@@ -349,8 +349,10 @@ exact canonical dataset authority (SHA-256
 737,337 bytes). The derived
 [`v36-prefix-screen-authority.json`](v36-prefix-screen-authority.json) is
 SHA-256
-`4c4ef577ccfab2945f13f0cab45606c5b8a296e937b914240d71a4224f3b02db`
-and 1,532 bytes. The complete derived
+`b0ae80d4c09840ffe60d3a0a1d831da0c5f212836b930648195d906cfeadeac3`
+and 2,274 bytes. This breaking v2 authority binds cohort A's zero-based
+sixteen-object window (5,485,265,954 bytes), the whole upstream authority
+SHA-256, population/corpus v2 seeds, and every future query-exclusion role. The complete derived
 [`v36-prefix-source-registry.json`](v36-prefix-source-registry.json) is SHA-256
 `b9a19e2f142fd54983ed1db9f09862f2c5623b6b2105d66e538664f8adda9180`
 and 726,170 bytes. Both are compact recursively sorted UTF-8 JSON with exactly

@@ -135,13 +135,13 @@ the pointer using `If-None-Match` for generation zero or `If-Match` against the
 previous pointer ETag. Resume accepts only the newest fully authenticated
 pointer, manifest, and dependencies; it never falls back past a corrupt newest
 generation. Rust revalidates SHA-256, BLAKE3, Arrow schemas, the consecutive
-object prefix, and every recomputed counter before network acquisition. The
+slots of the registered object window, and every recomputed counter before network acquisition. The
 sidecar starts at checked `generation + 1`; it never infers a generation from a
-directory listing. It rebuilds the dedup set or GT heaps and starts at the first
+directory listing. It reconstructs bounded sorted-run cursors or GT heaps and starts at the first
 incomplete object or source-row block. A population checkpoint carries
 identities rather than embeddings, so a resumed population scan does not replay
 completed objects, while final Parquet materialization reacquires exactly the
-authenticated consumed prefix. It never downloads the full registered corpus.
+authenticated selected window. It never downloads the full registered corpus.
 The controller confirms the prior instance is terminated before binding and
 launching a replacement. A third interruption is terminal
 infrastructure failure; it cannot silently buy a fourth cell.
@@ -154,7 +154,11 @@ all sixteen ranked objects authenticate, and records every completed object
 even when it contributes no surviving distinct ID. It also binds
 the input authority, registry, source archive, executable, source commit,
 physical/distinct/duplicate counters, all sixteen consumed identities, the
-population cutoff score/feature-ID pair, and every output artifact. Exact
+population cutoff score/feature-ID pair, the immutable 1,100,000-row selected-ID
+artifact, pre/post-exclusion counts, and every output artifact. Population
+checkpoint schemas contain no physical cutoff. They advance once per complete
+object, followed by an explicit selected-population checkpoint; materialized and
+ground-truth checkpoints bind that exact selection without recomputation drift. Exact
 output artifacts are uploaded before a terminal marker can be
 published. Terminal states are closed: `complete`,
 `screen-source-insufficient`, `infrastructure`, and `interrupted`; only
@@ -204,7 +208,11 @@ The cohort-A v2 authority binds `cohort_ordinal=0`,
 total, the upstream dataset-authority SHA-256, and no exclusion artifact. A
 cohort-B authority binds ordinal 1, start 16, count 16, its distinct exact byte
 total, and cohort A's selected-ID artifact. These fields are concrete and
-required; there is no inferred cohort or default.
+required; there is no inferred cohort or default. Source and identity-run rows
+retain the global ranked object ordinal (0--15 for A, 16--31 for B); checkpoint
+completion is a window-relative count. Cohort B remains execution-disabled until
+the authenticated cohort-A selected-ID payload is loaded and applied during the
+external merge. A descriptor alone is not exclusion evidence.
 
 Screen role seeds use population-specific SHA-256 labels under
 `borsuk-v36-prefix-screen-{role}-query-v2`. After removing all 13,000 query

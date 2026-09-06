@@ -22,11 +22,12 @@ use borsuk::{
     scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
     scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
-    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
-    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
-    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
+    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
+    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
+    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
     write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
     write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
@@ -44,6 +45,7 @@ fn v36_prefix_dataset_accepts_python_derived_frozen_inputs() {
         serde_json::from_slice(&registry_bytes).unwrap();
 
     validate_v36_prefix_freeze_authority(&authority, &registry).unwrap();
+    validate_v36_prefix_registered_screen_authority(&authority, &registry).unwrap();
     assert_eq!(
         canonical_v36_prefix_freeze_authority_bytes(&authority, &registry).unwrap(),
         authority_bytes
@@ -52,6 +54,128 @@ fn v36_prefix_dataset_accepts_python_derived_frozen_inputs() {
         canonical_v36_prefix_source_registry_bytes(&authority, &registry).unwrap(),
         registry_bytes
     );
+}
+
+#[test]
+fn v36_prefix_dataset_registered_screen_rejects_smaller_or_future_windows() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/research");
+    let authority_bytes = fs::read(root.join("v36-prefix-screen-authority.json")).unwrap();
+    let authority: V36PrefixFreezeAuthority = serde_json::from_slice(&authority_bytes).unwrap();
+    let registry: Vec<V36PrefixRegisteredSourceObject> =
+        serde_json::from_slice(&fs::read(root.join("v36-prefix-source-registry.json")).unwrap())
+            .unwrap();
+
+    let mut smaller = authority.clone();
+    smaller.selected_object_count = 1;
+    smaller.selected_object_encoded_bytes = 343_259_046;
+    assert!(validate_v36_prefix_freeze_authority(&smaller, &registry).is_ok());
+    assert!(validate_v36_prefix_registered_screen_authority(&smaller, &registry).is_err());
+
+    let mut future = authority;
+    future.cohort_ordinal = 1;
+    future.selected_object_start = 16;
+    future.selected_object_encoded_bytes = 5_483_342_562;
+    future.excluded_population_identity = Some(V36ArtifactIdentity {
+        blake3: "1".repeat(64),
+        encoded_bytes: 1,
+        role: "cohort-a-selected-ids".into(),
+        sha256: "2".repeat(64),
+        uri: format!(
+            "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/{}-cohort-a-selected-ids.json",
+            "2".repeat(64)
+        ),
+    });
+    assert!(validate_v36_prefix_freeze_authority(&future, &registry).is_ok());
+    assert!(validate_v36_prefix_registered_screen_authority(&future, &registry).is_err());
+}
+
+#[test]
+fn v36_prefix_dataset_accepts_v2_representativeness_authority() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/research");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("v36-prefix-screen-authority.json")).unwrap())
+            .unwrap();
+    let authority = value.as_object_mut().unwrap();
+    authority.insert(
+        "schema".into(),
+        "borsuk-v36-prefix-freeze-authority-v2".into(),
+    );
+    authority.insert("cohort_ordinal".into(), 0.into());
+    authority.insert("selected_object_start".into(), 0.into());
+    authority.insert("selected_object_count".into(), 16.into());
+    authority.insert(
+        "selected_object_encoded_bytes".into(),
+        5_485_265_954_u64.into(),
+    );
+    authority.insert(
+        "dataset_authority_sha256".into(),
+        "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1".into(),
+    );
+    authority.insert(
+        "excluded_population_identity".into(),
+        serde_json::Value::Null,
+    );
+    authority.insert(
+        "population_sampling_algorithm".into(),
+        "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2".into(),
+    );
+    authority.insert(
+        "population_seed_label".into(),
+        "borsuk-v36-prefix-screen-population-row-v2".into(),
+    );
+    authority.insert(
+        "population_seed_sha256".into(),
+        "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e".into(),
+    );
+    authority.insert(
+        "corpus_seed_label".into(),
+        "borsuk-v36-prefix-screen-corpus-v2".into(),
+    );
+    authority.insert(
+        "corpus_seed_sha256".into(),
+        "56b288d41e87d3b4ba97ac02b9944837e6bde8b402b8fab088861a27ef099f8c".into(),
+    );
+    authority.insert(
+        "future_full_source_exclusion_roles".into(),
+        serde_json::json!(["development", "validation", "sealed-holdout", "performance"]),
+    );
+    for role in authority["roles"].as_array_mut().unwrap() {
+        let name = role["role"].as_str().unwrap();
+        let label = format!("borsuk-v36-prefix-screen-{name}-query-v2");
+        role["seed_sha256"] =
+            serde_json::Value::String(format!("{:x}", Sha256::digest(label.as_bytes())));
+        role["seed_label"] = serde_json::Value::String(label);
+    }
+    let authority: V36PrefixFreezeAuthority = serde_json::from_value(value).unwrap();
+    let registry: Vec<V36PrefixRegisteredSourceObject> =
+        serde_json::from_slice(&fs::read(root.join("v36-prefix-source-registry.json")).unwrap())
+            .unwrap();
+    validate_v36_prefix_freeze_authority(&authority, &registry).unwrap();
+
+    let mut mutations = Vec::new();
+    let mut changed = authority.clone();
+    changed.dataset_authority_sha256 = "f".repeat(64);
+    mutations.push(changed);
+    let mut changed = authority.clone();
+    changed.selected_object_encoded_bytes -= 1;
+    mutations.push(changed);
+    let mut changed = authority.clone();
+    changed.population_seed_label.push_str("-drift");
+    mutations.push(changed);
+    let mut changed = authority.clone();
+    changed.corpus_seed_sha256 = "f".repeat(64);
+    mutations.push(changed);
+    let mut changed = authority.clone();
+    changed.future_full_source_exclusion_roles.pop();
+    mutations.push(changed);
+    let mut changed = authority;
+    changed.cohort_ordinal = 1;
+    changed.selected_object_start = 16;
+    changed.selected_object_encoded_bytes = 5_483_342_562;
+    mutations.push(changed);
+    for mutation in mutations {
+        assert!(validate_v36_prefix_freeze_authority(&mutation, &registry).is_err());
+    }
 }
 
 fn vector(axis: usize, value: f32) -> Vec<f32> {
@@ -83,22 +207,22 @@ fn role_authorities() -> [V36PrefixRoleAuthority; 4] {
         (
             "development",
             1_000,
-            "borsuk-v36-prefix-screen-development-query-v1",
+            "borsuk-v36-prefix-screen-development-query-v2",
         ),
         (
             "validation",
             1_000,
-            "borsuk-v36-prefix-screen-validation-query-v1",
+            "borsuk-v36-prefix-screen-validation-query-v2",
         ),
         (
             "sealed-holdout",
             1_000,
-            "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
+            "borsuk-v36-prefix-screen-sealed-holdout-query-v2",
         ),
         (
             "performance",
             10_000,
-            "borsuk-v36-prefix-screen-performance-query-v1",
+            "borsuk-v36-prefix-screen-performance-query-v2",
         ),
     ];
     definitions.map(|(role, rows, seed_label)| V36PrefixRoleAuthority {
@@ -137,19 +261,40 @@ fn population(registry: &[V36PrefixRegisteredSourceObject]) -> V36PrefixPopulati
     });
     V36PrefixPopulationAuthority {
         claim_eligible: false,
+        cohort_ordinal: 0,
         construction_capability: "named-query-excluded-corpus-only-no-query-truth".into(),
         consumed_objects: consumed,
         corpus_rows: 1_000_000,
+        corpus_seed_label: "borsuk-v36-prefix-screen-corpus-v2".into(),
+        corpus_seed_sha256: "56b288d41e87d3b4ba97ac02b9944837e6bde8b402b8fab088861a27ef099f8c"
+            .into(),
+        dataset_authority_sha256:
+            "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1".into(),
         distinct_candidates: 1_100_000,
         duplicate_rule: "first-selected-object-ordinal-then-row-offset".into(),
         evaluation_capability: "named-artifacts-only-no-source-list-discovery".into(),
-        format: "borsuk-v36-prefix-population-authority-v1".into(),
+        excluded_population_identity: None,
+        format: "borsuk-v36-prefix-population-authority-v2".into(),
+        future_full_source_exclusion_roles: vec![
+            "development".into(),
+            "validation".into(),
+            "sealed-holdout".into(),
+            "performance".into(),
+        ],
         object_cap: 16,
         object_sampling_algorithm:
             "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path".into(),
         ordered_source_manifest_sha256: format!("{:x}", manifest.finalize()),
-        population_id: "borsuk-v36-prefix-screen-population-v1".into(),
+        population_id: "borsuk-v36-prefix-screen-population-v2".into(),
+        population_sampling_algorithm:
+            "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2".into(),
+        population_seed_label: "borsuk-v36-prefix-screen-population-row-v2".into(),
+        population_seed_sha256: "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e"
+            .into(),
         roles: role_authorities().into(),
+        selected_object_count: registry.len().try_into().unwrap(),
+        selected_object_encoded_bytes: registry.iter().map(|object| object.encoded_bytes).sum(),
+        selected_object_start: 0,
         source_byte_cap: 6 * 1024 * 1024 * 1024,
         source_revision: "bfc7465dcf1245bd605d35dcaf5d2177bbc2025a".into(),
         workspace_bytes: 32 * 1024 * 1024,
@@ -161,18 +306,39 @@ fn freeze_authority(registry: &[V36PrefixRegisteredSourceObject]) -> V36PrefixFr
     let population = population(registry);
     V36PrefixFreezeAuthority {
         claim_eligible: false,
+        cohort_ordinal: 0,
         construction_capability: population.construction_capability,
+        corpus_seed_label: "borsuk-v36-prefix-screen-corpus-v2".into(),
+        corpus_seed_sha256: "56b288d41e87d3b4ba97ac02b9944837e6bde8b402b8fab088861a27ef099f8c"
+            .into(),
         corpus_rows: population.corpus_rows,
+        dataset_authority_sha256:
+            "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1".into(),
         distinct_candidates: population.distinct_candidates,
         duplicate_rule: population.duplicate_rule,
         evaluation_capability: population.evaluation_capability,
+        excluded_population_identity: None,
+        future_full_source_exclusion_roles: vec![
+            "development".into(),
+            "validation".into(),
+            "sealed-holdout".into(),
+            "performance".into(),
+        ],
         object_cap: population.object_cap,
         object_sampling_algorithm: population.object_sampling_algorithm,
         ordered_source_manifest_sha256: population.ordered_source_manifest_sha256,
+        population_sampling_algorithm:
+            "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2".into(),
+        population_seed_label: "borsuk-v36-prefix-screen-population-row-v2".into(),
+        population_seed_sha256: "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e"
+            .into(),
         registry_encoded_bytes: registry.iter().map(|object| object.encoded_bytes).sum(),
         registry_objects: registry.len().try_into().unwrap(),
         roles: population.roles,
-        schema: "borsuk-v36-prefix-freeze-authority-v1".into(),
+        schema: "borsuk-v36-prefix-freeze-authority-v2".into(),
+        selected_object_count: registry.len().try_into().unwrap(),
+        selected_object_encoded_bytes: registry.iter().map(|object| object.encoded_bytes).sum(),
+        selected_object_start: 0,
         source_byte_cap: population.source_byte_cap,
         source_revision: population.source_revision,
         workspace_bytes: population.workspace_bytes,
@@ -248,6 +414,43 @@ fn v36_prefix_dataset_ranks_complete_objects_and_keeps_first_valid_occurrence() 
 }
 
 #[test]
+fn v36_prefix_dataset_v2_population_hashes_all_selected_objects_before_cutoff() {
+    let rows = vec![
+        (1, 0, 0),
+        (2, 0, 1),
+        (3, 1, 0),
+        (4, 2, 0),
+        (5, 3, 0),
+        (6, 4, 0),
+        (7, 5, 0),
+        (8, 15, 0),
+        (1, 15, 1),
+    ]
+    .into_iter()
+    .map(
+        |(feature_row_id, selected_object_ordinal, row_offset)| borsuk::V36PrefixRowIdentity {
+            feature_row_id,
+            source_ordinal: None,
+            selected_object_ordinal,
+            row_offset,
+        },
+    )
+    .collect();
+    let selected = select_v36_prefix_population_rows(rows, &"1".repeat(64), 4).unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|row| (
+                row.feature_row_id,
+                row.selected_object_ordinal,
+                row.row_offset
+            ))
+            .collect::<Vec<_>>(),
+        vec![(1, 0, 0), (4, 2, 0), (8, 15, 0), (6, 4, 0)]
+    );
+}
+
+#[test]
 fn v36_prefix_dataset_freeze_input_and_population_output_are_not_circular() {
     let registry = source_registry();
     let authority = freeze_authority(&registry);
@@ -270,7 +473,7 @@ fn v36_prefix_dataset_freeze_input_and_population_output_are_not_circular() {
     let population = bind_v36_prefix_population_authority(&authority, consumed, &registry).unwrap();
     assert_eq!(
         population.population_id,
-        "borsuk-v36-prefix-screen-population-v1"
+        "borsuk-v36-prefix-screen-population-v2"
     );
     assert_eq!(population.consumed_objects.len(), 2);
     let mut drifted = authority;
@@ -298,11 +501,11 @@ fn v36_prefix_dataset_rejects_unfrozen_population_and_role_authority() {
     assert!(validate_v36_prefix_role_authority(&roles[..3]).is_err());
     assert_eq!(
         v36_prefix_query_score_sha256(&roles[0].seed_label, &"a".repeat(64), 1).unwrap(),
-        "ab16a833337789b1fbde70e9b6ffc119857bfe07efdb18b1fc4587d7e81d60e2"
+        "a03897cb913c8b5db7b56ef058828fb1077a7df502e92ea6777a5ca451588799"
     );
     assert_eq!(
         v36_prefix_source_score_sha256(&"a".repeat(64), 2).unwrap(),
-        "0356937eddd2eed2e10152577044a5b68c0153f4c0522b130c210753b7c5e94c"
+        "2ffef3c5304e22603265ae503bc65b6833f9e80cef8635e70e4be373a217ee03"
     );
     let registry = source_registry();
     let authority = population(&registry);

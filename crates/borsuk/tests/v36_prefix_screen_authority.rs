@@ -107,6 +107,7 @@ fn source_registry() -> Vec<V36PrefixRegisteredSourceObject> {
 fn population() -> V36PrefixPopulationAuthority {
     V36PrefixPopulationAuthority {
         claim_eligible: false,
+        cohort_ordinal: 0,
         construction_capability: "named-query-excluded-corpus-only-no-query-truth".to_owned(),
         consumed_objects: vec![
             source_object(0),
@@ -115,46 +116,66 @@ fn population() -> V36PrefixPopulationAuthority {
             source_object(2),
         ],
         corpus_rows: 1_000_000,
+        corpus_seed_label: "borsuk-v36-prefix-screen-corpus-v2".to_owned(),
+        corpus_seed_sha256: "56b288d41e87d3b4ba97ac02b9944837e6bde8b402b8fab088861a27ef099f8c"
+            .to_owned(),
+        dataset_authority_sha256:
+            "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1".to_owned(),
         distinct_candidates: 1_100_000,
         duplicate_rule: "first-selected-object-ordinal-then-row-offset".to_owned(),
         evaluation_capability: "named-artifacts-only-no-source-list-discovery".to_owned(),
-        format: "borsuk-v36-prefix-population-authority-v1".to_owned(),
+        excluded_population_identity: None,
+        format: "borsuk-v36-prefix-population-authority-v2".to_owned(),
+        future_full_source_exclusion_roles: vec![
+            "development".to_owned(),
+            "validation".to_owned(),
+            "sealed-holdout".to_owned(),
+            "performance".to_owned(),
+        ],
         object_cap: 16,
         object_sampling_algorithm:
             "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path".to_owned(),
         ordered_source_manifest_sha256:
             "e8127c6fffd6f2c6f2174ddb0344d3d1e73a470c693ba5355b0b9201dac9c514".to_owned(),
-        population_id: "borsuk-v36-prefix-screen-population-v1".to_owned(),
+        population_id: "borsuk-v36-prefix-screen-population-v2".to_owned(),
+        population_sampling_algorithm:
+            "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2".to_owned(),
+        population_seed_label: "borsuk-v36-prefix-screen-population-row-v2".to_owned(),
+        population_seed_sha256: "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e"
+            .to_owned(),
         roles: vec![
             V36PrefixRoleAuthority {
                 role: "development".to_owned(),
                 rows: 1_000,
-                seed_label: "borsuk-v36-prefix-screen-development-query-v1".to_owned(),
-                seed_sha256: "832b9c89bae79163c46a05cac0ae90e71da9efeec2aca4aa637f9f59a07c780f"
+                seed_label: "borsuk-v36-prefix-screen-development-query-v2".to_owned(),
+                seed_sha256: "da46dc39758d8dd6b71942fb9eadd666b3fce0b2e0114a62359335f645525981"
                     .to_owned(),
             },
             V36PrefixRoleAuthority {
                 role: "validation".to_owned(),
                 rows: 1_000,
-                seed_label: "borsuk-v36-prefix-screen-validation-query-v1".to_owned(),
-                seed_sha256: "be747ffbf481a02b3e247f92339b45084d112c84256dfc717dc96d56fdfc8873"
+                seed_label: "borsuk-v36-prefix-screen-validation-query-v2".to_owned(),
+                seed_sha256: "bcd253d65fc3786900a9e17aa9e4e65ef592d7ac11ca37abdcdfcf6b74aa9a59"
                     .to_owned(),
             },
             V36PrefixRoleAuthority {
                 role: "sealed-holdout".to_owned(),
                 rows: 1_000,
-                seed_label: "borsuk-v36-prefix-screen-sealed-holdout-query-v1".to_owned(),
-                seed_sha256: "b8035c4a96f2350c70d88b67a1eb4dce02b920214f2859ca599a5dc4635f02da"
+                seed_label: "borsuk-v36-prefix-screen-sealed-holdout-query-v2".to_owned(),
+                seed_sha256: "8e9f673c7451c72bd19e255b248f4212298d1c958d35a831ecaefac8a60b4d84"
                     .to_owned(),
             },
             V36PrefixRoleAuthority {
                 role: "performance".to_owned(),
                 rows: 10_000,
-                seed_label: "borsuk-v36-prefix-screen-performance-query-v1".to_owned(),
-                seed_sha256: "53507396cc88a5bcba45e697238ba27af205481267f6515b71aa234bff7549e3"
+                seed_label: "borsuk-v36-prefix-screen-performance-query-v2".to_owned(),
+                seed_sha256: "a84a6410a7bcad8ca1cc6520dbfd69c1f88ebff08d48610f5a9098d035e52901"
                     .to_owned(),
             },
         ],
+        selected_object_count: 4,
+        selected_object_encoded_bytes: 1_368_000_006,
+        selected_object_start: 0,
         source_byte_cap: 6 * 1_024 * MIB,
         source_revision: "bfc7465dcf1245bd605d35dcaf5d2177bbc2025a".to_owned(),
         workspace_bytes: 32 * MIB,

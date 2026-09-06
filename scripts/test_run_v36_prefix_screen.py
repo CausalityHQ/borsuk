@@ -212,7 +212,40 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         registry = json.loads(registry_bytes)
         self.assertEqual(authority_bytes, subject.canonical_json_bytes(authority))
         self.assertEqual(registry_bytes, subject.canonical_json_bytes(registry))
-        self.assertEqual(authority["schema"], "borsuk-v36-prefix-freeze-authority-v1")
+        self.assertEqual(authority["schema"], "borsuk-v36-prefix-freeze-authority-v2")
+        self.assertEqual(
+            authority["dataset_authority_sha256"],
+            "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1",
+        )
+        self.assertEqual(authority["cohort_ordinal"], 0)
+        self.assertEqual(authority["selected_object_start"], 0)
+        self.assertEqual(authority["selected_object_count"], 16)
+        self.assertEqual(authority["selected_object_encoded_bytes"], 5_485_265_954)
+        self.assertIsNone(authority["excluded_population_identity"])
+        self.assertEqual(
+            authority["population_sampling_algorithm"],
+            "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2",
+        )
+        self.assertEqual(
+            authority["population_seed_label"],
+            "borsuk-v36-prefix-screen-population-row-v2",
+        )
+        self.assertEqual(
+            authority["population_seed_sha256"],
+            "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e",
+        )
+        self.assertEqual(
+            authority["corpus_seed_label"],
+            "borsuk-v36-prefix-screen-corpus-v2",
+        )
+        self.assertEqual(
+            authority["corpus_seed_sha256"],
+            "56b288d41e87d3b4ba97ac02b9944837e6bde8b402b8fab088861a27ef099f8c",
+        )
+        self.assertEqual(
+            authority["future_full_source_exclusion_roles"],
+            ["development", "validation", "sealed-holdout", "performance"],
+        )
         self.assertEqual(authority["registry_objects"], 2_298)
         self.assertEqual(authority["registry_encoded_bytes"], 787_439_811_692)
         self.assertEqual(len(registry), 2_298)
@@ -223,10 +256,10 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertEqual(
             [role["seed_label"] for role in authority["roles"]],
             [
-                "borsuk-v36-prefix-screen-development-query-v1",
-                "borsuk-v36-prefix-screen-validation-query-v1",
-                "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
-                "borsuk-v36-prefix-screen-performance-query-v1",
+                "borsuk-v36-prefix-screen-development-query-v2",
+                "borsuk-v36-prefix-screen-validation-query-v2",
+                "borsuk-v36-prefix-screen-sealed-holdout-query-v2",
+                "borsuk-v36-prefix-screen-performance-query-v2",
             ],
         )
 

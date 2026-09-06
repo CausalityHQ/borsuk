@@ -311,6 +311,22 @@ def derive_v36_prefix_screen_inputs(
         or digest.hexdigest() != manifest["sha256"]
     ):
         raise ValueError("V36 prefix-screen dataset authority differs")
+    ranked_registry = sorted(
+        registry,
+        key=lambda shard: (
+            hashlib.sha256(
+                b"borsuk-v36-screen-object-v1"
+                + shard["path"].encode()
+                + shard["encoded_bytes"].to_bytes(8, "little")
+            ).digest(),
+            shard["path"].encode(),
+        ),
+    )
+    selected_object_encoded_bytes = sum(
+        shard["encoded_bytes"] for shard in ranked_registry[:16]
+    )
+    if selected_object_encoded_bytes != 5_485_265_954:
+        raise ValueError("V36 prefix-screen selected object authority differs")
     role_specs = (
         ("development", 1_000),
         ("validation", 1_000),
@@ -319,7 +335,7 @@ def derive_v36_prefix_screen_inputs(
     )
     roles = []
     for role, rows in role_specs:
-        seed_label = f"borsuk-v36-prefix-screen-{role}-query-v1"
+        seed_label = f"borsuk-v36-prefix-screen-{role}-query-v2"
         roles.append(
             {
                 "role": role,
@@ -330,21 +346,44 @@ def derive_v36_prefix_screen_inputs(
         )
     authority = {
         "claim_eligible": False,
+        "cohort_ordinal": 0,
         "construction_capability": "named-query-excluded-corpus-only-no-query-truth",
+        "corpus_seed_label": "borsuk-v36-prefix-screen-corpus-v2",
+        "corpus_seed_sha256": hashlib.sha256(
+            b"borsuk-v36-prefix-screen-corpus-v2"
+        ).hexdigest(),
         "corpus_rows": 1_000_000,
+        "dataset_authority_sha256": V36_DATASET_AUTHORITY_SHA256,
         "distinct_candidates": 1_100_000,
         "duplicate_rule": "first-selected-object-ordinal-then-row-offset",
         "evaluation_capability": "named-artifacts-only-no-source-list-discovery",
+        "excluded_population_identity": None,
+        "future_full_source_exclusion_roles": [
+            "development",
+            "validation",
+            "sealed-holdout",
+            "performance",
+        ],
         "invalid_row_policy": "reject-complete-source-revision",
         "object_cap": 16,
         "object_sampling_algorithm": (
             "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path"
         ),
         "ordered_source_manifest_sha256": manifest["sha256"],
+        "population_sampling_algorithm": (
+            "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2"
+        ),
+        "population_seed_label": "borsuk-v36-prefix-screen-population-row-v2",
+        "population_seed_sha256": hashlib.sha256(
+            b"borsuk-v36-prefix-screen-population-row-v2"
+        ).hexdigest(),
         "registry_encoded_bytes": total_bytes,
         "registry_objects": len(registry),
         "roles": roles,
-        "schema": "borsuk-v36-prefix-freeze-authority-v1",
+        "schema": "borsuk-v36-prefix-freeze-authority-v2",
+        "selected_object_count": 16,
+        "selected_object_encoded_bytes": selected_object_encoded_bytes,
+        "selected_object_start": 0,
         "source_byte_cap": 6 * 1_024**3,
         "source_revision": source["revision"],
         "workspace_bytes": 32 * 1_024**2,

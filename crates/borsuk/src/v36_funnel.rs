@@ -261,16 +261,28 @@ pub struct V36PrefixRegisteredSourceObject {
 pub struct V36PrefixFreezeAuthority {
     /// Diagnostic authority can never support release claims.
     pub claim_eligible: bool,
+    /// Zero-based independently registered screen cohort.
+    pub cohort_ordinal: u8,
     /// Capability available while constructing the population.
     pub construction_capability: String,
+    /// Population-specific corpus-selection seed label.
+    pub corpus_seed_label: String,
+    /// SHA-256 of the corpus-selection seed label.
+    pub corpus_seed_sha256: String,
     /// Exact corpus rows after query removal.
     pub corpus_rows: u64,
+    /// Exact SHA-256 of the upstream dataset authority bytes.
+    pub dataset_authority_sha256: String,
     /// Exact distinct candidates retained before role hashing.
     pub distinct_candidates: u64,
     /// Physical duplicate resolution rule.
     pub duplicate_rule: String,
     /// Capability available to later evaluation.
     pub evaluation_capability: String,
+    /// Prior cohort selected-ID artifact; absent only for cohort zero.
+    pub excluded_population_identity: Option<V36ArtifactIdentity>,
+    /// Screen query roles excluded from every later full-source role.
+    pub future_full_source_exclusion_roles: Vec<String>,
     /// Complete-source disposition for any invalid gated row.
     pub invalid_row_policy: String,
     /// Maximum complete source objects.
@@ -279,6 +291,12 @@ pub struct V36PrefixFreezeAuthority {
     pub object_sampling_algorithm: String,
     /// Digest of the complete ordered source registry.
     pub ordered_source_manifest_sha256: String,
+    /// Query-independent population-row sampling algorithm.
+    pub population_sampling_algorithm: String,
+    /// Population-row sampling seed label.
+    pub population_seed_label: String,
+    /// SHA-256 of the population-row sampling seed label.
+    pub population_seed_sha256: String,
     /// Sum of encoded lengths across the complete registered source set.
     pub registry_encoded_bytes: u64,
     /// Count of objects in the complete registered source set.
@@ -287,6 +305,12 @@ pub struct V36PrefixFreezeAuthority {
     pub roles: Vec<V36PrefixRoleAuthority>,
     /// Exact authority schema marker.
     pub schema: String,
+    /// Number of complete objects in this cohort's registered window.
+    pub selected_object_count: u16,
+    /// Sum of encoded lengths in the registered object window.
+    pub selected_object_encoded_bytes: u64,
+    /// Zero-based start of this cohort's registered object window.
+    pub selected_object_start: u16,
     /// Maximum complete encoded source bytes.
     pub source_byte_cap: u64,
     /// Frozen upstream source revision.
@@ -343,30 +367,54 @@ pub struct V36PrefixResumeBinding {
 pub struct V36PrefixPopulationAuthority {
     /// Diagnostic populations can never make release claims.
     pub claim_eligible: bool,
+    /// Zero-based independently registered screen cohort.
+    pub cohort_ordinal: u8,
     /// Capability available to construction.
     pub construction_capability: String,
     /// Complete consumed-object identities in sample order.
     pub consumed_objects: Vec<V36PrefixSourceObject>,
     /// Exact corpus row count after role removal.
     pub corpus_rows: u64,
+    /// Population-specific corpus-selection seed label.
+    pub corpus_seed_label: String,
+    /// SHA-256 of the corpus-selection seed label.
+    pub corpus_seed_sha256: String,
+    /// Exact SHA-256 of the upstream dataset authority bytes.
+    pub dataset_authority_sha256: String,
     /// Exact distinct-row target before role removal.
     pub distinct_candidates: u64,
     /// Duplicate resolution rule.
     pub duplicate_rule: String,
     /// Capability available to evaluation.
     pub evaluation_capability: String,
+    /// Prior cohort selected-ID artifact; absent only for cohort zero.
+    pub excluded_population_identity: Option<V36ArtifactIdentity>,
     /// Exact format marker.
     pub format: String,
+    /// Screen query roles excluded from every later full-source role.
+    pub future_full_source_exclusion_roles: Vec<String>,
     /// Maximum complete source objects.
     pub object_cap: u16,
     /// Query-independent object sampling algorithm.
     pub object_sampling_algorithm: String,
     /// Ordered complete-source-manifest digest.
     pub ordered_source_manifest_sha256: String,
+    /// Query-independent population-row sampling algorithm.
+    pub population_sampling_algorithm: String,
+    /// Population-row sampling seed label.
+    pub population_seed_label: String,
+    /// SHA-256 of the population-row sampling seed label.
+    pub population_seed_sha256: String,
     /// Identity distinct from full-source qualification.
     pub population_id: String,
     /// Ordered role authorities.
     pub roles: Vec<V36PrefixRoleAuthority>,
+    /// Number of complete objects in the registered cohort window.
+    pub selected_object_count: u16,
+    /// Sum of encoded lengths in the registered cohort window.
+    pub selected_object_encoded_bytes: u64,
+    /// Zero-based start of the registered cohort window.
+    pub selected_object_start: u16,
     /// Maximum complete encoded source bytes.
     pub source_byte_cap: u64,
     /// Frozen source revision.
@@ -684,7 +732,11 @@ fn validate_prefix_source_registry(
     population: &V36PrefixPopulationAuthority,
     source_registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<()> {
-    if source_registry.len() < population.consumed_objects.len() {
+    let window_start = usize::from(population.selected_object_start);
+    let window_end = window_start
+        .checked_add(population.consumed_objects.len())
+        .ok_or_else(|| invalid("V36 prefix source registry window overflows"))?;
+    if source_registry.len() < window_end {
         return Err(invalid("V36 prefix source registry is incomplete"));
     }
     validate_prefix_source_registry_identity(
@@ -704,7 +756,10 @@ fn validate_prefix_source_registry(
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| (left.0.as_str(), left.1).cmp(&(right.0.as_str(), right.1)));
-    for (observed, (sample_sha256, _, registered)) in population.consumed_objects.iter().zip(ranked)
+    for (observed, (sample_sha256, _, registered)) in population
+        .consumed_objects
+        .iter()
+        .zip(ranked.into_iter().skip(window_start))
     {
         if observed.sample_sha256 != sample_sha256
             || observed.path != registered.path
@@ -762,15 +817,38 @@ fn validate_prefix_population(
     population: &V36PrefixPopulationAuthority,
     source_registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<()> {
-    if population.format != "borsuk-v36-prefix-population-authority-v1"
+    if population.format != "borsuk-v36-prefix-population-authority-v2"
         || population.claim_eligible
-        || population.population_id != "borsuk-v36-prefix-screen-population-v1"
+        || population.population_id != "borsuk-v36-prefix-screen-population-v2"
         || population.object_sampling_algorithm
             != "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path"
+        || population.population_sampling_algorithm
+            != "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2"
+        || population.population_seed_label != "borsuk-v36-prefix-screen-population-row-v2"
+        || population.population_seed_sha256
+            != format!(
+                "{:x}",
+                Sha256::digest(population.population_seed_label.as_bytes())
+            )
+        || population.corpus_seed_label != "borsuk-v36-prefix-screen-corpus-v2"
+        || population.corpus_seed_sha256
+            != format!(
+                "{:x}",
+                Sha256::digest(population.corpus_seed_label.as_bytes())
+            )
+        || population.dataset_authority_sha256
+            != "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1"
         || population.duplicate_rule != "first-selected-object-ordinal-then-row-offset"
         || population.distinct_candidates != 1_100_000
         || population.corpus_rows != 1_000_000
         || population.object_cap != 16
+        || population.cohort_ordinal > 1
+        || population.selected_object_count == 0
+        || population.selected_object_count > population.object_cap
+        || population.selected_object_start
+            != u16::from(population.cohort_ordinal)
+                .checked_mul(population.selected_object_count)
+                .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?
         || population.source_byte_cap != 6 * 1_024 * MIB
         || population.workspace_count != 16
         || population.workspace_bytes != 32 * MIB
@@ -781,31 +859,46 @@ fn validate_prefix_population(
     {
         return Err(invalid("V36 prefix population authority differs"));
     }
+    let expected_exclusion_roles = ["development", "validation", "sealed-holdout", "performance"];
+    if population.future_full_source_exclusion_roles != expected_exclusion_roles.map(str::to_owned)
+        || match population.cohort_ordinal {
+            0 => population.excluded_population_identity.is_some(),
+            1 => !population
+                .excluded_population_identity
+                .as_ref()
+                .is_some_and(|artifact| {
+                    valid_checkpoint_artifact(artifact, "cohort-a-selected-ids")
+                }),
+            _ => true,
+        }
+    {
+        return Err(invalid("V36 prefix cohort authority differs"));
+    }
 
     let expected_roles = [
         (
             "development",
             1_000_u64,
-            "borsuk-v36-prefix-screen-development-query-v1",
-            "832b9c89bae79163c46a05cac0ae90e71da9efeec2aca4aa637f9f59a07c780f",
+            "borsuk-v36-prefix-screen-development-query-v2",
+            "da46dc39758d8dd6b71942fb9eadd666b3fce0b2e0114a62359335f645525981",
         ),
         (
             "validation",
             1_000,
-            "borsuk-v36-prefix-screen-validation-query-v1",
-            "be747ffbf481a02b3e247f92339b45084d112c84256dfc717dc96d56fdfc8873",
+            "borsuk-v36-prefix-screen-validation-query-v2",
+            "bcd253d65fc3786900a9e17aa9e4e65ef592d7ac11ca37abdcdfcf6b74aa9a59",
         ),
         (
             "sealed-holdout",
             1_000,
-            "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
-            "b8035c4a96f2350c70d88b67a1eb4dce02b920214f2859ca599a5dc4635f02da",
+            "borsuk-v36-prefix-screen-sealed-holdout-query-v2",
+            "8e9f673c7451c72bd19e255b248f4212298d1c958d35a831ecaefac8a60b4d84",
         ),
         (
             "performance",
             10_000,
-            "borsuk-v36-prefix-screen-performance-query-v1",
-            "53507396cc88a5bcba45e697238ba27af205481267f6515b71aa234bff7549e3",
+            "borsuk-v36-prefix-screen-performance-query-v2",
+            "a84a6410a7bcad8ca1cc6520dbfd69c1f88ebff08d48610f5a9098d035e52901",
         ),
     ];
     if population.roles.len() != expected_roles.len()
@@ -829,9 +922,7 @@ fn validate_prefix_population(
         return Err(invalid("V36 prefix role seeds overlap"));
     }
 
-    if population.consumed_objects.is_empty()
-        || population.consumed_objects.len() > usize::from(population.object_cap)
-    {
+    if population.consumed_objects.len() != usize::from(population.selected_object_count) {
         return Err(invalid("V36 prefix consumed-object count differs"));
     }
     let mut paths = BTreeSet::new();
@@ -861,8 +952,10 @@ fn validate_prefix_population(
             .checked_add(object.encoded_bytes)
             .ok_or_else(|| invalid("V36 prefix source bytes overflow"))?;
     }
-    if total_bytes > population.source_byte_cap {
-        return Err(invalid("V36 prefix source bytes exceed cap"));
+    if total_bytes != population.selected_object_encoded_bytes
+        || total_bytes > population.source_byte_cap
+    {
+        return Err(invalid("V36 prefix source bytes differ"));
     }
     validate_prefix_source_registry(population, source_registry)?;
     Ok(())
@@ -881,17 +974,40 @@ pub fn validate_v36_prefix_freeze_authority(
     authority: &V36PrefixFreezeAuthority,
     source_registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<()> {
-    if authority.schema != "borsuk-v36-prefix-freeze-authority-v1"
+    if authority.schema != "borsuk-v36-prefix-freeze-authority-v2"
         || authority.claim_eligible
         || authority.construction_capability != "named-query-excluded-corpus-only-no-query-truth"
         || authority.evaluation_capability != "named-artifacts-only-no-source-list-discovery"
         || authority.invalid_row_policy != "reject-complete-source-revision"
         || authority.object_sampling_algorithm
             != "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path"
+        || authority.population_sampling_algorithm
+            != "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2"
+        || authority.population_seed_label != "borsuk-v36-prefix-screen-population-row-v2"
+        || authority.population_seed_sha256
+            != format!(
+                "{:x}",
+                Sha256::digest(authority.population_seed_label.as_bytes())
+            )
+        || authority.corpus_seed_label != "borsuk-v36-prefix-screen-corpus-v2"
+        || authority.corpus_seed_sha256
+            != format!(
+                "{:x}",
+                Sha256::digest(authority.corpus_seed_label.as_bytes())
+            )
+        || authority.dataset_authority_sha256
+            != "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1"
         || authority.duplicate_rule != "first-selected-object-ordinal-then-row-offset"
         || authority.distinct_candidates != 1_100_000
         || authority.corpus_rows != 1_000_000
         || authority.object_cap != 16
+        || authority.cohort_ordinal > 1
+        || authority.selected_object_count == 0
+        || authority.selected_object_count > authority.object_cap
+        || authority.selected_object_start
+            != u16::from(authority.cohort_ordinal)
+                .checked_mul(authority.selected_object_count)
+                .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?
         || authority.source_byte_cap != 6 * 1_024 * MIB
         || authority.registry_objects != u32::try_from(source_registry.len()).unwrap_or(u32::MAX)
         || authority.workspace_count != 16
@@ -899,6 +1015,21 @@ pub fn validate_v36_prefix_freeze_authority(
         || authority.source_revision != "bfc7465dcf1245bd605d35dcaf5d2177bbc2025a"
     {
         return Err(invalid("V36 prefix freeze authority differs"));
+    }
+    let expected_exclusion_roles = ["development", "validation", "sealed-holdout", "performance"];
+    if authority.future_full_source_exclusion_roles != expected_exclusion_roles.map(str::to_owned)
+        || match authority.cohort_ordinal {
+            0 => authority.excluded_population_identity.is_some(),
+            1 => !authority
+                .excluded_population_identity
+                .as_ref()
+                .is_some_and(|artifact| {
+                    valid_checkpoint_artifact(artifact, "cohort-a-selected-ids")
+                }),
+            _ => true,
+        }
+    {
+        return Err(invalid("V36 prefix cohort authority differs"));
     }
     let registry_encoded_bytes = source_registry.iter().try_fold(0_u64, |total, object| {
         total
@@ -908,26 +1039,55 @@ pub fn validate_v36_prefix_freeze_authority(
     if authority.registry_encoded_bytes != registry_encoded_bytes {
         return Err(invalid("V36 prefix registry byte total differs"));
     }
+    let mut ranked = source_registry.iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        (
+            source_sample_sha256(&left.path, left.encoded_bytes),
+            left.path.as_bytes(),
+        )
+            .cmp(&(
+                source_sample_sha256(&right.path, right.encoded_bytes),
+                right.path.as_bytes(),
+            ))
+    });
+    let window_start = usize::from(authority.selected_object_start);
+    let window_end = window_start
+        .checked_add(usize::from(authority.selected_object_count))
+        .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?;
+    let selected_bytes = ranked
+        .get(window_start..window_end)
+        .ok_or_else(|| invalid("V36 prefix selected object window differs"))?
+        .iter()
+        .try_fold(0_u64, |total, object| {
+            total
+                .checked_add(object.encoded_bytes)
+                .ok_or_else(|| invalid("V36 prefix selected object bytes overflow"))
+        })?;
+    if selected_bytes != authority.selected_object_encoded_bytes
+        || selected_bytes > authority.source_byte_cap
+    {
+        return Err(invalid("V36 prefix selected object bytes differ"));
+    }
     let expected_roles = [
         (
             "development",
             1_000_u64,
-            "borsuk-v36-prefix-screen-development-query-v1",
+            "borsuk-v36-prefix-screen-development-query-v2",
         ),
         (
             "validation",
             1_000,
-            "borsuk-v36-prefix-screen-validation-query-v1",
+            "borsuk-v36-prefix-screen-validation-query-v2",
         ),
         (
             "sealed-holdout",
             1_000,
-            "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
+            "borsuk-v36-prefix-screen-sealed-holdout-query-v2",
         ),
         (
             "performance",
             10_000,
-            "borsuk-v36-prefix-screen-performance-query-v1",
+            "borsuk-v36-prefix-screen-performance-query-v2",
         ),
     ];
     if authority.roles.len() != expected_roles.len()
@@ -949,6 +1109,31 @@ pub fn validate_v36_prefix_freeze_authority(
         &authority.ordered_source_manifest_sha256,
         source_registry,
     )
+}
+
+/// Validate the exact registered cohort-A screen authority used by the campaign runner.
+///
+/// The generic freeze validator deliberately supports reduced synthetic registries. The
+/// executable campaign boundary must additionally pin the immutable production registry and
+/// reject future cohorts until their exclusion evidence is authenticated and consumed.
+pub fn validate_v36_prefix_registered_screen_authority(
+    authority: &V36PrefixFreezeAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    validate_v36_prefix_freeze_authority(authority, source_registry)?;
+    if authority.cohort_ordinal != 0
+        || authority.selected_object_start != 0
+        || authority.selected_object_count != 16
+        || authority.selected_object_encoded_bytes != 5_485_265_954
+        || authority.registry_objects != 2_298
+        || authority.registry_encoded_bytes != 787_439_811_692
+        || authority.ordered_source_manifest_sha256
+            != "76ac61cf2821a331419ad40d5eb94d2cdafccccf39af17af1d328b7a2f0bc6c7"
+        || authority.excluded_population_identity.is_some()
+    {
+        return Err(invalid("V36 prefix registered screen authority differs"));
+    }
+    Ok(())
 }
 
 /// Canonical newline JSON for one validated pre-freeze authority.
@@ -1624,18 +1809,30 @@ pub fn bind_v36_prefix_population_authority(
     validate_v36_prefix_freeze_authority(authority, source_registry)?;
     let population = V36PrefixPopulationAuthority {
         claim_eligible: authority.claim_eligible,
+        cohort_ordinal: authority.cohort_ordinal,
         construction_capability: authority.construction_capability.clone(),
         consumed_objects,
         corpus_rows: authority.corpus_rows,
+        corpus_seed_label: authority.corpus_seed_label.clone(),
+        corpus_seed_sha256: authority.corpus_seed_sha256.clone(),
+        dataset_authority_sha256: authority.dataset_authority_sha256.clone(),
         distinct_candidates: authority.distinct_candidates,
         duplicate_rule: authority.duplicate_rule.clone(),
         evaluation_capability: authority.evaluation_capability.clone(),
-        format: "borsuk-v36-prefix-population-authority-v1".into(),
+        excluded_population_identity: authority.excluded_population_identity.clone(),
+        format: "borsuk-v36-prefix-population-authority-v2".into(),
+        future_full_source_exclusion_roles: authority.future_full_source_exclusion_roles.clone(),
         object_cap: authority.object_cap,
         object_sampling_algorithm: authority.object_sampling_algorithm.clone(),
         ordered_source_manifest_sha256: authority.ordered_source_manifest_sha256.clone(),
-        population_id: "borsuk-v36-prefix-screen-population-v1".into(),
+        population_id: "borsuk-v36-prefix-screen-population-v2".into(),
+        population_sampling_algorithm: authority.population_sampling_algorithm.clone(),
+        population_seed_label: authority.population_seed_label.clone(),
+        population_seed_sha256: authority.population_seed_sha256.clone(),
         roles: authority.roles.clone(),
+        selected_object_count: authority.selected_object_count,
+        selected_object_encoded_bytes: authority.selected_object_encoded_bytes,
+        selected_object_start: authority.selected_object_start,
         source_byte_cap: authority.source_byte_cap,
         source_revision: authority.source_revision.clone(),
         workspace_bytes: authority.workspace_bytes,

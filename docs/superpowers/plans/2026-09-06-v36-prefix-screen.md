@@ -171,6 +171,23 @@ conversion remains because BORSUK is prerelease.
   in-memory scalar oracle on reduced shapes. Regenerate both checked-in inputs
   and require byte-identical Python/Rust canonicalization.
 
+  Keep the executable fail-closed before source acquisition until the complete
+  v2 path below is GREEN. Generic reduced-shape validation remains separate
+  from the registered campaign validator. The registered validator pins the
+  2,298-object/787,439,811,692-byte registry, its exact manifest digest, and
+  cohort A's 0--15 window; it rejects smaller self-consistent windows and
+  rejects cohort B until the selected-ID exclusion artifact is authenticated
+  and consumed.
+
+  Replace every persisted physical-cutoff field rather than retaining a v1
+  alias. Checkpoint and receipt schemas advance to v2. Identity runs bind the
+  global ranked object ordinal (A 0--15, B 16--31) plus the window start/count;
+  checkpoint completion is a count of complete objects, never an inferred
+  prefix cutoff. Add an explicit `Selected` phase carrying the complete
+  population-score cutoff `(sha256,feature_row_id)`, pre/post-exclusion counts,
+  and the immutable 1,100,000-row selected-identity Arrow artifact. Later
+  phases must bind that selection byte-for-byte.
+
 - [ ] **Step 1: Write dataset and GT REDs**
 
   Test object selection by registered hash then path, and first occurrence by
@@ -241,6 +258,38 @@ conversion remains because BORSUK is prerelease.
   authenticated output plus a manifest
   before publishing the terminal. Capture binary exit, timeout, and SIGTERM
   explicitly so `set -e` cannot bypass the terminal path.
+
+  The population implementation is a bounded external merge, not a resident
+  cross-object vector set or a target-sized hash heap. For each authenticated
+  object, stream strict `(feature_row_id,row_offset)` records into capped
+  sorted Arrow IPC spills; retain the minimum row offset per ID; anti-join the
+  sorted stream against earlier committed runs so the globally earliest
+  physical occurrence wins; then publish one immutable, possibly empty,
+  first-occurrence run. Keep only file-backed authenticated dependencies in the
+  writer and restore path. After all sixteen runs exist, externally score-sort
+  fixed records by `(population_sha256,unsigned_feature_row_id)` with bounded
+  fan-in, apply any authenticated prior-cohort exclusion, and emit exactly the
+  first 1,100,000 identities. A complete window with insufficient eligible IDs
+  is `screen-source-insufficient`; a spill/row/disk bound is infrastructure,
+  never scientific insufficiency.
+
+  Mutation-test multi-batch spills, duplicate-only empty runs, cross-object
+  duplicates, a winning row from the last object after the target was already
+  reached, equal-score ID ties, malicious IPC metadata/nulls/counts, byte-cap
+  overflow, writer failure followed by retry, interruption after every object,
+  corrupt-newest-checkpoint rejection without fallback, and external/scalar
+  equality with a three-row buffer. The selected-ID artifact binds seed,
+  manifest, cohort/window, exclusion identity, count, winning positions and
+  cutoff. Role selection consumes that authenticated selection and never
+  silently performs population selection again.
+
+  Population state advances `Population(1)..Population(16) -> Selected ->
+  Materialized -> GroundTruth -> Complete`. Acquisition is capability-limited
+  to the registered window; resume downloads no completed population object,
+  while final vector materialization may reacquire exactly that window. Remove
+  the fail-closed execution gate only after a reduced-shape end-to-end
+  scan/checkpoint/restore/select/materialize test and the controller's v2
+  dependency closure are GREEN.
 
   Implement replacement attempts as one authenticated handoff. The controller
   first confirms the preceding EC2 instance is terminal, reads the one

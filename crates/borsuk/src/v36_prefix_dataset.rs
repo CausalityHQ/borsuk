@@ -1290,6 +1290,31 @@ pub fn deduplicate_v36_prefix_row_identities(
     Ok(unique)
 }
 
+/// Select the lowest v2 population-row hashes after physical-first deduplication.
+pub fn select_v36_prefix_population_rows(
+    rows: Vec<V36PrefixRowIdentity>,
+    ordered_source_manifest_sha256: &str,
+    count: usize,
+) -> Result<Vec<V36PrefixRowIdentity>> {
+    if count == 0 {
+        return Err(invalid("V36 prefix population row count differs"));
+    }
+    let source_identity = digest_bytes(ordered_source_manifest_sha256)?;
+    let seed: [u8; 32] = Sha256::digest(b"borsuk-v36-prefix-screen-population-row-v2").into();
+    let mut ranked = deduplicate_v36_prefix_row_identities(rows)?
+        .into_iter()
+        .map(|row| (score(&seed, &source_identity, row.feature_row_id), row))
+        .collect::<Vec<_>>();
+    if ranked.len() < count {
+        return Err(invalid("V36 prefix population is insufficient"));
+    }
+    ranked.sort_by(|left, right| {
+        (&left.0, left.1.feature_row_id).cmp(&(&right.0, right.1.feature_row_id))
+    });
+    ranked.truncate(count);
+    Ok(ranked.into_iter().map(|(_, row)| row).collect())
+}
+
 /// Validate membership against independently authenticated complete-object evidence.
 pub fn validate_v36_prefix_cutoff_membership(
     rows: &[V36PrefixRowIdentity],
@@ -1318,13 +1343,6 @@ fn score(seed: &[u8; 32], source_identity: &[u8; 32], feature_row_id: u64) -> [u
     hasher.finalize().into()
 }
 
-fn source_score(source_identity: &[u8; 32], feature_row_id: u64) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(source_identity);
-    hasher.update(feature_row_id.to_le_bytes());
-    hasher.finalize().into()
-}
-
 /// Compute one frozen prefix-population query score for audit and mutation tests.
 pub fn v36_prefix_query_score_sha256(
     seed_label: &str,
@@ -1344,8 +1362,9 @@ pub fn v36_prefix_source_score_sha256(
     source_identity_sha256: &str,
     feature_row_id: u64,
 ) -> Result<String> {
+    let seed: [u8; 32] = Sha256::digest(b"borsuk-v36-prefix-screen-corpus-v2").into();
     let source_identity = digest_bytes(source_identity_sha256)?;
-    Ok(source_score(&source_identity, feature_row_id)
+    Ok(score(&seed, &source_identity, feature_row_id)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
@@ -1355,10 +1374,10 @@ pub fn v36_prefix_source_score_sha256(
 pub fn validate_v36_prefix_role_authority(roles: &[V36PrefixRoleAuthority]) -> Result<()> {
     let expected_names = ["development", "validation", "sealed-holdout", "performance"];
     let expected_labels = [
-        "borsuk-v36-prefix-screen-development-query-v1",
-        "borsuk-v36-prefix-screen-validation-query-v1",
-        "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
-        "borsuk-v36-prefix-screen-performance-query-v1",
+        "borsuk-v36-prefix-screen-development-query-v2",
+        "borsuk-v36-prefix-screen-validation-query-v2",
+        "borsuk-v36-prefix-screen-sealed-holdout-query-v2",
+        "borsuk-v36-prefix-screen-performance-query-v2",
     ];
     let expected_rows = [1_000_u64, 1_000, 1_000, 10_000];
     if roles.len() != expected_names.len() {
@@ -1392,11 +1411,20 @@ pub fn select_v36_prefix_roles(
     validate_v36_prefix_population_authority(population, source_registry)?;
     validate_v36_prefix_role_authority(&population.roles)?;
     let source_identity = digest_bytes(&population.ordered_source_manifest_sha256)?;
-    let mut unique = deduplicate_v36_prefix_row_identities(rows)?;
-    let consumed_objects = population.consumed_objects.len();
-    validate_v36_prefix_cutoff_membership(&unique, consumed_objects, DISTINCT_CANDIDATES)?;
-    unique.truncate(DISTINCT_CANDIDATES);
-    let mut remaining = unique;
+    let window_start = population.selected_object_start;
+    let window_end = window_start
+        .checked_add(population.selected_object_count)
+        .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?;
+    if rows.iter().any(|row| {
+        row.selected_object_ordinal < window_start || row.selected_object_ordinal >= window_end
+    }) {
+        return Err(invalid("V36 prefix population row object differs"));
+    }
+    let mut remaining = select_v36_prefix_population_rows(
+        rows,
+        &population.ordered_source_manifest_sha256,
+        DISTINCT_CANDIDATES,
+    )?;
     let mut selected = Vec::with_capacity(4);
     for role in &population.roles {
         let seed = digest_bytes(&role.seed_sha256)?;
@@ -1416,9 +1444,15 @@ pub fn select_v36_prefix_roles(
         selected.push(ranked.into_iter().map(|(_, row)| row).collect::<Vec<_>>());
         remaining = rest.into_iter().map(|(_, row)| row).collect();
     }
+    let corpus_seed = digest_bytes(&population.corpus_seed_sha256)?;
     let mut corpus = remaining
         .into_iter()
-        .map(|row| (source_score(&source_identity, row.feature_row_id), row))
+        .map(|row| {
+            (
+                score(&corpus_seed, &source_identity, row.feature_row_id),
+                row,
+            )
+        })
         .collect::<Vec<_>>();
     corpus.sort_by(|left, right| {
         (&left.0, left.1.feature_row_id).cmp(&(&right.0, right.1.feature_row_id))
@@ -1683,6 +1717,11 @@ fn output_identity(
 /// Execute one complete bounded V36 diagnostic population freeze locally.
 pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
     let mut preflight = load_v36_prefix_freeze_preflight(&request)?;
+    crate::validate_v36_prefix_registered_screen_authority(
+        &preflight.authority,
+        &preflight.registry,
+    )?;
+    ensure_v36_prefix_complete_window_execution_available(&preflight.authority)?;
     let execution_authority_sha256 = format!(
         "{:x}",
         Sha256::digest(canonical_v36_prefix_freeze_execution_authority_bytes(
@@ -1936,6 +1975,14 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
     )?;
     acquired.cleanup()?;
     Ok(())
+}
+
+fn ensure_v36_prefix_complete_window_execution_available(
+    _authority: &V36PrefixFreezeAuthority,
+) -> Result<()> {
+    Err(invalid(
+        "V36 prefix complete-window population execution is unavailable",
+    ))
 }
 
 /// Authenticate every local attempt input before any source-object network access.
