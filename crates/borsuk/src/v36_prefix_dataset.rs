@@ -1,9 +1,9 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeSet, BinaryHeap},
-    fs::File,
+    fs::{self, File},
     io::{BufReader, Read},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -17,9 +17,12 @@ use parquet::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V36PrefixFreezeAuthority, V36PrefixPopulationAuthority,
-    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_population_authority,
+    BorsukError, Result, V36ArtifactIdentity, V36PrefixFreezeAuthority,
+    V36PrefixFreezeExecutionAuthority, V36PrefixPopulationAuthority,
+    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority,
+    canonical_v36_prefix_freeze_authority_bytes,
+    canonical_v36_prefix_freeze_execution_authority_bytes, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_population_authority,
 };
 
 const DIMENSIONS: usize = 768;
@@ -178,6 +181,38 @@ pub struct V36PrefixRankedSourceObject {
     pub sha256: String,
     /// Immutable object URI.
     pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Local immutable inputs for one bounded V36 prefix-freeze attempt.
+pub struct V36PrefixFreezeRequest {
+    /// Pre-freeze scientific authority path.
+    pub authority: PathBuf,
+    /// Executable whose exact bytes are bound by the attempt authority.
+    pub executable: PathBuf,
+    /// Attempt lifecycle and provenance authority path.
+    pub execution_authority: PathBuf,
+    /// Empty output directory owned by this attempt.
+    pub output: PathBuf,
+    /// Empty encrypted scratch directory owned by this attempt.
+    pub scratch: PathBuf,
+    /// Exact source-code archive evidence path.
+    pub source_archive: PathBuf,
+    /// Complete registered source-object list path.
+    pub source_registry: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated local state produced before any source-object network access.
+pub struct V36PrefixFreezePreflight {
+    /// Validated pre-freeze scientific authority.
+    pub authority: V36PrefixFreezeAuthority,
+    /// Validated lifecycle and provenance authority.
+    pub execution_authority: V36PrefixFreezeExecutionAuthority,
+    /// Complete source registry in its canonical encoded order.
+    pub registry: Vec<V36PrefixRegisteredSourceObject>,
+    /// Query-independently ranked complete objects.
+    pub ranked_objects: Vec<V36PrefixRankedSourceObject>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -485,6 +520,118 @@ fn sha256_file(path: &Path) -> Result<(u64, String)> {
         hasher.update(&buffer[..read]);
     }
     Ok((bytes, format!("{:x}", hasher.finalize())))
+}
+
+fn authenticate_file(path: &Path, expected: &V36ArtifactIdentity) -> Result<()> {
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut bytes = 0_u64;
+    let mut sha256 = Sha256::new();
+    let mut blake3 = blake3::Hasher::new();
+    loop {
+        let read = reader.read(&mut buffer).map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(u64::try_from(read).unwrap())
+            .ok_or_else(|| invalid("V36 prefix local input length overflows"))?;
+        sha256.update(&buffer[..read]);
+        blake3.update(&buffer[..read]);
+    }
+    if bytes != expected.encoded_bytes
+        || format!("{:x}", sha256.finalize()) != expected.sha256
+        || blake3.finalize().to_hex().as_str() != expected.blake3
+    {
+        return Err(invalid("V36 prefix local input authority differs"));
+    }
+    Ok(())
+}
+
+fn read_file(path: &Path) -> Result<Vec<u8>> {
+    fs::read(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+/// Authenticate every local attempt input before any source-object network access.
+pub fn load_v36_prefix_freeze_preflight(
+    request: &V36PrefixFreezeRequest,
+) -> Result<V36PrefixFreezePreflight> {
+    if request.output == request.scratch
+        || !request.output.is_dir()
+        || !request.scratch.is_dir()
+        || request
+            .output
+            .read_dir()
+            .map_err(|source| BorsukError::Io {
+                path: request.output.clone(),
+                source,
+            })?
+            .next()
+            .is_some()
+        || request
+            .scratch
+            .read_dir()
+            .map_err(|source| BorsukError::Io {
+                path: request.scratch.clone(),
+                source,
+            })?
+            .next()
+            .is_some()
+    {
+        return Err(invalid("V36 prefix attempt directories differ"));
+    }
+    let execution_bytes = read_file(&request.execution_authority)?;
+    let execution_authority: V36PrefixFreezeExecutionAuthority =
+        serde_json::from_slice(&execution_bytes)
+            .map_err(|_| invalid("V36 prefix execution authority JSON differs"))?;
+    validate_v36_prefix_freeze_execution_authority(&execution_authority)?;
+    if canonical_v36_prefix_freeze_execution_authority_bytes(&execution_authority)?
+        != execution_bytes
+    {
+        return Err(invalid("V36 prefix execution authority bytes differ"));
+    }
+    let input = |role: &str| {
+        execution_authority
+            .inputs
+            .iter()
+            .find(|input| input.role == role)
+            .ok_or_else(|| invalid("V36 prefix execution input role differs"))
+    };
+    authenticate_file(&request.executable, input("binary")?)?;
+    authenticate_file(&request.authority, input("freeze-authority")?)?;
+    authenticate_file(&request.source_archive, input("source-archive")?)?;
+    authenticate_file(&request.source_registry, input("source-registry")?)?;
+
+    let authority_bytes = read_file(&request.authority)?;
+    let authority: V36PrefixFreezeAuthority = serde_json::from_slice(&authority_bytes)
+        .map_err(|_| invalid("V36 prefix freeze authority JSON differs"))?;
+    let registry_bytes = read_file(&request.source_registry)?;
+    let registry: Vec<V36PrefixRegisteredSourceObject> = serde_json::from_slice(&registry_bytes)
+        .map_err(|_| invalid("V36 prefix source registry JSON differs"))?;
+    validate_v36_prefix_freeze_authority(&authority, &registry)?;
+    if canonical_v36_prefix_freeze_authority_bytes(&authority, &registry)? != authority_bytes
+        || crate::canonical_v36_prefix_source_registry_bytes(&authority, &registry)?
+            != registry_bytes
+    {
+        return Err(invalid("V36 prefix local authority bytes differ"));
+    }
+    let ranked_objects = rank_v36_prefix_source_objects(&authority, &registry)?;
+    Ok(V36PrefixFreezePreflight {
+        authority,
+        execution_authority,
+        registry,
+        ranked_objects,
+    })
 }
 
 /// Authenticate and stream one complete registered raw source object.

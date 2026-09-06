@@ -299,6 +299,28 @@ pub struct V36PrefixFreezeAuthority {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Immutable executable and lifecycle authority for one bounded freeze attempt.
+pub struct V36PrefixFreezeExecutionAuthority {
+    /// Maximum active execution wall time.
+    pub active_wall_seconds: u64,
+    /// Unique attempt identity.
+    pub attempt_id: String,
+    /// Maximum active seconds between durable checkpoint publications.
+    pub checkpoint_seconds: u64,
+    /// Diagnostic execution can never support a release claim.
+    pub claim_eligible: bool,
+    /// Exact binary, freeze-authority, source-archive, and registry identities.
+    pub inputs: Vec<V36ArtifactIdentity>,
+    /// Attempt-scoped S3 output prefix.
+    pub output_prefix: String,
+    /// Exact authority schema marker.
+    pub schema: String,
+    /// Exact source commit used to build the executable.
+    pub source_commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Authority for the bounded hash-object-sampled V36 population.
 pub struct V36PrefixPopulationAuthority {
     /// Diagnostic populations can never make release claims.
@@ -705,6 +727,90 @@ pub fn canonical_v36_prefix_freeze_authority_bytes(
     source_registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<Vec<u8>> {
     validate_v36_prefix_freeze_authority(authority, source_registry)?;
+    canonical_value_bytes(authority)
+}
+
+/// Canonical newline JSON for the complete registry bound by a freeze authority.
+pub fn canonical_v36_prefix_source_registry_bytes(
+    authority: &V36PrefixFreezeAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<Vec<u8>> {
+    validate_v36_prefix_freeze_authority(authority, source_registry)?;
+    canonical_value_bytes(&source_registry)
+}
+
+fn valid_s3_object_uri(uri: &str, prefix: bool) -> bool {
+    let Ok(parsed) = url::Url::parse(uri) else {
+        return false;
+    };
+    let path = parsed.path();
+    parsed.scheme() == "s3"
+        && parsed.host_str().is_some_and(|host| !host.is_empty())
+        && path.len() > 1
+        && !path.split('/').any(|part| part == "..")
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        && path.ends_with('/') == prefix
+}
+
+/// Validate the immutable executable and lifecycle authority for one attempt.
+pub fn validate_v36_prefix_freeze_execution_authority(
+    authority: &V36PrefixFreezeExecutionAuthority,
+) -> Result<()> {
+    if authority.schema != "borsuk-v36-prefix-freeze-execution-authority-v1"
+        || authority.claim_eligible
+        || authority.active_wall_seconds != 43_200
+        || authority.checkpoint_seconds != 300
+        || !authority.attempt_id.starts_with("v36-prefix-screen-")
+        || authority.attempt_id.len() > 128
+        || !authority
+            .attempt_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        || authority.source_commit.len() != 40
+        || !authority
+            .source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || authority
+            .source_commit
+            .bytes()
+            .any(|byte| byte.is_ascii_uppercase())
+        || !valid_s3_object_uri(&authority.output_prefix, true)
+    {
+        return Err(invalid("V36 prefix freeze execution authority differs"));
+    }
+    let expected_roles = [
+        "binary",
+        "freeze-authority",
+        "source-archive",
+        "source-registry",
+    ];
+    let mut uris = BTreeSet::new();
+    if authority.inputs.len() != expected_roles.len()
+        || authority
+            .inputs
+            .iter()
+            .zip(expected_roles)
+            .any(|(input, role)| {
+                input.role != role
+                    || input.encoded_bytes == 0
+                    || !valid_digest(&input.sha256)
+                    || !valid_digest(&input.blake3)
+                    || !valid_s3_object_uri(&input.uri, false)
+                    || !uris.insert(input.uri.as_str())
+            })
+    {
+        return Err(invalid("V36 prefix freeze execution inputs differ"));
+    }
+    Ok(())
+}
+
+/// Canonical newline JSON for one validated execution authority.
+pub fn canonical_v36_prefix_freeze_execution_authority_bytes(
+    authority: &V36PrefixFreezeExecutionAuthority,
+) -> Result<Vec<u8>> {
+    validate_v36_prefix_freeze_execution_authority(authority)?;
     canonical_value_bytes(authority)
 }
 

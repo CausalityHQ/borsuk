@@ -1,6 +1,6 @@
 //! Contract tests for the bounded V36 diagnostic population and exact truth.
 
-use std::sync::Arc;
+use std::{fs, path::Path, sync::Arc};
 
 use arrow_array::{
     ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray,
@@ -8,19 +8,22 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    V36PrefixFreezeAuthority, V36PrefixGtAccumulator, V36PrefixInputRow,
+    V36ArtifactIdentity, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
+    V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixInputRow,
     V36PrefixPopulationAuthority, V36PrefixQualityRole, V36PrefixRankedSourceObject,
     V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
-    deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100, rank_v36_prefix_source_objects,
+    canonical_v36_prefix_freeze_execution_authority_bytes,
+    canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
+    exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, rank_v36_prefix_source_objects,
     scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
     select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
     v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
     validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_input_row,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -308,6 +311,137 @@ fn v36_prefix_dataset_allows_complete_duplicate_only_objects_before_the_cutoff()
     assert!(validate_v36_prefix_cutoff_membership(&outside, 3, 2).is_err());
     assert!(validate_v36_prefix_cutoff_membership(&rows, 3, 3).is_err());
     assert!(validate_v36_prefix_cutoff_membership(&rows, 2, 2).is_err());
+}
+
+fn execution_authority() -> V36PrefixFreezeExecutionAuthority {
+    V36PrefixFreezeExecutionAuthority {
+        active_wall_seconds: 43_200,
+        attempt_id: "v36-prefix-screen-r01-attempt-0001".into(),
+        checkpoint_seconds: 300,
+        claim_eligible: false,
+        inputs: [
+            "binary",
+            "freeze-authority",
+            "source-archive",
+            "source-registry",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, role)| V36ArtifactIdentity {
+            blake3: format!("{:064x}", ordinal + 1),
+            encoded_bytes: 1_024 + ordinal as u64,
+            role: role.into(),
+            sha256: format!("{:064x}", ordinal + 11),
+            uri: format!("s3://fixture/v36/{role}"),
+        })
+        .collect(),
+        output_prefix: "s3://fixture/v36/output/attempt-0001/".into(),
+        schema: "borsuk-v36-prefix-freeze-execution-authority-v1".into(),
+        source_commit: "1".repeat(40),
+    }
+}
+
+fn file_identity(role: &str, uri: &str, path: &Path) -> V36ArtifactIdentity {
+    let bytes = fs::read(path).unwrap();
+    V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes: bytes.len().try_into().unwrap(),
+        role: role.into(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri: uri.into(),
+    }
+}
+
+#[test]
+fn v36_prefix_dataset_execution_authority_binds_provenance_and_lifecycle() {
+    let authority = execution_authority();
+    validate_v36_prefix_freeze_execution_authority(&authority).unwrap();
+    let bytes = canonical_v36_prefix_freeze_execution_authority_bytes(&authority).unwrap();
+    assert_eq!(bytes.last(), Some(&b'\n'));
+
+    let mut drifted = authority.clone();
+    drifted.inputs[0].role = "source-registry".into();
+    assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());
+    let mut drifted = authority.clone();
+    drifted.inputs[1].uri = drifted.inputs[0].uri.clone();
+    assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());
+    let mut drifted = authority.clone();
+    drifted.active_wall_seconds += 1;
+    assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());
+    let mut drifted = authority;
+    drifted.output_prefix.pop();
+    assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());
+}
+
+#[test]
+fn v36_prefix_dataset_preflight_authenticates_every_local_input_before_network() {
+    let directory = tempfile::tempdir().unwrap();
+    let authority_path = directory.path().join("authority.json");
+    let execution_path = directory.path().join("execution.json");
+    let registry_path = directory.path().join("registry.json");
+    let archive_path = directory.path().join("source.tar.zst");
+    let binary_path = directory.path().join("v36_prefix_freeze");
+    let output = directory.path().join("output");
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&output).unwrap();
+    fs::create_dir(&scratch).unwrap();
+    fs::write(&archive_path, b"source archive evidence").unwrap();
+    fs::write(&binary_path, b"freezer executable evidence").unwrap();
+
+    let registry = source_registry();
+    let authority = freeze_authority(&registry);
+    fs::write(
+        &authority_path,
+        canonical_v36_prefix_freeze_authority_bytes(&authority, &registry).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &registry_path,
+        canonical_v36_prefix_source_registry_bytes(&authority, &registry).unwrap(),
+    )
+    .unwrap();
+    let mut execution = execution_authority();
+    execution.inputs = [
+        ("binary", "s3://fixture/v36/binary", binary_path.as_path()),
+        (
+            "freeze-authority",
+            "s3://fixture/v36/authority",
+            authority_path.as_path(),
+        ),
+        (
+            "source-archive",
+            "s3://fixture/v36/archive",
+            archive_path.as_path(),
+        ),
+        (
+            "source-registry",
+            "s3://fixture/v36/registry",
+            registry_path.as_path(),
+        ),
+    ]
+    .into_iter()
+    .map(|(role, uri, path)| file_identity(role, uri, path))
+    .collect();
+    fs::write(
+        &execution_path,
+        canonical_v36_prefix_freeze_execution_authority_bytes(&execution).unwrap(),
+    )
+    .unwrap();
+    let request = V36PrefixFreezeRequest {
+        authority: authority_path,
+        executable: binary_path,
+        execution_authority: execution_path,
+        output,
+        scratch,
+        source_archive: archive_path.clone(),
+        source_registry: registry_path,
+    };
+    let preflight = load_v36_prefix_freeze_preflight(&request).unwrap();
+    assert_eq!(preflight.ranked_objects.len(), registry.len());
+    assert_eq!(preflight.authority.object_cap, 16);
+
+    fs::write(&archive_path, b"mutated archive evidence").unwrap();
+    assert!(load_v36_prefix_freeze_preflight(&request).is_err());
 }
 
 #[test]
