@@ -149,12 +149,44 @@ struct SrhtTrainingDescriptor {
 #[derive(Debug, Clone, PartialEq)]
 /// One projected query plus its clamped complement-energy heuristic.
 pub struct V35ProjectedQuery {
+    coordinates: Vec<f64>,
+    complement_energy: f64,
+    backend: V35ProjectionBackend,
+    source_query: Vec<f32>,
+    source_digest: [u8; 32],
+    projection_checksum: [u8; 32],
+}
+
+impl V35ProjectedQuery {
     /// Routing coordinates in logical output order.
-    pub coordinates: Vec<f64>,
+    pub fn coordinates(&self) -> &[f64] {
+        &self.coordinates
+    }
+
     /// `max(0, ||q||²-||Pq||²)` over the decoded f32 basis.
-    pub complement_energy: f64,
+    pub fn complement_energy(&self) -> f64 {
+        self.complement_energy
+    }
+
     /// Registered arithmetic backend.
-    pub backend: V35ProjectionBackend,
+    pub fn backend(&self) -> V35ProjectionBackend {
+        self.backend
+    }
+
+    /// Canonical source query retained for exact reranking.
+    pub fn source_query(&self) -> &[f32] {
+        &self.source_query
+    }
+
+    /// Domain-separated digest of source query, dimensions, and projection.
+    pub fn source_digest(&self) -> [u8; 32] {
+        self.source_digest
+    }
+
+    /// Exact projection basis used to derive routing coordinates.
+    pub fn projection_checksum(&self) -> [u8; 32] {
+        self.projection_checksum
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1118,6 +1150,18 @@ fn complement_energy(query: &[f32], coordinates: &[f64]) -> f64 {
     if energy == 0.0 { 0.0 } else { energy }
 }
 
+fn source_query_digest(projection: &V35Projection, query: &[f32]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"borsuk-v35-source-query-v1\n");
+    digest.update(projection.dimensions.source.to_le_bytes());
+    digest.update(projection.dimensions.routing.to_le_bytes());
+    digest.update(projection.checksum);
+    for value in query {
+        digest.update(value.to_bits().to_le_bytes());
+    }
+    digest.finalize().into()
+}
+
 /// Project with the increasing-source-dimension scalar f64 authority.
 pub fn project_v35_query_scalar(
     projection: &V35Projection,
@@ -1144,6 +1188,9 @@ pub fn project_v35_query_scalar(
         complement_energy: complement_energy(query, &coordinates),
         coordinates,
         backend: V35ProjectionBackend::ScalarControl,
+        source_query: query.to_vec(),
+        source_digest: source_query_digest(projection, query),
+        projection_checksum: projection.checksum,
     })
 }
 
@@ -1176,5 +1223,8 @@ pub fn project_v35_query_simd(
         complement_energy: complement_energy(query, &coordinates),
         coordinates,
         backend,
+        source_query: query.to_vec(),
+        source_digest: source_query_digest(projection, query),
+        projection_checksum: projection.checksum,
     })
 }

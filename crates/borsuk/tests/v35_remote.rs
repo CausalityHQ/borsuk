@@ -7,7 +7,8 @@ use borsuk::{
     V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
     V35VersionedRangeReader, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
     build_v35_routing_generation, build_v35_srht, execute_v35_remote_plan, exhaustive_v35_route,
-    plan_v35_remote_reads, reduce_v35_scanned_candidates, select_v35_exact_pages,
+    plan_v35_remote_reads, project_v35_query_scalar, reduce_v35_scanned_candidates,
+    select_v35_exact_pages,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -58,10 +59,10 @@ fn selected_route(blocks: &[V35ArtifactIdentity]) -> V35RoutePrefix {
         V35GroupStorage::new_bound(1, 2, 100, binding(0x51), &blocks[1]).unwrap(),
         V35GroupStorage::new_bound(2, 2, 100, binding(0x51), &blocks[2]).unwrap(),
     ];
+    let query = project_v35_query_scalar(&projection, &[0.0; 384]).unwrap();
     exhaustive_v35_route(
         &generation,
-        &[0.0; 64],
-        0.0,
+        &query,
         &groups,
         V35RouteBudget::new(2, 4, 300).unwrap(),
     )

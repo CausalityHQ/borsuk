@@ -143,19 +143,19 @@ fn v35_projection_simd_matches_ordered_f64_authority_exactly() {
     for query in &queries {
         let scalar = project_v35_query_scalar(&projection, query).unwrap();
         let simd = project_v35_query_simd(&projection, query).unwrap();
-        assert_eq!(scalar.coordinates.len(), 64);
+        assert_eq!(scalar.coordinates().len(), 64);
         assert!(
             scalar
-                .coordinates
+                .coordinates()
                 .iter()
-                .zip(&simd.coordinates)
+                .zip(simd.coordinates())
                 .all(|(left, right)| left.to_bits() == right.to_bits())
         );
         assert_eq!(
-            scalar.complement_energy.to_bits(),
-            simd.complement_energy.to_bits()
+            scalar.complement_energy().to_bits(),
+            simd.complement_energy().to_bits()
         );
-        assert!(simd.backend.is_fused());
+        assert!(simd.backend().is_fused());
     }
 
     let mut nonfinite = vec![0.0; 384];
@@ -568,7 +568,7 @@ fn v35_projection_pca_preserves_scaled_rank_and_canonicalizes_null_completion() 
     query[95] = 1.0;
     let projected = project_v35_query_scalar(&projection, &query).unwrap();
     let captured = projected
-        .coordinates
+        .coordinates()
         .iter()
         .fold(0.0, |sum, value| value.mul_add(*value, sum));
     assert!(
@@ -602,7 +602,7 @@ fn v35_projection_pca_canonicalizes_repeated_eigenspace_before_truncation() {
         query[dimension] = 1.0;
         let projected = project_v35_query_scalar(&projection, &query).unwrap();
         let captured = projected
-            .coordinates
+            .coordinates()
             .iter()
             .fold(0.0, |sum, value| value.mul_add(*value, sum));
         if dimension < 64 {
@@ -688,17 +688,17 @@ fn v35_projection_simd_covers_registered_high_dimension_matrix() {
                 .collect::<Vec<_>>();
             let scalar = project_v35_query_scalar(&projection, &query).unwrap();
             let simd = project_v35_query_simd(&projection, &query).unwrap();
-            assert!(simd.backend.is_fused());
+            assert!(simd.backend().is_fused());
             assert!(
                 scalar
-                    .coordinates
+                    .coordinates()
                     .iter()
-                    .zip(&simd.coordinates)
+                    .zip(simd.coordinates())
                     .all(|(left, right)| left.to_bits() == right.to_bits())
             );
             assert_eq!(
-                scalar.complement_energy.to_bits(),
-                simd.complement_energy.to_bits()
+                scalar.complement_energy().to_bits(),
+                simd.complement_energy().to_bits()
             );
         }
     }

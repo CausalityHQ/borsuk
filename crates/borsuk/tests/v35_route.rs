@@ -5,7 +5,7 @@ use borsuk::{
     V35RoutingGenerationLimits, bound_v35_node, build_v35_leaf_patch_arm, build_v35_route_tree,
     build_v35_routing_generation, build_v35_srht, decode_v35_generation_arrow,
     encode_v35_generation_arrow, exhaustive_v35_route, hierarchical_v35_route,
-    project_v35_route_tree_bytes, score_v35_leaf_patch_arm,
+    project_v35_query_scalar, project_v35_route_tree_bytes, score_v35_leaf_patch_arm,
 };
 
 const MIB: u64 = 1_048_576;
@@ -57,6 +57,15 @@ fn fixture(
     (generation, groups, expected_scores)
 }
 
+fn zero_query(generation: &borsuk::V35RoutingGeneration, seed: u64) -> borsuk::V35ProjectedQuery {
+    let projection = build_v35_srht(generation.dimensions(), seed).unwrap();
+    project_v35_query_scalar(
+        &projection,
+        &vec![0.0; usize::try_from(generation.dimensions().source).unwrap()],
+    )
+    .unwrap()
+}
+
 type RouteEvidence = (Vec<(u32, u32, u64)>, Option<(u32, u32)>, u64, u64);
 
 fn route_evidence(route: &V35RoutePrefix) -> RouteEvidence {
@@ -81,14 +90,45 @@ fn route_evidence(route: &V35RoutePrefix) -> RouteEvidence {
 }
 
 #[test]
+fn v35_route_binds_the_source_query_and_projection_before_scoring() {
+    // Break caught: routing binds only projected coordinates, so exact rerank
+    // can silently consume a different source query or projection generation.
+    let (generation, groups, _) = fixture(64, &[(0, 0.0), (1, 1.0)]);
+    let projection = build_v35_srht(generation.dimensions(), 91).unwrap();
+    let source = vec![0.0_f32; 64];
+    let query = project_v35_query_scalar(&projection, &source).unwrap();
+    let route = exhaustive_v35_route(
+        &generation,
+        &query,
+        &groups,
+        V35RouteBudget::new(2, 4, 1_000).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(query.source_query(), source);
+    assert_eq!(route.query_digest(), query.source_digest());
+
+    let different_projection = build_v35_srht(generation.dimensions(), 92).unwrap();
+    let mismatched = project_v35_query_scalar(&different_projection, &source).unwrap();
+    assert!(
+        exhaustive_v35_route(
+            &generation,
+            &mismatched,
+            &groups,
+            V35RouteBudget::new(2, 4, 1_000).unwrap(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn v35_route_exhaustive_uses_group_minima_stable_order_and_complete_prefix() {
     // Break caught: duplicate leaves overwrite rather than minimize, ties use
     // discovery order, or a group is partially admitted.
     let (generation, groups, scores) = fixture(64, &[(0, 3.0), (1, 1.0), (1, 0.5), (2, 2.0)]);
+    let query = zero_query(&generation, 91);
     let route = exhaustive_v35_route(
         &generation,
-        &[0.0; 64],
-        0.0,
+        &query,
         &groups,
         V35RouteBudget::new(3, 8, 330).unwrap(),
     )
@@ -122,7 +162,8 @@ fn v35_route_exhaustive_stops_at_first_overflow_without_group_skipping() {
         V35RouteBudget::new(3, 2, 1_000).unwrap(),
         V35RouteBudget::new(3, 6, 150).unwrap(),
     ] {
-        let route = exhaustive_v35_route(&generation, &[0.0; 64], 0.0, &groups, budget).unwrap();
+        let query = zero_query(&generation, 91);
+        let route = exhaustive_v35_route(&generation, &query, &groups, budget).unwrap();
         assert_eq!(route.selected_groups().len(), 1);
         assert_eq!(route.selected_groups()[0].group_ordinal(), 0);
         assert_eq!(route.overflow().unwrap().group_ordinal(), 1);
@@ -140,12 +181,12 @@ fn v35_route_hierarchy_matches_exhaustive_for_every_routing_width() {
     // selected groups, scores, rows, bytes, or first overflow.
     for routing in [64, 128, 192] {
         let (generation, groups, _) = fixture(routing, &[(0, -1.0), (1, 1.0), (2, 0.5), (3, 2.0)]);
-        let query = vec![0.0; usize::from(routing)];
+        let query = zero_query(&generation, 91);
         let budget = V35RouteBudget::new(3, 6, 1_000).unwrap();
-        let exhaustive = exhaustive_v35_route(&generation, &query, 0.0, &groups, budget).unwrap();
+        let exhaustive = exhaustive_v35_route(&generation, &query, &groups, budget).unwrap();
         let tree = build_v35_route_tree(&generation).unwrap();
         let hierarchical =
-            hierarchical_v35_route(&generation, &tree, &query, 0.0, &groups, budget).unwrap();
+            hierarchical_v35_route(&generation, &tree, &query, &groups, budget).unwrap();
         assert_eq!(route_evidence(&hierarchical), route_evidence(&exhaustive));
         assert!(hierarchical.exact_leaf_evaluations() <= generation.leaf_count());
         assert!(hierarchical.bound_evaluations() > 0);
@@ -252,11 +293,11 @@ fn v35_route_hierarchy_certifies_a_narrow_prefix_without_scanning_every_leaf() {
         .map(|leaf| (leaf, leaf as f32 * 100.0))
         .collect::<Vec<_>>();
     let (generation, groups, _) = fixture(64, &means);
+    let query = zero_query(&generation, 91);
     let budget = V35RouteBudget::new(1, 2, 8 * MIB).unwrap();
-    let exact = exhaustive_v35_route(&generation, &[0.0; 64], 0.0, &groups, budget).unwrap();
+    let exact = exhaustive_v35_route(&generation, &query, &groups, budget).unwrap();
     let tree = build_v35_route_tree(&generation).unwrap();
-    let routed =
-        hierarchical_v35_route(&generation, &tree, &[0.0; 64], 0.0, &groups, budget).unwrap();
+    let routed = hierarchical_v35_route(&generation, &tree, &query, &groups, budget).unwrap();
     assert_eq!(route_evidence(&routed), route_evidence(&exact));
     assert!(routed.exact_leaf_evaluations() < generation.leaf_count());
 }
@@ -285,12 +326,12 @@ fn v35_route_uses_the_authenticated_columnar_generation_without_row_owners() {
     )
     .unwrap();
     assert!(decoded.is_columnar_serving());
+    let query = project_v35_query_scalar(&projection, &[0.0; 64]).unwrap();
     let budget = V35RouteBudget::new(2, 4, 1_000).unwrap();
-    let construction_route =
-        exhaustive_v35_route(&generation, &[0.0; 64], 0.0, &groups, budget).unwrap();
+    let construction_route = exhaustive_v35_route(&generation, &query, &groups, budget).unwrap();
     let decoded_tree = build_v35_route_tree(&decoded).unwrap();
     let decoded_route =
-        hierarchical_v35_route(&decoded, &decoded_tree, &[0.0; 64], 0.0, &groups, budget).unwrap();
+        hierarchical_v35_route(&decoded, &decoded_tree, &query, &groups, budget).unwrap();
     assert_eq!(
         route_evidence(&decoded_route),
         route_evidence(&construction_route)
@@ -304,12 +345,12 @@ fn v35_route_tree_rejects_a_different_generation_with_matching_outer_metadata() 
     let (first, groups, _) = fixture(64, &[(0, 0.0), (1, 1.0), (2, 2.0)]);
     let (different, _, _) = fixture(64, &[(0, 0.5), (1, 1.5), (2, 2.5)]);
     let tree = build_v35_route_tree(&first).unwrap();
+    let query = zero_query(&different, 91);
     assert!(
         hierarchical_v35_route(
             &different,
             &tree,
-            &[0.0; 64],
-            0.0,
+            &query,
             &groups,
             V35RouteBudget::new(2, 4, 1_000).unwrap(),
         )
@@ -431,11 +472,11 @@ fn v35_route_hierarchy_expands_ambiguous_ties_and_returns_after_all_groups() {
     // Break caught: ambiguous equal bounds are certified early, or an all-fit
     // query continues traversal after every complete group is established.
     let (generation, groups, _) = fixture(64, &[(0, 1.0); 32]);
+    let query = zero_query(&generation, 91);
     let budget = V35RouteBudget::new(1, 64, 8 * MIB).unwrap();
-    let exact = exhaustive_v35_route(&generation, &[0.0; 64], 0.0, &groups, budget).unwrap();
+    let exact = exhaustive_v35_route(&generation, &query, &groups, budget).unwrap();
     let tree = build_v35_route_tree(&generation).unwrap();
-    let routed =
-        hierarchical_v35_route(&generation, &tree, &[0.0; 64], 0.0, &groups, budget).unwrap();
+    let routed = hierarchical_v35_route(&generation, &tree, &query, &groups, budget).unwrap();
     assert_eq!(route_evidence(&routed), route_evidence(&exact));
     assert_eq!(routed.exact_leaf_evaluations(), generation.leaf_count());
     assert!(routed.overflow().is_none());

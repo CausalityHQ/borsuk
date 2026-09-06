@@ -1,6 +1,9 @@
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use crate::{BorsukError, Result, V35ArtifactIdentity, V35Dimensions, V35RoutingGeneration};
+use crate::{
+    BorsukError, Result, V35ArtifactIdentity, V35Dimensions, V35ProjectedQuery,
+    V35RoutingGeneration,
+};
 use sha2::{Digest, Sha256};
 
 const MAX_GROUPS: u32 = 64;
@@ -216,7 +219,8 @@ impl V35RoutePrefix {
     pub(crate) fn generation_digest(&self) -> [u8; 32] {
         self.generation_digest
     }
-    pub(crate) fn query_digest(&self) -> [u8; 32] {
+    /// Source-query and projection authority carried into remote execution.
+    pub fn query_digest(&self) -> [u8; 32] {
         self.query_digest
     }
     pub(crate) fn remote_binding(&self) -> Option<V35RemoteDirectoryBinding> {
@@ -224,21 +228,16 @@ impl V35RoutePrefix {
     }
 }
 
-fn route_query_digest(query: &[f64], omitted: f64) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update((query.len() as u64).to_le_bytes());
-    for value in query {
-        hasher.update(value.to_bits().to_le_bytes());
-    }
-    hasher.update(omitted.to_bits().to_le_bytes());
-    hasher.finalize().into()
-}
-
-fn validate_query(generation: &V35RoutingGeneration, query: &[f64], omitted: f64) -> Result<()> {
-    if query.len() != usize::from(generation.dimensions().routing)
-        || query.iter().any(|value| !value.is_finite())
-        || !omitted.is_finite()
-        || omitted < 0.0
+fn validate_query(generation: &V35RoutingGeneration, query: &V35ProjectedQuery) -> Result<()> {
+    if query.coordinates().len() != usize::from(generation.dimensions().routing)
+        || query.coordinates().iter().any(|value| !value.is_finite())
+        || !query.complement_energy().is_finite()
+        || query.complement_energy() < 0.0
+        || query.source_query().len()
+            != usize::try_from(generation.dimensions().source).unwrap_or(usize::MAX)
+        || query.source_query().iter().any(|value| !value.is_finite())
+        || query.projection_checksum() != generation.projection_checksum()
+        || query.source_digest() == [0; 32]
     {
         return Err(invalid("V35 route query differs"));
     }
@@ -353,20 +352,24 @@ fn admit_prefix(
 /// Score every leaf and admit the exact complete group prefix.
 pub fn exhaustive_v35_route(
     generation: &V35RoutingGeneration,
-    query: &[f64],
-    omitted: f64,
+    query: &V35ProjectedQuery,
     groups: &[V35GroupStorage],
     budget: V35RouteBudget,
 ) -> Result<V35RoutePrefix> {
-    validate_query(generation, query, omitted)?;
+    validate_query(generation, query)?;
     validate_groups(generation, groups)?;
     admit_prefix(
-        exact_group_order(generation, query, omitted, groups)?,
+        exact_group_order(
+            generation,
+            query.coordinates(),
+            query.complement_energy(),
+            groups,
+        )?,
         budget,
         generation.leaf_count(),
         0,
         generation.route_authority_digest(),
-        route_query_digest(query, omitted),
+        query.source_digest(),
         groups.first().and_then(|group| group.remote_binding),
     )
 }
@@ -936,8 +939,7 @@ impl Ord for LeafCandidate {
 pub fn hierarchical_v35_route(
     generation: &V35RoutingGeneration,
     tree: &V35RouteTree,
-    query: &[f64],
-    omitted: f64,
+    query: &V35ProjectedQuery,
     groups: &[V35GroupStorage],
     budget: V35RouteBudget,
 ) -> Result<V35RoutePrefix> {
@@ -951,14 +953,16 @@ pub fn hierarchical_v35_route(
     {
         return Err(invalid("V35 route tree authority differs"));
     }
-    validate_query(generation, query, omitted)?;
+    validate_query(generation, query)?;
     validate_groups(generation, groups)?;
     let generation_digest = generation.route_authority_digest();
-    let query_digest = route_query_digest(query, omitted);
+    let query_digest = query.source_digest();
+    let coordinates = query.coordinates();
+    let omitted = query.complement_energy();
     let remote_binding = groups.first().and_then(|group| group.remote_binding);
     let mut nodes = BinaryHeap::new();
     nodes.push(NodeCandidate {
-        bound: bound_v35_node(tree, 0, query, omitted)?,
+        bound: bound_v35_node(tree, 0, coordinates, omitted)?,
         ordinal: 0,
     });
     let mut bound_evaluations = 1;
@@ -1054,7 +1058,11 @@ pub fn hierarchical_v35_route(
             {
                 exact_leaf_evaluations += 1;
                 let candidate = LeafCandidate {
-                    score: generation.route_score_leaf(*leaf_ordinal as usize, query, omitted)?,
+                    score: generation.route_score_leaf(
+                        *leaf_ordinal as usize,
+                        coordinates,
+                        omitted,
+                    )?,
                     group_ordinal: generation.route_group_ordinal(*leaf_ordinal as usize)?,
                     leaf_ordinal: *leaf_ordinal,
                 };
@@ -1077,7 +1085,7 @@ pub fn hierarchical_v35_route(
             {
                 bound_evaluations += 1;
                 nodes.push(NodeCandidate {
-                    bound: bound_v35_node(tree, child, query, omitted)?,
+                    bound: bound_v35_node(tree, child, coordinates, omitted)?,
                     ordinal: child,
                 });
             }
