@@ -291,10 +291,10 @@ pub use v35_remote::{
     V35ResidualSqDescriptor, V35ResidualSqScorer, V35ScannedCandidate, V35SearchResult,
     V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
     build_v35_residual_sq_descriptor, decode_v35_remote_directory_arrow,
-    encode_v35_exact_page_parquet, encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow,
-    execute_v35_remote_plan, plan_v35_remote_reads, reduce_v35_scanned_candidates,
-    rerank_v35_exact_pages, scan_v35_code_ranges, select_v35_exact_pages,
-    v35_remote_code_schema_digest,
+    decode_v35_snapshot_visibility_arrow, encode_v35_exact_page_parquet,
+    encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
+    plan_v35_remote_reads, reduce_v35_scanned_candidates, rerank_v35_exact_pages,
+    scan_v35_code_ranges, select_v35_exact_pages, v35_remote_code_schema_digest,
 };
 #[doc(hidden)]
 pub use v35_route::{

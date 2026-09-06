@@ -342,6 +342,12 @@ generation atomically.
 
 Every pinned snapshot includes a complete mutation directory for all admitted
 deltas, keyed by ID and containing latest sequence plus live/tombstone state.
+The directory is one canonical Arrow IPC file with exactly one non-null
+`(id: u64, sequence: u64, live: bool)` batch in strictly increasing ID order.
+Its snapshot digest is the SHA-256 of those exact canonical bytes; callers
+cannot supply an unrelated digest label. Readers authenticate the registered
+role, URI, length, digest, schema, manifest, batch count, order, and canonical
+re-encoding before constructing visibility state.
 The directory is consulted before a base or delta candidate enters the bounded
 heap, so a moved replacement or tombstone in an unselected group still removes
 the stale base row. At one million delta IDs its checked 32-byte entries consume

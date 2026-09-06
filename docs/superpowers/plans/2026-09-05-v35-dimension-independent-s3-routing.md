@@ -253,6 +253,14 @@
 
   Require conditional publication, base-plus-ordered-delta pinning, a complete snapshot mutation directory, `(id,sequence)` latest-wins suppression before heap admission even when the replacement/tombstone route is unselected, four-run/one-million-row admission, checked 32-byte directory entries, reader-safe retirement, and deterministic compaction. Pin one-bit immutable active/retiring base-row liveness planes inside the exact 25,000,000-B cache component; replacement/delete publication changes these planes rather than rewriting full base code or vector pages. Require the same snapshot liveness decision before candidate-heap admission and after exact-page decode; stale rows may charge route work but never enter either result stage. Pin the single 64-MiB delta reservation across all old/new pinned directories, construction copies, hash-table capacity, run metadata, delta leaves, and delta trees; an old-reader publication race must backpressure before allocating an over-budget copy.
 
+  Encode the complete mutation directory as one canonical Arrow IPC file with
+  one non-null `(id: u64, sequence: u64, live: bool)` batch ordered by ID.
+  Derive the snapshot SHA-256 from the exact encoded bytes; authenticate its
+  role, URI, length, schema, manifest, batch count, order, and byte-for-byte
+  canonical re-encoding before exposing visibility state. Mutation-lock body,
+  identity, schema, ordering, nullability, sequence-zero, and caller-supplied
+  digest substitution.
+
 - [ ] **Step 3: Run RED**
 
   Run: `cargo test -p borsuk --test v35_build -- --nocapture`

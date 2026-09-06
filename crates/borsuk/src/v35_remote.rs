@@ -9,8 +9,8 @@ use crate::{
     V35RoutePrefix, simd_control::f32x8, v35_route::v35_artifact_authority_digest,
 };
 use arrow_array::{
-    Array, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch, StringArray,
-    UInt32Array, UInt64Array,
+    Array, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
+    StringArray, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     MetadataVersion,
@@ -38,6 +38,8 @@ const MAX_CANDIDATES: usize = 12_288;
 const MAX_MUTATION_ENTRIES: usize = 1_000_000;
 const MAX_DIRECTORY_BLOCK_BYTES: u64 = MIB;
 const MAX_DIRECTORY_CHUNKS: usize = 64;
+const SNAPSHOT_FORMAT: &str = "borsuk-v35-snapshot-visibility-arrow-v1";
+const SNAPSHOT_MANIFEST_KEY: &str = "borsuk.v35.snapshot-visibility.manifest";
 const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
 const CODE_FORMAT: &str = "borsuk-v35-remote-code-arrow-v2";
 const CODE_MANIFEST_KEY: &str = "borsuk.v35.remote-code.manifest";
@@ -105,16 +107,91 @@ pub struct V35SnapshotVisibility {
     entries: Vec<V35SnapshotEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35SnapshotManifest {
+    format: String,
+    rows: u32,
+}
+
+fn snapshot_visibility_schema(rows: usize) -> Result<Arc<Schema>> {
+    let manifest = V35SnapshotManifest {
+        format: SNAPSHOT_FORMAT.to_owned(),
+        rows: u32::try_from(rows).map_err(|_| invalid("V35 snapshot rows overflow"))?,
+    };
+    let manifest = serde_json::to_string(&manifest)
+        .map_err(|_| invalid("V35 snapshot manifest cannot be serialized"))?;
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("live", DataType::Boolean, false),
+        ],
+        HashMap::from([(SNAPSHOT_MANIFEST_KEY.to_owned(), manifest)]),
+    )))
+}
+
+fn validate_snapshot_entries(entries: &[V35SnapshotEntry]) -> Result<()> {
+    if entries.len() > MAX_MUTATION_ENTRIES
+        || entries.windows(2).any(|pair| pair[0].id >= pair[1].id)
+        || entries.iter().any(|entry| entry.sequence == 0)
+    {
+        return Err(invalid("V35 snapshot visibility authority differs"));
+    }
+    Ok(())
+}
+
 impl V35SnapshotVisibility {
-    /// Construct a strict ID-ordered visibility snapshot.
-    pub fn new(digest: [u8; 32], entries: Vec<V35SnapshotEntry>) -> Result<Self> {
-        if digest == [0; 32]
-            || entries.len() > MAX_MUTATION_ENTRIES
-            || entries.windows(2).any(|pair| pair[0].id >= pair[1].id)
-        {
-            return Err(invalid("V35 snapshot visibility authority differs"));
-        }
-        Ok(Self { digest, entries })
+    /// Construct a strict ID-ordered snapshot with a content-derived digest.
+    pub fn new(entries: Vec<V35SnapshotEntry>) -> Result<Self> {
+        validate_snapshot_entries(&entries)?;
+        let mut snapshot = Self {
+            digest: [0; 32],
+            entries,
+        };
+        snapshot.digest = Sha256::digest(snapshot.canonical_bytes()?).into();
+        Ok(snapshot)
+    }
+
+    /// Content-derived SHA-256 authority for this complete mutation directory.
+    pub fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
+
+    /// Encode the one strict cross-language Arrow snapshot directory.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        validate_snapshot_entries(&self.entries)?;
+        let schema = snapshot_visibility_schema(self.entries.len())?;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(
+                    self.entries
+                        .iter()
+                        .map(|entry| entry.id)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt64Array::from(
+                    self.entries
+                        .iter()
+                        .map(|entry| entry.sequence)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(BooleanArray::from(
+                    self.entries
+                        .iter()
+                        .map(|entry| entry.live)
+                        .collect::<Vec<_>>(),
+                )),
+            ],
+        )?;
+        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+        let mut bytes = Vec::new();
+        let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+        drop(writer);
+        Ok(bytes)
     }
 
     fn admits(&self, id: u64, sequence: u64) -> bool {
@@ -125,6 +202,74 @@ impl V35SnapshotVisibility {
                 entry.live && entry.sequence == sequence
             })
     }
+}
+
+/// Authenticate and decode a complete canonical Arrow mutation directory.
+pub fn decode_v35_snapshot_visibility_arrow(
+    bytes: &[u8],
+    registered: &V35ArtifactIdentity,
+) -> Result<V35SnapshotVisibility> {
+    if registered.role != "snapshot-visibility-directory"
+        || registered.digest_algorithm != "sha256"
+        || registered.length != bytes.len() as u64
+        || registered.digest != format!("{:x}", Sha256::digest(bytes))
+        || !registered.uri.starts_with("s3://")
+        || registered.uri.contains("/corpus/")
+    {
+        return Err(invalid("V35 snapshot object authority differs"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    let schema = reader.schema();
+    let manifest_json = schema
+        .metadata()
+        .get(SNAPSHOT_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V35 snapshot manifest is missing"))?;
+    let manifest: V35SnapshotManifest = serde_json::from_str(manifest_json)
+        .map_err(|_| invalid("V35 snapshot manifest differs"))?;
+    if schema.metadata().len() != 1
+        || serde_json::to_string(&manifest)
+            .map_err(|_| invalid("V35 snapshot manifest cannot be serialized"))?
+            != *manifest_json
+        || manifest.format != SNAPSHOT_FORMAT
+        || reader.num_batches() != 1
+        || schema.as_ref() != snapshot_visibility_schema(manifest.rows as usize)?.as_ref()
+    {
+        return Err(invalid("V35 snapshot Arrow authority differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V35 snapshot batch is missing"))?;
+    if reader.next().is_some() || batch.num_rows() != manifest.rows as usize {
+        return Err(invalid("V35 snapshot rows differ"));
+    }
+    let ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 snapshot ID column differs"))?;
+    let sequences = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 snapshot sequence column differs"))?;
+    let live = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| invalid("V35 snapshot live column differs"))?;
+    if ids.null_count() != 0 || sequences.null_count() != 0 || live.null_count() != 0 {
+        return Err(invalid("V35 snapshot nullability differs"));
+    }
+    let entries = (0..batch.num_rows())
+        .map(|row| V35SnapshotEntry::new(ids.value(row), sequences.value(row), live.value(row)))
+        .collect::<Result<Vec<_>>>()?;
+    let snapshot = V35SnapshotVisibility::new(entries)?;
+    let content_digest: [u8; 32] = Sha256::digest(bytes).into();
+    if snapshot.canonical_bytes()? != bytes || snapshot.digest != content_digest {
+        return Err(invalid("V35 snapshot bytes are noncanonical"));
+    }
+    Ok(snapshot)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

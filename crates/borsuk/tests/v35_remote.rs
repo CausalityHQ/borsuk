@@ -8,9 +8,9 @@ use borsuk::{
     V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
     V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
     build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor, build_v35_routing_generation,
-    build_v35_srht, decode_v35_remote_directory_arrow, encode_v35_exact_page_parquet,
-    encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
-    exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
+    build_v35_srht, decode_v35_remote_directory_arrow, decode_v35_snapshot_visibility_arrow,
+    encode_v35_exact_page_parquet, encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow,
+    execute_v35_remote_plan, exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
     reduce_v35_scanned_candidates, rerank_v35_exact_pages, scan_v35_code_ranges,
     select_v35_exact_pages, v35_remote_code_schema_digest,
 };
@@ -28,11 +28,22 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 fn binding(byte: u8) -> V35RemoteDirectoryBinding {
-    V35RemoteDirectoryBinding::new([byte; 32], [byte + 1; 32], v35_remote_code_schema_digest())
+    binding_with_snapshot(byte, V35SnapshotVisibility::new(vec![]).unwrap().digest())
+}
+
+fn binding_with_snapshot(byte: u8, snapshot_digest: [u8; 32]) -> V35RemoteDirectoryBinding {
+    V35RemoteDirectoryBinding::new([byte; 32], snapshot_digest, v35_remote_code_schema_digest())
         .unwrap()
 }
 
 fn selected_route(blocks: &[V35ArtifactIdentity]) -> V35RoutePrefix {
+    selected_route_with_snapshot(blocks, V35SnapshotVisibility::new(vec![]).unwrap().digest())
+}
+
+fn selected_route_with_snapshot(
+    blocks: &[V35ArtifactIdentity],
+    snapshot_digest: [u8; 32],
+) -> V35RoutePrefix {
     let dimensions = V35Dimensions {
         routing: 64,
         source: 384,
@@ -60,9 +71,30 @@ fn selected_route(blocks: &[V35ArtifactIdentity]) -> V35RoutePrefix {
     let generation =
         build_v35_routing_generation(&projection, "deep-image", &digest(0x11), arms).unwrap();
     let groups = [
-        V35GroupStorage::new_bound(0, 2, 200, binding(0x51), &blocks[0]).unwrap(),
-        V35GroupStorage::new_bound(1, 2, 100, binding(0x51), &blocks[1]).unwrap(),
-        V35GroupStorage::new_bound(2, 2, 100, binding(0x51), &blocks[2]).unwrap(),
+        V35GroupStorage::new_bound(
+            0,
+            2,
+            200,
+            binding_with_snapshot(0x51, snapshot_digest),
+            &blocks[0],
+        )
+        .unwrap(),
+        V35GroupStorage::new_bound(
+            1,
+            2,
+            100,
+            binding_with_snapshot(0x51, snapshot_digest),
+            &blocks[1],
+        )
+        .unwrap(),
+        V35GroupStorage::new_bound(
+            2,
+            2,
+            100,
+            binding_with_snapshot(0x51, snapshot_digest),
+            &blocks[2],
+        )
+        .unwrap(),
     ];
     let query = project_v35_query_scalar(&projection, &[0.0; 384]).unwrap();
     exhaustive_v35_route(
@@ -82,6 +114,66 @@ fn object(role: &str, uri: &str, length: u64, byte: u8) -> V35ArtifactIdentity {
         role: role.to_owned(),
         uri: uri.to_owned(),
     }
+}
+
+#[test]
+fn v35_remote_snapshot_visibility_arrow_derives_and_authenticates_content_authority() {
+    // Break caught: a caller labels arbitrary visibility entries with a trusted
+    // digest instead of authenticating one canonical cross-language directory.
+    let entries = vec![
+        V35SnapshotEntry::new(7, 2, true).unwrap(),
+        V35SnapshotEntry::new(8, 1, false).unwrap(),
+    ];
+    let visibility = V35SnapshotVisibility::new(entries).unwrap();
+    let bytes = visibility.canonical_bytes().unwrap();
+    let registered = V35ArtifactIdentity {
+        digest: sha256(&bytes),
+        digest_algorithm: "sha256".to_owned(),
+        length: bytes.len() as u64,
+        role: "snapshot-visibility-directory".to_owned(),
+        uri: "s3://borsuk-index/generations/g01/snapshots/visibility.arrow".to_owned(),
+    };
+    let decoded = decode_v35_snapshot_visibility_arrow(&bytes, &registered).unwrap();
+    assert_eq!(decoded, visibility);
+    let content_digest: [u8; 32] = Sha256::digest(&bytes).into();
+    assert_eq!(decoded.digest(), content_digest);
+
+    let changed = V35SnapshotVisibility::new(vec![
+        V35SnapshotEntry::new(7, 3, true).unwrap(),
+        V35SnapshotEntry::new(8, 1, false).unwrap(),
+    ])
+    .unwrap();
+    assert_ne!(changed.digest(), visibility.digest());
+
+    let mut corrupt = bytes.clone();
+    let position = corrupt.len() / 2;
+    corrupt[position] ^= 1;
+    assert!(decode_v35_snapshot_visibility_arrow(&corrupt, &registered).is_err());
+    let mut wrong_identity = registered.clone();
+    wrong_identity.length += 1;
+    assert!(decode_v35_snapshot_visibility_arrow(&bytes, &wrong_identity).is_err());
+    for (field, value) in [
+        ("role", "remote-directory-block"),
+        ("digest_algorithm", "blake3"),
+        ("uri", "s3://borsuk-index/corpus/visibility.arrow"),
+    ] {
+        let mut changed = registered.clone();
+        match field {
+            "role" => changed.role = value.to_owned(),
+            "digest_algorithm" => changed.digest_algorithm = value.to_owned(),
+            "uri" => changed.uri = value.to_owned(),
+            _ => unreachable!(),
+        }
+        assert!(decode_v35_snapshot_visibility_arrow(&bytes, &changed).is_err());
+    }
+    assert!(
+        V35SnapshotVisibility::new(vec![
+            V35SnapshotEntry::new(8, 1, false).unwrap(),
+            V35SnapshotEntry::new(7, 2, true).unwrap(),
+        ])
+        .is_err()
+    );
+    assert!(V35SnapshotEntry::new(7, 0, true).is_err());
 }
 
 fn authenticated_directory_block(
@@ -137,6 +229,10 @@ fn v35_remote_directory_arrow_authenticates_binding_and_chunks() {
 }
 
 fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
+    directory_blocks_with_snapshot(V35SnapshotVisibility::new(vec![]).unwrap().digest())
+}
+
+fn directory_blocks_with_snapshot(snapshot_digest: [u8; 32]) -> Vec<V35RemoteDirectoryBlock> {
     let first = object(
         "remote-code-object",
         "s3://borsuk-index/generations/g01/codes/code-0000.bin",
@@ -186,7 +282,7 @@ fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
     (0..3)
         .map(|group| {
             authenticated_directory_block(
-                binding(0x51),
+                binding_with_snapshot(0x51, snapshot_digest),
                 chunks
                     .iter()
                     .filter(|chunk| chunk.group_ordinal() == group)
@@ -305,12 +401,20 @@ impl V35VersionedRangeTransport for CancellationTransport {
 }
 
 fn planned_execution() -> borsuk::V35RemotePlan {
-    let blocks = directory_blocks();
+    planned_execution_with_snapshot(V35SnapshotVisibility::new(vec![]).unwrap().digest())
+}
+
+fn planned_execution_with_snapshot(snapshot_digest: [u8; 32]) -> borsuk::V35RemotePlan {
+    let blocks = directory_blocks_with_snapshot(snapshot_digest);
     let identities = blocks
         .iter()
         .map(|block| block.identity().clone())
         .collect::<Vec<_>>();
-    plan_v35_remote_reads(&selected_route(&identities), &blocks).unwrap()
+    plan_v35_remote_reads(
+        &selected_route_with_snapshot(&identities, snapshot_digest),
+        &blocks,
+    )
+    .unwrap()
 }
 
 fn response(range: &V35RemoteRange, body: &[u8]) -> V35RemoteRangeResponse {
@@ -790,6 +894,12 @@ fn code_scan_fixture() -> CodeScanFixture {
         })
         .collect::<Vec<_>>();
     let descriptor = build_v35_residual_sq_descriptor(&source_rows, 4).unwrap();
+    let visibility = V35SnapshotVisibility::new(vec![
+        V35SnapshotEntry::new(50, 2, true).unwrap(),
+        V35SnapshotEntry::new(900, 1, false).unwrap(),
+    ])
+    .unwrap();
+    let code_binding = binding_with_snapshot(0x51, visibility.digest());
     let rows = vec![
         V35RemoteCodeRow::new(91, 10, 1, 2, Some(3)).unwrap(),
         V35RemoteCodeRow::new(3, 11, 1, 4, None).unwrap(),
@@ -817,7 +927,7 @@ fn code_scan_fixture() -> CodeScanFixture {
     )
     .unwrap();
     let block = authenticated_directory_block(
-        binding(0x51),
+        code_binding,
         vec![chunk],
         "s3://borsuk-index/generations/g01/directory/group-0000.arrow",
     );
@@ -847,9 +957,8 @@ fn code_scan_fixture() -> CodeScanFixture {
         .map(|dimension| ((dimension * 11) % 97) as f32 / 23.0 - 2.0)
         .collect::<Vec<_>>();
     let query = project_v35_query_scalar(&projection, &source_query).unwrap();
-    let group =
-        V35GroupStorage::new_bound(0, 3, body.len() as u64, binding(0x51), block.identity())
-            .unwrap();
+    let group = V35GroupStorage::new_bound(0, 3, body.len() as u64, code_binding, block.identity())
+        .unwrap();
     let route = exhaustive_v35_route(
         &generation,
         &query,
@@ -873,7 +982,7 @@ fn code_scan_fixture() -> CodeScanFixture {
     CodeScanFixture {
         plan,
         query,
-        visibility: V35SnapshotVisibility::new([0x52; 32], vec![]).unwrap(),
+        visibility,
         body,
         expected,
     }
@@ -976,14 +1085,7 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
     expected.push((50, exact_sq(&vec![0.25; 384], fixture.query.source_query())));
     expected.sort_by(|left, right| left.1.total_cmp(&right.1).then(left.0.cmp(&right.0)));
     expected.truncate(4);
-    let visibility = V35SnapshotVisibility::new(
-        [0x52; 32],
-        vec![
-            V35SnapshotEntry::new(50, 2, true).unwrap(),
-            V35SnapshotEntry::new(900, 1, false).unwrap(),
-        ],
-    )
-    .unwrap();
+    let visibility = fixture.visibility.clone();
     let mut accumulator = V35CandidateAccumulator::new(&fixture.plan, &visibility).unwrap();
     for candidate in candidate_rows {
         accumulator.admit(candidate);
@@ -1169,7 +1271,7 @@ fn v35_remote_candidate_heap_filters_visibility_before_bounded_admission() {
         .collect::<Vec<_>>();
     entries[0] = V35SnapshotEntry::new(0, 2, true).unwrap();
     entries[1] = V35SnapshotEntry::new(1, 1, false).unwrap();
-    let visibility = V35SnapshotVisibility::new([0x81; 32], entries).unwrap();
+    let visibility = V35SnapshotVisibility::new(entries).unwrap();
     let mut scanned = (0..12_290_u64)
         .map(|row| {
             V35ScannedCandidate::new(
@@ -1206,13 +1308,10 @@ fn v35_remote_candidate_heap_filters_visibility_before_bounded_admission() {
 fn v35_remote_visibility_defaults_untouched_base_rows_to_live() {
     // Break caught: the bounded delta mutation directory is treated as a
     // 100M-row allowlist, consuming gigabytes or dropping every untouched row.
-    let visibility = V35SnapshotVisibility::new(
-        [0xa1; 32],
-        vec![
-            V35SnapshotEntry::new(7, 2, true).unwrap(),
-            V35SnapshotEntry::new(8, 1, false).unwrap(),
-        ],
-    )
+    let visibility = V35SnapshotVisibility::new(vec![
+        V35SnapshotEntry::new(7, 2, true).unwrap(),
+        V35SnapshotEntry::new(8, 1, false).unwrap(),
+    ])
     .unwrap();
     let scanned = [
         V35ScannedCandidate::new(0.0, 0, 7, 1, 0, None).unwrap(),
@@ -1234,10 +1333,9 @@ fn v35_remote_visibility_defaults_untouched_base_rows_to_live() {
 fn v35_remote_candidate_accumulator_streams_only_the_plans_snapshot() {
     // Break caught: scan candidates are materialized before reduction or are
     // reduced against a stale visibility snapshot from another generation.
-    let plan = planned_execution();
     let visibility =
-        V35SnapshotVisibility::new([0x52; 32], vec![V35SnapshotEntry::new(7, 2, true).unwrap()])
-            .unwrap();
+        V35SnapshotVisibility::new(vec![V35SnapshotEntry::new(7, 2, true).unwrap()]).unwrap();
+    let plan = planned_execution_with_snapshot(visibility.digest());
     let mut accumulator = V35CandidateAccumulator::new(&plan, &visibility).unwrap();
     for candidate in [
         V35ScannedCandidate::new(2.0, 2, 9, 1, 4, None).unwrap(),
@@ -1249,7 +1347,7 @@ fn v35_remote_candidate_accumulator_streams_only_the_plans_snapshot() {
     let candidates = accumulator.finish();
     assert_eq!(candidates.generation_digest(), plan.generation_digest());
     assert_eq!(candidates.query_digest(), plan.query_digest());
-    assert_eq!(candidates.snapshot_digest(), [0x52; 32]);
+    assert_eq!(candidates.snapshot_digest(), visibility.digest());
     assert_eq!(
         candidates
             .candidates()
@@ -1259,7 +1357,7 @@ fn v35_remote_candidate_accumulator_streams_only_the_plans_snapshot() {
         vec![(7, 2), (9, 1)]
     );
 
-    let stale = V35SnapshotVisibility::new([0x53; 32], vec![]).unwrap();
+    let stale = V35SnapshotVisibility::new(vec![]).unwrap();
     assert!(V35CandidateAccumulator::new(&plan, &stale).is_err());
 }
 
@@ -1269,7 +1367,6 @@ fn v35_remote_page_reducer_is_coverage_greedy_and_exactly_eight_bounded() {
     // page slots, input order changes page choice, or more than eight exact
     // pages are authorized.
     let visibility = V35SnapshotVisibility::new(
-        [0x91; 32],
         (0..12_u64)
             .map(|id| V35SnapshotEntry::new(id, 1, true).unwrap())
             .collect(),
