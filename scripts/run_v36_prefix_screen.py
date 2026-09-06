@@ -2133,15 +2133,26 @@ def run_v36_prefix_screen(
     raise RuntimeError("V36 prefix-screen three attempts exhausted")
 
 
+def _v36_aws_clients() -> tuple[Any, Any]:
+    """Create the only AWS clients admitted by the execution CLI."""
+
+    import boto3
+
+    session = boto3.Session(profile_name=PROFILE, region_name=REGION)
+    return session.client("ec2"), session.client("s3")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run one explicit controller-only mode."""
 
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--execute-prefix-screen", action="store_true")
     mode.add_argument("--publish-checkpoints", action="store_true")
     mode.add_argument("--materialize-resume", action="store_true")
     parser.add_argument("--plan-json")
+    parser.add_argument("--launch-nonce")
     parser.add_argument("--checkpoint-outbox")
     parser.add_argument("--producer-pid", type=int)
     parser.add_argument("--first-generation", type=int)
@@ -2151,6 +2162,7 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.publish_checkpoints:
         if (
             arguments.plan_json is not None
+            or arguments.launch_nonce is not None
             or arguments.checkpoint_outbox is None
             or arguments.producer_pid is None
             or arguments.first_generation is None
@@ -2168,6 +2180,7 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.materialize_resume:
         if (
             arguments.plan_json is not None
+            or arguments.launch_nonce is not None
             or arguments.checkpoint_outbox is not None
             or arguments.producer_pid is not None
             or arguments.first_generation is not None
@@ -2197,7 +2210,25 @@ def main(argv: list[str] | None = None) -> int:
         plan = build_v36_prefix_screen_plan(**raw)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         parser.error(str(error))
-    sys.stdout.write(dry_run_v36_prefix_screen(plan).decode())
+    if arguments.dry_run:
+        if arguments.launch_nonce is not None:
+            parser.error("V36 prefix-screen dry-run arguments differ")
+        sys.stdout.write(dry_run_v36_prefix_screen(plan).decode())
+        return 0
+    if (
+        not arguments.execute_prefix_screen
+        or type(arguments.launch_nonce) is not str
+        or re.fullmatch(r"[0-9a-f]{32}", arguments.launch_nonce) is None
+    ):
+        parser.error("V36 prefix-screen execution arguments differ")
+    ec2_client, s3_client = _v36_aws_clients()
+    terminal_uri = run_v36_prefix_screen(
+        plan,
+        ec2_client=ec2_client,
+        s3_client=s3_client,
+        launch_nonce=arguments.launch_nonce,
+    )
+    sys.stdout.write(f"{terminal_uri}\n")
     return 0
 
 

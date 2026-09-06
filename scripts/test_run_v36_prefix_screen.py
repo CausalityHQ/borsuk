@@ -154,6 +154,44 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             )
         self.assertEqual(stdout.buffer if hasattr(stdout, "buffer") else stdout.getvalue(), receipt.decode())
 
+    def test_v36_prefix_screen_execute_cli_uses_only_registered_aws_clients(self) -> None:
+        plan = self.plan()
+        ec2 = mock.Mock()
+        s3 = mock.Mock()
+        with (
+            mock.patch.object(subject, "_v36_aws_clients", return_value=(ec2, s3)) as clients,
+            mock.patch.object(
+                subject,
+                "run_v36_prefix_screen",
+                return_value=(
+                    "s3://fixture/v36/prefix-results/"
+                    "attempt-0000/ATTEMPT_COMPLETE.json"
+                ),
+            ) as run,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            self.assertEqual(
+                subject.main(
+                    [
+                        "--execute-prefix-screen",
+                        "--plan-json",
+                        json.dumps(dataclasses.asdict(plan)),
+                        "--launch-nonce",
+                        "a" * 32,
+                    ]
+                ),
+                0,
+            )
+        clients.assert_called_once_with()
+        run.assert_called_once_with(
+            plan, ec2_client=ec2, s3_client=s3, launch_nonce="a" * 32
+        )
+        self.assertEqual(
+            stdout.getvalue(),
+            "s3://fixture/v36/prefix-results/"
+            "attempt-0000/ATTEMPT_COMPLETE.json\n",
+        )
+
     def test_v36_prefix_screen_canonical_json_matches_rust_utf8(self) -> None:
         # Break caught: Python escapes non-ASCII source paths while serde_json
         # writes UTF-8, making one authority fail cross-language authentication.
