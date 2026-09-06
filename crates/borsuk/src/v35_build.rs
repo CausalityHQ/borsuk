@@ -23,6 +23,7 @@ const MORTON_FORMAT: &str = "borsuk-v35-morton-model-arrow-v1";
 const MORTON_METADATA_KEY: &str = "borsuk.v35.morton-model.manifest";
 const BUILD_RUN_FORMAT: &str = "borsuk-v35-build-scratch-arrow-v1";
 const BUILD_RUN_METADATA_KEY: &str = "borsuk.v35.build-run.manifest";
+const MAX_BUILD_RUN_BATCH_ROWS: usize = 256;
 const MAX_BUILDER_BYTES: u64 = 64 * 1_048_576;
 
 fn invalid(message: &str) -> BorsukError {
@@ -490,62 +491,311 @@ fn encode_build_run(
         source_dimensions: source_dimensions as u32,
     };
     let schema = build_run_schema(&manifest)?;
-    let keys =
-        FixedSizeBinaryArray::try_from_iter(ordered.iter().map(|(key, _)| key.to_be_bytes()))?;
-    let source_values = ordered
-        .iter()
-        .flat_map(|(_, row)| row.source.iter().copied())
-        .collect::<Vec<_>>();
-    let projected_values = ordered
-        .iter()
-        .flat_map(|(_, row)| row.projected.iter().copied())
-        .collect::<Vec<_>>();
-    let source = FixedSizeListArray::try_new(
-        Arc::new(Field::new("element", DataType::Float32, false)),
-        source_dimensions as i32,
-        Arc::new(Float32Array::from(source_values)),
-        None,
-    )?;
-    let projected = FixedSizeListArray::try_new(
-        Arc::new(Field::new("element", DataType::Float64, false)),
-        projected_dimensions as i32,
-        Arc::new(Float64Array::from(projected_values)),
-        None,
-    )?;
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(keys),
-            Arc::new(UInt64Array::from(
-                ordered
-                    .iter()
-                    .map(|(_, row)| row.source_ordinal)
-                    .collect::<Vec<_>>(),
-            )),
-            Arc::new(UInt64Array::from(
-                ordered.iter().map(|(_, row)| row.id).collect::<Vec<_>>(),
-            )),
-            Arc::new(UInt64Array::from(
-                ordered
-                    .iter()
-                    .map(|(_, row)| row.sequence)
-                    .collect::<Vec<_>>(),
-            )),
-            Arc::new(source),
-            Arc::new(projected),
-        ],
-    )?;
     let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     let mut bytes = Vec::new();
     let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
-    writer.write(&batch)?;
+    for rows in ordered.chunks(MAX_BUILD_RUN_BATCH_ROWS) {
+        let keys =
+            FixedSizeBinaryArray::try_from_iter(rows.iter().map(|(key, _)| key.to_be_bytes()))?;
+        let source_values = rows
+            .iter()
+            .flat_map(|(_, row)| row.source.iter().copied())
+            .collect::<Vec<_>>();
+        let projected_values = rows
+            .iter()
+            .flat_map(|(_, row)| row.projected.iter().copied())
+            .collect::<Vec<_>>();
+        let source = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            source_dimensions as i32,
+            Arc::new(Float32Array::from(source_values)),
+            None,
+        )?;
+        let projected = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float64, false)),
+            projected_dimensions as i32,
+            Arc::new(Float64Array::from(projected_values)),
+            None,
+        )?;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(keys),
+                Arc::new(UInt64Array::from(
+                    rows.iter()
+                        .map(|(_, row)| row.source_ordinal)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt64Array::from(
+                    rows.iter().map(|(_, row)| row.id).collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt64Array::from(
+                    rows.iter().map(|(_, row)| row.sequence).collect::<Vec<_>>(),
+                )),
+                Arc::new(source),
+                Arc::new(projected),
+            ],
+        )?;
+        writer.write(&batch)?;
+    }
     writer.finish()?;
     drop(writer);
     Ok(bytes)
 }
 
+/// One authenticated, bounded scratch-run batch exposed to external merge.
+pub struct V35BuildRunBatch {
+    batch: RecordBatch,
+    source_dimensions: usize,
+    projected_dimensions: usize,
+}
+
+impl V35BuildRunBatch {
+    /// Number of rows; never greater than 256.
+    pub fn len(&self) -> usize {
+        self.batch.num_rows()
+    }
+    /// Whether the batch is empty. Authenticated cursors never return an empty batch.
+    pub fn is_empty(&self) -> bool {
+        self.batch.num_rows() == 0
+    }
+    fn keys(&self) -> &FixedSizeBinaryArray {
+        self.batch
+            .column(0)
+            .as_any()
+            .downcast_ref()
+            .expect("validated key column")
+    }
+    fn ordinals(&self) -> &UInt64Array {
+        self.batch
+            .column(1)
+            .as_any()
+            .downcast_ref()
+            .expect("validated ordinal column")
+    }
+    fn ids(&self) -> &UInt64Array {
+        self.batch
+            .column(2)
+            .as_any()
+            .downcast_ref()
+            .expect("validated ID column")
+    }
+    fn sequences(&self) -> &UInt64Array {
+        self.batch
+            .column(3)
+            .as_any()
+            .downcast_ref()
+            .expect("validated sequence column")
+    }
+    fn source_values(&self) -> &Float32Array {
+        self.batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("validated source column")
+            .values()
+            .as_any()
+            .downcast_ref()
+            .expect("validated source values")
+    }
+    fn projected_values(&self) -> &Float64Array {
+        self.batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("validated projected column")
+            .values()
+            .as_any()
+            .downcast_ref()
+            .expect("validated projected values")
+    }
+    /// Exact Morton key for one row.
+    pub fn morton_key(&self, row: usize) -> Option<u128> {
+        (row < self.len()).then(|| {
+            u128::from_be_bytes(
+                self.keys()
+                    .value(row)
+                    .try_into()
+                    .expect("fixed 16-byte key"),
+            )
+        })
+    }
+    /// Stable source ordinal for one row.
+    pub fn source_ordinal(&self, row: usize) -> Option<u64> {
+        (row < self.len()).then(|| self.ordinals().value(row))
+    }
+    /// Immutable vector ID for one row.
+    pub fn id(&self, row: usize) -> Option<u64> {
+        (row < self.len()).then(|| self.ids().value(row))
+    }
+    /// Immutable sequence for one row.
+    pub fn sequence(&self, row: usize) -> Option<u64> {
+        (row < self.len()).then(|| self.sequences().value(row))
+    }
+    /// Full-dimensional exact source vector for one row.
+    pub fn source(&self, row: usize) -> Option<&[f32]> {
+        let start = row.checked_mul(self.source_dimensions)?;
+        self.source_values()
+            .values()
+            .get(start..start.checked_add(self.source_dimensions)?)
+    }
+    /// Resident projected vector for one row.
+    pub fn projected(&self, row: usize) -> Option<&[f64]> {
+        let start = row.checked_mul(self.projected_dimensions)?;
+        self.projected_values()
+            .values()
+            .get(start..start.checked_add(self.projected_dimensions)?)
+    }
+}
+
+/// Authenticated streaming cursor over one multi-batch scratch object.
+pub struct V35BuildRunCursor<'a> {
+    reader: FileReader<Cursor<&'a [u8]>>,
+    manifest: V35BuildRunManifest,
+    previous: Option<(u128, u64)>,
+    rows_seen: u64,
+    finished: bool,
+}
+
+impl V35BuildRunCursor<'_> {
+    /// Scratch run ordinal authenticated by the Arrow manifest.
+    pub fn run_ordinal(&self) -> u32 {
+        self.manifest.run_ordinal
+    }
+    /// Rows yielded so far.
+    pub fn rows_seen(&self) -> u64 {
+        self.rows_seen
+    }
+    /// Yield the next authenticated at-most-256-row record batch.
+    pub fn next_batch(&mut self) -> Result<Option<V35BuildRunBatch>> {
+        if self.finished {
+            return Ok(None);
+        }
+        let Some(batch) = self.reader.next().transpose()? else {
+            self.finished = true;
+            if self.rows_seen != u64::from(self.manifest.rows) {
+                return Err(invalid("V35 build run rows differ"));
+            }
+            return Ok(None);
+        };
+        if batch.num_rows() == 0
+            || batch.num_rows() > MAX_BUILD_RUN_BATCH_ROWS
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V35 build run batch authority differs"));
+        }
+        let source_dimensions = self.manifest.source_dimensions as usize;
+        let projected_dimensions = self.manifest.projected_dimensions as usize;
+        let view = V35BuildRunBatch {
+            batch,
+            source_dimensions,
+            projected_dimensions,
+        };
+        let source_rows = view
+            .batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V35 build run source column differs"))?;
+        let projected_rows = view
+            .batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V35 build run projected column differs"))?;
+        if source_dimensions == 0
+            || projected_dimensions < MORTON_COORDINATES
+            || source_rows.value_length() as usize != source_dimensions
+            || projected_rows.value_length() as usize != projected_dimensions
+            || view.source_values().null_count() != 0
+            || view.projected_values().null_count() != 0
+        {
+            return Err(invalid("V35 build run vector authority differs"));
+        }
+        for row in 0..view.len() {
+            let order = (
+                view.morton_key(row).expect("row exists"),
+                view.source_ordinal(row).expect("row exists"),
+            );
+            if self.previous.is_some_and(|previous| previous >= order)
+                || view.sequence(row) == Some(0)
+                || view
+                    .source(row)
+                    .expect("validated row")
+                    .iter()
+                    .any(|value| !value.is_finite())
+                || view
+                    .projected(row)
+                    .expect("validated row")
+                    .iter()
+                    .any(|value| !value.is_finite())
+            {
+                return Err(invalid("V35 build run row authority differs"));
+            }
+            self.previous = Some(order);
+        }
+        self.rows_seen = self
+            .rows_seen
+            .checked_add(view.len() as u64)
+            .ok_or_else(|| invalid("V35 build run rows overflow"))?;
+        if self.rows_seen > u64::from(self.manifest.rows) {
+            return Err(invalid("V35 build run rows differ"));
+        }
+        Ok(Some(view))
+    }
+}
+
+/// Authenticate one complete scratch object, then expose only bounded batches.
+pub fn open_v35_build_run_cursor<'a>(
+    bytes: &'a [u8],
+    registered: &V35ArtifactIdentity,
+) -> Result<V35BuildRunCursor<'a>> {
+    if registered.role != "build-scratch-run"
+        || registered.digest_algorithm != "sha256"
+        || registered.length != bytes.len() as u64
+        || registered.digest != format!("{:x}", Sha256::digest(bytes))
+        || !registered.uri.starts_with("s3://")
+        || !registered.uri.contains("/scratch/")
+        || registered.uri.contains("/corpus/")
+    {
+        return Err(invalid("V35 build scratch identity differs"));
+    }
+    let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    let manifest_json = reader
+        .schema()
+        .metadata()
+        .get(BUILD_RUN_METADATA_KEY)
+        .ok_or_else(|| invalid("V35 build run manifest is missing"))?
+        .clone();
+    let manifest: V35BuildRunManifest = serde_json::from_str(&manifest_json)
+        .map_err(|_| invalid("V35 build run manifest differs"))?;
+    if reader.schema().metadata().len() != 1
+        || serde_json::to_string(&manifest)
+            .map_err(|_| invalid("V35 build run manifest cannot be serialized"))?
+            != manifest_json
+        || manifest.format != BUILD_RUN_FORMAT
+        || manifest.rows == 0
+        || manifest.source_dimensions == 0
+        || manifest.projected_dimensions < MORTON_COORDINATES as u32
+        || reader.num_batches() == 0
+        || reader.schema().as_ref() != build_run_schema(&manifest)?.as_ref()
+    {
+        return Err(invalid("V35 build run Arrow authority differs"));
+    }
+    Ok(V35BuildRunCursor {
+        reader,
+        manifest,
+        previous: None,
+        rows_seen: 0,
+        finished: false,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
-/// One decoded scratch row used by the bounded merge stage.
+/// Compact metadata-only view used to inspect a complete scratch run.
 pub struct V35BuildRunRow {
     morton_key: u128,
     source_ordinal: u64,
@@ -590,81 +840,26 @@ impl V35BuildRun {
     }
 }
 
-/// Decode one exact-digest-bound cross-language Arrow scratch run.
+/// Decode one exact-digest-bound run into metadata only; merge uses the bounded cursor.
 pub fn decode_v35_build_run_arrow(
     bytes: &[u8],
     registered: &V35ArtifactIdentity,
 ) -> Result<V35BuildRun> {
-    if registered.role != "build-scratch-run"
-        || registered.digest_algorithm != "sha256"
-        || registered.length != bytes.len() as u64
-        || registered.digest != format!("{:x}", Sha256::digest(bytes))
-        || !registered.uri.starts_with("s3://")
-        || !registered.uri.contains("/scratch/")
-        || registered.uri.contains("/corpus/")
-    {
-        return Err(invalid("V35 build scratch identity differs"));
+    let mut cursor = open_v35_build_run_cursor(bytes, registered)?;
+    let run_ordinal = cursor.run_ordinal();
+    let mut rows = Vec::new();
+    while let Some(batch) = cursor.next_batch()? {
+        rows.reserve(batch.len());
+        for row in 0..batch.len() {
+            rows.push(V35BuildRunRow {
+                morton_key: batch.morton_key(row).expect("row exists"),
+                source_ordinal: batch.source_ordinal(row).expect("row exists"),
+                source_dimensions: batch.source_dimensions,
+                projected_dimensions: batch.projected_dimensions,
+            });
+        }
     }
-    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
-    let manifest_json = reader
-        .schema()
-        .metadata()
-        .get(BUILD_RUN_METADATA_KEY)
-        .ok_or_else(|| invalid("V35 build run manifest is missing"))?
-        .clone();
-    let manifest: V35BuildRunManifest = serde_json::from_str(&manifest_json)
-        .map_err(|_| invalid("V35 build run manifest differs"))?;
-    if reader.schema().metadata().len() != 1
-        || serde_json::to_string(&manifest)
-            .map_err(|_| invalid("V35 build run manifest cannot be serialized"))?
-            != manifest_json
-        || manifest.format != BUILD_RUN_FORMAT
-        || reader.num_batches() != 1
-        || reader.schema().as_ref() != build_run_schema(&manifest)?.as_ref()
-    {
-        return Err(invalid("V35 build run Arrow authority differs"));
-    }
-    let batch = reader
-        .next()
-        .transpose()?
-        .ok_or_else(|| invalid("V35 build run batch is missing"))?;
-    if reader.next().is_some() || batch.num_rows() != manifest.rows as usize {
-        return Err(invalid("V35 build run rows differ"));
-    }
-    if batch
-        .columns()
-        .iter()
-        .any(|column| column.null_count() != 0)
-    {
-        return Err(invalid("V35 build run nullability differs"));
-    }
-    let keys = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .ok_or_else(|| invalid("V35 build run key column differs"))?;
-    let ordinals = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| invalid("V35 build run ordinal column differs"))?;
-    let rows = (0..batch.num_rows())
-        .map(|row| V35BuildRunRow {
-            morton_key: u128::from_be_bytes(keys.value(row).try_into().expect("fixed 16-byte key")),
-            source_ordinal: ordinals.value(row),
-            source_dimensions: manifest.source_dimensions as usize,
-            projected_dimensions: manifest.projected_dimensions as usize,
-        })
-        .collect::<Vec<_>>();
-    if rows.windows(2).any(|pair| {
-        (pair[0].morton_key, pair[0].source_ordinal) >= (pair[1].morton_key, pair[1].source_ordinal)
-    }) {
-        return Err(invalid("V35 build run order differs"));
-    }
-    Ok(V35BuildRun {
-        run_ordinal: manifest.run_ordinal,
-        rows,
-    })
+    Ok(V35BuildRun { run_ordinal, rows })
 }
 
 /// Stream ordered source blocks into bounded authenticated external-sort runs.

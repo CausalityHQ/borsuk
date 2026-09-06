@@ -3,7 +3,7 @@
 use borsuk::{
     Result, V35ArtifactIdentity, V35BuildBlock, V35BuildBlockSource, V35BuildRow,
     V35BuildScratchSink, V35MortonModel, build_v35_scratch_runs, decode_v35_build_run_arrow,
-    train_v35_morton_model,
+    open_v35_build_run_cursor, train_v35_morton_model,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -24,6 +24,58 @@ fn training_rows() -> Vec<Vec<f64>> {
                 .collect()
         })
         .collect()
+}
+
+#[test]
+fn v35_build_scratch_cursor_authenticates_and_streams_bounded_batches() {
+    // Break caught: external merge materializes a complete run, drops payload
+    // fields, or loses total `(Morton key,source ordinal)` order at a batch edge.
+    let model = train_v35_morton_model(&training_rows()).unwrap();
+    let rows = (0..520_u64)
+        .map(|source_ordinal| {
+            let source = (0..384)
+                .map(|dimension| (source_ordinal + dimension as u64) as f32 / 19.0)
+                .collect::<Vec<_>>();
+            let projected = (0..18)
+                .map(|dimension| ((source_ordinal * 29 + dimension as u64 * 7) % 997) as f64 / 31.0)
+                .collect::<Vec<_>>();
+            V35BuildRow::new(
+                source_ordinal,
+                50_000 + source_ordinal,
+                3,
+                source,
+                projected,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut source = Blocks(VecDeque::from([V35BuildBlock::new(rows).unwrap()]));
+    let mut scratch = Scratch::default();
+    build_v35_scratch_runs(&model, &mut source, &mut scratch).unwrap();
+    let (registered, bytes) = &scratch.writes[0];
+    let mut cursor = open_v35_build_run_cursor(bytes, registered).unwrap();
+    let mut batch_sizes = Vec::new();
+    let mut observed = Vec::new();
+    while let Some(batch) = cursor.next_batch().unwrap() {
+        batch_sizes.push(batch.len());
+        assert!(batch.len() <= 256);
+        for row in 0..batch.len() {
+            assert_eq!(
+                batch.id(row),
+                Some(50_000 + batch.source_ordinal(row).unwrap())
+            );
+            assert_eq!(batch.sequence(row), Some(3));
+            assert_eq!(batch.source(row).unwrap().len(), 384);
+            assert_eq!(batch.projected(row).unwrap().len(), 18);
+            observed.push((
+                batch.morton_key(row).unwrap(),
+                batch.source_ordinal(row).unwrap(),
+            ));
+        }
+    }
+    assert_eq!(batch_sizes, vec![256, 256, 8]);
+    assert_eq!(cursor.rows_seen(), 520);
+    assert!(observed.windows(2).all(|pair| pair[0] < pair[1]));
 }
 
 #[test]
