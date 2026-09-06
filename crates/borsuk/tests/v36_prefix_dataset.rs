@@ -16,7 +16,7 @@ use borsuk::{
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
     exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, rank_v36_prefix_source_objects,
-    scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix, scan_v36_prefix_query_parquet,
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
     select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
     v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
@@ -782,5 +782,89 @@ fn v36_prefix_dataset_registered_input_is_authenticated_and_strict() {
     null_object.sha256 = format!("{:x}", Sha256::digest(&null_bytes));
     assert!(
         scan_v36_prefix_registered_input_parquet(&null_path, &null_object, 3, |_| Ok(())).is_err()
+    );
+}
+
+fn write_registered_rows(path: &Path, feature_ids: &[i64]) -> V36PrefixRankedSourceObject {
+    let child = Arc::new(Field::new("item", DataType::Float32, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("url", DataType::Utf8, true),
+        Field::new("natural_score", DataType::Float32, true),
+        Field::new("feature_row_id", DataType::Int64, true),
+        Field::new(
+            "embedding",
+            DataType::FixedSizeList(child.clone(), DIMENSIONS as i32),
+            true,
+        ),
+    ]));
+    let mut values = vec![0.0_f32; feature_ids.len() * DIMENSIONS];
+    for row in 0..feature_ids.len() {
+        values[row * DIMENSIONS + row % DIMENSIONS] = 1.0;
+    }
+    let embeddings = FixedSizeListArray::try_new(
+        child,
+        DIMENSIONS as i32,
+        Arc::new(Float32Array::from(values)),
+        None,
+    )
+    .unwrap();
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![None::<&str>; feature_ids.len()])) as ArrayRef,
+            Arc::new(Float32Array::from(vec![None; feature_ids.len()])),
+            Arc::new(Int64Array::from(
+                feature_ids.iter().copied().map(Some).collect::<Vec<_>>(),
+            )),
+            Arc::new(embeddings),
+        ],
+    )
+    .unwrap();
+    let file = fs::File::create(path).unwrap();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let bytes = fs::read(path).unwrap();
+    let name = path.file_name().unwrap().to_str().unwrap();
+    V36PrefixRankedSourceObject {
+        encoded_bytes: bytes.len().try_into().unwrap(),
+        path: format!("data/{name}"),
+        sample_sha256: sample_digest(&format!("data/{name}"), bytes.len() as u64),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri: format!("https://example.invalid/{name}"),
+    }
+}
+
+#[test]
+fn v36_prefix_dataset_scans_complete_cutoff_object_and_records_duplicate_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first.parquet");
+    let second = directory.path().join("second.parquet");
+    let ranked = vec![
+        write_registered_rows(&first, &[7, 9]),
+        write_registered_rows(&second, &[7, 11, 13]),
+    ];
+    let paths = [first, second];
+    let scan = scan_v36_prefix_object_prefix(
+        &ranked,
+        2,
+        ranked.iter().map(|object| object.encoded_bytes).sum(),
+        3,
+        |ordinal, _| Ok(paths[ordinal].clone()),
+    )
+    .unwrap();
+    assert_eq!(scan.unique_rows.len(), 3);
+    assert_eq!(scan.consumed_objects.len(), 2);
+    assert_eq!(scan.cutoff_object_ordinal, 1);
+    assert_eq!(scan.cutoff_row_offset, 1);
+    assert_eq!(scan.physical_rows, 5);
+    assert_eq!(scan.distinct_rows_observed, 4);
+    assert_eq!(scan.duplicate_rows, 1);
+
+    assert!(
+        scan_v36_prefix_object_prefix(&ranked, 1, u64::MAX, 3, |ordinal, _| {
+            Ok(paths[ordinal].clone())
+        })
+        .is_err()
     );
 }

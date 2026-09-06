@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeSet, BinaryHeap},
+    collections::{BTreeSet, BinaryHeap, HashSet},
     fs::{self, File},
     io::{BufReader, Read},
     path::{Path, PathBuf},
@@ -213,6 +213,25 @@ pub struct V36PrefixFreezePreflight {
     pub registry: Vec<V36PrefixRegisteredSourceObject>,
     /// Query-independently ranked complete objects.
     pub ranked_objects: Vec<V36PrefixRankedSourceObject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete bounded source-prefix scan evidence before role selection.
+pub struct V36PrefixObjectPrefixScan {
+    /// Complete authenticated objects through the cutoff object.
+    pub consumed_objects: Vec<crate::V36PrefixSourceObject>,
+    /// Selected-object ordinal containing the target distinct row.
+    pub cutoff_object_ordinal: u16,
+    /// Physical row offset of the target distinct row.
+    pub cutoff_row_offset: u64,
+    /// Distinct IDs observed across every complete consumed object.
+    pub distinct_rows_observed: u64,
+    /// Physical rows whose ID repeated an earlier occurrence.
+    pub duplicate_rows: u64,
+    /// Physical rows scanned across every complete consumed object.
+    pub physical_rows: u64,
+    /// First-occurrence identities for the exact requested distinct prefix.
+    pub unique_rows: Vec<V36PrefixRowIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -721,6 +740,116 @@ where
         return Err(invalid("V36 prefix registered object is empty"));
     }
     Ok(row_offset)
+}
+
+fn blake3_file(path: &Path) -> Result<String> {
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut hasher = blake3::Hasher::new();
+    loop {
+        let read = reader.read(&mut buffer).map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Scan authenticated complete objects through a distinct-ID cutoff.
+pub fn scan_v36_prefix_object_prefix<F>(
+    ranked_objects: &[V36PrefixRankedSourceObject],
+    object_cap: usize,
+    byte_cap: u64,
+    distinct_candidates: usize,
+    mut acquire: F,
+) -> Result<V36PrefixObjectPrefixScan>
+where
+    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+{
+    if object_cap == 0
+        || object_cap > 16
+        || byte_cap == 0
+        || distinct_candidates == 0
+        || ranked_objects.is_empty()
+    {
+        return Err(invalid("V36 prefix source scan limits differ"));
+    }
+    let mut consumed_objects = Vec::new();
+    let mut seen = HashSet::with_capacity(distinct_candidates);
+    let mut unique_rows = Vec::with_capacity(distinct_candidates);
+    let mut physical_rows = 0_u64;
+    let mut encoded_bytes = 0_u64;
+    let mut cutoff = None;
+    for (ordinal, object) in ranked_objects.iter().take(object_cap).enumerate() {
+        encoded_bytes = encoded_bytes
+            .checked_add(object.encoded_bytes)
+            .ok_or_else(|| invalid("V36 prefix source scan bytes overflow"))?;
+        if encoded_bytes > byte_cap {
+            break;
+        }
+        let path = acquire(ordinal, object)?;
+        let selected_object_ordinal = u16::try_from(ordinal)
+            .map_err(|_| invalid("V36 prefix source object ordinal overflows"))?;
+        let object_rows = scan_v36_prefix_registered_input_parquet(
+            &path,
+            object,
+            selected_object_ordinal,
+            |row| {
+                physical_rows = physical_rows
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V36 prefix physical rows overflow"))?;
+                let identity = validate_v36_prefix_input_row(&row)?;
+                if seen.insert(identity.feature_row_id) && unique_rows.len() < distinct_candidates {
+                    unique_rows.push(identity);
+                    if unique_rows.len() == distinct_candidates {
+                        cutoff = Some((selected_object_ordinal, row.row_offset));
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        if object_rows == 0 {
+            return Err(invalid("V36 prefix source object is empty"));
+        }
+        consumed_objects.push(crate::V36PrefixSourceObject {
+            blake3: blake3_file(&path)?,
+            encoded_bytes: object.encoded_bytes,
+            path: object.path.clone(),
+            sample_sha256: object.sample_sha256.clone(),
+            sha256: object.sha256.clone(),
+            uri: object.uri.clone(),
+        });
+        if cutoff.is_some() {
+            break;
+        }
+    }
+    let (cutoff_object_ordinal, cutoff_row_offset) =
+        cutoff.ok_or_else(|| invalid("V36 prefix source is insufficient"))?;
+    validate_v36_prefix_cutoff_membership(
+        &unique_rows,
+        consumed_objects.len(),
+        distinct_candidates,
+    )?;
+    let distinct_rows_observed = u64::try_from(seen.len()).unwrap_or(u64::MAX);
+    Ok(V36PrefixObjectPrefixScan {
+        consumed_objects,
+        cutoff_object_ordinal,
+        cutoff_row_offset,
+        distinct_rows_observed,
+        duplicate_rows: physical_rows
+            .checked_sub(distinct_rows_observed)
+            .ok_or_else(|| invalid("V36 prefix duplicate rows underflow"))?,
+        physical_rows,
+        unique_rows,
+    })
 }
 
 /// Exact physical schema of a V36 prefix source table.

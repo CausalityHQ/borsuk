@@ -341,11 +341,11 @@ pub use v36_funnel::{
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
     V36PrefixFreezePreflight, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtNeighbor,
-    V36PrefixInputRow, V36PrefixMaterializedRow, V36PrefixQualityRole, V36PrefixQueryRow,
-    V36PrefixRankedSourceObject, V36PrefixRoleSplit, V36PrefixRowIdentity,
+    V36PrefixInputRow, V36PrefixMaterializedRow, V36PrefixObjectPrefixScan, V36PrefixQualityRole,
+    V36PrefixQueryRow, V36PrefixRankedSourceObject, V36PrefixRoleSplit, V36PrefixRowIdentity,
     deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
     load_v36_prefix_freeze_preflight, rank_v36_prefix_source_objects,
-    scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix, scan_v36_prefix_query_parquet,
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
     select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
     v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
