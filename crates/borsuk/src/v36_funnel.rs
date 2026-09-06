@@ -463,13 +463,22 @@ pub struct V36PrefixFreezeReceipt {
 pub enum V36PrefixCheckpointPhase {
     /// A consecutive prefix of complete registered source objects.
     Population,
+    /// Complete population selection ready for vector materialization.
+    Selected {
+        /// Immutable population-score cutoff and selected-row identities.
+        selection: V36PrefixPopulationSelection,
+    },
     /// Complete role-separated Parquet outputs ready for reuse.
     Materialized {
+        /// Exact population selection consumed by materialization.
+        selection: V36PrefixPopulationSelection,
         /// Named immutable population authority, source, and query artifacts.
         artifacts: V36PrefixMaterializedArtifacts,
     },
     /// All quality-query heaps after one complete source-row prefix.
     GroundTruth {
+        /// Exact population selection consumed by materialization.
+        selection: V36PrefixPopulationSelection,
         /// Exact materialized lineage consumed by this GT generation.
         materialized: V36PrefixMaterializedArtifacts,
         /// Canonical Arrow IPC top-100 heap snapshot.
@@ -481,24 +490,44 @@ pub enum V36PrefixCheckpointPhase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Immutable population selection produced after the complete object window.
+pub struct V36PrefixPopulationSelection {
+    /// Feature-row ID at the inclusive population-score cutoff.
+    pub cutoff_feature_row_id: u64,
+    /// SHA-256 population score at the inclusive cutoff.
+    pub cutoff_score_sha256: String,
+    /// Distinct rows eligible after any authenticated prior-cohort exclusion.
+    pub eligible_rows: u64,
+    /// Distinct rows removed by authenticated prior-cohort exclusion.
+    pub excluded_rows: u64,
+    /// Exact prior-cohort selected-ID artifact consumed during exclusion.
+    pub excluded_population_identity: Option<V36ArtifactIdentity>,
+    /// Complete Arrow IPC selected-identity artifact.
+    pub selected_ids: V36ArtifactIdentity,
+    /// Exact number of retained population identities.
+    pub selected_rows: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Complete population accounting retained across every checkpoint phase.
 pub struct V36PrefixPopulationCheckpoint {
+    /// Number of complete registered source objects incorporated.
+    pub completed_objects: u16,
     /// Complete source objects committed in ranked order.
     pub consumed_objects: Vec<V36PrefixSourceObject>,
-    /// Object containing the registered distinct-row cutoff, once reached.
-    pub cutoff_object_ordinal: Option<u16>,
-    /// Row offset of the registered cutoff inside its complete object.
-    pub cutoff_row_offset: Option<u64>,
     /// Distinct feature IDs observed through the complete prefix.
     pub distinct_rows: u64,
     /// Duplicate physical rows observed through the complete prefix.
     pub duplicate_rows: u64,
     /// One immutable Arrow IPC first-occurrence run per source object.
     pub identity_runs: Vec<V36ArtifactIdentity>,
-    /// First registered object ordinal not incorporated into this checkpoint.
-    pub next_object_ordinal: u16,
     /// Physical rows observed through the complete prefix.
     pub physical_rows: u64,
+    /// Number of objects in the registered cohort window.
+    pub selected_object_count: u16,
+    /// Global ranked ordinal at which the cohort window starts.
+    pub selected_object_start: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -522,16 +551,18 @@ pub struct V36PrefixMaterializedArtifacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Trusted campaign authority used to authenticate checkpoint claims.
 pub struct V36PrefixCheckpointContext {
+    /// Zero-based independently registered screen cohort.
+    pub cohort_ordinal: u8,
     /// Exact materialized source row count.
     pub corpus_rows: u64,
     /// Registered distinct-row cutoff.
     pub distinct_candidates: u64,
+    /// Prior-cohort selected-ID artifact required for nonzero cohorts.
+    pub excluded_population_identity: Option<V36ArtifactIdentity>,
     /// SHA-256 of the scientific freeze authority.
     pub freeze_authority_sha256: String,
     /// Durable GT source-block row count.
     pub gt_block_rows: u64,
-    /// Maximum complete source objects.
-    pub object_cap: u16,
     /// Exact campaign-scoped immutable object prefix.
     pub object_prefix: String,
     /// One run-scoped compare-and-swap pointer URI.
@@ -542,6 +573,10 @@ pub struct V36PrefixCheckpointContext {
     pub run_id: String,
     /// SHA-256 of the frozen source archive.
     pub source_archive_sha256: String,
+    /// Number of complete objects in the registered cohort window.
+    pub selected_object_count: u16,
+    /// Global ranked ordinal at which the cohort window starts.
+    pub selected_object_start: u16,
     /// Maximum complete encoded source bytes.
     pub source_byte_cap: u64,
     /// Exact source commit.
@@ -1290,11 +1325,53 @@ fn checkpoint_source_matches_registry(
         && consumed.sample_sha256 == format!("{:x}", sample.finalize())
 }
 
+fn valid_population_selection(
+    selection: &V36PrefixPopulationSelection,
+    population: &V36PrefixPopulationCheckpoint,
+) -> bool {
+    selection.selected_rows > 0
+        && selection.eligible_rows >= selection.selected_rows
+        && selection.eligible_rows.checked_add(selection.excluded_rows)
+            == Some(population.distinct_rows)
+        && valid_digest(&selection.cutoff_score_sha256)
+        && selection
+            .excluded_population_identity
+            .as_ref()
+            .is_none_or(|identity| {
+                valid_checkpoint_artifact(identity, "population-selected-identities")
+            })
+        && valid_checkpoint_artifact(&selection.selected_ids, "population-selected-identities")
+}
+
+fn population_selection_matches_context(
+    context: &V36PrefixCheckpointContext,
+    selection: &V36PrefixPopulationSelection,
+) -> bool {
+    selection.selected_rows == context.distinct_candidates
+        && selection
+            .selected_ids
+            .uri
+            .starts_with(&context.object_prefix)
+        && match context.cohort_ordinal {
+            0 => {
+                context.excluded_population_identity.is_none()
+                    && selection.excluded_population_identity.is_none()
+                    && selection.excluded_rows == 0
+            }
+            1 => {
+                context.excluded_population_identity.is_some()
+                    && selection.excluded_population_identity
+                        == context.excluded_population_identity
+            }
+            _ => false,
+        }
+}
+
 /// Validate one immutable V36 prefix-freeze checkpoint manifest.
 pub fn validate_v36_prefix_checkpoint_manifest(
     manifest: &V36PrefixCheckpointManifest,
 ) -> Result<()> {
-    if manifest.schema != "borsuk-v36-prefix-freeze-checkpoint-v1"
+    if manifest.schema != "borsuk-v36-prefix-freeze-checkpoint-v2"
         || manifest.claim_eligible
         || !valid_digest(&manifest.execution_authority_sha256)
         || !valid_digest(&manifest.freeze_authority_sha256)
@@ -1322,24 +1399,21 @@ pub fn validate_v36_prefix_checkpoint_manifest(
         return Err(invalid("V36 prefix checkpoint authority differs"));
     }
     let population = &manifest.population;
-    let cutoff_complete =
-        population.cutoff_object_ordinal.is_some() && population.cutoff_row_offset.is_some();
     if population.consumed_objects.is_empty()
-        || population.consumed_objects.len() > 16
-        || usize::from(population.next_object_ordinal) != population.consumed_objects.len()
+        || population.selected_object_count == 0
+        || population.selected_object_count > 16
+        || population
+            .selected_object_start
+            .checked_add(population.selected_object_count)
+            .is_none()
+        || usize::from(population.completed_objects) != population.consumed_objects.len()
+        || population.completed_objects > population.selected_object_count
         || population.identity_runs.len() != population.consumed_objects.len()
         || population.distinct_rows == 0
         || population
             .distinct_rows
             .checked_add(population.duplicate_rows)
             != Some(population.physical_rows)
-        || population.cutoff_object_ordinal.is_some() != population.cutoff_row_offset.is_some()
-        || population
-            .cutoff_object_ordinal
-            .is_some_and(|ordinal| usize::from(ordinal) >= population.consumed_objects.len())
-        || population
-            .cutoff_row_offset
-            .is_some_and(|offset| offset >= population.physical_rows)
         || population.consumed_objects.iter().any(|object| {
             object.path.is_empty()
                 || object.encoded_bytes == 0
@@ -1353,19 +1427,37 @@ pub fn validate_v36_prefix_checkpoint_manifest(
             .iter()
             .enumerate()
             .any(|(ordinal, run)| {
-                !valid_checkpoint_artifact(run, &format!("population-identity-run-{ordinal:04}"))
+                let Some(global_ordinal) = population
+                    .selected_object_start
+                    .checked_add(u16::try_from(ordinal).unwrap_or(u16::MAX))
+                else {
+                    return true;
+                };
+                !valid_checkpoint_artifact(
+                    run,
+                    &format!("population-identity-run-{global_ordinal:04}"),
+                )
             })
     {
         return Err(invalid("V36 prefix population checkpoint differs"));
     }
     match &manifest.phase {
         V36PrefixCheckpointPhase::Population => {}
+        V36PrefixCheckpointPhase::Selected { selection } => {
+            if population.completed_objects != population.selected_object_count
+                || !valid_population_selection(selection, population)
+            {
+                return Err(invalid("V36 prefix selected checkpoint differs"));
+            }
+        }
         V36PrefixCheckpointPhase::GroundTruth {
             heaps,
             materialized,
             next_source_ordinal,
+            selection,
         } => {
-            if !cutoff_complete
+            if population.completed_objects != population.selected_object_count
+                || !valid_population_selection(selection, population)
                 || *next_source_ordinal == 0
                 || !valid_checkpoint_artifact(heaps, "gt-heaps")
                 || !valid_materialized_artifacts(materialized)
@@ -1373,8 +1465,14 @@ pub fn validate_v36_prefix_checkpoint_manifest(
                 return Err(invalid("V36 prefix GT checkpoint differs"));
             }
         }
-        V36PrefixCheckpointPhase::Materialized { artifacts } => {
-            if !cutoff_complete || !valid_materialized_artifacts(artifacts) {
+        V36PrefixCheckpointPhase::Materialized {
+            artifacts,
+            selection,
+        } => {
+            if population.completed_objects != population.selected_object_count
+                || !valid_population_selection(selection, population)
+                || !valid_materialized_artifacts(artifacts)
+            {
                 return Err(invalid("V36 prefix materialized checkpoint differs"));
             }
         }
@@ -1403,35 +1501,35 @@ pub fn validate_v36_prefix_checkpoint_manifest_with_context(
         .all(|artifact| artifact.uri.starts_with(&context.object_prefix));
     let phase_in_scope = match &manifest.phase {
         V36PrefixCheckpointPhase::Population => true,
-        V36PrefixCheckpointPhase::Materialized { artifacts } => materialized_artifacts(artifacts)
-            .into_iter()
-            .all(|(artifact, _)| artifact.uri.starts_with(&context.object_prefix)),
+        V36PrefixCheckpointPhase::Selected { selection } => {
+            population_selection_matches_context(context, selection)
+        }
+        V36PrefixCheckpointPhase::Materialized {
+            artifacts,
+            selection,
+        } => {
+            population_selection_matches_context(context, selection)
+                && materialized_artifacts(artifacts)
+                    .into_iter()
+                    .all(|(artifact, _)| artifact.uri.starts_with(&context.object_prefix))
+        }
         V36PrefixCheckpointPhase::GroundTruth {
             heaps,
             materialized,
             next_source_ordinal,
+            selection,
         } => {
             let aligned = *next_source_ordinal == context.corpus_rows
                 || (context.gt_block_rows > 0
                     && next_source_ordinal.is_multiple_of(context.gt_block_rows));
             aligned
                 && *next_source_ordinal <= context.corpus_rows
+                && population_selection_matches_context(context, selection)
                 && heaps.uri.starts_with(&context.object_prefix)
                 && materialized_artifacts(materialized)
                     .into_iter()
                     .all(|(artifact, _)| artifact.uri.starts_with(&context.object_prefix))
         }
-    };
-    let cutoff_valid = match (
-        population.cutoff_object_ordinal,
-        population.cutoff_row_offset,
-    ) {
-        (None, None) => population.distinct_rows < context.distinct_candidates,
-        (Some(object), Some(_)) => {
-            population.distinct_rows >= context.distinct_candidates
-                && usize::from(object) + 1 == population.consumed_objects.len()
-        }
-        _ => false,
     };
     let expected_pointer_uri = context
         .object_prefix
@@ -1442,8 +1540,27 @@ pub fn validate_v36_prefix_checkpoint_manifest_with_context(
         || context.source_archive_sha256 != manifest.source_archive_sha256
         || context.source_commit != manifest.source_commit
         || context.source_registry_sha256 != manifest.source_registry_sha256
-        || context.object_cap == 0
-        || population.consumed_objects.len() > usize::from(context.object_cap)
+        || context.selected_object_count == 0
+        || context.selected_object_count > 16
+        || context.selected_object_start
+            != u16::from(context.cohort_ordinal).saturating_mul(context.selected_object_count)
+        || match context.cohort_ordinal {
+            0 => context.excluded_population_identity.is_some(),
+            1 => context
+                .excluded_population_identity
+                .as_ref()
+                .is_none_or(|identity| {
+                    !valid_checkpoint_artifact(identity, "population-selected-identities")
+                }),
+            _ => true,
+        }
+        || context
+            .selected_object_start
+            .checked_add(context.selected_object_count)
+            .is_none()
+        || context.ranked_objects.len() != usize::from(context.selected_object_count)
+        || population.selected_object_start != context.selected_object_start
+        || population.selected_object_count != context.selected_object_count
         || population.consumed_objects.len() > context.ranked_objects.len()
         || population
             .consumed_objects
@@ -1456,9 +1573,6 @@ pub fn validate_v36_prefix_checkpoint_manifest_with_context(
         || expected_pointer_uri.as_deref() != Some(context.pointer_uri.as_str())
         || !structural_artifacts_in_scope
         || !phase_in_scope
-        || !cutoff_valid
-        || (!matches!(manifest.phase, V36PrefixCheckpointPhase::Population)
-            && population.cutoff_object_ordinal.is_none())
     {
         return Err(invalid("V36 prefix checkpoint context differs"));
     }
@@ -1468,8 +1582,9 @@ pub fn validate_v36_prefix_checkpoint_manifest_with_context(
 fn checkpoint_phase_rank(phase: &V36PrefixCheckpointPhase) -> u8 {
     match phase {
         V36PrefixCheckpointPhase::Population => 0,
-        V36PrefixCheckpointPhase::Materialized { .. } => 1,
-        V36PrefixCheckpointPhase::GroundTruth { .. } => 2,
+        V36PrefixCheckpointPhase::Selected { .. } => 1,
+        V36PrefixCheckpointPhase::Materialized { .. } => 2,
+        V36PrefixCheckpointPhase::GroundTruth { .. } => 3,
     }
 }
 
@@ -1502,37 +1617,55 @@ pub fn validate_v36_prefix_checkpoint_transition(
         && next.population.distinct_rows >= previous.population.distinct_rows
         && next.population.duplicate_rows >= previous.population.duplicate_rows
         && next.population.physical_rows >= previous.population.physical_rows;
-    let population_frozen = previous.population.cutoff_object_ordinal.is_none()
+    let population_frozen = (matches!(previous.phase, V36PrefixCheckpointPhase::Population)
+        && previous.population.completed_objects < previous.population.selected_object_count)
         || next.population == previous.population;
     let phase_lineage = match (&previous.phase, &next.phase) {
         (V36PrefixCheckpointPhase::Population, V36PrefixCheckpointPhase::Population) => {
-            previous.population.cutoff_object_ordinal.is_none()
-                && next.population.consumed_objects.len()
-                    > previous.population.consumed_objects.len()
+            previous.population.completed_objects < previous.population.selected_object_count
+                && next.population.completed_objects
+                    == previous.population.completed_objects.saturating_add(1)
         }
-        (V36PrefixCheckpointPhase::Population, V36PrefixCheckpointPhase::Materialized { .. }) => {
-            true
+        (V36PrefixCheckpointPhase::Population, V36PrefixCheckpointPhase::Selected { .. }) => {
+            previous.population.completed_objects == previous.population.selected_object_count
         }
+        (
+            V36PrefixCheckpointPhase::Selected {
+                selection: previous,
+            },
+            V36PrefixCheckpointPhase::Materialized {
+                selection: next, ..
+            },
+        ) => previous == next,
         (
             V36PrefixCheckpointPhase::Materialized {
                 artifacts: previous,
+                selection: previous_selection,
             },
             V36PrefixCheckpointPhase::GroundTruth {
-                materialized: next, ..
+                materialized: next,
+                selection: next_selection,
+                ..
             },
-        ) => previous == next,
+        ) => previous == next && previous_selection == next_selection,
         (
             V36PrefixCheckpointPhase::GroundTruth {
                 materialized: previous_materialized,
                 next_source_ordinal: previous_ordinal,
+                selection: previous_selection,
                 ..
             },
             V36PrefixCheckpointPhase::GroundTruth {
                 materialized: next_materialized,
                 next_source_ordinal: next_ordinal,
+                selection: next_selection,
                 ..
             },
-        ) => previous_materialized == next_materialized && next_ordinal > previous_ordinal,
+        ) => {
+            previous_materialized == next_materialized
+                && previous_selection == next_selection
+                && next_ordinal > previous_ordinal
+        }
         _ => false,
     };
     let same_attempt_valid = next.producer_attempt_ordinal != previous.producer_attempt_ordinal
@@ -1571,7 +1704,7 @@ pub fn canonical_v36_prefix_checkpoint_pointer_bytes(
     context: &V36PrefixCheckpointContext,
     pointer: &V36PrefixCheckpointPointer,
 ) -> Result<Vec<u8>> {
-    if pointer.schema != "borsuk-v36-prefix-checkpoint-pointer-v1"
+    if pointer.schema != "borsuk-v36-prefix-checkpoint-pointer-v2"
         || pointer.claim_eligible
         || pointer.run_id != context.run_id
         || pointer.producer_attempt_ordinal >= 3
@@ -1611,20 +1744,26 @@ fn checkpoint_manifest_identity(
 pub fn plan_v36_prefix_checkpoint_publication(
     context: &V36PrefixCheckpointContext,
     manifest: &V36PrefixCheckpointManifest,
+    previous_manifest: Option<&V36PrefixCheckpointManifest>,
     current_pointer: Option<(&[u8], &str)>,
 ) -> Result<V36PrefixCheckpointPublication> {
     validate_v36_prefix_checkpoint_manifest_with_context(context, manifest)?;
-    let condition = match (manifest.generation, current_pointer) {
-        (0, None) if manifest.previous_checkpoint.is_none() => {
+    let condition = match (manifest.generation, previous_manifest, current_pointer) {
+        (0, None, None) if manifest.previous_checkpoint.is_none() => {
             V36PrefixCheckpointPointerCondition::Create
         }
-        (0, _) => return Err(invalid("V36 prefix checkpoint pointer genesis differs")),
-        (_, Some((bytes, etag))) if !etag.is_empty() => {
+        (0, _, _) => return Err(invalid("V36 prefix checkpoint pointer genesis differs")),
+        (_, Some(previous), Some((bytes, etag))) if !etag.is_empty() => {
             let current: V36PrefixCheckpointPointer = serde_json::from_slice(bytes)
                 .map_err(|_| invalid("V36 prefix current checkpoint pointer JSON differs"))?;
+            let previous_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(previous)?;
+            let previous_identity =
+                checkpoint_manifest_identity(context, previous, &previous_bytes);
             if canonical_v36_prefix_checkpoint_pointer_bytes(context, &current)? != bytes
                 || current.generation.checked_add(1) != Some(manifest.generation)
                 || manifest.previous_checkpoint.as_ref() != Some(&current.manifest)
+                || current.manifest != previous_identity
+                || validate_v36_prefix_checkpoint_transition(context, previous, manifest).is_err()
             {
                 return Err(invalid("V36 prefix current checkpoint pointer differs"));
             }
@@ -1632,7 +1771,7 @@ pub fn plan_v36_prefix_checkpoint_publication(
                 etag: etag.to_owned(),
             }
         }
-        _ => return Err(invalid("V36 prefix checkpoint current pointer is missing")),
+        _ => return Err(invalid("V36 prefix checkpoint predecessor is missing")),
     };
 
     let manifest_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(manifest)?;
@@ -1644,22 +1783,33 @@ pub fn plan_v36_prefix_checkpoint_publication(
         producer_attempt_id: manifest.producer_attempt_id.clone(),
         producer_attempt_ordinal: manifest.producer_attempt_ordinal,
         run_id: manifest.run_id.clone(),
-        schema: "borsuk-v36-prefix-checkpoint-pointer-v1".to_owned(),
+        schema: "borsuk-v36-prefix-checkpoint-pointer-v2".to_owned(),
     };
     let pointer_bytes = canonical_v36_prefix_checkpoint_pointer_bytes(context, &pointer)?;
     let mut dependencies = manifest.population.identity_runs.clone();
     match &manifest.phase {
         V36PrefixCheckpointPhase::Population => {}
-        V36PrefixCheckpointPhase::Materialized { artifacts } => dependencies.extend(
-            materialized_artifacts(artifacts)
-                .into_iter()
-                .map(|(artifact, _)| artifact.clone()),
-        ),
+        V36PrefixCheckpointPhase::Selected { selection } => {
+            dependencies.push(selection.selected_ids.clone());
+        }
+        V36PrefixCheckpointPhase::Materialized {
+            artifacts,
+            selection,
+        } => {
+            dependencies.push(selection.selected_ids.clone());
+            dependencies.extend(
+                materialized_artifacts(artifacts)
+                    .into_iter()
+                    .map(|(artifact, _)| artifact.clone()),
+            );
+        }
         V36PrefixCheckpointPhase::GroundTruth {
             heaps,
             materialized,
+            selection,
             ..
         } => {
+            dependencies.push(selection.selected_ids.clone());
             dependencies.extend(
                 materialized_artifacts(materialized)
                     .into_iter()

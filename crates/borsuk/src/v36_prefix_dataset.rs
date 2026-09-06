@@ -298,12 +298,17 @@ pub struct V36PrefixPopulationCheckpointHead {
 
 impl V36PrefixPopulationCheckpointHead {
     fn identity_runs(&self) -> Result<Vec<V36PrefixIdentityRun>> {
+        let selected_object_start = self.manifest.population.selected_object_start;
         self.dependencies
             .iter()
             .enumerate()
             .map(|(ordinal, (identity, bytes))| {
-                let selected_object_ordinal = u16::try_from(ordinal)
-                    .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?;
+                let selected_object_ordinal = selected_object_start
+                    .checked_add(
+                        u16::try_from(ordinal)
+                            .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?,
+                    )
+                    .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?;
                 let source = self
                     .manifest
                     .population
@@ -461,15 +466,15 @@ impl V36PrefixPopulationCheckpointWriter {
             usize::try_from(context.distinct_candidates)
                 .map_err(|_| invalid("V36 population checkpoint row count overflows"))?,
         )?;
-        let expected_cutoff = previous_manifest
-            .population
-            .cutoff_object_ordinal
-            .zip(previous_manifest.population.cutoff_row_offset);
         if restored.consumed_objects != previous_manifest.population.consumed_objects
-            || restored.cutoff != expected_cutoff
             || restored.distinct_rows_observed != previous_manifest.population.distinct_rows
             || restored.duplicate_rows != previous_manifest.population.duplicate_rows
-            || restored.next_object_ordinal != previous_manifest.population.next_object_ordinal
+            || restored.next_object_ordinal
+                != previous_manifest
+                    .population
+                    .selected_object_start
+                    .checked_add(previous_manifest.population.completed_objects)
+                    .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?
             || restored.physical_rows != previous_manifest.population.physical_rows
         {
             return Err(invalid("V36 population checkpoint resume state differs"));
@@ -509,9 +514,15 @@ impl V36PrefixPopulationCheckpointWriter {
             .previous_manifest
             .as_ref()
             .map(|manifest| &manifest.population);
-        if usize::from(boundary.run.selected_object_ordinal) != ordinal
-            || previous_population
-                .is_some_and(|population| population.cutoff_object_ordinal.is_some())
+        let expected_global_ordinal = self
+            .context
+            .selected_object_start
+            .checked_add(
+                u16::try_from(ordinal)
+                    .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?;
+        if boundary.run.selected_object_ordinal != expected_global_ordinal
             || self
                 .context
                 .ranked_objects
@@ -530,10 +541,10 @@ impl V36PrefixPopulationCheckpointWriter {
         let identity = V36ArtifactIdentity {
             blake3: blake3::hash(&bytes).to_hex().to_string(),
             encoded_bytes: bytes.len().try_into().unwrap_or(u64::MAX),
-            role: format!("population-identity-run-{ordinal:04}"),
+            role: format!("population-identity-run-{expected_global_ordinal:04}"),
             sha256: sha256.clone(),
             uri: format!(
-                "{}{sha256}-population-identity-run-{ordinal:04}.arrow",
+                "{}{sha256}-population-identity-run-{expected_global_ordinal:04}.arrow",
                 self.context.object_prefix
             ),
         };
@@ -613,24 +624,21 @@ impl V36PrefixPopulationCheckpointWriter {
             generation,
             phase: V36PrefixCheckpointPhase::Population,
             population: V36PrefixPopulationCheckpoint {
+                completed_objects: u16::try_from(identity_runs.len())
+                    .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?,
                 consumed_objects,
-                cutoff_object_ordinal: cutoff.map(|position| position.0),
-                cutoff_row_offset: cutoff.map(|position| position.1),
                 distinct_rows,
                 duplicate_rows,
                 identity_runs,
-                next_object_ordinal: boundary
-                    .run
-                    .selected_object_ordinal
-                    .checked_add(1)
-                    .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?,
                 physical_rows,
+                selected_object_count: self.context.selected_object_count,
+                selected_object_start: self.context.selected_object_start,
             },
             previous_checkpoint: self.previous_manifest_identity.clone(),
             producer_attempt_id: self.producer_attempt_id.clone(),
             producer_attempt_ordinal: self.producer_attempt_ordinal,
             producer_instance_id: self.producer_instance_id.clone(),
-            schema: "borsuk-v36-prefix-freeze-checkpoint-v1".to_owned(),
+            schema: "borsuk-v36-prefix-freeze-checkpoint-v2".to_owned(),
             run_id: self.context.run_id.clone(),
             source_archive_sha256: self.context.source_archive_sha256.clone(),
             source_commit: self.context.source_commit.clone(),
@@ -642,6 +650,7 @@ impl V36PrefixPopulationCheckpointWriter {
         let publication = plan_v36_prefix_checkpoint_publication(
             &self.context,
             &manifest,
+            self.previous_manifest.as_ref(),
             self.previous_pointer_bytes
                 .as_deref()
                 .map(|pointer| (pointer, "local-predecessor")),
@@ -783,8 +792,7 @@ fn v36_prefix_object_sample_sha256(path: &str, encoded_bytes: u64) -> String {
 
 fn validate_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<()> {
     let mut feature_ids = HashSet::with_capacity(run.rows.len());
-    if run.selected_object_ordinal >= 16
-        || run.physical_rows == 0
+    if run.physical_rows == 0
         || run.rows.len() as u64 > run.physical_rows
         || run.source.path.is_empty()
         || run.source.uri.is_empty()
@@ -855,8 +863,7 @@ pub fn decode_v36_prefix_identity_run(
         .filter(|uri| uri.scheme() == "s3" && uri.host_str().is_some())
         .and_then(|uri| uri.path().rsplit('/').next().map(str::to_owned))
         .is_some_and(|name| name.starts_with(&format!("{sha256}-")));
-    if selected_object_ordinal >= 16
-        || registered.role != expected_role
+    if registered.role != expected_role
         || registered.encoded_bytes != bytes.len() as u64
         || registered.sha256 != sha256
         || registered.blake3 != blake3
@@ -960,12 +967,16 @@ pub fn restore_v36_prefix_population_state(
     let mut unique_rows = Vec::with_capacity(distinct_candidates);
     let mut physical_rows = 0_u64;
     let mut cutoff = None;
+    let selected_object_start = runs[0].selected_object_ordinal;
     for (ordinal, run) in runs.iter().enumerate() {
-        if cutoff.is_some() {
-            return Err(invalid("V36 prefix identity run follows cutoff object"));
-        }
         validate_v36_prefix_identity_run(run)?;
-        if usize::from(run.selected_object_ordinal) != ordinal
+        let expected_ordinal = selected_object_start
+            .checked_add(
+                u16::try_from(ordinal)
+                    .map_err(|_| invalid("V36 prefix identity-run ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix identity-run ordinal overflows"))?;
+        if run.selected_object_ordinal != expected_ordinal
             || !source_paths.insert(run.source.path.as_str())
         {
             return Err(invalid("V36 prefix identity-run sequence differs"));
@@ -995,10 +1006,13 @@ pub fn restore_v36_prefix_population_state(
         cutoff,
         distinct_rows_observed,
         duplicate_rows,
-        next_object_ordinal: runs
-            .len()
-            .try_into()
-            .map_err(|_| invalid("V36 prefix identity-run ordinal overflows"))?,
+        next_object_ordinal: selected_object_start
+            .checked_add(
+                runs.len()
+                    .try_into()
+                    .map_err(|_| invalid("V36 prefix identity-run ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix identity-run ordinal overflows"))?,
         physical_rows,
         unique_rows,
     })
@@ -2094,15 +2108,18 @@ pub fn load_v36_prefix_freeze_preflight(
         .ok_or_else(|| invalid("V36 prefix checkpoint campaign prefix differs"))?;
     let source_archive_sha256 = input("source-archive")?.sha256.clone();
     let checkpoint_context = V36PrefixCheckpointContext {
+        cohort_ordinal: authority.cohort_ordinal,
         corpus_rows: authority.corpus_rows,
         distinct_candidates: authority.distinct_candidates,
+        excluded_population_identity: authority.excluded_population_identity.clone(),
         freeze_authority_sha256: format!("{:x}", Sha256::digest(&authority_bytes)),
         gt_block_rows: PARQUET_ROW_GROUP_ROWS as u64,
-        object_cap: authority.object_cap,
         object_prefix: format!("{campaign_prefix}checkpoints/objects/"),
         pointer_uri: format!("{campaign_prefix}checkpoints/runs/{run_id}/latest.json"),
         ranked_objects: ranked_objects
             .iter()
+            .skip(usize::from(authority.selected_object_start))
+            .take(usize::from(authority.selected_object_count))
             .map(|object| V36PrefixRegisteredSourceObject {
                 encoded_bytes: object.encoded_bytes,
                 path: object.path.clone(),
@@ -2111,6 +2128,8 @@ pub fn load_v36_prefix_freeze_preflight(
             })
             .collect(),
         run_id: run_id.to_owned(),
+        selected_object_count: authority.selected_object_count,
+        selected_object_start: authority.selected_object_start,
         source_archive_sha256,
         source_byte_cap: authority.source_byte_cap,
         source_commit: execution_authority.source_commit.clone(),
@@ -2161,7 +2180,6 @@ where
     digest_bytes(&object.sample_sha256)?;
     if object.path.is_empty()
         || object.uri.is_empty()
-        || selected_object_ordinal >= 16
         || object.sample_sha256
             != v36_prefix_object_sample_sha256(&object.path, object.encoded_bytes)
     {

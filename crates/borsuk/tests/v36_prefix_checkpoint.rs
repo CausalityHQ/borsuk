@@ -10,7 +10,7 @@ use borsuk::{
     V36PrefixCheckpointOutbox, V36PrefixCheckpointPhase, V36PrefixCheckpointPointer,
     V36PrefixCheckpointPointerCondition, V36PrefixIdentityRun, V36PrefixMaterializedArtifacts,
     V36PrefixPopulationCheckpoint, V36PrefixPopulationCheckpointHead,
-    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit,
+    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
     V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
     canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
     decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
@@ -101,9 +101,8 @@ fn population_manifest() -> V36PrefixCheckpointManifest {
         generation: 0,
         phase: V36PrefixCheckpointPhase::Population,
         population: V36PrefixPopulationCheckpoint {
+            completed_objects: 1,
             consumed_objects: vec![source_object()],
-            cutoff_object_ordinal: None,
-            cutoff_row_offset: None,
             distinct_rows: 80,
             duplicate_rows: 20,
             identity_runs: vec![artifact(
@@ -111,15 +110,16 @@ fn population_manifest() -> V36PrefixCheckpointManifest {
                 "population-identity-run-0000.arrow",
                 '9',
             )],
-            next_object_ordinal: 1,
             physical_rows: 100,
+            selected_object_count: 1,
+            selected_object_start: 0,
         },
         previous_checkpoint: None,
         producer_attempt_id: "v36-prefix-screen-fixture-attempt-0000".into(),
         producer_attempt_ordinal: 0,
         producer_instance_id: "i-fixture".into(),
         run_id: "v36-prefix-screen-fixture".into(),
-        schema: "borsuk-v36-prefix-freeze-checkpoint-v1".into(),
+        schema: "borsuk-v36-prefix-freeze-checkpoint-v2".into(),
         source_archive_sha256: "3".repeat(64),
         source_commit: "4".repeat(40),
         source_registry_sha256: "5".repeat(64),
@@ -128,16 +128,19 @@ fn population_manifest() -> V36PrefixCheckpointManifest {
 
 fn checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpointContext {
     V36PrefixCheckpointContext {
+        cohort_ordinal: 0,
         corpus_rows: 50,
         distinct_candidates,
+        excluded_population_identity: None,
         freeze_authority_sha256: "2".repeat(64),
         gt_block_rows: 16,
-        object_cap: 16,
         object_prefix: "s3://fixture/v36/checkpoints/objects/".into(),
         pointer_uri: "s3://fixture/v36/checkpoints/runs/v36-prefix-screen-fixture/latest.json"
             .into(),
         ranked_objects: vec![registered_source()],
         run_id: "v36-prefix-screen-fixture".into(),
+        selected_object_count: 1,
+        selected_object_start: 0,
         source_archive_sha256: "3".repeat(64),
         source_byte_cap: 8_192,
         source_commit: "4".repeat(40),
@@ -147,6 +150,7 @@ fn checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpointContext {
 
 fn two_object_checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpointContext {
     let mut context = checkpoint_context(distinct_candidates);
+    context.selected_object_count = 2;
     context.ranked_objects.push(registered_source_at(1));
     context
 }
@@ -177,6 +181,133 @@ fn checkpoint_identity(manifest: &V36PrefixCheckpointManifest) -> V36ArtifactIde
     }
 }
 
+fn population_selection() -> V36PrefixPopulationSelection {
+    V36PrefixPopulationSelection {
+        cutoff_feature_row_id: 41,
+        cutoff_score_sha256: "a".repeat(64),
+        eligible_rows: 80,
+        excluded_rows: 0,
+        excluded_population_identity: None,
+        selected_ids: artifact(
+            "population-selected-identities",
+            "population-selected-identities.arrow",
+            'b',
+        ),
+        selected_rows: 80,
+    }
+}
+
+#[test]
+fn v36_prefix_checkpoint_selected_phase_binds_complete_window_and_selection() {
+    let selection = population_selection();
+    let phase = V36PrefixCheckpointPhase::Selected {
+        selection: selection.clone(),
+    };
+    let value = serde_json::to_value(&phase).unwrap();
+    assert_eq!(value["kind"], "selected");
+    assert_eq!(value["selection"], serde_json::to_value(selection).unwrap());
+}
+
+#[test]
+fn v36_prefix_checkpoint_selected_phase_requires_complete_reconciled_selection() {
+    let mut manifest = population_manifest();
+    manifest.phase = V36PrefixCheckpointPhase::Selected {
+        selection: population_selection(),
+    };
+    validate_v36_prefix_checkpoint_manifest_with_context(&checkpoint_context(80), &manifest)
+        .unwrap();
+
+    let V36PrefixCheckpointPhase::Selected { selection } = &mut manifest.phase else {
+        unreachable!()
+    };
+    selection.eligible_rows = 79;
+    assert!(
+        validate_v36_prefix_checkpoint_manifest_with_context(&checkpoint_context(80), &manifest)
+            .is_err()
+    );
+
+    let mut incomplete = population_manifest();
+    incomplete.population.selected_object_count = 2;
+    incomplete.phase = V36PrefixCheckpointPhase::Selected {
+        selection: population_selection(),
+    };
+    let mut context = checkpoint_context(80);
+    context.selected_object_count = 2;
+    context.ranked_objects.push(registered_source_at(1));
+    assert!(validate_v36_prefix_checkpoint_manifest_with_context(&context, &incomplete).is_err());
+}
+
+#[test]
+fn v36_prefix_checkpoint_selection_binds_cohort_exclusion_evidence() {
+    let exclusion = artifact(
+        "population-selected-identities",
+        "cohort-a-population-selected-identities.arrow",
+        'd',
+    );
+    let mut cohort_a = population_manifest();
+    let mut invalid_a = population_selection();
+    invalid_a.eligible_rows = 79;
+    invalid_a.excluded_rows = 1;
+    invalid_a.excluded_population_identity = Some(exclusion.clone());
+    cohort_a.phase = V36PrefixCheckpointPhase::Selected {
+        selection: invalid_a,
+    };
+    assert!(
+        validate_v36_prefix_checkpoint_manifest_with_context(&checkpoint_context(80), &cohort_a)
+            .is_err()
+    );
+
+    let mut cohort_b = population_manifest();
+    cohort_b.population.distinct_rows = 100;
+    cohort_b.population.duplicate_rows = 0;
+    cohort_b.population.selected_object_start = 1;
+    cohort_b.population.identity_runs[0].role = "population-identity-run-0001".into();
+    let mut valid_b = population_selection();
+    valid_b.excluded_rows = 20;
+    valid_b.excluded_population_identity = Some(exclusion.clone());
+    cohort_b.phase = V36PrefixCheckpointPhase::Selected { selection: valid_b };
+    let mut context = checkpoint_context(80);
+    context.cohort_ordinal = 1;
+    context.excluded_population_identity = Some(exclusion);
+    context.selected_object_start = 1;
+    validate_v36_prefix_checkpoint_manifest_with_context(&context, &cohort_b).unwrap();
+
+    context
+        .excluded_population_identity
+        .as_mut()
+        .unwrap()
+        .sha256 = "e".repeat(64);
+    assert!(validate_v36_prefix_checkpoint_manifest_with_context(&context, &cohort_b).is_err());
+}
+
+#[test]
+fn v36_prefix_checkpoint_population_v2_rejects_physical_cutoff_state() {
+    let population = serde_json::json!({
+        "completed_objects": 1,
+        "consumed_objects": [source_object()],
+        "distinct_rows": 80,
+        "duplicate_rows": 20,
+        "identity_runs": [artifact(
+            "population-identity-run-0000",
+            "population-identity-run-0000.arrow",
+            '9',
+        )],
+        "physical_rows": 100,
+        "selected_object_count": 1,
+        "selected_object_start": 0,
+    });
+    let decoded: V36PrefixPopulationCheckpoint =
+        serde_json::from_value(population.clone()).unwrap();
+    assert_eq!(decoded.completed_objects, 1);
+    assert_eq!(decoded.selected_object_start, 0);
+    assert_eq!(decoded.selected_object_count, 1);
+
+    let mut legacy = population;
+    legacy["cutoff_object_ordinal"] = serde_json::json!(0);
+    legacy["cutoff_row_offset"] = serde_json::json!(79);
+    assert!(serde_json::from_value::<V36PrefixPopulationCheckpoint>(legacy).is_err());
+}
+
 #[test]
 fn v36_prefix_checkpoint_population_authority_is_canonical_and_closed() {
     let manifest = population_manifest();
@@ -196,8 +327,6 @@ fn v36_prefix_checkpoint_population_authority_is_canonical_and_closed() {
 #[test]
 fn v36_prefix_checkpoint_gt_binds_complete_all_query_source_prefix() {
     let mut manifest = population_manifest();
-    manifest.population.cutoff_object_ordinal = Some(0);
-    manifest.population.cutoff_row_offset = Some(79);
     manifest.generation = 1;
     manifest.previous_checkpoint = Some(artifact(
         "checkpoint-manifest",
@@ -205,6 +334,7 @@ fn v36_prefix_checkpoint_gt_binds_complete_all_query_source_prefix() {
         'a',
     ));
     manifest.phase = V36PrefixCheckpointPhase::GroundTruth {
+        selection: population_selection(),
         materialized: materialized_artifacts(),
         heaps: artifact("gt-heaps", "gt-heaps-00001024.arrow", 'b'),
         next_source_ordinal: 48,
@@ -241,23 +371,37 @@ fn v36_prefix_checkpoint_context_rejects_foreign_prefix_and_registry() {
 }
 
 #[test]
+fn v36_prefix_checkpoint_context_binds_exact_registered_object_window() {
+    let manifest = population_manifest();
+    let context = checkpoint_context(100);
+    assert_eq!(context.selected_object_start, 0);
+    assert_eq!(context.selected_object_count, 1);
+    validate_v36_prefix_checkpoint_manifest_with_context(&context, &manifest).unwrap();
+
+    let mut wrong_window = context;
+    wrong_window.selected_object_start = 1;
+    assert!(
+        validate_v36_prefix_checkpoint_manifest_with_context(&wrong_window, &manifest).is_err()
+    );
+}
+
+#[test]
 fn v36_prefix_checkpoint_transition_is_monotonic_across_attempts() {
     let context = checkpoint_context(80);
-    let mut previous = population_manifest();
-    previous.population.cutoff_object_ordinal = Some(0);
-    previous.population.cutoff_row_offset = Some(79);
+    let previous = population_manifest();
     let mut next = previous.clone();
     next.generation = 1;
     next.previous_checkpoint = Some(checkpoint_identity(&previous));
     next.producer_attempt_id = "v36-prefix-screen-fixture-attempt-0001".into();
     next.producer_attempt_ordinal = 1;
-    next.phase = V36PrefixCheckpointPhase::Materialized {
-        artifacts: materialized_artifacts(),
+    next.phase = V36PrefixCheckpointPhase::Selected {
+        selection: population_selection(),
     };
     validate_v36_prefix_checkpoint_transition(&context, &previous, &next).unwrap();
 
     let mut skipped_materialization = next.clone();
     skipped_materialization.phase = V36PrefixCheckpointPhase::GroundTruth {
+        selection: population_selection(),
         heaps: artifact("gt-heaps", "gt-heaps-00000032.arrow", 'd'),
         materialized: materialized_artifacts(),
         next_source_ordinal: 32,
@@ -276,13 +420,61 @@ fn v36_prefix_checkpoint_transition_is_monotonic_across_attempts() {
 }
 
 #[test]
+fn v36_prefix_checkpoint_transition_requires_selected_phase_and_selection_lineage() {
+    let context = checkpoint_context(80);
+    let population = population_manifest();
+    let mut selected = population.clone();
+    selected.generation = 1;
+    selected.previous_checkpoint = Some(checkpoint_identity(&population));
+    selected.phase = V36PrefixCheckpointPhase::Selected {
+        selection: population_selection(),
+    };
+    validate_v36_prefix_checkpoint_transition(&context, &population, &selected).unwrap();
+
+    let mut skipped = selected.clone();
+    skipped.phase = V36PrefixCheckpointPhase::Materialized {
+        selection: population_selection(),
+        artifacts: materialized_artifacts(),
+    };
+    assert!(validate_v36_prefix_checkpoint_transition(&context, &population, &skipped).is_err());
+
+    let mut materialized = selected.clone();
+    materialized.generation = 2;
+    materialized.previous_checkpoint = Some(checkpoint_identity(&selected));
+    materialized.phase = V36PrefixCheckpointPhase::Materialized {
+        selection: population_selection(),
+        artifacts: materialized_artifacts(),
+    };
+    validate_v36_prefix_checkpoint_transition(&context, &selected, &materialized).unwrap();
+
+    let mut changed_selection = materialized.clone();
+    let V36PrefixCheckpointPhase::Materialized { selection, .. } = &mut changed_selection.phase
+    else {
+        unreachable!()
+    };
+    selection.cutoff_feature_row_id += 1;
+    assert!(
+        validate_v36_prefix_checkpoint_transition(&context, &selected, &changed_selection).is_err()
+    );
+
+    let mut ground_truth = materialized.clone();
+    ground_truth.generation = 3;
+    ground_truth.previous_checkpoint = Some(checkpoint_identity(&materialized));
+    ground_truth.phase = V36PrefixCheckpointPhase::GroundTruth {
+        selection: population_selection(),
+        materialized: materialized_artifacts(),
+        heaps: artifact("gt-heaps", "gt-heaps-00000016.arrow", 'c'),
+        next_source_ordinal: 16,
+    };
+    validate_v36_prefix_checkpoint_transition(&context, &materialized, &ground_truth).unwrap();
+}
+
+#[test]
 fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
     let context = checkpoint_context(80);
-    let mut previous = population_manifest();
-    previous.population.cutoff_object_ordinal = Some(0);
-    previous.population.cutoff_row_offset = Some(79);
+    let previous = population_manifest();
     let previous_identity = checkpoint_identity(&previous);
-    let genesis = plan_v36_prefix_checkpoint_publication(&context, &previous, None).unwrap();
+    let genesis = plan_v36_prefix_checkpoint_publication(&context, &previous, None, None).unwrap();
     assert_eq!(
         genesis.condition,
         V36PrefixCheckpointPointerCondition::Create
@@ -295,7 +487,7 @@ fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
         producer_attempt_id: previous.producer_attempt_id.clone(),
         producer_attempt_ordinal: 0,
         run_id: previous.run_id.clone(),
-        schema: "borsuk-v36-prefix-checkpoint-pointer-v1".into(),
+        schema: "borsuk-v36-prefix-checkpoint-pointer-v2".into(),
     };
     let current_bytes =
         canonical_v36_prefix_checkpoint_pointer_bytes(&context, &current_pointer).unwrap();
@@ -303,12 +495,27 @@ fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
     let mut next = previous.clone();
     next.generation = 1;
     next.previous_checkpoint = Some(previous_identity);
-    next.phase = V36PrefixCheckpointPhase::Materialized {
+    let mut skipped_selection = next.clone();
+    skipped_selection.phase = V36PrefixCheckpointPhase::Materialized {
+        selection: population_selection(),
         artifacts: materialized_artifacts(),
+    };
+    assert!(
+        plan_v36_prefix_checkpoint_publication(
+            &context,
+            &skipped_selection,
+            Some(&previous),
+            Some((&current_bytes, "etag-generation-zero")),
+        )
+        .is_err()
+    );
+    next.phase = V36PrefixCheckpointPhase::Selected {
+        selection: population_selection(),
     };
     let plan = plan_v36_prefix_checkpoint_publication(
         &context,
         &next,
+        Some(&previous),
         Some((&current_bytes, "etag-generation-zero")),
     )
     .unwrap();
@@ -318,10 +525,9 @@ fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
             etag: "etag-generation-zero".into()
         }
     );
-    assert_eq!(plan.dependencies.len(), 7);
+    assert_eq!(plan.dependencies.len(), 2);
     assert_eq!(plan.dependencies[0].role, "population-identity-run-0000");
-    assert_eq!(plan.dependencies[1].role, "population-authority");
-    assert_eq!(plan.dependencies[6].role, "performance-query");
+    assert_eq!(plan.dependencies[1].role, "population-selected-identities");
     assert_eq!(plan.manifest.role, "checkpoint-manifest");
     validate_v36_prefix_checkpoint_pointer_observation(&plan.pointer_bytes, &plan.pointer_bytes)
         .unwrap();
@@ -329,14 +535,39 @@ fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
     changed[0] ^= 1;
     assert!(validate_v36_prefix_checkpoint_pointer_observation(&current_bytes, &changed).is_err());
 
-    assert!(plan_v36_prefix_checkpoint_publication(&context, &next, None).is_err());
+    assert!(
+        plan_v36_prefix_checkpoint_publication(&context, &next, Some(&previous), None).is_err()
+    );
     let mut wrong_pointer = current_pointer;
     wrong_pointer.manifest.sha256 = "f".repeat(64);
     let wrong_bytes = serde_json::to_vec(&wrong_pointer).unwrap();
     assert!(
-        plan_v36_prefix_checkpoint_publication(&context, &next, Some((&wrong_bytes, "etag-wrong")))
-            .is_err()
+        plan_v36_prefix_checkpoint_publication(
+            &context,
+            &next,
+            Some(&previous),
+            Some((&wrong_bytes, "etag-wrong")),
+        )
+        .is_err()
     );
+}
+
+#[test]
+fn v36_prefix_checkpoint_pointer_v2_rejects_legacy_schema() {
+    let context = checkpoint_context(100);
+    let manifest = population_manifest();
+    let mut pointer = V36PrefixCheckpointPointer {
+        claim_eligible: false,
+        generation: 0,
+        manifest: checkpoint_identity(&manifest),
+        producer_attempt_id: manifest.producer_attempt_id.clone(),
+        producer_attempt_ordinal: 0,
+        run_id: manifest.run_id.clone(),
+        schema: "borsuk-v36-prefix-checkpoint-pointer-v2".into(),
+    };
+    canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer).unwrap();
+    pointer.schema = "borsuk-v36-prefix-checkpoint-pointer-v1".into();
+    assert!(canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer).is_err());
 }
 
 #[test]
@@ -352,7 +583,8 @@ fn v36_prefix_checkpoint_outbox_exposes_only_complete_generations() {
     let mut manifest = population_manifest();
     manifest.population.identity_runs = vec![run_identity.clone()];
     let plan =
-        plan_v36_prefix_checkpoint_publication(&checkpoint_context(100), &manifest, None).unwrap();
+        plan_v36_prefix_checkpoint_publication(&checkpoint_context(100), &manifest, None, None)
+            .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("outbox");
     std::fs::create_dir(&root).unwrap();
@@ -566,6 +798,87 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
 }
 
 #[test]
+fn v36_prefix_checkpoint_writer_round_trips_cohort_b_global_ordinal() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let mut context = checkpoint_context(100);
+    context.cohort_ordinal = 1;
+    context.excluded_population_identity = Some(artifact(
+        "population-selected-identities",
+        "cohort-a-population-selected-identities.arrow",
+        'd',
+    ));
+    context.selected_object_count = 16;
+    context.selected_object_start = 16;
+    context.ranked_objects = (0..16).map(registered_source_at).collect();
+    context.source_byte_cap = 1_000_000;
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &root,
+        context.clone(),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    let ready = writer
+        .commit(&V36PrefixPopulationCommit {
+            cutoff: None,
+            distinct_rows: 1,
+            duplicate_rows: 0,
+            physical_rows: 1,
+            run: V36PrefixIdentityRun {
+                physical_rows: 1,
+                rows: vec![identity(41, 0, 16)],
+                selected_object_ordinal: 16,
+                source: source_object_at(0),
+            },
+        })
+        .unwrap();
+    let ready_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(ready).unwrap()).unwrap();
+    let manifest_identity: V36ArtifactIdentity =
+        serde_json::from_value(ready_value["manifest"].clone()).unwrap();
+    let manifest_bytes = std::fs::read(
+        root.join("manifests")
+            .join(format!("{}.json", manifest_identity.sha256)),
+    )
+    .unwrap();
+    let manifest: V36PrefixCheckpointManifest = serde_json::from_slice(&manifest_bytes).unwrap();
+    assert_eq!(manifest.population.selected_object_start, 16);
+    assert_eq!(
+        manifest.population.identity_runs[0].role,
+        "population-identity-run-0016"
+    );
+    let run_identity = manifest.population.identity_runs[0].clone();
+    let run_bytes = std::fs::read(
+        root.join("objects")
+            .join(format!("{}.blob", run_identity.sha256)),
+    )
+    .unwrap();
+    let pointer_bytes = std::fs::read(root.join("pointers").join(format!(
+        "{}.json",
+        ready_value["pointer_sha256"].as_str().unwrap()
+    )))
+    .unwrap();
+    let staged = directory.path().join("staged");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::create_dir(staged.join("objects")).unwrap();
+    std::fs::write(staged.join("pointer.json"), pointer_bytes).unwrap();
+    std::fs::write(staged.join("manifest.json"), manifest_bytes).unwrap();
+    std::fs::write(
+        staged
+            .join("objects")
+            .join(format!("{}.blob", run_identity.sha256)),
+        run_bytes,
+    )
+    .unwrap();
+    let loaded = load_v36_prefix_population_checkpoint_head(&staged, &context).unwrap();
+    assert_eq!(loaded.manifest, manifest);
+}
+
+#[test]
 fn v36_prefix_checkpoint_identity_run_is_strict_arrow_ipc() {
     let rows = vec![identity(41, 2, 3), identity(7, 9, 3)];
     let run = V36PrefixIdentityRun {
@@ -615,6 +928,24 @@ fn v36_prefix_checkpoint_identity_run_is_strict_arrow_ipc() {
 }
 
 #[test]
+fn v36_prefix_checkpoint_identity_run_accepts_global_cohort_b_ordinal() {
+    let run = V36PrefixIdentityRun {
+        physical_rows: 3,
+        rows: vec![identity(41, 0, 16), identity(7, 2, 16)],
+        selected_object_ordinal: 16,
+        source: source_object(),
+    };
+    let bytes = encode_v36_prefix_identity_run(&run).unwrap();
+    let registered = identity_run_artifact(&bytes, 16);
+    assert_eq!(
+        decode_v36_prefix_identity_run(&bytes, &registered, &source_object(), 16).unwrap(),
+        run
+    );
+    let restored = restore_v36_prefix_population_state(&[run], 1).unwrap();
+    assert_eq!(restored.next_object_ordinal, 17);
+}
+
+#[test]
 fn v36_prefix_checkpoint_population_before_cutoff_is_resumable() {
     let run = V36PrefixIdentityRun {
         physical_rows: 3,
@@ -636,6 +967,29 @@ fn v36_prefix_checkpoint_population_before_cutoff_is_resumable() {
             .collect::<Vec<_>>(),
         vec![41, 7],
     );
+}
+
+#[test]
+fn v36_prefix_checkpoint_restores_complete_window_after_selection_target_is_reached() {
+    let runs = vec![
+        V36PrefixIdentityRun {
+            physical_rows: 1,
+            rows: vec![identity(41, 0, 0)],
+            selected_object_ordinal: 0,
+            source: source_object_at(0),
+        },
+        V36PrefixIdentityRun {
+            physical_rows: 1,
+            rows: vec![identity(7, 0, 1)],
+            selected_object_ordinal: 1,
+            source: source_object_at(1),
+        },
+    ];
+    let restored = restore_v36_prefix_population_state(&runs, 1).unwrap();
+    assert_eq!(restored.consumed_objects.len(), 2);
+    assert_eq!(restored.distinct_rows_observed, 2);
+    assert_eq!(restored.next_object_ordinal, 2);
+    assert_eq!(restored.unique_rows, vec![identity(41, 0, 0)]);
 }
 
 fn empty_identity_run(selected_object_ordinal: u16, physical_rows: u64) -> V36PrefixIdentityRun {
@@ -717,12 +1071,15 @@ fn v36_prefix_checkpoint_identity_runs_restore_complete_cutoff_object() {
     let mut duplicate = runs.clone();
     duplicate[1].rows[0].feature_row_id = 1;
     assert!(restore_v36_prefix_population(&duplicate, 4).is_err());
-    let mut extra_after_cutoff = runs;
-    extra_after_cutoff.push(V36PrefixIdentityRun {
+    let mut complete_window = runs;
+    complete_window.push(V36PrefixIdentityRun {
         physical_rows: 1,
         rows: Vec::new(),
         selected_object_ordinal: 2,
-        source: source_object(),
+        source: source_object_at(2),
     });
-    assert!(restore_v36_prefix_population(&extra_after_cutoff, 4).is_err());
+    let restored = restore_v36_prefix_population(&complete_window, 4).unwrap();
+    assert_eq!(restored.cutoff_object_ordinal, 1);
+    assert_eq!(restored.cutoff_row_offset, 1);
+    assert_eq!(restored.consumed_objects.len(), 3);
 }

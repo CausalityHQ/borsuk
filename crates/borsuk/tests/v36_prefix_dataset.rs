@@ -1244,6 +1244,13 @@ fn v36_prefix_dataset_registered_input_is_authenticated_and_strict() {
         2
     );
     assert_eq!(observed, [(7, 3, 0), (9, 3, 1)]);
+    let mut cohort_b = Vec::new();
+    scan_v36_prefix_registered_input_parquet(&path, &object, 16, |row| {
+        cohort_b.push(row.selected_object_ordinal);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(cohort_b, [16, 16]);
     let mut drifted = object.clone();
     drifted.sha256 = "4".repeat(64);
     assert!(scan_v36_prefix_registered_input_parquet(&path, &drifted, 3, |_| Ok(())).is_err());
