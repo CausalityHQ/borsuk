@@ -25,8 +25,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result, V35ArtifactIdentity, V35ExactPageIdentity, V35ExactPageRow, V35LeafPatch,
-    V35Projection, V35RemoteCodeRow, build_v35_leaf_patch_from_merge_rows,
-    encode_v35_exact_page_parquet, encode_v35_remote_code_arrow,
+    V35PageDirectoryBlockReference, V35Projection, V35RemoteCodeRow,
+    build_v35_leaf_patch_from_merge_rows, decode_v35_page_directory_arrow,
+    encode_v35_exact_page_parquet, encode_v35_page_directory_arrow, encode_v35_remote_code_arrow,
     v35_projection::project_v35_source_row_simd,
     v35_remote::{
         build_v35_residual_sq_descriptor_from_slices, projected_exact_page_decoded_bytes,
@@ -1093,6 +1094,8 @@ pub trait V35BuildEncodedObjectSink {
     fn code_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget>;
     /// Return the registered target for one dense exact-vector page.
     fn page_target(&self, page_ordinal: u32) -> Result<V35BuildObjectTarget>;
+    /// Return the registered page-directory target for one dense code group.
+    fn page_directory_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget>;
     /// Persist one complete authenticated Arrow code object before returning.
     fn write_code_object(
         &mut self,
@@ -1103,6 +1106,13 @@ pub trait V35BuildEncodedObjectSink {
     ) -> Result<()>;
     /// Persist one complete authenticated Parquet page before returning.
     fn write_exact_page(&mut self, identity: V35ExactPageIdentity, bytes: &[u8]) -> Result<()>;
+    /// Persist one complete authenticated Arrow page-directory block before returning.
+    fn write_page_directory(
+        &mut self,
+        identity: V35ArtifactIdentity,
+        version_id: &str,
+        bytes: &[u8],
+    ) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1110,6 +1120,7 @@ pub trait V35BuildEncodedObjectSink {
 pub struct V35BuildEncodedGroupReceipt {
     rows: u64,
     patches: Vec<V35LeafPatch>,
+    page_directory: V35PageDirectoryBlockReference,
     page_count: u32,
     next_leaf_ordinal: u32,
     next_page_ordinal: u32,
@@ -1123,6 +1134,10 @@ impl V35BuildEncodedGroupReceipt {
     /// One compact routing patch for every final leaf fragment.
     pub fn patches(&self) -> &[V35LeafPatch] {
         &self.patches
+    }
+    /// Compact reference to the persisted page-directory block for this group.
+    pub fn page_directory(&self) -> &V35PageDirectoryBlockReference {
+        &self.page_directory
     }
     /// Exact-vector pages written for this group.
     pub fn page_count(&self) -> u32 {
@@ -1181,6 +1196,12 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
             return Err(invalid("V35 build page-object target differs"));
         }
         page_targets.push(target);
+    }
+    let page_directory_target = sink.page_directory_target(group.group_ordinal)?;
+    if !page_directory_target.uri.ends_with(".arrow")
+        || !written_uris.insert(page_directory_target.uri.clone())
+    {
+        return Err(invalid("V35 build page-directory target differs"));
     }
     let source_dimensions = usize::try_from(group.dimensions.source)
         .map_err(|_| invalid("V35 build encoded group dimensions overflow"))?;
@@ -1254,6 +1275,7 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
     drop(code_rows);
     drop(descriptor);
 
+    let mut page_identities = Vec::with_capacity(group.leaves.len());
     for ((offset, leaf), target) in group.leaves.into_iter().enumerate().zip(page_targets) {
         let page = first_page_ordinal
             .checked_add(
@@ -1267,11 +1289,29 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
             .collect::<Result<Vec<_>>>()?;
         let (identity, page_bytes) =
             encode_v35_exact_page_parquet(page, &target.uri, &target.version_id, &rows)?;
-        sink.write_exact_page(identity, &page_bytes)?;
+        sink.write_exact_page(identity.clone(), &page_bytes)?;
+        page_identities.push(identity);
     }
+    let (page_directory_bytes, page_directory_identity) = encode_v35_page_directory_arrow(
+        group.group_ordinal,
+        &page_identities,
+        &page_directory_target.uri,
+    )?;
+    let page_directory_block = decode_v35_page_directory_arrow(
+        &page_directory_bytes,
+        &page_directory_identity,
+        &page_directory_target.version_id,
+    )?;
+    let page_directory = V35PageDirectoryBlockReference::new(&page_directory_block)?;
+    sink.write_page_directory(
+        page_directory_identity,
+        &page_directory_target.version_id,
+        &page_directory_bytes,
+    )?;
     Ok(V35BuildEncodedGroupReceipt {
         rows: row_count,
         patches,
+        page_directory,
         page_count,
         next_leaf_ordinal: leaf_ordinal,
         next_page_ordinal: page_ordinal,

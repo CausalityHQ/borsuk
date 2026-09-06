@@ -1631,6 +1631,22 @@ impl V35PageDirectoryBlockReference {
             version_id: block.version_id.clone(),
         })
     }
+    /// Storage group described by this compact reference.
+    pub fn group_ordinal(&self) -> u32 {
+        self.group_ordinal
+    }
+    /// First dense page ordinal in this block.
+    pub fn first_page_ordinal(&self) -> u32 {
+        self.first_page_ordinal
+    }
+    /// Number of dense page identities in this block.
+    pub fn page_count(&self) -> u32 {
+        self.pages
+    }
+    /// Complete immutable block identity.
+    pub fn identity(&self) -> &V35ArtifactIdentity {
+        &self.identity
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
