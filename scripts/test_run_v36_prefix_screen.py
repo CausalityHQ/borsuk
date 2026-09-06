@@ -532,7 +532,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-screen-fixture",
-                "schema": "borsuk-v36-prefix-freeze-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
             }
         )
         etag = subject.publish_v36_checkpoint(
@@ -578,7 +578,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-screen-fixture",
-                "schema": "borsuk-v36-prefix-freeze-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
             }
         )
 
@@ -633,7 +633,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-screen-fixture",
-                "schema": "borsuk-v36-prefix-freeze-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
             }
         )
 

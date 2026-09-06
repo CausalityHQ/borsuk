@@ -239,7 +239,7 @@ def _checkpoint_pointer_value(pointer_bytes: bytes) -> dict[str, object]:
         or _RUN_ID.fullmatch(value["run_id"]) is None
         or value.get("producer_attempt_id")
         != f"{value.get('run_id')}-attempt-{value.get('producer_attempt_ordinal'):04d}"
-        or value.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-pointer-v1"
+        or value.get("schema") != "borsuk-v36-prefix-checkpoint-pointer-v1"
     ):
         raise ValueError("V36 checkpoint pointer authority differs")
     _s3(value["manifest"]["uri"])
