@@ -41,6 +41,8 @@ const MAX_DIRECTORY_CHUNKS: usize = 64;
 const SNAPSHOT_FORMAT: &str = "borsuk-v35-snapshot-visibility-arrow-v1";
 const SNAPSHOT_MANIFEST_KEY: &str = "borsuk.v35.snapshot-visibility.manifest";
 const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
+const CODE_DIRECTORY_ROOT_FORMAT: &str = "borsuk-v35-code-directory-root-v1";
+const CODE_DIRECTORY_ROOT_MANIFEST_KEY: &str = "borsuk.v35.code-directory-root.manifest";
 const CODE_FORMAT: &str = "borsuk-v35-remote-code-arrow-v2";
 const CODE_MANIFEST_KEY: &str = "borsuk.v35.remote-code.manifest";
 const PAGE_FORMAT: &str = "borsuk-v35-exact-page-parquet-v2";
@@ -2807,6 +2809,314 @@ impl V35CodeDirectoryBlockReference {
     pub fn version_id(&self) -> &str {
         &self.version_id
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35CodeDirectoryRootManifest {
+    blocks: u32,
+    code_bytes: u64,
+    format: String,
+    rows: u64,
+    uri: String,
+}
+
+fn code_directory_root_manifest_json(manifest: &V35CodeDirectoryRootManifest) -> Result<String> {
+    serde_json::to_string(manifest)
+        .map_err(|_| invalid("V35 code-directory root manifest cannot be serialized"))
+}
+
+fn code_directory_root_schema(manifest: &V35CodeDirectoryRootManifest) -> Result<Arc<Schema>> {
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("group_ordinal", DataType::UInt32, false),
+            Field::new("logical_start", DataType::UInt64, false),
+            Field::new("rows", DataType::UInt64, false),
+            Field::new("code_bytes", DataType::UInt64, false),
+            Field::new("block_uri", DataType::Utf8, false),
+            Field::new("block_sha256", DataType::Utf8, false),
+            Field::new("block_length", DataType::UInt64, false),
+            Field::new("block_version_id", DataType::Utf8, false),
+        ],
+        HashMap::from([(
+            CODE_DIRECTORY_ROOT_MANIFEST_KEY.to_owned(),
+            code_directory_root_manifest_json(manifest)?,
+        )]),
+    )))
+}
+
+fn validate_code_directory_block_references(
+    blocks: &[V35CodeDirectoryBlockReference],
+) -> Result<(u64, u64)> {
+    if blocks.is_empty() {
+        return Err(invalid("V35 code-directory root is empty"));
+    }
+    let mut next_logical = 0_u64;
+    let mut total_rows = 0_u64;
+    let mut total_code_bytes = 0_u64;
+    let mut identities = BTreeSet::new();
+    for (position, block) in blocks.iter().enumerate() {
+        if block.group_ordinal != u32::try_from(position).unwrap_or(u32::MAX)
+            || block.logical_start != next_logical
+            || block.rows == 0
+            || block.code_bytes == 0
+            || block.identity.role != "code-directory-block"
+            || block.identity.digest_algorithm != "sha256"
+            || !is_digest(&block.identity.digest)
+            || block.identity.length == 0
+            || block.identity.length > MAX_DIRECTORY_BLOCK_BYTES
+            || !block.identity.uri.starts_with("s3://")
+            || block.identity.uri.contains("/corpus/")
+            || block.version_id.is_empty()
+            || block.version_id.len() > 1_024
+            || !identities.insert(block.identity.uri.as_str())
+        {
+            return Err(invalid("V35 code-directory root block authority differs"));
+        }
+        next_logical = next_logical
+            .checked_add(block.rows)
+            .ok_or_else(|| invalid("V35 code-directory root row interval overflows"))?;
+        total_rows = total_rows
+            .checked_add(block.rows)
+            .ok_or_else(|| invalid("V35 code-directory root row count overflows"))?;
+        total_code_bytes = total_code_bytes
+            .checked_add(block.code_bytes)
+            .ok_or_else(|| invalid("V35 code-directory root byte count overflows"))?;
+    }
+    Ok((total_rows, total_code_bytes))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated compact root for every code-directory block in a generation.
+pub struct V35CodeDirectoryRoot {
+    identity: V35ArtifactIdentity,
+    entries: Vec<V35CodeDirectoryBlockReference>,
+    rows: u64,
+    code_bytes: u64,
+}
+
+impl V35CodeDirectoryRoot {
+    /// Number of bounded directory blocks.
+    pub fn block_count(&self) -> usize {
+        self.entries.len()
+    }
+    /// Complete logical row population.
+    pub fn row_count(&self) -> u64 {
+        self.rows
+    }
+    /// Complete encoded code bytes represented by this root.
+    pub fn code_bytes(&self) -> u64 {
+        self.code_bytes
+    }
+    /// Whether this root names this exact decoded block and covered interval.
+    pub fn authenticates(&self, block: &V35RemoteDirectoryBlock) -> bool {
+        self.entries.iter().any(|entry| {
+            let first = block.chunks.first();
+            first.is_some_and(|first| {
+                entry.group_ordinal == first.group_ordinal
+                    && entry.logical_start == first.logical_start
+                    && entry.rows == block.chunks.iter().map(|chunk| chunk.rows).sum::<u64>()
+                    && entry.code_bytes
+                        == block
+                            .chunks
+                            .iter()
+                            .map(|chunk| chunk.encoded_length)
+                            .sum::<u64>()
+                    && entry.identity == block.identity
+                    && entry.version_id == block.version_id
+            })
+        })
+    }
+    /// Complete root identity pinned by the generation manifest.
+    pub fn identity(&self) -> &V35ArtifactIdentity {
+        &self.identity
+    }
+}
+
+/// Encode the compact Arrow root of generation-neutral code-directory blocks.
+pub fn encode_v35_code_directory_root_arrow(
+    blocks: &[V35CodeDirectoryBlockReference],
+    uri: &str,
+) -> Result<(Vec<u8>, V35ArtifactIdentity)> {
+    let (rows, code_bytes) = validate_code_directory_block_references(blocks)?;
+    if !uri.starts_with("s3://") || uri.contains("/corpus/") {
+        return Err(invalid("V35 code-directory root URI differs"));
+    }
+    let manifest = V35CodeDirectoryRootManifest {
+        blocks: u32::try_from(blocks.len())
+            .map_err(|_| invalid("V35 code-directory root block count overflows"))?,
+        code_bytes,
+        format: CODE_DIRECTORY_ROOT_FORMAT.to_owned(),
+        rows,
+        uri: uri.to_owned(),
+    };
+    let schema = code_directory_root_schema(&manifest)?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                blocks.iter().map(|block| block.group_ordinal),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                blocks.iter().map(|block| block.logical_start),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                blocks.iter().map(|block| block.rows),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                blocks.iter().map(|block| block.code_bytes),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                blocks.iter().map(|block| block.identity.uri.as_str()),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                blocks.iter().map(|block| block.identity.digest.as_str()),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                blocks.iter().map(|block| block.identity.length),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                blocks.iter().map(|block| block.version_id.as_str()),
+            )),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    if bytes.len() as u64 > 64 * MIB {
+        return Err(invalid("V35 code-directory root exceeds admission"));
+    }
+    let identity = V35ArtifactIdentity {
+        digest: format!("{:x}", Sha256::digest(&bytes)),
+        digest_algorithm: "sha256".to_owned(),
+        length: bytes.len() as u64,
+        role: "code-directory".to_owned(),
+        uri: uri.to_owned(),
+    };
+    Ok((bytes, identity))
+}
+
+/// Authenticate and decode one compact Arrow code-directory root.
+pub fn decode_v35_code_directory_root_arrow(
+    bytes: &[u8],
+    registered: &V35ArtifactIdentity,
+) -> Result<V35CodeDirectoryRoot> {
+    if registered.role != "code-directory"
+        || registered.digest_algorithm != "sha256"
+        || !is_digest(&registered.digest)
+        || registered.length != bytes.len() as u64
+        || registered.length == 0
+        || registered.length > 64 * MIB
+        || !registered.uri.starts_with("s3://")
+        || registered.uri.contains("/corpus/")
+        || registered.digest != format!("{:x}", Sha256::digest(bytes))
+    {
+        return Err(invalid("V35 code-directory root identity differs"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 || reader.schema().metadata().len() != 1 {
+        return Err(invalid("V35 code-directory root Arrow envelope differs"));
+    }
+    let manifest_json = reader
+        .schema()
+        .metadata()
+        .get(CODE_DIRECTORY_ROOT_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V35 code-directory root manifest is missing"))?
+        .clone();
+    let manifest: V35CodeDirectoryRootManifest = serde_json::from_str(&manifest_json)
+        .map_err(|_| invalid("V35 code-directory root manifest differs"))?;
+    if code_directory_root_manifest_json(&manifest)? != manifest_json
+        || manifest.format != CODE_DIRECTORY_ROOT_FORMAT
+        || manifest.uri != registered.uri
+        || manifest.blocks == 0
+        || reader.schema().as_ref() != code_directory_root_schema(&manifest)?.as_ref()
+    {
+        return Err(invalid(
+            "V35 code-directory root manifest authority differs",
+        ));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V35 code-directory root batch is missing"))?;
+    if reader.next().is_some()
+        || batch.num_rows() != manifest.blocks as usize
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V35 code-directory root batch differs"));
+    }
+    let groups = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 code-directory root group column differs"))?;
+    let logical_starts = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory root logical column differs"))?;
+    let rows = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory root rows column differs"))?;
+    let code_bytes = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory root byte column differs"))?;
+    let uris = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 code-directory root URI column differs"))?;
+    let digests = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 code-directory root digest column differs"))?;
+    let lengths = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory root length column differs"))?;
+    let versions = batch
+        .column(7)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 code-directory root version column differs"))?;
+    let entries = (0..batch.num_rows())
+        .map(|row| V35CodeDirectoryBlockReference {
+            group_ordinal: groups.value(row),
+            logical_start: logical_starts.value(row),
+            rows: rows.value(row),
+            code_bytes: code_bytes.value(row),
+            identity: V35ArtifactIdentity {
+                digest: digests.value(row).to_owned(),
+                digest_algorithm: "sha256".to_owned(),
+                length: lengths.value(row),
+                role: "code-directory-block".to_owned(),
+                uri: uris.value(row).to_owned(),
+            },
+            version_id: versions.value(row).to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let (row_count, encoded_code_bytes) = validate_code_directory_block_references(&entries)?;
+    if row_count != manifest.rows || encoded_code_bytes != manifest.code_bytes {
+        return Err(invalid("V35 code-directory root totals differ"));
+    }
+    Ok(V35CodeDirectoryRoot {
+        identity: registered.clone(),
+        entries,
+        rows: row_count,
+        code_bytes: encoded_code_bytes,
+    })
 }
 
 /// Authenticate and decode one strict Arrow directory block before planning.

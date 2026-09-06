@@ -10,9 +10,11 @@ use borsuk::{
     V35BuildStorageGroupAssembler, V35BuildStorageGroupSink, V35Dimensions, V35MortonModel,
     V35Projection, V35RemoteDirectoryBinding, build_v35_leaf_patch_from_merge_rows,
     build_v35_residual_sq_descriptor, build_v35_scratch_runs, build_v35_srht,
-    decode_v35_build_run_arrow, decode_v35_page_directory_arrow, decode_v35_remote_directory_arrow,
-    decode_v35_source_block_parquet, encode_v35_build_storage_group, merge_v35_build_runs,
-    open_v35_build_run_cursor, project_v35_query_scalar, train_v35_morton_model,
+    decode_v35_build_run_arrow, decode_v35_code_directory_root_arrow,
+    decode_v35_page_directory_arrow, decode_v35_remote_directory_arrow,
+    decode_v35_source_block_parquet, encode_v35_build_storage_group,
+    encode_v35_code_directory_root_arrow, merge_v35_build_runs, open_v35_build_run_cursor,
+    project_v35_query_scalar, train_v35_morton_model,
 };
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
@@ -881,6 +883,25 @@ fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
     )
     .unwrap();
     assert_eq!(decoded_code_directory.chunks().len(), 1);
+    let (code_root_bytes, code_root_identity) = encode_v35_code_directory_root_arrow(
+        &[receipt.code_directory().clone()],
+        "s3://borsuk-index/generations/g01/code-directory.arrow",
+    )
+    .unwrap();
+    let code_root =
+        decode_v35_code_directory_root_arrow(&code_root_bytes, &code_root_identity).unwrap();
+    assert_eq!(code_root.block_count(), 1);
+    assert_eq!(code_root.row_count(), 600);
+    assert_eq!(
+        code_root.code_bytes(),
+        receipt.code_directory().code_bytes()
+    );
+    assert!(code_root.authenticates(&decoded_code_directory));
+    let mut wrong_code_root_identity = code_root_identity.clone();
+    wrong_code_root_identity.digest.replace_range(0..2, "ff");
+    assert!(
+        decode_v35_code_directory_root_arrow(&code_root_bytes, &wrong_code_root_identity).is_err()
+    );
     assert_eq!(
         receipt.page_directory().identity(),
         &sink.page_directories[0].0
