@@ -100,18 +100,33 @@ the first incomplete source-row block. Source membership, query identities,
 distance arithmetic, and GT ordering remain unchanged.
 
 Every object-sample or full-source freeze has at most three Spot attempts.
-After each complete input object or 300 active seconds, whichever comes first,
-and after each complete GT query tile, the process publishes an immutable
-canonical checkpoint containing the completed source prefix, immutable
-dedup-spill run identities and counters, materialized output identities, and
-every GT heap. Each checkpoint binds the freeze authority, complete registry,
-source archive, executable, attempt, and every referenced object by exact URI,
-digest, and encoded length. Only after all dependencies authenticate may the
-launcher conditionally replace the per-attempt checkpoint pointer. Resume
-accepts only the newest fully authenticated pointer and starts at its first
-incomplete source object or query tile. A partial object or tile is discarded.
-A third interruption is terminal infrastructure failure; it cannot silently
-buy a fourth cell.
+Population progress commits only after a complete authenticated input object.
+The checkpoint stores one immutable Arrow IPC identity run per object with
+non-null `feature_row_id:u64` and `row_offset:u64`; its canonical JSON manifest
+binds the consecutive ranked-object prefix, object ordinal, physical/distinct/
+duplicate counters, and every run identity. A 300-active-second timer republishes
+the newest complete boundary but never represents a partial object as durable.
+Therefore publication cadence is bounded to 300 seconds while maximum lost work
+is one complete object.
+
+GT scheduling still uses successive eight-query tiles inside one source scan,
+but the durable unit is a source-row block only after that block has updated all
+3,000 quality-query heaps. The checkpoint stores the next source ordinal and a
+strict Arrow IPC snapshot of canonical `(role,query_ordinal,rank,feature_row_id,
+squared_distance)` top-100 rows. It is published after a complete source block
+when 300 active seconds have elapsed; a partially updated block is discarded.
+This preserves one corpus read rather than performing 375 query-major reads.
+
+Checkpoint dependencies use immutable campaign-scoped content keys so complete
+Parquet outputs are uploaded once and reused across replacement attempts.
+Attempt-scoped pointers and terminals retain producer provenance. Publish all
+immutable dependencies, then the immutable checkpoint manifest, then replace
+the pointer using `If-None-Match` for generation zero or `If-Match` against the
+previous pointer ETag. Resume accepts only the newest fully authenticated
+pointer, manifest, and dependencies; it never falls back past a corrupt newest
+generation. It rebuilds the dedup set or GT heaps and starts at the first
+incomplete object or source-row block. A third interruption is terminal
+infrastructure failure; it cannot silently buy a fourth cell.
 
 The object-sample input authority exists before execution and binds the full
 2,298-object registry count, 787,439,811,692-byte total, ordered-manifest
