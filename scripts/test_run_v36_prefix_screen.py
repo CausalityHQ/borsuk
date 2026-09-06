@@ -171,7 +171,8 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertIn('science_pid=$!', script)
         self.assertIn('--publish-checkpoints', script)
         self.assertIn('--producer-pid "$science_pid"', script)
-        self.assertIn('--first-generation 0', script)
+        self.assertIn('--first-generation "$first_generation"', script)
+        self.assertIn('first_generation=$(cat "$root/resume/first-generation")', script)
         self.assertIn('sidecar_pid=$!', script)
         self.assertIn('kill -TERM "$science_pid"', script)
         self.assertIn('sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py"', script)
@@ -308,6 +309,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "_read_attempt_status",
                 side_effect=[None, "interrupted", "interrupted", None],
             ),
+            mock.patch.object(
+                subject, "read_v36_checkpoint_head_if_present", return_value=None
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "terminal missing"):
                 subject.run_v36_prefix_screen(
@@ -320,6 +324,129 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertEqual(ec2.terminate_instances.call_count, 3)
         launched = [call.kwargs for call in ec2.run_instances.call_args_list]
         self.assertEqual(len({spec["ClientToken"] for spec in launched}), 3)
+
+    def test_v36_prefix_screen_replacement_binds_newest_head_after_termination(self) -> None:
+        # Break caught: a replacement launches fresh or observes a checkpoint
+        # while the prior producer can still advance the run-scoped pointer.
+        plan = self.plan()
+        ec2 = mock.Mock()
+        ec2.run_instances.side_effect = [
+            {"Instances": [{"InstanceId": "i-first"}]},
+            {"Instances": [{"InstanceId": "i-second"}]},
+        ]
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
+        }
+        pointer = b"pointer\n"
+        manifest = b"manifest\n"
+        binding = {
+            "generation": 2,
+            "manifest": {
+                "blake3": "d" * 64,
+                "encoded_bytes": 1_024,
+                "role": "checkpoint-manifest",
+                "sha256": "e" * 64,
+                "uri": f"{plan.output_prefix}checkpoints/objects/{'e' * 64}-checkpoint.json",
+            },
+            "pointer_encoded_bytes": len(pointer),
+            "pointer_sha256": hashlib.sha256(pointer).hexdigest(),
+            "pointer_uri": f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json",
+        }
+        with (
+            mock.patch.object(
+                subject,
+                "_read_attempt_status",
+                side_effect=[None, "interrupted", "complete"],
+            ),
+            mock.patch.object(
+                subject,
+                "read_v36_checkpoint_head_if_present",
+                return_value=(pointer, manifest, "etag"),
+            ) as read_head,
+            mock.patch.object(
+                subject, "v36_checkpoint_resume_binding", return_value=binding
+            ) as bind,
+            mock.patch.object(
+                subject,
+                "build_v36_prefix_launch_specs",
+                wraps=subject.build_v36_prefix_launch_specs,
+            ) as specs,
+        ):
+            self.assertTrue(
+                subject.run_v36_prefix_screen(
+                    plan,
+                    ec2_client=ec2,
+                    s3_client=mock.Mock(),
+                    launch_nonce="6" * 32,
+                ).endswith("attempt-0001/ATTEMPT_COMPLETE.json")
+            )
+        read_head.assert_called_once()
+        bind.assert_called_once_with(plan, 1, pointer, manifest)
+        self.assertIsNone(specs.call_args_list[0].kwargs.get("resume"))
+        self.assertEqual(specs.call_args_list[1].kwargs["resume"], binding)
+        self.assertEqual(ec2.terminate_instances.call_count, 2)
+        self.assertEqual(ec2.get_waiter.return_value.wait.call_count, 2)
+
+    def test_v36_prefix_screen_controller_restart_resumes_after_terminal_interruption(self) -> None:
+        # Break caught: controller death after a durable interrupted terminal
+        # either blocks the campaign forever or relaunches attempt zero.
+        plan = self.plan()
+        prior_terminal = {"instance_id": "i-prior", "status": "interrupted"}
+        pointer = b"pointer\n"
+        manifest = b"manifest\n"
+        binding = {
+            "generation": 2,
+            "manifest": {
+                "blake3": "d" * 64,
+                "encoded_bytes": 1_024,
+                "role": "checkpoint-manifest",
+                "sha256": "e" * 64,
+                "uri": f"{plan.output_prefix}checkpoints/objects/{'e' * 64}-checkpoint.json",
+            },
+            "pointer_encoded_bytes": len(pointer),
+            "pointer_sha256": hashlib.sha256(pointer).hexdigest(),
+            "pointer_uri": f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json",
+        }
+        ec2 = mock.Mock()
+        ec2.run_instances.return_value = {
+            "Instances": [{"InstanceId": "i-replacement"}]
+        }
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
+        }
+        with (
+            mock.patch.object(
+                subject,
+                "_read_attempt_status",
+                side_effect=[prior_terminal, None, "complete"],
+            ),
+            mock.patch.object(
+                subject,
+                "read_v36_checkpoint_head_if_present",
+                return_value=(pointer, manifest, "etag"),
+            ),
+            mock.patch.object(
+                subject, "v36_checkpoint_resume_binding", return_value=binding
+            ),
+            mock.patch.object(
+                subject,
+                "build_v36_prefix_launch_specs",
+                wraps=subject.build_v36_prefix_launch_specs,
+            ) as specs,
+        ):
+            uri = subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=mock.Mock(),
+                launch_nonce="5" * 32,
+            )
+        self.assertTrue(uri.endswith("attempt-0001/ATTEMPT_COMPLETE.json"))
+        self.assertEqual(specs.call_args.kwargs["attempt_ordinal"], 1)
+        self.assertEqual(specs.call_args.kwargs["resume"], binding)
+        self.assertEqual(
+            ec2.terminate_instances.call_args_list[0].kwargs,
+            {"InstanceIds": ["i-prior"]},
+        )
 
     def test_v36_prefix_screen_capacity_fallback_and_cost_projection_are_closed(self) -> None:
         # Break caught: one unavailable zone aborts the screen, or the three
@@ -419,8 +546,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             "inputs": execution_authority["inputs"],
             "instance_id": "i-fixture",
             "outputs": outputs,
+            "resume": execution_authority["resume"],
             "run_id": plan.run_id,
-            "schema": "borsuk-v36-prefix-freeze-terminal-v1",
+            "schema": "borsuk-v36-prefix-freeze-terminal-v2",
             "source_commit": plan.source_commit,
             "status": "complete",
         }
@@ -429,7 +557,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             def __init__(self, value: object) -> None:
                 self.value = value
 
-            def get_object(self, **_kwargs: object) -> dict[str, object]:
+            def get_object(self, **kwargs: object) -> dict[str, object]:
+                if not str(kwargs["Key"]).endswith("ATTEMPT_COMPLETE.json"):
+                    raise _AwsError("NoSuchKey")
                 body = subject.canonical_json_bytes(self.value)
                 return {"Body": io.BytesIO(body), "ContentLength": len(body)}
 
@@ -680,6 +810,211 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             subject.read_v36_checkpoint_head(
                 S3(), "s3://fixture/checkpoints/runs/v36-prefix-fixture/latest.json"
             )
+
+    def test_v36_checkpoint_resume_binding_is_exact_and_precedes_replacement(self) -> None:
+        # Break caught: a replacement resumes a foreign run, a same/newer
+        # producer, or bytes other than the exact newest head it binds.
+        plan = self.plan()
+        dependency_sha = "d" * 64
+        dependency = {
+            "blake3": "e" * 64,
+            "encoded_bytes": 1_024,
+            "role": "population-identity-run-0000",
+            "sha256": dependency_sha,
+            "uri": f"{plan.output_prefix}checkpoints/objects/{dependency_sha}-run.arrow",
+        }
+        manifest = subject.canonical_json_bytes(
+            {
+                "generation": 3,
+                "phase": {"kind": "population"},
+                "population": {"identity_runs": [dependency]},
+                "producer_attempt_id": f"{plan.run_id}-attempt-0000",
+                "producer_attempt_ordinal": 0,
+                "run_id": plan.run_id,
+                "schema": "borsuk-v36-prefix-freeze-checkpoint-v1",
+            }
+        )
+        manifest_identity = {
+            "blake3": "b" * 64,
+            "encoded_bytes": len(manifest),
+            "role": "checkpoint-manifest",
+            "sha256": hashlib.sha256(manifest).hexdigest(),
+            "uri": f"{plan.output_prefix}checkpoints/objects/{'a' * 64}-checkpoint.json",
+        }
+        pointer = subject.canonical_json_bytes(
+            {
+                "claim_eligible": False,
+                "generation": 3,
+                "manifest": manifest_identity,
+                "producer_attempt_id": f"{plan.run_id}-attempt-0000",
+                "producer_attempt_ordinal": 0,
+                "run_id": plan.run_id,
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+            }
+        )
+        expected = {
+                "generation": 3,
+                "manifest": manifest_identity,
+                "pointer_encoded_bytes": len(pointer),
+                "pointer_sha256": hashlib.sha256(pointer).hexdigest(),
+                "pointer_uri": (
+                    f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json"
+                ),
+            }
+        self.assertEqual(
+            subject.v36_checkpoint_resume_binding(plan, 1, pointer, manifest), expected
+        )
+        self.assertEqual(subject._execution_authority(plan, 1, resume=expected)["resume"], expected)
+        with self.assertRaisesRegex(ValueError, "resume binding differs"):
+            subject.v36_checkpoint_resume_binding(plan, 0, pointer, manifest)
+
+    def test_v36_checkpoint_resume_materializes_only_newest_dependency_closure(self) -> None:
+        # Break caught: resume lists a prefix, falls back to history, or stages
+        # bytes not named by the exact bound newest population manifest.
+        dependency = b"arrow-ipc-run"
+        dependency_sha = hashlib.sha256(dependency).hexdigest()
+        dependency_identity = {
+            "blake3": "d" * 64,
+            "encoded_bytes": len(dependency),
+            "role": "population-identity-run-0000",
+            "sha256": dependency_sha,
+            "uri": f"s3://fixture/v36/checkpoints/objects/{dependency_sha}-run.arrow",
+        }
+        manifest = subject.canonical_json_bytes(
+            {
+                "generation": 4,
+                "phase": {"kind": "population"},
+                "population": {"identity_runs": [dependency_identity]},
+                "producer_attempt_id": "v36-prefix-fixture-attempt-0000",
+                "producer_attempt_ordinal": 0,
+                "run_id": "v36-prefix-fixture",
+                "schema": "borsuk-v36-prefix-freeze-checkpoint-v1",
+            }
+        )
+        manifest_sha = hashlib.sha256(manifest).hexdigest()
+        manifest_identity = {
+            "blake3": "e" * 64,
+            "encoded_bytes": len(manifest),
+            "role": "checkpoint-manifest",
+            "sha256": manifest_sha,
+            "uri": f"s3://fixture/v36/checkpoints/objects/{manifest_sha}-checkpoint.json",
+        }
+        pointer_uri = "s3://fixture/v36/checkpoints/runs/v36-prefix-fixture/latest.json"
+        pointer = subject.canonical_json_bytes(
+            {
+                "claim_eligible": False,
+                "generation": 4,
+                "manifest": manifest_identity,
+                "producer_attempt_id": "v36-prefix-fixture-attempt-0000",
+                "producer_attempt_ordinal": 0,
+                "run_id": "v36-prefix-fixture",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+            }
+        )
+        binding = {
+            "generation": 4,
+            "manifest": manifest_identity,
+            "pointer_encoded_bytes": len(pointer),
+            "pointer_sha256": hashlib.sha256(pointer).hexdigest(),
+            "pointer_uri": pointer_uri,
+        }
+
+        class Transport:
+            def __init__(self) -> None:
+                self.reads: list[str] = []
+
+            def read_bytes(self, uri: str, maximum: int) -> bytes:
+                self.reads.append(uri)
+                value = {pointer_uri: pointer, manifest_identity["uri"]: manifest}[uri]
+                if len(value) > maximum:
+                    raise AssertionError("unbounded read")
+                return value
+
+            def download(self, identity: dict[str, object], path: pathlib.Path) -> None:
+                self.reads.append(str(identity["uri"]))
+                path.write_bytes(dependency)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            transport = Transport()
+            self.assertEqual(
+                subject.materialize_v36_checkpoint_resume(binding, root, transport), 5
+            )
+            self.assertEqual((root / "pointer.json").read_bytes(), pointer)
+            self.assertEqual((root / "manifest.json").read_bytes(), manifest)
+            self.assertEqual(
+                (root / "objects" / f"{dependency_sha}.blob").read_bytes(), dependency
+            )
+            self.assertEqual(transport.reads, [pointer_uri, manifest_identity["uri"], dependency_identity["uri"]])
+
+            (root / "pointer.json").unlink()
+            (root / "manifest.json").unlink()
+            (root / "objects" / f"{dependency_sha}.blob").unlink()
+            (root / "objects").rmdir()
+            changed = dict(binding)
+            changed["pointer_sha256"] = "f" * 64
+            with self.assertRaisesRegex(ValueError, "resume pointer differs"):
+                subject.materialize_v36_checkpoint_resume(changed, root, Transport())
+
+    def test_v36_checkpoint_resume_cli_stages_fresh_generation_without_s3(self) -> None:
+        # Break caught: a fresh attempt probes checkpoint history or starts its
+        # publisher at a generation other than the execution-bound value.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            authority = root / "execution.json"
+            destination = root / "resume"
+            destination.mkdir()
+            authority.write_bytes(
+                subject.canonical_json_bytes(subject._execution_authority(self.plan(), 0))
+            )
+            with mock.patch.object(subject, "V36AwsCliCheckpointTransport") as transport:
+                self.assertEqual(
+                    subject.main(
+                        [
+                            "--materialize-resume",
+                            "--execution-authority",
+                            str(authority),
+                            "--resume-directory",
+                            str(destination),
+                        ]
+                    ),
+                    0,
+                )
+            transport.return_value.read_bytes.assert_not_called()
+            self.assertEqual((destination / "first-generation").read_text(), "0\n")
+
+    def test_v36_prefix_screen_replacement_materializes_exact_bound_head(self) -> None:
+        # Break caught: replacement user-data starts Rust or its publisher
+        # before staging the execution-bound head, or restarts at generation 0.
+        plan = self.plan()
+        manifest = {
+            "blake3": "b" * 64,
+            "encoded_bytes": 1_024,
+            "role": "checkpoint-manifest",
+            "sha256": "a" * 64,
+            "uri": f"{plan.output_prefix}checkpoints/objects/{'a' * 64}-checkpoint.json",
+        }
+        resume = {
+            "generation": 7,
+            "manifest": manifest,
+            "pointer_encoded_bytes": 512,
+            "pointer_sha256": "c" * 64,
+            "pointer_uri": f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json",
+        }
+        script = base64.b64decode(
+            subject.build_v36_prefix_launch_specs(
+                plan,
+                launch_nonce="9" * 32,
+                attempt_ordinal=1,
+                resume=resume,
+            )[0]["UserData"]
+        ).decode()
+        materialize = script.index("--materialize-resume")
+        science = script.index("--execute-prefix-freeze")
+        self.assertLess(materialize, science)
+        self.assertIn('--resume-checkpoint "$root/resume"', script)
+        self.assertIn('--first-generation "$first_generation"', script)
+        self.assertNotIn("--first-generation 0", script)
 
     def test_v36_checkpoint_sidecar_streams_only_rust_committed_generation(self) -> None:
         # Break caught: the supervisor recreates scientific JSON, reads a

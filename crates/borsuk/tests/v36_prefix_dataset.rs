@@ -567,6 +567,7 @@ fn v36_prefix_dataset_preflight_authenticates_every_local_input_before_network()
         execution_authority: execution_path,
         output,
         producer_instance_id: "i-fixture".into(),
+        resume_checkpoint: None,
         scratch,
         source_archive: archive_path.clone(),
         source_registry: registry_path,

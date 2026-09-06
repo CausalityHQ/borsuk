@@ -34,6 +34,7 @@ MAX_CHECKPOINT_DEPENDENCY_BYTES = 256 * 1024**2
 MAX_CHECKPOINT_MANIFEST_BYTES = 8 * 1024**2
 MAX_CHECKPOINT_POINTER_BYTES = 1024**2
 MAX_CHECKPOINT_READY_BYTES = 1024**2
+MAX_TERMINAL_BYTES = 1024**2
 AWS_CLI_TIMEOUT_SECONDS = 120
 MAX_ATTEMPTS = 3
 SPOT_HOURLY_CAP_MICRO_USD = 3_000_000
@@ -72,6 +73,7 @@ _CAPACITY_ERRORS = {
     "SpotMaxPriceTooLow",
     "Unsupported",
 }
+_UNBOUND = object()
 
 _GUEST_TERMINAL_PROGRAM = r'''import hashlib
 import json
@@ -134,8 +136,9 @@ terminal = {
     "inputs": execution["inputs"],
     "instance_id": instance_id,
     "outputs": outputs,
+    "resume": execution["resume"],
     "run_id": run_id,
-    "schema": "borsuk-v36-prefix-freeze-terminal-v1",
+    "schema": "borsuk-v36-prefix-freeze-terminal-v2",
     "source_commit": source_commit,
     "status": status,
 }
@@ -201,11 +204,21 @@ def canonical_json_bytes(value: object) -> bytes:
     )
 
 
-def _read_s3_bytes(s3_client: Any, uri: str) -> tuple[bytes, str | None]:
+def _read_s3_bytes(
+    s3_client: Any, uri: str, maximum: int
+) -> tuple[bytes, str | None]:
     bucket, key = _s3(uri)
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    body = response["Body"].read()
-    if response.get("ContentLength") != len(body):
+    content_length = response.get("ContentLength")
+    if (
+        type(maximum) is not int
+        or maximum <= 0
+        or type(content_length) is not int
+        or not 0 < content_length <= maximum
+    ):
+        raise ValueError("V36 checkpoint object length differs")
+    body = response["Body"].read(maximum + 1)
+    if len(body) != content_length:
         raise ValueError("V36 checkpoint object length differs")
     etag = response.get("ETag")
     if etag is not None:
@@ -271,7 +284,7 @@ def _put_immutable_s3_bytes(s3_client: Any, uri: str, body: bytes) -> None:
             IfNoneMatch="*",
         )
     except Exception:
-        observed, _ = _read_s3_bytes(s3_client, uri)
+        observed, _ = _read_s3_bytes(s3_client, uri, len(body))
         if observed != body:
             raise ValueError("V36 checkpoint immutable object differs") from None
 
@@ -343,7 +356,9 @@ def publish_v36_checkpoint(
             raise ValueError("V36 checkpoint pointer ETag differs")
         return etag.strip('"')
     except Exception:
-        observed, etag = _read_s3_bytes(s3_client, pointer_uri)
+        observed, etag = _read_s3_bytes(
+            s3_client, pointer_uri, MAX_CHECKPOINT_POINTER_BYTES
+        )
         if observed != pointer_bytes or etag is None:
             raise ValueError("V36 checkpoint pointer observation differs") from None
         return etag
@@ -354,10 +369,23 @@ def read_v36_checkpoint_head(
 ) -> tuple[bytes, bytes, str | None]:
     """Read exactly the newest pointer and its manifest, failing closed."""
 
-    pointer_bytes, etag = _read_s3_bytes(s3_client, pointer_uri)
+    pointer_bytes, etag = _read_s3_bytes(
+        s3_client, pointer_uri, MAX_CHECKPOINT_POINTER_BYTES
+    )
+    manifest_bytes = _read_v36_checkpoint_manifest(s3_client, pointer_bytes)
+    return pointer_bytes, manifest_bytes, etag
+
+
+def _read_v36_checkpoint_manifest(s3_client: Any, pointer_bytes: bytes) -> bytes:
+    """Read and authenticate the manifest named by one exact pointer."""
+
     pointer = _checkpoint_pointer_value(pointer_bytes)
     manifest_identity = pointer["manifest"]
-    manifest_bytes, _ = _read_s3_bytes(s3_client, str(manifest_identity["uri"]))
+    manifest_bytes, _ = _read_s3_bytes(
+        s3_client,
+        str(manifest_identity["uri"]),
+        MAX_CHECKPOINT_MANIFEST_BYTES,
+    )
     try:
         manifest = json.loads(manifest_bytes)
     except (TypeError, json.JSONDecodeError) as error:
@@ -371,7 +399,239 @@ def read_v36_checkpoint_head(
         or manifest.get("generation") != pointer["generation"]
     ):
         raise ValueError("V36 checkpoint manifest authority differs")
+    return manifest_bytes
+
+
+def read_v36_checkpoint_head_if_present(
+    s3_client: Any, pointer_uri: str
+) -> tuple[bytes, bytes, str | None] | None:
+    """Read the sole newest head, distinguishing only an absent pointer."""
+
+    try:
+        pointer_bytes, etag = _read_s3_bytes(
+            s3_client, pointer_uri, MAX_CHECKPOINT_POINTER_BYTES
+        )
+    except Exception as error:
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code in {"NoSuchKey", "404"}:
+            return None
+        raise
+    manifest_bytes = _read_v36_checkpoint_manifest(s3_client, pointer_bytes)
     return pointer_bytes, manifest_bytes, etag
+
+
+def v36_checkpoint_resume_binding(
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+    pointer_bytes: bytes,
+    manifest_bytes: bytes,
+) -> dict[str, object]:
+    """Bind one exact older-attempt checkpoint head for replacement."""
+
+    pointer = _checkpoint_pointer_value(pointer_bytes)
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("V36 checkpoint resume binding differs") from error
+    manifest_identity = pointer["manifest"]
+    if (
+        type(attempt_ordinal) is not int
+        or not 0 < attempt_ordinal < MAX_ATTEMPTS
+        or pointer["run_id"] != plan.run_id
+        or pointer["producer_attempt_ordinal"] >= attempt_ordinal
+        or len(manifest_bytes) != manifest_identity["encoded_bytes"]
+        or hashlib.sha256(manifest_bytes).hexdigest() != manifest_identity["sha256"]
+        or type(manifest) is not dict
+        or canonical_json_bytes(manifest) != manifest_bytes
+        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest.get("generation") != pointer["generation"]
+    ):
+        raise ValueError("V36 checkpoint resume binding differs")
+    binding = {
+        "generation": pointer["generation"],
+        "manifest": manifest_identity,
+        "pointer_encoded_bytes": len(pointer_bytes),
+        "pointer_sha256": hashlib.sha256(pointer_bytes).hexdigest(),
+        "pointer_uri": (
+            f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json"
+        ),
+    }
+    _validate_v36_resume_closure(binding, pointer, manifest_bytes)
+    return binding
+
+
+def _validate_v36_resume_closure(
+    binding: dict[str, object],
+    pointer: dict[str, object],
+    manifest_bytes: bytes,
+) -> list[dict[str, object]]:
+    """Validate the bounded population dependency closure before a launch."""
+
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("V36 checkpoint resume manifest differs") from error
+    population = manifest.get("population") if type(manifest) is dict else None
+    dependencies = population.get("identity_runs") if type(population) is dict else None
+    if (
+        canonical_json_bytes(manifest) != manifest_bytes
+        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest.get("generation") != binding["generation"]
+        or manifest.get("run_id") != pointer["run_id"]
+        or manifest.get("producer_attempt_id") != pointer["producer_attempt_id"]
+        or manifest.get("producer_attempt_ordinal")
+        != pointer["producer_attempt_ordinal"]
+        or manifest.get("phase") != {"kind": "population"}
+        or type(dependencies) is not list
+        or not 0 < len(dependencies) <= CHECKPOINT_OBJECTS
+    ):
+        raise ValueError("V36 checkpoint resume manifest differs")
+    manifest_identity = _outbox_artifact_identity(binding["manifest"])
+    manifest_bucket, manifest_key = _s3(manifest_identity["uri"])
+    object_marker = "checkpoints/objects/"
+    campaign_prefix, marker, _ = manifest_key.partition(object_marker)
+    object_prefix = f"{campaign_prefix}{object_marker}"
+    expected_pointer = (
+        f"s3://{manifest_bucket}/{campaign_prefix}checkpoints/runs/"
+        f"{pointer['run_id']}/latest.json"
+    )
+    if marker != object_marker or binding["pointer_uri"] != expected_pointer:
+        raise ValueError("V36 checkpoint resume namespace differs")
+    identities = []
+    for ordinal, raw in enumerate(dependencies):
+        identity = _outbox_artifact_identity(raw)
+        bucket, key = _s3(identity["uri"])
+        if (
+            identity["role"] != f"population-identity-run-{ordinal:04d}"
+            or identity["encoded_bytes"] > MAX_CHECKPOINT_DEPENDENCY_BYTES
+            or bucket != manifest_bucket
+            or not key.startswith(object_prefix)
+            or key == object_prefix
+        ):
+            raise ValueError("V36 checkpoint resume dependency differs")
+        identities.append(identity)
+    return identities
+
+
+def materialize_v36_checkpoint_resume(
+    binding: dict[str, object],
+    destination: pathlib.Path,
+    transport: Any,
+) -> int:
+    """Stage exactly one bound newest population head for Rust validation."""
+
+    if (
+        type(binding) is not dict
+        or set(binding)
+        != {
+            "generation",
+            "manifest",
+            "pointer_encoded_bytes",
+            "pointer_sha256",
+            "pointer_uri",
+        }
+        or type(binding.get("generation")) is not int
+        or binding["generation"] < 0
+        or type(binding.get("pointer_encoded_bytes")) is not int
+        or not 0 < binding["pointer_encoded_bytes"] <= MAX_CHECKPOINT_POINTER_BYTES
+        or type(binding.get("pointer_sha256")) is not str
+        or _SHA256.fullmatch(binding["pointer_sha256"]) is None
+        or type(binding.get("pointer_uri")) is not str
+        or not isinstance(destination, pathlib.Path)
+        or destination.is_symlink()
+        or not destination.is_dir()
+    ):
+        raise ValueError("V36 checkpoint resume binding differs")
+    if next(destination.iterdir(), None) is not None:
+        raise ValueError("V36 checkpoint resume destination differs")
+    manifest_identity = _outbox_artifact_identity(binding["manifest"])
+    if (
+        manifest_identity["role"] != "checkpoint-manifest"
+        or manifest_identity["encoded_bytes"] > MAX_CHECKPOINT_MANIFEST_BYTES
+    ):
+        raise ValueError("V36 checkpoint resume manifest differs")
+
+    pointer_bytes = transport.read_bytes(
+        binding["pointer_uri"], MAX_CHECKPOINT_POINTER_BYTES
+    )
+    if (
+        type(pointer_bytes) is not bytes
+        or len(pointer_bytes) != binding["pointer_encoded_bytes"]
+        or hashlib.sha256(pointer_bytes).hexdigest() != binding["pointer_sha256"]
+    ):
+        raise ValueError("V36 checkpoint resume pointer differs")
+    pointer = _checkpoint_pointer_value(pointer_bytes)
+    if (
+        pointer["generation"] != binding["generation"]
+        or pointer["manifest"] != manifest_identity
+    ):
+        raise ValueError("V36 checkpoint resume pointer differs")
+
+    manifest_bytes = transport.read_bytes(
+        manifest_identity["uri"], MAX_CHECKPOINT_MANIFEST_BYTES
+    )
+    if (
+        type(manifest_bytes) is not bytes
+        or len(manifest_bytes) != manifest_identity["encoded_bytes"]
+        or hashlib.sha256(manifest_bytes).hexdigest() != manifest_identity["sha256"]
+    ):
+        raise ValueError("V36 checkpoint resume manifest differs")
+    identities = _validate_v36_resume_closure(binding, pointer, manifest_bytes)
+
+    objects = destination / "objects"
+    objects.mkdir()
+    for identity in identities:
+        path = objects / f"{identity['sha256']}.blob"
+        transport.download(identity, path)
+        _authenticate_outbox_file(path, identity)
+    (destination / "manifest.json").write_bytes(manifest_bytes)
+    (destination / "pointer.json").write_bytes(pointer_bytes)
+    return binding["generation"] + 1
+
+
+def prepare_v36_checkpoint_resume(
+    execution_authority_path: pathlib.Path,
+    destination: pathlib.Path,
+    transport: Any,
+) -> int:
+    """Stage the exact optional head bound by one execution authority."""
+
+    try:
+        authority_bytes = execution_authority_path.read_bytes()
+        authority = json.loads(authority_bytes)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("V36 checkpoint execution authority differs") from error
+    if (
+        type(authority) is not dict
+        or canonical_json_bytes(authority) != authority_bytes
+        or set(authority)
+        != {
+            "active_wall_seconds",
+            "attempt_id",
+            "checkpoint_seconds",
+            "claim_eligible",
+            "inputs",
+            "output_prefix",
+            "resume",
+            "schema",
+            "source_commit",
+        }
+        or authority.get("schema")
+        != "borsuk-v36-prefix-freeze-execution-authority-v2"
+        or not isinstance(destination, pathlib.Path)
+        or destination.is_symlink()
+        or not destination.is_dir()
+        or next(destination.iterdir(), None) is not None
+    ):
+        raise ValueError("V36 checkpoint execution authority differs")
+    resume = authority["resume"]
+    generation = (
+        0
+        if resume is None
+        else materialize_v36_checkpoint_resume(resume, destination, transport)
+    )
+    (destination / "first-generation").write_text(f"{generation}\n")
+    return generation
 
 
 def _outbox_artifact_identity(value: object) -> dict[str, object]:
@@ -636,6 +896,47 @@ class V36AwsCliCheckpointTransport:
             digest.update(chunk)
         return length, digest.hexdigest()
 
+    def read_bytes(self, uri: str, maximum: int) -> bytes:
+        if type(maximum) is not int or maximum <= 0:
+            raise ValueError("V36 checkpoint AWS read limit differs")
+        value = bytearray()
+        for chunk in self._runner.stream(
+            ["aws", "s3", "cp", uri, "-", "--only-show-errors", "--region", REGION]
+        ):
+            if type(chunk) is not bytes or not chunk:
+                raise ValueError("V36 checkpoint AWS stream differs")
+            value.extend(chunk)
+            if len(value) > maximum:
+                raise ValueError("V36 checkpoint AWS read limit differs")
+        return bytes(value)
+
+    def download(self, identity: dict[str, object], path: pathlib.Path) -> None:
+        expected = _outbox_artifact_identity(identity)
+        if path.exists() or path.is_symlink() or not path.parent.is_dir():
+            raise ValueError("V36 checkpoint local dependency differs")
+        written = 0
+        with path.open("xb") as output:
+            for chunk in self._runner.stream(
+                [
+                    "aws",
+                    "s3",
+                    "cp",
+                    str(expected["uri"]),
+                    "-",
+                    "--only-show-errors",
+                    "--region",
+                    REGION,
+                ]
+            ):
+                if type(chunk) is not bytes or not chunk:
+                    raise ValueError("V36 checkpoint AWS stream differs")
+                written += len(chunk)
+                if written > expected["encoded_bytes"]:
+                    raise ValueError("V36 checkpoint local dependency differs")
+                output.write(chunk)
+        if written != expected["encoded_bytes"]:
+            raise ValueError("V36 checkpoint local dependency differs")
+
     def put_immutable(
         self, identity: dict[str, object], path: pathlib.Path
     ) -> None:
@@ -835,8 +1136,37 @@ def _attempt_wall_seconds(attempt_ordinal: int) -> int:
 
 
 def _execution_authority(
-    plan: V36PrefixScreenPlan, attempt_ordinal: int
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+    *,
+    resume: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    if resume is not None:
+        expected_pointer_uri = (
+            f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json"
+        )
+        if (
+            attempt_ordinal == 0
+            or type(resume) is not dict
+            or set(resume)
+            != {
+                "generation",
+                "manifest",
+                "pointer_encoded_bytes",
+                "pointer_sha256",
+                "pointer_uri",
+            }
+            or type(resume.get("generation")) is not int
+            or resume["generation"] < 0
+            or type(resume.get("pointer_encoded_bytes")) is not int
+            or resume["pointer_encoded_bytes"] <= 0
+            or type(resume.get("pointer_sha256")) is not str
+            or _SHA256.fullmatch(resume["pointer_sha256"]) is None
+            or resume.get("pointer_uri") != expected_pointer_uri
+            or _outbox_artifact_identity(resume.get("manifest"))["role"]
+            != "checkpoint-manifest"
+        ):
+            raise ValueError("V36 checkpoint resume binding differs")
     output_bucket, output_key = _s3(plan.output_prefix, prefix=True)
     attempt_prefix = f"{output_key}attempt-{attempt_ordinal:04d}/"
     return {
@@ -851,11 +1181,16 @@ def _execution_authority(
             {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
         ],
         "output_prefix": f"s3://{output_bucket}/{attempt_prefix}",
-        "resume": None,
+        "resume": resume,
         "schema": "borsuk-v36-prefix-freeze-execution-authority-v2",
         "source_commit": plan.source_commit,
     }
-def _user_data(plan: V36PrefixScreenPlan, *, attempt_ordinal: int) -> str:
+def _user_data(
+    plan: V36PrefixScreenPlan,
+    *,
+    attempt_ordinal: int,
+    resume: dict[str, object] | None = None,
+) -> str:
     quoted = {
         field.name: shlex.quote(str(getattr(plan, field.name)))
         for field in dataclasses.fields(plan)
@@ -864,11 +1199,16 @@ def _user_data(plan: V36PrefixScreenPlan, *, attempt_ordinal: int) -> str:
     attempt_prefix = f"{output_key}attempt-{attempt_ordinal:04d}/"
     wall_seconds = _attempt_wall_seconds(attempt_ordinal)
     execution_authority = canonical_json_bytes(
-        _execution_authority(plan, attempt_ordinal)
+        _execution_authority(plan, attempt_ordinal, resume=resume)
     )
     execution_authority_b64 = base64.b64encode(execution_authority).decode()
     terminal_program_b64 = base64.b64encode(_GUEST_TERMINAL_PROGRAM.encode()).decode()
     sidecar_sha256 = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
+    resume_argument = (
+        '--resume-checkpoint "$root/resume" '
+        if resume is not None
+        else ""
+    )
     return f"""#!/bin/bash
 set -euo pipefail
 trap 'shutdown -h now' EXIT
@@ -890,7 +1230,7 @@ test "$(sha256sum "$root/authority.json" | cut -d' ' -f1)" = {plan.authority_sha
 test "$(stat -c %s "$root/source-registry.json")" = {plan.source_registry_bytes}
 test "$(sha256sum "$root/source-registry.json" | cut -d' ' -f1)" = {plan.source_registry_sha256}
 chmod 500 "$root/v36_prefix_freeze"
-mkdir "$root/output" "$root/scratch" "$root/checkpoint-outbox" "$root/sidecar-source"
+mkdir "$root/output" "$root/scratch" "$root/checkpoint-outbox" "$root/sidecar-source" "$root/resume"
 chmod 700 "$root/checkpoint-outbox"
 tar --zstd -xf "$root/source.tar.zst" -C "$root/sidecar-source" scripts/run_v36_prefix_screen.py
 test "$(sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py" | cut -d' ' -f1)" = {sidecar_sha256}
@@ -899,17 +1239,28 @@ aws s3api put-object --generate-cli-skeleton input | grep -q '"IfMatch"'
 token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
 instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 set +e
+python3 "$root/sidecar-source/scripts/run_v36_prefix_screen.py" \
+  --materialize-resume --execution-authority "$root/execution-authority.json" \
+  --resume-directory "$root/resume"
+status=$?
+if [[ "$status" = 0 ]]; then
+  first_generation=$(cat "$root/resume/first-generation")
+  if ! [[ "$first_generation" =~ ^[0-9]+$ ]]; then
+    status=70
+  fi
+fi
+if [[ "$status" = 0 ]]; then
 timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
   --execute-prefix-freeze \
   --execution-authority "$root/execution-authority.json" \
   --authority "$root/authority.json" --source-registry "$root/source-registry.json" \
   --source-archive "$root/source.tar.zst" --output "$root/output" \
   --scratch "$root/scratch" --checkpoint-outbox "$root/checkpoint-outbox" \
-  --producer-instance-id "$instance_id" &
+  {resume_argument} --producer-instance-id "$instance_id" &
 science_pid=$!
 python3 "$root/sidecar-source/scripts/run_v36_prefix_screen.py" \
   --publish-checkpoints --checkpoint-outbox "$root/checkpoint-outbox" \
-  --producer-pid "$science_pid" --first-generation 0 &
+  --producer-pid "$science_pid" --first-generation "$first_generation" &
 sidecar_pid=$!
 status=
 while kill -0 "$science_pid" 2>/dev/null; do
@@ -931,6 +1282,7 @@ if [[ -z "$status" ]]; then
   if [[ "$sidecar_status" != 0 ]]; then
     status=70
   fi
+fi
 fi
 set -e
 if [[ "$status" = 0 ]]; then
@@ -974,13 +1326,19 @@ exit "$status"
 
 
 def build_v36_prefix_launch_specs(
-    plan: V36PrefixScreenPlan, *, launch_nonce: str, attempt_ordinal: int
+    plan: V36PrefixScreenPlan,
+    *,
+    launch_nonce: str,
+    attempt_ordinal: int,
+    resume: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Build the three registered Spot-zone candidates for one attempt."""
 
     if re.fullmatch(r"[0-9a-f]{32}", launch_nonce) is None:
         raise ValueError("V36 prefix-screen launch nonce differs")
-    data = base64.b64encode(_user_data(plan, attempt_ordinal=attempt_ordinal).encode()).decode()
+    data = base64.b64encode(
+        _user_data(plan, attempt_ordinal=attempt_ordinal, resume=resume).encode()
+    ).decode()
     specs: list[dict[str, object]] = []
     for zone_ordinal, (zone, subnet) in enumerate(SPOT_TARGETS):
         token = hashlib.sha256(
@@ -1019,17 +1377,30 @@ def _marker_key(plan: V36PrefixScreenPlan, attempt_ordinal: int, marker: str) ->
     return bucket, f"{prefix}attempt-{attempt_ordinal:04d}/{marker}"
 
 
+def _terminate_v36_instance(ec2_client: Any, instance_id: str) -> None:
+    """Terminate one attempt and prove it can no longer advance its head."""
+
+    ec2_client.terminate_instances(InstanceIds=[instance_id])
+    ec2_client.get_waiter("instance_terminated").wait(
+        InstanceIds=[instance_id],
+        WaiterConfig={"Delay": 5, "MaxAttempts": 60},
+    )
+
+
 def _read_attempt_status(
     s3_client: Any,
     plan: V36PrefixScreenPlan,
     attempt_ordinal: int | None = None,
     *,
     expected_instance_id: str | None = None,
-) -> str | None:
+    expected_resume: dict[str, object] | None | object = _UNBOUND,
+    return_terminal: bool = False,
+) -> str | dict[str, object] | None:
     """Read one authenticated terminal status, or prove it absent."""
 
     ordinals = range(MAX_ATTEMPTS) if attempt_ordinal is None else (attempt_ordinal,)
     for ordinal in ordinals:
+        observed: list[tuple[str, dict[str, object]]] = []
         for marker, statuses in (
             ("ATTEMPT_COMPLETE.json", {"complete"}),
             ("ATTEMPT_FAILED.json", {"infrastructure", "screen-source-insufficient"}),
@@ -1043,9 +1414,19 @@ def _read_attempt_status(
                 if code in {"NoSuchKey", "404"}:
                     continue
                 raise
-            body = response["Body"].read()
+            content_length = response.get("ContentLength")
+            if (
+                type(content_length) is not int
+                or not 0 < content_length <= MAX_TERMINAL_BYTES
+            ):
+                raise ValueError("V36 prefix-screen terminal length differs")
+            body = response["Body"].read(MAX_TERMINAL_BYTES + 1)
             value = json.loads(body)
-            execution_authority = _execution_authority(plan, ordinal)
+            if expected_resume is not _UNBOUND and value.get("resume") != expected_resume:
+                raise ValueError("V36 prefix-screen terminal authority differs")
+            execution_authority = _execution_authority(
+                plan, ordinal, resume=value.get("resume")
+            )
             expected_attempt_id = execution_authority["attempt_id"]
             expected_inputs = execution_authority["inputs"]
             expected_execution_sha256 = hashlib.sha256(
@@ -1103,6 +1484,7 @@ def _read_attempt_status(
                     "inputs",
                     "instance_id",
                     "outputs",
+                    "resume",
                     "run_id",
                     "schema",
                     "source_commit",
@@ -1111,7 +1493,7 @@ def _read_attempt_status(
                 or status not in statuses
                 or value.get("run_id") != plan.run_id
                 or value.get("source_commit") != plan.source_commit
-                or value.get("schema") != "borsuk-v36-prefix-freeze-terminal-v1"
+                or value.get("schema") != "borsuk-v36-prefix-freeze-terminal-v2"
                 or value.get("claim_eligible") is not False
                 or value.get("attempt_id") != expected_attempt_id
                 or value.get("execution_authority_sha256")
@@ -1130,7 +1512,12 @@ def _read_attempt_status(
                 )
             ):
                 raise ValueError("V36 prefix-screen terminal authority differs")
-            return status
+            observed.append((status, value))
+        if len(observed) > 1:
+            raise ValueError("V36 prefix-screen terminal conflict")
+        if observed:
+            status, value = observed[0]
+            return value if return_terminal else status
     return None
 
 
@@ -1143,9 +1530,36 @@ def run_v36_prefix_screen(
 ) -> str:
     """Run at most three bounded Spot attempts and preserve every terminal."""
 
-    if _read_attempt_status(s3_client, plan) is not None:
-        raise ValueError("V36 prefix-screen terminal already exists")
-    for attempt_ordinal in range(MAX_ATTEMPTS):
+    resume: dict[str, object] | None = None
+    pointer_uri = f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json"
+    first_attempt = 0
+    for ordinal in range(MAX_ATTEMPTS):
+        terminal = _read_attempt_status(
+            s3_client, plan, ordinal, return_terminal=True
+        )
+        if terminal is None:
+            first_attempt = ordinal
+            break
+        if not isinstance(terminal, dict):
+            raise ValueError("V36 prefix-screen terminal differs")
+        _terminate_v36_instance(ec2_client, str(terminal["instance_id"]))
+        status = terminal["status"]
+        if status == "complete":
+            bucket, key = _marker_key(plan, ordinal, "ATTEMPT_COMPLETE.json")
+            return f"s3://{bucket}/{key}"
+        if status == "screen-source-insufficient":
+            raise RuntimeError("V36 prefix-screen source is insufficient")
+        first_attempt = ordinal + 1
+        if first_attempt < MAX_ATTEMPTS:
+            head = read_v36_checkpoint_head_if_present(s3_client, pointer_uri)
+            resume = (
+                None
+                if head is None
+                else v36_checkpoint_resume_binding(
+                    plan, first_attempt, head[0], head[1]
+                )
+            )
+    for attempt_ordinal in range(first_attempt, MAX_ATTEMPTS):
         instance_id: str | None = None
         status: str | None = None
         try:
@@ -1153,6 +1567,7 @@ def run_v36_prefix_screen(
                 plan,
                 launch_nonce=launch_nonce,
                 attempt_ordinal=attempt_ordinal,
+                resume=resume,
             )[attempt_ordinal]
             try:
                 response = ec2_client.run_instances(**spec)
@@ -1178,6 +1593,7 @@ def run_v36_prefix_screen(
                     plan,
                     attempt_ordinal,
                     expected_instance_id=instance_id,
+                    expected_resume=resume,
                 )
                 if status is not None:
                     break
@@ -1188,13 +1604,14 @@ def run_v36_prefix_screen(
                 time.sleep(15)
         finally:
             if instance_id is not None:
-                ec2_client.terminate_instances(InstanceIds=[instance_id])
+                _terminate_v36_instance(ec2_client, instance_id)
         if status is None:
             status = _read_attempt_status(
                 s3_client,
                 plan,
                 attempt_ordinal,
                 expected_instance_id=instance_id,
+                expected_resume=resume,
             )
         if status == "complete":
             bucket, key = _marker_key(plan, attempt_ordinal, "ATTEMPT_COMPLETE.json")
@@ -1203,6 +1620,15 @@ def run_v36_prefix_screen(
             raise RuntimeError("V36 prefix-screen source is insufficient")
         if status is None:
             raise RuntimeError(f"V36 prefix-screen attempt {attempt_ordinal} terminal missing")
+        if attempt_ordinal + 1 < MAX_ATTEMPTS:
+            head = read_v36_checkpoint_head_if_present(s3_client, pointer_uri)
+            resume = (
+                None
+                if head is None
+                else v36_checkpoint_resume_binding(
+                    plan, attempt_ordinal + 1, head[0], head[1]
+                )
+            )
     raise RuntimeError("V36 prefix-screen three attempts exhausted")
 
 
@@ -1213,10 +1639,13 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--publish-checkpoints", action="store_true")
+    mode.add_argument("--materialize-resume", action="store_true")
     parser.add_argument("--plan-json")
     parser.add_argument("--checkpoint-outbox")
     parser.add_argument("--producer-pid", type=int)
     parser.add_argument("--first-generation", type=int)
+    parser.add_argument("--execution-authority")
+    parser.add_argument("--resume-directory")
     arguments = parser.parse_args(argv)
     if arguments.publish_checkpoints:
         if (
@@ -1224,6 +1653,8 @@ def main(argv: list[str] | None = None) -> int:
             or arguments.checkpoint_outbox is None
             or arguments.producer_pid is None
             or arguments.first_generation is None
+            or arguments.execution_authority is not None
+            or arguments.resume_directory is not None
         ):
             parser.error("V36 checkpoint sidecar arguments differ")
         watch_v36_checkpoint_outbox(
@@ -1233,11 +1664,29 @@ def main(argv: list[str] | None = None) -> int:
             first_generation=arguments.first_generation,
         )
         return 0
+    if arguments.materialize_resume:
+        if (
+            arguments.plan_json is not None
+            or arguments.checkpoint_outbox is not None
+            or arguments.producer_pid is not None
+            or arguments.first_generation is not None
+            or arguments.execution_authority is None
+            or arguments.resume_directory is None
+        ):
+            parser.error("V36 checkpoint resume arguments differ")
+        prepare_v36_checkpoint_resume(
+            pathlib.Path(arguments.execution_authority),
+            pathlib.Path(arguments.resume_directory),
+            V36AwsCliCheckpointTransport(),
+        )
+        return 0
     if (
         arguments.plan_json is None
         or arguments.checkpoint_outbox is not None
         or arguments.producer_pid is not None
         or arguments.first_generation is not None
+        or arguments.execution_authority is not None
+        or arguments.resume_directory is not None
     ):
         parser.error("V36 prefix-screen dry-run arguments differ")
     try:

@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeSet, BinaryHeap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
@@ -285,7 +285,7 @@ pub struct V36PrefixPopulationCheckpointWriter {
     producer_instance_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Fully authenticated local material needed to continue one published head.
 pub struct V36PrefixPopulationCheckpointHead {
     /// Cumulative identity-run artifacts and their exact local bytes.
@@ -294,6 +294,88 @@ pub struct V36PrefixPopulationCheckpointHead {
     pub manifest: V36PrefixCheckpointManifest,
     /// Exact canonical pointer bytes naming `manifest`.
     pub pointer_bytes: Vec<u8>,
+}
+
+impl V36PrefixPopulationCheckpointHead {
+    fn identity_runs(&self) -> Result<Vec<V36PrefixIdentityRun>> {
+        self.dependencies
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (identity, bytes))| {
+                let selected_object_ordinal = u16::try_from(ordinal)
+                    .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?;
+                let source = self
+                    .manifest
+                    .population
+                    .consumed_objects
+                    .get(ordinal)
+                    .ok_or_else(|| invalid("V36 population checkpoint resume state differs"))?;
+                decode_v36_prefix_identity_run(bytes, identity, source, selected_object_ordinal)
+            })
+            .collect()
+    }
+}
+
+/// Load one exact locally staged newest population head without history fallback.
+pub fn load_v36_prefix_population_checkpoint_head(
+    root: &Path,
+    context: &V36PrefixCheckpointContext,
+) -> Result<V36PrefixPopulationCheckpointHead> {
+    let regular_bytes = |path: &Path| -> Result<Vec<u8>> {
+        let metadata = fs::symlink_metadata(path).map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(invalid("V36 population checkpoint staged file differs"));
+        }
+        read_file(path)
+    };
+    if !root.is_dir() || root.is_symlink() || !root.join("objects").is_dir() {
+        return Err(invalid("V36 population checkpoint staged root differs"));
+    }
+    let pointer_bytes = regular_bytes(&root.join("pointer.json"))?;
+    let pointer: V36PrefixCheckpointPointer = serde_json::from_slice(&pointer_bytes)
+        .map_err(|_| invalid("V36 population checkpoint pointer JSON differs"))?;
+    if canonical_v36_prefix_checkpoint_pointer_bytes(context, &pointer)? != pointer_bytes {
+        return Err(invalid("V36 population checkpoint pointer bytes differ"));
+    }
+    let manifest_bytes = regular_bytes(&root.join("manifest.json"))?;
+    if pointer.manifest.encoded_bytes != manifest_bytes.len() as u64
+        || pointer.manifest.sha256 != format!("{:x}", Sha256::digest(&manifest_bytes))
+        || pointer.manifest.blake3 != blake3::hash(&manifest_bytes).to_hex().as_str()
+    {
+        return Err(invalid(
+            "V36 population checkpoint manifest authority differs",
+        ));
+    }
+    let manifest: V36PrefixCheckpointManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|_| invalid("V36 population checkpoint manifest JSON differs"))?;
+    if canonical_v36_prefix_checkpoint_manifest_bytes(&manifest)? != manifest_bytes
+        || manifest.generation != pointer.generation
+        || !matches!(&manifest.phase, V36PrefixCheckpointPhase::Population)
+    {
+        return Err(invalid("V36 population checkpoint manifest bytes differ"));
+    }
+    validate_v36_prefix_checkpoint_manifest_with_context(context, &manifest)?;
+    let mut dependencies = Vec::with_capacity(manifest.population.identity_runs.len());
+    for identity in &manifest.population.identity_runs {
+        if identity.encoded_bytes > 256 * 1024 * 1024 {
+            return Err(invalid(
+                "V36 population checkpoint dependency limit differs",
+            ));
+        }
+        let path = root
+            .join("objects")
+            .join(format!("{}.blob", identity.sha256));
+        authenticate_file(&path, identity)?;
+        dependencies.push((identity.clone(), regular_bytes(&path)?));
+    }
+    Ok(V36PrefixPopulationCheckpointHead {
+        dependencies,
+        manifest,
+        pointer_bytes,
+    })
 }
 
 impl V36PrefixPopulationCheckpointWriter {
@@ -338,6 +420,7 @@ impl V36PrefixPopulationCheckpointWriter {
         producer_instance_id: String,
         head: V36PrefixPopulationCheckpointHead,
     ) -> Result<Self> {
+        let runs = head.identity_runs()?;
         let V36PrefixPopulationCheckpointHead {
             dependencies,
             manifest: previous_manifest,
@@ -373,20 +456,6 @@ impl V36PrefixPopulationCheckpointWriter {
                 "V36 population checkpoint resume authority differs",
             ));
         }
-        let runs = dependencies
-            .iter()
-            .enumerate()
-            .map(|(ordinal, (identity, bytes))| {
-                let selected_object_ordinal = u16::try_from(ordinal)
-                    .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?;
-                let source = previous_manifest
-                    .population
-                    .consumed_objects
-                    .get(ordinal)
-                    .ok_or_else(|| invalid("V36 population checkpoint resume state differs"))?;
-                decode_v36_prefix_identity_run(bytes, identity, source, selected_object_ordinal)
-            })
-            .collect::<Result<Vec<_>>>()?;
         let restored = restore_v36_prefix_population_state(
             &runs,
             usize::try_from(context.distinct_candidates)
@@ -998,6 +1067,8 @@ pub struct V36PrefixFreezeRequest {
     pub output: PathBuf,
     /// Exact EC2 instance producing this attempt's checkpoints.
     pub producer_instance_id: String,
+    /// Exact locally staged newest population head, absent for a fresh attempt.
+    pub resume_checkpoint: Option<PathBuf>,
     /// Empty encrypted scratch directory owned by this attempt.
     pub scratch: PathBuf,
     /// Exact source-code archive evidence path.
@@ -1021,6 +1092,8 @@ pub struct V36PrefixFreezePreflight {
     pub registry: Vec<V36PrefixRegisteredSourceObject>,
     /// Query-independently ranked complete objects.
     pub ranked_objects: Vec<V36PrefixRankedSourceObject>,
+    /// Fully authenticated prior population head, absent for a fresh attempt.
+    pub resume_head: Option<V36PrefixPopulationCheckpointHead>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1605,40 +1678,92 @@ fn output_identity(
 
 /// Execute one complete bounded V36 diagnostic population freeze locally.
 pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
-    let preflight = load_v36_prefix_freeze_preflight(&request)?;
+    let mut preflight = load_v36_prefix_freeze_preflight(&request)?;
     let execution_authority_sha256 = format!(
         "{:x}",
         Sha256::digest(canonical_v36_prefix_freeze_execution_authority_bytes(
             &preflight.execution_authority,
         )?)
     );
-    let mut checkpoint_writer = V36PrefixPopulationCheckpointWriter::create(
-        &request.checkpoint_outbox,
-        preflight.checkpoint_context.clone(),
-        execution_authority_sha256,
-        preflight.execution_authority.attempt_id.clone(),
-        preflight.producer_attempt_ordinal,
-        request.producer_instance_id.clone(),
-    )?;
+    let resume_head = preflight.resume_head.take();
+    let prior_runs = resume_head
+        .as_ref()
+        .map(V36PrefixPopulationCheckpointHead::identity_runs)
+        .transpose()?;
+    let mut checkpoint_writer = match resume_head {
+        Some(head) => V36PrefixPopulationCheckpointWriter::resume(
+            &request.checkpoint_outbox,
+            preflight.checkpoint_context.clone(),
+            execution_authority_sha256,
+            preflight.execution_authority.attempt_id.clone(),
+            preflight.producer_attempt_ordinal,
+            request.producer_instance_id.clone(),
+            head,
+        )?,
+        None => V36PrefixPopulationCheckpointWriter::create(
+            &request.checkpoint_outbox,
+            preflight.checkpoint_context.clone(),
+            execution_authority_sha256,
+            preflight.execution_authority.attempt_id.clone(),
+            preflight.producer_attempt_ordinal,
+            request.producer_instance_id.clone(),
+        )?,
+    };
     let runtime =
         tokio::runtime::Runtime::new().map_err(|_| invalid("V36 prefix object runtime differs"))?;
     let mut acquired = V36PrefixAcquiredObjects { paths: Vec::new() };
-    let scan = scan_v36_prefix_object_prefix_checkpointed(
-        &preflight.ranked_objects,
-        usize::from(preflight.authority.object_cap),
-        preflight.authority.source_byte_cap,
-        usize::try_from(preflight.authority.distinct_candidates)
-            .map_err(|_| invalid("V36 prefix distinct row count overflows"))?,
-        |ordinal, object| {
+    let mut acquired_by_ordinal = BTreeMap::new();
+    let object_cap = usize::from(preflight.authority.object_cap);
+    let distinct_candidates = usize::try_from(preflight.authority.distinct_candidates)
+        .map_err(|_| invalid("V36 prefix distinct row count overflows"))?;
+    let scan = {
+        let mut acquire = |ordinal, object: &V36PrefixRankedSourceObject| {
             let path = acquire_v36_prefix_object(&runtime, object, &request.scratch, ordinal)?;
+            if acquired_by_ordinal.insert(ordinal, path.clone()).is_some() {
+                return Err(invalid("V36 prefix acquired object ordinal differs"));
+            }
             acquired.paths.push(path.clone());
             Ok(path)
-        },
-        |boundary| {
+        };
+        let mut commit = |boundary: &V36PrefixPopulationCommit| {
             checkpoint_writer.commit(boundary)?;
             Ok(())
-        },
-    )?;
+        };
+        match prior_runs.as_deref() {
+            Some(runs) => scan_v36_prefix_object_prefix_resumed(
+                &preflight.ranked_objects,
+                object_cap,
+                preflight.authority.source_byte_cap,
+                distinct_candidates,
+                runs,
+                &mut acquire,
+                &mut commit,
+            )?,
+            None => scan_v36_prefix_object_prefix_checkpointed(
+                &preflight.ranked_objects,
+                object_cap,
+                preflight.authority.source_byte_cap,
+                distinct_candidates,
+                &mut acquire,
+                &mut commit,
+            )?,
+        }
+    };
+    for ordinal in 0..scan.consumed_objects.len() {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            acquired_by_ordinal.entry(ordinal)
+        {
+            let path = acquire_v36_prefix_object(
+                &runtime,
+                &preflight.ranked_objects[ordinal],
+                &request.scratch,
+                ordinal,
+            )?;
+            acquired.paths.push(path.clone());
+            entry.insert(path);
+        }
+    }
+    let ordered_paths = acquired_by_ordinal.into_values().collect::<Vec<_>>();
     let population = bind_v36_prefix_population_authority(
         &preflight.authority,
         scan.consumed_objects.clone(),
@@ -1646,8 +1771,8 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
     )?;
     let split = select_v36_prefix_roles(scan.unique_rows, &population, &preflight.registry)?;
     let paths = materialize_v36_prefix_role_parquets(
-        &acquired.paths,
-        &preflight.ranked_objects[..acquired.paths.len()],
+        &ordered_paths,
+        &preflight.ranked_objects[..scan.consumed_objects.len()],
         &split,
         &request.scratch,
         &request.output,
@@ -1816,6 +1941,13 @@ pub fn load_v36_prefix_freeze_preflight(
     if request.output == request.scratch
         || request.output == request.checkpoint_outbox
         || request.scratch == request.checkpoint_outbox
+        || request.resume_checkpoint.as_ref().is_some_and(|resume| {
+            resume == &request.output
+                || resume == &request.scratch
+                || resume == &request.checkpoint_outbox
+                || !resume.is_dir()
+                || resume.is_symlink()
+        })
         || !request.output.is_dir()
         || !request.scratch.is_dir()
         || !request.checkpoint_outbox.is_dir()
@@ -1933,6 +2065,26 @@ pub fn load_v36_prefix_freeze_preflight(
         source_commit: execution_authority.source_commit.clone(),
         source_registry_sha256: format!("{:x}", Sha256::digest(&registry_bytes)),
     };
+    let resume_head = match (&request.resume_checkpoint, &execution_authority.resume) {
+        (None, None) => None,
+        (Some(root), Some(binding)) => {
+            let head = load_v36_prefix_population_checkpoint_head(root, &checkpoint_context)?;
+            let pointer: V36PrefixCheckpointPointer =
+                serde_json::from_slice(&head.pointer_bytes)
+                    .map_err(|_| invalid("V36 prefix resume pointer JSON differs"))?;
+            if binding.generation != pointer.generation
+                || binding.manifest != pointer.manifest
+                || binding.pointer_encoded_bytes != head.pointer_bytes.len() as u64
+                || binding.pointer_sha256 != format!("{:x}", Sha256::digest(&head.pointer_bytes))
+                || binding.pointer_uri != checkpoint_context.pointer_uri
+                || head.manifest.producer_attempt_ordinal >= producer_attempt_ordinal
+            {
+                return Err(invalid("V36 prefix resume binding differs"));
+            }
+            Some(head)
+        }
+        _ => return Err(invalid("V36 prefix resume presence differs")),
+    };
     Ok(V36PrefixFreezePreflight {
         authority,
         checkpoint_context,
@@ -1940,6 +2092,7 @@ pub fn load_v36_prefix_freeze_preflight(
         producer_attempt_ordinal,
         registry,
         ranked_objects,
+        resume_head,
     })
 }
 

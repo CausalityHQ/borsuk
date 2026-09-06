@@ -13,6 +13,7 @@ struct Args {
     source_registry: PathBuf,
     source_archive: PathBuf,
     output: PathBuf,
+    resume_checkpoint: Option<PathBuf>,
     scratch: PathBuf,
 }
 
@@ -33,6 +34,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
                 | "--scratch"
                 | "--checkpoint-outbox"
                 | "--producer-instance-id"
+                | "--resume-checkpoint"
         ) || fields.contains_key(&flag)
         {
             return Err("V36 prefix freezer argument differs".into());
@@ -55,6 +57,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     let source_archive = take("--source-archive")?.into();
     let output = take("--output")?.into();
     let scratch = take("--scratch")?.into();
+    let resume_checkpoint = fields.remove("--resume-checkpoint").map(PathBuf::from);
     if !fields.is_empty() {
         return Err("V36 prefix freezer arguments differ".into());
     }
@@ -66,6 +69,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
         source_registry,
         source_archive,
         output,
+        resume_checkpoint,
         scratch,
     })
 }
@@ -101,6 +105,7 @@ fn main() -> ExitCode {
         source_archive: args.source_archive,
         output: args.output,
         producer_instance_id: args.producer_instance_id,
+        resume_checkpoint: args.resume_checkpoint,
         scratch: args.scratch,
     }) {
         Ok(()) => ExitCode::SUCCESS,
@@ -150,6 +155,14 @@ mod tests {
         assert_eq!(parsed.scratch, PathBuf::from("scratch"));
         assert_eq!(parsed.checkpoint_outbox, PathBuf::from("outbox"));
         assert_eq!(parsed.producer_instance_id, "i-fixture");
+        assert_eq!(parsed.resume_checkpoint, None);
+
+        let mut resumed = valid();
+        resumed.extend(["--resume-checkpoint".into(), "resume".into()]);
+        assert_eq!(
+            parse_args(resumed).unwrap().resume_checkpoint,
+            Some(PathBuf::from("resume"))
+        );
 
         let mut missing = valid();
         missing.drain(2..4);
@@ -160,6 +173,17 @@ mod tests {
         let mut unknown = valid();
         unknown.extend(["--bucket".into(), "forbidden".into()]);
         assert!(parse_args(unknown).is_err());
+        let mut duplicate_resume = valid();
+        duplicate_resume.extend([
+            "--resume-checkpoint".into(),
+            "resume-a".into(),
+            "--resume-checkpoint".into(),
+            "resume-b".into(),
+        ]);
+        assert!(parse_args(duplicate_resume).is_err());
+        let mut missing_resume_value = valid();
+        missing_resume_value.push("--resume-checkpoint".into());
+        assert!(parse_args(missing_resume_value).is_err());
     }
 
     #[test]

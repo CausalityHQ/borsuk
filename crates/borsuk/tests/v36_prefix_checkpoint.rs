@@ -14,8 +14,9 @@ use borsuk::{
     V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
     canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
     decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
-    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
-    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
+    load_v36_prefix_population_checkpoint_head, plan_v36_prefix_checkpoint_publication,
+    restore_v36_prefix_population, restore_v36_prefix_population_state,
+    validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -444,6 +445,31 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
             .join(format!("{}.blob", first_identity.sha256)),
     )
     .unwrap();
+    let staged = directory.path().join("staged-resume");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::create_dir(staged.join("objects")).unwrap();
+    std::fs::write(staged.join("pointer.json"), &previous_pointer_bytes).unwrap();
+    std::fs::write(
+        staged.join("manifest.json"),
+        canonical_v36_prefix_checkpoint_manifest_bytes(&previous_manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        staged
+            .join("objects")
+            .join(format!("{}.blob", first_identity.sha256)),
+        &first_bytes,
+    )
+    .unwrap();
+    let loaded =
+        load_v36_prefix_population_checkpoint_head(&staged, &two_object_checkpoint_context(3))
+            .unwrap();
+    assert_eq!(loaded.manifest, previous_manifest);
+    assert_eq!(loaded.pointer_bytes, previous_pointer_bytes);
+    assert_eq!(
+        loaded.dependencies,
+        vec![(first_identity.clone(), first_bytes.clone())]
+    );
     let inconsistent_root = directory.path().join("inconsistent-resume-outbox");
     std::fs::create_dir(&inconsistent_root).unwrap();
     let mut inconsistent_manifest = previous_manifest.clone();
