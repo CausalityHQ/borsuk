@@ -280,6 +280,13 @@
 
   Accept only registered full-dimensional source blocks plus the authenticated projection. Validate its logical checksum against construction authority, derive every projected row internally through the fused SIMD kernel, emit `(key,source ordinal,projected row,source row)` scratch runs, and merge them with a preregistered bounded fan-in in exact order. Authenticate complete scratch objects before semantic use, expose only at-most-256-row streaming cursors, and report every merge pass and byte written; loading a complete run per input is forbidden. Create at-most-256-row leaves and capped consecutive storage groups, build the Task 5 per-group SQ4/SQ8 descriptors from one bounded group buffer, and emit immutable code/vector objects and assignment directories. Publish only after all content digests are known. Keep one bounded block per worker, one leaf accumulator, one at-most-64-MiB group buffer, and declared 64-MiB merge buffers; lifecycle-tag and clean only registered scratch objects after terminal publication.
 
+  Cap each external merge pass at 32 authenticated run capabilities. Retain
+  one owned row head per run and one at-most-256-row leaf buffer, recompute each
+  scratch Morton key against the expected model, and require strict local and
+  global `(key,source ordinal)` order. The source writer requires contiguous
+  ordinals before key permutation; merge never allocates a corpus-sized
+  uniqueness set or complete input run.
+
   Before projecting, sorting, or allocating Arrow columns/output, account for
   owned source-row capacities, the internally projected f64 row staging and
   Morton references, the largest 256-row flattened batch, raw encoded payload,

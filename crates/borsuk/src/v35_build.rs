@@ -1,7 +1,8 @@
 //! Query-independent, bounded construction primitives for the V35 format.
 
 use std::{
-    collections::HashMap,
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
     io::{Cursor, Write},
     mem::size_of,
     sync::Arc,
@@ -497,7 +498,7 @@ impl V35BuildBlock {
         let source_dimensions = rows.first().map_or(0, |row| row.source.len());
         if rows.is_empty()
             || rows.windows(2).any(|pair| {
-                pair[0].source_ordinal >= pair[1].source_ordinal
+                pair[0].source_ordinal.checked_add(1) != Some(pair[1].source_ordinal)
                     || (pair[0].id, pair[0].sequence) == (pair[1].id, pair[1].sequence)
             })
             || rows.iter().any(|row| row.source.len() != source_dimensions)
@@ -670,6 +671,200 @@ pub trait V35BuildBlockSource {
 pub trait V35BuildScratchSink {
     /// Persist one complete authenticated Arrow run under its exact ordinal.
     fn write_run(&mut self, run_ordinal: u32, bytes: &[u8]) -> Result<V35ArtifactIdentity>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One authenticated scratch row owned by the bounded external merge.
+pub struct V35BuildMergeRow {
+    morton_key: u128,
+    source_ordinal: u64,
+    id: u64,
+    sequence: u64,
+    source: Vec<f32>,
+    projected: Vec<f64>,
+}
+
+impl V35BuildMergeRow {
+    /// Construct one finite scratch row; merge independently verifies its key.
+    pub fn new(
+        morton_key: u128,
+        source_ordinal: u64,
+        id: u64,
+        sequence: u64,
+        source: Vec<f32>,
+        projected: Vec<f64>,
+    ) -> Result<Self> {
+        if sequence == 0
+            || source.is_empty()
+            || projected.len() < MORTON_COORDINATES
+            || source.iter().any(|value| !value.is_finite())
+            || projected.iter().any(|value| !value.is_finite())
+        {
+            return Err(invalid("V35 build merge row differs"));
+        }
+        Ok(Self {
+            morton_key,
+            source_ordinal,
+            id,
+            sequence,
+            source,
+            projected,
+        })
+    }
+
+    /// Exact 128-bit locality key.
+    pub fn morton_key(&self) -> u128 {
+        self.morton_key
+    }
+    /// Stable source ordinal.
+    pub fn source_ordinal(&self) -> u64 {
+        self.source_ordinal
+    }
+    /// Immutable vector ID.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    /// Immutable mutation sequence.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    /// Full-dimensional exact source vector.
+    pub fn source(&self) -> &[f32] {
+        &self.source
+    }
+    /// Internally derived routing vector from the authenticated scratch run.
+    pub fn projected(&self) -> &[f64] {
+        &self.projected
+    }
+}
+
+/// Bounded authenticated scratch-run capability for one merge pass.
+pub trait V35BuildMergeSource {
+    /// Number of runs participating in this pass; hard-capped at 32.
+    fn run_count(&self) -> usize;
+    /// Yield the next owned row from one run in strict local order.
+    fn next_row(&mut self, run: usize) -> Result<Option<V35BuildMergeRow>>;
+}
+
+/// Write-only leaf capability; implementations must release each leaf after return.
+pub trait V35BuildLeafSink {
+    /// Consume one nonempty at-most-256-row leaf in exact global order.
+    fn write_leaf(&mut self, rows: Vec<V35BuildMergeRow>) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Work and bounded-head evidence from one external merge pass.
+pub struct V35BuildMergeReceipt {
+    rows: u64,
+    leaves: u32,
+    peak_heads: u32,
+}
+
+impl V35BuildMergeReceipt {
+    /// Complete rows emitted.
+    pub fn rows(self) -> u64 {
+        self.rows
+    }
+    /// Complete at-most-256-row leaves emitted.
+    pub fn leaves(self) -> u32 {
+        self.leaves
+    }
+    /// Greatest simultaneously owned run heads.
+    pub fn peak_heads(self) -> u32 {
+        self.peak_heads
+    }
+}
+
+fn validate_merge_row(
+    model: &V35MortonModel,
+    row: &V35BuildMergeRow,
+    source_dimensions: &mut Option<usize>,
+) -> Result<()> {
+    if model.key(&row.projected)? != row.morton_key
+        || source_dimensions.is_some_and(|dimensions| dimensions != row.source.len())
+    {
+        return Err(invalid("V35 build merge row authority differs"));
+    }
+    source_dimensions.get_or_insert(row.source.len());
+    Ok(())
+}
+
+/// Merge at most 32 authenticated runs using one head per run and one leaf buffer.
+pub fn merge_v35_build_runs<R: V35BuildMergeSource, S: V35BuildLeafSink>(
+    model: &V35MortonModel,
+    source: &mut R,
+    sink: &mut S,
+) -> Result<V35BuildMergeReceipt> {
+    validate_model(model)?;
+    let run_count = source.run_count();
+    if run_count == 0 || run_count > 32 {
+        return Err(invalid("V35 build merge fan-in differs"));
+    }
+    let mut heads = (0..run_count).map(|_| None).collect::<Vec<_>>();
+    let mut previous_by_run = vec![None; run_count];
+    let mut heap = BinaryHeap::with_capacity(run_count);
+    let mut source_dimensions = None;
+    for (run, head) in heads.iter_mut().enumerate() {
+        if let Some(row) = source.next_row(run)? {
+            validate_merge_row(model, &row, &mut source_dimensions)?;
+            heap.push(Reverse((row.morton_key, row.source_ordinal, run)));
+            *head = Some(row);
+        }
+    }
+    if heap.is_empty() {
+        return Err(invalid("V35 build merge source is empty"));
+    }
+    let peak_heads = u32::try_from(heap.len()).expect("fan-in is at most 32");
+    let mut leaf = Vec::with_capacity(MAX_BUILD_RUN_BATCH_ROWS);
+    let mut previous_global = None;
+    let mut receipt = V35BuildMergeReceipt {
+        rows: 0,
+        leaves: 0,
+        peak_heads,
+    };
+    while let Some(Reverse((key, source_ordinal, run))) = heap.pop() {
+        let row = heads[run]
+            .take()
+            .ok_or_else(|| invalid("V35 build merge head is missing"))?;
+        let order = (key, source_ordinal);
+        if (row.morton_key, row.source_ordinal) != order
+            || previous_global.is_some_and(|previous| previous >= order)
+        {
+            return Err(invalid("V35 build merge global order differs"));
+        }
+        previous_global = Some(order);
+        previous_by_run[run] = Some(order);
+        leaf.push(row);
+        receipt.rows = receipt
+            .rows
+            .checked_add(1)
+            .ok_or_else(|| invalid("V35 build merge rows overflow"))?;
+        if leaf.len() == MAX_BUILD_RUN_BATCH_ROWS {
+            sink.write_leaf(std::mem::take(&mut leaf))?;
+            leaf = Vec::with_capacity(MAX_BUILD_RUN_BATCH_ROWS);
+            receipt.leaves = receipt
+                .leaves
+                .checked_add(1)
+                .ok_or_else(|| invalid("V35 build merge leaves overflow"))?;
+        }
+        if let Some(next) = source.next_row(run)? {
+            validate_merge_row(model, &next, &mut source_dimensions)?;
+            let next_order = (next.morton_key, next.source_ordinal);
+            if previous_by_run[run].is_some_and(|previous| previous >= next_order) {
+                return Err(invalid("V35 build merge run order differs"));
+            }
+            heap.push(Reverse((next.morton_key, next.source_ordinal, run)));
+            heads[run] = Some(next);
+        }
+    }
+    if !leaf.is_empty() {
+        sink.write_leaf(leaf)?;
+        receipt.leaves = receipt
+            .leaves
+            .checked_add(1)
+            .ok_or_else(|| invalid("V35 build merge leaves overflow"))?;
+    }
+    Ok(receipt)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1294,11 +1489,11 @@ pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
         scratch_bytes: 0,
         peak_live_builder_bytes: 0,
     };
-    let mut previous_source_ordinal = None;
+    let mut expected_source_ordinal = None;
     while let Some(block) = source.next_block()? {
-        if previous_source_ordinal.is_some_and(|previous| {
-            previous
-                >= block
+        if expected_source_ordinal.is_some_and(|expected| {
+            expected
+                != block
                     .rows
                     .first()
                     .expect("block is nonempty")
@@ -1306,7 +1501,13 @@ pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
         }) {
             return Err(invalid("V35 build source block order differs"));
         }
-        previous_source_ordinal = block.rows.last().map(|row| row.source_ordinal);
+        expected_source_ordinal = block
+            .rows
+            .last()
+            .and_then(|row| row.source_ordinal.checked_add(1));
+        if expected_source_ordinal.is_none() {
+            return Err(invalid("V35 build source ordinal overflows"));
+        }
         let memory = project_build_block_live_bytes(&block, model, projection)?;
         if memory.peak_live_bytes > MAX_BUILDER_BYTES {
             return Err(invalid("V35 build live memory exceeds admission"));

@@ -4,10 +4,10 @@ use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt6
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ArtifactIdentity, V35BuildAuthority, V35BuildBlock, V35BuildBlockSource,
-    V35BuildRow, V35BuildScratchSink, V35Dimensions, V35MortonModel, V35Projection,
-    build_v35_scratch_runs, build_v35_srht, decode_v35_build_run_arrow,
-    decode_v35_source_block_parquet, open_v35_build_run_cursor, project_v35_query_scalar,
-    train_v35_morton_model,
+    V35BuildLeafSink, V35BuildMergeRow, V35BuildMergeSource, V35BuildRow, V35BuildScratchSink,
+    V35Dimensions, V35MortonModel, V35Projection, build_v35_scratch_runs, build_v35_srht,
+    decode_v35_build_run_arrow, decode_v35_source_block_parquet, merge_v35_build_runs,
+    open_v35_build_run_cursor, project_v35_query_scalar, train_v35_morton_model,
 };
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
@@ -463,4 +463,120 @@ fn v35_build_artifacts_bind_source_projection_attempt_and_morton_model() {
     changed_rows[0][0] += 1.0;
     let changed_model = train_v35_morton_model(&changed_rows, &projection, authority).unwrap();
     assert!(decode_v35_build_run_arrow(bytes, registered, &changed_model).is_err());
+}
+
+struct MergeSource {
+    runs: Vec<VecDeque<V35BuildMergeRow>>,
+}
+
+impl V35BuildMergeSource for MergeSource {
+    fn run_count(&self) -> usize {
+        self.runs.len()
+    }
+
+    fn next_row(&mut self, run: usize) -> Result<Option<V35BuildMergeRow>> {
+        Ok(self.runs.get_mut(run).and_then(VecDeque::pop_front))
+    }
+}
+
+#[derive(Default)]
+struct LeafSink {
+    leaves: Vec<Vec<V35BuildMergeRow>>,
+}
+
+impl V35BuildLeafSink for LeafSink {
+    fn write_leaf(&mut self, rows: Vec<V35BuildMergeRow>) -> Result<()> {
+        self.leaves.push(rows);
+        Ok(())
+    }
+}
+
+fn merge_source(model: &V35MortonModel, projection: &V35Projection) -> MergeSource {
+    let mut runs = vec![Vec::new(), Vec::new(), Vec::new()];
+    for source_ordinal in 0..600_u64 {
+        let source = (0..384)
+            .map(|dimension| ((source_ordinal * 31 + dimension as u64 * 7) % 4_093) as f32 / 53.0)
+            .collect::<Vec<_>>();
+        let projected = project_v35_query_scalar(projection, &source)
+            .unwrap()
+            .coordinates()
+            .to_vec();
+        let key = model.key(&projected).unwrap();
+        let run = usize::try_from(source_ordinal / 200).unwrap();
+        runs[run].push(
+            V35BuildMergeRow::new(
+                key,
+                source_ordinal,
+                100_000 + source_ordinal,
+                1,
+                source,
+                projected,
+            )
+            .unwrap(),
+        );
+    }
+    for run in &mut runs {
+        run.sort_by_key(|row| (row.morton_key(), row.source_ordinal()));
+    }
+    MergeSource {
+        runs: runs.into_iter().map(VecDeque::from).collect(),
+    }
+}
+
+#[test]
+fn v35_build_merge_streams_one_head_per_run_into_bounded_ordered_leaves() {
+    // Break caught: external merge loads complete runs, loses total order at a
+    // run boundary, or retains more than one 256-row leaf accumulator.
+    let projection = projection();
+    let model = train_v35_morton_model(&training_rows(), &projection, build_authority(&projection))
+        .unwrap();
+    let mut source = merge_source(&model, &projection);
+    let mut sink = LeafSink::default();
+    let receipt = merge_v35_build_runs(&model, &mut source, &mut sink).unwrap();
+    assert_eq!(receipt.rows(), 600);
+    assert_eq!(receipt.leaves(), 3);
+    assert_eq!(receipt.peak_heads(), 3);
+    assert_eq!(
+        sink.leaves.iter().map(Vec::len).collect::<Vec<_>>(),
+        [256, 256, 88]
+    );
+    let order = sink
+        .leaves
+        .iter()
+        .flatten()
+        .map(|row| (row.morton_key(), row.source_ordinal()))
+        .collect::<Vec<_>>();
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
+    let mut ordinals = order
+        .iter()
+        .map(|(_, ordinal)| *ordinal)
+        .collect::<Vec<_>>();
+    ordinals.sort_unstable();
+    assert_eq!(ordinals, (0..600).collect::<Vec<_>>());
+}
+
+#[test]
+fn v35_build_merge_rejects_unbounded_fanin_and_untrusted_rows() {
+    // Break caught: merge admits unbounded head state or trusts a scratch key
+    // that is inconsistent with the authenticated Morton model and row.
+    let projection = projection();
+    let model = train_v35_morton_model(&training_rows(), &projection, build_authority(&projection))
+        .unwrap();
+    let mut source = merge_source(&model, &projection);
+    let row = source.runs[0].front().unwrap().clone();
+    source.runs[0][0] = V35BuildMergeRow::new(
+        row.morton_key() ^ 1,
+        row.source_ordinal(),
+        row.id(),
+        row.sequence(),
+        row.source().to_vec(),
+        row.projected().to_vec(),
+    )
+    .unwrap();
+    assert!(merge_v35_build_runs(&model, &mut source, &mut LeafSink::default()).is_err());
+
+    let mut too_many = MergeSource {
+        runs: (0..33).map(|_| VecDeque::new()).collect(),
+    };
+    assert!(merge_v35_build_runs(&model, &mut too_many, &mut LeafSink::default()).is_err());
 }

@@ -353,7 +353,14 @@ Scratch objects contain bounded Arrow record batches. Each complete object is
 authenticated before semantic use, then exposed through at-most-256-row
 cursors. A preregistered bounded-fan-in external merge reports every pass and
 scratch byte; opening one complete decoded run per input is forbidden. The
-merge keeps one live leaf accumulator, computes and seals each patch,
+merge core admits at most 32 authenticated run capabilities, owns at most one
+source/projected row head from each, recomputes every 128-bit Morton key from
+the expected model, and enforces strict per-run and global `(key,ordinal)`
+order. It transfers rows into one at-most-256-row leaf sink buffer and releases
+that buffer before continuing; no complete run or unbounded ordinal set is
+materialized. Construction requires contiguous source ordinals before writing
+scratch, so uniqueness is established upstream of key-order permutation.
+The merge keeps one live leaf accumulator, computes and seals each patch,
 encodes code planes, writes exact-vector pages, and emits assignment runs. Local
 builder RSS is capped below 3 GiB with declared 64-MiB buffers; remote scratch may be
 large but is separately prefixed, byte-accounted, lifecycle-tagged, and deleted
