@@ -188,6 +188,179 @@ def canonical_json_bytes(value: object) -> bytes:
     )
 
 
+def _read_s3_bytes(s3_client: Any, uri: str) -> tuple[bytes, str | None]:
+    bucket, key = _s3(uri)
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    body = response["Body"].read()
+    if response.get("ContentLength") != len(body):
+        raise ValueError("V36 checkpoint object length differs")
+    etag = response.get("ETag")
+    if etag is not None:
+        if type(etag) is not str or len(etag.strip('"')) == 0:
+            raise ValueError("V36 checkpoint object ETag differs")
+        etag = etag.strip('"')
+    return body, etag
+
+
+def _checkpoint_pointer_value(pointer_bytes: bytes) -> dict[str, object]:
+    try:
+        value = json.loads(pointer_bytes)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("V36 checkpoint pointer authority differs") from error
+    if (
+        type(value) is not dict
+        or canonical_json_bytes(value) != pointer_bytes
+        or set(value)
+        != {
+            "claim_eligible",
+            "generation",
+            "manifest",
+            "producer_attempt_id",
+            "producer_attempt_ordinal",
+            "run_id",
+            "schema",
+        }
+        or value.get("claim_eligible") is not False
+        or type(value.get("generation")) is not int
+        or value["generation"] < 0
+        or type(value.get("manifest")) is not dict
+        or set(value["manifest"])
+        != {"blake3", "encoded_bytes", "role", "sha256", "uri"}
+        or type(value["manifest"].get("blake3")) is not str
+        or _SHA256.fullmatch(value["manifest"]["blake3"]) is None
+        or type(value["manifest"].get("encoded_bytes")) is not int
+        or value["manifest"]["encoded_bytes"] <= 0
+        or value["manifest"].get("role") != "checkpoint-manifest"
+        or type(value["manifest"].get("sha256")) is not str
+        or _SHA256.fullmatch(value["manifest"]["sha256"]) is None
+        or type(value.get("producer_attempt_ordinal")) is not int
+        or not 0 <= value["producer_attempt_ordinal"] < MAX_ATTEMPTS
+        or type(value.get("run_id")) is not str
+        or _RUN_ID.fullmatch(value["run_id"]) is None
+        or value.get("producer_attempt_id")
+        != f"{value.get('run_id')}-attempt-{value.get('producer_attempt_ordinal'):04d}"
+        or value.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-pointer-v1"
+    ):
+        raise ValueError("V36 checkpoint pointer authority differs")
+    _s3(value["manifest"]["uri"])
+    return value
+
+
+def _put_immutable_s3_bytes(s3_client: Any, uri: str, body: bytes) -> None:
+    if type(body) is not bytes or not body:
+        raise ValueError("V36 checkpoint immutable object differs")
+    bucket, key = _s3(uri)
+    try:
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=body,
+            IfNoneMatch="*",
+        )
+    except Exception:
+        observed, _ = _read_s3_bytes(s3_client, uri)
+        if observed != body:
+            raise ValueError("V36 checkpoint immutable object differs") from None
+
+
+def publish_v36_checkpoint(
+    s3_client: Any,
+    *,
+    immutable_objects: tuple[tuple[str, bytes], ...],
+    manifest_uri: str,
+    manifest_bytes: bytes,
+    pointer_uri: str,
+    pointer_bytes: bytes,
+    previous_pointer_etag: str | None,
+) -> str:
+    """Publish dependencies then manifest, and CAS one run-scoped pointer."""
+
+    if type(immutable_objects) is not tuple:
+        raise ValueError("V36 checkpoint immutable objects differ")
+    uris = [uri for uri, _ in immutable_objects]
+    if len(set(uris)) != len(uris) or manifest_uri in uris or pointer_uri in {
+        *uris,
+        manifest_uri,
+    }:
+        raise ValueError("V36 checkpoint object roles overlap")
+    pointer = _checkpoint_pointer_value(pointer_bytes)
+    manifest_identity = pointer["manifest"]
+    if (
+        manifest_identity["uri"] != manifest_uri
+        or manifest_identity["encoded_bytes"] != len(manifest_bytes)
+        or manifest_identity["sha256"] != hashlib.sha256(manifest_bytes).hexdigest()
+    ):
+        raise ValueError("V36 checkpoint manifest authority differs")
+    try:
+        manifest_value = json.loads(manifest_bytes)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("V36 checkpoint manifest authority differs") from error
+    if (
+        type(manifest_value) is not dict
+        or canonical_json_bytes(manifest_value) != manifest_bytes
+        or manifest_value.get("schema")
+        != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest_value.get("generation") != pointer["generation"]
+    ):
+        raise ValueError("V36 checkpoint manifest authority differs")
+    if previous_pointer_etag is not None and (
+        type(previous_pointer_etag) is not str or not previous_pointer_etag
+    ):
+        raise ValueError("V36 checkpoint pointer ETag differs")
+
+    for uri, body in immutable_objects:
+        _put_immutable_s3_bytes(s3_client, uri, body)
+    _put_immutable_s3_bytes(s3_client, manifest_uri, manifest_bytes)
+
+    bucket, key = _s3(pointer_uri)
+    condition = (
+        {"IfNoneMatch": "*"}
+        if previous_pointer_etag is None
+        else {"IfMatch": previous_pointer_etag}
+    )
+    try:
+        response = s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=pointer_bytes,
+            **condition,
+        )
+        etag = response.get("ETag")
+        if type(etag) is not str or not etag.strip('"'):
+            raise ValueError("V36 checkpoint pointer ETag differs")
+        return etag.strip('"')
+    except Exception:
+        observed, etag = _read_s3_bytes(s3_client, pointer_uri)
+        if observed != pointer_bytes or etag is None:
+            raise ValueError("V36 checkpoint pointer observation differs") from None
+        return etag
+
+
+def read_v36_checkpoint_head(
+    s3_client: Any, pointer_uri: str
+) -> tuple[bytes, bytes, str | None]:
+    """Read exactly the newest pointer and its manifest, failing closed."""
+
+    pointer_bytes, etag = _read_s3_bytes(s3_client, pointer_uri)
+    pointer = _checkpoint_pointer_value(pointer_bytes)
+    manifest_identity = pointer["manifest"]
+    manifest_bytes, _ = _read_s3_bytes(s3_client, str(manifest_identity["uri"]))
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("V36 checkpoint manifest authority differs") from error
+    if (
+        len(manifest_bytes) != manifest_identity["encoded_bytes"]
+        or hashlib.sha256(manifest_bytes).hexdigest() != manifest_identity["sha256"]
+        or type(manifest) is not dict
+        or canonical_json_bytes(manifest) != manifest_bytes
+        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest.get("generation") != pointer["generation"]
+    ):
+        raise ValueError("V36 checkpoint manifest authority differs")
+    return pointer_bytes, manifest_bytes, etag
+
+
 def build_v36_prefix_screen_plan(**values: Any) -> V36PrefixScreenPlan:
     """Validate one immutable prefix-screen launch plan."""
 

@@ -504,6 +504,149 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             InstanceIds=["i-running-hung"]
         )
 
+    def test_v36_checkpoint_publication_orders_dependencies_manifest_pointer(self) -> None:
+        # Break caught: a pointer becomes visible before the immutable objects
+        # needed to restore it, or pointer replacement is not conditional.
+        calls = []
+
+        class S3:
+            def put_object(self, **values: object) -> dict[str, str]:
+                calls.append(values)
+                return {"ETag": '"etag-next"'}
+
+        dependency = b"identity-run\n"
+        manifest = subject.canonical_json_bytes(
+            {"generation": 2, "schema": "borsuk-v36-prefix-freeze-checkpoint-v1"}
+        )
+        pointer = subject.canonical_json_bytes(
+            {
+                "claim_eligible": False,
+                "generation": 2,
+                "manifest": {
+                    "blake3": "b" * 64,
+                    "encoded_bytes": len(manifest),
+                    "role": "checkpoint-manifest",
+                    "sha256": hashlib.sha256(manifest).hexdigest(),
+                    "uri": "s3://fixture/checkpoints/manifests/m2.json",
+                },
+                "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
+                "producer_attempt_ordinal": 0,
+                "run_id": "v36-prefix-screen-fixture",
+                "schema": "borsuk-v36-prefix-freeze-checkpoint-pointer-v1",
+            }
+        )
+        etag = subject.publish_v36_checkpoint(
+            S3(),
+            immutable_objects=(("s3://fixture/checkpoints/objects/run.arrow", dependency),),
+            manifest_uri="s3://fixture/checkpoints/manifests/m2.json",
+            manifest_bytes=manifest,
+            pointer_uri="s3://fixture/checkpoints/runs/v36-prefix-fixture/latest.json",
+            pointer_bytes=pointer,
+            previous_pointer_etag="etag-before",
+        )
+        self.assertEqual(etag, "etag-next")
+        self.assertEqual(
+            [(call["Key"], call.get("IfNoneMatch"), call.get("IfMatch")) for call in calls],
+            [
+                ("checkpoints/objects/run.arrow", "*", None),
+                ("checkpoints/manifests/m2.json", "*", None),
+                (
+                    "checkpoints/runs/v36-prefix-fixture/latest.json",
+                    None,
+                    "etag-before",
+                ),
+            ],
+        )
+
+    def test_v36_checkpoint_lost_pointer_ack_accepts_only_intended_bytes(self) -> None:
+        # Break caught: a timed-out CAS is retried blindly or a concurrent
+        # writer's pointer is accepted as this generation's publication.
+        manifest = subject.canonical_json_bytes(
+            {"generation": 1, "schema": "borsuk-v36-prefix-freeze-checkpoint-v1"}
+        )
+        pointer = subject.canonical_json_bytes(
+            {
+                "claim_eligible": False,
+                "generation": 1,
+                "manifest": {
+                    "blake3": "b" * 64,
+                    "encoded_bytes": len(manifest),
+                    "role": "checkpoint-manifest",
+                    "sha256": hashlib.sha256(manifest).hexdigest(),
+                    "uri": "s3://fixture/checkpoints/manifests/m1.json",
+                },
+                "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
+                "producer_attempt_ordinal": 0,
+                "run_id": "v36-prefix-screen-fixture",
+                "schema": "borsuk-v36-prefix-freeze-checkpoint-pointer-v1",
+            }
+        )
+
+        class S3:
+            def __init__(self, observed: bytes) -> None:
+                self.observed = observed
+
+            def put_object(self, *, Key: str, **_values: object) -> object:
+                if not Key.endswith("latest.json"):
+                    return {"ETag": '"etag-immutable"'}
+                raise TimeoutError("ack lost")
+
+            def get_object(self, **_values: object) -> dict[str, object]:
+                return {
+                    "Body": io.BytesIO(self.observed),
+                    "ContentLength": len(self.observed),
+                    "ETag": '"etag-observed"',
+                }
+
+        common = {
+            "immutable_objects": (),
+            "manifest_uri": "s3://fixture/checkpoints/manifests/m1.json",
+            "manifest_bytes": manifest,
+            "pointer_uri": "s3://fixture/checkpoints/runs/v36-prefix-fixture/latest.json",
+            "pointer_bytes": pointer,
+            "previous_pointer_etag": None,
+        }
+        self.assertEqual(
+            subject.publish_v36_checkpoint(S3(pointer), **common), "etag-observed"
+        )
+        changed = json.loads(pointer)
+        changed["generation"] = 7
+        with self.assertRaisesRegex(ValueError, "checkpoint pointer observation differs"):
+            subject.publish_v36_checkpoint(
+                S3(subject.canonical_json_bytes(changed)), **common
+            )
+
+    def test_v36_checkpoint_corrupt_newest_pointer_fails_closed(self) -> None:
+        # Break caught: resume silently falls back to an older generation when
+        # the authoritative newest pointer or its referenced manifest is bad.
+        pointer = subject.canonical_json_bytes(
+            {
+                "claim_eligible": False,
+                "generation": 3,
+                "manifest": {
+                    "blake3": "b" * 64,
+                    "encoded_bytes": 8,
+                    "role": "checkpoint-manifest",
+                    "sha256": "a" * 64,
+                    "uri": "s3://fixture/checkpoints/manifests/m3.json",
+                },
+                "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
+                "producer_attempt_ordinal": 0,
+                "run_id": "v36-prefix-screen-fixture",
+                "schema": "borsuk-v36-prefix-freeze-checkpoint-pointer-v1",
+            }
+        )
+
+        class S3:
+            def get_object(self, *, Key: str, **_values: object) -> dict[str, object]:
+                body = pointer if Key.endswith("latest.json") else b"corrupt\n"
+                return {"Body": io.BytesIO(body), "ContentLength": len(body)}
+
+        with self.assertRaisesRegex(ValueError, "checkpoint manifest authority differs"):
+            subject.read_v36_checkpoint_head(
+                S3(), "s3://fixture/checkpoints/runs/v36-prefix-fixture/latest.json"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
