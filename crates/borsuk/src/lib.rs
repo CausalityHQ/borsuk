@@ -212,6 +212,7 @@ mod v35_projection;
 mod v35_remote;
 mod v35_route;
 mod v36_funnel;
+mod v36_prefix_dataset;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -330,7 +331,19 @@ pub use v36_funnel::{
     V36ShapeScore, V36TransportDisposition, V36TransportFragment, V36TransportLimits,
     V36TransportPlan, V36TransportPosting, canonical_v36_prefix_screen_manifest_bytes,
     plan_v36_transport, project_v36_resources, validate_v36_manifest,
-    validate_v36_prefix_screen_manifest,
+    validate_v36_prefix_population_authority, validate_v36_prefix_screen_manifest,
+};
+#[doc(hidden)]
+pub use v36_prefix_dataset::{
+    V36PrefixGtAccumulator, V36PrefixGtNeighbor, V36PrefixInputRow, V36PrefixMaterializedRow,
+    V36PrefixQualityRole, V36PrefixQueryRow, V36PrefixRankedSourceObject, V36PrefixRoleSplit,
+    V36PrefixRowIdentity, deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
+    rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_source_parquet, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_input_row,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 #[allow(
     dead_code,

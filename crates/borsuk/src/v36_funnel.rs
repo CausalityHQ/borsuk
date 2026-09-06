@@ -560,6 +560,14 @@ fn validate_prefix_population(
     Ok(())
 }
 
+/// Validate the complete bounded population authority against its source registry.
+pub fn validate_v36_prefix_population_authority(
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    validate_prefix_population(population, source_registry)
+}
+
 fn validate_prefix_projection(projection: &V36ProjectionArm) -> Result<()> {
     match projection {
         V36ProjectionArm::Srht192 { seed } if *seed == PROJECTION_SEED => Ok(()),

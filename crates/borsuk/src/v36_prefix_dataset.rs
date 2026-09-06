@@ -1,0 +1,971 @@
+use std::{
+    cmp::Ordering,
+    collections::{BTreeSet, BinaryHeap},
+    fs::File,
+    path::Path,
+    sync::Arc,
+};
+
+use arrow_array::{Array, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+use arrow_schema::{DataType, Field, Schema};
+use parquet::{
+    arrow::{ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    file::properties::WriterProperties,
+    schema::types::SchemaDescriptor,
+};
+use sha2::{Digest, Sha256};
+
+use crate::{
+    BorsukError, Result, V36PrefixPopulationAuthority, V36PrefixRegisteredSourceObject,
+    V36PrefixRoleAuthority, validate_v36_prefix_population_authority,
+};
+
+const DIMENSIONS: usize = 768;
+const GT_NEIGHBORS: usize = 100;
+const DISTINCT_CANDIDATES: usize = 1_100_000;
+const CORPUS_ROWS: usize = 1_000_000;
+const PARQUET_ROW_GROUP_ROWS: usize = 8_192;
+
+fn invalid(message: &str) -> BorsukError {
+    BorsukError::InvalidStorage(message.to_owned())
+}
+
+fn temporary_output(path: &Path) -> Result<tempfile::NamedTempFile> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid("V36 prefix output path has no parent"))?;
+    tempfile::NamedTempFile::new_in(parent).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn publish_output(temporary: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+    temporary.persist(path).map_err(|error| BorsukError::Io {
+        path: path.to_owned(),
+        source: error.error,
+    })?;
+    Ok(())
+}
+
+fn parquet_writer_properties() -> WriterProperties {
+    WriterProperties::builder()
+        .set_max_row_group_row_count(Some(PARQUET_ROW_GROUP_ROWS))
+        .set_data_page_size_limit(1024 * 1024)
+        .build()
+}
+
+fn validate_parquet_descriptor(actual: &SchemaDescriptor, expected: &Schema) -> Result<()> {
+    let expected = ArrowSchemaConverter::new().convert(expected)?;
+    if actual != &expected {
+        return Err(invalid("V36 prefix Parquet physical schema differs"));
+    }
+    Ok(())
+}
+
+fn digest_bytes(value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid("V36 prefix digest differs"));
+    }
+    let mut decoded = [0_u8; 32];
+    for (index, chunk) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+        let pair = std::str::from_utf8(chunk).map_err(|_| invalid("V36 prefix digest differs"))?;
+        decoded[index] =
+            u8::from_str_radix(pair, 16).map_err(|_| invalid("V36 prefix digest differs"))?;
+    }
+    if decoded.iter().all(|byte| *byte == 0) {
+        return Err(invalid("V36 prefix digest differs"));
+    }
+    Ok(decoded)
+}
+
+fn validate_embedding(embedding: &[f32]) -> Result<()> {
+    if embedding.len() != DIMENSIONS
+        || embedding.iter().any(|value| !value.is_finite())
+        || embedding.iter().all(|value| *value == 0.0)
+    {
+        return Err(invalid("V36 prefix embedding differs"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One physical input row before duplicate resolution and role selection.
+pub struct V36PrefixInputRow {
+    /// Signed physical feature ID; negative IDs are invalid.
+    pub feature_row_id: i64,
+    /// Position of the complete object in the registered sampled order.
+    pub selected_object_ordinal: u16,
+    /// Zero-based physical row offset inside that object.
+    pub row_offset: u64,
+    /// Exact source-domain f32 vector.
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Compact identity retained after a streamed row passes vector validation.
+pub struct V36PrefixRowIdentity {
+    /// Unsigned logical feature ID.
+    pub feature_row_id: u64,
+    /// Corpus ordinal, absent until query removal and source ordering finish.
+    pub source_ordinal: Option<u64>,
+    /// Position of the complete object in the registered sampled order.
+    pub selected_object_ordinal: u16,
+    /// Zero-based physical row offset inside that object.
+    pub row_offset: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One valid unique row after materialization ordering.
+pub struct V36PrefixMaterializedRow {
+    /// Unsigned logical feature ID.
+    pub feature_row_id: u64,
+    /// Corpus ordinal, absent for a query row.
+    pub source_ordinal: Option<u64>,
+    /// Exact source-domain f32 vector.
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One query row with its role-local ordinal.
+pub struct V36PrefixQueryRow {
+    /// Zero-based ordinal within a query role.
+    pub query_ordinal: u32,
+    /// Unsigned logical feature ID.
+    pub feature_row_id: u64,
+    /// Exact source-domain f32 vector.
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Disjoint role selection plus the query-excluded corpus.
+pub struct V36PrefixRoleSplit {
+    /// Development queries.
+    pub development: Vec<V36PrefixRowIdentity>,
+    /// Validation queries.
+    pub validation: Vec<V36PrefixRowIdentity>,
+    /// Once-opened sealed holdout queries.
+    pub sealed_holdout: Vec<V36PrefixRowIdentity>,
+    /// Timing-only queries with no exact-GT obligation.
+    pub performance: Vec<V36PrefixRowIdentity>,
+    /// Remaining rows ordered by the registered source score.
+    pub corpus: Vec<V36PrefixRowIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One registered source object with its query-independent sample score.
+pub struct V36PrefixRankedSourceObject {
+    /// Complete encoded length.
+    pub encoded_bytes: u64,
+    /// Registered path.
+    pub path: String,
+    /// Query-independent sample digest.
+    pub sample_sha256: String,
+    /// Complete-object SHA-256.
+    pub sha256: String,
+    /// Immutable object URI.
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One exact GT@100 row.
+pub struct V36PrefixGtNeighbor {
+    /// Query ordinal.
+    pub query_ordinal: u32,
+    /// Zero-based neighbor rank.
+    pub rank: u16,
+    /// Unsigned logical feature ID.
+    pub feature_row_id: u64,
+    /// Exact binary64 squared-L2 distance.
+    pub squared_distance: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One query role authorized to receive exact GT@100.
+pub enum V36PrefixQualityRole {
+    /// Development queries.
+    Development,
+    /// Validation queries.
+    Validation,
+    /// Once-opened sealed holdout queries.
+    SealedHoldout,
+}
+
+/// Rank a complete authenticated registry by the frozen sample rule.
+pub fn rank_v36_prefix_source_objects(
+    population: &V36PrefixPopulationAuthority,
+    registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<Vec<V36PrefixRankedSourceObject>> {
+    validate_v36_prefix_population_authority(population, registry)?;
+    let mut paths = BTreeSet::new();
+    let mut uris = BTreeSet::new();
+    let mut ranked = registry
+        .iter()
+        .map(|object| {
+            if object.encoded_bytes == 0
+                || object.path.is_empty()
+                || !paths.insert(object.path.as_str())
+                || !uris.insert(object.uri.as_str())
+            {
+                return Err(invalid("V36 prefix source registry differs"));
+            }
+            digest_bytes(&object.sha256)?;
+            let mut hasher = Sha256::new();
+            hasher.update(b"borsuk-v36-screen-object-v1");
+            hasher.update(object.path.as_bytes());
+            hasher.update(object.encoded_bytes.to_le_bytes());
+            Ok(V36PrefixRankedSourceObject {
+                encoded_bytes: object.encoded_bytes,
+                path: object.path.clone(),
+                sample_sha256: format!("{:x}", hasher.finalize()),
+                sha256: object.sha256.clone(),
+                uri: object.uri.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ranked.sort_by(|left, right| {
+        (&left.sample_sha256, &left.path).cmp(&(&right.sample_sha256, &right.path))
+    });
+    Ok(ranked)
+}
+
+/// Validate one streamed physical row and retain only its compact identity.
+pub fn validate_v36_prefix_input_row(row: &V36PrefixInputRow) -> Result<V36PrefixRowIdentity> {
+    if row.feature_row_id < 0 {
+        return Err(invalid("V36 prefix feature ID differs"));
+    }
+    validate_embedding(&row.embedding)?;
+    Ok(V36PrefixRowIdentity {
+        feature_row_id: u64::try_from(row.feature_row_id)
+            .map_err(|_| invalid("V36 prefix feature ID differs"))?,
+        source_ordinal: None,
+        selected_object_ordinal: row.selected_object_ordinal,
+        row_offset: row.row_offset,
+    })
+}
+
+/// Keep the first sampled-object occurrence per ID without retaining vectors.
+pub fn deduplicate_v36_prefix_row_identities(
+    mut rows: Vec<V36PrefixRowIdentity>,
+) -> Result<Vec<V36PrefixRowIdentity>> {
+    rows.sort_by_key(|row| (row.selected_object_ordinal, row.row_offset));
+    let mut physical = BTreeSet::new();
+    let mut feature_ids = BTreeSet::new();
+    let mut unique = Vec::new();
+    for row in rows {
+        if row.source_ordinal.is_some()
+            || !physical.insert((row.selected_object_ordinal, row.row_offset))
+        {
+            return Err(invalid("V36 prefix physical row differs"));
+        }
+        if feature_ids.insert(row.feature_row_id) {
+            unique.push(row);
+        }
+    }
+    Ok(unique)
+}
+
+fn score(seed: &[u8; 32], source_identity: &[u8; 32], feature_row_id: u64) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(seed);
+    hasher.update(source_identity);
+    hasher.update(feature_row_id.to_le_bytes());
+    hasher.finalize().into()
+}
+
+fn source_score(source_identity: &[u8; 32], feature_row_id: u64) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(source_identity);
+    hasher.update(feature_row_id.to_le_bytes());
+    hasher.finalize().into()
+}
+
+/// Compute one frozen prefix-population query score for audit and mutation tests.
+pub fn v36_prefix_query_score_sha256(
+    seed_label: &str,
+    source_identity_sha256: &str,
+    feature_row_id: u64,
+) -> Result<String> {
+    let seed: [u8; 32] = Sha256::digest(seed_label.as_bytes()).into();
+    let source_identity = digest_bytes(source_identity_sha256)?;
+    Ok(score(&seed, &source_identity, feature_row_id)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// Compute one frozen prefix-population corpus score for audit and mutation tests.
+pub fn v36_prefix_source_score_sha256(
+    source_identity_sha256: &str,
+    feature_row_id: u64,
+) -> Result<String> {
+    let source_identity = digest_bytes(source_identity_sha256)?;
+    Ok(source_score(&source_identity, feature_row_id)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// Validate the exact population-specific query-role authority.
+pub fn validate_v36_prefix_role_authority(roles: &[V36PrefixRoleAuthority]) -> Result<()> {
+    let expected_names = ["development", "validation", "sealed-holdout", "performance"];
+    let expected_labels = [
+        "borsuk-v36-prefix-screen-development-query-v1",
+        "borsuk-v36-prefix-screen-validation-query-v1",
+        "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
+        "borsuk-v36-prefix-screen-performance-query-v1",
+    ];
+    let expected_rows = [1_000_u64, 1_000, 1_000, 10_000];
+    if roles.len() != expected_names.len() {
+        return Err(invalid("V36 prefix query role authority differs"));
+    }
+    let mut seeds = BTreeSet::new();
+    for (((role, expected_name), expected_label), expected_rows) in roles
+        .iter()
+        .zip(expected_names)
+        .zip(expected_labels)
+        .zip(expected_rows)
+    {
+        if role.role != expected_name
+            || role.seed_label != expected_label
+            || role.rows != expected_rows
+            || role.seed_sha256 != format!("{:x}", Sha256::digest(role.seed_label.as_bytes()))
+            || !seeds.insert(role.seed_sha256.as_str())
+        {
+            return Err(invalid("V36 prefix query role authority differs"));
+        }
+    }
+    Ok(())
+}
+
+/// Select disjoint query roles in priority order, then order the corpus.
+pub fn select_v36_prefix_roles(
+    rows: Vec<V36PrefixRowIdentity>,
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<V36PrefixRoleSplit> {
+    validate_v36_prefix_population_authority(population, source_registry)?;
+    validate_v36_prefix_role_authority(&population.roles)?;
+    let source_identity = digest_bytes(&population.ordered_source_manifest_sha256)?;
+    let mut unique = deduplicate_v36_prefix_row_identities(rows)?;
+    let consumed_objects = population.consumed_objects.len();
+    let observed_objects = unique
+        .iter()
+        .map(|row| usize::from(row.selected_object_ordinal))
+        .collect::<BTreeSet<_>>();
+    if consumed_objects == 0
+        || observed_objects.len() != consumed_objects
+        || observed_objects.iter().copied().ne(0..consumed_objects)
+        || unique
+            .iter()
+            .any(|row| usize::from(row.selected_object_ordinal) >= consumed_objects)
+    {
+        return Err(invalid("V36 prefix consumed-object membership differs"));
+    }
+    if unique.len() < DISTINCT_CANDIDATES {
+        return Err(invalid("V36 prefix population size differs"));
+    }
+    if usize::from(unique[DISTINCT_CANDIDATES - 1].selected_object_ordinal) != consumed_objects - 1
+    {
+        return Err(invalid("V36 prefix population cutoff object differs"));
+    }
+    unique.truncate(DISTINCT_CANDIDATES);
+    let mut remaining = unique;
+    let mut selected = Vec::with_capacity(4);
+    for role in &population.roles {
+        let seed = digest_bytes(&role.seed_sha256)?;
+        let mut ranked = remaining
+            .into_iter()
+            .map(|row| (score(&seed, &source_identity, row.feature_row_id), row))
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            (&left.0, left.1.feature_row_id).cmp(&(&right.0, right.1.feature_row_id))
+        });
+        let count =
+            usize::try_from(role.rows).map_err(|_| invalid("V36 prefix query count overflows"))?;
+        if ranked.len() < count {
+            return Err(invalid("V36 prefix query population is insufficient"));
+        }
+        let rest = ranked.split_off(count);
+        selected.push(ranked.into_iter().map(|(_, row)| row).collect::<Vec<_>>());
+        remaining = rest.into_iter().map(|(_, row)| row).collect();
+    }
+    let mut corpus = remaining
+        .into_iter()
+        .map(|row| (source_score(&source_identity, row.feature_row_id), row))
+        .collect::<Vec<_>>();
+    corpus.sort_by(|left, right| {
+        (&left.0, left.1.feature_row_id).cmp(&(&right.0, right.1.feature_row_id))
+    });
+    if corpus.len() < CORPUS_ROWS {
+        return Err(invalid("V36 prefix corpus size differs"));
+    }
+    corpus.truncate(CORPUS_ROWS);
+    let corpus = corpus
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, (_, mut row))| {
+            row.source_ordinal = Some(u64::try_from(ordinal).unwrap());
+            row
+        })
+        .collect();
+    let [development, validation, sealed_holdout, performance] = selected
+        .try_into()
+        .map_err(|_| invalid("V36 prefix query roles differ"))?;
+    Ok(V36PrefixRoleSplit {
+        development,
+        validation,
+        sealed_holdout,
+        performance,
+        corpus,
+    })
+}
+
+fn vector_field() -> Field {
+    Field::new(
+        "embedding",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float32, false)),
+            DIMENSIONS as i32,
+        ),
+        false,
+    )
+}
+
+/// Exact physical schema of a V36 prefix source table.
+pub fn v36_prefix_source_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("feature_row_id", DataType::UInt64, false),
+        vector_field(),
+    ])
+}
+
+/// Exact physical schema of a V36 prefix query table.
+pub fn v36_prefix_query_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("feature_row_id", DataType::UInt64, false),
+        vector_field(),
+    ])
+}
+
+/// Exact physical schema of a V36 prefix exact-GT table.
+pub fn v36_prefix_gt100_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("rank", DataType::UInt16, false),
+        Field::new("feature_row_id", DataType::UInt64, false),
+        Field::new("squared_distance", DataType::Float64, false),
+    ])
+}
+
+fn validate_expected_feature_ids(expected: &[u64]) -> Result<()> {
+    if expected.is_empty() {
+        return Err(invalid("V36 prefix source membership is empty"));
+    }
+    let mut sorted = expected.to_vec();
+    sorted.sort_unstable();
+    if sorted.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(invalid("V36 prefix source membership overlaps"));
+    }
+    Ok(())
+}
+
+fn validate_source_batch(
+    batch: &RecordBatch,
+    expected_feature_ids: &[u64],
+    next_ordinal: &mut usize,
+) -> Result<()> {
+    if batch.schema().as_ref() != &v36_prefix_source_schema()
+        || batch.num_rows() == 0
+        || batch.num_columns() != 2
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V36 prefix source Parquet batch differs"));
+    }
+    let ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 prefix source Parquet ID column differs"))?;
+    let embeddings = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V36 prefix source Parquet embedding column differs"))?;
+    let values = embeddings
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V36 prefix source Parquet embedding child differs"))?;
+    if values.null_count() != 0 || values.len() != batch.num_rows() * DIMENSIONS {
+        return Err(invalid("V36 prefix source Parquet embedding shape differs"));
+    }
+    for row in 0..batch.num_rows() {
+        if expected_feature_ids.get(*next_ordinal).copied() != Some(ids.value(row)) {
+            return Err(invalid("V36 prefix source Parquet membership differs"));
+        }
+        let start = row * DIMENSIONS;
+        validate_embedding(&values.values()[start..start + DIMENSIONS])?;
+        *next_ordinal = next_ordinal
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 prefix source Parquet row count overflows"))?;
+    }
+    Ok(())
+}
+
+/// Write validated source batches without retaining the complete corpus in RAM.
+pub fn write_v36_prefix_source_parquet<I>(
+    path: &Path,
+    expected_feature_ids: &[u64],
+    batches: I,
+) -> Result<()>
+where
+    I: IntoIterator<Item = RecordBatch>,
+{
+    validate_expected_feature_ids(expected_feature_ids)?;
+    let mut temporary = temporary_output(path)?;
+    let mut writer = ArrowWriter::try_new(
+        temporary.as_file_mut(),
+        Arc::new(v36_prefix_source_schema()),
+        Some(parquet_writer_properties()),
+    )?;
+    let mut next_ordinal = 0_usize;
+    for batch in batches {
+        validate_source_batch(&batch, expected_feature_ids, &mut next_ordinal)?;
+        writer.write(&batch)?;
+    }
+    if next_ordinal != expected_feature_ids.len() {
+        return Err(invalid("V36 prefix source Parquet row count differs"));
+    }
+    writer.close()?;
+    publish_output(temporary, path)?;
+    Ok(())
+}
+
+/// Stream and validate a complete source Parquet artifact one batch at a time.
+pub fn scan_v36_prefix_source_parquet<F>(
+    path: &Path,
+    expected_feature_ids: &[u64],
+    mut consume: F,
+) -> Result<()>
+where
+    F: FnMut(RecordBatch) -> Result<()>,
+{
+    validate_expected_feature_ids(expected_feature_ids)?;
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_source_schema())?;
+    if builder.schema().as_ref() != &v36_prefix_source_schema() {
+        return Err(invalid("V36 prefix source Parquet physical schema differs"));
+    }
+    let mut next_ordinal = 0_usize;
+    for batch in builder.build()? {
+        let batch = batch?;
+        validate_source_batch(&batch, expected_feature_ids, &mut next_ordinal)?;
+        consume(batch)?;
+    }
+    if next_ordinal != expected_feature_ids.len() {
+        return Err(invalid("V36 prefix source Parquet row count differs"));
+    }
+    Ok(())
+}
+
+fn validate_query_batch(
+    batch: &RecordBatch,
+    next_ordinal: &mut u64,
+    feature_ids: &mut BTreeSet<u64>,
+) -> Result<()> {
+    if batch.schema().as_ref() != &v36_prefix_query_schema()
+        || batch.num_rows() == 0
+        || batch.num_columns() != 3
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V36 prefix query Parquet batch differs"));
+    }
+    let ordinals = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::UInt32Array>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet ordinal column differs"))?;
+    let ids = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet ID column differs"))?;
+    let embeddings = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet embedding column differs"))?;
+    let values = embeddings
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet embedding child differs"))?;
+    if values.null_count() != 0 || values.len() != batch.num_rows() * DIMENSIONS {
+        return Err(invalid("V36 prefix query Parquet embedding shape differs"));
+    }
+    for row in 0..batch.num_rows() {
+        if u64::from(ordinals.value(row)) != *next_ordinal || !feature_ids.insert(ids.value(row)) {
+            return Err(invalid("V36 prefix query Parquet ordering differs"));
+        }
+        let start = row * DIMENSIONS;
+        validate_embedding(&values.values()[start..start + DIMENSIONS])?;
+        *next_ordinal = next_ordinal
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 prefix query Parquet row count overflows"))?;
+    }
+    Ok(())
+}
+
+/// Write validated query batches without retaining all query vectors in RAM.
+pub fn write_v36_prefix_query_parquet<I>(path: &Path, batches: I) -> Result<()>
+where
+    I: IntoIterator<Item = RecordBatch>,
+{
+    let mut temporary = temporary_output(path)?;
+    let mut writer = ArrowWriter::try_new(
+        temporary.as_file_mut(),
+        Arc::new(v36_prefix_query_schema()),
+        Some(parquet_writer_properties()),
+    )?;
+    let mut feature_ids = BTreeSet::new();
+    let mut next_ordinal = 0_u64;
+    for batch in batches {
+        validate_query_batch(&batch, &mut next_ordinal, &mut feature_ids)?;
+        writer.write(&batch)?;
+    }
+    if next_ordinal == 0 {
+        return Err(invalid("V36 prefix query Parquet is empty"));
+    }
+    writer.close()?;
+    publish_output(temporary, path)?;
+    Ok(())
+}
+
+/// Stream and validate a complete query Parquet artifact.
+pub fn scan_v36_prefix_query_parquet<F>(
+    path: &Path,
+    expected_rows: u64,
+    mut consume: F,
+) -> Result<()>
+where
+    F: FnMut(RecordBatch) -> Result<()>,
+{
+    if expected_rows == 0 {
+        return Err(invalid("V36 prefix query Parquet row count differs"));
+    }
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_query_schema())?;
+    if builder.schema().as_ref() != &v36_prefix_query_schema() {
+        return Err(invalid("V36 prefix query Parquet physical schema differs"));
+    }
+    let mut feature_ids = BTreeSet::new();
+    let mut next_ordinal = 0_u64;
+    for batch in builder.build()? {
+        let batch = batch?;
+        validate_query_batch(&batch, &mut next_ordinal, &mut feature_ids)?;
+        consume(batch)?;
+    }
+    if next_ordinal != expected_rows {
+        return Err(invalid("V36 prefix query Parquet row count differs"));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct GtValidationState {
+    next_query: u32,
+    next_rank: u16,
+    prior: Option<(f64, u64)>,
+    feature_ids: BTreeSet<u64>,
+    rows: u64,
+}
+
+fn validate_gt_batch(batch: &RecordBatch, state: &mut GtValidationState) -> Result<()> {
+    if batch.schema().as_ref() != &v36_prefix_gt100_schema()
+        || batch.num_rows() == 0
+        || batch.num_columns() != 4
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V36 prefix GT Parquet batch differs"));
+    }
+    let queries = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::UInt32Array>()
+        .ok_or_else(|| invalid("V36 prefix GT query column differs"))?;
+    let ranks = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::UInt16Array>()
+        .ok_or_else(|| invalid("V36 prefix GT rank column differs"))?;
+    let ids = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 prefix GT ID column differs"))?;
+    let distances = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<arrow_array::Float64Array>()
+        .ok_or_else(|| invalid("V36 prefix GT distance column differs"))?;
+    for row in 0..batch.num_rows() {
+        let distance = distances.value(row);
+        let id = ids.value(row);
+        if queries.value(row) != state.next_query
+            || ranks.value(row) != state.next_rank
+            || !distance.is_finite()
+            || distance < 0.0
+            || !state.feature_ids.insert(id)
+            || state
+                .prior
+                .is_some_and(|prior| prior.0.total_cmp(&distance).then(prior.1.cmp(&id)).is_gt())
+        {
+            return Err(invalid("V36 prefix GT ordering differs"));
+        }
+        state.rows = state
+            .rows
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 prefix GT row count overflows"))?;
+        if usize::from(state.next_rank) + 1 == GT_NEIGHBORS {
+            state.next_query = state
+                .next_query
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 prefix GT query count overflows"))?;
+            state.next_rank = 0;
+            state.prior = None;
+            state.feature_ids.clear();
+        } else {
+            state.next_rank += 1;
+            state.prior = Some((distance, id));
+        }
+    }
+    Ok(())
+}
+
+/// Write validated exact-GT batches.
+pub fn write_v36_prefix_gt100_parquet<I>(path: &Path, batches: I) -> Result<()>
+where
+    I: IntoIterator<Item = RecordBatch>,
+{
+    let mut temporary = temporary_output(path)?;
+    let mut writer = ArrowWriter::try_new(
+        temporary.as_file_mut(),
+        Arc::new(v36_prefix_gt100_schema()),
+        Some(parquet_writer_properties()),
+    )?;
+    let mut state = GtValidationState::default();
+    for batch in batches {
+        validate_gt_batch(&batch, &mut state)?;
+        writer.write(&batch)?;
+    }
+    if state.rows == 0 || state.next_rank != 0 {
+        return Err(invalid("V36 prefix GT row count differs"));
+    }
+    writer.close()?;
+    publish_output(temporary, path)?;
+    Ok(())
+}
+
+/// Stream and validate exact GT@100 for an exact query count.
+pub fn scan_v36_prefix_gt100_parquet<F>(
+    path: &Path,
+    expected_queries: u32,
+    mut consume: F,
+) -> Result<()>
+where
+    F: FnMut(RecordBatch) -> Result<()>,
+{
+    if expected_queries == 0 {
+        return Err(invalid("V36 prefix GT query count differs"));
+    }
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_gt100_schema())?;
+    if builder.schema().as_ref() != &v36_prefix_gt100_schema() {
+        return Err(invalid("V36 prefix GT physical schema differs"));
+    }
+    let mut state = GtValidationState::default();
+    for batch in builder.build()? {
+        let batch = batch?;
+        validate_gt_batch(&batch, &mut state)?;
+        consume(batch)?;
+    }
+    if state.next_query != expected_queries || state.next_rank != 0 {
+        return Err(invalid("V36 prefix GT query count differs"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RankedNeighbor {
+    distance: f64,
+    feature_row_id: u64,
+}
+
+impl PartialEq for RankedNeighbor {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance.to_bits() == other.distance.to_bits()
+            && self.feature_row_id == other.feature_row_id
+    }
+}
+
+impl Eq for RankedNeighbor {}
+
+impl PartialOrd for RankedNeighbor {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RankedNeighbor {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then(self.feature_row_id.cmp(&other.feature_row_id))
+    }
+}
+
+fn squared_l2(left: &[f32], right: &[f32]) -> f64 {
+    left.iter().zip(right).fold(0.0_f64, |sum, (left, right)| {
+        let delta = f64::from(*left) - f64::from(*right);
+        let squared = delta * delta;
+        sum + squared
+    })
+}
+
+/// Bounded exact-GT state that consumes the corpus in source-ordinal batches.
+pub struct V36PrefixGtAccumulator {
+    queries: Vec<V36PrefixQueryRow>,
+    query_ids: BTreeSet<u64>,
+    corpus_ids: BTreeSet<u64>,
+    heaps: Vec<BinaryHeap<RankedNeighbor>>,
+    next_source_ordinal: u64,
+}
+
+impl V36PrefixGtAccumulator {
+    /// Create a GT tile accumulator for one quality-query role.
+    pub fn new(_role: V36PrefixQualityRole, queries: Vec<V36PrefixQueryRow>) -> Result<Self> {
+        if queries.is_empty()
+            || queries.iter().enumerate().any(|(ordinal, row)| {
+                row.query_ordinal != u32::try_from(ordinal).unwrap()
+                    || validate_embedding(&row.embedding).is_err()
+            })
+        {
+            return Err(invalid("V36 prefix exact truth query input differs"));
+        }
+        let query_ids = queries
+            .iter()
+            .map(|query| query.feature_row_id)
+            .collect::<BTreeSet<_>>();
+        if query_ids.len() != queries.len() {
+            return Err(invalid("V36 prefix exact truth query membership differs"));
+        }
+        let heaps = (0..queries.len())
+            .map(|_| BinaryHeap::with_capacity(GT_NEIGHBORS))
+            .collect();
+        Ok(Self {
+            queries,
+            query_ids,
+            corpus_ids: BTreeSet::new(),
+            heaps,
+            next_source_ordinal: 0,
+        })
+    }
+
+    /// Absorb one validated, source-ordered corpus batch.
+    pub fn absorb(&mut self, corpus: &[V36PrefixMaterializedRow]) -> Result<()> {
+        for row in corpus {
+            if row.source_ordinal != Some(self.next_source_ordinal)
+                || validate_embedding(&row.embedding).is_err()
+                || self.query_ids.contains(&row.feature_row_id)
+                || !self.corpus_ids.insert(row.feature_row_id)
+            {
+                return Err(invalid("V36 prefix exact truth corpus input differs"));
+            }
+            for (query, heap) in self.queries.iter().zip(&mut self.heaps) {
+                let candidate = RankedNeighbor {
+                    distance: squared_l2(&row.embedding, &query.embedding),
+                    feature_row_id: row.feature_row_id,
+                };
+                if heap.len() < GT_NEIGHBORS {
+                    heap.push(candidate);
+                } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+                    heap.pop();
+                    heap.push(candidate);
+                }
+            }
+            self.next_source_ordinal = self
+                .next_source_ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 prefix exact truth corpus size overflows"))?;
+        }
+        Ok(())
+    }
+
+    /// Finish one complete GT tile in `(query_ordinal,rank)` order.
+    pub fn finish(self) -> Result<Vec<V36PrefixGtNeighbor>> {
+        if self.next_source_ordinal < GT_NEIGHBORS as u64
+            || self.heaps.iter().any(|heap| heap.len() != GT_NEIGHBORS)
+        {
+            return Err(invalid("V36 prefix exact truth corpus is insufficient"));
+        }
+        let mut truth = Vec::with_capacity(self.queries.len() * GT_NEIGHBORS);
+        for (query, heap) in self.queries.iter().zip(self.heaps) {
+            let mut neighbors = heap.into_vec();
+            neighbors.sort();
+            truth.extend(neighbors.into_iter().enumerate().map(|(rank, neighbor)| {
+                V36PrefixGtNeighbor {
+                    query_ordinal: query.query_ordinal,
+                    rank: u16::try_from(rank).unwrap(),
+                    feature_row_id: neighbor.feature_row_id,
+                    squared_distance: neighbor.distance,
+                }
+            }));
+        }
+        Ok(truth)
+    }
+}
+
+/// Exact binary64 no-explicit-FMA GT@100 for quality queries.
+pub fn exact_v36_prefix_gt100(
+    role: V36PrefixQualityRole,
+    corpus: &[V36PrefixMaterializedRow],
+    queries: &[V36PrefixQueryRow],
+) -> Result<Vec<V36PrefixGtNeighbor>> {
+    let mut accumulator = V36PrefixGtAccumulator::new(role, queries.to_vec())?;
+    accumulator.absorb(corpus)?;
+    accumulator.finish()
+}
