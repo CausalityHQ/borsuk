@@ -299,20 +299,27 @@ containing exact source ordinals trains `P` and locality quantiles first. One
 subsequent full source pass projects bounded row blocks and assigns a 128-bit
 locality key. The sample selects the sixteen projected coordinates with greatest
 ordered f64 variance, breaking ties by coordinate. Each is quantized to eight
-bits against 255 sample-derived f32 quantile boundaries, with equality assigned
+bits against 255 sample-derived f64 quantile boundaries, with equality assigned
 to the lower bucket; the key is their most-significant-bit-first Morton
 interleave. Bounded S3 scratch runs store
 `(key,source_ordinal,projected_row,source_row)` and merge in
 `(key,source_ordinal)` order. Consecutive runs of at most 256 rows form leaves.
-Consecutive leaves form storage groups targeting between one-sixteenth and
-one-sixty-fourth of the 8-MiB query code budget after descriptor/envelope
-charges, under both the 8-MiB encoded-object cap
+Consecutive leaves form storage groups targeting 349,526 through 524,288 code
+bytes after descriptor/envelope charges. The lower bound is
+`ceil(8 MiB / 24)` and applies to every nonterminal group; only the final group
+may be smaller. The upper target is `8 MiB / 16`. This makes a complete legal
+8-MiB route executable under the hard 24-GET ceiling even when selected groups
+cannot be coalesced, under both the 8-MiB encoded-object cap
 and a 64-MiB builder-buffer cap including source/projected rows, IDs,
 references, moments, and allocator capacity. This
 one layout is reused by one-patch, two-patch, and equal-byte-centroid controls
 within a projection arm.
 
-The merge keeps one live leaf accumulator, computes and seals each patch,
+Scratch objects contain bounded Arrow record batches. Each complete object is
+authenticated before semantic use, then exposed through at-most-256-row
+cursors. A preregistered bounded-fan-in external merge reports every pass and
+scratch byte; opening one complete decoded run per input is forbidden. The
+merge keeps one live leaf accumulator, computes and seals each patch,
 encodes code planes, writes exact-vector pages, and emits assignment runs. Local
 builder RSS is capped below 3 GiB with declared 64-MiB buffers; remote scratch may be
 large but is separately prefixed, byte-accounted, lifecycle-tagged, and deleted

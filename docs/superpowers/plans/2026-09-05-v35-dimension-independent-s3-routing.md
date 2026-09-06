@@ -44,7 +44,7 @@
 
 - [ ] **Step 2: Write exact projection REDs**
 
-  Pin `8*M+128` bytes per one-patch leaf and the exact one-generation values `265_024_000`, `477_043_200`, and `689_062_400` for 414,100 leaves. Pin the 192-wide complete admission sum at `2_792_129_536` and hard limit at `3_221_225_472`. Make the 64-MiB delta term explicit: 32,000,000 mutation-directory bytes, 16,000,000 posting/reference bytes, 6,890,624 leaf bytes, 223,680 tree bytes, 4,194,304 four-run overhead, and 7,800,256 reserved bytes. Cover multiplication/addition overflow, boundary equality rejection, a two-patch overflow, and a reduced leaf count that legitimately admits two patches.
+  Pin `8*M+128` bytes per one-patch leaf and the exact one-generation values `265_024_000`, `477_043_200`, and `689_062_400` for 414,100 leaves. Pin the 192-wide complete admission sum at `2_842_461_184` and hard limit at `3_221_225_472`, including the exact `67_108_864`-byte immutable chunk/page-directory term inside the `251_658_240`-byte shared-cache reservation. Make the 64-MiB delta term explicit: 32,000,000 mutation-directory bytes, 16,000,000 posting/reference bytes, 6,890,624 leaf bytes, 223,680 tree bytes, 4,194,304 four-run overhead, and 7,800,256 reserved bytes. Cover multiplication/addition overflow, boundary equality rejection, a two-patch overflow, and a reduced leaf count that legitimately admits two patches.
 
 - [ ] **Step 3: Run the narrow RED**
 
@@ -247,7 +247,7 @@
 
 - [ ] **Step 1: Write streaming-bound REDs**
 
-  Use a reader that panics if more than two registered blocks are alive. Require deterministic outputs across block sizes/workers, sample selection of the sixteen highest-variance projected coordinates with coordinate ties, 255 f32 quantile boundaries per selected coordinate, equality-to-lower-bucket, and a 128-bit most-significant-bit-first Morton interleave. Require `(key,source ordinal)` ordering, at-most-256-row leaves, and storage groups capped by both 8-MiB final encoded bytes and 64-MiB live builder bytes including source/projected rows, IDs, references, moments, and allocator capacity. Require bounded S3 scratch runs with 64-MiB local buffers, exact source ordinals, no query/truth access, no corpus materialization, and complete scratch/final digest/length binding.
+  Use a reader that panics if more than two registered blocks are alive. Require deterministic outputs across block sizes/workers, sample selection of the sixteen highest-variance projected coordinates with coordinate ties, 255 f64 quantile boundaries per selected coordinate, equality-to-lower-bucket, and a 128-bit most-significant-bit-first Morton interleave. Require `(key,source ordinal)` ordering, at-most-256-row leaves, and storage groups capped by both 8-MiB final encoded bytes and 64-MiB live builder bytes including source/projected rows, IDs, references, moments, and allocator capacity. After all descriptors and envelopes, require every nonterminal group to contain at least `ceil(8 MiB / 24) == 349_526` code bytes and target at most `8 MiB / 16 == 524_288` code bytes; only the terminal group may be smaller. This makes every legal 8-MiB route executable under the hard 24-GET ceiling. Require bounded multi-batch S3 scratch runs with 64-MiB local buffers, exact source ordinals, no query/truth access, no corpus materialization, and complete scratch/final digest/length binding.
 
 - [ ] **Step 2: Write delta semantics REDs**
 
@@ -261,7 +261,7 @@
 
 - [ ] **Step 4: Implement bounded construction**
 
-  Project registered source blocks, emit `(key,source ordinal,projected row,source row)` scratch runs, merge them in exact order, create at-most-256-row leaves and capped consecutive storage groups, build the Task 5 per-group SQ4/SQ8 descriptors from one bounded group buffer, and emit immutable code/vector objects and assignment directories. Publish only after all content digests are known. Keep one bounded block per worker, one leaf accumulator, one at-most-64-MiB group buffer, and declared 64-MiB merge buffers; lifecycle-tag and clean only registered scratch objects after terminal publication.
+  Project registered source blocks, emit `(key,source ordinal,projected row,source row)` scratch runs, and merge them with a preregistered bounded fan-in in exact order. Authenticate complete scratch objects before semantic use, expose only at-most-256-row streaming cursors, and report every merge pass and byte written; loading a complete run per input is forbidden. Create at-most-256-row leaves and capped consecutive storage groups, build the Task 5 per-group SQ4/SQ8 descriptors from one bounded group buffer, and emit immutable code/vector objects and assignment directories. Publish only after all content digests are known. Keep one bounded block per worker, one leaf accumulator, one at-most-64-MiB group buffer, and declared 64-MiB merge buffers; lifecycle-tag and clean only registered scratch objects after terminal publication.
 
 - [ ] **Step 5: Implement delta/compaction state machine**
 
