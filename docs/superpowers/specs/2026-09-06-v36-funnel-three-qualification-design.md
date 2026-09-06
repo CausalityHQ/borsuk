@@ -100,12 +100,31 @@ the first incomplete source-row block. Source membership, query identities,
 distance arithmetic, and GT ordering remain unchanged.
 
 Every object-sample or full-source freeze has at most three Spot attempts.
-After each 16 complete input objects or 300 active seconds, whichever comes
-first, it uploads a canonical authenticated checkpoint containing the completed
-source prefix, immutable dedup-spill run identities and counters, materialized output identities, and every GT
-heap. Resume accepts only the newest fully authenticated checkpoint and starts
-at its first incomplete source object/tile. A third interruption is terminal
-infrastructure failure; it cannot silently buy a fourth cell.
+After each complete input object or 300 active seconds, whichever comes first,
+and after each complete GT query tile, the process publishes an immutable
+canonical checkpoint containing the completed source prefix, immutable
+dedup-spill run identities and counters, materialized output identities, and
+every GT heap. Each checkpoint binds the freeze authority, complete registry,
+source archive, executable, attempt, and every referenced object by exact URI,
+digest, and encoded length. Only after all dependencies authenticate may the
+launcher conditionally replace the per-attempt checkpoint pointer. Resume
+accepts only the newest fully authenticated pointer and starts at its first
+incomplete source object or query tile. A partial object or tile is discarded.
+A third interruption is terminal infrastructure failure; it cannot silently
+buy a fourth cell.
+
+The object-sample input authority exists before execution and binds the full
+2,298-object registry count, 787,439,811,692-byte total, ordered-manifest
+SHA-256, source revision, caps, policies, and role seeds. It contains no
+consumed-object claim. The post-freeze population receipt is created only after
+the complete cutoff object authenticates, and records every completed ranked
+object even when an object contributes no surviving distinct ID. It also binds
+the input authority, registry, source archive, executable, source commit,
+physical/distinct/duplicate counters, cutoff object and row, and every output
+artifact. Exact output artifacts are uploaded before a terminal marker can be
+published. Terminal states are closed: `complete`,
+`screen-source-insufficient`, `infrastructure`, and `interrupted`; only
+infrastructure or interruption may retry.
 The object-sample campaign rejects a Spot rate above $3/hour or a $90 total
 campaign projection. The cumulative active-time budget is therefore at most 30
 hours across all attempts at the admitted rate; before every attempt, its

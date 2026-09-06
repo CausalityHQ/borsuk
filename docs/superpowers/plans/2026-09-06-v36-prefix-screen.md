@@ -30,7 +30,7 @@
 - Bulk cross-language artifacts are strict Parquet or Arrow IPC. Small authorities, terminals, and results are strict canonical newline JSON.
 - Remote execution uses profile `causality`, `eu-central-1`, Spot by default,
   encrypted ephemeral NVMe, one original process per attempt, authenticated
-  checkpoint upload every 16 complete objects or 300 active seconds, at most
+  immutable checkpoint upload after every complete object or 300 active seconds, at most
   three attempts, a 43,200-second active cap, a registered Spot price ceiling
   of $3/hour and total campaign ceiling of $90, and immediate termination. The
   per-attempt effective cap is the smaller of 43,200 seconds and the remaining
@@ -122,7 +122,12 @@
 
 **Interfaces:**
 - Produces strict source/query/GT Parquet, source-ordinal mapping, and a canonical population receipt.
-- Consumes only the registered finite source-object prefix and Task 1 authority.
+- Consumes `V36PrefixFreezeAuthority`, which independently binds the complete
+  registry count, encoded-byte total, ordered-manifest digest, caps, policies,
+  and role seeds without future consumed-object evidence.
+- Produces `V36PrefixPopulationAuthority` only after the complete cutoff object
+  authenticates; the receipt records every completed object independently of
+  whether it contributed a surviving distinct ID.
 
 - [ ] **Step 1: Write dataset and GT REDs**
 
@@ -145,11 +150,17 @@
   Require `causality`, Spot, three registered `eu-central-1` AZ candidates,
   encrypted ephemeral NVMe, the 16-object/6-GiB source cap, $3/hour Spot and
   $90 campaign caps, disk preflight above raw
-  population plus 25% workspace, no devbox corpus path, terminal conditional
-  upload, durable authenticated checkpoint upload every 16 complete objects or
-  300 active seconds, at most three Spot attempts, interrupted-cell checkpoint
-  validation, and unconditional instance termination. A failed or missing
-  marker is terminal failure, never an unbounded poll or fourth attempt.
+  population plus 25% workspace, no devbox corpus path, output-artifact
+  publication before terminal conditional upload, immutable authenticated
+  checkpoint upload after each complete object or 300 active seconds and each
+  complete GT tile, at most three Spot attempts, interrupted-cell checkpoint
+  validation, a controller deadline, and unconditional instance termination.
+  Checkpoints and terminals bind the exact freeze authority, registry, source
+  archive, executable, source commit, attempt, and referenced artifacts. A
+  failed or missing marker is terminal failure, never an unbounded poll or
+  fourth attempt. Closed statuses are `complete`,
+  `screen-source-insufficient`, `infrastructure`, and `interrupted`;
+  scientific insufficiency never retries.
   Require a non-mutating `--dry-run` that prints exact object/byte/disk/wall/
   attempt/cost caps and creates no instance, bucket object, or local corpus.
 
@@ -165,14 +176,18 @@
 
 - [ ] **Step 4: Implement bounded streaming materialization**
 
-  Stream complete authenticated objects to ephemeral NVMe in bounded Arrow
-  batches. Stop only after the complete object containing the 1,100,000th
-  distinct valid ID. Rust owns validation, membership, Parquet, and blocked
+  Stream complete authenticated objects from their registered immutable HTTPS
+  URIs to encrypted ephemeral NVMe, authenticate SHA-256 before decoding, and
+  process bounded Arrow batches. Stop only after validating the complete object
+  containing the 1,100,000th distinct ID; any invalid gated row rejects the
+  source revision rather than being skipped. Rust owns validation, membership, Parquet, and blocked
   no-FMA GT; Python owns provisioning, monitoring, terminal sync, and
   termination. Checkpoint only complete source objects and complete GT query
-  tiles. Authenticate and upload each checkpoint before deleting its prior
-  durable checkpoint; resume only from complete registered object/tile
-  boundaries.
+  tiles. Publish immutable checkpoint dependencies before conditionally
+  replacing the per-attempt pointer; resume only from complete registered
+  object/tile boundaries. Upload every authenticated output plus a manifest
+  before publishing the terminal. Capture binary exit, timeout, and SIGTERM
+  explicitly so `set -e` cannot bypass the terminal path.
 
 - [ ] **Step 5: Execute one dry run and one Spot freeze**
 
