@@ -35,6 +35,16 @@ fn digest_bytes(value: &str) -> [u8; 32] {
     std::array::from_fn(|index| u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).unwrap())
 }
 
+fn stored_exact_page(
+    page_ordinal: u32,
+    uri: &str,
+    version_id: &str,
+    rows: &[V35ExactPageRow],
+) -> (borsuk::V35ExactPageIdentity, Vec<u8>) {
+    let (encoded, bytes) = encode_v35_exact_page_parquet(page_ordinal, uri, rows).unwrap();
+    (encoded.with_stored_version(version_id).unwrap(), bytes)
+}
+
 fn binding(byte: u8) -> V35RemoteDirectoryBinding {
     binding_with_snapshot(byte, V35SnapshotVisibility::new(vec![]).unwrap().digest())
 }
@@ -1149,8 +1159,7 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
             rows.push(V35ExactPageRow::new(50, 2, vec![0.25; 384]).unwrap());
         }
         let uri = format!("s3://borsuk-index/generations/g01/pages/page-{page:04}.parquet");
-        let (identity, bytes) =
-            encode_v35_exact_page_parquet(page, &uri, "version-01", &rows).unwrap();
+        let (identity, bytes) = stored_exact_page(page, &uri, "version-01", &rows);
         bodies.insert(uri, bytes);
         pages.push(identity);
     }
@@ -1280,13 +1289,11 @@ fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
     let rows = vec![V35ExactPageRow::new(7, 1, vec![0.25; 384]).unwrap()];
     let page_0_uri = "s3://borsuk-index/attempts/a01/pages/page-0000.parquet";
     let page_1_uri = "s3://borsuk-index/attempts/a01/pages/page-0001.parquet";
-    let (page_0, bytes_0) =
-        encode_v35_exact_page_parquet(0, page_0_uri, "version-01", &rows).unwrap();
-    let (page_0_again, bytes_0_again) =
-        encode_v35_exact_page_parquet(0, page_0_uri, "version-01", &rows).unwrap();
+    let (page_0, bytes_0) = stored_exact_page(0, page_0_uri, "version-01", &rows);
+    let (page_0_again, bytes_0_again) = stored_exact_page(0, page_0_uri, "version-01", &rows);
     assert_eq!(bytes_0, bytes_0_again);
     assert_eq!(page_0, page_0_again);
-    let (page_1, _) = encode_v35_exact_page_parquet(1, page_1_uri, "version-01", &rows).unwrap();
+    let (page_1, _) = stored_exact_page(1, page_1_uri, "version-01", &rows);
 
     let directory_uri = "s3://borsuk-index/attempts/a01/page-directories/group-0000.arrow";
     let (bytes, identity) =
@@ -1324,8 +1331,7 @@ fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
     assert_eq!(selected.pages()[0].uri(), page_0_uri);
 
     let foreign_page_uri = "s3://borsuk-index/attempts/a02/pages/page-0000.parquet";
-    let (foreign_page, _) =
-        encode_v35_exact_page_parquet(0, foreign_page_uri, "version-02", &rows).unwrap();
+    let (foreign_page, _) = stored_exact_page(0, foreign_page_uri, "version-02", &rows);
     let (foreign_block_bytes, foreign_block_identity) = encode_v35_page_directory_arrow(
         0,
         &[foreign_page],
@@ -1342,13 +1348,12 @@ fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
     assert!(!root.authenticates_identity(foreign_block.identity()));
     assert!(resolve_v35_exact_pages(&fixture.plan, &candidates, &root, &[foreign_block]).is_err());
 
-    let (page_2, _) = encode_v35_exact_page_parquet(
+    let (page_2, _) = stored_exact_page(
         2,
         "s3://borsuk-index/attempts/a01/pages/page-0002.parquet",
         "version-01",
         &rows,
-    )
-    .unwrap();
+    );
     assert!(
         encode_v35_page_directory_arrow(0, &[decoded.pages()[0].clone(), page_2], directory_uri)
             .is_err()

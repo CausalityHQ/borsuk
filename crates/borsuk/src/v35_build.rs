@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V35ArtifactIdentity, V35CodeDirectoryBlockReference, V35ExactPageIdentity,
-    V35ExactPageRow, V35LeafPatch, V35PageDirectoryBlockReference, V35Projection, V35RemoteChunk,
-    V35RemoteCodeRow, build_v35_leaf_patch_from_merge_rows, decode_v35_page_directory_arrow,
+    BorsukError, Result, V35ArtifactIdentity, V35CodeDirectoryBlockReference, V35ExactPageRow,
+    V35LeafPatch, V35PageDirectoryBlockReference, V35Projection, V35RemoteChunk, V35RemoteCodeRow,
+    build_v35_leaf_patch_from_merge_rows, decode_v35_page_directory_arrow,
     encode_v35_exact_page_parquet, encode_v35_page_directory_arrow, encode_v35_remote_code_arrow,
     encode_v35_remote_directory_arrow,
     v35_projection::project_v35_source_row_simd,
@@ -1072,19 +1072,16 @@ impl<S: V35BuildStorageGroupSink> V35BuildLeafSink for V35BuildStorageGroupAssem
 /// Pre-authorized immutable object destination supplied by a write-only sink.
 pub struct V35BuildObjectTarget {
     uri: String,
-    version_id: String,
 }
 
 impl V35BuildObjectTarget {
     /// Construct one S3 destination without discovery or endpoint authority.
-    pub fn new(uri: &str, version_id: &str) -> Result<Self> {
-        if !uri.starts_with("s3://") || uri.contains("/corpus/") || !is_authority_token(version_id)
-        {
+    pub fn new(uri: &str) -> Result<Self> {
+        if !uri.starts_with("s3://") || uri.contains("/corpus/") {
             return Err(invalid("V35 build object target differs"));
         }
         Ok(Self {
             uri: uri.to_owned(),
-            version_id: version_id.to_owned(),
         })
     }
 }
@@ -1103,26 +1100,23 @@ pub trait V35BuildEncodedObjectSink {
     fn write_code_object(
         &mut self,
         identity: V35ArtifactIdentity,
-        version_id: &str,
         bytes: &[u8],
         decoded_bytes: u64,
-    ) -> Result<()>;
+    ) -> Result<String>;
     /// Persist one complete authenticated Arrow code-directory block before returning.
     fn write_code_directory(
         &mut self,
         identity: V35ArtifactIdentity,
-        version_id: &str,
         bytes: &[u8],
-    ) -> Result<()>;
+    ) -> Result<String>;
     /// Persist one complete authenticated Parquet page before returning.
-    fn write_exact_page(&mut self, identity: V35ExactPageIdentity, bytes: &[u8]) -> Result<()>;
+    fn write_exact_page(&mut self, identity: V35ArtifactIdentity, bytes: &[u8]) -> Result<String>;
     /// Persist one complete authenticated Arrow page-directory block before returning.
     fn write_page_directory(
         &mut self,
         identity: V35ArtifactIdentity,
-        version_id: &str,
         bytes: &[u8],
-    ) -> Result<()>;
+    ) -> Result<String>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1286,12 +1280,13 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
         role: "remote-code-object".to_owned(),
         uri: code_target.uri.clone(),
     };
+    let code_version = sink.write_code_object(code_identity.clone(), &code_bytes, decoded_bytes)?;
     let code_chunk = V35RemoteChunk::new(
         group.group_ordinal,
         group.logical_start,
         row_count,
         code_identity.clone(),
-        &code_target.version_id,
+        &code_version,
         0,
         code_identity.length,
         decoded_bytes,
@@ -1301,21 +1296,12 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
         std::slice::from_ref(&code_chunk),
         &code_directory_target.uri,
     )?;
+    let code_directory_version =
+        sink.write_code_directory(code_directory_identity.clone(), &code_directory_bytes)?;
     let code_directory = V35CodeDirectoryBlockReference::from_encoded(
         std::slice::from_ref(&code_chunk),
-        code_directory_identity.clone(),
-        &code_directory_target.version_id,
-    )?;
-    sink.write_code_object(
-        code_identity,
-        &code_target.version_id,
-        &code_bytes,
-        decoded_bytes,
-    )?;
-    sink.write_code_directory(
         code_directory_identity,
-        &code_directory_target.version_id,
-        &code_directory_bytes,
+        &code_directory_version,
     )?;
     drop(code_bytes);
     drop(code_rows);
@@ -1333,27 +1319,23 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
             .into_iter()
             .map(|row| V35ExactPageRow::new(row.id, row.sequence, row.source))
             .collect::<Result<Vec<_>>>()?;
-        let (identity, page_bytes) =
-            encode_v35_exact_page_parquet(page, &target.uri, &target.version_id, &rows)?;
-        sink.write_exact_page(identity.clone(), &page_bytes)?;
-        page_identities.push(identity);
+        let (encoded, page_bytes) = encode_v35_exact_page_parquet(page, &target.uri, &rows)?;
+        let page_version = sink.write_exact_page(encoded.object().clone(), &page_bytes)?;
+        page_identities.push(encoded.with_stored_version(&page_version)?);
     }
     let (page_directory_bytes, page_directory_identity) = encode_v35_page_directory_arrow(
         group.group_ordinal,
         &page_identities,
         &page_directory_target.uri,
     )?;
+    let page_directory_version =
+        sink.write_page_directory(page_directory_identity.clone(), &page_directory_bytes)?;
     let page_directory_block = decode_v35_page_directory_arrow(
         &page_directory_bytes,
         &page_directory_identity,
-        &page_directory_target.version_id,
+        &page_directory_version,
     )?;
     let page_directory = V35PageDirectoryBlockReference::new(&page_directory_block)?;
-    sink.write_page_directory(
-        page_directory_identity,
-        &page_directory_target.version_id,
-        &page_directory_bytes,
-    )?;
     Ok(V35BuildEncodedGroupReceipt {
         rows: row_count,
         patches,

@@ -1066,6 +1066,37 @@ pub struct V35ExactPageIdentity {
     version_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Encoded exact page awaiting the immutable store-assigned version identity.
+pub struct V35EncodedExactPage {
+    page_ordinal: u32,
+    dimensions: u32,
+    rows: u16,
+    decoded_length: u64,
+    object: V35ArtifactIdentity,
+}
+
+impl V35EncodedExactPage {
+    /// Complete-byte identity that the immutable sink must persist.
+    pub fn object(&self) -> &V35ArtifactIdentity {
+        &self.object
+    }
+    /// Seal the page only after storage returns its opaque immutable version.
+    pub fn with_stored_version(self, version_id: &str) -> Result<V35ExactPageIdentity> {
+        if version_id.is_empty() || version_id.len() > 1_024 {
+            return Err(invalid("V35 exact page stored version differs"));
+        }
+        Ok(V35ExactPageIdentity {
+            page_ordinal: self.page_ordinal,
+            dimensions: self.dimensions,
+            rows: self.rows,
+            decoded_length: self.decoded_length,
+            object: self.object,
+            version_id: version_id.to_owned(),
+        })
+    }
+}
+
 impl V35ExactPageIdentity {
     /// Exact immutable object URI.
     pub fn uri(&self) -> &str {
@@ -1074,6 +1105,10 @@ impl V35ExactPageIdentity {
     /// Exact encoded object bytes expected from storage.
     pub fn encoded_bytes(&self) -> u64 {
         self.object.length
+    }
+    /// Opaque immutable version returned by the object store.
+    pub fn version_id(&self) -> &str {
+        &self.version_id
     }
 }
 
@@ -1167,14 +1202,12 @@ pub(crate) fn projected_exact_page_decoded_bytes(rows: usize, dimensions: usize)
 pub fn encode_v35_exact_page_parquet(
     page_ordinal: u32,
     uri: &str,
-    version_id: &str,
     rows: &[V35ExactPageRow],
-) -> Result<(V35ExactPageIdentity, Vec<u8>)> {
+) -> Result<(V35EncodedExactPage, Vec<u8>)> {
     let dimensions = rows.first().map_or(0, |row| row.vector.len());
     if rows.is_empty()
         || rows.len() > 256
         || dimensions == 0
-        || version_id.is_empty()
         || !uri.starts_with("s3://")
         || uri.contains("/corpus/")
         || rows.iter().any(|row| row.vector.len() != dimensions)
@@ -1243,13 +1276,12 @@ pub fn encode_v35_exact_page_parquet(
         uri: uri.to_owned(),
     };
     Ok((
-        V35ExactPageIdentity {
+        V35EncodedExactPage {
             page_ordinal,
             dimensions: dimensions_u32,
             rows: rows_u16,
             decoded_length,
             object,
-            version_id: version_id.to_owned(),
         },
         bytes,
     ))
@@ -1352,6 +1384,10 @@ impl V35PageDirectoryBlock {
     /// Complete identity of this directory block.
     pub fn identity(&self) -> &V35ArtifactIdentity {
         &self.identity
+    }
+    /// Opaque immutable version returned when this block was stored.
+    pub fn version_id(&self) -> &str {
+        &self.version_id
     }
 }
 
@@ -1646,6 +1682,10 @@ impl V35PageDirectoryBlockReference {
     /// Complete immutable block identity.
     pub fn identity(&self) -> &V35ArtifactIdentity {
         &self.identity
+    }
+    /// Opaque immutable version returned when this block was stored.
+    pub fn version_id(&self) -> &str {
+        &self.version_id
     }
 }
 
@@ -2762,6 +2802,10 @@ impl V35CodeDirectoryBlockReference {
     /// Complete immutable block identity.
     pub fn identity(&self) -> &V35ArtifactIdentity {
         &self.identity
+    }
+    /// Opaque immutable version returned when this block was stored.
+    pub fn version_id(&self) -> &str {
+        &self.version_id
     }
 }
 

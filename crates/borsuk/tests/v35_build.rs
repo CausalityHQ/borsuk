@@ -7,8 +7,8 @@ use borsuk::{
     Result, V35ArtifactIdentity, V35BuildAuthority, V35BuildBlock, V35BuildBlockSource,
     V35BuildEncodedObjectSink, V35BuildLeafSink, V35BuildMergeRow, V35BuildMergeSource,
     V35BuildObjectTarget, V35BuildRow, V35BuildScratchSink, V35BuildStorageGroup,
-    V35BuildStorageGroupAssembler, V35BuildStorageGroupSink, V35Dimensions, V35ExactPageIdentity,
-    V35MortonModel, V35Projection, V35RemoteDirectoryBinding, build_v35_leaf_patch_from_merge_rows,
+    V35BuildStorageGroupAssembler, V35BuildStorageGroupSink, V35Dimensions, V35MortonModel,
+    V35Projection, V35RemoteDirectoryBinding, build_v35_leaf_patch_from_merge_rows,
     build_v35_residual_sq_descriptor, build_v35_scratch_runs, build_v35_srht,
     decode_v35_build_run_arrow, decode_v35_page_directory_arrow, decode_v35_remote_directory_arrow,
     decode_v35_source_block_parquet, encode_v35_build_storage_group, merge_v35_build_runs,
@@ -743,81 +743,75 @@ fn v35_build_groups_reject_morton_order_drift() {
 
 #[derive(Default)]
 struct EncodedObjectSink {
-    code_objects: Vec<(V35ArtifactIdentity, Vec<u8>)>,
+    code_objects: Vec<(V35ArtifactIdentity, String, Vec<u8>)>,
     code_directories: Vec<(V35ArtifactIdentity, String, Vec<u8>)>,
-    pages: Vec<(V35ExactPageIdentity, Vec<u8>)>,
+    pages: Vec<(V35ArtifactIdentity, String, Vec<u8>)>,
     page_directories: Vec<(V35ArtifactIdentity, String, Vec<u8>)>,
 }
 
 impl V35BuildEncodedObjectSink for EncodedObjectSink {
     fn code_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget> {
-        V35BuildObjectTarget::new(
-            &format!("s3://borsuk-index/generations/g01/codes/group-{group_ordinal:04}.arrow"),
-            "version-01",
-        )
+        V35BuildObjectTarget::new(&format!(
+            "s3://borsuk-index/generations/g01/codes/group-{group_ordinal:04}.arrow"
+        ))
     }
 
     fn page_target(&self, page_ordinal: u32) -> Result<V35BuildObjectTarget> {
-        V35BuildObjectTarget::new(
-            &format!("s3://borsuk-index/generations/g01/pages/page-{page_ordinal:04}.parquet"),
-            "version-01",
-        )
+        V35BuildObjectTarget::new(&format!(
+            "s3://borsuk-index/generations/g01/pages/page-{page_ordinal:04}.parquet"
+        ))
     }
 
     fn page_directory_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget> {
-        V35BuildObjectTarget::new(
-            &format!(
-                "s3://borsuk-index/generations/g01/page-directories/group-{group_ordinal:04}.arrow"
-            ),
-            "directory-version-01",
-        )
+        V35BuildObjectTarget::new(&format!(
+            "s3://borsuk-index/generations/g01/page-directories/group-{group_ordinal:04}.arrow"
+        ))
     }
 
     fn code_directory_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget> {
-        V35BuildObjectTarget::new(
-            &format!(
-                "s3://borsuk-index/generations/g01/code-directories/group-{group_ordinal:04}.arrow"
-            ),
-            "directory-version-01",
-        )
+        V35BuildObjectTarget::new(&format!(
+            "s3://borsuk-index/generations/g01/code-directories/group-{group_ordinal:04}.arrow"
+        ))
     }
 
     fn write_code_object(
         &mut self,
         identity: V35ArtifactIdentity,
-        _version_id: &str,
         bytes: &[u8],
         _decoded_bytes: u64,
-    ) -> Result<()> {
-        self.code_objects.push((identity, bytes.to_vec()));
-        Ok(())
+    ) -> Result<String> {
+        let version = "stored-code-version-01".to_owned();
+        self.code_objects
+            .push((identity, version.clone(), bytes.to_vec()));
+        Ok(version)
     }
 
-    fn write_exact_page(&mut self, identity: V35ExactPageIdentity, bytes: &[u8]) -> Result<()> {
-        self.pages.push((identity, bytes.to_vec()));
-        Ok(())
+    fn write_exact_page(&mut self, identity: V35ArtifactIdentity, bytes: &[u8]) -> Result<String> {
+        let version = format!("stored-page-version-{:02}", self.pages.len());
+        self.pages.push((identity, version.clone(), bytes.to_vec()));
+        Ok(version)
     }
 
     fn write_page_directory(
         &mut self,
         identity: V35ArtifactIdentity,
-        version_id: &str,
         bytes: &[u8],
-    ) -> Result<()> {
+    ) -> Result<String> {
+        let version_id = "stored-page-directory-version-01".to_owned();
         self.page_directories
-            .push((identity, version_id.to_owned(), bytes.to_vec()));
-        Ok(())
+            .push((identity, version_id.clone(), bytes.to_vec()));
+        Ok(version_id)
     }
 
     fn write_code_directory(
         &mut self,
         identity: V35ArtifactIdentity,
-        version_id: &str,
         bytes: &[u8],
-    ) -> Result<()> {
+    ) -> Result<String> {
+        let version_id = "stored-code-directory-version-01".to_owned();
         self.code_directories
-            .push((identity, version_id.to_owned(), bytes.to_vec()));
-        Ok(())
+            .push((identity, version_id.clone(), bytes.to_vec()));
+        Ok(version_id)
     }
 }
 
@@ -869,6 +863,10 @@ fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
         receipt.code_directory().identity(),
         &sink.code_directories[0].0
     );
+    assert_eq!(
+        receipt.code_directory().version_id(),
+        "stored-code-directory-version-01"
+    );
     let decoded_code_directory = decode_v35_remote_directory_arrow(
         &sink.code_directories[0].2,
         &sink.code_directories[0].0,
@@ -894,15 +892,13 @@ fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
     )
     .unwrap();
     assert_eq!(decoded_directory.pages().len(), 3);
-    assert!(
-        decoded_directory
-            .pages()
-            .iter()
-            .zip(&sink.pages)
-            .all(|(registered, (written, _))| registered == written)
-    );
-    assert!(sink.code_objects[0].1.starts_with(b"ARROW1"));
-    let reader = FileReader::try_new(Cursor::new(&sink.code_objects[0].1), None).unwrap();
+    assert!(decoded_directory.pages().iter().zip(&sink.pages).all(
+        |(registered, (written, version, _))| {
+            registered.uri() == written.uri && registered.version_id() == version
+        }
+    ));
+    assert!(sink.code_objects[0].2.starts_with(b"ARROW1"));
+    let reader = FileReader::try_new(Cursor::new(&sink.code_objects[0].2), None).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(
         reader
             .schema()
@@ -928,7 +924,7 @@ fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
     assert!(
         sink.pages
             .iter()
-            .all(|(_, bytes)| { bytes.starts_with(b"PAR1") && bytes.ends_with(b"PAR1") })
+            .all(|(_, _, bytes)| { bytes.starts_with(b"PAR1") && bytes.ends_with(b"PAR1") })
     );
     assert!(receipt.patches().iter().enumerate().all(|(index, patch)| {
         patch.leaf_ordinal() == 7 + index as u32
@@ -944,67 +940,60 @@ struct CollidingTargetSink {
 
 impl V35BuildEncodedObjectSink for CollidingTargetSink {
     fn code_target(&self, _group_ordinal: u32) -> Result<V35BuildObjectTarget> {
-        V35BuildObjectTarget::new(
-            "s3://borsuk-index/generations/g01/shared.arrow",
-            "version-01",
-        )
+        V35BuildObjectTarget::new("s3://borsuk-index/generations/g01/shared.arrow")
     }
 
     fn page_target(&self, _page_ordinal: u32) -> Result<V35BuildObjectTarget> {
-        V35BuildObjectTarget::new(
-            "s3://borsuk-index/generations/g01/shared.arrow",
-            "version-01",
-        )
+        V35BuildObjectTarget::new("s3://borsuk-index/generations/g01/shared.arrow")
     }
 
     fn page_directory_target(&self, _group_ordinal: u32) -> Result<V35BuildObjectTarget> {
         V35BuildObjectTarget::new(
             "s3://borsuk-index/generations/g01/page-directories/group-0000.arrow",
-            "directory-version-01",
         )
     }
 
     fn code_directory_target(&self, _group_ordinal: u32) -> Result<V35BuildObjectTarget> {
         V35BuildObjectTarget::new(
             "s3://borsuk-index/generations/g01/code-directories/group-0000.arrow",
-            "directory-version-01",
         )
     }
 
     fn write_code_object(
         &mut self,
         _identity: V35ArtifactIdentity,
-        _version_id: &str,
         _bytes: &[u8],
         _decoded_bytes: u64,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.writes += 1;
-        Ok(())
+        Ok("stored-version-01".to_owned())
     }
 
-    fn write_exact_page(&mut self, _identity: V35ExactPageIdentity, _bytes: &[u8]) -> Result<()> {
+    fn write_exact_page(
+        &mut self,
+        _identity: V35ArtifactIdentity,
+        _bytes: &[u8],
+    ) -> Result<String> {
         self.writes += 1;
-        Ok(())
+        Ok("stored-version-01".to_owned())
     }
 
     fn write_page_directory(
         &mut self,
         _identity: V35ArtifactIdentity,
-        _version_id: &str,
         _bytes: &[u8],
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.writes += 1;
-        Ok(())
+        Ok("stored-version-01".to_owned())
     }
 
     fn write_code_directory(
         &mut self,
         _identity: V35ArtifactIdentity,
-        _version_id: &str,
         _bytes: &[u8],
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.writes += 1;
-        Ok(())
+        Ok("stored-version-01".to_owned())
     }
 }
 
@@ -1012,13 +1001,7 @@ impl V35BuildEncodedObjectSink for CollidingTargetSink {
 fn v35_build_encoded_group_preflights_all_targets_before_writing() {
     // Break caught: a code object is persisted before discovering a colliding
     // page target, leaving unregistered partial output after deterministic failure.
-    assert!(
-        V35BuildObjectTarget::new(
-            "s3://borsuk-index/generations/g01/codes/group.arrow",
-            "bad/version",
-        )
-        .is_err()
-    );
+    assert!(V35BuildObjectTarget::new("s3://borsuk-index/corpus/codes/group.arrow").is_err());
     let dimensions = V35Dimensions {
         source: 384,
         routing: 64,
@@ -1086,7 +1069,7 @@ fn v35_build_encoded_group_reduces_sq_moments_in_source_ordinal_order() {
     let expected = build_v35_residual_sq_descriptor(&expected_rows, 4).unwrap();
     let mut sink = EncodedObjectSink::default();
     encode_v35_build_storage_group(groups.groups.pop().unwrap(), 0, 0, &mut sink).unwrap();
-    let reader = FileReader::try_new(Cursor::new(&sink.code_objects[0].1), None).unwrap();
+    let reader = FileReader::try_new(Cursor::new(&sink.code_objects[0].2), None).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(
         reader
             .schema()
