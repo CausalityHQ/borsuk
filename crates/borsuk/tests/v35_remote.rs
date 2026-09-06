@@ -1,20 +1,21 @@
 //! V35 selective remote-read capability and planning contracts.
 
 use borsuk::{
-    V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35GroupStorage,
-    V35LeafPatchBuildRequest, V35RemoteChunk, V35RemoteCodeRow, V35RemoteDirectoryBinding,
-    V35RemoteDirectoryBlock, V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange,
-    V35RemoteRangeResponse, V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix,
-    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
-    V35VersionedRangeTransport, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
-    build_v35_routing_generation, build_v35_srht, decode_v35_remote_directory_arrow,
+    V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35ExactPageResponse,
+    V35ExactPageRow, V35ExactPageTransport, V35GroupStorage, V35LeafPatchBuildRequest,
+    V35RemoteChunk, V35RemoteCodeRow, V35RemoteDirectoryBinding, V35RemoteDirectoryBlock,
+    V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse,
+    V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
+    V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
+    build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor, build_v35_routing_generation,
+    build_v35_srht, decode_v35_remote_directory_arrow, encode_v35_exact_page_parquet,
     encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
     exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
-    reduce_v35_scanned_candidates, scan_v35_code_ranges, select_v35_exact_pages,
-    v35_remote_code_schema_digest,
+    reduce_v35_scanned_candidates, rerank_v35_exact_pages, scan_v35_code_ranges,
+    select_v35_exact_pages, v35_remote_code_schema_digest,
 };
 use sha2::{Digest, Sha256};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 const MIB: u64 = 1_048_576;
 
@@ -693,6 +694,13 @@ fn scalar_residual_sq_score(
         .sum()
 }
 
+fn exact_sq(left: &[f32], right: &[f32]) -> f64 {
+    left.iter().zip(right).fold(0.0, |sum, (left, right)| {
+        let delta = f64::from(*left) - f64::from(*right);
+        delta.mul_add(delta, sum)
+    })
+}
+
 #[test]
 fn v35_remote_residual_sq_scorer_is_simd_bounded_for_every_dimension_and_rate() {
     // Break caught: high-dimensional code scoring falls back to scalar or
@@ -912,6 +920,164 @@ fn v35_remote_code_scanner_authenticates_arrow_and_streams_simd_candidates() {
         .is_err()
     );
     assert_eq!(untouched.dispatches, 0);
+}
+
+#[test]
+fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_dimension() {
+    // Break caught: exact rerank trusts approximate candidates, admits a stale
+    // replica/tombstone, accumulates page bodies, or scores routing dimensions.
+    let fixture = code_scan_fixture();
+    let generation = fixture.plan.generation_digest();
+    let mut candidates = Vec::new();
+    let mut pages = Vec::new();
+    let mut bodies = HashMap::new();
+    let mut expected = Vec::new();
+    for page in 0..8_u32 {
+        candidates.push(
+            V35ScannedCandidate::new(
+                f64::from(page),
+                u64::from(page),
+                100 + u64::from(page),
+                1,
+                page,
+                None,
+            )
+            .unwrap(),
+        );
+        let id = 100 + u64::from(page);
+        let value = page as f32 / 7.0 - 0.5;
+        let mut rows = vec![V35ExactPageRow::new(id, 1, vec![value; 384]).unwrap()];
+        if page == 0 {
+            rows.push(V35ExactPageRow::new(50, 1, vec![0.0; 384]).unwrap());
+            rows.push(V35ExactPageRow::new(900, 1, vec![0.0; 384]).unwrap());
+        } else if page == 1 {
+            rows.push(V35ExactPageRow::new(50, 2, vec![0.25; 384]).unwrap());
+        }
+        let uri = format!("s3://borsuk-index/generations/g01/pages/page-{page:04}.parquet");
+        let (identity, bytes) =
+            encode_v35_exact_page_parquet(page, generation, &uri, "version-01", &rows).unwrap();
+        bodies.insert(uri, bytes);
+        pages.push(identity);
+        expected.push((
+            id,
+            exact_sq(&vec![value; 384], fixture.query.source_query()),
+        ));
+    }
+    expected.push((50, exact_sq(&vec![0.25; 384], fixture.query.source_query())));
+    expected.sort_by(|left, right| left.1.total_cmp(&right.1).then(left.0.cmp(&right.0)));
+    expected.truncate(4);
+    let visibility = V35SnapshotVisibility::new(
+        [0x52; 32],
+        vec![
+            V35SnapshotEntry::new(50, 2, true).unwrap(),
+            V35SnapshotEntry::new(900, 1, false).unwrap(),
+        ],
+    )
+    .unwrap();
+    let mut transport = PageBodyTransport::new(bodies);
+    let result = rerank_v35_exact_pages(
+        &fixture.plan,
+        &fixture.query,
+        &visibility,
+        &candidates,
+        &pages,
+        &mut transport,
+        4,
+    )
+    .unwrap();
+    assert_eq!(result.matches().len(), 4);
+    for (actual, (expected_id, expected_distance)) in result.matches().iter().zip(expected) {
+        assert_eq!(actual.id(), expected_id);
+        assert_eq!(actual.squared_distance(), expected_distance);
+    }
+    assert_eq!(result.pages_read(), 8);
+    assert_eq!(result.decoded_rows(), 11);
+    assert_eq!(result.unique_visible_rows(), 9);
+    assert_eq!(transport.completed, 8);
+    assert_eq!(
+        transport.maximum_destination_bytes,
+        pages
+            .iter()
+            .map(borsuk::V35ExactPageIdentity::encoded_bytes)
+            .max()
+            .unwrap()
+    );
+
+    let mut corrupt_bodies = transport.bodies.clone();
+    corrupt_bodies.get_mut(pages[0].uri()).unwrap()[32] ^= 1;
+    let mut corrupt = PageBodyTransport::new(corrupt_bodies);
+    assert!(
+        rerank_v35_exact_pages(
+            &fixture.plan,
+            &fixture.query,
+            &visibility,
+            &candidates,
+            &pages,
+            &mut corrupt,
+            4,
+        )
+        .is_err()
+    );
+    assert_eq!(corrupt.completed, 1);
+    assert_eq!(corrupt.canceled, 7);
+}
+
+#[derive(Clone)]
+struct PageBodyTransport {
+    bodies: HashMap<String, Vec<u8>>,
+    dispatched: usize,
+    completed: usize,
+    maximum_destination_bytes: u64,
+    canceled: usize,
+}
+
+impl PageBodyTransport {
+    fn new(bodies: HashMap<String, Vec<u8>>) -> Self {
+        Self {
+            bodies,
+            dispatched: 0,
+            completed: 0,
+            maximum_destination_bytes: 0,
+            canceled: 0,
+        }
+    }
+}
+
+impl V35ExactPageTransport for PageBodyTransport {
+    fn dispatch(
+        &mut self,
+        _page: &borsuk::V35ExactPageIdentity,
+    ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure> {
+        self.dispatched += 1;
+        V35RemoteDispatch::new(self.dispatched as u64).map_err(|_| V35TransportFailure::terminal(0))
+    }
+
+    fn complete(
+        &mut self,
+        _dispatch: V35RemoteDispatch,
+        page: &borsuk::V35ExactPageIdentity,
+        destination: &mut [u8],
+    ) -> std::result::Result<V35ExactPageResponse, V35TransportFailure> {
+        if self.dispatched != 8 {
+            return Err(V35TransportFailure::terminal(0));
+        }
+        let body = self
+            .bodies
+            .get(page.uri())
+            .ok_or_else(|| V35TransportFailure::terminal(0))?;
+        if destination.len() != body.len() {
+            return Err(V35TransportFailure::terminal(0));
+        }
+        destination.copy_from_slice(body);
+        self.maximum_destination_bytes = self.maximum_destination_bytes.max(body.len() as u64);
+        self.completed += 1;
+        Ok(V35ExactPageResponse::new(page, body.len() as u64, true))
+    }
+
+    fn cancel(&mut self, _dispatch: V35RemoteDispatch) -> u64 {
+        self.canceled += 1;
+        0
+    }
 }
 
 #[test]

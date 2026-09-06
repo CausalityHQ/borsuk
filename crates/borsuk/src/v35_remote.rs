@@ -9,7 +9,8 @@ use crate::{
     V35RoutePrefix, simd_control::f32x8, v35_route::v35_artifact_authority_digest,
 };
 use arrow_array::{
-    Array, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array, UInt64Array,
+    Array, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch, StringArray,
+    UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     MetadataVersion,
@@ -18,6 +19,11 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use half::f16;
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::WriterProperties,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -35,6 +41,8 @@ const MAX_DIRECTORY_CHUNKS: usize = 64;
 const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
 const CODE_FORMAT: &str = "borsuk-v35-remote-code-arrow-v1";
 const CODE_MANIFEST_KEY: &str = "borsuk.v35.remote-code.manifest";
+const PAGE_FORMAT: &str = "borsuk-v35-exact-page-parquet-v1";
+const PAGE_MANIFEST_KEY: &str = "borsuk.v35.exact-page.manifest";
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -840,6 +848,498 @@ pub fn scan_v35_code_ranges<T: V35VersionedRangeTransport>(
         Ok(chunk.decoded_length)
     })?;
     Ok((candidates.finish(), receipt))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One immutable exact-vector page row.
+pub struct V35ExactPageRow {
+    id: u64,
+    sequence: u64,
+    vector: Vec<f32>,
+}
+
+impl V35ExactPageRow {
+    /// Construct one finite, non-empty exact row.
+    pub fn new(id: u64, sequence: u64, vector: Vec<f32>) -> Result<Self> {
+        if sequence == 0 || vector.is_empty() || vector.iter().any(|value| !value.is_finite()) {
+            return Err(invalid("V35 exact page row differs"));
+        }
+        Ok(Self {
+            id,
+            sequence,
+            vector,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact immutable identity and bounds for one Parquet page.
+pub struct V35ExactPageIdentity {
+    page_ordinal: u32,
+    generation_digest: [u8; 32],
+    dimensions: u32,
+    rows: u16,
+    decoded_length: u64,
+    object: V35ArtifactIdentity,
+    version_id: String,
+}
+
+impl V35ExactPageIdentity {
+    /// Exact immutable object URI.
+    pub fn uri(&self) -> &str {
+        &self.object.uri
+    }
+    /// Exact encoded object bytes expected from storage.
+    pub fn encoded_bytes(&self) -> u64 {
+        self.object.length
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Completed whole-page response identity returned into caller-owned storage.
+pub struct V35ExactPageResponse {
+    uri: String,
+    version_id: String,
+    returned_bytes: u64,
+    complete: bool,
+}
+
+impl V35ExactPageResponse {
+    /// Construct a response; reranking independently compares it to the selected page.
+    pub fn new(page: &V35ExactPageIdentity, returned_bytes: u64, complete: bool) -> Self {
+        Self {
+            uri: page.object.uri.clone(),
+            version_id: page.version_id.clone(),
+            returned_bytes,
+            complete,
+        }
+    }
+}
+
+/// Eight-wide immutable-page transport with caller-owned completion buffers.
+pub trait V35ExactPageTransport {
+    /// Dispatch one selected immutable page without returning its body.
+    fn dispatch(
+        &mut self,
+        page: &V35ExactPageIdentity,
+    ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure>;
+
+    /// Complete one dispatch into the exact caller-owned page buffer.
+    fn complete(
+        &mut self,
+        dispatch: V35RemoteDispatch,
+        page: &V35ExactPageIdentity,
+        destination: &mut [u8],
+    ) -> std::result::Result<V35ExactPageResponse, V35TransportFailure>;
+
+    /// Cancel or drain one outstanding page request and report returned bytes.
+    fn cancel(&mut self, dispatch: V35RemoteDispatch) -> u64;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35ExactPageManifest {
+    dimensions: u32,
+    format: String,
+    generation_sha256: String,
+    page_ordinal: u32,
+    rows: u16,
+}
+
+fn exact_page_manifest_json(manifest: &V35ExactPageManifest) -> Result<String> {
+    serde_json::to_string(manifest)
+        .map_err(|_| invalid("V35 exact page manifest cannot be serialized"))
+}
+
+fn exact_page_schema(dimensions: u32, manifest_json: String) -> Result<Arc<Schema>> {
+    let width =
+        i32::try_from(dimensions).map_err(|_| invalid("V35 exact page dimensions overflow"))?;
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    width,
+                ),
+                false,
+            ),
+        ],
+        HashMap::from([(PAGE_MANIFEST_KEY.to_owned(), manifest_json)]),
+    )))
+}
+
+fn projected_exact_page_decoded_bytes(rows: usize, dimensions: usize) -> Result<u64> {
+    let row_bytes = dimensions
+        .checked_mul(4)
+        .and_then(|bytes| bytes.checked_add(16))
+        .ok_or_else(|| invalid("V35 exact page row bytes overflow"))?;
+    rows.checked_mul(row_bytes)
+        .and_then(|bytes| bytes.checked_add(65_536))
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| invalid("V35 exact page decoded bytes overflow"))
+}
+
+/// Encode one strict, independently authenticated full-vector Parquet page.
+pub fn encode_v35_exact_page_parquet(
+    page_ordinal: u32,
+    generation_digest: [u8; 32],
+    uri: &str,
+    version_id: &str,
+    rows: &[V35ExactPageRow],
+) -> Result<(V35ExactPageIdentity, Vec<u8>)> {
+    let dimensions = rows.first().map_or(0, |row| row.vector.len());
+    if rows.is_empty()
+        || rows.len() > 256
+        || dimensions == 0
+        || generation_digest == [0; 32]
+        || version_id.is_empty()
+        || !uri.starts_with("s3://")
+        || uri.contains("/corpus/")
+        || rows.iter().any(|row| row.vector.len() != dimensions)
+    {
+        return Err(invalid("V35 exact page authority differs"));
+    }
+    let mut row_identities = BTreeSet::new();
+    if rows
+        .iter()
+        .any(|row| !row_identities.insert((row.id, row.sequence)))
+    {
+        return Err(invalid("V35 exact page row is duplicated"));
+    }
+    let rows_u16 =
+        u16::try_from(rows.len()).map_err(|_| invalid("V35 exact page rows overflow"))?;
+    let dimensions_u32 =
+        u32::try_from(dimensions).map_err(|_| invalid("V35 exact page dimensions overflow"))?;
+    let manifest = V35ExactPageManifest {
+        dimensions: dimensions_u32,
+        format: PAGE_FORMAT.to_owned(),
+        generation_sha256: digest_hex(generation_digest),
+        page_ordinal,
+        rows: rows_u16,
+    };
+    let schema = exact_page_schema(dimensions_u32, exact_page_manifest_json(&manifest)?)?;
+    let values = rows
+        .iter()
+        .flat_map(|row| row.vector.iter().copied())
+        .collect::<Vec<_>>();
+    let vectors = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        i32::try_from(dimensions).map_err(|_| invalid("V35 exact page dimensions overflow"))?,
+        Arc::new(Float32Array::from(values)),
+        None,
+    )?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+            )),
+            Arc::new(vectors),
+        ],
+    )?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    if bytes.is_empty() || bytes.len() as u64 > 4 * MIB {
+        return Err(invalid("V35 exact page encoded admission differs"));
+    }
+    let decoded_length = projected_exact_page_decoded_bytes(rows.len(), dimensions)?;
+    if decoded_length > 4 * MIB {
+        return Err(invalid("V35 exact page decoded admission differs"));
+    }
+    let object = V35ArtifactIdentity {
+        digest: format!("{:x}", Sha256::digest(&bytes)),
+        digest_algorithm: "sha256".to_owned(),
+        length: bytes.len() as u64,
+        role: "exact-vector-page".to_owned(),
+        uri: uri.to_owned(),
+    };
+    Ok((
+        V35ExactPageIdentity {
+            page_ordinal,
+            generation_digest,
+            dimensions: dimensions_u32,
+            rows: rows_u16,
+            decoded_length,
+            object,
+            version_id: version_id.to_owned(),
+        },
+        bytes,
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// One exact full-dimensional neighbor.
+pub struct V35Match {
+    id: u64,
+    squared_distance: f64,
+}
+
+impl V35Match {
+    /// Stable vector identifier.
+    pub fn id(self) -> u64 {
+        self.id
+    }
+    /// Exact full-source squared L2 distance.
+    pub fn squared_distance(self) -> f64 {
+        self.squared_distance
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Bounded exact result plus decoded page work.
+pub struct V35SearchResult {
+    matches: Vec<V35Match>,
+    pages_read: usize,
+    decoded_rows: usize,
+    unique_visible_rows: usize,
+}
+
+impl V35SearchResult {
+    /// Exact neighbors in `(distance,id)` order.
+    pub fn matches(&self) -> &[V35Match] {
+        &self.matches
+    }
+    /// Exact authenticated pages consumed.
+    pub fn pages_read(&self) -> usize {
+        self.pages_read
+    }
+    /// Rows decoded before visibility and sequence reduction.
+    pub fn decoded_rows(&self) -> usize {
+        self.decoded_rows
+    }
+    /// Unique rows remaining after snapshot and greatest-sequence reduction.
+    pub fn unique_visible_rows(&self) -> usize {
+        self.unique_visible_rows
+    }
+}
+
+fn exact_squared_distance(vector: &[f32], query: &[f32]) -> Result<f64> {
+    if vector.len() != query.len() {
+        return Err(invalid("V35 exact page vector dimension differs"));
+    }
+    let mut score = 0.0_f64;
+    let bulk = vector.len() / 4 * 4;
+    for base in (0..bulk).step_by(4) {
+        let left = crate::simd_control::f64x4::from(std::array::from_fn(|lane| {
+            f64::from(vector[base + lane])
+        }));
+        let right = crate::simd_control::f64x4::from(std::array::from_fn(|lane| {
+            f64::from(query[base + lane])
+        }));
+        for contribution in ((left - right) * (left - right)).to_array() {
+            score += contribution;
+        }
+    }
+    for dimension in bulk..vector.len() {
+        let delta = f64::from(vector[dimension]) - f64::from(query[dimension]);
+        score = delta.mul_add(delta, score);
+    }
+    if !score.is_finite() {
+        return Err(invalid("V35 exact rerank distance is nonfinite"));
+    }
+    Ok(if score == 0.0 { 0.0 } else { score })
+}
+
+/// Authenticate and exactly rerank the frozen first-eight candidate pages.
+pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
+    plan: &V35RemotePlan,
+    query: &V35ProjectedQuery,
+    visibility: &V35SnapshotVisibility,
+    candidates: &[V35ScannedCandidate],
+    pages: &[V35ExactPageIdentity],
+    transport: &mut T,
+    k: usize,
+) -> Result<V35SearchResult> {
+    let selected = select_v35_exact_pages(candidates);
+    if plan.query_digest != query.source_digest()
+        || plan.directory_binding.snapshot_digest != visibility.digest
+        || selected.len() != 8
+        || pages.len() != selected.len()
+        || k == 0
+        || k > MAX_CANDIDATES
+    {
+        return Err(invalid("V35 exact rerank authority differs"));
+    }
+    let mut pending = Vec::with_capacity(pages.len());
+    for page in pages {
+        match transport.dispatch(page) {
+            Ok(dispatch) => pending.push(dispatch),
+            Err(_) => {
+                for dispatch in pending.drain(..) {
+                    transport.cancel(dispatch);
+                }
+                return Err(invalid("V35 exact page dispatch failed"));
+            }
+        }
+    }
+    let dimensions = query.source_query().len();
+    let mut best = BTreeMap::<u64, (u64, f64)>::new();
+    let mut decoded_rows = 0_usize;
+    let mut body = Vec::new();
+    for (index, (expected_page, identity)) in selected.iter().zip(pages).enumerate() {
+        let encoded_bytes = usize::try_from(identity.object.length)
+            .map_err(|_| invalid("V35 exact page encoded length overflows"))?;
+        body.resize(encoded_bytes, 0);
+        let response = match transport.complete(pending[index], identity, &mut body) {
+            Ok(response) => response,
+            Err(_) => {
+                for dispatch in pending.iter().skip(index + 1).copied() {
+                    transport.cancel(dispatch);
+                }
+                return Err(invalid("V35 exact page completion failed"));
+            }
+        };
+        if identity.page_ordinal != *expected_page
+            || identity.generation_digest != plan.generation_digest
+            || identity.dimensions as usize != dimensions
+            || identity.rows == 0
+            || identity.rows > 256
+            || identity.decoded_length > 4 * MIB
+            || identity.object.role != "exact-vector-page"
+            || identity.object.digest_algorithm != "sha256"
+            || identity.object.length != body.len() as u64
+            || identity.object.digest != format!("{:x}", Sha256::digest(&body))
+            || identity.version_id.is_empty()
+            || !identity.object.uri.starts_with("s3://")
+            || identity.object.uri.contains("/corpus/")
+            || response.uri != identity.object.uri
+            || response.version_id != identity.version_id
+            || response.returned_bytes != identity.object.length
+            || !response.complete
+        {
+            for dispatch in pending.iter().skip(index + 1).copied() {
+                transport.cancel(dispatch);
+            }
+            return Err(invalid("V35 exact page identity differs"));
+        }
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(&body))?;
+        let manifest_json = builder
+            .schema()
+            .metadata()
+            .get(PAGE_MANIFEST_KEY)
+            .ok_or_else(|| invalid("V35 exact page manifest is missing"))?;
+        if builder.schema().metadata().len() != 1 {
+            return Err(invalid("V35 exact page metadata differs"));
+        }
+        let manifest: V35ExactPageManifest = serde_json::from_str(manifest_json)
+            .map_err(|_| invalid("V35 exact page manifest differs"))?;
+        if exact_page_manifest_json(&manifest)? != *manifest_json
+            || manifest.format != PAGE_FORMAT
+            || manifest.generation_sha256 != digest_hex(plan.generation_digest)
+            || manifest.page_ordinal != *expected_page
+            || manifest.dimensions as usize != dimensions
+            || manifest.rows != identity.rows
+            || builder.schema().as_ref()
+                != exact_page_schema(manifest.dimensions, manifest_json.clone())?.as_ref()
+        {
+            return Err(invalid("V35 exact page schema authority differs"));
+        }
+        let mut reader = builder.with_batch_size(256).build()?;
+        let mut page_rows = 0_usize;
+        for batch in &mut reader {
+            let batch = batch?;
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid("V35 exact page id column differs"))?;
+            let sequences = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid("V35 exact page sequence column differs"))?;
+            let vectors = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| invalid("V35 exact page vector column differs"))?;
+            let values = vectors
+                .values()
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| invalid("V35 exact page vector values differ"))?;
+            if ids.null_count() != 0
+                || sequences.null_count() != 0
+                || vectors.null_count() != 0
+                || values.null_count() != 0
+                || vectors.value_length() as usize != dimensions
+            {
+                return Err(invalid("V35 exact page nullability differs"));
+            }
+            for row in 0..batch.num_rows() {
+                let id = ids.value(row);
+                let sequence = sequences.value(row);
+                let start = row * dimensions;
+                let vector = &values.values()[start..start + dimensions];
+                if sequence == 0 || vector.iter().any(|value| !value.is_finite()) {
+                    return Err(invalid("V35 exact page row authority differs"));
+                }
+                if visibility.admits(id, sequence) {
+                    let distance = exact_squared_distance(vector, query.source_query())?;
+                    match best.get(&id).copied() {
+                        None => {
+                            best.insert(id, (sequence, distance));
+                        }
+                        Some((old_sequence, _)) if sequence > old_sequence => {
+                            best.insert(id, (sequence, distance));
+                        }
+                        Some((old_sequence, old_distance)) if sequence == old_sequence => {
+                            if distance.to_bits() != old_distance.to_bits() {
+                                return Err(invalid("V35 exact replica vector differs"));
+                            }
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            page_rows = page_rows
+                .checked_add(batch.num_rows())
+                .ok_or_else(|| invalid("V35 exact page rows overflow"))?;
+        }
+        if page_rows != usize::from(identity.rows)
+            || projected_exact_page_decoded_bytes(page_rows, dimensions)? != identity.decoded_length
+        {
+            return Err(invalid("V35 exact page decoded extent differs"));
+        }
+        decoded_rows = decoded_rows
+            .checked_add(page_rows)
+            .ok_or_else(|| invalid("V35 exact rerank rows overflow"))?;
+    }
+    if decoded_rows > 8 * 256 || best.len() < k {
+        return Err(invalid("V35 exact rerank work differs"));
+    }
+    let unique_visible_rows = best.len();
+    let mut matches = best
+        .into_iter()
+        .map(|(id, (_, squared_distance))| V35Match {
+            id,
+            squared_distance,
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        left.squared_distance
+            .total_cmp(&right.squared_distance)
+            .then(left.id.cmp(&right.id))
+    });
+    matches.truncate(k);
+    Ok(V35SearchResult {
+        matches,
+        pages_read: pages.len(),
+        decoded_rows,
+        unique_visible_rows,
+    })
 }
 
 /// Build an exact per-group SQ4 or SQ8 descriptor from a bounded row group.
