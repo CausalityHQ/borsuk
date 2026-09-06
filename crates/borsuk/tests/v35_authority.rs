@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use borsuk::{
     V35ArtifactIdentity, V35Dimensions, V35GenerationManifest, V35ProjectionArm, V35RemoteCodeRate,
-    project_v35_serving_memory, validate_v35_manifest,
+    V35StoredArtifactIdentity, project_v35_serving_memory, validate_v35_manifest,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -23,24 +23,31 @@ fn identity(role: &str, ordinal: u8) -> V35ArtifactIdentity {
     }
 }
 
+fn stored(role: &str, ordinal: u8) -> V35StoredArtifactIdentity {
+    V35StoredArtifactIdentity {
+        object: identity(role, ordinal),
+        version_id: format!("stored-version-{ordinal:02}"),
+    }
+}
+
 fn manifest() -> V35GenerationManifest {
     V35GenerationManifest {
         artifacts: vec![
-            identity("active-routing", 1),
-            identity("retiring-routing", 2),
-            identity("active-projection-basis", 3),
-            identity("retiring-projection-basis", 4),
-            identity("code-directory", 5),
-            identity("page-directory", 6),
-            identity("active-liveness", 7),
-            identity("retiring-liveness", 8),
-            identity("snapshot-visibility-directory", 9),
+            stored("active-routing", 1),
+            stored("retiring-routing", 2),
+            stored("active-projection-basis", 3),
+            stored("retiring-projection-basis", 4),
+            stored("code-directory", 5),
+            stored("page-directory", 6),
+            stored("active-liveness", 7),
+            stored("retiring-liveness", 8),
+            stored("snapshot-visibility-directory", 9),
         ],
         dimensions: V35Dimensions {
             routing: 192,
             source: 3_072,
         },
-        format: "borsuk-v35-generation-v2".to_owned(),
+        format: "borsuk-v35-generation-v3".to_owned(),
         leaf_count: 414_100,
         metric: "squared-l2".to_owned(),
         normalization: "none".to_owned(),
@@ -137,7 +144,7 @@ fn v35_authority_rejects_schema_types_and_identity_drift() {
         assert!(validate_v35_manifest(&bytes, &registered_manifest(&bytes)).is_err());
     }
 
-    let manifest_mutations: [fn(&mut V35GenerationManifest); 15] = [
+    let manifest_mutations: [fn(&mut V35GenerationManifest); 16] = [
         |v| v.dimensions.source = 0,
         |v| v.dimensions.routing = 96,
         |v| v.dimensions.routing = 256,
@@ -148,11 +155,12 @@ fn v35_authority_rejects_schema_types_and_identity_drift() {
         |v| v.patches_per_leaf = 3,
         |v| v.remote_code.bits_per_dimension = 6,
         |v| v.remote_code.bytes_per_row = 1,
-        |v| v.artifacts[0].digest_algorithm = "blake3".to_owned(),
-        |v| v.artifacts[0].digest = "00".repeat(31),
-        |v| v.artifacts[0].length = 0,
-        |v| v.artifacts[1].uri = v.artifacts[0].uri.clone(),
-        |v| v.artifacts[1].role = v.artifacts[0].role.clone(),
+        |v| v.artifacts[0].object.digest_algorithm = "blake3".to_owned(),
+        |v| v.artifacts[0].object.digest = "00".repeat(31),
+        |v| v.artifacts[0].object.length = 0,
+        |v| v.artifacts[1].object.uri = v.artifacts[0].object.uri.clone(),
+        |v| v.artifacts[1].object.role = v.artifacts[0].object.role.clone(),
+        |v| v.artifacts[0].version_id.clear(),
     ];
     for (index, mutate) in manifest_mutations.into_iter().enumerate() {
         let mut value = baseline.clone();
@@ -183,7 +191,7 @@ fn v35_authority_requires_visibility_snapshot_in_published_generation() {
 
     value
         .artifacts
-        .retain(|artifact| artifact.role != "snapshot-visibility-directory");
+        .retain(|artifact| artifact.object.role != "snapshot-visibility-directory");
     let bytes = manifest_bytes(&value);
     assert!(validate_v35_manifest(&bytes, &registered_manifest(&bytes)).is_err());
 }

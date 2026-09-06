@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
 
-const FORMAT: &str = "borsuk-v35-generation-v2";
+const FORMAT: &str = "borsuk-v35-generation-v3";
 const HARD_LIMIT_BYTES: u64 = 3_221_225_472;
 const TREE_CAP_BYTES: u64 = 32 * 1_048_576;
 const LIVENESS_PLANE_BYTES: u64 = 25_000_000;
@@ -64,6 +64,16 @@ pub struct V35ArtifactIdentity {
     pub uri: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Immutable object identity paired with the opaque version returned by storage.
+pub struct V35StoredArtifactIdentity {
+    /// Complete content and location authority.
+    pub object: V35ArtifactIdentity,
+    /// Opaque immutable version returned by the successful object-store write.
+    pub version_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 /// Remote residual scalar-quantization rate.
@@ -79,7 +89,7 @@ pub struct V35RemoteCodeRate {
 /// Strict V35 generation manifest authenticated before allocation.
 pub struct V35GenerationManifest {
     /// Complete role-separated immutable inputs.
-    pub artifacts: Vec<V35ArtifactIdentity>,
+    pub artifacts: Vec<V35StoredArtifactIdentity>,
     /// Source and resident routing dimensions.
     pub dimensions: V35Dimensions,
     /// Breaking persistent format marker.
@@ -211,9 +221,13 @@ fn validate_manifest_fields(manifest: &V35GenerationManifest) -> Result<()> {
     ]);
     let mut roles = BTreeSet::new();
     let mut uris = BTreeSet::new();
-    for identity in &manifest.artifacts {
-        validate_identity(identity)?;
-        if !roles.insert(identity.role.as_str()) || !uris.insert(identity.uri.as_str()) {
+    for stored in &manifest.artifacts {
+        validate_identity(&stored.object)?;
+        if stored.version_id.is_empty()
+            || stored.version_id.len() > 1_024
+            || !roles.insert(stored.object.role.as_str())
+            || !uris.insert(stored.object.uri.as_str())
+        {
             return Err(invalid("V35 artifact roles and URIs must be unique"));
         }
     }

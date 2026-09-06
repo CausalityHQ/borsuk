@@ -257,7 +257,8 @@ pub use v34_route::{
 #[doc(hidden)]
 pub use v35_authority::{
     V35ArtifactIdentity, V35Dimensions, V35GenerationManifest, V35ProjectionArm, V35RemoteCodeRate,
-    V35ServingProjection, project_v35_serving_memory, validate_v35_manifest,
+    V35ServingProjection, V35StoredArtifactIdentity, project_v35_serving_memory,
+    validate_v35_manifest,
 };
 #[doc(hidden)]
 pub use v35_build::{
