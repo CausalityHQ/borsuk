@@ -3,8 +3,10 @@
 use borsuk::{
     V35ArtifactIdentity, V35Dimensions, V35GroupStorage, V35LeafPatchBuildRequest, V35RemoteChunk,
     V35RemoteDirectoryBinding, V35RemoteDirectoryBlock, V35RouteBudget, V35RoutePrefix,
-    build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor, build_v35_routing_generation,
-    build_v35_srht, exhaustive_v35_route, plan_v35_remote_reads,
+    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, build_v35_leaf_patch_arm,
+    build_v35_residual_sq_descriptor, build_v35_routing_generation, build_v35_srht,
+    exhaustive_v35_route, plan_v35_remote_reads, reduce_v35_scanned_candidates,
+    select_v35_exact_pages,
 };
 
 const MIB: u64 = 1_048_576;
@@ -355,4 +357,82 @@ fn v35_remote_code_payload_and_scan_rows_scale_with_source_dimension_not_ram() {
     assert_eq!(odd.codes().last(), Some(&0));
     assert!(build_v35_residual_sq_descriptor(&[vec![0.0; 384]], 3).is_err());
     assert!(build_v35_residual_sq_descriptor(&[vec![70_000.0]], 4).is_err());
+}
+
+#[test]
+fn v35_remote_candidate_heap_filters_visibility_before_bounded_admission() {
+    // Break caught: a stale/tombstoned row occupies the 12,288-slot heap,
+    // primary/replica copies duplicate an ID, or ties depend on input order.
+    let mut entries = (0..12_290_u64)
+        .map(|id| V35SnapshotEntry::new(id, 1, true).unwrap())
+        .collect::<Vec<_>>();
+    entries[0] = V35SnapshotEntry::new(0, 2, true).unwrap();
+    entries[1] = V35SnapshotEntry::new(1, 1, false).unwrap();
+    let visibility = V35SnapshotVisibility::new([0x81; 32], entries).unwrap();
+    let mut scanned = (0..12_290_u64)
+        .map(|row| {
+            V35ScannedCandidate::new(
+                row as f64,
+                row,
+                row,
+                1,
+                u32::try_from(row % 32).unwrap(),
+                Some(u32::try_from((row + 1) % 32).unwrap()),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    scanned.push(V35ScannedCandidate::new(-2.0, 20_000, 0, 1, 0, Some(1)).unwrap());
+    scanned.push(V35ScannedCandidate::new(-1.0, 20_001, 1, 1, 0, Some(1)).unwrap());
+    scanned.push(V35ScannedCandidate::new(0.5, 20_002, 0, 2, 0, Some(1)).unwrap());
+    scanned.reverse();
+
+    let reduced = reduce_v35_scanned_candidates(&scanned, &visibility).unwrap();
+    assert_eq!(reduced.len(), 12_288);
+    assert_eq!(reduced[0].id(), 0);
+    assert_eq!(reduced[0].sequence(), 2);
+    assert_eq!(reduced[0].distance().to_bits(), 0.5_f64.to_bits());
+    assert!(reduced.iter().all(|candidate| candidate.id() != 1));
+    assert!(
+        reduced
+            .windows(2)
+            .all(|pair| (pair[0].distance(), pair[0].row_ordinal())
+                <= (pair[1].distance(), pair[1].row_ordinal()))
+    );
+}
+
+#[test]
+fn v35_remote_page_reducer_is_coverage_greedy_and_exactly_eight_bounded() {
+    // Break caught: primary and replica copies of one candidate consume two
+    // page slots, input order changes page choice, or more than eight exact
+    // pages are authorized.
+    let visibility = V35SnapshotVisibility::new(
+        [0x91; 32],
+        (0..12_u64)
+            .map(|id| V35SnapshotEntry::new(id, 1, true).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    let candidates = [
+        (0, 4, Some(7)),
+        (1, 7, Some(4)),
+        (2, 8, Some(9)),
+        (3, 9, Some(8)),
+        (4, 10, Some(11)),
+        (5, 12, Some(13)),
+        (6, 14, Some(15)),
+        (7, 16, Some(17)),
+        (8, 18, Some(19)),
+        (9, 20, Some(21)),
+    ]
+    .into_iter()
+    .map(|(row, primary, replica)| {
+        V35ScannedCandidate::new(row as f64, row, row, 1, primary, replica).unwrap()
+    })
+    .collect::<Vec<_>>();
+    let reduced = reduce_v35_scanned_candidates(&candidates, &visibility).unwrap();
+    assert_eq!(
+        select_v35_exact_pages(&reduced),
+        vec![4, 8, 10, 12, 14, 16, 18, 20]
+    );
 }

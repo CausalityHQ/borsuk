@@ -277,7 +277,9 @@ pub use v35_projection::{
 #[doc(hidden)]
 pub use v35_remote::{
     V35RemoteChunk, V35RemoteDirectoryBlock, V35RemotePlan, V35RemoteRange,
-    V35ResidualSqDescriptor, build_v35_residual_sq_descriptor, plan_v35_remote_reads,
+    V35ResidualSqDescriptor, V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility,
+    build_v35_residual_sq_descriptor, plan_v35_remote_reads, reduce_v35_scanned_candidates,
+    select_v35_exact_pages,
 };
 #[doc(hidden)]
 pub use v35_route::{

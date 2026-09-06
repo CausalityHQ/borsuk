@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::{
     BorsukError, Result, V35ArtifactIdentity, V35RemoteDirectoryBinding, V35RoutePrefix,
@@ -11,6 +11,7 @@ const MAX_ENCODED_CHUNK_BYTES: u64 = MIB;
 const MAX_DECODED_CHUNK_BYTES: u64 = 2 * MIB;
 const MAX_QUERY_WORKSPACE_BYTES: u64 = 32 * MIB;
 const MAX_RETRIES: u8 = 2;
+const MAX_CANDIDATES: usize = 12_288;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -34,6 +35,213 @@ fn validate_object(identity: &V35ArtifactIdentity) -> Result<()> {
         return Err(invalid("V35 remote code object authority differs"));
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Latest visible sequence and live/tombstone state for one vector ID.
+pub struct V35SnapshotEntry {
+    id: u64,
+    sequence: u64,
+    live: bool,
+}
+
+impl V35SnapshotEntry {
+    /// Construct one nonzero-sequence snapshot entry.
+    pub fn new(id: u64, sequence: u64, live: bool) -> Result<Self> {
+        if sequence == 0 {
+            return Err(invalid("V35 snapshot sequence differs"));
+        }
+        Ok(Self { id, sequence, live })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete sorted visibility authority pinned for one query.
+pub struct V35SnapshotVisibility {
+    digest: [u8; 32],
+    entries: Vec<V35SnapshotEntry>,
+}
+
+impl V35SnapshotVisibility {
+    /// Construct a strict ID-ordered visibility snapshot.
+    pub fn new(digest: [u8; 32], entries: Vec<V35SnapshotEntry>) -> Result<Self> {
+        if digest == [0; 32] || entries.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+            return Err(invalid("V35 snapshot visibility authority differs"));
+        }
+        Ok(Self { digest, entries })
+    }
+
+    fn admits(&self, id: u64, sequence: u64) -> bool {
+        self.entries
+            .binary_search_by_key(&id, |entry| entry.id)
+            .ok()
+            .is_some_and(|position| {
+                let entry = self.entries[position];
+                entry.live && entry.sequence == sequence
+            })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// One decoded approximate-distance row before bounded heap reduction.
+pub struct V35ScannedCandidate {
+    distance: f64,
+    row_ordinal: u64,
+    id: u64,
+    sequence: u64,
+    primary_page: u32,
+    replica_page: Option<u32>,
+}
+
+impl V35ScannedCandidate {
+    /// Construct one finite candidate with distinct optional page references.
+    pub fn new(
+        distance: f64,
+        row_ordinal: u64,
+        id: u64,
+        sequence: u64,
+        primary_page: u32,
+        replica_page: Option<u32>,
+    ) -> Result<Self> {
+        if !distance.is_finite() || sequence == 0 || replica_page == Some(primary_page) {
+            return Err(invalid("V35 scanned candidate differs"));
+        }
+        Ok(Self {
+            distance,
+            row_ordinal,
+            id,
+            sequence,
+            primary_page,
+            replica_page,
+        })
+    }
+    /// Approximate full-source SQ distance.
+    pub fn distance(self) -> f64 {
+        self.distance
+    }
+    /// Stable source row ordinal.
+    pub fn row_ordinal(self) -> u64 {
+        self.row_ordinal
+    }
+    /// Vector identifier.
+    pub fn id(self) -> u64 {
+        self.id
+    }
+    /// Visible sequence number.
+    pub fn sequence(self) -> u64 {
+        self.sequence
+    }
+}
+
+fn candidate_order(left: &V35ScannedCandidate, right: &V35ScannedCandidate) -> std::cmp::Ordering {
+    left.distance
+        .total_cmp(&right.distance)
+        .then_with(|| left.row_ordinal.cmp(&right.row_ordinal))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn heap_swap(
+    heap: &mut [V35ScannedCandidate],
+    positions: &mut HashMap<u64, usize>,
+    left: usize,
+    right: usize,
+) {
+    heap.swap(left, right);
+    positions.insert(heap[left].id, left);
+    positions.insert(heap[right].id, right);
+}
+
+fn heap_sift_up(
+    heap: &mut [V35ScannedCandidate],
+    positions: &mut HashMap<u64, usize>,
+    mut position: usize,
+) {
+    while position > 0 {
+        let parent = (position - 1) / 2;
+        if !candidate_order(&heap[position], &heap[parent]).is_gt() {
+            break;
+        }
+        heap_swap(heap, positions, position, parent);
+        position = parent;
+    }
+}
+
+fn heap_sift_down(
+    heap: &mut [V35ScannedCandidate],
+    positions: &mut HashMap<u64, usize>,
+    mut position: usize,
+) {
+    loop {
+        let left = 2 * position + 1;
+        if left >= heap.len() {
+            break;
+        }
+        let right = left + 1;
+        let child = if right < heap.len() && candidate_order(&heap[right], &heap[left]).is_gt() {
+            right
+        } else {
+            left
+        };
+        if !candidate_order(&heap[child], &heap[position]).is_gt() {
+            break;
+        }
+        heap_swap(heap, positions, position, child);
+        position = child;
+    }
+}
+
+/// Filter snapshot visibility before keeping the exact bounded candidate prefix.
+pub fn reduce_v35_scanned_candidates(
+    scanned: &[V35ScannedCandidate],
+    visibility: &V35SnapshotVisibility,
+) -> Result<Vec<V35ScannedCandidate>> {
+    let mut heap = Vec::<V35ScannedCandidate>::with_capacity(MAX_CANDIDATES);
+    let mut positions = HashMap::<u64, usize>::with_capacity(MAX_CANDIDATES);
+    for candidate in scanned.iter().copied() {
+        if !visibility.admits(candidate.id, candidate.sequence) {
+            continue;
+        }
+        if let Some(position) = positions.get(&candidate.id).copied() {
+            if !candidate_order(&candidate, &heap[position]).is_lt() {
+                continue;
+            }
+            heap[position] = candidate;
+            heap_sift_down(&mut heap, &mut positions, position);
+        } else if heap.len() < MAX_CANDIDATES {
+            let position = heap.len();
+            heap.push(candidate);
+            positions.insert(candidate.id, position);
+            heap_sift_up(&mut heap, &mut positions, position);
+        } else if candidate_order(&candidate, &heap[0]).is_lt() {
+            positions.remove(&heap[0].id);
+            heap[0] = candidate;
+            positions.insert(candidate.id, 0);
+            heap_sift_down(&mut heap, &mut positions, 0);
+        }
+    }
+    heap.sort_by(candidate_order);
+    Ok(heap)
+}
+
+/// Select at most eight coverage-greedy exact primary pages in candidate order.
+pub fn select_v35_exact_pages(candidates: &[V35ScannedCandidate]) -> Vec<u32> {
+    let mut selected = BTreeSet::new();
+    let mut pages = Vec::with_capacity(8);
+    for candidate in candidates {
+        if selected.contains(&candidate.primary_page)
+            || candidate
+                .replica_page
+                .is_some_and(|page| selected.contains(&page))
+        {
+            continue;
+        }
+        selected.insert(candidate.primary_page);
+        pages.push(candidate.primary_page);
+        if pages.len() == 8 {
+            break;
+        }
+    }
+    pages
 }
 
 #[derive(Debug, Clone, PartialEq)]
