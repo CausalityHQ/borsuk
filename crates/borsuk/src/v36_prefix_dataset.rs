@@ -17,6 +17,7 @@ use parquet::{
     file::properties::WriterProperties,
     schema::types::SchemaDescriptor,
 };
+use rayon::{ThreadPoolBuilder, prelude::*};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -33,7 +34,6 @@ const GT_NEIGHBORS: usize = 100;
 const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 8_192;
-const GT_QUERY_TILE_ROWS: usize = 8;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -275,6 +275,30 @@ pub enum V36PrefixQualityRole {
     Validation,
     /// Once-opened sealed holdout queries.
     SealedHoldout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One quality-query Parquet input and exact-GT output role.
+pub struct V36PrefixGtParquetJob {
+    /// Exact number of queries in this role.
+    pub expected_queries: u32,
+    /// Destination exact-GT Parquet path.
+    pub output: PathBuf,
+    /// Source query Parquet path.
+    pub query: PathBuf,
+    /// Closed quality role.
+    pub role: V36PrefixQualityRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Bounded work evidence from one corpus-outer exact-GT pass.
+pub struct V36PrefixGtRunStats {
+    /// Quality queries updated for every source row.
+    pub quality_queries: u32,
+    /// Complete source scans performed.
+    pub source_scans: u32,
+    /// Source rows processed in canonical order.
+    pub source_rows: u64,
 }
 
 /// Rank a complete authenticated registry by the frozen sample rule.
@@ -1773,52 +1797,122 @@ fn v36_prefix_gt_batch(rows: &[V36PrefixGtNeighbor]) -> Result<RecordBatch> {
     )?)
 }
 
-/// Compute exact GT@100 from strict Parquet artifacts using bounded query tiles.
-pub fn write_v36_prefix_gt100_from_parquets(
+struct V36PrefixGtQueryState {
+    heap: BinaryHeap<RankedNeighbor>,
+    query: V36PrefixQueryRow,
+    role: usize,
+}
+
+/// Compute all quality-role GT@100 with one corpus scan and bounded state.
+pub fn write_v36_prefix_gt100_roles_from_parquets(
     source_path: &Path,
     expected_source_feature_ids: &[u64],
-    query_path: &Path,
-    role: V36PrefixQualityRole,
-    expected_query_rows: u32,
-    output_path: &Path,
-) -> Result<()> {
-    if expected_query_rows == 0 {
-        return Err(invalid("V36 prefix GT query count differs"));
+    jobs: &[V36PrefixGtParquetJob],
+    worker_threads: usize,
+) -> Result<V36PrefixGtRunStats> {
+    if jobs.len() != 3
+        || worker_threads == 0
+        || worker_threads > 16
+        || jobs[0].role != V36PrefixQualityRole::Development
+        || jobs[1].role != V36PrefixQualityRole::Validation
+        || jobs[2].role != V36PrefixQualityRole::SealedHoldout
+        || jobs.iter().any(|job| job.expected_queries == 0)
+    {
+        return Err(invalid("V36 prefix exact truth job set differs"));
     }
-    let mut temporary = temporary_output(output_path)?;
-    let mut writer = ArrowWriter::try_new(
-        temporary.as_file_mut(),
-        Arc::new(v36_prefix_gt100_schema()),
-        Some(parquet_writer_properties()),
-    )?;
-    let mut validation = GtValidationState::default();
-    scan_v36_prefix_query_parquet(query_path, u64::from(expected_query_rows), |batch| {
-        for offset in (0..batch.num_rows()).step_by(GT_QUERY_TILE_ROWS) {
-            let tile_rows = GT_QUERY_TILE_ROWS.min(batch.num_rows() - offset);
-            let queries = v36_prefix_query_rows_from_batch(&batch, offset, tile_rows)?;
-            let mut accumulator = V36PrefixGtAccumulator::new(role, queries)?;
-            let mut next_source_ordinal = 0_u64;
-            scan_v36_prefix_source_parquet(
-                source_path,
-                expected_source_feature_ids,
-                |source_batch| {
-                    let rows =
-                        v36_prefix_source_rows_from_batch(&source_batch, &mut next_source_ordinal)?;
-                    accumulator.absorb(&rows)
-                },
-            )?;
-            let truth = accumulator.finish()?;
-            let truth_batch = v36_prefix_gt_batch(&truth)?;
-            validate_gt_batch(&truth_batch, &mut validation)?;
-            writer.write(&truth_batch)?;
+    let mut paths = BTreeSet::from([source_path]);
+    if jobs
+        .iter()
+        .flat_map(|job| [&job.query, &job.output])
+        .any(|path| !paths.insert(path))
+    {
+        return Err(invalid("V36 prefix exact truth paths overlap"));
+    }
+    let mut states = Vec::new();
+    let mut query_ids = BTreeSet::new();
+    for (role, job) in jobs.iter().enumerate() {
+        scan_v36_prefix_query_parquet(&job.query, u64::from(job.expected_queries), |batch| {
+            let rows = v36_prefix_query_rows_from_batch(&batch, 0, batch.num_rows())?;
+            for query in rows {
+                if !query_ids.insert(query.feature_row_id) {
+                    return Err(invalid("V36 prefix exact truth query membership differs"));
+                }
+                states.push(V36PrefixGtQueryState {
+                    heap: BinaryHeap::with_capacity(GT_NEIGHBORS),
+                    query,
+                    role,
+                });
+            }
+            Ok(())
+        })?;
+    }
+    let quality_queries = u32::try_from(states.len())
+        .map_err(|_| invalid("V36 prefix exact truth query count overflows"))?;
+    let expected_quality_queries = jobs.iter().try_fold(0_u32, |total, job| {
+        total
+            .checked_add(job.expected_queries)
+            .ok_or_else(|| invalid("V36 prefix exact truth query count overflows"))
+    })?;
+    if quality_queries != expected_quality_queries {
+        return Err(invalid("V36 prefix exact truth query count differs"));
+    }
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .build()
+        .map_err(|_| invalid("V36 prefix exact truth worker pool differs"))?;
+    let mut source_rows = 0_u64;
+    scan_v36_prefix_source_parquet(source_path, expected_source_feature_ids, |source_batch| {
+        let rows = v36_prefix_source_rows_from_batch(&source_batch, &mut source_rows)?;
+        if rows
+            .iter()
+            .any(|row| query_ids.contains(&row.feature_row_id))
+        {
+            return Err(invalid("V36 prefix exact truth corpus contains a query"));
         }
+        pool.install(|| {
+            states.par_iter_mut().for_each(|state| {
+                for row in &rows {
+                    let candidate = RankedNeighbor {
+                        distance: squared_l2(&row.embedding, &state.query.embedding),
+                        feature_row_id: row.feature_row_id,
+                    };
+                    if state.heap.len() < GT_NEIGHBORS {
+                        state.heap.push(candidate);
+                    } else if state.heap.peek().is_some_and(|worst| candidate < *worst) {
+                        state.heap.pop();
+                        state.heap.push(candidate);
+                    }
+                }
+            });
+        });
         Ok(())
     })?;
-    if validation.next_query != expected_query_rows || validation.next_rank != 0 {
-        return Err(invalid("V36 prefix GT query count differs"));
+    if source_rows < GT_NEIGHBORS as u64
+        || states.iter().any(|state| state.heap.len() != GT_NEIGHBORS)
+    {
+        return Err(invalid("V36 prefix exact truth corpus is insufficient"));
     }
-    writer.close()?;
-    publish_output(temporary, output_path)
+    let mut truth_by_role = [Vec::new(), Vec::new(), Vec::new()];
+    for state in states {
+        let mut neighbors = state.heap.into_vec();
+        neighbors.sort();
+        truth_by_role[state.role].extend(neighbors.into_iter().enumerate().map(
+            |(rank, neighbor)| V36PrefixGtNeighbor {
+                query_ordinal: state.query.query_ordinal,
+                rank: u16::try_from(rank).unwrap(),
+                feature_row_id: neighbor.feature_row_id,
+                squared_distance: neighbor.distance,
+            },
+        ));
+    }
+    for (job, truth) in jobs.iter().zip(truth_by_role) {
+        write_v36_prefix_gt100_parquet(&job.output, [v36_prefix_gt_batch(&truth)?])?;
+    }
+    Ok(V36PrefixGtRunStats {
+        quality_queries,
+        source_scans: 1,
+        source_rows,
+    })
 }
 
 #[cfg(test)]

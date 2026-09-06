@@ -9,10 +9,11 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixInputRow,
-    V36PrefixPopulationAuthority, V36PrefixQualityRole, V36PrefixRankedSourceObject,
-    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
-    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
+    V36PrefixInputRow, V36PrefixPopulationAuthority, V36PrefixQualityRole,
+    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority,
+    V36PrefixSourceObject, bind_v36_prefix_population_authority,
+    canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_source_registry_bytes,
     deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
@@ -24,8 +25,8 @@ use borsuk::{
     v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
     validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
     validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_from_parquets,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
     write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
@@ -635,21 +636,19 @@ fn v36_prefix_dataset_parquet_and_exact_truth_are_closed() {
 }
 
 #[test]
-fn v36_prefix_dataset_writes_exact_truth_in_bounded_query_tiles() {
+fn v36_prefix_dataset_writes_all_quality_truth_with_one_corpus_scan() {
     let directory = tempfile::tempdir().unwrap();
     let source_path = directory.path().join("source.parquet");
-    let query_path = directory.path().join("development-query.parquet");
-    let gt_path = directory.path().join("development-gt100.parquet");
     let child = Arc::new(Field::new("item", DataType::Float32, false));
-
     let feature_ids = (1_000_u64..1_101).collect::<Vec<_>>();
-    let source_values = (0_u64..101)
-        .flat_map(|ordinal| vector(1, ordinal as f32 / 100.0))
-        .collect::<Vec<_>>();
     let source_embeddings = FixedSizeListArray::try_new(
         child.clone(),
         DIMENSIONS as i32,
-        Arc::new(Float32Array::from(source_values)),
+        Arc::new(Float32Array::from(
+            (0_u64..101)
+                .flat_map(|ordinal| vector(1, ordinal as f32 / 100.0))
+                .collect::<Vec<_>>(),
+        )),
         None,
     )
     .unwrap();
@@ -663,55 +662,80 @@ fn v36_prefix_dataset_writes_exact_truth_in_bounded_query_tiles() {
     .unwrap();
     write_v36_prefix_source_parquet(&source_path, &feature_ids, [source_batch]).unwrap();
 
-    let query_embeddings = FixedSizeListArray::try_new(
-        child,
-        DIMENSIONS as i32,
-        Arc::new(Float32Array::from(vector(1, 0.0))),
-        None,
-    )
-    .unwrap();
-    let query_batch = RecordBatch::try_new(
-        Arc::new(v36_prefix_query_schema()),
-        vec![
-            Arc::new(UInt32Array::from(vec![0])) as ArrayRef,
-            Arc::new(UInt64Array::from(vec![77])),
-            Arc::new(query_embeddings),
-        ],
-    )
-    .unwrap();
-    write_v36_prefix_query_parquet(&query_path, [query_batch]).unwrap();
-
-    write_v36_prefix_gt100_from_parquets(
-        &source_path,
-        &feature_ids,
-        &query_path,
-        V36PrefixQualityRole::Development,
-        1,
-        &gt_path,
-    )
-    .unwrap();
-    let mut observed = Vec::new();
-    scan_v36_prefix_gt100_parquet(&gt_path, 1, |batch| {
-        let ids = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
-        observed.extend((0..batch.num_rows()).map(|row| ids.value(row)));
-        Ok(())
-    })
-    .unwrap();
-    assert_eq!(observed, (1_000_u64..1_100).collect::<Vec<_>>());
-    assert!(
-        write_v36_prefix_gt100_from_parquets(
-            &source_path,
-            &feature_ids,
-            &query_path,
+    let definitions = [
+        (
             V36PrefixQualityRole::Development,
-            2,
-            &gt_path,
-        )
-        .is_err()
+            "development",
+            70_u64,
+            0.0_f32,
+        ),
+        (V36PrefixQualityRole::Validation, "validation", 71, 0.25),
+        (
+            V36PrefixQualityRole::SealedHoldout,
+            "sealed-holdout",
+            72,
+            0.5,
+        ),
+    ];
+    let query_paths = definitions
+        .iter()
+        .map(|(_, name, feature_row_id, value)| {
+            let path = directory.path().join(format!("{name}-query.parquet"));
+            let embeddings = FixedSizeListArray::try_new(
+                child.clone(),
+                DIMENSIONS as i32,
+                Arc::new(Float32Array::from(vector(1, *value))),
+                None,
+            )
+            .unwrap();
+            let batch = RecordBatch::try_new(
+                Arc::new(v36_prefix_query_schema()),
+                vec![
+                    Arc::new(UInt32Array::from(vec![0])) as ArrayRef,
+                    Arc::new(UInt64Array::from(vec![*feature_row_id])),
+                    Arc::new(embeddings),
+                ],
+            )
+            .unwrap();
+            write_v36_prefix_query_parquet(&path, [batch]).unwrap();
+            path
+        })
+        .collect::<Vec<_>>();
+
+    let run = |suffix: &str, workers| {
+        let jobs = definitions
+            .iter()
+            .zip(&query_paths)
+            .map(|((role, name, _, _), query)| V36PrefixGtParquetJob {
+                expected_queries: 1,
+                output: directory.path().join(format!("{name}-gt-{suffix}.parquet")),
+                query: query.clone(),
+                role: *role,
+            })
+            .collect::<Vec<_>>();
+        let stats =
+            write_v36_prefix_gt100_roles_from_parquets(&source_path, &feature_ids, &jobs, workers)
+                .unwrap();
+        (jobs, stats)
+    };
+    let (single_jobs, single) = run("single", 1);
+    let (parallel_jobs, parallel) = run("parallel", 2);
+    assert_eq!(single.source_scans, 1);
+    assert_eq!(single.source_rows, 101);
+    assert_eq!(single.quality_queries, 3);
+    assert_eq!(single, parallel);
+    for (single, parallel) in single_jobs.iter().zip(parallel_jobs) {
+        assert_eq!(
+            fs::read(&single.output).unwrap(),
+            fs::read(parallel.output).unwrap()
+        );
+        scan_v36_prefix_gt100_parquet(&single.output, 1, |_| Ok(())).unwrap();
+    }
+    let mut overlapping = single_jobs;
+    overlapping[0].output = source_path.clone();
+    assert!(
+        write_v36_prefix_gt100_roles_from_parquets(&source_path, &feature_ids, &overlapping, 1,)
+            .is_err()
     );
 }
 
