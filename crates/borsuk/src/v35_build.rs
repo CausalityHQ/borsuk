@@ -1145,7 +1145,6 @@ impl V35BuildEncodedGroupReceipt {
 /// Encode one bounded group into cross-language code/page objects and routing patches.
 pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
     group: V35BuildStorageGroup,
-    generation_digest: [u8; 32],
     first_leaf_ordinal: u32,
     first_page_ordinal: u32,
     sink: &mut S,
@@ -1156,8 +1155,7 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
         .and_then(|bits| bits.checked_add(7))
         .map(|bits| bits / 8)
         .ok_or_else(|| invalid("V35 build encoded group extent overflows"))?;
-    if generation_digest == [0; 32]
-        || group.leaves.is_empty()
+    if group.leaves.is_empty()
         || row_count == 0
         || group.code_bytes
             != row_count
@@ -1267,13 +1265,8 @@ pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
             .into_iter()
             .map(|row| V35ExactPageRow::new(row.id, row.sequence, row.source))
             .collect::<Result<Vec<_>>>()?;
-        let (identity, page_bytes) = encode_v35_exact_page_parquet(
-            page,
-            generation_digest,
-            &target.uri,
-            &target.version_id,
-            &rows,
-        )?;
+        let (identity, page_bytes) =
+            encode_v35_exact_page_parquet(page, &target.uri, &target.version_id, &rows)?;
         sink.write_exact_page(identity, &page_bytes)?;
     }
     Ok(V35BuildEncodedGroupReceipt {

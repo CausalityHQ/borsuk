@@ -366,6 +366,32 @@ Leaf sealing narrows authenticated f64 routing coordinates to the canonical f32
 patch input exactly once, computes each row's clamped omitted energy as
 `max(0, ||source||²-||projected||²)` in ordered f64 arithmetic, and derives
 assignment bounds from source ordinals rather than Morton positions.
+Exact-vector pages are generation-neutral immutable content: their Parquet
+manifest binds the breaking page format, dense page ordinal, source dimension,
+and row count, while the complete object SHA-256, length, URI, and version bind
+the bytes. A page never embeds the routing-generation digest, because that
+digest is not known until the final streamed leaf patch has been sealed. Each
+bounded storage group writes its pages first and then one authenticated Arrow
+page-directory block containing their complete identities. The published
+page-directory root binds those blocks into exactly one routing generation.
+Code- and page-directory blocks are generation-neutral too: a block never
+embeds a root or snapshot digest that can only be computed after the block
+exists. Each directory root instead contains the complete identities and
+covered ordinal intervals of its independently authenticated blocks. The
+published generation binds both final root identities and the visibility
+snapshot.
+This removes a construction hash cycle without weakening serving authority:
+the route, code-directory root, page-directory root, visibility snapshot, and
+query are cross-bound before any GET, and reranking accepts pages only from the
+authenticated selected directory blocks. Unpublished immutable objects are
+unreachable and remain eligible only for registered lifecycle cleanup.
+
+One independently decodable Arrow code object for a storage group is itself a
+legal selected range when its complete encoded length is within the 1-MiB
+chunk cap. The prohibition on whole-code-plane reads applies to the union of
+unselected or over-budget groups, not to a complete selected bounded object.
+Its directory entry still authenticates the exact URI, version, interval,
+complete-object digest, chunk digest, encoded length, and decoded length.
 Local
 builder RSS is capped below 3 GiB with declared 64-MiB buffers; remote scratch may be
 large but is separately prefixed, byte-accounted, lifecycle-tagged, and deleted

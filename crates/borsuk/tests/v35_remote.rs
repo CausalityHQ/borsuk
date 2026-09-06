@@ -3,14 +3,17 @@
 use borsuk::{
     V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35ExactPageResponse,
     V35ExactPageRow, V35ExactPageTransport, V35GroupStorage, V35LeafPatchBuildRequest,
-    V35RemoteChunk, V35RemoteCodeRow, V35RemoteDirectoryBinding, V35RemoteDirectoryBlock,
-    V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse,
-    V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
-    V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
-    build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor, build_v35_routing_generation,
-    build_v35_srht, decode_v35_remote_directory_arrow, decode_v35_snapshot_visibility_arrow,
-    encode_v35_exact_page_parquet, encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow,
-    execute_v35_remote_plan, exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
+    V35PageDirectoryBlockReference, V35RemoteChunk, V35RemoteCodeRow, V35RemoteDirectoryBinding,
+    V35RemoteDirectoryBlock, V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange,
+    V35RemoteRangeResponse, V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix,
+    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
+    V35VersionedRangeTransport, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
+    build_v35_routing_generation, build_v35_srht, decode_v35_page_directory_arrow,
+    decode_v35_page_directory_root_arrow, decode_v35_remote_directory_arrow,
+    decode_v35_snapshot_visibility_arrow, encode_v35_exact_page_parquet,
+    encode_v35_page_directory_arrow, encode_v35_page_directory_root_arrow,
+    encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
+    exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
     reduce_v35_scanned_candidates, rerank_v35_exact_pages, scan_v35_code_ranges,
     select_v35_exact_pages, v35_remote_code_schema_digest,
 };
@@ -613,10 +616,58 @@ fn v35_remote_plan_reads_only_selected_authenticated_ranges() {
 }
 
 #[test]
+fn v35_remote_selected_bounded_code_object_may_be_one_complete_range() {
+    // Break caught: the range constructor confuses one independently
+    // decodable, selected sub-MiB group object with the forbidden whole code
+    // plane, making the streaming writer's final Arrow objects unreadable.
+    let length = 524_288;
+    let complete = V35RemoteChunk::new(
+        0,
+        0,
+        1_024,
+        object(
+            "remote-code-object",
+            "s3://borsuk-index/generations/g01/codes/group-0000.arrow",
+            length,
+            0x41,
+        ),
+        "version-01",
+        0,
+        length,
+        786_432,
+        digest(0x51),
+    )
+    .unwrap();
+    assert_eq!(complete.group_ordinal(), 0);
+    assert_eq!(complete.logical_start(), 0);
+    assert_eq!(complete.decoded_length(), 786_432);
+
+    assert!(
+        V35RemoteChunk::new(
+            0,
+            0,
+            1_024,
+            object(
+                "remote-code-object",
+                "s3://borsuk-index/generations/g01/codes/whole-plane.arrow",
+                MIB + 1,
+                0x42,
+            ),
+            "version-01",
+            0,
+            MIB + 1,
+            786_432,
+            digest(0x52),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn v35_remote_plan_rejects_capability_and_memory_escape_hatches() {
-    // Break caught: an object outside the selected prefix, a whole-object
-    // request, an endpoint/corpus path, or an oversized buffer reaches the
-    // range reader and turns selective S3 search into corpus download/RAM use.
+    // Break caught: an object outside the selected prefix, an endpoint/corpus
+    // path, or an oversized buffer reaches the range reader and turns
+    // selective S3 search into corpus download/RAM use.
     let mut baseline = directory_blocks();
     let identities = baseline
         .iter()
@@ -629,22 +680,6 @@ fn v35_remote_plan_rejects_capability_and_memory_escape_hatches() {
     assert!(plan_v35_remote_reads(&route, &unselected_only).is_err());
 
     let invalid = [
-        V35RemoteChunk::new(
-            0,
-            0,
-            2,
-            object(
-                "remote-code-object",
-                "s3://borsuk-index/generations/g01/codes/whole.bin",
-                200,
-                0x41,
-            ),
-            "v01",
-            0,
-            200,
-            384,
-            digest(0x51),
-        ),
         V35RemoteChunk::new(
             0,
             0,
@@ -1046,7 +1081,6 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
     // Break caught: exact rerank trusts approximate candidates, admits a stale
     // replica/tombstone, accumulates page bodies, or scores routing dimensions.
     let fixture = code_scan_fixture();
-    let generation = fixture.plan.generation_digest();
     let mut candidate_rows = Vec::new();
     let mut pages = Vec::new();
     let mut bodies = HashMap::new();
@@ -1074,7 +1108,7 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
         }
         let uri = format!("s3://borsuk-index/generations/g01/pages/page-{page:04}.parquet");
         let (identity, bytes) =
-            encode_v35_exact_page_parquet(page, generation, &uri, "version-01", &rows).unwrap();
+            encode_v35_exact_page_parquet(page, &uri, "version-01", &rows).unwrap();
         bodies.insert(uri, bytes);
         pages.push(identity);
         expected.push((
@@ -1172,6 +1206,80 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
     );
     assert_eq!(corrupt.completed, 1);
     assert_eq!(corrupt.canceled, 7);
+}
+
+#[test]
+fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
+    // Break caught: page bytes point upward at a routing digest that is known
+    // only after the streaming writer has consumed every source row, or page
+    // identities remain caller-supplied instead of directory-authenticated.
+    let rows = vec![V35ExactPageRow::new(7, 1, vec![0.25; 384]).unwrap()];
+    let page_0_uri = "s3://borsuk-index/attempts/a01/pages/page-0000.parquet";
+    let page_1_uri = "s3://borsuk-index/attempts/a01/pages/page-0001.parquet";
+    let (page_0, bytes_0) =
+        encode_v35_exact_page_parquet(0, page_0_uri, "version-01", &rows).unwrap();
+    let (page_0_again, bytes_0_again) =
+        encode_v35_exact_page_parquet(0, page_0_uri, "version-01", &rows).unwrap();
+    assert_eq!(bytes_0, bytes_0_again);
+    assert_eq!(page_0, page_0_again);
+    let (page_1, _) = encode_v35_exact_page_parquet(1, page_1_uri, "version-01", &rows).unwrap();
+
+    let directory_uri = "s3://borsuk-index/attempts/a01/page-directories/group-0000.arrow";
+    let (bytes, identity) =
+        encode_v35_page_directory_arrow(0, &[page_0, page_1], directory_uri).unwrap();
+    let decoded = decode_v35_page_directory_arrow(&bytes, &identity).unwrap();
+    assert_eq!(decoded.group_ordinal(), 0);
+    assert_eq!(decoded.first_page_ordinal(), 0);
+    assert_eq!(decoded.pages().len(), 2);
+    assert_eq!(decoded.pages()[0].uri(), page_0_uri);
+    assert_eq!(decoded.pages()[1].uri(), page_1_uri);
+
+    let root_uri = "s3://borsuk-index/attempts/a01/page-directory.arrow";
+    let block_reference =
+        V35PageDirectoryBlockReference::new(&decoded, "directory-version-01").unwrap();
+    let (root_bytes, root_identity) =
+        encode_v35_page_directory_root_arrow(std::slice::from_ref(&block_reference), root_uri)
+            .unwrap();
+    let root = decode_v35_page_directory_root_arrow(&root_bytes, &root_identity).unwrap();
+    assert_eq!(root.block_count(), 1);
+    assert_eq!(root.page_count(), 2);
+    assert!(root.authenticates(&decoded, "directory-version-01"));
+
+    let foreign_page_uri = "s3://borsuk-index/attempts/a02/pages/page-0000.parquet";
+    let (foreign_page, _) =
+        encode_v35_exact_page_parquet(0, foreign_page_uri, "version-02", &rows).unwrap();
+    let (foreign_block_bytes, foreign_block_identity) = encode_v35_page_directory_arrow(
+        0,
+        &[foreign_page],
+        "s3://borsuk-index/attempts/a02/page-directories/group-0000.arrow",
+    )
+    .unwrap();
+    let foreign_block =
+        decode_v35_page_directory_arrow(&foreign_block_bytes, &foreign_block_identity).unwrap();
+    assert!(!root.authenticates(&foreign_block, "directory-version-02"));
+    assert!(!root.authenticates_identity(foreign_block.identity()));
+
+    let (page_2, _) = encode_v35_exact_page_parquet(
+        2,
+        "s3://borsuk-index/attempts/a01/pages/page-0002.parquet",
+        "version-01",
+        &rows,
+    )
+    .unwrap();
+    assert!(
+        encode_v35_page_directory_arrow(0, &[decoded.pages()[0].clone(), page_2], directory_uri)
+            .is_err()
+    );
+
+    let mut corrupt = bytes;
+    let midpoint = corrupt.len() / 2;
+    corrupt[midpoint] ^= 1;
+    assert!(decode_v35_page_directory_arrow(&corrupt, &identity).is_err());
+
+    let mut corrupt_root = root_bytes;
+    let root_midpoint = corrupt_root.len() / 2;
+    corrupt_root[root_midpoint] ^= 1;
+    assert!(decode_v35_page_directory_root_arrow(&corrupt_root, &root_identity).is_err());
 }
 
 #[derive(Clone)]

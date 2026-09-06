@@ -807,7 +807,7 @@ fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
         .collect::<Vec<_>>();
     let expected_descriptor = build_v35_residual_sq_descriptor(&source_order, 4).unwrap();
     let mut sink = EncodedObjectSink::default();
-    let receipt = encode_v35_build_storage_group(group, [0x51; 32], 7, 11, &mut sink).unwrap();
+    let receipt = encode_v35_build_storage_group(group, 7, 11, &mut sink).unwrap();
     assert_eq!(receipt.rows(), 600);
     assert_eq!(receipt.patch_count(), 3);
     assert_eq!(receipt.page_count(), 3);
@@ -910,10 +910,7 @@ fn v35_build_encoded_group_preflights_all_targets_before_writing() {
         .unwrap();
     assembler.finish().unwrap();
     let mut sink = CollidingTargetSink::default();
-    assert!(
-        encode_v35_build_storage_group(groups.groups.pop().unwrap(), [0x51; 32], 0, 0, &mut sink)
-            .is_err()
-    );
+    assert!(encode_v35_build_storage_group(groups.groups.pop().unwrap(), 0, 0, &mut sink).is_err());
     assert_eq!(sink.writes, 0);
 
     let oversized = V35Dimensions {
@@ -927,10 +924,7 @@ fn v35_build_encoded_group_preflights_all_targets_before_writing() {
         .unwrap();
     assembler.finish().unwrap();
     let mut sink = EncodedObjectSink::default();
-    assert!(
-        encode_v35_build_storage_group(groups.groups.pop().unwrap(), [0x51; 32], 0, 0, &mut sink)
-            .is_err()
-    );
+    assert!(encode_v35_build_storage_group(groups.groups.pop().unwrap(), 0, 0, &mut sink).is_err());
     assert!(sink.code_objects.is_empty());
     assert!(sink.pages.is_empty());
 }
@@ -971,8 +965,7 @@ fn v35_build_encoded_group_reduces_sq_moments_in_source_ordinal_order() {
         .collect::<Vec<_>>();
     let expected = build_v35_residual_sq_descriptor(&expected_rows, 4).unwrap();
     let mut sink = EncodedObjectSink::default();
-    encode_v35_build_storage_group(groups.groups.pop().unwrap(), [0x51; 32], 0, 0, &mut sink)
-        .unwrap();
+    encode_v35_build_storage_group(groups.groups.pop().unwrap(), 0, 0, &mut sink).unwrap();
     let reader = FileReader::try_new(Cursor::new(&sink.code_objects[0].1), None).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(
         reader

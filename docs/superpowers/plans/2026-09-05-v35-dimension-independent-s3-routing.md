@@ -280,6 +280,23 @@
 
   Accept only registered full-dimensional source blocks plus the authenticated projection. Validate its logical checksum against construction authority, derive every projected row internally through the fused SIMD kernel, emit `(key,source ordinal,projected row,source row)` scratch runs, and merge them with a preregistered bounded fan-in in exact order. Authenticate complete scratch objects before semantic use, expose only at-most-256-row streaming cursors, and report every merge pass and byte written; loading a complete run per input is forbidden. Create at-most-256-row leaves and capped consecutive storage groups, build the Task 5 per-group SQ4/SQ8 descriptors from one bounded group buffer, and emit immutable code/vector objects and assignment directories. Publish only after all content digests are known. Keep one bounded block per worker, one leaf accumulator, one at-most-64-MiB group buffer, and declared 64-MiB merge buffers; lifecycle-tag and clean only registered scratch objects after terminal publication.
 
+  Break the experimental exact-page format rather than preserving a circular
+  generation binding. Page manifests are generation-neutral and bind only the
+  page format, dense ordinal, source dimension, and rows; their complete
+  SHA-256/length/URI/version identities are written into per-group Arrow page
+  directory blocks. Seal and authenticate code-directory and page-directory
+  roots after all bounded objects exist, bind both roots into the routing
+  generation/publication manifest, and publish the conditional head last.
+  Directory blocks are generation-neutral too: they bind exact covered
+  group/logical/page intervals and contained object identities, while the final
+  roots bind the complete block identities. No block embeds its not-yet-known
+  root or visibility-snapshot digest.
+  Require failure-before-publication when any object or directory write fails.
+  Serving must obtain exact-page identities only through authenticated selected
+  page-directory blocks. Also admit a complete selected code-group object as
+  one range when it is independently decodable and within the 1-MiB chunk cap;
+  continue to reject any unselected or over-budget whole-code-plane read.
+
   Cap each external merge pass at 32 authenticated run capabilities. Retain
   one owned row head per run and one at-most-256-row leaf buffer, recompute each
   scratch Morton key against the expected model, and require strict local and

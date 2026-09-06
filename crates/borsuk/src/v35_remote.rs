@@ -10,7 +10,7 @@ use crate::{
 };
 use arrow_array::{
     Array, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
-    StringArray, UInt32Array, UInt64Array,
+    StringArray, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     MetadataVersion,
@@ -43,8 +43,12 @@ const SNAPSHOT_MANIFEST_KEY: &str = "borsuk.v35.snapshot-visibility.manifest";
 const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
 const CODE_FORMAT: &str = "borsuk-v35-remote-code-arrow-v2";
 const CODE_MANIFEST_KEY: &str = "borsuk.v35.remote-code.manifest";
-const PAGE_FORMAT: &str = "borsuk-v35-exact-page-parquet-v1";
+const PAGE_FORMAT: &str = "borsuk-v35-exact-page-parquet-v2";
 const PAGE_MANIFEST_KEY: &str = "borsuk.v35.exact-page.manifest";
+const PAGE_DIRECTORY_FORMAT: &str = "borsuk-v35-page-directory-block-v1";
+const PAGE_DIRECTORY_MANIFEST_KEY: &str = "borsuk.v35.page-directory.manifest";
+const PAGE_DIRECTORY_ROOT_FORMAT: &str = "borsuk-v35-page-directory-root-v1";
+const PAGE_DIRECTORY_ROOT_MANIFEST_KEY: &str = "borsuk.v35.page-directory-root.manifest";
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -1055,7 +1059,6 @@ impl V35ExactPageRow {
 /// Exact immutable identity and bounds for one Parquet page.
 pub struct V35ExactPageIdentity {
     page_ordinal: u32,
-    generation_digest: [u8; 32],
     dimensions: u32,
     rows: u16,
     decoded_length: u64,
@@ -1120,7 +1123,6 @@ pub trait V35ExactPageTransport {
 struct V35ExactPageManifest {
     dimensions: u32,
     format: String,
-    generation_sha256: String,
     page_ordinal: u32,
     rows: u16,
 }
@@ -1164,7 +1166,6 @@ pub(crate) fn projected_exact_page_decoded_bytes(rows: usize, dimensions: usize)
 /// Encode one strict, independently authenticated full-vector Parquet page.
 pub fn encode_v35_exact_page_parquet(
     page_ordinal: u32,
-    generation_digest: [u8; 32],
     uri: &str,
     version_id: &str,
     rows: &[V35ExactPageRow],
@@ -1173,7 +1174,6 @@ pub fn encode_v35_exact_page_parquet(
     if rows.is_empty()
         || rows.len() > 256
         || dimensions == 0
-        || generation_digest == [0; 32]
         || version_id.is_empty()
         || !uri.starts_with("s3://")
         || uri.contains("/corpus/")
@@ -1195,7 +1195,6 @@ pub fn encode_v35_exact_page_parquet(
     let manifest = V35ExactPageManifest {
         dimensions: dimensions_u32,
         format: PAGE_FORMAT.to_owned(),
-        generation_sha256: digest_hex(generation_digest),
         page_ordinal,
         rows: rows_u16,
     };
@@ -1246,7 +1245,6 @@ pub fn encode_v35_exact_page_parquet(
     Ok((
         V35ExactPageIdentity {
             page_ordinal,
-            generation_digest,
             dimensions: dimensions_u32,
             rows: rows_u16,
             decoded_length,
@@ -1255,6 +1253,630 @@ pub fn encode_v35_exact_page_parquet(
         },
         bytes,
     ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35PageDirectoryManifest {
+    dimensions: u32,
+    first_page_ordinal: u32,
+    format: String,
+    group_ordinal: u32,
+    pages: u32,
+    uri: String,
+}
+
+fn page_directory_manifest_json(manifest: &V35PageDirectoryManifest) -> Result<String> {
+    serde_json::to_string(manifest)
+        .map_err(|_| invalid("V35 page-directory manifest cannot be serialized"))
+}
+
+fn page_directory_schema(manifest: &V35PageDirectoryManifest) -> Result<Arc<Schema>> {
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("page_ordinal", DataType::UInt32, false),
+            Field::new("rows", DataType::UInt16, false),
+            Field::new("decoded_length", DataType::UInt64, false),
+            Field::new("object_uri", DataType::Utf8, false),
+            Field::new("object_sha256", DataType::Utf8, false),
+            Field::new("object_length", DataType::UInt64, false),
+            Field::new("version_id", DataType::Utf8, false),
+        ],
+        HashMap::from([(
+            PAGE_DIRECTORY_MANIFEST_KEY.to_owned(),
+            page_directory_manifest_json(manifest)?,
+        )]),
+    )))
+}
+
+fn validate_page_identities(pages: &[V35ExactPageIdentity]) -> Result<()> {
+    let first = pages
+        .first()
+        .ok_or_else(|| invalid("V35 page-directory block is empty"))?;
+    if pages.len() > MAX_DIRECTORY_CHUNKS {
+        return Err(invalid("V35 page-directory block page count differs"));
+    }
+    let mut objects = BTreeSet::new();
+    for (offset, page) in pages.iter().enumerate() {
+        let expected = first
+            .page_ordinal
+            .checked_add(
+                u32::try_from(offset)
+                    .map_err(|_| invalid("V35 page-directory ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V35 page-directory ordinal overflows"))?;
+        if page.page_ordinal != expected
+            || page.dimensions != first.dimensions
+            || page.rows == 0
+            || page.rows > 256
+            || page.decoded_length == 0
+            || page.decoded_length > 4 * MIB
+            || page.object.role != "exact-vector-page"
+            || page.object.digest_algorithm != "sha256"
+            || !is_digest(&page.object.digest)
+            || page.object.length == 0
+            || page.object.length > 4 * MIB
+            || !page.object.uri.starts_with("s3://")
+            || page.object.uri.contains("/corpus/")
+            || page.version_id.is_empty()
+            || !objects.insert((page.object.uri.as_str(), page.version_id.as_str()))
+        {
+            return Err(invalid("V35 page-directory page authority differs"));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One independently authenticated page-directory block for a storage group.
+pub struct V35PageDirectoryBlock {
+    group_ordinal: u32,
+    identity: V35ArtifactIdentity,
+    pages: Vec<V35ExactPageIdentity>,
+}
+
+impl V35PageDirectoryBlock {
+    /// Storage group covered by this block.
+    pub fn group_ordinal(&self) -> u32 {
+        self.group_ordinal
+    }
+    /// First dense page ordinal covered by this block.
+    pub fn first_page_ordinal(&self) -> u32 {
+        self.pages[0].page_ordinal
+    }
+    /// Exact page identities authenticated by this block.
+    pub fn pages(&self) -> &[V35ExactPageIdentity] {
+        &self.pages
+    }
+    /// Complete identity of this directory block.
+    pub fn identity(&self) -> &V35ArtifactIdentity {
+        &self.identity
+    }
+}
+
+/// Encode one generation-neutral Arrow page-directory block.
+pub fn encode_v35_page_directory_arrow(
+    group_ordinal: u32,
+    pages: &[V35ExactPageIdentity],
+    uri: &str,
+) -> Result<(Vec<u8>, V35ArtifactIdentity)> {
+    validate_page_identities(pages)?;
+    if !uri.starts_with("s3://") || uri.contains("/corpus/") {
+        return Err(invalid("V35 page-directory block URI differs"));
+    }
+    let manifest = V35PageDirectoryManifest {
+        dimensions: pages[0].dimensions,
+        first_page_ordinal: pages[0].page_ordinal,
+        format: PAGE_DIRECTORY_FORMAT.to_owned(),
+        group_ordinal,
+        pages: u32::try_from(pages.len())
+            .map_err(|_| invalid("V35 page-directory page count overflows"))?,
+        uri: uri.to_owned(),
+    };
+    let schema = page_directory_schema(&manifest)?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                pages.iter().map(|page| page.page_ordinal),
+            )),
+            Arc::new(UInt16Array::from_iter_values(
+                pages.iter().map(|page| page.rows),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                pages.iter().map(|page| page.decoded_length),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                pages.iter().map(|page| page.object.uri.as_str()),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                pages.iter().map(|page| page.object.digest.as_str()),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                pages.iter().map(|page| page.object.length),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                pages.iter().map(|page| page.version_id.as_str()),
+            )),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    if bytes.len() as u64 > MAX_DIRECTORY_BLOCK_BYTES {
+        return Err(invalid("V35 page-directory block exceeds admission"));
+    }
+    let identity = V35ArtifactIdentity {
+        digest: format!("{:x}", Sha256::digest(&bytes)),
+        digest_algorithm: "sha256".to_owned(),
+        length: bytes.len() as u64,
+        role: "page-directory-block".to_owned(),
+        uri: uri.to_owned(),
+    };
+    Ok((bytes, identity))
+}
+
+/// Authenticate and decode one strict Arrow page-directory block.
+pub fn decode_v35_page_directory_arrow(
+    bytes: &[u8],
+    registered: &V35ArtifactIdentity,
+) -> Result<V35PageDirectoryBlock> {
+    if registered.role != "page-directory-block"
+        || registered.digest_algorithm != "sha256"
+        || !is_digest(&registered.digest)
+        || registered.length != bytes.len() as u64
+        || registered.length == 0
+        || registered.length > MAX_DIRECTORY_BLOCK_BYTES
+        || !registered.uri.starts_with("s3://")
+        || registered.uri.contains("/corpus/")
+        || registered.digest != format!("{:x}", Sha256::digest(bytes))
+    {
+        return Err(invalid("V35 page-directory block identity differs"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 || reader.schema().metadata().len() != 1 {
+        return Err(invalid("V35 page-directory block Arrow envelope differs"));
+    }
+    let manifest_json = reader
+        .schema()
+        .metadata()
+        .get(PAGE_DIRECTORY_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V35 page-directory manifest is missing"))?
+        .clone();
+    let manifest: V35PageDirectoryManifest = serde_json::from_str(&manifest_json)
+        .map_err(|_| invalid("V35 page-directory manifest differs"))?;
+    if page_directory_manifest_json(&manifest)? != manifest_json
+        || manifest.format != PAGE_DIRECTORY_FORMAT
+        || manifest.uri != registered.uri
+        || manifest.pages == 0
+        || manifest.pages as usize > MAX_DIRECTORY_CHUNKS
+        || reader.schema().as_ref() != page_directory_schema(&manifest)?.as_ref()
+    {
+        return Err(invalid("V35 page-directory manifest authority differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V35 page-directory batch is missing"))?;
+    if reader.next().is_some()
+        || batch.num_rows() != manifest.pages as usize
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V35 page-directory batch differs"));
+    }
+    let ordinals = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 page-directory ordinal column differs"))?;
+    let rows = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt16Array>()
+        .ok_or_else(|| invalid("V35 page-directory rows column differs"))?;
+    let decoded = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 page-directory decoded column differs"))?;
+    let uris = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 page-directory URI column differs"))?;
+    let digests = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 page-directory digest column differs"))?;
+    let lengths = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 page-directory length column differs"))?;
+    let versions = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 page-directory version column differs"))?;
+    let mut pages = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        pages.push(V35ExactPageIdentity {
+            page_ordinal: ordinals.value(row),
+            dimensions: manifest.dimensions,
+            rows: rows.value(row),
+            decoded_length: decoded.value(row),
+            object: V35ArtifactIdentity {
+                digest: digests.value(row).to_owned(),
+                digest_algorithm: "sha256".to_owned(),
+                length: lengths.value(row),
+                role: "exact-vector-page".to_owned(),
+                uri: uris.value(row).to_owned(),
+            },
+            version_id: versions.value(row).to_owned(),
+        });
+    }
+    validate_page_identities(&pages)?;
+    if pages[0].page_ordinal != manifest.first_page_ordinal {
+        return Err(invalid("V35 page-directory interval differs"));
+    }
+    Ok(V35PageDirectoryBlock {
+        group_ordinal: manifest.group_ordinal,
+        identity: registered.clone(),
+        pages,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35PageDirectoryRootManifest {
+    blocks: u32,
+    format: String,
+    pages: u64,
+    uri: String,
+}
+
+fn page_directory_root_manifest_json(manifest: &V35PageDirectoryRootManifest) -> Result<String> {
+    serde_json::to_string(manifest)
+        .map_err(|_| invalid("V35 page-directory root manifest cannot be serialized"))
+}
+
+fn page_directory_root_schema(manifest: &V35PageDirectoryRootManifest) -> Result<Arc<Schema>> {
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("group_ordinal", DataType::UInt32, false),
+            Field::new("first_page_ordinal", DataType::UInt32, false),
+            Field::new("pages", DataType::UInt32, false),
+            Field::new("dimensions", DataType::UInt32, false),
+            Field::new("block_uri", DataType::Utf8, false),
+            Field::new("block_sha256", DataType::Utf8, false),
+            Field::new("block_length", DataType::UInt64, false),
+            Field::new("block_version_id", DataType::Utf8, false),
+        ],
+        HashMap::from([(
+            PAGE_DIRECTORY_ROOT_MANIFEST_KEY.to_owned(),
+            page_directory_root_manifest_json(manifest)?,
+        )]),
+    )))
+}
+
+fn validate_page_directory_block_references(
+    blocks: &[V35PageDirectoryBlockReference],
+) -> Result<u64> {
+    let first = blocks
+        .first()
+        .ok_or_else(|| invalid("V35 page-directory root is empty"))?;
+    let dimensions = first.dimensions;
+    let mut next_page = 0_u32;
+    let mut total_pages = 0_u64;
+    let mut identities = BTreeSet::new();
+    for (position, block) in blocks.iter().enumerate() {
+        let block_pages = block.pages;
+        if block.group_ordinal != u32::try_from(position).unwrap_or(u32::MAX)
+            || block.first_page_ordinal != next_page
+            || block.dimensions != dimensions
+            || block.identity.role != "page-directory-block"
+            || block.identity.digest_algorithm != "sha256"
+            || !is_digest(&block.identity.digest)
+            || block.identity.length == 0
+            || block.identity.length > MAX_DIRECTORY_BLOCK_BYTES
+            || !block.identity.uri.starts_with("s3://")
+            || block.identity.uri.contains("/corpus/")
+            || block.version_id.is_empty()
+            || !identities.insert(block.identity.uri.as_str())
+        {
+            return Err(invalid("V35 page-directory root block authority differs"));
+        }
+        next_page = next_page
+            .checked_add(block_pages)
+            .ok_or_else(|| invalid("V35 page-directory root interval overflows"))?;
+        total_pages = total_pages
+            .checked_add(u64::from(block_pages))
+            .ok_or_else(|| invalid("V35 page-directory root page count overflows"))?;
+    }
+    Ok(total_pages)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Bounded root entry retained after one page-directory block is written.
+pub struct V35PageDirectoryBlockReference {
+    group_ordinal: u32,
+    first_page_ordinal: u32,
+    pages: u32,
+    dimensions: u32,
+    identity: V35ArtifactIdentity,
+    version_id: String,
+}
+
+impl V35PageDirectoryBlockReference {
+    /// Bind one decoded block to the immutable S3 version returned by its PUT.
+    pub fn new(block: &V35PageDirectoryBlock, version_id: &str) -> Result<Self> {
+        if version_id.is_empty() {
+            return Err(invalid("V35 page-directory block version differs"));
+        }
+        Ok(Self {
+            group_ordinal: block.group_ordinal,
+            first_page_ordinal: block.pages[0].page_ordinal,
+            pages: u32::try_from(block.pages.len())
+                .map_err(|_| invalid("V35 page-directory page count overflows"))?,
+            dimensions: block.pages[0].dimensions,
+            identity: block.identity.clone(),
+            version_id: version_id.to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated compact root for every page-directory block in a generation.
+pub struct V35PageDirectoryRoot {
+    identity: V35ArtifactIdentity,
+    entries: Vec<V35PageDirectoryBlockReference>,
+    page_count: u64,
+}
+
+impl V35PageDirectoryRoot {
+    /// Number of bounded directory blocks.
+    pub fn block_count(&self) -> usize {
+        self.entries.len()
+    }
+    /// Complete dense page population.
+    pub fn page_count(&self) -> u64 {
+        self.page_count
+    }
+    /// Whether this root names this exact decoded block and covered interval.
+    pub fn authenticates(&self, block: &V35PageDirectoryBlock, version_id: &str) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.group_ordinal == block.group_ordinal
+                && entry.first_page_ordinal == block.pages[0].page_ordinal
+                && entry.pages as usize == block.pages.len()
+                && entry.dimensions == block.pages[0].dimensions
+                && entry.identity == block.identity
+                && entry.version_id == version_id
+        })
+    }
+    /// Whether this root names one exact block identity.
+    pub fn authenticates_identity(&self, identity: &V35ArtifactIdentity) -> bool {
+        self.entries.iter().any(|entry| &entry.identity == identity)
+    }
+    /// Complete root identity pinned by the generation manifest.
+    pub fn identity(&self) -> &V35ArtifactIdentity {
+        &self.identity
+    }
+}
+
+/// Encode the compact Arrow root of generation-neutral page-directory blocks.
+pub fn encode_v35_page_directory_root_arrow(
+    blocks: &[V35PageDirectoryBlockReference],
+    uri: &str,
+) -> Result<(Vec<u8>, V35ArtifactIdentity)> {
+    let page_count = validate_page_directory_block_references(blocks)?;
+    if !uri.starts_with("s3://") || uri.contains("/corpus/") {
+        return Err(invalid("V35 page-directory root URI differs"));
+    }
+    let manifest = V35PageDirectoryRootManifest {
+        blocks: u32::try_from(blocks.len())
+            .map_err(|_| invalid("V35 page-directory root block count overflows"))?,
+        format: PAGE_DIRECTORY_ROOT_FORMAT.to_owned(),
+        pages: page_count,
+        uri: uri.to_owned(),
+    };
+    let schema = page_directory_root_schema(&manifest)?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                blocks.iter().map(|block| block.group_ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                blocks.iter().map(|block| block.first_page_ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                blocks.iter().map(|block| block.pages),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                blocks.iter().map(|block| block.dimensions),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                blocks.iter().map(|block| block.identity.uri.as_str()),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                blocks.iter().map(|block| block.identity.digest.as_str()),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                blocks.iter().map(|block| block.identity.length),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                blocks.iter().map(|block| block.version_id.as_str()),
+            )),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    if bytes.len() as u64 > 64 * MIB {
+        return Err(invalid("V35 page-directory root exceeds admission"));
+    }
+    let identity = V35ArtifactIdentity {
+        digest: format!("{:x}", Sha256::digest(&bytes)),
+        digest_algorithm: "sha256".to_owned(),
+        length: bytes.len() as u64,
+        role: "page-directory".to_owned(),
+        uri: uri.to_owned(),
+    };
+    Ok((bytes, identity))
+}
+
+/// Authenticate and decode one compact Arrow page-directory root.
+pub fn decode_v35_page_directory_root_arrow(
+    bytes: &[u8],
+    registered: &V35ArtifactIdentity,
+) -> Result<V35PageDirectoryRoot> {
+    if registered.role != "page-directory"
+        || registered.digest_algorithm != "sha256"
+        || !is_digest(&registered.digest)
+        || registered.length != bytes.len() as u64
+        || registered.length == 0
+        || registered.length > 64 * MIB
+        || !registered.uri.starts_with("s3://")
+        || registered.uri.contains("/corpus/")
+        || registered.digest != format!("{:x}", Sha256::digest(bytes))
+    {
+        return Err(invalid("V35 page-directory root identity differs"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 || reader.schema().metadata().len() != 1 {
+        return Err(invalid("V35 page-directory root Arrow envelope differs"));
+    }
+    let manifest_json = reader
+        .schema()
+        .metadata()
+        .get(PAGE_DIRECTORY_ROOT_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V35 page-directory root manifest is missing"))?
+        .clone();
+    let manifest: V35PageDirectoryRootManifest = serde_json::from_str(&manifest_json)
+        .map_err(|_| invalid("V35 page-directory root manifest differs"))?;
+    if page_directory_root_manifest_json(&manifest)? != manifest_json
+        || manifest.format != PAGE_DIRECTORY_ROOT_FORMAT
+        || manifest.uri != registered.uri
+        || manifest.blocks == 0
+        || reader.schema().as_ref() != page_directory_root_schema(&manifest)?.as_ref()
+    {
+        return Err(invalid(
+            "V35 page-directory root manifest authority differs",
+        ));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V35 page-directory root batch is missing"))?;
+    if reader.next().is_some()
+        || batch.num_rows() != manifest.blocks as usize
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V35 page-directory root batch differs"));
+    }
+    let groups = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 page-directory root group column differs"))?;
+    let first_pages = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 page-directory root first-page column differs"))?;
+    let page_counts = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 page-directory root page-count column differs"))?;
+    let dimensions = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 page-directory root dimensions column differs"))?;
+    let uris = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 page-directory root URI column differs"))?;
+    let digests = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 page-directory root digest column differs"))?;
+    let lengths = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 page-directory root length column differs"))?;
+    let versions = batch
+        .column(7)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 page-directory root version column differs"))?;
+    let mut entries = Vec::with_capacity(batch.num_rows());
+    let mut next_page = 0_u32;
+    let mut page_count = 0_u64;
+    let mut seen_uris = BTreeSet::new();
+    for row in 0..batch.num_rows() {
+        let identity = V35ArtifactIdentity {
+            digest: digests.value(row).to_owned(),
+            digest_algorithm: "sha256".to_owned(),
+            length: lengths.value(row),
+            role: "page-directory-block".to_owned(),
+            uri: uris.value(row).to_owned(),
+        };
+        let pages = page_counts.value(row);
+        if groups.value(row) != u32::try_from(row).unwrap_or(u32::MAX)
+            || first_pages.value(row) != next_page
+            || pages == 0
+            || dimensions.value(row) == 0
+            || !is_digest(&identity.digest)
+            || identity.length == 0
+            || identity.length > MAX_DIRECTORY_BLOCK_BYTES
+            || !identity.uri.starts_with("s3://")
+            || identity.uri.contains("/corpus/")
+            || versions.value(row).is_empty()
+            || !seen_uris.insert(identity.uri.clone())
+        {
+            return Err(invalid("V35 page-directory root entry differs"));
+        }
+        next_page = next_page
+            .checked_add(pages)
+            .ok_or_else(|| invalid("V35 page-directory root interval overflows"))?;
+        page_count = page_count
+            .checked_add(u64::from(pages))
+            .ok_or_else(|| invalid("V35 page-directory root page count overflows"))?;
+        entries.push(V35PageDirectoryBlockReference {
+            group_ordinal: groups.value(row),
+            first_page_ordinal: first_pages.value(row),
+            pages,
+            dimensions: dimensions.value(row),
+            identity,
+            version_id: versions.value(row).to_owned(),
+        });
+    }
+    if page_count != manifest.pages {
+        return Err(invalid("V35 page-directory root page total differs"));
+    }
+    Ok(V35PageDirectoryRoot {
+        identity: registered.clone(),
+        entries,
+        page_count,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1357,7 +1979,6 @@ pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
     let mut page_objects = BTreeSet::new();
     for (expected_page, identity) in selected.iter().zip(pages) {
         if identity.page_ordinal != *expected_page
-            || identity.generation_digest != plan.generation_digest
             || identity.dimensions as usize != dimensions
             || identity.rows == 0
             || identity.rows > 256
@@ -1404,7 +2025,6 @@ pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
             }
         };
         if identity.page_ordinal != *expected_page
-            || identity.generation_digest != plan.generation_digest
             || identity.dimensions as usize != dimensions
             || identity.rows == 0
             || identity.rows > 256
@@ -1441,7 +2061,6 @@ pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
                 .map_err(|_| invalid("V35 exact page manifest differs"))?;
             if exact_page_manifest_json(&manifest)? != *manifest_json
                 || manifest.format != PAGE_FORMAT
-                || manifest.generation_sha256 != digest_hex(plan.generation_digest)
                 || manifest.page_ordinal != *expected_page
                 || manifest.dimensions as usize != dimensions
                 || manifest.rows != identity.rows
@@ -1760,7 +2379,6 @@ impl V35RemoteChunk {
             || decoded_length == 0
             || decoded_length > MAX_DECODED_CHUNK_BYTES
             || end > object.length
-            || (offset == 0 && encoded_length == object.length)
             || !is_digest(&digest)
         {
             return Err(invalid("V35 remote chunk authority differs"));
