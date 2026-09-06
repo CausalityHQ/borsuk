@@ -12,8 +12,8 @@ use borsuk::{
     V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
     V36PrefixInputRow, V36PrefixPopulationAuthority, V36PrefixPopulationCommit,
     V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
-    V36PrefixRoleAuthority, V36PrefixSourceObject, bind_v36_prefix_population_authority,
-    canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixResumeBinding, V36PrefixRoleAuthority, V36PrefixSourceObject,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
@@ -341,7 +341,8 @@ fn execution_authority() -> V36PrefixFreezeExecutionAuthority {
         })
         .collect(),
         output_prefix: "s3://fixture/v36/output/attempt-0001/".into(),
-        schema: "borsuk-v36-prefix-freeze-execution-authority-v1".into(),
+        resume: None,
+        schema: "borsuk-v36-prefix-freeze-execution-authority-v2".into(),
         source_commit: "1".repeat(40),
     }
 }
@@ -381,6 +382,27 @@ fn v36_prefix_dataset_execution_authority_binds_provenance_and_lifecycle() {
     let mut drifted = authority;
     drifted.output_prefix.pop();
     assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());
+
+    let mut resumed = execution_authority();
+    resumed.resume = Some(V36PrefixResumeBinding {
+        generation: 7,
+        manifest: V36ArtifactIdentity {
+            blake3: "b".repeat(64),
+            encoded_bytes: 2_048,
+            role: "checkpoint-manifest".into(),
+            sha256: "a".repeat(64),
+            uri: format!(
+                "s3://fixture/v36/checkpoints/objects/{}-checkpoint-00000007.json",
+                "a".repeat(64)
+            ),
+        },
+        pointer_encoded_bytes: 1_024,
+        pointer_sha256: "c".repeat(64),
+        pointer_uri: "s3://fixture/v36/checkpoints/runs/v36-prefix-screen-r01/latest.json".into(),
+    });
+    validate_v36_prefix_freeze_execution_authority(&resumed).unwrap();
+    resumed.resume.as_mut().unwrap().manifest.role = "source".into();
+    assert!(validate_v36_prefix_freeze_execution_authority(&resumed).is_err());
 }
 
 #[test]

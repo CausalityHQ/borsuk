@@ -313,10 +313,28 @@ pub struct V36PrefixFreezeExecutionAuthority {
     pub inputs: Vec<V36ArtifactIdentity>,
     /// Attempt-scoped S3 output prefix.
     pub output_prefix: String,
+    /// Exact newest run-scoped population head, absent only for a fresh start.
+    pub resume: Option<V36PrefixResumeBinding>,
     /// Exact authority schema marker.
     pub schema: String,
     /// Exact source commit used to build the executable.
     pub source_commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Immutable checkpoint head bound into one replacement attempt.
+pub struct V36PrefixResumeBinding {
+    /// Exact newest generation observed before launch.
+    pub generation: u32,
+    /// Immutable manifest named by the pointer.
+    pub manifest: V36ArtifactIdentity,
+    /// Exact canonical pointer length.
+    pub pointer_encoded_bytes: u64,
+    /// SHA-256 of the exact canonical pointer bytes.
+    pub pointer_sha256: String,
+    /// Sole run-scoped newest-pointer URI.
+    pub pointer_uri: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -969,7 +987,7 @@ fn valid_s3_object_uri(uri: &str, prefix: bool) -> bool {
 pub fn validate_v36_prefix_freeze_execution_authority(
     authority: &V36PrefixFreezeExecutionAuthority,
 ) -> Result<()> {
-    if authority.schema != "borsuk-v36-prefix-freeze-execution-authority-v1"
+    if authority.schema != "borsuk-v36-prefix-freeze-execution-authority-v2"
         || authority.claim_eligible
         || authority.active_wall_seconds == 0
         || authority.active_wall_seconds > 43_200
@@ -1015,6 +1033,15 @@ pub fn validate_v36_prefix_freeze_execution_authority(
             })
     {
         return Err(invalid("V36 prefix freeze execution inputs differ"));
+    }
+    if authority.resume.as_ref().is_some_and(|resume| {
+        !valid_checkpoint_artifact(&resume.manifest, "checkpoint-manifest")
+            || resume.pointer_encoded_bytes == 0
+            || !valid_digest(&resume.pointer_sha256)
+            || !valid_s3_object_uri(&resume.pointer_uri, false)
+            || resume.pointer_uri == resume.manifest.uri
+    }) {
+        return Err(invalid("V36 prefix freeze resume binding differs"));
     }
     Ok(())
 }

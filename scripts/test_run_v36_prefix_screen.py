@@ -384,7 +384,8 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
             ],
             "output_prefix": "s3://fixture/v36/prefix-results/attempt-0000/",
-            "schema": "borsuk-v36-prefix-freeze-execution-authority-v1",
+            "resume": None,
+            "schema": "borsuk-v36-prefix-freeze-execution-authority-v2",
             "source_commit": plan.source_commit,
         }
         outputs = [
