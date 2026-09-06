@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     BorsukError, Result, V35ArtifactIdentity, V35RemoteDirectoryBinding, V35RoutePrefix,
-    v35_route::v35_artifact_authority_digest,
+    simd_control::f32x8, v35_route::v35_artifact_authority_digest,
 };
 use arrow_array::{Array, RecordBatch, StringArray, UInt32Array, UInt64Array};
 use arrow_ipc::{
@@ -391,6 +391,95 @@ impl V35ResidualSqDescriptor {
     /// Packed source-order row codes.
     pub fn codes(&self) -> &[u8] {
         &self.codes
+    }
+}
+
+/// Reusable allocation-free SIMD scorer for one bounded residual-SQ group.
+pub struct V35ResidualSqScorer<'a> {
+    descriptor: &'a V35ResidualSqDescriptor,
+    query: &'a [f32],
+    levels: f32,
+}
+
+impl<'a> V35ResidualSqScorer<'a> {
+    /// Bind one full-source query to one validated SQ4/SQ8 descriptor.
+    pub fn new(descriptor: &'a V35ResidualSqDescriptor, query: &'a [f32]) -> Result<Self> {
+        let dimensions = usize::try_from(descriptor.dimensions)
+            .map_err(|_| invalid("V35 residual SQ dimensions overflow"))?;
+        let width = usize::try_from(descriptor.bytes_per_row)
+            .map_err(|_| invalid("V35 residual SQ row bytes overflow"))?;
+        let rows = usize::try_from(descriptor.rows)
+            .map_err(|_| invalid("V35 residual SQ rows overflow"))?;
+        if query.len() != dimensions
+            || query.iter().any(|value| !value.is_finite())
+            || descriptor.center_f16_bits.len() != dimensions
+            || descriptor.scales.len() != dimensions
+            || descriptor
+                .scales
+                .iter()
+                .any(|scale| !scale.is_finite() || *scale < 0.0)
+            || descriptor.codes.len() != rows.saturating_mul(width)
+            || !matches!(descriptor.bits_per_dimension, 4 | 8)
+        {
+            return Err(invalid("V35 residual SQ scorer authority differs"));
+        }
+        Ok(Self {
+            descriptor,
+            query,
+            levels: if descriptor.bits_per_dimension == 4 {
+                15.0
+            } else {
+                255.0
+            },
+        })
+    }
+
+    fn decoded(&self, codes: &[u8], dimension: usize) -> f32 {
+        let code = if self.descriptor.bits_per_dimension == 8 {
+            codes[dimension]
+        } else if dimension % 2 == 0 {
+            codes[dimension / 2] >> 4
+        } else {
+            codes[dimension / 2] & 0x0f
+        };
+        let center = f16::from_bits(self.descriptor.center_f16_bits[dimension]).to_f32();
+        let scale = self.descriptor.scales[dimension];
+        center - self.levels * scale / 2.0 + f32::from(code) * scale
+    }
+
+    /// Score one row with eight source dimensions per SIMD step and a scalar tail.
+    pub fn score(&self, row: u64) -> Result<f32> {
+        if row >= self.descriptor.rows {
+            return Err(invalid("V35 residual SQ scorer row differs"));
+        }
+        let width = self.descriptor.bytes_per_row as usize;
+        let start = usize::try_from(row)
+            .ok()
+            .and_then(|row| row.checked_mul(width))
+            .ok_or_else(|| invalid("V35 residual SQ scorer row overflows"))?;
+        let codes = self
+            .descriptor
+            .codes
+            .get(start..start + width)
+            .ok_or_else(|| invalid("V35 residual SQ scorer code extent differs"))?;
+        let dimensions = self.query.len();
+        let bulk = dimensions / 8 * 8;
+        let mut accumulator = f32x8::ZERO;
+        for base in (0..bulk).step_by(8) {
+            let decoded = std::array::from_fn(|lane| self.decoded(codes, base + lane));
+            let query = std::array::from_fn(|lane| self.query[base + lane]);
+            let delta = f32x8::from(query) - f32x8::from(decoded);
+            accumulator += delta * delta;
+        }
+        let mut score = accumulator.reduce_add();
+        for dimension in bulk..dimensions {
+            let delta = self.query[dimension] - self.decoded(codes, dimension);
+            score = delta.mul_add(delta, score);
+        }
+        if !score.is_finite() {
+            return Err(invalid("V35 residual SQ score is nonfinite"));
+        }
+        Ok(if score == 0.0 { 0.0 } else { score })
     }
 }
 

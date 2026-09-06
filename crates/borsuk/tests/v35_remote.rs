@@ -4,11 +4,11 @@ use borsuk::{
     V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35GroupStorage,
     V35LeafPatchBuildRequest, V35RemoteChunk, V35RemoteDirectoryBinding, V35RemoteDirectoryBlock,
     V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse,
-    V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility,
-    V35TransportFailure, V35VersionedRangeTransport, build_v35_leaf_patch_arm,
-    build_v35_residual_sq_descriptor, build_v35_routing_generation, build_v35_srht,
-    decode_v35_remote_directory_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
-    exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
+    V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
+    V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
+    build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor, build_v35_routing_generation,
+    build_v35_srht, decode_v35_remote_directory_arrow, encode_v35_remote_directory_arrow,
+    execute_v35_remote_plan, exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
     reduce_v35_scanned_candidates, select_v35_exact_pages,
 };
 use sha2::{Digest, Sha256};
@@ -656,6 +656,68 @@ fn v35_remote_sq4_and_sq8_use_f16_centers_group_sigma_and_source_order() {
     let sq8 = build_v35_residual_sq_descriptor(&rows, 8).unwrap();
     assert_eq!(sq8.bytes_per_row(), 4);
     assert_eq!(sq8.codes(), &[96, 96, 96, 0, 159, 159, 159, 0]);
+}
+
+fn scalar_residual_sq_score(
+    descriptor: &borsuk::V35ResidualSqDescriptor,
+    row: usize,
+    query: &[f32],
+) -> f32 {
+    let width = descriptor.bytes_per_row() as usize;
+    let codes = &descriptor.codes()[row * width..(row + 1) * width];
+    let levels = if descriptor.bits_per_dimension() == 4 {
+        15.0
+    } else {
+        255.0
+    };
+    query
+        .iter()
+        .enumerate()
+        .map(|(dimension, query)| {
+            let code = if descriptor.bits_per_dimension() == 8 {
+                codes[dimension]
+            } else if dimension % 2 == 0 {
+                codes[dimension / 2] >> 4
+            } else {
+                codes[dimension / 2] & 0x0f
+            };
+            let center = half::f16::from_bits(descriptor.center_f16_bits()[dimension]).to_f32();
+            let scale = descriptor.scales()[dimension];
+            let decoded = center - levels * scale / 2.0 + f32::from(code) * scale;
+            let delta = *query - decoded;
+            delta * delta
+        })
+        .sum()
+}
+
+#[test]
+fn v35_remote_residual_sq_scorer_is_simd_bounded_for_every_dimension_and_rate() {
+    // Break caught: high-dimensional code scoring falls back to scalar or
+    // allocates a decoded vector per row, and odd SQ4 tails change ordering.
+    for dimensions in [97, 384, 1_536, 3_072] {
+        let rows = (0..3)
+            .map(|row| {
+                (0..dimensions)
+                    .map(|dimension| ((row * 37 + dimension * 13) % 251) as f32 / 31.0 - 4.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let query = (0..dimensions)
+            .map(|dimension| ((dimension * 19) % 127) as f32 / 17.0 - 3.0)
+            .collect::<Vec<_>>();
+        for bits in [4, 8] {
+            let descriptor = build_v35_residual_sq_descriptor(&rows, bits).unwrap();
+            let scorer = V35ResidualSqScorer::new(&descriptor, &query).unwrap();
+            for row in 0..rows.len() {
+                let simd = scorer.score(row as u64).unwrap();
+                let scalar = scalar_residual_sq_score(&descriptor, row, &query);
+                let tolerance = 2.0e-5 * scalar.abs().max(1.0);
+                assert!((simd - scalar).abs() <= tolerance);
+            }
+            assert!(scorer.score(rows.len() as u64).is_err());
+            assert!(V35ResidualSqScorer::new(&descriptor, &query[..dimensions - 1]).is_err());
+        }
+    }
 }
 
 #[test]
