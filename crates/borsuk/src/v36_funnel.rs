@@ -241,7 +241,8 @@ pub struct V36PrefixSourceObject {
     pub uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// One object from an authenticated ordered V36 source registry.
 pub struct V36PrefixRegisteredSourceObject {
     /// Complete encoded length.
@@ -252,6 +253,48 @@ pub struct V36PrefixRegisteredSourceObject {
     pub sha256: String,
     /// Immutable source URI.
     pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Immutable inputs and limits for one V36 prefix population freeze.
+pub struct V36PrefixFreezeAuthority {
+    /// Diagnostic authority can never support release claims.
+    pub claim_eligible: bool,
+    /// Capability available while constructing the population.
+    pub construction_capability: String,
+    /// Exact corpus rows after query removal.
+    pub corpus_rows: u64,
+    /// Exact distinct candidates retained before role hashing.
+    pub distinct_candidates: u64,
+    /// Physical duplicate resolution rule.
+    pub duplicate_rule: String,
+    /// Capability available to later evaluation.
+    pub evaluation_capability: String,
+    /// Complete-source disposition for any invalid gated row.
+    pub invalid_row_policy: String,
+    /// Maximum complete source objects.
+    pub object_cap: u16,
+    /// Query-independent object ranking algorithm.
+    pub object_sampling_algorithm: String,
+    /// Digest of the complete ordered source registry.
+    pub ordered_source_manifest_sha256: String,
+    /// Sum of encoded lengths across the complete registered source set.
+    pub registry_encoded_bytes: u64,
+    /// Count of objects in the complete registered source set.
+    pub registry_objects: u32,
+    /// Ordered query-role authorities.
+    pub roles: Vec<V36PrefixRoleAuthority>,
+    /// Exact authority schema marker.
+    pub schema: String,
+    /// Maximum complete encoded source bytes.
+    pub source_byte_cap: u64,
+    /// Frozen upstream source revision.
+    pub source_revision: String,
+    /// Bytes available to each streaming workspace.
+    pub workspace_bytes: u64,
+    /// Count of streaming workspaces.
+    pub workspace_count: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -392,36 +435,11 @@ fn validate_prefix_source_registry(
     if source_registry.len() < population.consumed_objects.len() {
         return Err(invalid("V36 prefix source registry is incomplete"));
     }
-    let mut paths = BTreeSet::new();
-    let mut uris = BTreeSet::new();
-    let mut ordered = source_registry.iter().collect::<Vec<_>>();
-    ordered.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
-    let mut manifest_hasher = Sha256::new();
-    for object in ordered {
-        let expected_uri = format!(
-            "https://huggingface.co/datasets/andropar/relaion2b-natural-embeddings/resolve/{}/{path}",
-            population.source_revision,
-            path = object.path,
-        );
-        if object.path.is_empty()
-            || object.uri != expected_uri
-            || object.encoded_bytes == 0
-            || !valid_digest(&object.sha256)
-            || !paths.insert(object.path.as_str())
-            || !uris.insert(object.uri.as_str())
-        {
-            return Err(invalid("V36 prefix registered source object differs"));
-        }
-        manifest_hasher.update(object.path.as_bytes());
-        manifest_hasher.update(b"\t");
-        manifest_hasher.update(object.sha256.as_bytes());
-        manifest_hasher.update(b"\t");
-        manifest_hasher.update(object.encoded_bytes.to_string().as_bytes());
-        manifest_hasher.update(b"\n");
-    }
-    if format!("{:x}", manifest_hasher.finalize()) != population.ordered_source_manifest_sha256 {
-        return Err(invalid("V36 prefix ordered source manifest differs"));
-    }
+    validate_prefix_source_registry_identity(
+        &population.source_revision,
+        &population.ordered_source_manifest_sha256,
+        source_registry,
+    )?;
 
     let mut ranked = source_registry
         .iter()
@@ -446,6 +464,44 @@ fn validate_prefix_source_registry(
                 "V36 prefix consumed objects are not the ranked prefix",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_prefix_source_registry_identity(
+    source_revision: &str,
+    ordered_source_manifest_sha256: &str,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    let mut paths = BTreeSet::new();
+    let mut uris = BTreeSet::new();
+    let mut ordered = source_registry.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
+    let mut manifest_hasher = Sha256::new();
+    for object in ordered {
+        let expected_uri = format!(
+            "https://huggingface.co/datasets/andropar/relaion2b-natural-embeddings/resolve/{}/{path}",
+            source_revision,
+            path = object.path,
+        );
+        if object.path.is_empty()
+            || object.uri != expected_uri
+            || object.encoded_bytes == 0
+            || !valid_digest(&object.sha256)
+            || !paths.insert(object.path.as_str())
+            || !uris.insert(object.uri.as_str())
+        {
+            return Err(invalid("V36 prefix registered source object differs"));
+        }
+        manifest_hasher.update(object.path.as_bytes());
+        manifest_hasher.update(b"\t");
+        manifest_hasher.update(object.sha256.as_bytes());
+        manifest_hasher.update(b"\t");
+        manifest_hasher.update(object.encoded_bytes.to_string().as_bytes());
+        manifest_hasher.update(b"\n");
+    }
+    if format!("{:x}", manifest_hasher.finalize()) != ordered_source_manifest_sha256 {
+        return Err(invalid("V36 prefix ordered source manifest differs"));
     }
     Ok(())
 }
@@ -566,6 +622,120 @@ pub fn validate_v36_prefix_population_authority(
     source_registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<()> {
     validate_prefix_population(population, source_registry)
+}
+
+/// Validate immutable freeze inputs without requiring future consumed-object evidence.
+pub fn validate_v36_prefix_freeze_authority(
+    authority: &V36PrefixFreezeAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    if authority.schema != "borsuk-v36-prefix-freeze-authority-v1"
+        || authority.claim_eligible
+        || authority.construction_capability != "named-query-excluded-corpus-only-no-query-truth"
+        || authority.evaluation_capability != "named-artifacts-only-no-source-list-discovery"
+        || authority.invalid_row_policy != "reject-complete-source-revision"
+        || authority.object_sampling_algorithm
+            != "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path"
+        || authority.duplicate_rule != "first-selected-object-ordinal-then-row-offset"
+        || authority.distinct_candidates != 1_100_000
+        || authority.corpus_rows != 1_000_000
+        || authority.object_cap != 16
+        || authority.source_byte_cap != 6 * 1_024 * MIB
+        || authority.registry_objects != u32::try_from(source_registry.len()).unwrap_or(u32::MAX)
+        || authority.workspace_count != 16
+        || authority.workspace_bytes != 32 * MIB
+        || authority.source_revision != "bfc7465dcf1245bd605d35dcaf5d2177bbc2025a"
+    {
+        return Err(invalid("V36 prefix freeze authority differs"));
+    }
+    let registry_encoded_bytes = source_registry.iter().try_fold(0_u64, |total, object| {
+        total
+            .checked_add(object.encoded_bytes)
+            .ok_or_else(|| invalid("V36 prefix registry bytes overflow"))
+    })?;
+    if authority.registry_encoded_bytes != registry_encoded_bytes {
+        return Err(invalid("V36 prefix registry byte total differs"));
+    }
+    let expected_roles = [
+        (
+            "development",
+            1_000_u64,
+            "borsuk-v36-prefix-screen-development-query-v1",
+        ),
+        (
+            "validation",
+            1_000,
+            "borsuk-v36-prefix-screen-validation-query-v1",
+        ),
+        (
+            "sealed-holdout",
+            1_000,
+            "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
+        ),
+        (
+            "performance",
+            10_000,
+            "borsuk-v36-prefix-screen-performance-query-v1",
+        ),
+    ];
+    if authority.roles.len() != expected_roles.len()
+        || authority
+            .roles
+            .iter()
+            .zip(expected_roles)
+            .any(|(role, expected)| {
+                role.role != expected.0
+                    || role.rows != expected.1
+                    || role.seed_label != expected.2
+                    || role.seed_sha256 != format!("{:x}", Sha256::digest(expected.2.as_bytes()))
+            })
+    {
+        return Err(invalid("V36 prefix freeze role authority differs"));
+    }
+    validate_prefix_source_registry_identity(
+        &authority.source_revision,
+        &authority.ordered_source_manifest_sha256,
+        source_registry,
+    )
+}
+
+/// Canonical newline JSON for one validated pre-freeze authority.
+pub fn canonical_v36_prefix_freeze_authority_bytes(
+    authority: &V36PrefixFreezeAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<Vec<u8>> {
+    validate_v36_prefix_freeze_authority(authority, source_registry)?;
+    canonical_value_bytes(authority)
+}
+
+/// Bind observed complete consumed objects into the post-freeze population receipt.
+pub fn bind_v36_prefix_population_authority(
+    authority: &V36PrefixFreezeAuthority,
+    consumed_objects: Vec<V36PrefixSourceObject>,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<V36PrefixPopulationAuthority> {
+    validate_v36_prefix_freeze_authority(authority, source_registry)?;
+    let population = V36PrefixPopulationAuthority {
+        claim_eligible: authority.claim_eligible,
+        construction_capability: authority.construction_capability.clone(),
+        consumed_objects,
+        corpus_rows: authority.corpus_rows,
+        distinct_candidates: authority.distinct_candidates,
+        duplicate_rule: authority.duplicate_rule.clone(),
+        evaluation_capability: authority.evaluation_capability.clone(),
+        format: "borsuk-v36-prefix-population-authority-v1".into(),
+        object_cap: authority.object_cap,
+        object_sampling_algorithm: authority.object_sampling_algorithm.clone(),
+        ordered_source_manifest_sha256: authority.ordered_source_manifest_sha256.clone(),
+        population_id: "borsuk-v36-prefix-screen-population-v1".into(),
+        roles: authority.roles.clone(),
+        source_byte_cap: authority.source_byte_cap,
+        source_revision: authority.source_revision.clone(),
+        workspace_bytes: authority.workspace_bytes,
+        workspace_count: authority.workspace_count,
+    };
+    validate_prefix_population(&population, source_registry)?;
+    Ok(population)
 }
 
 fn validate_prefix_projection(projection: &V36ProjectionArm) -> Result<()> {

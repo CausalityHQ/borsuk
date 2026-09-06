@@ -8,16 +8,18 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    V36PrefixGtAccumulator, V36PrefixInputRow, V36PrefixPopulationAuthority, V36PrefixQualityRole,
-    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority,
-    V36PrefixSourceObject, deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
-    rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
+    V36PrefixFreezeAuthority, V36PrefixGtAccumulator, V36PrefixInputRow,
+    V36PrefixPopulationAuthority, V36PrefixQualityRole, V36PrefixRankedSourceObject,
+    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
+    deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100, rank_v36_prefix_source_objects,
+    scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
     select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
     v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_input_row,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -126,6 +128,30 @@ fn population(registry: &[V36PrefixRegisteredSourceObject]) -> V36PrefixPopulati
     }
 }
 
+fn freeze_authority(registry: &[V36PrefixRegisteredSourceObject]) -> V36PrefixFreezeAuthority {
+    let population = population(registry);
+    V36PrefixFreezeAuthority {
+        claim_eligible: false,
+        construction_capability: population.construction_capability,
+        corpus_rows: population.corpus_rows,
+        distinct_candidates: population.distinct_candidates,
+        duplicate_rule: population.duplicate_rule,
+        evaluation_capability: population.evaluation_capability,
+        object_cap: population.object_cap,
+        object_sampling_algorithm: population.object_sampling_algorithm,
+        ordered_source_manifest_sha256: population.ordered_source_manifest_sha256,
+        registry_encoded_bytes: registry.iter().map(|object| object.encoded_bytes).sum(),
+        registry_objects: registry.len().try_into().unwrap(),
+        roles: population.roles,
+        schema: "borsuk-v36-prefix-freeze-authority-v1".into(),
+        source_byte_cap: population.source_byte_cap,
+        source_revision: population.source_revision,
+        workspace_bytes: population.workspace_bytes,
+        workspace_count: population.workspace_count,
+        invalid_row_policy: "reject-complete-source-revision".into(),
+    }
+}
+
 fn source_registry() -> Vec<V36PrefixRegisteredSourceObject> {
     vec![
         V36PrefixRegisteredSourceObject {
@@ -146,7 +172,7 @@ fn source_registry() -> Vec<V36PrefixRegisteredSourceObject> {
 #[test]
 fn v36_prefix_dataset_ranks_complete_objects_and_keeps_first_valid_occurrence() {
     let registry = source_registry();
-    let authority = population(&registry);
+    let authority = freeze_authority(&registry);
     let ranked = rank_v36_prefix_source_objects(&authority, &registry).unwrap();
     let mut expected = registry
         .iter()
@@ -190,6 +216,45 @@ fn v36_prefix_dataset_ranks_complete_objects_and_keeps_first_valid_occurrence() 
     assert!(validate_v36_prefix_input_row(&invalid).is_err());
     invalid.embedding = vec![1.0; DIMENSIONS - 1];
     assert!(validate_v36_prefix_input_row(&invalid).is_err());
+}
+
+#[test]
+fn v36_prefix_dataset_freeze_input_and_population_output_are_not_circular() {
+    let registry = source_registry();
+    let authority = freeze_authority(&registry);
+    validate_v36_prefix_freeze_authority(&authority, &registry).unwrap();
+    let bytes = canonical_v36_prefix_freeze_authority_bytes(&authority, &registry).unwrap();
+    assert_eq!(bytes.last(), Some(&b'\n'));
+    assert!(!bytes.windows(2).any(|pair| pair == b" \n"));
+    let ranked = rank_v36_prefix_source_objects(&authority, &registry).unwrap();
+    let consumed = ranked
+        .into_iter()
+        .map(|object| V36PrefixSourceObject {
+            blake3: "9".repeat(64),
+            encoded_bytes: object.encoded_bytes,
+            path: object.path,
+            sample_sha256: object.sample_sha256,
+            sha256: object.sha256,
+            uri: object.uri,
+        })
+        .collect();
+    let population = bind_v36_prefix_population_authority(&authority, consumed, &registry).unwrap();
+    assert_eq!(
+        population.population_id,
+        "borsuk-v36-prefix-screen-population-v1"
+    );
+    assert_eq!(population.consumed_objects.len(), 2);
+    let mut drifted = authority;
+    drifted.invalid_row_policy = "skip-invalid".into();
+    assert!(validate_v36_prefix_freeze_authority(&drifted, &registry).is_err());
+
+    let mut subset = registry.clone();
+    subset.pop();
+    let mut subset_authority = freeze_authority(&subset);
+    subset_authority.registry_objects = registry.len().try_into().unwrap();
+    subset_authority.registry_encoded_bytes =
+        registry.iter().map(|object| object.encoded_bytes).sum();
+    assert!(validate_v36_prefix_freeze_authority(&subset_authority, &subset).is_err());
 }
 
 #[test]

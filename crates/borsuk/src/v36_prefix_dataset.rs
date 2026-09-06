@@ -17,8 +17,9 @@ use parquet::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V36PrefixPopulationAuthority, V36PrefixRegisteredSourceObject,
-    V36PrefixRoleAuthority, validate_v36_prefix_population_authority,
+    BorsukError, Result, V36PrefixFreezeAuthority, V36PrefixPopulationAuthority,
+    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_population_authority,
 };
 
 const DIMENSIONS: usize = 768;
@@ -205,10 +206,10 @@ pub enum V36PrefixQualityRole {
 
 /// Rank a complete authenticated registry by the frozen sample rule.
 pub fn rank_v36_prefix_source_objects(
-    population: &V36PrefixPopulationAuthority,
+    authority: &V36PrefixFreezeAuthority,
     registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<Vec<V36PrefixRankedSourceObject>> {
-    validate_v36_prefix_population_authority(population, registry)?;
+    validate_v36_prefix_freeze_authority(authority, registry)?;
     let mut paths = BTreeSet::new();
     let mut uris = BTreeSet::new();
     let mut ranked = registry

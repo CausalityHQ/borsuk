@@ -325,12 +325,14 @@ pub use v35_route::{
 };
 pub use v36_funnel::{
     V36ArtifactIdentity, V36ChunkCeiling, V36CoarseCode, V36FineCodec, V36FunnelManifest,
-    V36GeometryArm, V36PrefixPopulationAuthority, V36PrefixRegisteredSourceObject,
-    V36PrefixRoleAuthority, V36PrefixScreenManifest, V36PrefixSourceObject, V36PrimaryRows,
-    V36ProjectionArm, V36RegisteredManifest, V36Replication, V36ResourceLedger, V36ResourceRequest,
-    V36ShapeScore, V36TransportDisposition, V36TransportFragment, V36TransportLimits,
-    V36TransportPlan, V36TransportPosting, canonical_v36_prefix_screen_manifest_bytes,
-    plan_v36_transport, project_v36_resources, validate_v36_manifest,
+    V36GeometryArm, V36PrefixFreezeAuthority, V36PrefixPopulationAuthority,
+    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixScreenManifest,
+    V36PrefixSourceObject, V36PrimaryRows, V36ProjectionArm, V36RegisteredManifest, V36Replication,
+    V36ResourceLedger, V36ResourceRequest, V36ShapeScore, V36TransportDisposition,
+    V36TransportFragment, V36TransportLimits, V36TransportPlan, V36TransportPosting,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
+    canonical_v36_prefix_screen_manifest_bytes, plan_v36_transport, project_v36_resources,
+    validate_v36_manifest, validate_v36_prefix_freeze_authority,
     validate_v36_prefix_population_authority, validate_v36_prefix_screen_manifest,
 };
 #[doc(hidden)]
