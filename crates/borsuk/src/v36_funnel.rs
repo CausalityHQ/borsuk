@@ -392,6 +392,133 @@ pub struct V36PrefixFreezeReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+/// Phase-specific durable state for one V36 prefix-freeze checkpoint.
+pub enum V36PrefixCheckpointPhase {
+    /// A consecutive prefix of complete registered source objects.
+    Population,
+    /// Complete role-separated Parquet outputs ready for reuse.
+    Materialized {
+        /// Named immutable population authority, source, and query artifacts.
+        artifacts: V36PrefixMaterializedArtifacts,
+    },
+    /// All quality-query heaps after one complete source-row prefix.
+    GroundTruth {
+        /// Exact materialized lineage consumed by this GT generation.
+        materialized: V36PrefixMaterializedArtifacts,
+        /// Canonical Arrow IPC top-100 heap snapshot.
+        heaps: V36ArtifactIdentity,
+        /// First source row not incorporated into every query heap.
+        next_source_ordinal: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Complete population accounting retained across every checkpoint phase.
+pub struct V36PrefixPopulationCheckpoint {
+    /// Complete source objects committed in ranked order.
+    pub consumed_objects: Vec<V36PrefixSourceObject>,
+    /// Object containing the registered distinct-row cutoff, once reached.
+    pub cutoff_object_ordinal: Option<u16>,
+    /// Row offset of the registered cutoff inside its complete object.
+    pub cutoff_row_offset: Option<u64>,
+    /// Distinct feature IDs observed through the complete prefix.
+    pub distinct_rows: u64,
+    /// Duplicate physical rows observed through the complete prefix.
+    pub duplicate_rows: u64,
+    /// One immutable Arrow IPC first-occurrence run per source object.
+    pub identity_runs: Vec<V36ArtifactIdentity>,
+    /// First registered object ordinal not incorporated into this checkpoint.
+    pub next_object_ordinal: u16,
+    /// Physical rows observed through the complete prefix.
+    pub physical_rows: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Named immutable outputs at the completed materialization boundary.
+pub struct V36PrefixMaterializedArtifacts {
+    /// Canonical population authority JSON.
+    pub population_authority: V36ArtifactIdentity,
+    /// Query-excluded source Parquet.
+    pub source: V36ArtifactIdentity,
+    /// Development query Parquet.
+    pub development_query: V36ArtifactIdentity,
+    /// Validation query Parquet.
+    pub validation_query: V36ArtifactIdentity,
+    /// Sealed-holdout query Parquet.
+    pub sealed_holdout_query: V36ArtifactIdentity,
+    /// Performance-only query Parquet.
+    pub performance_query: V36ArtifactIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Trusted campaign authority used to authenticate checkpoint claims.
+pub struct V36PrefixCheckpointContext {
+    /// Exact materialized source row count.
+    pub corpus_rows: u64,
+    /// Registered distinct-row cutoff.
+    pub distinct_candidates: u64,
+    /// SHA-256 of the scientific freeze authority.
+    pub freeze_authority_sha256: String,
+    /// Durable GT source-block row count.
+    pub gt_block_rows: u64,
+    /// Maximum complete source objects.
+    pub object_cap: u16,
+    /// Exact campaign-scoped immutable object prefix.
+    pub object_prefix: String,
+    /// Source registry entries in query-independent registered rank order.
+    pub ranked_objects: Vec<V36PrefixRegisteredSourceObject>,
+    /// Stable campaign run identity.
+    pub run_id: String,
+    /// SHA-256 of the frozen source archive.
+    pub source_archive_sha256: String,
+    /// Maximum complete encoded source bytes.
+    pub source_byte_cap: u64,
+    /// Exact source commit.
+    pub source_commit: String,
+    /// SHA-256 of the complete registered source list.
+    pub source_registry_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Canonical manifest for one immutable V36 prefix-freeze checkpoint generation.
+pub struct V36PrefixCheckpointManifest {
+    /// Diagnostic checkpoints can never make release claims.
+    pub claim_eligible: bool,
+    /// SHA-256 of the producing attempt's execution authority.
+    pub execution_authority_sha256: String,
+    /// SHA-256 of the scientific freeze authority.
+    pub freeze_authority_sha256: String,
+    /// Monotonic checkpoint generation.
+    pub generation: u32,
+    /// Phase-specific durable state.
+    pub phase: V36PrefixCheckpointPhase,
+    /// Complete population accounting retained by every phase.
+    pub population: V36PrefixPopulationCheckpoint,
+    /// Prior immutable checkpoint manifest, absent only for generation zero.
+    pub previous_checkpoint: Option<V36ArtifactIdentity>,
+    /// Attempt that produced this generation.
+    pub producer_attempt_id: String,
+    /// Zero-based producer attempt ordinal used to fence zombie writers.
+    pub producer_attempt_ordinal: u8,
+    /// EC2 instance that produced this generation.
+    pub producer_instance_id: String,
+    /// Exact checkpoint schema marker.
+    pub schema: String,
+    /// Campaign run identity shared across replacement attempts.
+    pub run_id: String,
+    /// SHA-256 of the frozen source archive.
+    pub source_archive_sha256: String,
+    /// Exact source commit.
+    pub source_commit: String,
+    /// SHA-256 of the complete registered source list.
+    pub source_registry_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 /// Closed manifest for one bounded V36 screen arm.
 pub struct V36PrefixScreenManifest {
@@ -845,6 +972,328 @@ pub fn canonical_v36_prefix_freeze_execution_authority_bytes(
 ) -> Result<Vec<u8>> {
     validate_v36_prefix_freeze_execution_authority(authority)?;
     canonical_value_bytes(authority)
+}
+
+fn valid_checkpoint_artifact(artifact: &V36ArtifactIdentity, role: &str) -> bool {
+    artifact.role == role
+        && artifact.encoded_bytes > 0
+        && valid_digest(&artifact.sha256)
+        && valid_digest(&artifact.blake3)
+        && valid_s3_object_uri(&artifact.uri, false)
+        && url::Url::parse(&artifact.uri).ok().is_some_and(|uri| {
+            uri.path()
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.starts_with(&format!("{}-", artifact.sha256)))
+        })
+}
+
+fn materialized_artifacts(
+    artifacts: &V36PrefixMaterializedArtifacts,
+) -> [(&V36ArtifactIdentity, &'static str); 6] {
+    [
+        (&artifacts.population_authority, "population-authority"),
+        (&artifacts.source, "source"),
+        (&artifacts.development_query, "development-query"),
+        (&artifacts.validation_query, "validation-query"),
+        (&artifacts.sealed_holdout_query, "sealed-holdout-query"),
+        (&artifacts.performance_query, "performance-query"),
+    ]
+}
+
+fn valid_materialized_artifacts(artifacts: &V36PrefixMaterializedArtifacts) -> bool {
+    let mut uris = BTreeSet::new();
+    materialized_artifacts(artifacts)
+        .into_iter()
+        .all(|(artifact, role)| {
+            valid_checkpoint_artifact(artifact, role) && uris.insert(artifact.uri.as_str())
+        })
+}
+
+fn checkpoint_source_matches_registry(
+    consumed: &V36PrefixSourceObject,
+    registered: &V36PrefixRegisteredSourceObject,
+) -> bool {
+    let mut sample = Sha256::new();
+    sample.update(b"borsuk-v36-screen-object-v1");
+    sample.update(registered.path.as_bytes());
+    sample.update(registered.encoded_bytes.to_le_bytes());
+    consumed.encoded_bytes == registered.encoded_bytes
+        && consumed.path == registered.path
+        && consumed.sha256 == registered.sha256
+        && consumed.uri == registered.uri
+        && consumed.sample_sha256 == format!("{:x}", sample.finalize())
+}
+
+/// Validate one immutable V36 prefix-freeze checkpoint manifest.
+pub fn validate_v36_prefix_checkpoint_manifest(
+    manifest: &V36PrefixCheckpointManifest,
+) -> Result<()> {
+    if manifest.schema != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        || manifest.claim_eligible
+        || !valid_digest(&manifest.execution_authority_sha256)
+        || !valid_digest(&manifest.freeze_authority_sha256)
+        || !valid_digest(&manifest.source_archive_sha256)
+        || !valid_digest(&manifest.source_registry_sha256)
+        || manifest.source_commit.len() != 40
+        || !manifest
+            .source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || manifest.producer_attempt_id
+            != format!(
+                "{}-attempt-{:04}",
+                manifest.run_id, manifest.producer_attempt_ordinal
+            )
+        || manifest.producer_attempt_ordinal >= 3
+        || !manifest.run_id.starts_with("v36-prefix-screen-")
+        || manifest.producer_instance_id.is_empty()
+        || (manifest.generation == 0) != manifest.previous_checkpoint.is_none()
+        || manifest
+            .previous_checkpoint
+            .as_ref()
+            .is_some_and(|previous| !valid_checkpoint_artifact(previous, "checkpoint-manifest"))
+    {
+        return Err(invalid("V36 prefix checkpoint authority differs"));
+    }
+    let population = &manifest.population;
+    let cutoff_complete =
+        population.cutoff_object_ordinal.is_some() && population.cutoff_row_offset.is_some();
+    if population.consumed_objects.is_empty()
+        || population.consumed_objects.len() > 16
+        || usize::from(population.next_object_ordinal) != population.consumed_objects.len()
+        || population.identity_runs.len() != population.consumed_objects.len()
+        || population.distinct_rows == 0
+        || population
+            .distinct_rows
+            .checked_add(population.duplicate_rows)
+            != Some(population.physical_rows)
+        || population.cutoff_object_ordinal.is_some() != population.cutoff_row_offset.is_some()
+        || population
+            .cutoff_object_ordinal
+            .is_some_and(|ordinal| usize::from(ordinal) >= population.consumed_objects.len())
+        || population
+            .cutoff_row_offset
+            .is_some_and(|offset| offset >= population.physical_rows)
+        || population.consumed_objects.iter().any(|object| {
+            object.path.is_empty()
+                || object.encoded_bytes == 0
+                || !valid_digest(&object.sha256)
+                || !valid_digest(&object.blake3)
+                || !valid_digest(&object.sample_sha256)
+                || object.uri.is_empty()
+        })
+        || population
+            .identity_runs
+            .iter()
+            .enumerate()
+            .any(|(ordinal, run)| {
+                !valid_checkpoint_artifact(run, &format!("population-identity-run-{ordinal:04}"))
+            })
+    {
+        return Err(invalid("V36 prefix population checkpoint differs"));
+    }
+    match &manifest.phase {
+        V36PrefixCheckpointPhase::Population => {}
+        V36PrefixCheckpointPhase::GroundTruth {
+            heaps,
+            materialized,
+            next_source_ordinal,
+        } => {
+            if !cutoff_complete
+                || *next_source_ordinal == 0
+                || !valid_checkpoint_artifact(heaps, "gt-heaps")
+                || !valid_materialized_artifacts(materialized)
+            {
+                return Err(invalid("V36 prefix GT checkpoint differs"));
+            }
+        }
+        V36PrefixCheckpointPhase::Materialized { artifacts } => {
+            if !cutoff_complete || !valid_materialized_artifacts(artifacts) {
+                return Err(invalid("V36 prefix materialized checkpoint differs"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate one checkpoint against its frozen campaign and ranked source authority.
+pub fn validate_v36_prefix_checkpoint_manifest_with_context(
+    context: &V36PrefixCheckpointContext,
+    manifest: &V36PrefixCheckpointManifest,
+) -> Result<()> {
+    validate_v36_prefix_checkpoint_manifest(manifest)?;
+    let population = &manifest.population;
+    let consumed_bytes = population
+        .consumed_objects
+        .iter()
+        .try_fold(0_u64, |total, object| {
+            total.checked_add(object.encoded_bytes)
+        })
+        .ok_or_else(|| invalid("V36 prefix checkpoint source bytes overflow"))?;
+    let structural_artifacts_in_scope = population
+        .identity_runs
+        .iter()
+        .chain(manifest.previous_checkpoint.iter())
+        .all(|artifact| artifact.uri.starts_with(&context.object_prefix));
+    let phase_in_scope = match &manifest.phase {
+        V36PrefixCheckpointPhase::Population => true,
+        V36PrefixCheckpointPhase::Materialized { artifacts } => materialized_artifacts(artifacts)
+            .into_iter()
+            .all(|(artifact, _)| artifact.uri.starts_with(&context.object_prefix)),
+        V36PrefixCheckpointPhase::GroundTruth {
+            heaps,
+            materialized,
+            next_source_ordinal,
+        } => {
+            let aligned = *next_source_ordinal == context.corpus_rows
+                || (context.gt_block_rows > 0
+                    && next_source_ordinal.is_multiple_of(context.gt_block_rows));
+            aligned
+                && *next_source_ordinal <= context.corpus_rows
+                && heaps.uri.starts_with(&context.object_prefix)
+                && materialized_artifacts(materialized)
+                    .into_iter()
+                    .all(|(artifact, _)| artifact.uri.starts_with(&context.object_prefix))
+        }
+    };
+    let cutoff_valid = match (
+        population.cutoff_object_ordinal,
+        population.cutoff_row_offset,
+    ) {
+        (None, None) => population.distinct_rows < context.distinct_candidates,
+        (Some(object), Some(_)) => {
+            population.distinct_rows >= context.distinct_candidates
+                && usize::from(object) + 1 == population.consumed_objects.len()
+        }
+        _ => false,
+    };
+    if context.run_id != manifest.run_id
+        || context.freeze_authority_sha256 != manifest.freeze_authority_sha256
+        || context.source_archive_sha256 != manifest.source_archive_sha256
+        || context.source_commit != manifest.source_commit
+        || context.source_registry_sha256 != manifest.source_registry_sha256
+        || context.object_cap == 0
+        || population.consumed_objects.len() > usize::from(context.object_cap)
+        || population.consumed_objects.len() > context.ranked_objects.len()
+        || population
+            .consumed_objects
+            .iter()
+            .zip(&context.ranked_objects)
+            .any(|(consumed, registered)| !checkpoint_source_matches_registry(consumed, registered))
+        || consumed_bytes > context.source_byte_cap
+        || !context.object_prefix.starts_with("s3://")
+        || !context.object_prefix.ends_with("/objects/")
+        || !structural_artifacts_in_scope
+        || !phase_in_scope
+        || !cutoff_valid
+        || (!matches!(manifest.phase, V36PrefixCheckpointPhase::Population)
+            && population.cutoff_object_ordinal.is_none())
+    {
+        return Err(invalid("V36 prefix checkpoint context differs"));
+    }
+    Ok(())
+}
+
+fn checkpoint_phase_rank(phase: &V36PrefixCheckpointPhase) -> u8 {
+    match phase {
+        V36PrefixCheckpointPhase::Population => 0,
+        V36PrefixCheckpointPhase::Materialized { .. } => 1,
+        V36PrefixCheckpointPhase::GroundTruth { .. } => 2,
+    }
+}
+
+/// Validate one authenticated monotonic checkpoint transition, including cross-attempt resume.
+pub fn validate_v36_prefix_checkpoint_transition(
+    context: &V36PrefixCheckpointContext,
+    previous: &V36PrefixCheckpointManifest,
+    next: &V36PrefixCheckpointManifest,
+) -> Result<()> {
+    validate_v36_prefix_checkpoint_manifest_with_context(context, previous)?;
+    validate_v36_prefix_checkpoint_manifest_with_context(context, next)?;
+    let previous_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(previous)?;
+    let previous_sha256 = format!("{:x}", Sha256::digest(&previous_bytes));
+    let previous_blake3 = blake3::hash(&previous_bytes).to_hex().to_string();
+    let linked = next.previous_checkpoint.as_ref().is_some_and(|identity| {
+        identity.role == "checkpoint-manifest"
+            && identity.encoded_bytes == previous_bytes.len() as u64
+            && identity.sha256 == previous_sha256
+            && identity.blake3 == previous_blake3
+            && identity.uri.starts_with(&context.object_prefix)
+    });
+    let population_prefix = next
+        .population
+        .consumed_objects
+        .starts_with(&previous.population.consumed_objects)
+        && next
+            .population
+            .identity_runs
+            .starts_with(&previous.population.identity_runs)
+        && next.population.distinct_rows >= previous.population.distinct_rows
+        && next.population.duplicate_rows >= previous.population.duplicate_rows
+        && next.population.physical_rows >= previous.population.physical_rows;
+    let population_frozen = previous.population.cutoff_object_ordinal.is_none()
+        || next.population == previous.population;
+    let phase_lineage = match (&previous.phase, &next.phase) {
+        (V36PrefixCheckpointPhase::Population, V36PrefixCheckpointPhase::Population) => {
+            previous.population.cutoff_object_ordinal.is_none()
+                && next.population.consumed_objects.len()
+                    > previous.population.consumed_objects.len()
+        }
+        (V36PrefixCheckpointPhase::Population, V36PrefixCheckpointPhase::Materialized { .. }) => {
+            true
+        }
+        (
+            V36PrefixCheckpointPhase::Materialized {
+                artifacts: previous,
+            },
+            V36PrefixCheckpointPhase::GroundTruth {
+                materialized: next, ..
+            },
+        ) => previous == next,
+        (
+            V36PrefixCheckpointPhase::GroundTruth {
+                materialized: previous_materialized,
+                next_source_ordinal: previous_ordinal,
+                ..
+            },
+            V36PrefixCheckpointPhase::GroundTruth {
+                materialized: next_materialized,
+                next_source_ordinal: next_ordinal,
+                ..
+            },
+        ) => previous_materialized == next_materialized && next_ordinal > previous_ordinal,
+        _ => false,
+    };
+    let same_attempt_valid = next.producer_attempt_ordinal != previous.producer_attempt_ordinal
+        || (next.producer_attempt_id == previous.producer_attempt_id
+            && next.execution_authority_sha256 == previous.execution_authority_sha256
+            && next.producer_instance_id == previous.producer_instance_id);
+    if next.generation != previous.generation.saturating_add(1)
+        || !linked
+        || next.run_id != previous.run_id
+        || next.freeze_authority_sha256 != previous.freeze_authority_sha256
+        || next.source_archive_sha256 != previous.source_archive_sha256
+        || next.source_commit != previous.source_commit
+        || next.source_registry_sha256 != previous.source_registry_sha256
+        || next.producer_attempt_ordinal < previous.producer_attempt_ordinal
+        || !same_attempt_valid
+        || !population_prefix
+        || !population_frozen
+        || checkpoint_phase_rank(&next.phase) < checkpoint_phase_rank(&previous.phase)
+        || !phase_lineage
+    {
+        return Err(invalid("V36 prefix checkpoint transition differs"));
+    }
+    Ok(())
+}
+
+/// Canonical newline JSON for one validated V36 prefix-freeze checkpoint.
+pub fn canonical_v36_prefix_checkpoint_manifest_bytes(
+    manifest: &V36PrefixCheckpointManifest,
+) -> Result<Vec<u8>> {
+    validate_v36_prefix_checkpoint_manifest(manifest)?;
+    canonical_value_bytes(manifest)
 }
 
 /// Validate a completed freeze receipt against every immutable input authority.

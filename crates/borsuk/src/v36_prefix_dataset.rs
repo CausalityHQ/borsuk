@@ -11,6 +11,11 @@ use arrow_array::{
     Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch,
     UInt16Array, UInt32Array, UInt64Array,
 };
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader as ArrowFileReader,
+    writer::{FileWriter as ArrowFileWriter, IpcWriteOptions},
+};
 use arrow_schema::{DataType, Field, Schema};
 use futures_util::StreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, ObjectStoreScheme};
@@ -25,8 +30,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     BorsukError, Result, V36ArtifactIdentity, V36PrefixFreezeAuthority,
     V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixPopulationAuthority,
-    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, bind_v36_prefix_population_authority,
-    canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, validate_v36_prefix_freeze_authority,
@@ -38,6 +43,7 @@ const GT_NEIGHBORS: usize = 100;
 const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 8_192;
+const IDENTITY_RUN_FORMAT: &str = "borsuk-v36-prefix-identity-run-v1";
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -137,6 +143,259 @@ pub struct V36PrefixRowIdentity {
     pub selected_object_ordinal: u16,
     /// Zero-based physical row offset inside that object.
     pub row_offset: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete-object first-occurrence evidence stored in one Arrow IPC identity run.
+pub struct V36PrefixIdentityRun {
+    /// Physical rows validated in the complete source object.
+    pub physical_rows: u64,
+    /// Global first occurrences contributed by this object in row-offset order.
+    pub rows: Vec<V36PrefixRowIdentity>,
+    /// Position of the complete object in registered sample order.
+    pub selected_object_ordinal: u16,
+    /// Exact complete source object authenticated before the run was committed.
+    pub source: V36PrefixSourceObject,
+}
+
+fn v36_prefix_identity_run_schema(run: &V36PrefixIdentityRun, row_count: usize) -> Schema {
+    Schema::new_with_metadata(
+        vec![
+            Field::new("feature_row_id", DataType::UInt64, false),
+            Field::new("row_offset", DataType::UInt64, false),
+        ],
+        HashMap::from([
+            ("format".to_owned(), IDENTITY_RUN_FORMAT.to_owned()),
+            (
+                "selected_object_ordinal".to_owned(),
+                run.selected_object_ordinal.to_string(),
+            ),
+            ("physical_rows".to_owned(), run.physical_rows.to_string()),
+            ("rows".to_owned(), row_count.to_string()),
+            ("source_blake3".to_owned(), run.source.blake3.clone()),
+            (
+                "source_encoded_bytes".to_owned(),
+                run.source.encoded_bytes.to_string(),
+            ),
+            ("source_path".to_owned(), run.source.path.clone()),
+            (
+                "source_sample_sha256".to_owned(),
+                run.source.sample_sha256.clone(),
+            ),
+            ("source_sha256".to_owned(), run.source.sha256.clone()),
+            ("source_uri".to_owned(), run.source.uri.clone()),
+        ]),
+    )
+}
+
+fn v36_prefix_object_sample_sha256(path: &str, encoded_bytes: u64) -> String {
+    let mut sample = Sha256::new();
+    sample.update(b"borsuk-v36-screen-object-v1");
+    sample.update(path.as_bytes());
+    sample.update(encoded_bytes.to_le_bytes());
+    format!("{:x}", sample.finalize())
+}
+
+fn validate_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<()> {
+    let mut feature_ids = HashSet::with_capacity(run.rows.len());
+    if run.selected_object_ordinal >= 16
+        || run.physical_rows == 0
+        || run.rows.len() as u64 > run.physical_rows
+        || run.source.path.is_empty()
+        || run.source.uri.is_empty()
+        || run.source.encoded_bytes == 0
+        || digest_bytes(&run.source.sha256).is_err()
+        || digest_bytes(&run.source.blake3).is_err()
+        || digest_bytes(&run.source.sample_sha256).is_err()
+        || run.source.sample_sha256
+            != v36_prefix_object_sample_sha256(&run.source.path, run.source.encoded_bytes)
+        || run.rows.iter().any(|row| {
+            row.selected_object_ordinal != run.selected_object_ordinal
+                || row.source_ordinal.is_some()
+                || row.row_offset >= run.physical_rows
+                || !feature_ids.insert(row.feature_row_id)
+        })
+        || run
+            .rows
+            .windows(2)
+            .any(|pair| pair[0].row_offset >= pair[1].row_offset)
+    {
+        return Err(invalid("V36 prefix identity-run rows differ"));
+    }
+    Ok(())
+}
+
+/// Encode the first-occurrence identities contributed by one complete source object.
+pub fn encode_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<Vec<u8>> {
+    validate_v36_prefix_identity_run(run)?;
+    let schema = Arc::new(v36_prefix_identity_run_schema(run, run.rows.len()));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(
+                run.rows
+                    .iter()
+                    .map(|row| row.feature_row_id)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                run.rows
+                    .iter()
+                    .map(|row| row.row_offset)
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = ArrowFileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(bytes)
+}
+
+/// Authenticate and decode one complete immutable source-object identity run.
+pub fn decode_v36_prefix_identity_run(
+    bytes: &[u8],
+    registered: &V36ArtifactIdentity,
+    source: &V36PrefixSourceObject,
+    selected_object_ordinal: u16,
+) -> Result<V36PrefixIdentityRun> {
+    let expected_role = format!("population-identity-run-{selected_object_ordinal:04}");
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    let blake3 = blake3::hash(bytes).to_hex().to_string();
+    let content_addressed = url::Url::parse(&registered.uri)
+        .ok()
+        .filter(|uri| uri.scheme() == "s3" && uri.host_str().is_some())
+        .and_then(|uri| uri.path().rsplit('/').next().map(str::to_owned))
+        .is_some_and(|name| name.starts_with(&format!("{sha256}-")));
+    if selected_object_ordinal >= 16
+        || registered.role != expected_role
+        || registered.encoded_bytes != bytes.len() as u64
+        || registered.sha256 != sha256
+        || registered.blake3 != blake3
+        || !content_addressed
+    {
+        return Err(invalid("V36 prefix identity-run artifact differs"));
+    }
+
+    let mut reader = ArrowFileReader::try_new(std::io::Cursor::new(bytes), None)?;
+    let schema = reader.schema();
+    let row_count = schema
+        .metadata()
+        .get("rows")
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or_else(|| invalid("V36 prefix identity-run schema differs"))?;
+    let physical_rows = schema
+        .metadata()
+        .get("physical_rows")
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| invalid("V36 prefix identity-run schema differs"))?;
+    let expected_run = V36PrefixIdentityRun {
+        physical_rows,
+        rows: Vec::with_capacity(row_count),
+        selected_object_ordinal,
+        source: source.clone(),
+    };
+    if schema.as_ref() != &v36_prefix_identity_run_schema(&expected_run, row_count)
+        || reader.num_batches() != 1
+    {
+        return Err(invalid("V36 prefix identity-run schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V36 prefix identity-run batch is missing"))?;
+    if reader.next().is_some() || batch.num_rows() != row_count {
+        return Err(invalid("V36 prefix identity-run batches differ"));
+    }
+    let feature_ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 prefix identity-run feature IDs differ"))?;
+    let row_offsets = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 prefix identity-run row offsets differ"))?;
+    let rows = feature_ids
+        .values()
+        .iter()
+        .zip(row_offsets.values())
+        .map(|(&feature_row_id, &row_offset)| V36PrefixRowIdentity {
+            feature_row_id,
+            source_ordinal: None,
+            selected_object_ordinal,
+            row_offset,
+        })
+        .collect::<Vec<_>>();
+    let run = V36PrefixIdentityRun {
+        physical_rows,
+        rows,
+        selected_object_ordinal,
+        source: source.clone(),
+    };
+    validate_v36_prefix_identity_run(&run)?;
+    Ok(run)
+}
+
+/// Reconstruct the exact completed population prefix from authenticated identity runs.
+pub fn restore_v36_prefix_population(
+    runs: &[V36PrefixIdentityRun],
+    distinct_candidates: usize,
+) -> Result<V36PrefixObjectPrefixScan> {
+    if runs.is_empty() || runs.len() > 16 || distinct_candidates == 0 {
+        return Err(invalid("V36 prefix identity-run replay limits differ"));
+    }
+    let mut source_paths = BTreeSet::new();
+    let mut feature_ids = HashSet::with_capacity(distinct_candidates);
+    let mut consumed_objects = Vec::with_capacity(runs.len());
+    let mut unique_rows = Vec::with_capacity(distinct_candidates);
+    let mut physical_rows = 0_u64;
+    let mut cutoff = None;
+    for (ordinal, run) in runs.iter().enumerate() {
+        if cutoff.is_some() {
+            return Err(invalid("V36 prefix identity run follows cutoff object"));
+        }
+        validate_v36_prefix_identity_run(run)?;
+        if usize::from(run.selected_object_ordinal) != ordinal
+            || !source_paths.insert(run.source.path.as_str())
+        {
+            return Err(invalid("V36 prefix identity-run sequence differs"));
+        }
+        physical_rows = physical_rows
+            .checked_add(run.physical_rows)
+            .ok_or_else(|| invalid("V36 prefix identity-run physical rows overflow"))?;
+        for row in &run.rows {
+            if !feature_ids.insert(row.feature_row_id) {
+                return Err(invalid("V36 prefix identity-run global ID repeats"));
+            }
+            if unique_rows.len() < distinct_candidates {
+                unique_rows.push(row.clone());
+                if unique_rows.len() == distinct_candidates {
+                    cutoff = Some((run.selected_object_ordinal, row.row_offset));
+                }
+            }
+        }
+        consumed_objects.push(run.source.clone());
+    }
+    let (cutoff_object_ordinal, cutoff_row_offset) =
+        cutoff.ok_or(BorsukError::V36PrefixSourceInsufficient)?;
+    let distinct_rows_observed = u64::try_from(feature_ids.len()).unwrap_or(u64::MAX);
+    let duplicate_rows = physical_rows
+        .checked_sub(distinct_rows_observed)
+        .ok_or_else(|| invalid("V36 prefix identity-run duplicate rows underflow"))?;
+    Ok(V36PrefixObjectPrefixScan {
+        consumed_objects,
+        cutoff_object_ordinal,
+        cutoff_row_offset,
+        distinct_rows_observed,
+        duplicate_rows,
+        physical_rows,
+        unique_rows,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1041,14 +1300,11 @@ where
 {
     digest_bytes(&object.sha256)?;
     digest_bytes(&object.sample_sha256)?;
-    let mut sample = Sha256::new();
-    sample.update(b"borsuk-v36-screen-object-v1");
-    sample.update(object.path.as_bytes());
-    sample.update(object.encoded_bytes.to_le_bytes());
     if object.path.is_empty()
         || object.uri.is_empty()
         || selected_object_ordinal >= 16
-        || object.sample_sha256 != format!("{:x}", sample.finalize())
+        || object.sample_sha256
+            != v36_prefix_object_sample_sha256(&object.path, object.encoded_bytes)
     {
         return Err(invalid("V36 prefix registered object identity differs"));
     }
