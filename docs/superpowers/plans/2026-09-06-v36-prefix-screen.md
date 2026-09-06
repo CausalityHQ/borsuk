@@ -12,22 +12,32 @@
 
 ## Global Constraints
 
-- The screen population is `borsuk-v36-prefix-screen-population-v1`; it is not the globally hash-selected V36 corpus and cannot satisfy G0--G5 or a release claim.
+- The screen population is `borsuk-v36-prefix-screen-population-v2`; it is not the globally hash-selected V36 corpus and cannot satisfy G0--G5 or a release claim.
 - Order registered complete source objects by
-  `(SHA-256("borsuk-v36-screen-object-v1" || utf8(path) || u64le(length)),path)`,
-  then freeze the first 1,100,000 distinct valid feature IDs in that object and
-  physical-row order, keeping the first occurrence. Stop after the complete
-  object that reaches the target and record every consumed identity and byte.
-- The object-sample stream is capped at 16 complete source objects and 6 GiB;
-  reaching either cap before 1,100,000 distinct valid rows is terminal
-  `screen-source-insufficient`, never permission to fetch object 17.
+  `(SHA-256("borsuk-v36-screen-object-v1" || utf8(path) || u64le(length)),path)`
+  and authenticate exactly the first 16, whose frozen total is 5,485,265,954
+  bytes. Deduplicate by minimum `(selected_object_ordinal,row_offset)`, then
+  take the 1,100,000 lowest population-specific row hashes across all sixteen
+  objects. Fewer distinct rows is terminal `screen-source-insufficient`.
+- Each object-sample cohort remains capped at its registered 16-object window
+  and 6 GiB. Cohort A never fetches zero-based ranked object 16; cohort B never
+  fetches outside zero-based ranks 16--31. Identity runs and selection are
+  external-memory and bounded; no decoded multi-object vector set is resident.
 - Within that frozen population, select disjoint development, validation,
   sealed holdout, and performance roles using the population-specific labels
-  `borsuk-v36-prefix-screen-{role}-query-v1`; never reuse full-source role
+  `borsuk-v36-prefix-screen-{role}-query-v2`; never reuse full-source role
   seeds. Remove all 13,000 query rows before selecting exactly 1,000,000 corpus
-  rows. Leave the remaining rows unused.
+  rows using `borsuk-v36-prefix-screen-corpus-v2`. Leave the remaining rows
+  unused. All four query artifacts from every executed screen cohort become
+  exact exclusion dependencies of every later full-source role selection;
+  prove zero overlap and reject omission of cohort B when it ran.
 - Construction receives corpus only. Evaluation receives named corpus-derived artifacts, query vectors, and truth but no source/list/discovery capability.
 - Bulk cross-language artifacts are strict Parquet or Arrow IPC. Small authorities, terminals, and results are strict canonical newline JSON.
+- V36 campaign code is research scaffolding, not a generic runtime dependency.
+  Before release the V36 freezer/controller/evaluation modules and executables
+  move into a separate workspace research crate. Production Parquet and
+  object-store dependencies remain, but generic consumers receive no campaign
+  checkpoint, AWS policy, or frozen-dataset authority surface.
 - Remote execution uses profile `causality`, `eu-central-1`, Spot by default,
   encrypted ephemeral NVMe, one original process per attempt, authenticated
   immutable checkpoint publication after every complete object and after a
@@ -38,11 +48,21 @@
   dollar budget divided by the admitted hourly rate and multiplied by 3,600
   seconds/hour, so three attempts cannot project past $90.
 - The normal envelope is 14 complete GETs and 7 MiB per wave; the hard retry-inclusive envelope is 16 GETs and 8 MiB. Offline object admission uses the same complete encoded identities and limits.
-- Screen development selects exactly one complete arm. Validation rejection is
-  terminal, and sealed holdout opens once only after validation passes. Passing
-  authorizes unchanged full-source replay; failure records the causal rejection
-  and stops V36 before further corpus spend. A population-diagnostic shift is
-  indeterminate rather than an architecture rejection.
+- Screen development ranks complete families. Validation evaluates only the
+  leader, and sealed holdout opens once only after validation passes. Passing
+  advances projection/geometry/score to full-source replay; K, code width, and
+  layout remain open until 10M. A population-diagnostic shift is indeterminate,
+  and one-cohort failure cannot reject the generic architecture.
+- The screen also evaluates diagnostic posting occupancies
+  64/82/128/256/512/1024/2048/4096/8192 with actual unique admitted fractions,
+  GT@1 containment, rank-100 reconstruction error, rank-100/101 gaps, zero-gap
+  counts, and finite positive-gap ratios; none is a scale-equivalence gate.
+  It advances projection/geometry/score only. K, code width, and object layout
+  remain open until 10M. One-cohort failure requires a disjoint 16-object
+  confirmation before a family is rejected. Confirmation cohort B uses ranked
+  objects 16--31 (5,483,342,562 bytes) and excludes the exact cohort-A
+  selected-ID artifact before ranking, so duplicate logical IDs cannot leak
+  across cohorts.
 
 ---
 
@@ -60,7 +80,7 @@
 - Produces `V36PrefixRegisteredSourceObject`, `V36PrefixPopulationAuthority`,
   `V36PrefixScreenManifest`, `validate_v36_prefix_screen_manifest`, and
   canonical serializers.
-- The prefix manifest binds the complete arm (projection, geometry, score,
+- The prefix manifest binds each complete candidate arm (projection, geometry, score,
   coarse code, fine codec, chunk ceiling, and K); the breaking full-source v2
   manifest embeds the same projection authority rather than only a seed.
 - Extends the checked resource ledger to sixteen 32-MiB streaming query
@@ -127,11 +147,31 @@
 - Consumes `V36PrefixFreezeAuthority`, which independently binds the complete
   registry count, encoded-byte total, ordered-manifest digest, caps, policies,
   and role seeds without future consumed-object evidence.
-- Produces `V36PrefixPopulationAuthority` only after the complete cutoff object
-  authenticates; the receipt records every completed object independently of
-  whether it contributed a surviving distinct ID.
+- Produces `V36PrefixPopulationAuthority` only after all sixteen selected
+  objects authenticate; the receipt records every completed object
+  independently of whether it contributes a surviving selected ID.
 
-- [x] **Step 1: Write dataset and GT REDs**
+The post-review v2 boundary replaces the cutoff-object rule before execution.
+`V36PrefixFreezeAuthority` binds the exact upstream dataset-authority SHA-256,
+the cohort ordinal, zero-based object-window start/count and exact window byte
+total, population-row and corpus seed labels, the four future-exclusion roles,
+and an exclusion artifact required for nonzero cohorts. No v1 reader, alias, or
+conversion remains because BORSUK is prerelease.
+
+- [ ] **Step 0: Implement the v2 representativeness authority**
+
+  Mutation-test upstream authority digest, object algorithm/version, exact
+  cohort ordinal/start/count/window byte total, population-row and corpus
+  label/digest, source-manifest binding, exclusion-artifact rules, and four
+  query-exclusion roles. Cohort A binds 5,485,265,954 bytes; cohort B binds
+  5,483,342,562 bytes for zero-based ranks 16--31. Test
+  that late high-ranked rows from every selected object can enter the
+  population, a physical prefix cannot substitute, duplicates retain the
+  minimum physical occurrence, and the bounded external merge equals an
+  in-memory scalar oracle on reduced shapes. Regenerate both checked-in inputs
+  and require byte-identical Python/Rust canonicalization.
+
+- [ ] **Step 1: Write dataset and GT REDs**
 
   Test object selection by registered hash then path, and first occurrence by
   `(selected_object_ordinal,row_offset)`, nonnegative u64 feature
@@ -146,6 +186,10 @@
   Report GT@10 exact/near-duplicate rates, nearest-neighbour distance quantiles,
   and centered spectrum retained-energy fractions for comparison with the
   later globally selected 1M population.
+  Add GT@1 containment, exact rank-101 margin evidence, per-query own-object
+  GT@10 incidence, and the occupancy 64/82/128/256/512/1024/2048/4096/8192
+  route curve. Mutation-test separately registered cohort-failure
+  classification and forbid a one-cohort generic-architecture rejection.
 
 - [x] **Step 2: Write launcher and lifecycle REDs**
 
@@ -168,7 +212,7 @@
   Require a non-mutating `--dry-run` that prints exact object/byte/disk/wall/
   attempt/cost caps and creates no instance, bucket object, or local corpus.
 
-- [x] **Step 3: Run focused REDs**
+- [ ] **Step 3: Run focused REDs**
 
   Run the Rust test, then:
 
@@ -182,12 +226,13 @@
 
   Stream complete authenticated objects from their registered immutable HTTPS
   URIs to encrypted ephemeral NVMe, authenticate SHA-256 before decoding, and
-  process bounded Arrow batches. Stop only after validating the complete object
-  containing the 1,100,000th distinct ID; any invalid gated row rejects the
-  source revision rather than being skipped. Rust owns validation, membership, Parquet, and blocked
+  process bounded Arrow batches. Validate all sixteen selected objects, then
+  externally deduplicate and row-hash rank the exact 1,100,000 candidates; any
+  invalid gated row rejects the source revision rather than being skipped.
+  Rust owns validation, membership, Parquet, and blocked
   no-FMA GT; Python owns provisioning, monitoring, terminal sync, and
   termination. Store population checkpoint bulk state as per-object Arrow IPC
-  identity runs and GT state as Arrow IPC top-100 heaps. Eight-query tiles are
+  identity runs and GT state as Arrow IPC top-101 heaps. Eight-query tiles are
   scheduling units only: checkpoint GT at a source-row block after every query
   heap has incorporated it, preserving one corpus scan. Publish immutable
   campaign-scoped dependencies before the checkpoint manifest, then replace
@@ -203,7 +248,8 @@
   manifest identity into the next execution authority. The guest stages only
   that manifest and its ordered dependency closure. Rust authenticates both
   digests, canonical JSON, Arrow IPC schemas, producer transition, restored
-  object prefix, cutoff, and all population counters before any source GET.
+  completed object window, selection threshold, and all population counters
+  before any source GET.
   Rust alone chooses fresh versus resume and the next generation; the Python
   publisher receives that exact generation. A resumed scan downloads only the
   incomplete suffix. Because population identity runs deliberately omit vector
@@ -213,15 +259,29 @@
 
   Test the handoff in narrow layers before any Spot work: manifest/run replay
   disagreement and corrupt-newest rejection with zero acquisition; partial and
-  cutoff-complete scan resume; full-prefix materialization after suffix-only
+  sixteen-object completion resume; selected-population materialization after suffix-only
   scan; head-plus-one sidecar publication; a two-attempt interrupted lifecycle;
   conflicting terminals; and confirmed instance termination before replacement
   launch. Completion requires both science success and a successful final
   checkpoint drain.
 
+  Implement the GT phase rather than treating its manifest variant as
+  evidence: fix corpus row groups at 65,536 rows and serialize every query's
+  ordered top-101 heap plus exact next source ordinal as Arrow IPC at the first
+  complete row group after at least 300 active seconds since the preceding
+  publication;
+  bind source/query identities and arithmetic authority; restore the suffix;
+  prove bit-identical uninterrupted/resumed GT@100 output, rank-101 identity,
+  distance bits, and margin. A reduced-shape exact-kernel
+  preflight with the production thread count must project completion below half
+  the active wall cap by the exact row-times-query ratio, and 900
+  seconds without a completed row group or checkpoint is an infrastructure
+  stop.
+
   Mutation-test pointer races, lost acknowledgements, corrupt newest
-  generations, cross-object duplicates, duplicate-only objects, a cutoff in the
-  final object, interruption before object commit, tied GT distances,
+  generations, cross-object duplicates, duplicate-only objects, a selection
+  threshold contributed by the final object, interruption before object commit,
+  tied GT distances,
   interruption during a source block, and uninterrupted-versus-resumed exact
   identity/distance-bit equality. Existing identical immutable objects succeed
   only after exact length/SHA-256/BLAKE3 verification; conflicting bytes fail.
@@ -344,7 +404,10 @@
 
 **Interfaces:**
 - Consumes the Task 2 diagnostic population and Task 3 executable.
-- Produces one claim-ineligible causal decision that either authorizes the full-source freeze or rejects V36.
+- Produces one claim-ineligible causal decision that advances one
+  projection/geometry/score family, requests cohort-B confirmation, or rejects
+  a twice-failed family. It does not freeze scale-sensitive representation or
+  layout choices.
 
 - [ ] **Step 1: Write campaign/result REDs**
 
@@ -357,8 +420,9 @@
 
   Use development to compare projections first, then geometry, then all five
   registered posting scores, then coarse codes, then physical layouts.
-  Select exactly one complete winner by the global lexicographic rule.
-  Validation evaluates only that identity and rejection is terminal. Open
+  Select exactly one leading projection/geometry/score family by the global
+  lexicographic rule. Coarse-code and layout measurements are diagnostic here.
+  Validation evaluates only that family and rejection cannot try the runner-up. Open
   sealed holdout once only after validation passes. Do not execute a Cartesian product after an
   earlier causal stage rejects an arm.
 
@@ -371,17 +435,28 @@
   RSS below 2 GiB; and complete-object admission inside 14 GETs/7 MiB. Start no
   cold S3 query cell unless the offline replay passes.
   Bind exact/near-duplicate ppm, nearest-neighbour squared-L2 p10/p50/p90, and
-  centered M192 retained-energy ppm. Later full-source comparison uses the
+  centered M192 retained-energy ppm. Also bind the complete occupancy curve
+  with actual unique admitted rows/fractions, GT@1 containment, rank-101
+  margins, true-rank-100 coarse reconstruction error, zero-gap counts, and
+  finite positive-gap error/margin quantiles. Treat every occupancy, including
+  82, and every ratio as diagnostic rather than a rejection gate. Later full-source comparison uses the
   spec's exact 20,000-ppm/10% material-shift rules and cannot turn a shifted
   population into architecture evidence.
 
 - [ ] **Step 4: Record the terminal decision**
 
-  On failure, name the first causal stage and stop the full V36 plan. On pass,
-  freeze the one winning combination of projection, geometry, score, coarse
-  code, K, local packing, object ceiling, and admission rule. Full-source
-  qualification only replays this identity. Authorize Task 2 of the full plan
-  without treating screen metrics as release evidence.
+  On cohort-A failure, name the first causal stage and authorize only the
+  pre-registered object/ID-disjoint cohort-B confirmation. Reject a family only
+  if B fails the same stage. A B pass is terminal `cohort-discordant` and
+  neither advances nor rejects; B source insufficiency or infrastructure
+  failure is indeterminate, no cohort C exists, and B has its own three-attempt
+  $90 cap. On A pass, advance only projection, geometry, and score. Before
+  opening the 1M holdout, preregister the finite 10M candidate set
+  and deterministic development-only selection rule for coarse code, K, local
+  packing, object ceiling, and admission. Freeze those once on 10M development;
+  validation and the 1M scale-transfer holdout cannot retune them. Authorize
+  full-source materialization without treating
+  screen metrics as release evidence.
 
 - [ ] **Step 5: Verify and commit**
 

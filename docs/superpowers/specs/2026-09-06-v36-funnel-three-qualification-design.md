@@ -14,6 +14,10 @@ the winning design may introduce a breaking format with no legacy reader or
 migration path. Sub-second contracts run locally; corpus work runs on bounded
 same-region AWS Spot capacity under profile `causality`. No 100M build starts
 until one frozen arm passes 1M and 10M without retuning.
+Before release, the campaign-only V36 freezer/controller/evaluation modules and
+executables move into a separate workspace research crate. The generic library
+retains its production Parquet and object-store dependencies but exposes no
+frozen-dataset authority, AWS campaign policy, or research checkpoint surface.
 
 Before the full-source materialization, a separately named object-sample
 screen uses a frozen, bounded population from query-independent hash-ranked
@@ -78,23 +82,26 @@ reductions, and training ties use `source_ordinal`. After primary assignment,
 `dense_ordinal` means the separate primary-posting storage position used by
 coarse heaps and the fine interval directory. The two names are never aliases.
 
-The complete 10M policy is frozen before opening the 1M holdout. Because query
-identities are shared across scales, the 10M result is a frozen scale-transfer
-test, not a second fresh cohort. Development may select once. Validation may
-reject but not retune. Holdout opens once and rejection cannot trigger another
-arm. Reused historical query sets are diagnostic only. Construction receives
-no query or truth capability; serving receives no source-corpus or list-S3
-capability.
+Before opening the 1M holdout, preregister the finite 10M candidate set and its
+deterministic development-only selection rule. The 10M development role alone
+selects K, code width, and payload layout; 10M validation may reject but cannot
+retune, and the previously unopened 1M holdout then measures scale transfer of
+that frozen policy. Because query identities are shared across scales, neither
+the 10M result nor the 1M holdout is a second fresh cohort. Holdout rejection
+cannot trigger another arm. Reused historical query sets are diagnostic only.
+Construction receives no query or truth capability; serving receives no
+source-corpus or list-S3 capability.
 
 The Task 0 v1 registry's `performance-gt100` output and query-major
 `block_queries=8` GT checkpoint are planned, unmaterialized contracts and are not executable at
 100M within the 12-hour cell cap. Before materialization, a breaking v2
-authority explicitly removes `performance-gt100` from the output set and
-replaces the checkpoint while preserving the source
-and four query-role identities: the 3,000 quality query vectors are
+authority explicitly removes `performance-gt100` from the output set, replaces
+the checkpoint, and binds the complete executed-screen query-exclusion set
+while preserving the source and four full-source query-role identities: the
+3,000 quality query vectors are
 loaded once (about 9 MiB), each source row block is read once, distance work
 proceeds in successive eight-query tiles, and the checkpoint binds the
-completed source-row prefix plus every quality query's canonical top-100 heap.
+completed source-row prefix plus every quality query's canonical top-101 heap.
 The 10,000 performance vectors remain separately authenticated. Resume starts at
 the first incomplete source-row block. Source membership, query identities,
 distance arithmetic, and GT ordering remain unchanged.
@@ -143,14 +150,28 @@ The object-sample input authority exists before execution and binds the full
 2,298-object registry count, 787,439,811,692-byte total, ordered-manifest
 SHA-256, source revision, caps, policies, and role seeds. It contains no
 consumed-object claim. The post-freeze population receipt is created only after
-the complete cutoff object authenticates, and records every completed ranked
-object even when an object contributes no surviving distinct ID. It also binds
+all sixteen ranked objects authenticate, and records every completed object
+even when it contributes no surviving distinct ID. It also binds
 the input authority, registry, source archive, executable, source commit,
-physical/distinct/duplicate counters, cutoff object and row, and every output
-artifact. Exact output artifacts are uploaded before a terminal marker can be
+physical/distinct/duplicate counters, all sixteen consumed identities, the
+population cutoff score/feature-ID pair, and every output artifact. Exact
+output artifacts are uploaded before a terminal marker can be
 published. Terminal states are closed: `complete`,
 `screen-source-insufficient`, `infrastructure`, and `interrupted`; only
 infrastructure or interruption may retry.
+Before launch, a reduced-shape execution of the exact GT kernel with the
+production thread count must project completion below half the registered
+active wall cap by scaling measured time with the exact row-times-query ratio;
+otherwise launch is forbidden. The authority fixes corpus row groups at 65,536
+rows, and each complete row group is an interruption boundary. At the first
+complete row group after at least 300 active seconds since the preceding
+publication, the freezer publishes every
+query's canonical top-101 heap plus the exact next source ordinal,
+source/query artifact identities, and arithmetic authority. Resume
+authenticates that state before scanning the suffix. More than 900 seconds
+without a completed row group or checkpoint is an infrastructure stop.
+Uninterrupted and resumed executions must produce identical neighbour IDs and
+binary64 distance bits.
 The object-sample campaign rejects a Spot rate above $3/hour or a $90 total
 campaign projection. The cumulative active-time budget is therefore at most 30
 hours across all attempts at the admitted rate; before every attempt, its
@@ -167,16 +188,37 @@ bind BLAKE3. ETag is never treated as a digest.
 
 The bounded screen does not take a path prefix. It orders the 2,298 registered
 complete source objects by
-`(SHA-256("borsuk-v36-screen-object-v1" || utf8(path) || u64le(length)),path)`,
-streams complete objects in that order, keeps the first occurrence of every
-valid feature ID, and stops after the complete object containing the
-1,100,000th distinct row. It may consume at most 16 objects and 6 GiB; hitting
-either cap first is terminal source insufficiency. This object-sampling identity, every consumed object,
-and all bytes are registered before query roles are derived. Screen role seeds
-use population-specific SHA-256 labels under
-`borsuk-v36-prefix-screen-{role}-query-v1`; they are deliberately distinct from
-the full-source role seeds, so the diagnostic cohort cannot partially open the
-future full-source validation or sealed holdout. The screen reports
+`(SHA-256("borsuk-v36-screen-object-v1" || utf8(path) || u64le(length)),path)`
+and authenticates all of the first 16 objects. The frozen registry proves those
+objects total 5,485,265,954 bytes, below the 6-GiB cap. It validates every row,
+resolves duplicate feature IDs by the minimum
+`(selected_object_ordinal,row_offset)`, then ranks the remaining identities by
+`(SHA-256(SHA-256(utf8("borsuk-v36-prefix-screen-population-row-v2")) ||
+ordered_source_manifest_sha256_bytes || u64le(feature_row_id)),feature_row_id)`.
+The first 1,100,000 identities form the diagnostic candidate population. This
+uses all sixteen query-independently sampled objects instead of a contiguous
+physical prefix of roughly five objects. Fewer than 1,100,000 distinct valid
+IDs after all sixteen complete objects is terminal source insufficiency.
+The cohort-A v2 authority binds `cohort_ordinal=0`,
+`selected_object_start=0`, `selected_object_count=16`, the exact selected byte
+total, the upstream dataset-authority SHA-256, and no exclusion artifact. A
+cohort-B authority binds ordinal 1, start 16, count 16, its distinct exact byte
+total, and cohort A's selected-ID artifact. These fields are concrete and
+required; there is no inferred cohort or default.
+
+Screen role seeds use population-specific SHA-256 labels under
+`borsuk-v36-prefix-screen-{role}-query-v2`. After removing all 13,000 query
+identities, corpus rows use the distinct label
+`borsuk-v36-prefix-screen-corpus-v2`; they never reuse the full-source corpus
+score. All four query artifacts from every executed screen cohort are mandatory
+exclusion dependencies of future full-source role selection: their union is
+removed before any full-source development, validation, sealed-holdout, or
+performance ranking. The full-source authority binds the complete ordered set
+of executed-cohort artifact identities and proves zero overlap; omission of
+cohort B, when executed, is an authority failure. Different seeds alone are not
+treated as separation.
+
+The screen reports
 GT@10 exact/near-duplicate rates, nearest-neighbour distance quantiles, and the
 centered spectrum energy retained at M192. These diagnostics are repeated on
 the globally selected 1M population; a material shift is
@@ -187,6 +229,39 @@ retained-energy ppm. A shift is material when either duplicate rate changes by
 more than 20,000 ppm, retained energy changes by more than 20,000 ppm, or a
 nonzero distance quantile changes by more than 10%; a zero/nonzero quantile
 transition is always material.
+
+The 1M screen is a fail-fast cohort diagnostic, not a 100M performance proxy.
+For each geometry it additionally reports the route-containment curve for
+target posting occupancies 64, 82, 128, 256, 512, 1,024, 2,048, 4,096, and
+8,192 rows under the unchanged 14-object wave and reports actual unique
+admitted rows and fractions at every point. The curve, including occupancy 82,
+is diagnostic and never a pass/fail or family-rejection gate: 82 only
+approximates the nominal 0.115% corpus fraction of fourteen 8,192-row postings
+at 100M and does not preserve clustering, replication, scoring, or scale
+equivalence. For each query, also report GT@1 containment, exact squared-L2
+`gap_100_101 = d101 - d100`, squared-L2 reconstruction error of the true
+rank-100 source vector, and absolute coarse-score errors
+`abs(d_hat(q,x)-d(q,x))` for the true rank-100 and rank-101 rows. Zero-gap
+cases are reported by separate `zero_gap_count` and error summaries; strictly
+positive gaps alone contribute finite boundary-score-error/gap quantiles.
+Neither vector reconstruction error nor boundary-score error is a certified
+rank-error bound. Exact truth therefore retains
+rank 101 internally even though the published neighbour contract remains
+GT@100. A screen pass advances projection,
+geometry, and score families; it does not freeze K, code width, payload layout,
+or generic production defaults. Those remain open through measured 10M replay.
+A failure is `registered-cohort-failed`; it rejects a family only after the
+same causal stage fails on cohort B, or after a mathematically stronger bound
+proves the stage impossible. Cohort-A failure followed by cohort-B pass is the
+terminal `cohort-discordant` outcome: it neither advances nor rejects, and no
+cohort C is permitted. Cohort-B source insufficiency or infrastructure failure
+also leaves the family indeterminate. Cohort B has a separately registered
+three-attempt, $90 campaign cap. Cohort B uses zero-based ranked source objects
+16 through 31
+(5,483,342,562 bytes), binds cohort A's exact selected-ID artifact, excludes
+every overlapping logical ID before its own row ranking, and is therefore
+object- and ID-disjoint without observing A's quality outcomes. It never alone
+labels the generic architecture infeasible.
 
 ## Qualification hypothesis
 
@@ -206,12 +281,13 @@ making its largest-absolute component (ties by coordinate ordinal) positive,
 and reports retained centered second-moment energy at dimensions 64/96/128/192.
 Failure to converge is a terminal numerical failure, not an architectural
 rejection. Both projections are registered before outcomes. Screen
-development selects exactly one complete funnel by the global lexicographic
-rule; screen validation rejection is terminal rather than trying the next
-development arm; sealed holdout opens once only after validation passes.
-Full-source qualification replays that one frozen arm unchanged and may never
-reopen a screen-rejected component. If neither projection survives development,
-Funnel-3 is rejected. The source-f32 metric
+development ranks projection/geometry/score families by the global
+lexicographic rule; screen validation does not try an unregistered rescue and
+sealed holdout opens once only after validation passes. A surviving family is
+replayed at 10M, where K, code width, and payload layout are first frozen.
+A family that fails one screen cohort is recorded for the disjoint-cohort
+confirmation rule rather than relabelled as a generic Funnel-3 rejection. The
+source-f32 metric
 remains the truth authority. A deterministic corpus-only
 reservoir and fixed reductions train
 `min(4,096,next_power_of_two(ceil(rows/262,144)))` super-cell centroids: 4 at
@@ -498,11 +574,15 @@ change an earlier prefix. Report duplicate scans, unique rows, useful/fetched
 bytes, GETs, excluded objects, candidate-to-object scattering, and unreachable
 frontiers.
 
-Screen development selects exactly one complete arm by the global
-lexicographic rule. Screen validation evaluates only that identity; rejection
-is terminal and cannot advance to another development survivor. Sealed screen
-holdout opens once only after validation passes. Full-source G1/G2 replay that
-identity unchanged; there is no second arm selection.
+Screen development ranks complete registered families by the global
+lexicographic rule. Screen validation evaluates only the leading family;
+rejection cannot advance to another development survivor. Sealed screen
+holdout opens once only after validation passes. The screen records the leading
+projection, geometry, and score, but K, coarse-code width, and object layout
+remain diagnostic. Before any 1M holdout opens, G2 preregisters their finite
+10M candidate set and lexicographic development-only selection rule. The 10M
+development role performs their sole freeze; neither 10M validation nor the 1M
+scale-transfer holdout can rescue or retune it.
 
 Development requires 998,000 ppm route, selected-scorer, projected-f32,
 coarse-code, and post-I/O containment; fine-codec loss versus same-row f32 is at
@@ -630,21 +710,25 @@ must meet the holdout recall gates and never return a deleted ID.
 
 ## Execution funnel and decision
 
-1. G-1 runs the separately registered bounded 1M hash-object-sample screen on
+1. G-1 runs the separately registered bounded 1M sixteen-object row-hash screen on
    same-region Spot/NVMe. It compares SRHT versus the centered principal
    subspace, all five registered posting scores, closure geometry, coarse
    codes, and the actual complete fine-object packer. It stops before the
-   787-GB freeze unless at least one arm reaches every causal containment gate
-   inside the physical 14-GET/7-MiB envelope. It freezes exactly one complete
-   arm after development, validation, and one sealed holdout; passing is
-   diagnostic only.
+   787-GB freeze unless at least one family reaches every causal containment
+   gate inside the physical
+   14-GET/7-MiB envelope. It advances one projection/geometry/score family
+   after development, validation, and one sealed holdout. K, code width, and
+   layout remain unfrozen; passing is diagnostic only. One-cohort failure is
+   confirmed on a disjoint registered cohort before family rejection.
 2. G0 proves schemas, deterministic arithmetic, capability isolation, bounded
    unique heaps, transport accounting, scalar/SIMD parity, and resource stops.
-3. G1 materializes the registered 1M corpus/GT on same-region Spot, runs the
-   one screen-frozen projection, geometry, score, representation, and
-   fine-layout arm unchanged across development, validation, and holdout.
-4. G2 replays the frozen arm at 10M and applies frontier-growth, quality,
-   construction, RSS, and transport gates before any production format work.
+3. G1 materializes the globally selected 1M corpus/GT on same-region Spot,
+   first proves zero overlap with every screen query identity, then replays the
+   advanced projection/geometry/score family across development, validation,
+   and holdout. Population shift is classified before interpreting a failure.
+4. G2 replays that family at 10M, freezes K/code-width/layout exactly once, and
+   applies frontier-growth, quality, construction, RSS, and transport gates
+   before any production format work.
 5. G3 builds the minimal executable S3 query path at 1M/10M and proves offline
    equality plus honest hot/shared-cache/cold measurements.
 6. G4 runs three terminal 100M/768D query repetitions on Spot only if G2/G3
