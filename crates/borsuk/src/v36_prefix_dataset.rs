@@ -2,7 +2,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeSet, BinaryHeap, HashMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::{BufReader, Read, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -959,6 +959,34 @@ fn validate_source_batch(
 const MATERIALIZATION_BUCKET_ROWS: usize = 8_192;
 const MATERIALIZATION_RECORD_BYTES: usize = 16 + DIMENSIONS * 4;
 
+fn write_materialization_record<W: Write>(
+    writer: &mut W,
+    path: &Path,
+    ordinal: usize,
+    row: &V36PrefixMaterializedRow,
+) -> Result<()> {
+    validate_embedding(&row.embedding)?;
+    let mut record = [0_u8; MATERIALIZATION_RECORD_BYTES];
+    record[..8].copy_from_slice(
+        &u64::try_from(ordinal)
+            .map_err(|_| invalid("V36 prefix materialization ordinal overflows"))?
+            .to_le_bytes(),
+    );
+    record[8..16].copy_from_slice(&row.feature_row_id.to_le_bytes());
+    for (encoded, value) in record[16..]
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(&row.embedding)
+    {
+        *encoded = value.to_bits().to_le_bytes();
+    }
+    writer.write_all(&record).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })
+}
+
 fn materialization_rows(split: &V36PrefixRoleSplit) -> [&[V36PrefixRowIdentity]; 5] {
     [
         &split.corpus,
@@ -1124,7 +1152,7 @@ pub fn materialize_v36_prefix_role_parquets(
                     source,
                 })?;
             role_paths.push(path);
-            role_files.push(file);
+            role_files.push(BufWriter::new(file));
         }
         spool_paths.push(role_paths);
         spools.push(role_files);
@@ -1144,20 +1172,16 @@ pub fn materialize_v36_prefix_role_parquets(
                         return Err(invalid("V36 prefix materialization feature ID differs"));
                     }
                     let file = &mut spools[role][ordinal / MATERIALIZATION_BUCKET_ROWS];
-                    file.write_all(&(ordinal as u64).to_le_bytes())
-                        .and_then(|_| file.write_all(&feature_row_id.to_le_bytes()))
-                        .map_err(|source| BorsukError::Io {
-                            path: spool_paths[role][ordinal / MATERIALIZATION_BUCKET_ROWS].clone(),
-                            source,
-                        })?;
-                    for value in row.embedding {
-                        file.write_all(&value.to_bits().to_le_bytes())
-                            .map_err(|source| BorsukError::Io {
-                                path: spool_paths[role][ordinal / MATERIALIZATION_BUCKET_ROWS]
-                                    .clone(),
-                                source,
-                            })?;
-                    }
+                    write_materialization_record(
+                        file,
+                        &spool_paths[role][ordinal / MATERIALIZATION_BUCKET_ROWS],
+                        ordinal,
+                        &V36PrefixMaterializedRow {
+                            feature_row_id,
+                            source_ordinal: Some(ordinal as u64),
+                            embedding: row.embedding,
+                        },
+                    )?;
                 }
                 Ok(())
             },
@@ -1165,6 +1189,14 @@ pub fn materialize_v36_prefix_role_parquets(
     }
     if !destinations.is_empty() {
         return Err(invalid("V36 prefix materialization row is missing"));
+    }
+    for (role, role_spools) in spools.iter_mut().enumerate() {
+        for (bucket, spool) in role_spools.iter_mut().enumerate() {
+            spool.flush().map_err(|source| BorsukError::Io {
+                path: spool_paths[role][bucket].clone(),
+                source,
+            })?;
+        }
     }
     drop(spools);
     let names = [
@@ -1787,4 +1819,57 @@ pub fn write_v36_prefix_gt100_from_parquets(
     }
     writer.close()?;
     publish_output(temporary, output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        cell::Cell,
+        io::{BufWriter, Write},
+        rc::Rc,
+    };
+
+    use super::*;
+
+    struct CountingWriter {
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn v36_prefix_dataset_spool_writer_coalesces_record_writes() {
+        let calls = Rc::new(Cell::new(0));
+        let mut writer = BufWriter::with_capacity(
+            8 * 1024,
+            CountingWriter {
+                calls: Rc::clone(&calls),
+            },
+        );
+        let row = V36PrefixMaterializedRow {
+            feature_row_id: 7,
+            source_ordinal: Some(0),
+            embedding: vec![1.0; DIMENSIONS],
+        };
+        for ordinal in 0..32 {
+            write_materialization_record(
+                &mut writer,
+                Path::new("counting-spool.bin"),
+                ordinal,
+                &row,
+            )
+            .unwrap();
+        }
+        writer.flush().unwrap();
+        assert!(calls.get() <= 16, "underlying writes={}", calls.get());
+    }
 }
