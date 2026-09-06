@@ -206,6 +206,7 @@ mod v34_rank4;
 mod v34_route;
 mod v35_authority;
 mod v35_build;
+mod v35_delta;
 mod v35_patch;
 mod v35_projection;
 mod v35_remote;
@@ -270,6 +271,11 @@ pub use v35_build::{
     V35BuildStorageGroupSink, V35MortonModel, build_v35_scratch_runs, decode_v35_build_run_arrow,
     decode_v35_source_block_parquet, encode_v35_build_storage_group, merge_v35_build_runs,
     open_v35_build_run_cursor, train_v35_morton_model,
+};
+#[doc(hidden)]
+pub use v35_delta::{
+    V35ConditionalHeadWrite, V35GenerationPublicationSink, V35PublicationOutcome,
+    publish_v35_generation,
 };
 #[doc(hidden)]
 pub use v35_patch::{
