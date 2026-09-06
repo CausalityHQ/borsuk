@@ -127,7 +127,11 @@ streams complete objects in that order, keeps the first occurrence of every
 valid feature ID, and stops after the complete object containing the
 1,100,000th distinct row. It may consume at most 16 objects and 6 GiB; hitting
 either cap first is terminal source insufficiency. This object-sampling identity, every consumed object,
-and all bytes are registered before query roles are derived. The screen reports
+and all bytes are registered before query roles are derived. Screen role seeds
+use population-specific SHA-256 labels under
+`borsuk-v36-prefix-screen-{role}-query-v1`; they are deliberately distinct from
+the full-source role seeds, so the diagnostic cohort cannot partially open the
+future full-source validation or sealed holdout. The screen reports
 GT@10 exact/near-duplicate rates, nearest-neighbour distance quantiles, and the
 centered spectrum energy retained at M192. These diagnostics are repeated on
 the globally selected 1M population; a material shift is
@@ -228,6 +232,11 @@ promised clustering properties. Exact global assignment at 100M would cost
 roughly 468.768T MACs for B4096 or 234.394T for B8192 before training, so every
 later construction method requires a reduced-shape throughput/cost preflight
 and a 12-hour active-cell cap.
+
+The breaking `borsuk-v36-funnel-manifest-v2` embeds the complete
+`V36ProjectionArm` rather than a seed alone. The prefix-screen manifest also
+binds geometry, posting score, coarse code, fine codec, chunk ceiling, and K;
+there is no partial winner that full-source qualification could reinterpret.
 
 ### Posting score and traversal
 

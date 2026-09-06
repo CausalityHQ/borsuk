@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use blake3::Hasher as Blake3;
 use borsuk::{
     V36ArtifactIdentity, V36ChunkCeiling, V36CoarseCode, V36FineCodec, V36FunnelManifest,
-    V36GeometryArm, V36PrimaryRows, V36RegisteredManifest, V36Replication, V36ResourceRequest,
-    V36ShapeScore, V36TransportDisposition, V36TransportFragment, V36TransportLimits,
-    V36TransportPosting, plan_v36_transport, project_v36_resources, validate_v36_manifest,
+    V36GeometryArm, V36PrimaryRows, V36ProjectionArm, V36RegisteredManifest, V36Replication,
+    V36ResourceRequest, V36ShapeScore, V36TransportDisposition, V36TransportFragment,
+    V36TransportLimits, V36TransportPosting, plan_v36_transport, project_v36_resources,
+    validate_v36_manifest,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -44,14 +45,14 @@ fn manifest() -> V36FunnelManifest {
         claim_eligible: false,
         coarse_code: V36CoarseCode::ResidualPq4Code32,
         fine_codec: V36FineCodec::Sq8,
-        format: "borsuk-v36-funnel-manifest-v1".to_owned(),
+        format: "borsuk-v36-funnel-manifest-v2".to_owned(),
         geometry: V36GeometryArm {
             primary_rows: V36PrimaryRows::Posting4096,
             replication: V36Replication::ClosureEpsilon15,
         },
         metric: "squared-l2".to_owned(),
         projection_dimensions: 192,
-        projection_seed: 36,
+        projection: V36ProjectionArm::Srht192 { seed: 36 },
         shape_score: V36ShapeScore::Rank4,
         source_dimensions: 768,
         unique_k: 1_536,
@@ -162,7 +163,7 @@ fn v36_funnel_authority_accepts_only_the_closed_arm_matrix_and_exact_bytes() {
     for mutate in [
         |value: &mut V36FunnelManifest| value.claim_eligible = true,
         |value: &mut V36FunnelManifest| value.projection_dimensions = 96,
-        |value: &mut V36FunnelManifest| value.projection_seed = 35,
+        |value: &mut V36FunnelManifest| value.projection = V36ProjectionArm::Srht192 { seed: 35 },
         |value: &mut V36FunnelManifest| value.source_dimensions = 0,
         |value: &mut V36FunnelManifest| value.unique_k = 2_049,
         |value: &mut V36FunnelManifest| {
@@ -351,9 +352,9 @@ fn v36_funnel_authority_projects_checked_resident_and_remote_resources() {
     assert_eq!(projected.minimum_fine_interval_directory_bytes, 4_785_168);
     assert_eq!(projected.directory_bytes, 67_108_864);
     assert_eq!(projected.delta_coarse_and_csr_bytes, 402_653_184);
-    assert_eq!(projected.query_workspace_bytes, 268_435_456);
+    assert_eq!(projected.query_workspace_bytes, 536_870_912);
     assert_eq!(projected.runtime_bytes, 536_870_912);
-    assert_eq!(projected.resident_admission_bytes, 2_037_437_888);
+    assert_eq!(projected.resident_admission_bytes, 2_305_873_344);
     assert_eq!(projected.resident_limit_bytes, 3_221_225_472);
     assert_eq!(projected.remote_coarse_payload_bytes, 9_600_000_000);
     assert_eq!(projected.remote_coarse_cap_eight_bytes, 38_400_000_000);
@@ -403,10 +404,25 @@ fn v36_funnel_authority_projects_checked_resident_and_remote_resources() {
         let mut inputs = request.clone();
         inputs.rows = rows;
         inputs.liveness_bytes = rows.div_ceil(8);
+        if rows < 100_000_000 {
+            inputs.compaction_new_arena_bytes = 0;
+            inputs.compaction_old_arena_bytes = 0;
+            inputs.delta_coarse_bytes = 0;
+            inputs.delta_csr_bytes = 0;
+            inputs.recent_fine_bytes = 0;
+            inputs.retiring_generation_bytes = 0;
+        }
         let ledger = project_v36_resources(&arm, &inputs).unwrap();
         assert_eq!(ledger.posting_count, postings);
         assert_eq!(ledger.super_cell_count, super_cells);
         assert_eq!(ledger.resident_limit_bytes, limit);
+    }
+
+    for rows in [1_000_000, 10_000_000] {
+        let mut write_loaded = request.clone();
+        write_loaded.rows = rows;
+        write_loaded.liveness_bytes = rows.div_ceil(8);
+        assert!(project_v36_resources(&value, &write_loaded).is_err());
     }
 
     for mean_replication_ppm in [1_000_000, 1_500_000, 2_000_000, 3_000_000, 8_000_000] {

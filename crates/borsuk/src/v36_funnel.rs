@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
 
-const FORMAT: &str = "borsuk-v36-funnel-manifest-v1";
+const FORMAT: &str = "borsuk-v36-funnel-manifest-v2";
 const PROJECTION_DIMENSIONS: u16 = 192;
 const PROJECTION_SEED: u64 = 36;
 const COARSE_FRAGMENT_LIMIT_BYTES: u64 = 512 * 1_024;
@@ -18,7 +18,7 @@ const POSTING_SUMMARY_SLOT_BYTES: u64 = 4_736;
 const OBJECT_DIRECTORY_ENTRY_BYTES: u64 = 80;
 const POSTING_DIRECTORY_ENTRY_BYTES: u64 = 16;
 const FINE_INTERVAL_ENTRY_BYTES: u64 = 16;
-const QUERY_WORKSPACE_BYTES: u64 = 256 * MIB;
+const QUERY_WORKSPACE_BYTES: u64 = 16 * 32 * MIB;
 const RUNTIME_BYTES: u64 = 512 * MIB;
 
 fn invalid(message: &str) -> BorsukError {
@@ -83,6 +83,9 @@ pub enum V36ShapeScore {
     Rank2,
     /// Rank-four Gaussian lower-tail heuristic.
     Rank4,
+    /// Six total projected-space prototypes, including the posting centroid.
+    #[serde(rename = "prototype-six")]
+    Prototype6,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +178,157 @@ pub struct V36RegisteredManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "arm")]
+/// Frozen projection authority for the bounded V36 screen.
+pub enum V36ProjectionArm {
+    /// Deterministic SRHT control.
+    Srht192 {
+        /// Structured projection seed.
+        seed: u64,
+    },
+    /// Deterministic centered covariance eigenspace.
+    CenteredSubspace192 {
+        /// Exact centered covariance digest.
+        covariance_sha256: String,
+        /// Exact eigenpair ordering.
+        eigenpair_order: String,
+        /// Exact eigenvector sign convention.
+        eigenvector_sign_rule: String,
+        /// Retained-energy dimensions, in ascending order.
+        energy_dimensions: Vec<u16>,
+        /// Exact corpus mean digest.
+        mean_sha256: String,
+        /// Maximum accepted eigenpair relative residual, in parts per trillion.
+        max_eigenpair_relative_residual_ppt: u32,
+        /// Maximum accepted covariance reconstruction error, in parts per trillion.
+        max_reconstruction_relative_error_ppt: u32,
+        /// Exact geometry-reservoir digest.
+        reservoir_sha256: String,
+        /// Pinned deterministic solver identity.
+        solver: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// One role selected from the bounded screen population.
+pub struct V36PrefixRoleAuthority {
+    /// Role name.
+    pub role: String,
+    /// Exact row count.
+    pub rows: u64,
+    /// Population-specific role-selection seed label.
+    pub seed_label: String,
+    /// Role-selection seed digest.
+    pub seed_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// One complete immutable source object consumed by the bounded screen.
+pub struct V36PrefixSourceObject {
+    /// Independently authenticated BLAKE3.
+    pub blake3: String,
+    /// Complete encoded length.
+    pub encoded_bytes: u64,
+    /// Registered source-manifest path.
+    pub path: String,
+    /// Query-independent object-sampling digest.
+    pub sample_sha256: String,
+    /// Registered complete-object SHA-256.
+    pub sha256: String,
+    /// Immutable source URI.
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One object from an authenticated ordered V36 source registry.
+pub struct V36PrefixRegisteredSourceObject {
+    /// Complete encoded length.
+    pub encoded_bytes: u64,
+    /// Registered source-manifest path.
+    pub path: String,
+    /// Registered complete-object SHA-256.
+    pub sha256: String,
+    /// Immutable source URI.
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Authority for the bounded hash-object-sampled V36 population.
+pub struct V36PrefixPopulationAuthority {
+    /// Diagnostic populations can never make release claims.
+    pub claim_eligible: bool,
+    /// Capability available to construction.
+    pub construction_capability: String,
+    /// Complete consumed-object identities in sample order.
+    pub consumed_objects: Vec<V36PrefixSourceObject>,
+    /// Exact corpus row count after role removal.
+    pub corpus_rows: u64,
+    /// Exact distinct-row target before role removal.
+    pub distinct_candidates: u64,
+    /// Duplicate resolution rule.
+    pub duplicate_rule: String,
+    /// Capability available to evaluation.
+    pub evaluation_capability: String,
+    /// Exact format marker.
+    pub format: String,
+    /// Maximum complete source objects.
+    pub object_cap: u16,
+    /// Query-independent object sampling algorithm.
+    pub object_sampling_algorithm: String,
+    /// Ordered complete-source-manifest digest.
+    pub ordered_source_manifest_sha256: String,
+    /// Identity distinct from full-source qualification.
+    pub population_id: String,
+    /// Ordered role authorities.
+    pub roles: Vec<V36PrefixRoleAuthority>,
+    /// Maximum complete encoded source bytes.
+    pub source_byte_cap: u64,
+    /// Frozen source revision.
+    pub source_revision: String,
+    /// Bytes per streaming query workspace.
+    pub workspace_bytes: u64,
+    /// Streaming query workspace count.
+    pub workspace_count: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Closed manifest for one bounded V36 screen arm.
+pub struct V36PrefixScreenManifest {
+    /// Complete role-separated artifacts.
+    pub artifacts: Vec<V36ArtifactIdentity>,
+    /// Screen results can never make release claims.
+    pub claim_eligible: bool,
+    /// Fine object ceiling.
+    pub chunk_ceiling: V36ChunkCeiling,
+    /// Coarse representation.
+    pub coarse_code: V36CoarseCode,
+    /// Fine representation.
+    pub fine_codec: V36FineCodec,
+    /// Exact format marker.
+    pub format: String,
+    /// Posting geometry.
+    pub geometry: V36GeometryArm,
+    /// Bound population authority.
+    pub population: V36PrefixPopulationAuthority,
+    /// Reserved metadata bytes in the equal posting-summary slot.
+    pub posting_summary_metadata_bytes: u64,
+    /// Complete equal posting-summary slot bytes.
+    pub posting_summary_slot_bytes: u64,
+    /// Reserved projected-vector bytes in the equal posting-summary slot.
+    pub posting_summary_vector_bytes: u64,
+    /// Frozen projection authority.
+    pub projection: V36ProjectionArm,
+    /// Frozen posting-ranking score.
+    pub shape_score: V36ShapeScore,
+    /// Bounded unique source-ID heap size.
+    pub unique_k: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 /// Strict, breaking V36 qualification manifest.
 pub struct V36FunnelManifest {
@@ -196,8 +350,8 @@ pub struct V36FunnelManifest {
     pub metric: String,
     /// Resident projection dimensions.
     pub projection_dimensions: u16,
-    /// Structured projection seed.
-    pub projection_seed: u64,
+    /// Frozen projection authority.
+    pub projection: V36ProjectionArm,
     /// Posting score.
     pub shape_score: V36ShapeScore,
     /// Source dimensions.
@@ -223,13 +377,345 @@ fn canonical_json_value(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn valid_geometry(manifest: &V36FunnelManifest) -> bool {
-    match (
-        manifest.geometry.primary_rows,
-        manifest.geometry.replication,
-    ) {
+fn source_sample_sha256(path: &str, encoded_bytes: u64) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"borsuk-v36-screen-object-v1");
+    hasher.update(path.as_bytes());
+    hasher.update(encoded_bytes.to_le_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn validate_prefix_source_registry(
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    if source_registry.len() < population.consumed_objects.len() {
+        return Err(invalid("V36 prefix source registry is incomplete"));
+    }
+    let mut paths = BTreeSet::new();
+    let mut uris = BTreeSet::new();
+    let mut ordered = source_registry.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
+    let mut manifest_hasher = Sha256::new();
+    for object in ordered {
+        let expected_uri = format!(
+            "https://huggingface.co/datasets/andropar/relaion2b-natural-embeddings/resolve/{}/{path}",
+            population.source_revision,
+            path = object.path,
+        );
+        if object.path.is_empty()
+            || object.uri != expected_uri
+            || object.encoded_bytes == 0
+            || !valid_digest(&object.sha256)
+            || !paths.insert(object.path.as_str())
+            || !uris.insert(object.uri.as_str())
+        {
+            return Err(invalid("V36 prefix registered source object differs"));
+        }
+        manifest_hasher.update(object.path.as_bytes());
+        manifest_hasher.update(b"\t");
+        manifest_hasher.update(object.sha256.as_bytes());
+        manifest_hasher.update(b"\t");
+        manifest_hasher.update(object.encoded_bytes.to_string().as_bytes());
+        manifest_hasher.update(b"\n");
+    }
+    if format!("{:x}", manifest_hasher.finalize()) != population.ordered_source_manifest_sha256 {
+        return Err(invalid("V36 prefix ordered source manifest differs"));
+    }
+
+    let mut ranked = source_registry
+        .iter()
+        .map(|object| {
+            (
+                source_sample_sha256(&object.path, object.encoded_bytes),
+                object.path.as_str(),
+                object,
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| (left.0.as_str(), left.1).cmp(&(right.0.as_str(), right.1)));
+    for (observed, (sample_sha256, _, registered)) in population.consumed_objects.iter().zip(ranked)
+    {
+        if observed.sample_sha256 != sample_sha256
+            || observed.path != registered.path
+            || observed.uri != registered.uri
+            || observed.sha256 != registered.sha256
+            || observed.encoded_bytes != registered.encoded_bytes
+        {
+            return Err(invalid(
+                "V36 prefix consumed objects are not the ranked prefix",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_prefix_population(
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    if population.format != "borsuk-v36-prefix-population-authority-v1"
+        || population.claim_eligible
+        || population.population_id != "borsuk-v36-prefix-screen-population-v1"
+        || population.object_sampling_algorithm
+            != "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path"
+        || population.duplicate_rule != "first-selected-object-ordinal-then-row-offset"
+        || population.distinct_candidates != 1_100_000
+        || population.corpus_rows != 1_000_000
+        || population.object_cap != 16
+        || population.source_byte_cap != 6 * 1_024 * MIB
+        || population.workspace_count != 16
+        || population.workspace_bytes != 32 * MIB
+        || population.construction_capability != "named-query-excluded-corpus-only-no-query-truth"
+        || population.evaluation_capability != "named-artifacts-only-no-source-list-discovery"
+        || population.source_revision != "bfc7465dcf1245bd605d35dcaf5d2177bbc2025a"
+        || !valid_digest(&population.ordered_source_manifest_sha256)
+    {
+        return Err(invalid("V36 prefix population authority differs"));
+    }
+
+    let expected_roles = [
+        (
+            "development",
+            1_000_u64,
+            "borsuk-v36-prefix-screen-development-query-v1",
+            "832b9c89bae79163c46a05cac0ae90e71da9efeec2aca4aa637f9f59a07c780f",
+        ),
+        (
+            "validation",
+            1_000,
+            "borsuk-v36-prefix-screen-validation-query-v1",
+            "be747ffbf481a02b3e247f92339b45084d112c84256dfc717dc96d56fdfc8873",
+        ),
+        (
+            "sealed-holdout",
+            1_000,
+            "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
+            "b8035c4a96f2350c70d88b67a1eb4dce02b920214f2859ca599a5dc4635f02da",
+        ),
+        (
+            "performance",
+            10_000,
+            "borsuk-v36-prefix-screen-performance-query-v1",
+            "53507396cc88a5bcba45e697238ba27af205481267f6515b71aa234bff7549e3",
+        ),
+    ];
+    if population.roles.len() != expected_roles.len()
+        || population.roles.iter().zip(expected_roles).any(
+            |(role, (name, rows, seed_label, seed_sha256))| {
+                role.role != name
+                    || role.rows != rows
+                    || role.seed_label != seed_label
+                    || role.seed_sha256 != seed_sha256
+            },
+        )
+    {
+        return Err(invalid("V36 prefix role authority differs"));
+    }
+    let role_seeds = population
+        .roles
+        .iter()
+        .map(|role| role.seed_sha256.as_str())
+        .collect::<BTreeSet<_>>();
+    if role_seeds.len() != expected_roles.len() {
+        return Err(invalid("V36 prefix role seeds overlap"));
+    }
+
+    if population.consumed_objects.is_empty()
+        || population.consumed_objects.len() > usize::from(population.object_cap)
+    {
+        return Err(invalid("V36 prefix consumed-object count differs"));
+    }
+    let mut paths = BTreeSet::new();
+    let mut uris = BTreeSet::new();
+    let mut previous: Option<(&str, &str)> = None;
+    let mut total_bytes = 0_u64;
+    for object in &population.consumed_objects {
+        let expected_sample_sha256 = source_sample_sha256(&object.path, object.encoded_bytes);
+        if object.path.is_empty()
+            || object.uri.is_empty()
+            || object.encoded_bytes == 0
+            || !valid_digest(&object.sha256)
+            || !valid_digest(&object.blake3)
+            || !valid_digest(&object.sample_sha256)
+            || object.sample_sha256 != expected_sample_sha256
+            || !paths.insert(object.path.as_str())
+            || !uris.insert(object.uri.as_str())
+        {
+            return Err(invalid("V36 prefix source-object identity differs"));
+        }
+        let current = (object.sample_sha256.as_str(), object.path.as_str());
+        if previous.is_some_and(|prior| prior >= current) {
+            return Err(invalid("V36 prefix source-object order differs"));
+        }
+        previous = Some(current);
+        total_bytes = total_bytes
+            .checked_add(object.encoded_bytes)
+            .ok_or_else(|| invalid("V36 prefix source bytes overflow"))?;
+    }
+    if total_bytes > population.source_byte_cap {
+        return Err(invalid("V36 prefix source bytes exceed cap"));
+    }
+    validate_prefix_source_registry(population, source_registry)?;
+    Ok(())
+}
+
+fn validate_prefix_projection(projection: &V36ProjectionArm) -> Result<()> {
+    match projection {
+        V36ProjectionArm::Srht192 { seed } if *seed == PROJECTION_SEED => Ok(()),
+        V36ProjectionArm::CenteredSubspace192 {
+            covariance_sha256,
+            eigenpair_order,
+            eigenvector_sign_rule,
+            energy_dimensions,
+            mean_sha256,
+            max_eigenpair_relative_residual_ppt,
+            max_reconstruction_relative_error_ppt,
+            reservoir_sha256,
+            solver,
+        } if valid_digest(covariance_sha256)
+            && valid_digest(mean_sha256)
+            && valid_digest(reservoir_sha256)
+            && eigenpair_order == "eigenvalue-descending-then-coordinate-ordinal"
+            && eigenvector_sign_rule == "largest-absolute-component-positive-coordinate-tie"
+            && energy_dimensions == &[64, 96, 128, 192]
+            && *max_eigenpair_relative_residual_ppt == 100
+            && *max_reconstruction_relative_error_ppt == 100
+            && solver == "nalgebra-0.33-symmetric-eigen-single-thread-no-contraction" =>
+        {
+            Ok(())
+        }
+        _ => Err(invalid("V36 prefix projection authority differs")),
+    }
+}
+
+fn canonical_value_bytes(value: &impl Serialize) -> Result<Vec<u8>> {
+    let value = serde_json::to_value(value)
+        .map_err(|_| invalid("V36 prefix authority cannot be canonicalized"))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|_| invalid("V36 prefix authority cannot be serialized"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn artifact_binds_value(artifact: &V36ArtifactIdentity, value: &impl Serialize) -> Result<bool> {
+    let bytes = canonical_value_bytes(value)?;
+    Ok(
+        artifact.encoded_bytes == u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+            && artifact.sha256 == format!("{:x}", Sha256::digest(&bytes))
+            && artifact.blake3 == blake3::hash(&bytes).to_hex().as_str(),
+    )
+}
+
+fn validate_prefix_manifest_fields(
+    manifest: &V36PrefixScreenManifest,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    if manifest.format != "borsuk-v36-prefix-screen-manifest-v1"
+        || manifest.claim_eligible
+        || manifest.posting_summary_vector_bytes != 4_608
+        || manifest.posting_summary_metadata_bytes != 128
+        || manifest.posting_summary_slot_bytes != POSTING_SUMMARY_SLOT_BYTES
+        || !matches!(
+            manifest.geometry.primary_rows,
+            V36PrimaryRows::Posting4096 | V36PrimaryRows::Posting8192
+        )
+        || !valid_geometry_parts(
+            manifest.geometry.primary_rows,
+            manifest.geometry.replication,
+            manifest.shape_score,
+        )
+        || !matches!(manifest.unique_k, 512 | 1_024 | 1_536 | 2_048)
+        || manifest
+            .posting_summary_vector_bytes
+            .checked_add(manifest.posting_summary_metadata_bytes)
+            != Some(manifest.posting_summary_slot_bytes)
+    {
+        return Err(invalid("V36 prefix screen manifest differs"));
+    }
+    validate_prefix_population(&manifest.population, source_registry)?;
+    validate_prefix_projection(&manifest.projection)?;
+
+    let required_roles = BTreeSet::from([
+        "population-authority",
+        "posting-summaries",
+        "projection",
+        "query-excluded-corpus-parquet",
+    ]);
+    let mut roles = BTreeSet::new();
+    let mut uris = BTreeSet::new();
+    for artifact in &manifest.artifacts {
+        if !valid_digest(&artifact.sha256)
+            || !valid_digest(&artifact.blake3)
+            || artifact.encoded_bytes == 0
+            || !roles.insert(artifact.role.as_str())
+            || !uris.insert(artifact.uri.as_str())
+        {
+            return Err(invalid("V36 prefix artifact identity differs"));
+        }
+    }
+    if roles != required_roles {
+        return Err(invalid("V36 prefix artifact role set differs"));
+    }
+    let population_artifact = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "population-authority")
+        .ok_or_else(|| invalid("V36 prefix population artifact is missing"))?;
+    let projection_artifact = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "projection")
+        .ok_or_else(|| invalid("V36 prefix projection artifact is missing"))?;
+    if !artifact_binds_value(population_artifact, &manifest.population)?
+        || !artifact_binds_value(projection_artifact, &manifest.projection)?
+    {
+        return Err(invalid("V36 prefix embedded authority binding differs"));
+    }
+    Ok(())
+}
+
+/// Serialize one validated V36 prefix-screen manifest as canonical newline JSON.
+pub fn canonical_v36_prefix_screen_manifest_bytes(
+    manifest: &V36PrefixScreenManifest,
+) -> Result<Vec<u8>> {
+    canonical_value_bytes(manifest)
+}
+
+/// Authenticate, strictly decode, and validate one canonical V36 prefix manifest.
+pub fn validate_v36_prefix_screen_manifest(
+    bytes: &[u8],
+    registered: &V36RegisteredManifest,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<V36PrefixScreenManifest> {
+    if registered.uri.is_empty()
+        || !valid_digest(&registered.sha256)
+        || !valid_digest(&registered.blake3)
+        || registered.encoded_bytes != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        || format!("{:x}", Sha256::digest(bytes)) != registered.sha256
+        || blake3::hash(bytes).to_hex().as_str() != registered.blake3
+        || !bytes.ends_with(b"\n")
+        || bytes.ends_with(b"\n\n")
+    {
+        return Err(invalid("V36 registered prefix manifest bytes differ"));
+    }
+    let manifest: V36PrefixScreenManifest =
+        serde_json::from_slice(bytes).map_err(|_| invalid("V36 prefix manifest JSON differs"))?;
+    if canonical_v36_prefix_screen_manifest_bytes(&manifest)? != bytes {
+        return Err(invalid("V36 prefix manifest is not canonical"));
+    }
+    validate_prefix_manifest_fields(&manifest, source_registry)?;
+    Ok(manifest)
+}
+
+fn valid_geometry_parts(
+    primary_rows: V36PrimaryRows,
+    replication: V36Replication,
+    shape_score: V36ShapeScore,
+) -> bool {
+    match (primary_rows, replication) {
         (V36PrimaryRows::Control256, V36Replication::Single | V36Replication::DoubleControl) => {
-            manifest.shape_score == V36ShapeScore::Centroid
+            shape_score == V36ShapeScore::Centroid
         }
         (
             V36PrimaryRows::Posting4096 | V36PrimaryRows::Posting8192,
@@ -242,12 +728,20 @@ fn valid_geometry(manifest: &V36FunnelManifest) -> bool {
     }
 }
 
+fn valid_geometry(manifest: &V36FunnelManifest) -> bool {
+    valid_geometry_parts(
+        manifest.geometry.primary_rows,
+        manifest.geometry.replication,
+        manifest.shape_score,
+    )
+}
+
 fn validate_manifest_fields(manifest: &V36FunnelManifest) -> Result<()> {
     if manifest.format != FORMAT
         || manifest.claim_eligible
         || manifest.metric != "squared-l2"
         || manifest.projection_dimensions != PROJECTION_DIMENSIONS
-        || manifest.projection_seed != PROJECTION_SEED
+        || validate_prefix_projection(&manifest.projection).is_err()
         || !matches!(manifest.source_dimensions, 384 | 768 | 1_536 | 3_072)
         || !matches!(manifest.unique_k, 512 | 1_024 | 1_536 | 2_048)
         || !valid_geometry(manifest)
@@ -621,7 +1115,7 @@ pub struct V36ResourceLedger {
     pub posting_summary_bytes: u64,
     /// Source-to-M192 projection matrix.
     pub projection_bytes: u64,
-    /// Sixteen fixed 16-MiB query workspaces.
+    /// Sixteen fixed 32-MiB streaming query workspaces.
     pub query_workspace_bytes: u64,
     /// Recent fine-row arena.
     pub recent_fine_bytes: u64,

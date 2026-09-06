@@ -21,7 +21,11 @@
 - The object-sample stream is capped at 16 complete source objects and 6 GiB;
   reaching either cap before 1,100,000 distinct valid rows is terminal
   `screen-source-insufficient`, never permission to fetch object 17.
-- Within that frozen population, select disjoint development, validation, sealed holdout, and performance roles by registered SHA-256 rankings; remove all 13,000 query rows before selecting exactly 1,000,000 corpus rows. Leave the remaining rows unused.
+- Within that frozen population, select disjoint development, validation,
+  sealed holdout, and performance roles using the population-specific labels
+  `borsuk-v36-prefix-screen-{role}-query-v1`; never reuse full-source role
+  seeds. Remove all 13,000 query rows before selecting exactly 1,000,000 corpus
+  rows. Leave the remaining rows unused.
 - Construction receives corpus only. Evaluation receives named corpus-derived artifacts, query vectors, and truth but no source/list/discovery capability.
 - Bulk cross-language artifacts are strict Parquet or Arrow IPC. Small authorities, terminals, and results are strict canonical newline JSON.
 - Remote execution uses profile `causality`, `eu-central-1`, Spot by default,
@@ -52,11 +56,16 @@
 **Interfaces:**
 - Produces `V36ProjectionArm::{Srht192,CenteredSubspace192}`.
 - Extends `V36ShapeScore` with `Prototype6`, meaning six total f32[192] vectors including the posting centroid.
-- Produces `V36PrefixPopulationAuthority`, `V36PrefixScreenManifest`, `validate_v36_prefix_screen_manifest`, and canonical serializers.
+- Produces `V36PrefixRegisteredSourceObject`, `V36PrefixPopulationAuthority`,
+  `V36PrefixScreenManifest`, `validate_v36_prefix_screen_manifest`, and
+  canonical serializers.
+- The prefix manifest binds the complete arm (projection, geometry, score,
+  coarse code, fine codec, chunk ceiling, and K); the breaking full-source v2
+  manifest embeds the same projection authority rather than only a seed.
 - Extends the checked resource ledger to sixteen 32-MiB streaming query
   workspaces; no decoded object set may exceed one workspace.
 
-- [ ] **Step 1: Write projection and score identity REDs**
+- [x] **Step 1: Write projection and score identity REDs**
 
   Add tests named `v36_prefix_projection_identity_is_closed` and
   `v36_prototype_six_fits_the_equal_summary_slot`. Require seed 36 for SRHT;
@@ -66,17 +75,18 @@
   total vectors; 4,608 vector bytes plus 128 metadata bytes; unknown variants,
   seven-vector summaries, and post-result projection substitution rejected.
 
-- [ ] **Step 2: Write population authority REDs**
+- [x] **Step 2: Write population authority REDs**
 
   Add `v36_prefix_population_is_distinct_from_full_source_authority`. Require
   the exact population marker, source revision, ordered source-manifest digest,
   hash-ranked complete-object sampling algorithm,
   digest, 1,100,000 distinct candidates, 1,000,000 corpus rows, role counts
-  1,000/1,000/1,000/10,000, consumed-object identities, first-occurrence rule,
+  1,000/1,000/1,000/10,000, population-specific role labels and digests,
+  consumed-object identities, first-occurrence rule,
   and `claim_eligible=false`. Mutation-test every count, URI, digest, length,
   role seed, ordering rule, capability, 32-MiB workspace, and overflow.
 
-- [ ] **Step 3: Run the focused RED**
+- [x] **Step 3: Run the focused RED**
 
   Run:
 
@@ -87,14 +97,14 @@
   Expected: compilation fails only on the missing prefix/projection/prototype
   boundary.
 
-- [ ] **Step 4: Implement the minimal closed authority**
+- [x] **Step 4: Implement the minimal closed authority**
 
   Add closed enums and strict structs with `deny_unknown_fields`. Canonicalize
   recursively sorted JSON with one trailing LF. Validate all counts and exact
   cross-object identities; do not add defaults, aliases, legacy variants, or a
   conversion that can label prefix evidence as full-source evidence.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
   Rerun the focused test, scoped Clippy, `cargo fmt --all -- --check`, docs
   validation, and `git diff --check`. Commit the authority slice only after the
