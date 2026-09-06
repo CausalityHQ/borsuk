@@ -39,7 +39,7 @@ const MAX_CANDIDATES: usize = 12_288;
 const MAX_MUTATION_ENTRIES: usize = 1_000_000;
 const MAX_DIRECTORY_BLOCK_BYTES: u64 = MIB;
 const MAX_DIRECTORY_CHUNKS: usize = 64;
-const SNAPSHOT_FORMAT: &str = "borsuk-v35-snapshot-visibility-arrow-v1";
+const SNAPSHOT_FORMAT: &str = "borsuk-v35-snapshot-visibility-arrow-v2";
 const SNAPSHOT_MANIFEST_KEY: &str = "borsuk.v35.snapshot-visibility.manifest";
 const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
 const CODE_DIRECTORY_ROOT_FORMAT: &str = "borsuk-v35-code-directory-root-v1";
@@ -119,12 +119,14 @@ pub struct V35SnapshotVisibility {
 struct V35SnapshotManifest {
     format: String,
     rows: u32,
+    sequence_horizon: u64,
 }
 
-fn snapshot_visibility_schema(rows: usize) -> Result<Arc<Schema>> {
+fn snapshot_visibility_schema(rows: usize, sequence_horizon: u64) -> Result<Arc<Schema>> {
     let manifest = V35SnapshotManifest {
         format: SNAPSHOT_FORMAT.to_owned(),
         rows: u32::try_from(rows).map_err(|_| invalid("V35 snapshot rows overflow"))?,
+        sequence_horizon,
     };
     let manifest = serde_json::to_string(&manifest)
         .map_err(|_| invalid("V35 snapshot manifest cannot be serialized"))?;
@@ -164,11 +166,48 @@ impl V35SnapshotVisibility {
     pub fn digest(&self) -> [u8; 32] {
         self.digest
     }
+    /// Number of IDs represented by the complete latest-sequence directory.
+    pub fn row_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Number of latest-sequence entries that remain live in this snapshot.
+    pub fn live_rows(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.live).count()
+    }
+
+    /// Number of latest-sequence entries that suppress a deleted vector ID.
+    pub fn tombstone_rows(&self) -> usize {
+        self.entries.iter().filter(|entry| !entry.live).count()
+    }
+    /// Greatest mutation sequence represented by this snapshot, or zero when empty.
+    pub fn sequence_horizon(&self) -> u64 {
+        self.entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn minimum_sequence(&self) -> u64 {
+        self.entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .min()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn live_sequences(&self) -> impl Iterator<Item = u64> + '_ {
+        self.entries
+            .iter()
+            .filter(|entry| entry.live)
+            .map(|entry| entry.sequence)
+    }
 
     /// Encode the one strict cross-language Arrow snapshot directory.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         validate_snapshot_entries(&self.entries)?;
-        let schema = snapshot_visibility_schema(self.entries.len())?;
+        let schema = snapshot_visibility_schema(self.entries.len(), self.sequence_horizon())?;
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
@@ -239,7 +278,9 @@ pub fn decode_v35_snapshot_visibility_arrow(
             != *manifest_json
         || manifest.format != SNAPSHOT_FORMAT
         || reader.num_batches() != 1
-        || schema.as_ref() != snapshot_visibility_schema(manifest.rows as usize)?.as_ref()
+        || schema.as_ref()
+            != snapshot_visibility_schema(manifest.rows as usize, manifest.sequence_horizon)?
+                .as_ref()
     {
         return Err(invalid("V35 snapshot Arrow authority differs"));
     }
@@ -273,7 +314,10 @@ pub fn decode_v35_snapshot_visibility_arrow(
         .collect::<Result<Vec<_>>>()?;
     let snapshot = V35SnapshotVisibility::new(entries)?;
     let content_digest: [u8; 32] = Sha256::digest(bytes).into();
-    if snapshot.canonical_bytes()? != bytes || snapshot.digest != content_digest {
+    if snapshot.sequence_horizon() != manifest.sequence_horizon
+        || snapshot.canonical_bytes()? != bytes
+        || snapshot.digest != content_digest
+    {
         return Err(invalid("V35 snapshot bytes are noncanonical"));
     }
     Ok(snapshot)

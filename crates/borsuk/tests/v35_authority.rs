@@ -47,7 +47,7 @@ fn manifest() -> V35GenerationManifest {
             routing: 192,
             source: 3_072,
         },
-        format: "borsuk-v35-generation-v3".to_owned(),
+        format: "borsuk-v35-generation-v4".to_owned(),
         leaf_count: 414_100,
         metric: "squared-l2".to_owned(),
         normalization: "none".to_owned(),
@@ -57,6 +57,7 @@ fn manifest() -> V35GenerationManifest {
             bits_per_dimension: 4,
             bytes_per_row: 1_536,
         },
+        sequence_horizon: 41,
         source_archive_sha256: digest(42),
         source_id: "frozen-high-dimensional-source".to_owned(),
         tree_node_count: 69_905,
@@ -144,7 +145,7 @@ fn v35_authority_rejects_schema_types_and_identity_drift() {
         assert!(validate_v35_manifest(&bytes, &registered_manifest(&bytes)).is_err());
     }
 
-    let manifest_mutations: [fn(&mut V35GenerationManifest); 16] = [
+    let manifest_mutations: [fn(&mut V35GenerationManifest); 17] = [
         |v| v.dimensions.source = 0,
         |v| v.dimensions.routing = 96,
         |v| v.dimensions.routing = 256,
@@ -155,6 +156,7 @@ fn v35_authority_rejects_schema_types_and_identity_drift() {
         |v| v.patches_per_leaf = 3,
         |v| v.remote_code.bits_per_dimension = 6,
         |v| v.remote_code.bytes_per_row = 1,
+        |v| v.sequence_horizon = 0,
         |v| v.artifacts[0].object.digest_algorithm = "blake3".to_owned(),
         |v| v.artifacts[0].object.digest = "00".repeat(31),
         |v| v.artifacts[0].object.length = 0,

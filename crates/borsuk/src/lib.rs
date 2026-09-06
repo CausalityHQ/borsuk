@@ -274,8 +274,10 @@ pub use v35_build::{
 };
 #[doc(hidden)]
 pub use v35_delta::{
-    V35ConditionalHeadWrite, V35GenerationPublicationSink, V35PublicationOutcome,
-    decode_v35_generation_head, publish_v35_generation,
+    V35ConditionalHeadWrite, V35DeltaManifest, V35DeltaRun, V35GenerationPublicationSink,
+    V35PublicationOutcome, decode_v35_head, publish_v35_delta, publish_v35_generation,
+    seal_v35_delta, validate_v35_delta_base, validate_v35_delta_manifest,
+    validate_v35_delta_visibility,
 };
 #[doc(hidden)]
 pub use v35_patch::{

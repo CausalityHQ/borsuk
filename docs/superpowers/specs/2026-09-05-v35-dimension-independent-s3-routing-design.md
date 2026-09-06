@@ -22,6 +22,11 @@ sealed qualification set. Any claim is paired against disclosed competitors
 at equal or better recall on the same source vectors, queries, truth, host, and
 storage tier.
 
+Every source row has a positive global mutation sequence, including rows in the
+initial bulk build. A generation's nonzero sequence horizon is the maximum
+source sequence incorporated into that compacted base; zero is never a sentinel
+for an otherwise publishable generation.
+
 ## Evidence that constrains the design
 
 - The authenticated width-12 global-ADC diagnostic scanned all 4,096 cells and
@@ -403,10 +408,42 @@ Parquet evidence.
 Online writes use immutable append-only segments and conditional manifest
 publication. Inserts become searchable after one segment seal without global
 retraining. Tombstones and replacements resolve by `(id, sequence)` before
-final top-k. Readers pin one base plus ordered deltas; at most four uncompacted
-runs and one million delta rows are admitted. Backpressure starts before either
-bound. Compaction streams affected base/delta objects and publishes a new
-generation atomically.
+final top-k. The breaking `borsuk-v35-generation-v4` manifest records the
+greatest mutation sequence already folded into the compacted base. Every delta
+manifest authenticates that exact base manifest and copies its nonzero sequence
+horizon; every ordered run and the complete visibility snapshot must advance
+beyond it, and every individual visibility entry must have a sequence greater
+than the base horizon. A run or per-ID mutation at or below the base horizon is
+rejected so an unrelated newer entry cannot resurrect or suppress compacted
+base state. Tombstones may advance the snapshot beyond the newest physical run
+without manufacturing a dummy run.
+
+Readers pin one base plus ordered deltas; at most four uncompacted runs and one
+million physical delta rows are admitted. A delete-only delta is represented by
+an empty run list plus a strictly newer, nonempty visibility snapshot containing
+only tombstones, so it publishes without dummy routing, code, or page artifacts.
+Any live visibility entry still requires a routed physical row. Each run records
+both its sequence floor and horizon; ranges are strictly ordered and disjoint
+above the base horizon. The manifest records physical rows, visibility rows,
+tombstones, and the visibility sequence floor/horizon separately and validates
+their checked relationship. It also copies the authenticated base routing
+dimension and patches-per-leaf so the complete delta leaf payload, rather than
+only its count, must fit the 6,890,624-byte reservation. The reader recomputes
+all visibility counts and bounds from the authenticated Arrow directory and
+authenticates the referenced base bytes before cross-checking their horizon,
+routing dimension, and patch count. Both sealing and read admission also run
+the complete serving-memory projection on that authenticated base, so a delta
+cannot claim the reserved leaf budget for a base that already exceeds the
+three-GiB process envelope. Backpressure starts before either run or row bound.
+
+Every live visibility entry's sequence must fall inside exactly one admitted
+run range; tombstones may occur after the newest physical range. Delta
+publication receives the authenticated base bytes and decoded visibility
+directory and repeats both cross-object validations before writing the immutable
+manifest or conditionally replacing the shared head. A self-consistent but
+re-rooted manifest cannot bypass those dependencies.
+Compaction streams affected base/delta objects, advances the base horizon, and
+publishes a new generation atomically.
 
 Every pinned snapshot includes a complete mutation directory for all admitted
 deltas, keyed by ID and containing latest sequence plus live/tombstone state.

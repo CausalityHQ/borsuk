@@ -42,6 +42,12 @@
 
   Add `v35_authority_` tests requiring positive source `D`, `M in {64,128,192}`, `M<=D`, concrete finite scales, exact role/digest algorithms, unique URIs, one active plus one retiring generation, and no legacy format field. Include 384/768/960/1536/3072D qualification cases without making those the API bounds. Mutate every field family, extra/missing/null fields, roles, algorithms, digests, lengths, source identity, dimensions, projection arm, patch arm, and remote code rate.
 
+  Use the breaking `borsuk-v35-generation-v4` marker and require a nonzero
+  `sequence_horizon` giving the greatest mutation sequence folded into that
+  compacted base. Reject absent, zero, unknown, or noncanonical horizon state;
+  every initial bulk-source row already has a positive global sequence and the
+  initial horizon is their maximum. No earlier generation format is readable.
+
 - [ ] **Step 2: Write exact projection REDs**
 
   Pin `8*M+128` bytes per one-patch leaf and the exact one-generation values `265_024_000`, `477_043_200`, and `689_062_400` for 414,100 leaves. Pin the 192-wide complete admission sum at `2_842_461_184` and hard limit at `3_221_225_472`, including the exact `67_108_864`-byte immutable chunk/page-directory term inside the `251_658_240`-byte shared-cache reservation. Make the 64-MiB delta term explicit: 32,000,000 mutation-directory bytes, 16,000,000 posting/reference bytes, 6,890,624 leaf bytes, 223,680 tree bytes, 4,194,304 four-run overhead, and 7,800,256 reserved bytes. Cover multiplication/addition overflow, boundary equality rejection, a two-patch overflow, and a reduced leaf count that legitimately admits two patches.
@@ -261,6 +267,37 @@
 - [ ] **Step 2: Write delta semantics REDs**
 
   Require conditional publication, base-plus-ordered-delta pinning, a complete snapshot mutation directory, `(id,sequence)` latest-wins suppression before heap admission even when the replacement/tombstone route is unselected, four-run/one-million-row admission, checked 32-byte directory entries, reader-safe retirement, and deterministic compaction. Pin one-bit immutable active/retiring base-row liveness planes inside the exact 25,000,000-B cache component; replacement/delete publication changes these planes rather than rewriting full base code or vector pages. Require the same snapshot liveness decision before candidate-heap admission and after exact-page decode; stale rows may charge route work but never enter either result stage. Pin the single 64-MiB delta reservation across all old/new pinned directories, construction copies, hash-table capacity, run metadata, delta leaves, and delta trees; an old-reader publication race must backpressure before allocating an over-budget copy.
+
+  Authenticate the typed base manifest against its registered bytes before
+  sealing a delta. Copy its nonzero `sequence_horizon` into the canonical delta
+  manifest and require every run plus every individual visibility entry to
+  advance beyond it; reject stale mutations that compaction already folded into
+  the base even when an unrelated entry raises the snapshot maximum. Permit a
+  later tombstone to advance the snapshot beyond the newest physical run
+  without rewriting that immutable run. Give every run an authenticated
+  sequence floor and horizon and require strictly ordered, nonoverlapping ranges
+  above the base. Record
+  physical run rows, visibility rows, and tombstones independently with checked
+  arithmetic. Permit an empty run list only for a strictly newer, nonempty,
+  tombstone-only visibility snapshot; do not manufacture routing/code/page
+  artifacts for deletes. Reject an empty-run snapshot containing any live row.
+  Reader tests mutation-lock the registered role, digest, length, 64-KiB body
+  cap, strict schema, and canonical bytes before semantic exposure. Persist the
+  visibility sequence floor plus the authenticated base routing dimension and
+  patches-per-leaf. Recompute visibility floor/horizon/rows/tombstones from the
+  decoded Arrow bytes; authenticate the referenced base manifest bytes and
+  cross-check its horizon, routing dimension, and patch count, then require its
+  complete serving-memory projection to remain below the hard process limit on
+  both seal and read admission. Require
+  `leaves * (8*routing_dimension + 128) * patches_per_leaf <= 6_890_624`
+  with checked arithmetic on both seal and read.
+
+  Require every live visibility entry's sequence to lie inside one admitted
+  physical run range, while allowing later tombstones outside those ranges.
+  Make `publish_v35_delta` accept the authenticated base bytes and decoded
+  visibility snapshot, repeat both cross-object validators before its first
+  sink write, and mutation-lock valid-looking independently rehashed changes to
+  the copied base fields.
 
   Encode the complete mutation directory as one canonical Arrow IPC file with
   one non-null `(id: u64, sequence: u64, live: bool)` batch ordered by ID.

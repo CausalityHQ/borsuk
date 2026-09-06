@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
 
-const FORMAT: &str = "borsuk-v35-generation-v3";
+const FORMAT: &str = "borsuk-v35-generation-v4";
 const HARD_LIMIT_BYTES: u64 = 3_221_225_472;
 const TREE_CAP_BYTES: u64 = 32 * 1_048_576;
 const LIVENESS_PLANE_BYTES: u64 = 25_000_000;
@@ -106,6 +106,8 @@ pub struct V35GenerationManifest {
     pub projection: V35ProjectionArm,
     /// Remote scalar-quantization rate.
     pub remote_code: V35RemoteCodeRate,
+    /// Greatest mutation sequence incorporated into this compacted base.
+    pub sequence_horizon: u64,
     /// SHA-256 of the immutable source archive.
     pub source_archive_sha256: String,
     /// Immutable source identity.
@@ -198,6 +200,7 @@ fn validate_manifest_fields(manifest: &V35GenerationManifest) -> Result<()> {
         || !matches!(manifest.dimensions.routing, 64 | 128 | 192)
         || u32::from(manifest.dimensions.routing) > manifest.dimensions.source
         || !matches!(manifest.patches_per_leaf, 1 | 2)
+        || manifest.sequence_horizon == 0
         || manifest.leaf_count == 0
         || manifest.tree_node_count == 0
         || expected_remote_bytes_per_row(
