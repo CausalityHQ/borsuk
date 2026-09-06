@@ -157,6 +157,15 @@ for sixteen workers. This construction-only workspace is inside the declared
 runtime/allocator reservation and never enters serving RSS. A reader exposing
 a second live leaf to one worker still fails before allocation.
 
+Each external-sort source block is admitted before Morton ordering, Arrow
+column flattening, or output allocation. Its checked 64-MiB projection includes
+the owned row/vector capacities, one `(Morton key,row reference)` per row, the
+largest 256-row flattened batch, the complete raw encoded payload, a 65,536-B
+file envelope, and 16,384 B per record batch. The Arrow output buffer is
+preallocated to that admitted ceiling and a bounded writer rejects any attempt
+to grow beyond it; the receipt reports the conservative projected peak rather
+than a post-allocation byte count.
+
 The prose arithmetic above is explanatory; the canonical receipt records the
 component vector and checked sum. Tests pin the exact sum
 `2,842,461,184 B`, leaving `378,764,288 B` below 3 GiB. A two-patch 192-wide

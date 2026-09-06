@@ -198,3 +198,22 @@ fn v35_build_streams_ordered_blocks_into_bounded_authenticated_arrow_runs() {
         );
     }
 }
+
+#[test]
+fn v35_build_block_preflights_live_memory_before_encoding() {
+    // Break caught: the builder allocates Morton order, flattened Arrow
+    // columns, and the complete output before discovering that the block
+    // exceeds its 64-MiB live-memory admission.
+    let model = train_v35_morton_model(&training_rows()).unwrap();
+    let small = V35BuildBlock::new(vec![
+        V35BuildRow::new(0, 10_000, 1, vec![0.0; 384], vec![0.0; 18]).unwrap(),
+    ])
+    .unwrap();
+    assert!(small.projected_peak_live_bytes(&model).unwrap() < 64 * 1_048_576);
+
+    let oversized = V35BuildBlock::new(vec![
+        V35BuildRow::new(0, 10_000, 1, vec![0.0; 6_000_000], vec![0.0; 18]).unwrap(),
+    ])
+    .unwrap();
+    assert!(oversized.projected_peak_live_bytes(&model).is_err());
+}

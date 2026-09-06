@@ -1,6 +1,11 @@
 //! Query-independent, bounded construction primitives for the V35 format.
 
-use std::{collections::HashMap, io::Cursor, mem::size_of, sync::Arc};
+use std::{
+    collections::HashMap,
+    io::{Cursor, Write},
+    mem::size_of,
+    sync::Arc,
+};
 
 use arrow_array::{
     Array, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array, RecordBatch,
@@ -25,6 +30,8 @@ const BUILD_RUN_FORMAT: &str = "borsuk-v35-build-scratch-arrow-v1";
 const BUILD_RUN_METADATA_KEY: &str = "borsuk.v35.build-run.manifest";
 const MAX_BUILD_RUN_BATCH_ROWS: usize = 256;
 const MAX_BUILDER_BYTES: u64 = 64 * 1_048_576;
+const BUILD_RUN_FILE_OVERHEAD_BYTES: usize = 64 * 1024;
+const BUILD_RUN_BATCH_OVERHEAD_BYTES: usize = 16 * 1024;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -357,6 +364,15 @@ impl V35BuildBlock {
         }
         Ok(Self { rows })
     }
+
+    /// Project and admit the complete peak before sorting or Arrow allocation.
+    pub fn projected_peak_live_bytes(&self, model: &V35MortonModel) -> Result<u64> {
+        let projection = project_build_block_live_bytes(self, model)?;
+        if projection.peak_live_bytes > MAX_BUILDER_BYTES {
+            return Err(invalid("V35 build live memory exceeds admission"));
+        }
+        Ok(projection.peak_live_bytes)
+    }
 }
 
 /// Ordered source-block capability without query, truth, listing, or random access.
@@ -443,30 +459,110 @@ fn build_run_schema(manifest: &V35BuildRunManifest) -> Result<Arc<Schema>> {
     )))
 }
 
-fn block_live_bytes(block: &V35BuildBlock, encoded_bytes: usize) -> Result<u64> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct V35BuildBlockMemoryProjection {
+    encoded_capacity: usize,
+    peak_live_bytes: u64,
+}
+
+fn project_build_block_live_bytes(
+    block: &V35BuildBlock,
+    model: &V35MortonModel,
+) -> Result<V35BuildBlockMemoryProjection> {
+    if block.rows[0].projected.len() != model.source_dimensions {
+        return Err(invalid("V35 build projection/model dimensions differ"));
+    }
     let row_storage = block.rows.iter().try_fold(0_usize, |total, row| {
         total
             .checked_add(size_of::<V35BuildRow>())
             .and_then(|bytes| bytes.checked_add(row.source.capacity().checked_mul(4)?))
             .and_then(|bytes| bytes.checked_add(row.projected.capacity().checked_mul(8)?))
     });
-    let flattened = block.rows.iter().try_fold(0_usize, |total, row| {
+    let encoded_payload = block.rows.iter().try_fold(0_usize, |total, row| {
         total
             .checked_add(row.source.len().checked_mul(4)?)
             .and_then(|bytes| bytes.checked_add(row.projected.len().checked_mul(8)?))
             .and_then(|bytes| bytes.checked_add(40))
     });
-    row_storage
-        .and_then(|bytes| bytes.checked_add(flattened?))
-        .and_then(|bytes| bytes.checked_add(encoded_bytes))
+    let maximum_batch_payload = block
+        .rows
+        .chunks(MAX_BUILD_RUN_BATCH_ROWS)
+        .try_fold(0_usize, |maximum, rows| {
+            let payload = rows.iter().try_fold(0_usize, |total, row| {
+                total
+                    .checked_add(row.source.len().checked_mul(4)?)
+                    .and_then(|bytes| bytes.checked_add(row.projected.len().checked_mul(8)?))
+                    .and_then(|bytes| bytes.checked_add(40))
+            });
+            payload.map(|payload| maximum.max(payload))
+        })
+        .ok_or_else(|| invalid("V35 build batch capacity overflow"))?;
+    let batches = block.rows.len().div_ceil(MAX_BUILD_RUN_BATCH_ROWS);
+    let encoded_capacity = encoded_payload
+        .and_then(|bytes| bytes.checked_add(BUILD_RUN_FILE_OVERHEAD_BYTES))
+        .and_then(|bytes| bytes.checked_add(batches.checked_mul(BUILD_RUN_BATCH_OVERHEAD_BYTES)?))
+        .ok_or_else(|| invalid("V35 build encoded capacity overflow"))?;
+    let ordered_capacity = block
+        .rows
+        .len()
+        .checked_mul(size_of::<(u128, &V35BuildRow)>())
+        .ok_or_else(|| invalid("V35 build order capacity overflow"))?;
+    let peak_live_bytes = row_storage
+        .and_then(|bytes| bytes.checked_add(ordered_capacity))
+        .and_then(|bytes| bytes.checked_add(maximum_batch_payload))
+        .and_then(|bytes| bytes.checked_add(encoded_capacity))
         .and_then(|bytes| u64::try_from(bytes).ok())
-        .ok_or_else(|| invalid("V35 build live bytes overflow"))
+        .ok_or_else(|| invalid("V35 build live bytes overflow"))?;
+    Ok(V35BuildBlockMemoryProjection {
+        encoded_capacity,
+        peak_live_bytes,
+    })
+}
+
+struct V35BoundedBuildRunWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl V35BoundedBuildRunWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(limit),
+            limit,
+        }
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for V35BoundedBuildRunWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if self
+            .bytes
+            .len()
+            .checked_add(buffer.len())
+            .is_none_or(|length| length > self.limit)
+        {
+            return Err(std::io::Error::other(
+                "V35 build run exceeds admitted capacity",
+            ));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn encode_build_run(
     model: &V35MortonModel,
     run_ordinal: u32,
     block: &V35BuildBlock,
+    encoded_capacity: usize,
 ) -> Result<Vec<u8>> {
     let source_dimensions = block.rows[0].source.len();
     let projected_dimensions = block.rows[0].projected.len();
@@ -492,8 +588,8 @@ fn encode_build_run(
     };
     let schema = build_run_schema(&manifest)?;
     let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
-    let mut bytes = Vec::new();
-    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    let mut output = V35BoundedBuildRunWriter::new(encoded_capacity);
+    let mut writer = FileWriter::try_new_with_options(&mut output, schema.as_ref(), options)?;
     for rows in ordered.chunks(MAX_BUILD_RUN_BATCH_ROWS) {
         let keys =
             FixedSizeBinaryArray::try_from_iter(rows.iter().map(|(key, _)| key.to_be_bytes()))?;
@@ -540,7 +636,7 @@ fn encode_build_run(
     }
     writer.finish()?;
     drop(writer);
-    Ok(bytes)
+    Ok(output.into_bytes())
 }
 
 /// One authenticated, bounded scratch-run batch exposed to external merge.
@@ -887,11 +983,16 @@ pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
             return Err(invalid("V35 build source block order differs"));
         }
         previous_source_ordinal = block.rows.last().map(|row| row.source_ordinal);
-        let bytes = encode_build_run(model, receipt.scratch_runs, &block)?;
-        let live_bytes = block_live_bytes(&block, bytes.len())?;
-        if live_bytes > MAX_BUILDER_BYTES {
+        let projection = project_build_block_live_bytes(&block, model)?;
+        if projection.peak_live_bytes > MAX_BUILDER_BYTES {
             return Err(invalid("V35 build live memory exceeds admission"));
         }
+        let bytes = encode_build_run(
+            model,
+            receipt.scratch_runs,
+            &block,
+            projection.encoded_capacity,
+        )?;
         let identity = scratch.write_run(receipt.scratch_runs, &bytes)?;
         decode_v35_build_run_arrow(&bytes, &identity)?;
         receipt.source_rows = receipt
@@ -906,7 +1007,9 @@ pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
             .scratch_bytes
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| invalid("V35 build scratch bytes overflow"))?;
-        receipt.peak_live_builder_bytes = receipt.peak_live_builder_bytes.max(live_bytes);
+        receipt.peak_live_builder_bytes = receipt
+            .peak_live_builder_bytes
+            .max(projection.peak_live_bytes);
     }
     if receipt.source_rows == 0 {
         return Err(invalid("V35 build source is empty"));
