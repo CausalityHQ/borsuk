@@ -20,6 +20,7 @@ PROFILE = "causality"
 REGION = "eu-central-1"
 INSTANCE_TYPE = "r8gd.8xlarge"
 ACTIVE_WALL_SECONDS = 43_200
+CONTROLLER_GRACE_SECONDS = 300
 EPHEMERAL_NVME_BYTES = 1_900_000_000_000
 MAX_SOURCE_OBJECTS = 16
 MAX_SOURCE_BYTES = 6 * 1024**3
@@ -458,6 +459,11 @@ def run_v36_prefix_screen(
                     continue
                 raise
             instance_id = response["Instances"][0]["InstanceId"]
+            controller_deadline = (
+                time.monotonic()
+                + _attempt_wall_seconds(attempt_ordinal)
+                + CONTROLLER_GRACE_SECONDS
+            )
             while True:
                 state = ec2_client.describe_instances(InstanceIds=[instance_id])[
                     "Reservations"
@@ -472,6 +478,10 @@ def run_v36_prefix_screen(
                 )
                 if status is not None:
                     break
+                if time.monotonic() >= controller_deadline:
+                    raise RuntimeError(
+                        f"V36 prefix-screen attempt {attempt_ordinal} controller deadline"
+                    )
                 time.sleep(15)
         finally:
             if instance_id is not None:

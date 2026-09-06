@@ -353,6 +353,42 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             InstanceIds=["i-running-complete"]
         )
 
+    def test_v36_prefix_screen_controller_deadline_is_bounded(self) -> None:
+        # Break caught: bootstrap or guest shutdown hangs outside the Rust
+        # timeout and leaves the controller polling a paid instance forever.
+        plan = self.plan()
+        ec2 = mock.Mock()
+        ec2.run_instances.return_value = {
+            "Instances": [{"InstanceId": "i-running-hung"}]
+        }
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "running"}}]}]
+        }
+        deadline = (
+            subject._attempt_wall_seconds(0)
+            + subject.CONTROLLER_GRACE_SECONDS
+            + 1
+        )
+        with (
+            mock.patch.object(subject, "_read_attempt_status", return_value=None),
+            mock.patch.object(subject.time, "monotonic", side_effect=[0.0, deadline]),
+            mock.patch.object(
+                subject.time,
+                "sleep",
+                side_effect=AssertionError("controller slept past deadline"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "controller deadline"):
+                subject.run_v36_prefix_screen(
+                    plan,
+                    ec2_client=ec2,
+                    s3_client=mock.Mock(),
+                    launch_nonce="e" * 32,
+                )
+        ec2.terminate_instances.assert_called_once_with(
+            InstanceIds=["i-running-hung"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
