@@ -967,18 +967,13 @@ pub fn hierarchical_v35_route(
     });
     let mut bound_evaluations = 1;
     let mut exact_leaf_evaluations = 0;
-    let mut leaves = vec![None::<LeafCandidate>; groups.len()];
+    let mut leaves = BinaryHeap::<LeafCandidate>::new();
     let mut emitted = vec![false; groups.len()];
     let mut selected_groups = Vec::new();
     let mut selected_rows = 0_u64;
     let mut selected_code_bytes = 0_u64;
     loop {
-        let next_leaf = leaves.iter().flatten().copied().min_by(|left, right| {
-            left.score
-                .total_cmp(&right.score)
-                .then_with(|| left.group_ordinal.cmp(&right.group_ordinal))
-                .then_with(|| left.leaf_ordinal.cmp(&right.leaf_ordinal))
-        });
+        let next_leaf = leaves.peek().copied();
         let leaf_is_certified = match (next_leaf, nodes.peek()) {
             (Some(leaf), Some(node)) => leaf.score.total_cmp(&node.bound).is_lt(),
             (Some(_), None) => true,
@@ -988,7 +983,7 @@ pub fn hierarchical_v35_route(
             let leaf = next_leaf.ok_or_else(|| invalid("V35 certified leaf differs"))?;
             let group = usize::try_from(leaf.group_ordinal)
                 .map_err(|_| invalid("V35 route group ordinal overflows"))?;
-            leaves[group] = None;
+            leaves.pop();
             if emitted[group] {
                 continue;
             }
@@ -1070,13 +1065,7 @@ pub fn hierarchical_v35_route(
                 if emitted[group] {
                     continue;
                 }
-                if leaves[group].is_none_or(|current| {
-                    candidate.score.total_cmp(&current.score).is_lt()
-                        || (candidate.score.to_bits() == current.score.to_bits()
-                            && candidate.leaf_ordinal < current.leaf_ordinal)
-                }) {
-                    leaves[group] = Some(candidate);
-                }
+                leaves.push(candidate);
             }
         } else {
             for child in node.children[..usize::from(node.child_count)]
