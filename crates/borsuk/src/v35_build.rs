@@ -1,8 +1,11 @@
 //! Query-independent, bounded construction primitives for the V35 format.
 
-use std::{collections::HashMap, io::Cursor, sync::Arc};
+use std::{collections::HashMap, io::Cursor, mem::size_of, sync::Arc};
 
-use arrow_array::{Array, FixedSizeListArray, Float64Array, RecordBatch, UInt16Array};
+use arrow_array::{
+    Array, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array, RecordBatch,
+    UInt16Array, UInt64Array,
+};
 use arrow_ipc::{
     MetadataVersion,
     reader::FileReader,
@@ -10,13 +13,17 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result};
+use crate::{BorsukError, Result, V35ArtifactIdentity};
 
 const MORTON_COORDINATES: usize = 16;
 const MORTON_BOUNDARIES: usize = 255;
 const MORTON_FORMAT: &str = "borsuk-v35-morton-model-arrow-v1";
 const MORTON_METADATA_KEY: &str = "borsuk.v35.morton-model.manifest";
+const BUILD_RUN_FORMAT: &str = "borsuk-v35-build-scratch-arrow-v1";
+const BUILD_RUN_METADATA_KEY: &str = "borsuk.v35.build-run.manifest";
+const MAX_BUILDER_BYTES: u64 = 64 * 1_048_576;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -286,4 +293,428 @@ pub fn train_v35_morton_model(projected_rows: &[Vec<f64>]) -> Result<V35MortonMo
     };
     validate_model(&model)?;
     Ok(model)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One query-independent source row carried through bounded construction.
+pub struct V35BuildRow {
+    source_ordinal: u64,
+    id: u64,
+    sequence: u64,
+    source: Vec<f32>,
+    projected: Vec<f64>,
+}
+
+impl V35BuildRow {
+    /// Construct one finite source/projected row with immutable identity.
+    pub fn new(
+        source_ordinal: u64,
+        id: u64,
+        sequence: u64,
+        source: Vec<f32>,
+        projected: Vec<f64>,
+    ) -> Result<Self> {
+        if sequence == 0
+            || source.is_empty()
+            || projected.len() < MORTON_COORDINATES
+            || source.iter().any(|value| !value.is_finite())
+            || projected.iter().any(|value| !value.is_finite())
+        {
+            return Err(invalid("V35 build row authority differs"));
+        }
+        Ok(Self {
+            source_ordinal,
+            id,
+            sequence,
+            source,
+            projected,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One ordered, bounded source block; the builder never owns two blocks.
+pub struct V35BuildBlock {
+    rows: Vec<V35BuildRow>,
+}
+
+impl V35BuildBlock {
+    /// Construct one dimension-consistent source-ordinal-ordered block.
+    pub fn new(rows: Vec<V35BuildRow>) -> Result<Self> {
+        let source_dimensions = rows.first().map_or(0, |row| row.source.len());
+        let projected_dimensions = rows.first().map_or(0, |row| row.projected.len());
+        if rows.is_empty()
+            || rows.windows(2).any(|pair| {
+                pair[0].source_ordinal >= pair[1].source_ordinal
+                    || (pair[0].id, pair[0].sequence) == (pair[1].id, pair[1].sequence)
+            })
+            || rows.iter().any(|row| {
+                row.source.len() != source_dimensions || row.projected.len() != projected_dimensions
+            })
+        {
+            return Err(invalid("V35 build block authority differs"));
+        }
+        Ok(Self { rows })
+    }
+}
+
+/// Ordered source-block capability without query, truth, listing, or random access.
+pub trait V35BuildBlockSource {
+    /// Yield the next owned block; the caller drops it before requesting another.
+    fn next_block(&mut self) -> Result<Option<V35BuildBlock>>;
+}
+
+/// Write-only remote scratch capability without read/list/delete operations.
+pub trait V35BuildScratchSink {
+    /// Persist one complete authenticated Arrow run under its exact ordinal.
+    fn write_run(&mut self, run_ordinal: u32, bytes: &[u8]) -> Result<V35ArtifactIdentity>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Truthful work and peak-memory projection for scratch-run construction.
+pub struct V35BuildScratchReceipt {
+    source_rows: u64,
+    scratch_runs: u32,
+    scratch_bytes: u64,
+    peak_live_builder_bytes: u64,
+}
+
+impl V35BuildScratchReceipt {
+    /// Complete source rows consumed exactly once.
+    pub fn source_rows(self) -> u64 {
+        self.source_rows
+    }
+    /// Complete independently authenticated scratch runs emitted.
+    pub fn scratch_runs(self) -> u32 {
+        self.scratch_runs
+    }
+    /// Complete encoded scratch bytes persisted.
+    pub fn scratch_bytes(self) -> u64 {
+        self.scratch_bytes
+    }
+    /// Maximum checked simultaneously live builder bytes.
+    pub fn peak_live_builder_bytes(self) -> u64 {
+        self.peak_live_builder_bytes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35BuildRunManifest {
+    format: String,
+    projected_dimensions: u32,
+    rows: u32,
+    run_ordinal: u32,
+    source_dimensions: u32,
+}
+
+fn build_run_schema(manifest: &V35BuildRunManifest) -> Result<Arc<Schema>> {
+    let source = i32::try_from(manifest.source_dimensions)
+        .map_err(|_| invalid("V35 build source dimensions overflow"))?;
+    let projected = i32::try_from(manifest.projected_dimensions)
+        .map_err(|_| invalid("V35 build projected dimensions overflow"))?;
+    let manifest_json = serde_json::to_string(manifest)
+        .map_err(|_| invalid("V35 build run manifest cannot be serialized"))?;
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("morton_key", DataType::FixedSizeBinary(16), false),
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new("id", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new(
+                "source",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    source,
+                ),
+                false,
+            ),
+            Field::new(
+                "projected",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float64, false)),
+                    projected,
+                ),
+                false,
+            ),
+        ],
+        HashMap::from([(BUILD_RUN_METADATA_KEY.to_owned(), manifest_json)]),
+    )))
+}
+
+fn block_live_bytes(block: &V35BuildBlock, encoded_bytes: usize) -> Result<u64> {
+    let row_storage = block.rows.iter().try_fold(0_usize, |total, row| {
+        total
+            .checked_add(size_of::<V35BuildRow>())
+            .and_then(|bytes| bytes.checked_add(row.source.capacity().checked_mul(4)?))
+            .and_then(|bytes| bytes.checked_add(row.projected.capacity().checked_mul(8)?))
+    });
+    let flattened = block.rows.iter().try_fold(0_usize, |total, row| {
+        total
+            .checked_add(row.source.len().checked_mul(4)?)
+            .and_then(|bytes| bytes.checked_add(row.projected.len().checked_mul(8)?))
+            .and_then(|bytes| bytes.checked_add(40))
+    });
+    row_storage
+        .and_then(|bytes| bytes.checked_add(flattened?))
+        .and_then(|bytes| bytes.checked_add(encoded_bytes))
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| invalid("V35 build live bytes overflow"))
+}
+
+fn encode_build_run(
+    model: &V35MortonModel,
+    run_ordinal: u32,
+    block: &V35BuildBlock,
+) -> Result<Vec<u8>> {
+    let source_dimensions = block.rows[0].source.len();
+    let projected_dimensions = block.rows[0].projected.len();
+    if projected_dimensions != model.source_dimensions {
+        return Err(invalid("V35 build projection/model dimensions differ"));
+    }
+    let mut ordered = block
+        .rows
+        .iter()
+        .map(|row| Ok((model.key(&row.projected)?, row)))
+        .collect::<Result<Vec<_>>>()?;
+    ordered.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.source_ordinal.cmp(&right.1.source_ordinal))
+    });
+    let manifest = V35BuildRunManifest {
+        format: BUILD_RUN_FORMAT.to_owned(),
+        projected_dimensions: projected_dimensions as u32,
+        rows: block.rows.len() as u32,
+        run_ordinal,
+        source_dimensions: source_dimensions as u32,
+    };
+    let schema = build_run_schema(&manifest)?;
+    let keys =
+        FixedSizeBinaryArray::try_from_iter(ordered.iter().map(|(key, _)| key.to_be_bytes()))?;
+    let source_values = ordered
+        .iter()
+        .flat_map(|(_, row)| row.source.iter().copied())
+        .collect::<Vec<_>>();
+    let projected_values = ordered
+        .iter()
+        .flat_map(|(_, row)| row.projected.iter().copied())
+        .collect::<Vec<_>>();
+    let source = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        source_dimensions as i32,
+        Arc::new(Float32Array::from(source_values)),
+        None,
+    )?;
+    let projected = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float64, false)),
+        projected_dimensions as i32,
+        Arc::new(Float64Array::from(projected_values)),
+        None,
+    )?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(keys),
+            Arc::new(UInt64Array::from(
+                ordered
+                    .iter()
+                    .map(|(_, row)| row.source_ordinal)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                ordered.iter().map(|(_, row)| row.id).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                ordered
+                    .iter()
+                    .map(|(_, row)| row.sequence)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(source),
+            Arc::new(projected),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(bytes)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One decoded scratch row used by the bounded merge stage.
+pub struct V35BuildRunRow {
+    morton_key: u128,
+    source_ordinal: u64,
+    source_dimensions: usize,
+    projected_dimensions: usize,
+}
+
+impl V35BuildRunRow {
+    /// Locality key in exact build order.
+    pub fn morton_key(&self) -> u128 {
+        self.morton_key
+    }
+    /// Stable original source ordinal.
+    pub fn source_ordinal(&self) -> u64 {
+        self.source_ordinal
+    }
+    /// Full exact-vector dimensionality retained remotely.
+    pub fn source_dimensions(&self) -> usize {
+        self.source_dimensions
+    }
+    /// Resident projected dimensionality.
+    pub fn projected_dimensions(&self) -> usize {
+        self.projected_dimensions
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Strict decoded view of one authenticated scratch run.
+pub struct V35BuildRun {
+    run_ordinal: u32,
+    rows: Vec<V35BuildRunRow>,
+}
+
+impl V35BuildRun {
+    /// Scratch run ordinal.
+    pub fn run_ordinal(&self) -> u32 {
+        self.run_ordinal
+    }
+    /// Rows in exact `(Morton key,source ordinal)` order.
+    pub fn rows(&self) -> &[V35BuildRunRow] {
+        &self.rows
+    }
+}
+
+/// Decode one exact-digest-bound cross-language Arrow scratch run.
+pub fn decode_v35_build_run_arrow(
+    bytes: &[u8],
+    registered: &V35ArtifactIdentity,
+) -> Result<V35BuildRun> {
+    if registered.role != "build-scratch-run"
+        || registered.digest_algorithm != "sha256"
+        || registered.length != bytes.len() as u64
+        || registered.digest != format!("{:x}", Sha256::digest(bytes))
+        || !registered.uri.starts_with("s3://")
+        || !registered.uri.contains("/scratch/")
+        || registered.uri.contains("/corpus/")
+    {
+        return Err(invalid("V35 build scratch identity differs"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    let manifest_json = reader
+        .schema()
+        .metadata()
+        .get(BUILD_RUN_METADATA_KEY)
+        .ok_or_else(|| invalid("V35 build run manifest is missing"))?
+        .clone();
+    let manifest: V35BuildRunManifest = serde_json::from_str(&manifest_json)
+        .map_err(|_| invalid("V35 build run manifest differs"))?;
+    if reader.schema().metadata().len() != 1
+        || serde_json::to_string(&manifest)
+            .map_err(|_| invalid("V35 build run manifest cannot be serialized"))?
+            != manifest_json
+        || manifest.format != BUILD_RUN_FORMAT
+        || reader.num_batches() != 1
+        || reader.schema().as_ref() != build_run_schema(&manifest)?.as_ref()
+    {
+        return Err(invalid("V35 build run Arrow authority differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V35 build run batch is missing"))?;
+    if reader.next().is_some() || batch.num_rows() != manifest.rows as usize {
+        return Err(invalid("V35 build run rows differ"));
+    }
+    if batch
+        .columns()
+        .iter()
+        .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V35 build run nullability differs"));
+    }
+    let keys = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| invalid("V35 build run key column differs"))?;
+    let ordinals = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 build run ordinal column differs"))?;
+    let rows = (0..batch.num_rows())
+        .map(|row| V35BuildRunRow {
+            morton_key: u128::from_be_bytes(keys.value(row).try_into().expect("fixed 16-byte key")),
+            source_ordinal: ordinals.value(row),
+            source_dimensions: manifest.source_dimensions as usize,
+            projected_dimensions: manifest.projected_dimensions as usize,
+        })
+        .collect::<Vec<_>>();
+    if rows.windows(2).any(|pair| {
+        (pair[0].morton_key, pair[0].source_ordinal) >= (pair[1].morton_key, pair[1].source_ordinal)
+    }) {
+        return Err(invalid("V35 build run order differs"));
+    }
+    Ok(V35BuildRun {
+        run_ordinal: manifest.run_ordinal,
+        rows,
+    })
+}
+
+/// Stream ordered source blocks into bounded authenticated external-sort runs.
+pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
+    model: &V35MortonModel,
+    source: &mut R,
+    scratch: &mut S,
+) -> Result<V35BuildScratchReceipt> {
+    let mut receipt = V35BuildScratchReceipt {
+        source_rows: 0,
+        scratch_runs: 0,
+        scratch_bytes: 0,
+        peak_live_builder_bytes: 0,
+    };
+    let mut previous_source_ordinal = None;
+    while let Some(block) = source.next_block()? {
+        if previous_source_ordinal.is_some_and(|previous| {
+            previous
+                >= block
+                    .rows
+                    .first()
+                    .expect("block is nonempty")
+                    .source_ordinal
+        }) {
+            return Err(invalid("V35 build source block order differs"));
+        }
+        previous_source_ordinal = block.rows.last().map(|row| row.source_ordinal);
+        let bytes = encode_build_run(model, receipt.scratch_runs, &block)?;
+        let live_bytes = block_live_bytes(&block, bytes.len())?;
+        if live_bytes > MAX_BUILDER_BYTES {
+            return Err(invalid("V35 build live memory exceeds admission"));
+        }
+        let identity = scratch.write_run(receipt.scratch_runs, &bytes)?;
+        decode_v35_build_run_arrow(&bytes, &identity)?;
+        receipt.source_rows = receipt
+            .source_rows
+            .checked_add(block.rows.len() as u64)
+            .ok_or_else(|| invalid("V35 build source rows overflow"))?;
+        receipt.scratch_runs = receipt
+            .scratch_runs
+            .checked_add(1)
+            .ok_or_else(|| invalid("V35 build scratch runs overflow"))?;
+        receipt.scratch_bytes = receipt
+            .scratch_bytes
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| invalid("V35 build scratch bytes overflow"))?;
+        receipt.peak_live_builder_bytes = receipt.peak_live_builder_bytes.max(live_bytes);
+    }
+    if receipt.source_rows == 0 {
+        return Err(invalid("V35 build source is empty"));
+    }
+    Ok(receipt)
 }

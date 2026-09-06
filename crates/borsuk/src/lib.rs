@@ -260,7 +260,11 @@ pub use v35_authority::{
     V35ServingProjection, project_v35_serving_memory, validate_v35_manifest,
 };
 #[doc(hidden)]
-pub use v35_build::{V35MortonModel, train_v35_morton_model};
+pub use v35_build::{
+    V35BuildBlock, V35BuildBlockSource, V35BuildRow, V35BuildRun, V35BuildRunRow,
+    V35BuildScratchReceipt, V35BuildScratchSink, V35MortonModel, build_v35_scratch_runs,
+    decode_v35_build_run_arrow, train_v35_morton_model,
+};
 #[doc(hidden)]
 pub use v35_patch::{
     V35EqualByteCentroidControl, V35LeafPatch, V35LeafPatchArm, V35LeafPatchBuildRequest,
