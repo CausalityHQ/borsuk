@@ -249,6 +249,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             }
             for ordinal, role in enumerate(
                 (
+                    "freeze-receipt",
                     "population-authority",
                     "source",
                     "development-query",

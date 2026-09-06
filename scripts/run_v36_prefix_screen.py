@@ -46,6 +46,7 @@ _GIT = re.compile(r"[0-9a-f]{40}\Z")
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _INSTANCE_ID = re.compile(r"i-[A-Za-z0-9-]+\Z")
 _COMPLETE_OUTPUT_ROLES = {
+    "freeze-receipt",
     "population-authority",
     "source",
     "development-query",
