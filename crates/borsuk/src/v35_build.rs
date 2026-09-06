@@ -42,6 +42,9 @@ const SOURCE_BLOCK_FORMAT: &str = "borsuk-v35-source-block-parquet-v1";
 const SOURCE_BLOCK_METADATA_KEY: &str = "borsuk.v35.source-block.manifest";
 const MAX_SOURCE_BLOCK_ROWS: usize = 8_192;
 const SOURCE_BLOCK_DECODE_ENVELOPE_BYTES: usize = 1_048_576;
+const MIN_GROUP_CODE_BYTES: u64 = 349_526;
+const TARGET_GROUP_CODE_BYTES: u64 = 524_288;
+const GROUP_MEMORY_ENVELOPE_BYTES: u64 = 1_048_576;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -750,6 +753,294 @@ pub trait V35BuildMergeSource {
 pub trait V35BuildLeafSink {
     /// Consume one nonempty at-most-256-row leaf in exact global order.
     fn write_leaf(&mut self, rows: Vec<V35BuildMergeRow>) -> Result<()>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One consecutive group of leaves bounded by its dimension-derived code payload.
+pub struct V35BuildStorageGroup {
+    group_ordinal: u32,
+    logical_start: u64,
+    code_bytes: u64,
+    leaves: Vec<Vec<V35BuildMergeRow>>,
+}
+
+impl V35BuildStorageGroup {
+    /// Zero-based group ordinal in global Morton order.
+    pub fn group_ordinal(&self) -> u32 {
+        self.group_ordinal
+    }
+
+    /// First logical row represented by this group.
+    pub fn logical_start(&self) -> u64 {
+        self.logical_start
+    }
+
+    /// Dimension-bound SQ code payload before object framing.
+    pub fn code_bytes(&self) -> u64 {
+        self.code_bytes
+    }
+
+    /// Complete rows retained by this group.
+    pub fn row_count(&self) -> u64 {
+        self.leaves.iter().map(|leaf| leaf.len() as u64).sum()
+    }
+
+    /// Consecutive leaves in exact global Morton order.
+    pub fn leaves(&self) -> &[Vec<V35BuildMergeRow>] {
+        &self.leaves
+    }
+}
+
+/// Write-only storage-group capability; implementations release each group after return.
+pub trait V35BuildStorageGroupSink {
+    /// Consume one complete consecutive group.
+    fn write_group(&mut self, group: V35BuildStorageGroup) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Work and live-memory evidence from dimension-bound leaf grouping.
+pub struct V35BuildStorageGroupReceipt {
+    rows: u64,
+    groups: u32,
+    peak_live_bytes: u64,
+}
+
+impl V35BuildStorageGroupReceipt {
+    /// Complete rows grouped exactly once.
+    pub fn rows(self) -> u64 {
+        self.rows
+    }
+
+    /// Complete consecutive groups emitted.
+    pub fn groups(self) -> u32 {
+        self.groups
+    }
+
+    /// Greatest conservatively projected live group memory.
+    pub fn peak_live_bytes(self) -> u64 {
+        self.peak_live_bytes
+    }
+}
+
+/// Streaming adapter from globally ordered leaves to dimension-bound storage groups.
+pub struct V35BuildStorageGroupAssembler<'a, S: V35BuildStorageGroupSink> {
+    sink: &'a mut S,
+    source_dimensions: usize,
+    projected_dimensions: usize,
+    code_bytes_per_row: u64,
+    max_rows_per_group: u64,
+    leaves: Vec<Vec<V35BuildMergeRow>>,
+    rows: u64,
+    code_bytes: u64,
+    live_row_bytes: u64,
+    previous_order: Option<(u128, u64)>,
+    next_group_ordinal: u32,
+    next_logical_start: u64,
+    receipt: V35BuildStorageGroupReceipt,
+}
+
+impl<'a, S: V35BuildStorageGroupSink> V35BuildStorageGroupAssembler<'a, S> {
+    /// Construct one SQ4/SQ8 grouping adapter from authenticated source dimensions.
+    pub fn new(
+        dimensions: crate::V35Dimensions,
+        bits_per_dimension: u8,
+        sink: &'a mut S,
+    ) -> Result<Self> {
+        if dimensions.source == 0 || dimensions.routing == 0 || !matches!(bits_per_dimension, 4 | 8)
+        {
+            return Err(invalid("V35 build storage-group dimensions differ"));
+        }
+        let source_dimensions = usize::try_from(dimensions.source)
+            .map_err(|_| invalid("V35 build storage-group dimensions overflow"))?;
+        let code_bits = u64::from(dimensions.source)
+            .checked_mul(u64::from(bits_per_dimension))
+            .ok_or_else(|| invalid("V35 build storage-group code width overflows"))?;
+        let code_bytes_per_row = code_bits.div_ceil(8);
+        let max_rows_per_group = TARGET_GROUP_CODE_BYTES / code_bytes_per_row;
+        if max_rows_per_group == 0
+            || max_rows_per_group
+                .checked_mul(code_bytes_per_row)
+                .is_none_or(|bytes| bytes < MIN_GROUP_CODE_BYTES)
+        {
+            return Err(invalid("V35 build storage-group code width is infeasible"));
+        }
+        Ok(Self {
+            sink,
+            source_dimensions,
+            projected_dimensions: usize::from(dimensions.routing),
+            code_bytes_per_row,
+            max_rows_per_group,
+            leaves: Vec::new(),
+            rows: 0,
+            code_bytes: 0,
+            live_row_bytes: 0,
+            previous_order: None,
+            next_group_ordinal: 0,
+            next_logical_start: 0,
+            receipt: V35BuildStorageGroupReceipt {
+                rows: 0,
+                groups: 0,
+                peak_live_bytes: 0,
+            },
+        })
+    }
+
+    fn projected_live_bytes(&self) -> Result<u64> {
+        let outer_bytes = self
+            .leaves
+            .capacity()
+            .checked_mul(size_of::<Vec<V35BuildMergeRow>>())
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| invalid("V35 build storage-group memory overflows"))?;
+        GROUP_MEMORY_ENVELOPE_BYTES
+            .checked_add(outer_bytes)
+            .and_then(|bytes| bytes.checked_add(self.live_row_bytes))
+            .ok_or_else(|| invalid("V35 build storage-group memory overflows"))
+    }
+
+    fn leaf_live_bytes(rows: &Vec<V35BuildMergeRow>) -> Result<u64> {
+        let container_bytes = rows
+            .capacity()
+            .checked_mul(size_of::<V35BuildMergeRow>())
+            .and_then(|bytes| bytes.checked_add(size_of::<Vec<V35BuildMergeRow>>()))
+            .ok_or_else(|| invalid("V35 build storage-group memory overflows"))?;
+        rows.iter().try_fold(
+            u64::try_from(container_bytes)
+                .map_err(|_| invalid("V35 build storage-group memory conversion overflows"))?,
+            |total, row| {
+                let source_bytes = row
+                    .source
+                    .capacity()
+                    .checked_mul(size_of::<f32>())
+                    .ok_or_else(|| invalid("V35 build storage-group memory overflows"))?;
+                let projected_bytes = row
+                    .projected
+                    .capacity()
+                    .checked_mul(size_of::<f64>())
+                    .ok_or_else(|| invalid("V35 build storage-group memory overflows"))?;
+                let owned_bytes = source_bytes
+                    .checked_add(projected_bytes)
+                    .and_then(|bytes| u64::try_from(bytes).ok())
+                    .ok_or_else(|| invalid("V35 build storage-group memory overflows"))?;
+                total
+                    .checked_add(owned_bytes)
+                    .ok_or_else(|| invalid("V35 build storage-group memory overflows"))
+            },
+        )
+    }
+
+    fn emit_group(&mut self) -> Result<()> {
+        if self.rows == 0 || self.leaves.is_empty() || self.code_bytes == 0 {
+            return Err(invalid("V35 build storage group is empty"));
+        }
+        let group = V35BuildStorageGroup {
+            group_ordinal: self.next_group_ordinal,
+            logical_start: self.next_logical_start,
+            code_bytes: self.code_bytes,
+            leaves: std::mem::take(&mut self.leaves),
+        };
+        self.sink.write_group(group)?;
+        self.receipt.rows = self
+            .receipt
+            .rows
+            .checked_add(self.rows)
+            .ok_or_else(|| invalid("V35 build storage-group rows overflow"))?;
+        self.receipt.groups = self
+            .receipt
+            .groups
+            .checked_add(1)
+            .ok_or_else(|| invalid("V35 build storage-group count overflow"))?;
+        self.next_group_ordinal = self
+            .next_group_ordinal
+            .checked_add(1)
+            .ok_or_else(|| invalid("V35 build storage-group ordinal overflow"))?;
+        self.next_logical_start = self
+            .next_logical_start
+            .checked_add(self.rows)
+            .ok_or_else(|| invalid("V35 build storage-group logical range overflow"))?;
+        self.rows = 0;
+        self.code_bytes = 0;
+        self.live_row_bytes = 0;
+        Ok(())
+    }
+
+    /// Emit the terminal group, which alone may be smaller than the minimum payload.
+    pub fn finish(mut self) -> Result<V35BuildStorageGroupReceipt> {
+        if self.rows == 0 && self.receipt.rows == 0 {
+            return Err(invalid("V35 build storage groups are empty"));
+        }
+        if self.rows != 0 {
+            self.emit_group()?;
+        }
+        Ok(self.receipt)
+    }
+}
+
+impl<S: V35BuildStorageGroupSink> V35BuildLeafSink for V35BuildStorageGroupAssembler<'_, S> {
+    fn write_leaf(&mut self, rows: Vec<V35BuildMergeRow>) -> Result<()> {
+        if rows.is_empty()
+            || rows.len() > MAX_BUILD_RUN_BATCH_ROWS
+            || rows.iter().any(|row| {
+                row.source.len() != self.source_dimensions
+                    || row.projected.len() != self.projected_dimensions
+            })
+        {
+            return Err(invalid("V35 build storage-group leaf differs"));
+        }
+        let mut previous = self.previous_order;
+        for row in &rows {
+            let order = (row.morton_key, row.source_ordinal);
+            if previous.is_some_and(|previous| previous >= order) {
+                return Err(invalid("V35 build storage-group order differs"));
+            }
+            previous = Some(order);
+        }
+        let incoming_live_bytes = Self::leaf_live_bytes(&rows)?;
+        let mut rows = rows.into_iter().peekable();
+        while rows.peek().is_some() {
+            if self.rows == self.max_rows_per_group {
+                debug_assert!(self.code_bytes >= MIN_GROUP_CODE_BYTES);
+                self.emit_group()?;
+            }
+            let available = usize::try_from(self.max_rows_per_group - self.rows)
+                .unwrap_or(usize::MAX)
+                .min(MAX_BUILD_RUN_BATCH_ROWS)
+                .min(rows.len());
+            if available == 0 {
+                return Err(invalid("V35 build storage-group capacity differs"));
+            }
+            let fragment = rows.by_ref().take(available).collect::<Vec<_>>();
+            let fragment_rows = u64::try_from(fragment.len())
+                .map_err(|_| invalid("V35 build storage-group leaf rows overflow"))?;
+            let fragment_code_bytes = fragment_rows
+                .checked_mul(self.code_bytes_per_row)
+                .ok_or_else(|| invalid("V35 build storage-group code bytes overflow"))?;
+            let fragment_live_bytes = Self::leaf_live_bytes(&fragment)?;
+            self.rows = self
+                .rows
+                .checked_add(fragment_rows)
+                .ok_or_else(|| invalid("V35 build storage-group rows overflow"))?;
+            self.code_bytes = self
+                .code_bytes
+                .checked_add(fragment_code_bytes)
+                .ok_or_else(|| invalid("V35 build storage-group code bytes overflow"))?;
+            self.live_row_bytes = self
+                .live_row_bytes
+                .checked_add(fragment_live_bytes)
+                .ok_or_else(|| invalid("V35 build storage-group memory overflows"))?;
+            self.leaves.push(fragment);
+            let live_bytes = self
+                .projected_live_bytes()?
+                .checked_add(incoming_live_bytes)
+                .ok_or_else(|| invalid("V35 build storage-group memory overflows"))?;
+            if live_bytes > MAX_BUILDER_BYTES {
+                return Err(invalid("V35 build storage-group memory exceeds admission"));
+            }
+            self.receipt.peak_live_bytes = self.receipt.peak_live_bytes.max(live_bytes);
+        }
+        self.previous_order = previous;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

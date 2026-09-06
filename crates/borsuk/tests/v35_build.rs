@@ -5,10 +5,11 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ArtifactIdentity, V35BuildAuthority, V35BuildBlock, V35BuildBlockSource,
     V35BuildLeafSink, V35BuildMergeRow, V35BuildMergeSource, V35BuildRow, V35BuildScratchSink,
-    V35Dimensions, V35MortonModel, V35Projection, build_v35_leaf_patch_from_merge_rows,
-    build_v35_scratch_runs, build_v35_srht, decode_v35_build_run_arrow,
-    decode_v35_source_block_parquet, merge_v35_build_runs, open_v35_build_run_cursor,
-    project_v35_query_scalar, train_v35_morton_model,
+    V35BuildStorageGroup, V35BuildStorageGroupAssembler, V35BuildStorageGroupSink, V35Dimensions,
+    V35MortonModel, V35Projection, build_v35_leaf_patch_from_merge_rows, build_v35_scratch_runs,
+    build_v35_srht, decode_v35_build_run_arrow, decode_v35_source_block_parquet,
+    merge_v35_build_runs, open_v35_build_run_cursor, project_v35_query_scalar,
+    train_v35_morton_model,
 };
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
@@ -492,9 +493,14 @@ impl V35BuildLeafSink for LeafSink {
     }
 }
 
-fn merge_source(model: &V35MortonModel, projection: &V35Projection) -> MergeSource {
+fn merge_source_with_rows(
+    model: &V35MortonModel,
+    projection: &V35Projection,
+    row_count: u64,
+) -> MergeSource {
     let mut runs = vec![Vec::new(), Vec::new(), Vec::new()];
-    for source_ordinal in 0..600_u64 {
+    let rows_per_run = row_count.div_ceil(3);
+    for source_ordinal in 0..row_count {
         let source = (0..384)
             .map(|dimension| ((source_ordinal * 31 + dimension as u64 * 7) % 4_093) as f32 / 53.0)
             .collect::<Vec<_>>();
@@ -503,7 +509,7 @@ fn merge_source(model: &V35MortonModel, projection: &V35Projection) -> MergeSour
             .coordinates()
             .to_vec();
         let key = model.key(&projected).unwrap();
-        let run = usize::try_from(source_ordinal / 200).unwrap();
+        let run = usize::try_from((source_ordinal / rows_per_run).min(2)).unwrap();
         runs[run].push(
             V35BuildMergeRow::new(
                 key,
@@ -522,6 +528,10 @@ fn merge_source(model: &V35MortonModel, projection: &V35Projection) -> MergeSour
     MergeSource {
         runs: runs.into_iter().map(VecDeque::from).collect(),
     }
+}
+
+fn merge_source(model: &V35MortonModel, projection: &V35Projection) -> MergeSource {
+    merge_source_with_rows(model, projection, 600)
 }
 
 #[test]
@@ -621,4 +631,109 @@ fn v35_build_merge_leaf_seals_authenticated_projection_and_omitted_energy() {
         .sum::<f64>()
         / rows.len() as f64;
     assert_eq!(patch.omitted_energy(), expected_omitted as f32);
+}
+
+#[derive(Default)]
+struct GroupSink {
+    groups: Vec<V35BuildStorageGroup>,
+}
+
+impl V35BuildStorageGroupSink for GroupSink {
+    fn write_group(&mut self, group: V35BuildStorageGroup) -> Result<()> {
+        self.groups.push(group);
+        Ok(())
+    }
+}
+
+#[test]
+fn v35_build_groups_streaming_leaves_by_dimension_bound_code_bytes() {
+    // Break caught: grouping uses a fixed 96D row width, buffers every leaf,
+    // emits a short nonterminal group, or exceeds the code-object target.
+    let projection = projection();
+    let model = train_v35_morton_model(&training_rows(), &projection, build_authority(&projection))
+        .unwrap();
+    let mut source = merge_source_with_rows(&model, &projection, 3_200);
+    let mut groups = GroupSink::default();
+    let mut assembler =
+        V35BuildStorageGroupAssembler::new(projection.dimensions(), 4, &mut groups).unwrap();
+    let merge = merge_v35_build_runs(&model, &mut source, &mut assembler).unwrap();
+    assert_eq!(merge.rows(), 3_200);
+    let receipt = assembler.finish().unwrap();
+    assert_eq!(receipt.rows(), 3_200);
+    assert_eq!(receipt.groups(), 2);
+    assert!(receipt.peak_live_bytes() <= 64 * 1_048_576);
+    assert_eq!(groups.groups.len(), 2);
+    assert_eq!(groups.groups[0].row_count(), 2_730);
+    assert_eq!(groups.groups[0].code_bytes(), 524_160);
+    assert_eq!(groups.groups[1].row_count(), 470);
+    assert_eq!(groups.groups[1].code_bytes(), 90_240);
+    assert!(groups.groups[0].code_bytes() >= 349_526);
+    assert!(
+        groups
+            .groups
+            .iter()
+            .all(|group| group.code_bytes() <= 524_288)
+    );
+    assert_eq!(groups.groups[0].group_ordinal(), 0);
+    assert_eq!(groups.groups[1].group_ordinal(), 1);
+    assert_eq!(groups.groups[0].logical_start(), 0);
+    assert_eq!(groups.groups[1].logical_start(), 2_730);
+}
+
+fn grouping_row(source_ordinal: u64, source_dimensions: usize) -> V35BuildMergeRow {
+    V35BuildMergeRow::new(
+        u128::from(source_ordinal),
+        source_ordinal,
+        source_ordinal + 1,
+        source_ordinal + 1,
+        vec![source_ordinal as f32; source_dimensions],
+        vec![source_ordinal as f64; 64],
+    )
+    .unwrap()
+}
+
+#[test]
+fn v35_build_groups_split_merge_leaves_at_high_dimension() {
+    // Break caught: treating 256-row merge batches as atomic makes 1,280D SQ8
+    // unable to form a legal nonterminal group even though 409 rows fit.
+    let dimensions = V35Dimensions {
+        source: 1_280,
+        routing: 64,
+    };
+    let mut groups = GroupSink::default();
+    let mut assembler = V35BuildStorageGroupAssembler::new(dimensions, 8, &mut groups).unwrap();
+    assembler
+        .write_leaf((0..256).map(|row| grouping_row(row, 1_280)).collect())
+        .unwrap();
+    assembler
+        .write_leaf((256..512).map(|row| grouping_row(row, 1_280)).collect())
+        .unwrap();
+    let receipt = assembler.finish().unwrap();
+    assert_eq!(receipt.rows(), 512);
+    assert_eq!(groups.groups.len(), 2);
+    assert_eq!(groups.groups[0].row_count(), 409);
+    assert_eq!(groups.groups[0].code_bytes(), 523_520);
+    assert_eq!(groups.groups[1].row_count(), 103);
+    assert_eq!(groups.groups[1].logical_start(), 409);
+    assert!(
+        groups
+            .groups
+            .iter()
+            .flat_map(V35BuildStorageGroup::leaves)
+            .all(|leaf| leaf.len() <= 256)
+    );
+}
+
+#[test]
+fn v35_build_groups_reject_morton_order_drift() {
+    // Break caught: a caller other than the merge core can silently publish a
+    // storage group whose rows are not in strict (Morton key,ordinal) order.
+    let dimensions = V35Dimensions {
+        source: 384,
+        routing: 64,
+    };
+    let mut groups = GroupSink::default();
+    let mut assembler = V35BuildStorageGroupAssembler::new(dimensions, 4, &mut groups).unwrap();
+    let rows = vec![grouping_row(1, 384), grouping_row(0, 384)];
+    assert!(assembler.write_leaf(rows).is_err());
 }
