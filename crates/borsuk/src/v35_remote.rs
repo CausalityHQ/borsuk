@@ -39,7 +39,7 @@ const MAX_MUTATION_ENTRIES: usize = 1_000_000;
 const MAX_DIRECTORY_BLOCK_BYTES: u64 = MIB;
 const MAX_DIRECTORY_CHUNKS: usize = 64;
 const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
-const CODE_FORMAT: &str = "borsuk-v35-remote-code-arrow-v1";
+const CODE_FORMAT: &str = "borsuk-v35-remote-code-arrow-v2";
 const CODE_MANIFEST_KEY: &str = "borsuk.v35.remote-code.manifest";
 const PAGE_FORMAT: &str = "borsuk-v35-exact-page-parquet-v1";
 const PAGE_MANIFEST_KEY: &str = "borsuk.v35.exact-page.manifest";
@@ -62,7 +62,7 @@ fn digest_hex(value: [u8; 32]) -> String {
 /// Logical identity of the one incompatible V35 Arrow code schema.
 pub fn v35_remote_code_schema_digest() -> [u8; 32] {
     Sha256::digest(
-        b"borsuk-v35-remote-code-schema-v1\nid:u64\nsequence:u64\nprimary_page:u32\nreplica_page:u32?\ncode:fixed-size-binary\n",
+        b"borsuk-v35-remote-code-schema-v2\nsource_ordinal:u64\nid:u64\nsequence:u64\nprimary_page:u32\nreplica_page:u32?\ncode:fixed-size-binary\n",
     )
     .into()
 }
@@ -507,6 +507,7 @@ impl<'a> V35ResidualSqScorer<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Immutable identity, visibility sequence, and exact-page references for one code row.
 pub struct V35RemoteCodeRow {
+    source_ordinal: u64,
     id: u64,
     sequence: u64,
     primary_page: u32,
@@ -516,6 +517,7 @@ pub struct V35RemoteCodeRow {
 impl V35RemoteCodeRow {
     /// Construct one row; a replica must differ from its primary page.
     pub fn new(
+        source_ordinal: u64,
         id: u64,
         sequence: u64,
         primary_page: u32,
@@ -525,11 +527,20 @@ impl V35RemoteCodeRow {
             return Err(invalid("V35 remote code row authority differs"));
         }
         Ok(Self {
+            source_ordinal,
             id,
             sequence,
             primary_page,
             replica_page,
         })
+    }
+    /// Stable original source ordinal used for deterministic distance ties.
+    pub fn source_ordinal(self) -> u64 {
+        self.source_ordinal
+    }
+    /// Immutable vector identifier.
+    pub fn id(self) -> u64 {
+        self.id
     }
 }
 
@@ -558,6 +569,7 @@ fn remote_code_schema(bytes_per_row: u32, manifest_json: String) -> Result<Arc<S
         i32::try_from(bytes_per_row).map_err(|_| invalid("V35 remote code row width overflows"))?;
     Ok(Arc::new(Schema::new_with_metadata(
         vec![
+            Field::new("source_ordinal", DataType::UInt64, false),
             Field::new("id", DataType::UInt64, false),
             Field::new("sequence", DataType::UInt64, false),
             Field::new("primary_page", DataType::UInt32, false),
@@ -574,7 +586,7 @@ fn projected_remote_code_decoded_bytes(
     bytes_per_row: u32,
 ) -> Result<u64> {
     let row_bytes = u64::from(bytes_per_row)
-        .checked_add(24)
+        .checked_add(32)
         .ok_or_else(|| invalid("V35 remote decoded row bytes overflow"))?;
     rows.checked_mul(row_bytes)
         .and_then(|bytes| bytes.checked_add(u64::from(dimensions) * 6))
@@ -627,10 +639,17 @@ pub fn encode_v35_remote_code_arrow(
     if rows.is_empty()
         || descriptor.rows != row_count
         || descriptor.codes.len() != encoded_code_bytes
-        || rows.windows(2).any(|pair| pair[0].id >= pair[1].id)
         || logical_start.checked_add(row_count).is_none()
     {
         return Err(invalid("V35 remote code chunk authority differs"));
+    }
+    let mut source_ordinals = BTreeSet::new();
+    let mut row_identities = BTreeSet::new();
+    if rows.iter().any(|row| {
+        !source_ordinals.insert(row.source_ordinal)
+            || !row_identities.insert((row.id, row.sequence))
+    }) {
+        return Err(invalid("V35 remote code row identity is duplicated"));
     }
     let manifest = V35RemoteCodeManifest {
         bits_per_dimension: descriptor.bits_per_dimension,
@@ -653,6 +672,11 @@ pub fn encode_v35_remote_code_arrow(
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
+            Arc::new(UInt64Array::from(
+                rows.iter()
+                    .map(|row| row.source_ordinal)
+                    .collect::<Vec<_>>(),
+            )),
             Arc::new(UInt64Array::from(
                 rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             )),
@@ -746,32 +770,38 @@ fn parse_remote_code_manifest(
     if reader.next().is_some() || batch.num_rows() as u64 != manifest.rows {
         return Err(invalid("V35 remote code Arrow rows differ"));
     }
-    let ids = batch
+    let source_ordinals = batch
         .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 remote code source-ordinal column differs"))?;
+    let ids = batch
+        .column(1)
         .as_any()
         .downcast_ref::<UInt64Array>()
         .ok_or_else(|| invalid("V35 remote code id column differs"))?;
     let sequences = batch
-        .column(1)
+        .column(2)
         .as_any()
         .downcast_ref::<UInt64Array>()
         .ok_or_else(|| invalid("V35 remote code sequence column differs"))?;
     let primary_pages = batch
-        .column(2)
+        .column(3)
         .as_any()
         .downcast_ref::<UInt32Array>()
         .ok_or_else(|| invalid("V35 remote code primary-page column differs"))?;
     let replica_pages = batch
-        .column(3)
+        .column(4)
         .as_any()
         .downcast_ref::<UInt32Array>()
         .ok_or_else(|| invalid("V35 remote code replica-page column differs"))?;
     let codes = batch
-        .column(4)
+        .column(5)
         .as_any()
         .downcast_ref::<FixedSizeBinaryArray>()
         .ok_or_else(|| invalid("V35 remote code payload column differs"))?;
-    if ids.null_count() != 0
+    if source_ordinals.null_count() != 0
+        || ids.null_count() != 0
         || sequences.null_count() != 0
         || primary_pages.null_count() != 0
         || codes.null_count() != 0
@@ -788,6 +818,7 @@ fn parse_remote_code_manifest(
     );
     for row in 0..batch.num_rows() {
         rows.push(V35RemoteCodeRow::new(
+            source_ordinals.value(row),
             ids.value(row),
             sequences.value(row),
             primary_pages.value(row),
@@ -795,8 +826,12 @@ fn parse_remote_code_manifest(
         )?);
         packed_codes.extend_from_slice(codes.value(row));
     }
-    if rows.windows(2).any(|pair| pair[0].id >= pair[1].id) {
-        return Err(invalid("V35 remote code row order differs"));
+    let mut seen_ordinals = BTreeSet::new();
+    let mut seen_identities = BTreeSet::new();
+    if rows.iter().any(|row| {
+        !seen_ordinals.insert(row.source_ordinal) || !seen_identities.insert((row.id, row.sequence))
+    }) {
+        return Err(invalid("V35 remote code row identity is duplicated"));
     }
     Ok((
         V35ResidualSqDescriptor {
@@ -832,13 +867,9 @@ pub fn scan_v35_code_ranges<T: V35VersionedRangeTransport>(
         let (descriptor, rows) = parse_remote_code_manifest(chunk, bytes)?;
         let scorer = V35ResidualSqScorer::new(&descriptor, query.source_query())?;
         for (row, authority) in rows.iter().enumerate() {
-            let row_ordinal = chunk
-                .logical_start
-                .checked_add(row as u64)
-                .ok_or_else(|| invalid("V35 remote code row ordinal overflows"))?;
             candidates.admit(V35ScannedCandidate::new(
                 f64::from(scorer.score(row as u64)?),
-                row_ordinal,
+                authority.source_ordinal,
                 authority.id,
                 authority.sequence,
                 authority.primary_page,

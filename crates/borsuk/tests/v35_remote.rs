@@ -765,7 +765,7 @@ struct CodeScanFixture {
     query: borsuk::V35ProjectedQuery,
     visibility: V35SnapshotVisibility,
     body: Vec<u8>,
-    expected: Vec<(u64, f32)>,
+    expected: Vec<(u64, u64, f32)>,
 }
 
 fn code_scan_fixture() -> CodeScanFixture {
@@ -783,9 +783,9 @@ fn code_scan_fixture() -> CodeScanFixture {
         .collect::<Vec<_>>();
     let descriptor = build_v35_residual_sq_descriptor(&source_rows, 4).unwrap();
     let rows = vec![
-        V35RemoteCodeRow::new(10, 1, 2, Some(3)).unwrap(),
-        V35RemoteCodeRow::new(11, 1, 4, None).unwrap(),
-        V35RemoteCodeRow::new(12, 1, 6, Some(7)).unwrap(),
+        V35RemoteCodeRow::new(91, 10, 1, 2, Some(3)).unwrap(),
+        V35RemoteCodeRow::new(3, 11, 1, 4, None).unwrap(),
+        V35RemoteCodeRow::new(50, 12, 1, 6, Some(7)).unwrap(),
     ];
     let (body, decoded_length) = encode_v35_remote_code_arrow(0, 0, &descriptor, &rows).unwrap();
     let object_bytes = [vec![0; 16], body.clone(), vec![0; 16]].concat();
@@ -855,12 +855,13 @@ fn code_scan_fixture() -> CodeScanFixture {
         .enumerate()
         .map(|(row, _)| {
             (
-                10 + row as u64,
+                rows[row].id(),
+                rows[row].source_ordinal(),
                 scalar_residual_sq_score(&descriptor, row, &source_query),
             )
         })
         .collect::<Vec<_>>();
-    expected.sort_by(|left, right| left.1.total_cmp(&right.1).then(left.0.cmp(&right.0)));
+    expected.sort_by(|left, right| left.2.total_cmp(&right.2).then(left.1.cmp(&right.1)));
     CodeScanFixture {
         plan,
         query,
@@ -887,10 +888,11 @@ fn v35_remote_code_scanner_authenticates_arrow_and_streams_simd_candidates() {
     )
     .unwrap();
     assert_eq!(candidates.candidates().len(), fixture.expected.len());
-    for (candidate, (expected_id, expected_distance)) in
+    for (candidate, (expected_id, expected_ordinal, expected_distance)) in
         candidates.candidates().iter().zip(&fixture.expected)
     {
         assert_eq!(candidate.id(), *expected_id);
+        assert_eq!(candidate.row_ordinal(), *expected_ordinal);
         let tolerance = 2.0e-5 * expected_distance.abs().max(1.0);
         assert!((candidate.distance() as f32 - expected_distance).abs() <= tolerance);
     }

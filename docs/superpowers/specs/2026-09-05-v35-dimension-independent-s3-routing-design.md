@@ -211,8 +211,10 @@ and sigma both use that decoded f16 center. Scale is `8*sigma/(2^bits-1)`, where
 deviation computed in the same order; zero sigma uses scale zero and code zero.
 Values outside center plus/minus four sigma saturate. Codes are packed
 source-order nibbles with the high nibble first for SQ4 or source-order bytes
-for SQ8, u64 row IDs, u64 sequences,
-and u32 primary/replica page ordinals in structure-of-arrays order. Query ADC
+for SQ8, u64 source ordinals, u64 row IDs, u64 sequences,
+and u32 primary/replica page ordinals in structure-of-arrays order. The source
+ordinal is persisted independently of Morton-layout position and is the exact
+distance-tie authority across construction, compaction, and query. Query ADC
 decodes `center-4*sigma+code*scale` in architecture-specific SIMD, sums squared
 differences in increasing-dimension scalar authority order, and keeps at most the best 12,288
 rows by `(distance,row_ordinal)`. The complete returned code-object budget is
