@@ -8,8 +8,8 @@ use std::{
 };
 
 use arrow_array::{
-    Array, ArrayRef, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, UInt32Array,
-    UInt64Array,
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch,
+    UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use parquet::{
@@ -33,6 +33,7 @@ const GT_NEIGHBORS: usize = 100;
 const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 8_192;
+const GT_QUERY_TILE_ROWS: usize = 8;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -1546,9 +1547,12 @@ pub struct V36PrefixGtAccumulator {
 impl V36PrefixGtAccumulator {
     /// Create a GT tile accumulator for one quality-query role.
     pub fn new(_role: V36PrefixQualityRole, queries: Vec<V36PrefixQueryRow>) -> Result<Self> {
+        let first_ordinal = queries.first().map(|row| row.query_ordinal);
         if queries.is_empty()
             || queries.iter().enumerate().any(|(ordinal, row)| {
-                row.query_ordinal != u32::try_from(ordinal).unwrap()
+                first_ordinal
+                    .and_then(|first| first.checked_add(u32::try_from(ordinal).unwrap_or(u32::MAX)))
+                    != Some(row.query_ordinal)
                     || validate_embedding(&row.embedding).is_err()
             })
         {
@@ -1636,4 +1640,151 @@ pub fn exact_v36_prefix_gt100(
     let mut accumulator = V36PrefixGtAccumulator::new(role, queries.to_vec())?;
     accumulator.absorb(corpus)?;
     accumulator.finish()
+}
+
+fn v36_prefix_query_rows_from_batch(
+    batch: &RecordBatch,
+    offset: usize,
+    rows: usize,
+) -> Result<Vec<V36PrefixQueryRow>> {
+    let ordinals = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet ordinal column differs"))?;
+    let ids = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet ID column differs"))?;
+    let embeddings = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet embedding column differs"))?;
+    let values = embeddings
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V36 prefix query Parquet embedding child differs"))?;
+    (offset..offset + rows)
+        .map(|row| {
+            let start = row * DIMENSIONS;
+            let embedding = values.values()[start..start + DIMENSIONS].to_vec();
+            validate_embedding(&embedding)?;
+            Ok(V36PrefixQueryRow {
+                query_ordinal: ordinals.value(row),
+                feature_row_id: ids.value(row),
+                embedding,
+            })
+        })
+        .collect()
+}
+
+fn v36_prefix_source_rows_from_batch(
+    batch: &RecordBatch,
+    next_source_ordinal: &mut u64,
+) -> Result<Vec<V36PrefixMaterializedRow>> {
+    let ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 prefix source Parquet ID column differs"))?;
+    let embeddings = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V36 prefix source Parquet embedding column differs"))?;
+    let values = embeddings
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V36 prefix source Parquet embedding child differs"))?;
+    let mut rows = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        let start = row * DIMENSIONS;
+        let embedding = values.values()[start..start + DIMENSIONS].to_vec();
+        validate_embedding(&embedding)?;
+        rows.push(V36PrefixMaterializedRow {
+            feature_row_id: ids.value(row),
+            source_ordinal: Some(*next_source_ordinal),
+            embedding,
+        });
+        *next_source_ordinal = next_source_ordinal
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 prefix source Parquet row count overflows"))?;
+    }
+    Ok(rows)
+}
+
+fn v36_prefix_gt_batch(rows: &[V36PrefixGtNeighbor]) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        Arc::new(v36_prefix_gt100_schema()),
+        vec![
+            Arc::new(UInt32Array::from(
+                rows.iter().map(|row| row.query_ordinal).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(UInt16Array::from(
+                rows.iter().map(|row| row.rank).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter()
+                    .map(|row| row.feature_row_id)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(Float64Array::from(
+                rows.iter()
+                    .map(|row| row.squared_distance)
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )?)
+}
+
+/// Compute exact GT@100 from strict Parquet artifacts using bounded query tiles.
+pub fn write_v36_prefix_gt100_from_parquets(
+    source_path: &Path,
+    expected_source_feature_ids: &[u64],
+    query_path: &Path,
+    role: V36PrefixQualityRole,
+    expected_query_rows: u32,
+    output_path: &Path,
+) -> Result<()> {
+    if expected_query_rows == 0 {
+        return Err(invalid("V36 prefix GT query count differs"));
+    }
+    let mut temporary = temporary_output(output_path)?;
+    let mut writer = ArrowWriter::try_new(
+        temporary.as_file_mut(),
+        Arc::new(v36_prefix_gt100_schema()),
+        Some(parquet_writer_properties()),
+    )?;
+    let mut validation = GtValidationState::default();
+    scan_v36_prefix_query_parquet(query_path, u64::from(expected_query_rows), |batch| {
+        for offset in (0..batch.num_rows()).step_by(GT_QUERY_TILE_ROWS) {
+            let tile_rows = GT_QUERY_TILE_ROWS.min(batch.num_rows() - offset);
+            let queries = v36_prefix_query_rows_from_batch(&batch, offset, tile_rows)?;
+            let mut accumulator = V36PrefixGtAccumulator::new(role, queries)?;
+            let mut next_source_ordinal = 0_u64;
+            scan_v36_prefix_source_parquet(
+                source_path,
+                expected_source_feature_ids,
+                |source_batch| {
+                    let rows =
+                        v36_prefix_source_rows_from_batch(&source_batch, &mut next_source_ordinal)?;
+                    accumulator.absorb(&rows)
+                },
+            )?;
+            let truth = accumulator.finish()?;
+            let truth_batch = v36_prefix_gt_batch(&truth)?;
+            validate_gt_batch(&truth_batch, &mut validation)?;
+            writer.write(&truth_batch)?;
+        }
+        Ok(())
+    })?;
+    if validation.next_query != expected_query_rows || validation.next_rank != 0 {
+        return Err(invalid("V36 prefix GT query count differs"));
+    }
+    writer.close()?;
+    publish_output(temporary, output_path)
 }

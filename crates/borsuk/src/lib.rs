@@ -351,8 +351,8 @@ pub use v36_prefix_dataset::{
     v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
     v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
     validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    write_v36_prefix_gt100_from_parquets, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 #[allow(
     dead_code,
