@@ -62,6 +62,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertGreaterEqual(
             subject.DISK_PREFLIGHT_BYTES,
             subject.MAX_SOURCE_BYTES
+            + subject.TARGET_DISTINCT_ROWS * subject.VECTOR_DIMENSIONS * 4
             + subject.TARGET_DISTINCT_ROWS * subject.VECTOR_DIMENSIONS * 5,
         )
 

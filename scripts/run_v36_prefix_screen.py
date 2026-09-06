@@ -32,7 +32,9 @@ MAX_ATTEMPTS = 3
 SPOT_HOURLY_CAP_MICRO_USD = 3_000_000
 CAMPAIGN_CAP_MICRO_USD = 90_000_000
 RAW_POPULATION_BYTES = TARGET_DISTINCT_ROWS * VECTOR_DIMENSIONS * 4
-DISK_PREFLIGHT_BYTES = MAX_SOURCE_BYTES + RAW_POPULATION_BYTES * 5 // 4
+# Complete source objects coexist with the 1.1M-row materialization spool and
+# the final Parquet population plus 25% writer/query/GT workspace.
+DISK_PREFLIGHT_BYTES = MAX_SOURCE_BYTES + RAW_POPULATION_BYTES * 9 // 4
 AMI_ID = "ami-07bcecd13a160173f"
 SECURITY_GROUP_ID = "sg-0b1fd3e4fbde4af0d"
 INSTANCE_PROFILE = "borsuk-bench-profile"
