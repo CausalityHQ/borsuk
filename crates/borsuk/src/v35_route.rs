@@ -105,7 +105,7 @@ impl V35GroupStorage {
     }
 
     /// Construct group storage derived from one authenticated directory-root entry.
-    pub fn new_bound(
+    pub(crate) fn new_bound(
         group_ordinal: u32,
         rows: u64,
         code_bytes: u64,

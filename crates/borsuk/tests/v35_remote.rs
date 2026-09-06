@@ -1,21 +1,23 @@
 //! V35 selective remote-read capability and planning contracts.
 
 use borsuk::{
-    V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35ExactPageResponse,
-    V35ExactPageRow, V35ExactPageTransport, V35GroupStorage, V35LeafPatchBuildRequest,
-    V35PageDirectoryBlockReference, V35RemoteChunk, V35RemoteCodeRow, V35RemoteDirectoryBinding,
-    V35RemoteDirectoryBlock, V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange,
-    V35RemoteRangeResponse, V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix,
-    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
-    V35VersionedRangeTransport, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
-    build_v35_routing_generation, build_v35_srht, decode_v35_page_directory_arrow,
+    V35ArtifactIdentity, V35CandidateAccumulator, V35CodeDirectoryBlockReference,
+    V35CodeDirectoryRoot, V35Dimensions, V35ExactPageResponse, V35ExactPageRow,
+    V35ExactPageTransport, V35LeafPatchBuildRequest, V35PageDirectoryBlockReference,
+    V35RemoteChunk, V35RemoteCodeRow, V35RemoteDirectoryBinding, V35RemoteDirectoryBlock,
+    V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse,
+    V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
+    V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
+    build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor, build_v35_routing_generation,
+    build_v35_srht, decode_v35_code_directory_root_arrow, decode_v35_page_directory_arrow,
     decode_v35_page_directory_root_arrow, decode_v35_remote_directory_arrow,
-    decode_v35_snapshot_visibility_arrow, encode_v35_exact_page_parquet,
-    encode_v35_page_directory_arrow, encode_v35_page_directory_root_arrow,
-    encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
-    exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
-    reduce_v35_scanned_candidates, rerank_v35_exact_pages, resolve_v35_exact_pages,
-    scan_v35_code_ranges, select_v35_exact_pages, v35_remote_code_schema_digest,
+    decode_v35_snapshot_visibility_arrow, encode_v35_code_directory_root_arrow,
+    encode_v35_exact_page_parquet, encode_v35_page_directory_arrow,
+    encode_v35_page_directory_root_arrow, encode_v35_remote_code_arrow,
+    encode_v35_remote_directory_arrow, execute_v35_remote_plan, exhaustive_v35_route,
+    plan_v35_remote_reads, project_v35_query_scalar, reduce_v35_scanned_candidates,
+    rerank_v35_exact_pages, resolve_v35_exact_pages, scan_v35_code_ranges, select_v35_exact_pages,
+    v35_remote_code_schema_digest,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
@@ -67,14 +69,17 @@ fn binding_with_snapshot_and_page(
     .unwrap()
 }
 
-fn selected_route(blocks: &[V35ArtifactIdentity]) -> V35RoutePrefix {
-    selected_route_with_snapshot(blocks, V35SnapshotVisibility::new(vec![]).unwrap().digest())
+struct DirectoryFixture {
+    binding: V35RemoteDirectoryBinding,
+    blocks: Vec<V35RemoteDirectoryBlock>,
+    root: V35CodeDirectoryRoot,
 }
 
-fn selected_route_with_snapshot(
-    blocks: &[V35ArtifactIdentity],
-    snapshot_digest: [u8; 32],
-) -> V35RoutePrefix {
+fn selected_route(directory: &DirectoryFixture) -> V35RoutePrefix {
+    selected_route_with_snapshot(directory)
+}
+
+fn selected_route_with_snapshot(directory: &DirectoryFixture) -> V35RoutePrefix {
     let dimensions = V35Dimensions {
         routing: 64,
         source: 384,
@@ -101,32 +106,7 @@ fn selected_route_with_snapshot(
         .collect();
     let generation =
         build_v35_routing_generation(&projection, "deep-image", &digest(0x11), arms).unwrap();
-    let groups = [
-        V35GroupStorage::new_bound(
-            0,
-            2,
-            200,
-            binding_with_snapshot(0x51, snapshot_digest),
-            &blocks[0],
-        )
-        .unwrap(),
-        V35GroupStorage::new_bound(
-            1,
-            2,
-            100,
-            binding_with_snapshot(0x51, snapshot_digest),
-            &blocks[1],
-        )
-        .unwrap(),
-        V35GroupStorage::new_bound(
-            2,
-            2,
-            100,
-            binding_with_snapshot(0x51, snapshot_digest),
-            &blocks[2],
-        )
-        .unwrap(),
-    ];
+    let groups = directory.root.bind_groups(directory.binding).unwrap();
     let query = project_v35_query_scalar(&projection, &[0.0; 384]).unwrap();
     exhaustive_v35_route(
         &generation,
@@ -280,11 +260,11 @@ fn v35_remote_directory_arrow_authenticates_binding_and_chunks() {
     );
 }
 
-fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
-    directory_blocks_with_snapshot(V35SnapshotVisibility::new(vec![]).unwrap().digest())
+fn directory_fixture() -> DirectoryFixture {
+    directory_fixture_with_snapshot(V35SnapshotVisibility::new(vec![]).unwrap().digest())
 }
 
-fn directory_blocks_with_snapshot(snapshot_digest: [u8; 32]) -> Vec<V35RemoteDirectoryBlock> {
+fn directory_fixture_with_snapshot(snapshot_digest: [u8; 32]) -> DirectoryFixture {
     let first = object(
         "remote-code-object",
         "s3://borsuk-index/generations/g01/codes/code-0000.bin",
@@ -331,19 +311,49 @@ fn directory_blocks_with_snapshot(snapshot_digest: [u8; 32]) -> Vec<V35RemoteDir
         )
         .unwrap(),
     ];
-    (0..3)
+    let grouped = (0..3)
         .map(|group| {
-            authenticated_directory_block(
-                binding_with_snapshot(0x51, snapshot_digest),
+            (
                 chunks
                     .iter()
                     .filter(|chunk| chunk.group_ordinal() == group)
                     .cloned()
                     .collect(),
-                &format!("s3://borsuk-index/generations/g01/directory/group-{group:04}.arrow"),
+                format!("s3://borsuk-index/generations/g01/directory/group-{group:04}.arrow"),
             )
         })
-        .collect()
+        .collect::<Vec<(Vec<V35RemoteChunk>, String)>>();
+    let provisional = grouped
+        .iter()
+        .map(|(chunks, uri)| authenticated_directory_block(binding(0x51), chunks.clone(), uri))
+        .collect::<Vec<_>>();
+    let references = provisional
+        .iter()
+        .map(|block| V35CodeDirectoryBlockReference::new(block).unwrap())
+        .collect::<Vec<_>>();
+    let (root_bytes, root_identity) = encode_v35_code_directory_root_arrow(
+        &references,
+        "s3://borsuk-index/generations/g01/code-directory.arrow",
+    )
+    .unwrap();
+    let root = decode_v35_code_directory_root_arrow(&root_bytes, &root_identity).unwrap();
+    let binding = V35RemoteDirectoryBinding::new(
+        digest_bytes(&root_identity.digest),
+        [0x61; 32],
+        snapshot_digest,
+        v35_remote_code_schema_digest(),
+    )
+    .unwrap();
+    let blocks = grouped
+        .into_iter()
+        .map(|(chunks, uri)| authenticated_directory_block(binding, chunks, &uri))
+        .collect::<Vec<_>>();
+    assert!(blocks.iter().all(|block| root.authenticates(block)));
+    DirectoryFixture {
+        binding,
+        blocks,
+        root,
+    }
 }
 
 enum ReadStep {
@@ -457,16 +467,8 @@ fn planned_execution() -> borsuk::V35RemotePlan {
 }
 
 fn planned_execution_with_snapshot(snapshot_digest: [u8; 32]) -> borsuk::V35RemotePlan {
-    let blocks = directory_blocks_with_snapshot(snapshot_digest);
-    let identities = blocks
-        .iter()
-        .map(|block| block.identity().clone())
-        .collect::<Vec<_>>();
-    plan_v35_remote_reads(
-        &selected_route_with_snapshot(&identities, snapshot_digest),
-        &blocks,
-    )
-    .unwrap()
+    let directory = directory_fixture_with_snapshot(snapshot_digest);
+    plan_v35_remote_reads(&selected_route_with_snapshot(&directory), &directory.blocks).unwrap()
 }
 
 fn response(range: &V35RemoteRange, body: &[u8]) -> V35RemoteRangeResponse {
@@ -613,12 +615,8 @@ fn v35_remote_plan_reads_only_selected_authenticated_ranges() {
     // Break caught: planning downloads a whole code object, includes an
     // unselected group, or fails to preserve independently authenticated
     // chunk boundaries while coalescing adjacent ranges.
-    let blocks = directory_blocks();
-    let identities = blocks
-        .iter()
-        .map(|block| block.identity().clone())
-        .collect::<Vec<_>>();
-    let plan = plan_v35_remote_reads(&selected_route(&identities), &blocks).unwrap();
+    let directory = directory_fixture();
+    let plan = plan_v35_remote_reads(&selected_route(&directory), &directory.blocks).unwrap();
     assert_eq!(plan.ranges().len(), 2);
     assert_eq!(
         plan.ranges()
@@ -655,7 +653,7 @@ fn v35_remote_plan_reads_only_selected_authenticated_ranges() {
     assert_eq!(plan.maximum_decoded_chunk_bytes(), 2 * MIB);
     assert_eq!(plan.maximum_query_workspace_bytes(), 32 * MIB);
     assert_eq!(plan.maximum_retries(), 2);
-    assert_eq!(plan.directory_binding(), binding(0x51));
+    assert_eq!(plan.directory_binding(), directory.binding);
     assert_ne!(plan.query_digest(), [0; 32]);
     assert!(
         plan.ranges()
@@ -717,12 +715,9 @@ fn v35_remote_plan_rejects_capability_and_memory_escape_hatches() {
     // Break caught: an object outside the selected prefix, an endpoint/corpus
     // path, or an oversized buffer reaches the range reader and turns
     // selective S3 search into corpus download/RAM use.
-    let mut baseline = directory_blocks();
-    let identities = baseline
-        .iter()
-        .map(|block| block.identity().clone())
-        .collect::<Vec<_>>();
-    let route = selected_route(&identities);
+    let directory = directory_fixture();
+    let mut baseline = directory.blocks.clone();
+    let route = selected_route(&directory);
 
     let mut unselected_only = baseline.clone();
     unselected_only.remove(1);
@@ -808,12 +803,9 @@ fn v35_remote_plan_rejects_generation_snapshot_and_directory_confusion() {
     // Break caught: an authentic route prefix is reused with another
     // generation's directory block or snapshot before any selected byte is
     // authorized.
-    let blocks = directory_blocks();
-    let identities = blocks
-        .iter()
-        .map(|block| block.identity().clone())
-        .collect::<Vec<_>>();
-    let route = selected_route(&identities);
+    let directory = directory_fixture();
+    let route = selected_route(&directory);
+    let blocks = directory.blocks;
     for position in 0..3 {
         let mut foreign = blocks.clone();
         let uri = foreign[position].identity().uri.clone();
@@ -987,8 +979,6 @@ fn code_scan_fixture_with_page_root(page_directory_root_digest: [u8; 32]) -> Cod
         V35SnapshotEntry::new(900, 1, false).unwrap(),
     ])
     .unwrap();
-    let code_binding =
-        binding_with_snapshot_and_page(0x51, visibility.digest(), page_directory_root_digest);
     let rows = vec![
         V35RemoteCodeRow::new(91, 10, 1, 2, Some(3)).unwrap(),
         V35RemoteCodeRow::new(3, 11, 1, 4, None).unwrap(),
@@ -1015,11 +1005,24 @@ fn code_scan_fixture_with_page_root(page_directory_root_digest: [u8; 32]) -> Cod
         sha256(&body),
     )
     .unwrap();
-    let block = authenticated_directory_block(
-        code_binding,
-        vec![chunk],
-        "s3://borsuk-index/generations/g01/directory/group-0000.arrow",
-    );
+    let block_uri = "s3://borsuk-index/generations/g01/directory/group-0000.arrow";
+    let provisional_block = authenticated_directory_block(binding(0x51), vec![chunk], block_uri);
+    let reference = V35CodeDirectoryBlockReference::new(&provisional_block).unwrap();
+    let (root_bytes, root_identity) = encode_v35_code_directory_root_arrow(
+        &[reference],
+        "s3://borsuk-index/generations/g01/code-directory.arrow",
+    )
+    .unwrap();
+    let root = decode_v35_code_directory_root_arrow(&root_bytes, &root_identity).unwrap();
+    let code_binding = V35RemoteDirectoryBinding::new(
+        digest_bytes(&root_identity.digest),
+        page_directory_root_digest,
+        visibility.digest(),
+        v35_remote_code_schema_digest(),
+    )
+    .unwrap();
+    let block =
+        authenticated_directory_block(code_binding, provisional_block.chunks().to_vec(), block_uri);
     let generation = build_v35_routing_generation(
         &projection,
         "deep-image",
@@ -1046,8 +1049,7 @@ fn code_scan_fixture_with_page_root(page_directory_root_digest: [u8; 32]) -> Cod
         .map(|dimension| ((dimension * 11) % 97) as f32 / 23.0 - 2.0)
         .collect::<Vec<_>>();
     let query = project_v35_query_scalar(&projection, &source_query).unwrap();
-    let group = V35GroupStorage::new_bound(0, 3, body.len() as u64, code_binding, block.identity())
-        .unwrap();
+    let group = root.bind_groups(code_binding).unwrap().remove(0);
     let route = exhaustive_v35_route(
         &generation,
         &query,
