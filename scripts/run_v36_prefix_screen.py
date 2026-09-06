@@ -15,6 +15,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 from typing import Any
@@ -57,6 +58,9 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _GIT = re.compile(r"[0-9a-f]{40}\Z")
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _INSTANCE_ID = re.compile(r"i-[A-Za-z0-9-]+\Z")
+V36_DATASET_AUTHORITY_SHA256 = (
+    "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1"
+)
 _COMPLETE_OUTPUT_ROLES = {
     "freeze-receipt",
     "population-authority",
@@ -204,6 +208,199 @@ def canonical_json_bytes(value: object) -> bytes:
         ).encode()
         + b"\n"
     )
+
+
+def derive_v36_prefix_screen_inputs(
+    dataset_authority_bytes: bytes,
+) -> tuple[bytes, bytes]:
+    """Derive the bounded screen authority and registry from frozen evidence."""
+
+    if hashlib.sha256(dataset_authority_bytes).hexdigest() != V36_DATASET_AUTHORITY_SHA256:
+        raise ValueError("V36 prefix-screen dataset authority differs")
+    try:
+        dataset = json.loads(dataset_authority_bytes)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("V36 prefix-screen dataset authority differs") from error
+    if (
+        type(dataset) is not dict
+        or canonical_json_bytes(dataset) != dataset_authority_bytes
+        or set(dataset)
+        != {
+            "claim_eligible",
+            "execution_authority",
+            "materialization",
+            "membership",
+            "observed_at_utc",
+            "schema",
+            "source",
+        }
+        or dataset.get("claim_eligible") is not False
+        or dataset.get("schema") != "borsuk-v36-funnel-dataset-authority-v1"
+        or type(dataset.get("source")) is not dict
+    ):
+        raise ValueError("V36 prefix-screen dataset authority differs")
+    source = dataset["source"]
+    if set(source) != {
+        "dataset_info",
+        "license",
+        "ordered_shard_manifest",
+        "physical_schema",
+        "readme",
+        "repository",
+        "revision",
+        "revision_uri",
+        "shard_missing_numeric_ordinals",
+        "shards",
+        "source_identity_encoding",
+        "source_identity_sha256",
+    } or type(source.get("ordered_shard_manifest")) is not dict:
+        raise ValueError("V36 prefix-screen dataset authority differs")
+    manifest = source["ordered_shard_manifest"]
+    shards = source.get("shards")
+    if (
+        source.get("repository") != "andropar/relaion2b-natural-embeddings"
+        or source.get("revision")
+        != "bfc7465dcf1245bd605d35dcaf5d2177bbc2025a"
+        or source.get("source_identity_sha256") != manifest.get("sha256")
+        or set(manifest)
+        != {"canonical_record", "encoded_bytes", "order", "sha256", "shards"}
+        or manifest.get("canonical_record")
+        != "utf8(path) || 0x09 || lowercase_sha256 || 0x09 || decimal_encoded_bytes || 0x0a"
+        or manifest.get("order") != "ascending UTF-8 path bytes"
+        or type(shards) is not list
+        or type(manifest.get("shards")) is not int
+        or manifest["shards"] != len(shards)
+        or type(manifest.get("encoded_bytes")) is not int
+        or type(manifest.get("sha256")) is not str
+        or _SHA256.fullmatch(manifest["sha256"]) is None
+    ):
+        raise ValueError("V36 prefix-screen dataset authority differs")
+    digest = hashlib.sha256()
+    total_bytes = 0
+    previous_path: bytes | None = None
+    registry: list[dict[str, object]] = []
+    for shard in shards:
+        if (
+            type(shard) is not dict
+            or set(shard) != {"encoded_bytes", "path", "sha256", "uri"}
+            or type(shard.get("encoded_bytes")) is not int
+            or shard["encoded_bytes"] <= 0
+            or type(shard.get("path")) is not str
+            or type(shard.get("sha256")) is not str
+            or _SHA256.fullmatch(shard["sha256"]) is None
+            or type(shard.get("uri")) is not str
+            or shard["uri"]
+            != (
+                "https://huggingface.co/datasets/"
+                "andropar/relaion2b-natural-embeddings/resolve/"
+                f"{source['revision']}/{shard['path']}"
+            )
+        ):
+            raise ValueError("V36 prefix-screen dataset authority differs")
+        path = shard["path"].encode()
+        if previous_path is not None and previous_path >= path:
+            raise ValueError("V36 prefix-screen dataset authority differs")
+        previous_path = path
+        total_bytes += shard["encoded_bytes"]
+        digest.update(
+            f"{shard['path']}\t{shard['sha256']}\t{shard['encoded_bytes']}\n".encode()
+        )
+        registry.append(dict(shard))
+    if (
+        total_bytes != manifest["encoded_bytes"]
+        or digest.hexdigest() != manifest["sha256"]
+    ):
+        raise ValueError("V36 prefix-screen dataset authority differs")
+    role_specs = (
+        ("development", 1_000),
+        ("validation", 1_000),
+        ("sealed-holdout", 1_000),
+        ("performance", 10_000),
+    )
+    roles = []
+    for role, rows in role_specs:
+        seed_label = f"borsuk-v36-prefix-screen-{role}-query-v1"
+        roles.append(
+            {
+                "role": role,
+                "rows": rows,
+                "seed_label": seed_label,
+                "seed_sha256": hashlib.sha256(seed_label.encode()).hexdigest(),
+            }
+        )
+    authority = {
+        "claim_eligible": False,
+        "construction_capability": "named-query-excluded-corpus-only-no-query-truth",
+        "corpus_rows": 1_000_000,
+        "distinct_candidates": 1_100_000,
+        "duplicate_rule": "first-selected-object-ordinal-then-row-offset",
+        "evaluation_capability": "named-artifacts-only-no-source-list-discovery",
+        "invalid_row_policy": "reject-complete-source-revision",
+        "object_cap": 16,
+        "object_sampling_algorithm": (
+            "sha256-borsuk-v36-screen-object-v1-path-utf8-length-le-u64-then-path"
+        ),
+        "ordered_source_manifest_sha256": manifest["sha256"],
+        "registry_encoded_bytes": total_bytes,
+        "registry_objects": len(registry),
+        "roles": roles,
+        "schema": "borsuk-v36-prefix-freeze-authority-v1",
+        "source_byte_cap": 6 * 1_024**3,
+        "source_revision": source["revision"],
+        "workspace_bytes": 32 * 1_024**2,
+        "workspace_count": 16,
+    }
+    return canonical_json_bytes(authority), canonical_json_bytes(registry)
+
+
+def _write_immutable_local_bytes(path: pathlib.Path, payload: bytes) -> None:
+    """Create one local artifact atomically or accept its identical bytes."""
+
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != payload:
+            raise ValueError("V36 prefix-screen local output differs")
+        return
+    if not path.parent.is_dir():
+        raise ValueError("V36 prefix-screen local output parent differs")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if not path.is_file() or path.read_bytes() != payload:
+                raise ValueError("V36 prefix-screen local output differs") from None
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_v36_prefix_screen_inputs(
+    dataset_authority_path: pathlib.Path,
+    authority_output_path: pathlib.Path,
+    registry_output_path: pathlib.Path,
+) -> None:
+    """Write the two exact derived inputs without replacing conflicting files."""
+
+    paths = (dataset_authority_path, authority_output_path, registry_output_path)
+    if len({path.resolve() for path in paths}) != len(paths):
+        raise ValueError("V36 prefix-screen local output differs")
+    authority_bytes, registry_bytes = derive_v36_prefix_screen_inputs(
+        dataset_authority_path.read_bytes()
+    )
+    for path, payload in (
+        (authority_output_path, authority_bytes),
+        (registry_output_path, registry_bytes),
+    ):
+        if path.exists() and (not path.is_file() or path.read_bytes() != payload):
+            raise ValueError("V36 prefix-screen local output differs")
+    _write_immutable_local_bytes(authority_output_path, authority_bytes)
+    _write_immutable_local_bytes(registry_output_path, registry_bytes)
 
 
 def _read_s3_bytes(
@@ -2151,6 +2348,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--execute-prefix-screen", action="store_true")
     mode.add_argument("--publish-checkpoints", action="store_true")
     mode.add_argument("--materialize-resume", action="store_true")
+    mode.add_argument("--derive-prefix-inputs", action="store_true")
     parser.add_argument("--plan-json")
     parser.add_argument("--launch-nonce")
     parser.add_argument("--checkpoint-outbox")
@@ -2158,7 +2356,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--first-generation", type=int)
     parser.add_argument("--execution-authority")
     parser.add_argument("--resume-directory")
+    parser.add_argument("--dataset-authority")
+    parser.add_argument("--authority-output")
+    parser.add_argument("--registry-output")
     arguments = parser.parse_args(argv)
+    if arguments.derive_prefix_inputs:
+        if (
+            arguments.dataset_authority is None
+            or arguments.authority_output is None
+            or arguments.registry_output is None
+            or arguments.plan_json is not None
+            or arguments.launch_nonce is not None
+            or arguments.checkpoint_outbox is not None
+            or arguments.producer_pid is not None
+            or arguments.first_generation is not None
+            or arguments.execution_authority is not None
+            or arguments.resume_directory is not None
+        ):
+            parser.error("V36 prefix-screen derivation arguments differ")
+        write_v36_prefix_screen_inputs(
+            pathlib.Path(arguments.dataset_authority),
+            pathlib.Path(arguments.authority_output),
+            pathlib.Path(arguments.registry_output),
+        )
+        return 0
     if arguments.publish_checkpoints:
         if (
             arguments.plan_json is not None
@@ -2168,6 +2389,9 @@ def main(argv: list[str] | None = None) -> int:
             or arguments.first_generation is None
             or arguments.execution_authority is not None
             or arguments.resume_directory is not None
+            or arguments.dataset_authority is not None
+            or arguments.authority_output is not None
+            or arguments.registry_output is not None
         ):
             parser.error("V36 checkpoint sidecar arguments differ")
         watch_v36_checkpoint_outbox(
@@ -2186,6 +2410,9 @@ def main(argv: list[str] | None = None) -> int:
             or arguments.first_generation is not None
             or arguments.execution_authority is None
             or arguments.resume_directory is None
+            or arguments.dataset_authority is not None
+            or arguments.authority_output is not None
+            or arguments.registry_output is not None
         ):
             parser.error("V36 checkpoint resume arguments differ")
         prepare_v36_checkpoint_resume(
@@ -2201,6 +2428,9 @@ def main(argv: list[str] | None = None) -> int:
         or arguments.first_generation is not None
         or arguments.execution_authority is not None
         or arguments.resume_directory is not None
+        or arguments.dataset_authority is not None
+        or arguments.authority_output is not None
+        or arguments.registry_output is not None
     ):
         parser.error("V36 prefix-screen dry-run arguments differ")
     try:

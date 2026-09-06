@@ -201,6 +201,127 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         )
         self.assertIn("ensure_ascii=False", subject._GUEST_TERMINAL_PROGRAM)
 
+    def test_v36_prefix_screen_inputs_derive_from_frozen_dataset_authority(self) -> None:
+        source = pathlib.Path(
+            "docs/research/v36-funnel-dataset-authority.json"
+        ).read_bytes()
+        authority_bytes, registry_bytes = subject.derive_v36_prefix_screen_inputs(
+            source
+        )
+        authority = json.loads(authority_bytes)
+        registry = json.loads(registry_bytes)
+        self.assertEqual(authority_bytes, subject.canonical_json_bytes(authority))
+        self.assertEqual(registry_bytes, subject.canonical_json_bytes(registry))
+        self.assertEqual(authority["schema"], "borsuk-v36-prefix-freeze-authority-v1")
+        self.assertEqual(authority["registry_objects"], 2_298)
+        self.assertEqual(authority["registry_encoded_bytes"], 787_439_811_692)
+        self.assertEqual(len(registry), 2_298)
+        self.assertEqual(
+            authority["ordered_source_manifest_sha256"],
+            "76ac61cf2821a331419ad40d5eb94d2cdafccccf39af17af1d328b7a2f0bc6c7",
+        )
+        self.assertEqual(
+            [role["seed_label"] for role in authority["roles"]],
+            [
+                "borsuk-v36-prefix-screen-development-query-v1",
+                "borsuk-v36-prefix-screen-validation-query-v1",
+                "borsuk-v36-prefix-screen-sealed-holdout-query-v1",
+                "borsuk-v36-prefix-screen-performance-query-v1",
+            ],
+        )
+
+        changed = json.loads(source)
+        changed["source"]["ordered_shard_manifest"]["sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "dataset authority differs"):
+            subject.derive_v36_prefix_screen_inputs(
+                subject.canonical_json_bytes(changed)
+            )
+
+        changed = json.loads(source)
+        changed["observed_at_utc"] = "2099-01-01T00:00:00Z"
+        with self.assertRaisesRegex(ValueError, "dataset authority differs"):
+            subject.derive_v36_prefix_screen_inputs(
+                subject.canonical_json_bytes(changed)
+            )
+
+        for mutate in (
+            lambda value: value["source"]["shards"].__setitem__(
+                0, {**value["source"]["shards"][0], "encoded_bytes": True}
+            ),
+            lambda value: value["source"]["shards"].__setitem__(
+                slice(0, 2), reversed(value["source"]["shards"][:2])
+            ),
+            lambda value: value["source"]["shards"][0].__setitem__(
+                "uri", "https://example.invalid/shard.parquet"
+            ),
+        ):
+            changed = json.loads(source)
+            mutate(changed)
+            with self.assertRaisesRegex(ValueError, "dataset authority differs"):
+                subject.derive_v36_prefix_screen_inputs(
+                    subject.canonical_json_bytes(changed)
+                )
+
+    def test_v36_prefix_screen_inputs_cli_writes_exact_immutable_files(self) -> None:
+        source = pathlib.Path(
+            "docs/research/v36-funnel-dataset-authority.json"
+        ).read_bytes()
+        expected_authority, expected_registry = (
+            subject.derive_v36_prefix_screen_inputs(source)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source_path = root / "dataset.json"
+            authority_path = root / "authority.json"
+            registry_path = root / "registry.json"
+            source_path.write_bytes(source)
+            self.assertEqual(
+                subject.main(
+                    [
+                        "--derive-prefix-inputs",
+                        "--dataset-authority",
+                        str(source_path),
+                        "--authority-output",
+                        str(authority_path),
+                        "--registry-output",
+                        str(registry_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(authority_path.read_bytes(), expected_authority)
+            self.assertEqual(registry_path.read_bytes(), expected_registry)
+
+            # Exact repeats are idempotent, but a conflicting output is never
+            # overwritten by a preparation rerun.
+            self.assertEqual(
+                subject.main(
+                    [
+                        "--derive-prefix-inputs",
+                        "--dataset-authority",
+                        str(source_path),
+                        "--authority-output",
+                        str(authority_path),
+                        "--registry-output",
+                        str(registry_path),
+                    ]
+                ),
+                0,
+            )
+            authority_path.write_bytes(b"conflict\n")
+            with self.assertRaisesRegex(ValueError, "local output differs"):
+                subject.main(
+                    [
+                        "--derive-prefix-inputs",
+                        "--dataset-authority",
+                        str(source_path),
+                        "--authority-output",
+                        str(authority_path),
+                        "--registry-output",
+                        str(registry_path),
+                    ]
+                )
+
     def test_v36_prefix_screen_specs_close_cost_disk_and_checkpoint_bounds(self) -> None:
         # Break caught: launch user-data widens source/cost/disk limits, omits
         # authenticated checkpoints, or acquires a persistent/devbox corpus.

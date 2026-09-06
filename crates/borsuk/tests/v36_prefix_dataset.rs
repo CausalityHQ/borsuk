@@ -34,6 +34,26 @@ use sha2::{Digest, Sha256};
 
 const DIMENSIONS: usize = 768;
 
+#[test]
+fn v36_prefix_dataset_accepts_python_derived_frozen_inputs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/research");
+    let authority_bytes = fs::read(root.join("v36-prefix-screen-authority.json")).unwrap();
+    let registry_bytes = fs::read(root.join("v36-prefix-source-registry.json")).unwrap();
+    let authority: V36PrefixFreezeAuthority = serde_json::from_slice(&authority_bytes).unwrap();
+    let registry: Vec<V36PrefixRegisteredSourceObject> =
+        serde_json::from_slice(&registry_bytes).unwrap();
+
+    validate_v36_prefix_freeze_authority(&authority, &registry).unwrap();
+    assert_eq!(
+        canonical_v36_prefix_freeze_authority_bytes(&authority, &registry).unwrap(),
+        authority_bytes
+    );
+    assert_eq!(
+        canonical_v36_prefix_source_registry_bytes(&authority, &registry).unwrap(),
+        registry_bytes
+    );
+}
+
 fn vector(axis: usize, value: f32) -> Vec<f32> {
     let mut vector = vec![0.0; DIMENSIONS];
     vector[0] = 1.0;

@@ -120,6 +120,7 @@
 - Create: `scripts/run_v36_prefix_screen.py`
 - Create: `scripts/test_run_v36_prefix_screen.py`
 - Create: `docs/research/v36-prefix-screen-authority.json`
+- Create: `docs/research/v36-prefix-source-registry.json`
 
 **Interfaces:**
 - Produces strict source/query/GT Parquet, source-ordinal mapping, and a canonical population receipt.
@@ -130,7 +131,7 @@
   authenticates; the receipt records every completed object independently of
   whether it contributed a surviving distinct ID.
 
-- [ ] **Step 1: Write dataset and GT REDs**
+- [x] **Step 1: Write dataset and GT REDs**
 
   Test object selection by registered hash then path, and first occurrence by
   `(selected_object_ordinal,row_offset)`, nonnegative u64 feature
@@ -146,7 +147,7 @@
   and centered spectrum retained-energy fractions for comparison with the
   later globally selected 1M population.
 
-- [ ] **Step 2: Write launcher and lifecycle REDs**
+- [x] **Step 2: Write launcher and lifecycle REDs**
 
   Require `causality`, Spot, three registered `eu-central-1` AZ candidates,
   encrypted ephemeral NVMe, the 16-object/6-GiB source cap, $3/hour Spot and
@@ -167,7 +168,7 @@
   Require a non-mutating `--dry-run` that prints exact object/byte/disk/wall/
   attempt/cost caps and creates no instance, bucket object, or local corpus.
 
-- [ ] **Step 3: Run focused REDs**
+- [x] **Step 3: Run focused REDs**
 
   Run the Rust test, then:
 

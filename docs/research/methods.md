@@ -343,6 +343,28 @@ frozen in
 [`v36-funnel-dataset-authority.json`](v36-funnel-dataset-authority.json).
 Historical V35 results remain causal context only.
 
+The bounded prefix freezer derives its two cross-language inputs only from the
+exact canonical dataset authority (SHA-256
+`0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1`,
+737,337 bytes). The derived
+[`v36-prefix-screen-authority.json`](v36-prefix-screen-authority.json) is
+SHA-256
+`4c4ef577ccfab2945f13f0cab45606c5b8a296e937b914240d71a4224f3b02db`
+and 1,532 bytes. The complete derived
+[`v36-prefix-source-registry.json`](v36-prefix-source-registry.json) is SHA-256
+`b9a19e2f142fd54983ed1db9f09862f2c5623b6b2105d66e538664f8adda9180`
+and 726,170 bytes. Both are compact recursively sorted UTF-8 JSON with exactly
+one trailing LF; the Rust freezer authenticates and reserializes both before
+any source acquisition. Reproduce them offline with:
+
+```bash
+python3 scripts/run_v36_prefix_screen.py \
+  --derive-prefix-inputs \
+  --dataset-authority docs/research/v36-funnel-dataset-authority.json \
+  --authority-output docs/research/v36-prefix-screen-authority.json \
+  --registry-output docs/research/v36-prefix-source-registry.json
+```
+
 The immutable source identity is the SHA-256 of the ordered per-shard
 `path<TAB>sha256<TAB>encoded_bytes<LF>` records. Query roles independently rank
 rows by `SHA-256(role_seed || source_identity || LE64(feature_row_id))`, with
