@@ -331,6 +331,13 @@ to the lower bucket; the key is their most-significant-bit-first Morton
 interleave. Bounded S3 scratch runs store
 `(key,source_ordinal,projected_row,source_row)` and merge in
 `(key,source_ordinal)` order. Consecutive runs of at most 256 rows form leaves.
+The source pass consumes exact-digest-bound Parquet shards with one canonical
+manifest and four non-null columns: `source_ordinal:u64`, `id:u64`,
+`sequence:u64`, and `source:fixed-size-list<f32,D>`. A shard contains at most
+8,192 contiguous source ordinals and is rejected from footer metadata before
+decode when compressed bytes plus the decoded Arrow batch plus owned source
+rows plus a 1-MiB decoder envelope can exceed 64 MiB. No projected column or
+alternate schema is accepted.
 Consecutive leaves form storage groups targeting 349,526 through 524,288 code
 bytes after descriptor/envelope charges. The lower bound is
 `ceil(8 MiB / 24)` and applies to every nonterminal group; only the final group

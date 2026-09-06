@@ -17,6 +17,8 @@ use arrow_ipc::{
     writer::{FileWriter, IpcWriteOptions},
 };
 use arrow_schema::{DataType, Field, Schema};
+use bytes::Bytes;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -35,6 +37,10 @@ const MAX_BUILD_RUN_BATCH_ROWS: usize = 256;
 const MAX_BUILDER_BYTES: u64 = 64 * 1_048_576;
 const BUILD_RUN_FILE_OVERHEAD_BYTES: usize = 64 * 1024;
 const BUILD_RUN_BATCH_OVERHEAD_BYTES: usize = 16 * 1024;
+const SOURCE_BLOCK_FORMAT: &str = "borsuk-v35-source-block-parquet-v1";
+const SOURCE_BLOCK_METADATA_KEY: &str = "borsuk.v35.source-block.manifest";
+const MAX_SOURCE_BLOCK_ROWS: usize = 8_192;
+const SOURCE_BLOCK_DECODE_ENVELOPE_BYTES: usize = 1_048_576;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -152,6 +158,40 @@ fn validate_projection_authority(
         return Err(invalid("V35 build projection authority differs"));
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35SourceBlockManifest {
+    first_source_ordinal: u64,
+    format: String,
+    rows: u32,
+    source_archive_sha256: String,
+    source_dimensions: u32,
+    source_id: String,
+}
+
+fn source_block_schema(manifest: &V35SourceBlockManifest) -> Result<Arc<Schema>> {
+    let source_dimensions = i32::try_from(manifest.source_dimensions)
+        .map_err(|_| invalid("V35 source dimensions overflow"))?;
+    let manifest_json = serde_json::to_string(manifest)
+        .map_err(|_| invalid("V35 source block manifest cannot be serialized"))?;
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new("id", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new(
+                "source",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    source_dimensions,
+                ),
+                false,
+            ),
+        ],
+        HashMap::from([(SOURCE_BLOCK_METADATA_KEY.to_owned(), manifest_json)]),
+    )))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -479,6 +519,145 @@ impl V35BuildBlock {
         }
         Ok(memory.peak_live_bytes)
     }
+}
+
+/// Authenticate and decode one bounded cross-language Parquet source shard.
+pub fn decode_v35_source_block_parquet(
+    bytes: Bytes,
+    registered: &V35ArtifactIdentity,
+    authority: &V35BuildAuthority,
+    dimensions: crate::V35Dimensions,
+) -> Result<V35BuildBlock> {
+    validate_build_authority(authority)?;
+    let encoded_bytes = bytes.len();
+    if registered.role != "build-source-block"
+        || registered.digest_algorithm != "sha256"
+        || registered.length != bytes.len() as u64
+        || registered.digest != format!("{:x}", Sha256::digest(&bytes))
+        || !registered.uri.starts_with("s3://")
+        || !registered.uri.ends_with(".parquet")
+    {
+        return Err(invalid("V35 source block identity differs"));
+    }
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+    let schema = builder.schema();
+    let manifest_json = schema
+        .metadata()
+        .get(SOURCE_BLOCK_METADATA_KEY)
+        .ok_or_else(|| invalid("V35 source block manifest is missing"))?;
+    let manifest: V35SourceBlockManifest = serde_json::from_str(manifest_json)
+        .map_err(|_| invalid("V35 source block manifest differs"))?;
+    let rows =
+        usize::try_from(manifest.rows).map_err(|_| invalid("V35 source block rows overflow"))?;
+    let source_dimensions = usize::try_from(dimensions.source)
+        .map_err(|_| invalid("V35 source dimensions overflow"))?;
+    let decoded_peak_bytes = rows
+        .checked_mul(source_dimensions)
+        .and_then(|values| values.checked_mul(size_of::<f32>()))
+        .and_then(|values| values.checked_mul(2))
+        .and_then(|values| values.checked_add(rows.checked_mul(size_of::<V35BuildRow>())?))
+        .and_then(|values| values.checked_add(rows.checked_mul(3 * size_of::<u64>())?))
+        .and_then(|values| values.checked_add(encoded_bytes))
+        .and_then(|values| values.checked_add(SOURCE_BLOCK_DECODE_ENVELOPE_BYTES))
+        .and_then(|values| u64::try_from(values).ok())
+        .ok_or_else(|| invalid("V35 source block memory projection overflow"))?;
+    if schema.metadata().len() != 1
+        || serde_json::to_string(&manifest)
+            .map_err(|_| invalid("V35 source block manifest cannot be serialized"))?
+            != *manifest_json
+        || manifest.format != SOURCE_BLOCK_FORMAT
+        || manifest.source_id != authority.source_id
+        || manifest.source_archive_sha256 != authority.source_archive_sha256
+        || manifest.source_dimensions != dimensions.source
+        || rows == 0
+        || rows > MAX_SOURCE_BLOCK_ROWS
+        || decoded_peak_bytes > MAX_BUILDER_BYTES
+        || builder.metadata().file_metadata().num_rows() != i64::from(manifest.rows)
+        || schema.as_ref() != source_block_schema(&manifest)?.as_ref()
+        || manifest
+            .first_source_ordinal
+            .checked_add(u64::from(manifest.rows))
+            .is_none()
+    {
+        return Err(invalid("V35 source block authority differs"));
+    }
+    let mut reader = builder.with_batch_size(MAX_SOURCE_BLOCK_ROWS).build()?;
+    let mut decoded = Vec::with_capacity(rows);
+    let mut next_source_ordinal = manifest.first_source_ordinal;
+    for batch in &mut reader {
+        let batch = batch?;
+        if batch.num_rows() == 0
+            || batch.num_columns() != 4
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V35 source block batch differs"));
+        }
+        let source_ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V35 source ordinal column differs"))?;
+        let ids = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V35 source ID column differs"))?;
+        let sequences = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V35 source sequence column differs"))?;
+        let sources = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V35 source vector column differs"))?;
+        let source_values = sources
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V35 source vector values differ"))?;
+        if sources.value_length() != i32::try_from(dimensions.source).unwrap_or(i32::MAX)
+            || source_values.null_count() != 0
+        {
+            return Err(invalid("V35 source vector authority differs"));
+        }
+        for row in 0..batch.num_rows() {
+            if source_ordinals.value(row) != next_source_ordinal {
+                return Err(invalid("V35 source ordinal order differs"));
+            }
+            let start = row
+                .checked_mul(source_dimensions)
+                .ok_or_else(|| invalid("V35 source vector offset overflow"))?;
+            let end = start
+                .checked_add(source_dimensions)
+                .ok_or_else(|| invalid("V35 source vector offset overflow"))?;
+            let source = source_values
+                .values()
+                .get(start..end)
+                .ok_or_else(|| invalid("V35 source vector length differs"))?
+                .to_vec();
+            decoded.push(V35BuildRow::new(
+                next_source_ordinal,
+                ids.value(row),
+                sequences.value(row),
+                source,
+            )?);
+            next_source_ordinal = next_source_ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V35 source ordinal overflows"))?;
+        }
+        if decoded.len() > rows {
+            return Err(invalid("V35 source block rows differ"));
+        }
+    }
+    if decoded.len() != rows {
+        return Err(invalid("V35 source block rows differ"));
+    }
+    V35BuildBlock::new(decoded)
 }
 
 /// Ordered source-block capability without query, truth, listing, or random access.

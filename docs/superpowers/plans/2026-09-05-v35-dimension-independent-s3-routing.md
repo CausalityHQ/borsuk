@@ -249,6 +249,15 @@
 
   Use a reader that panics if more than two registered blocks are alive. Source blocks expose only source ordinal, ID, sequence, and the full-dimensional f32 vector; projected coordinates are not a caller input. Require the builder to bind the authenticated projection checksum and derive projected rows internally through the fused SIMD kernel. Require deterministic outputs across block sizes/workers, sample selection of the sixteen highest-variance projected coordinates with coordinate ties, 255 f64 quantile boundaries per selected coordinate, equality-to-lower-bucket, and a 128-bit most-significant-bit-first Morton interleave. Require `(key,source ordinal)` ordering, at-most-256-row leaves, and storage groups capped by both 8-MiB final encoded bytes and 64-MiB live builder bytes including source rows, internally projected rows, IDs, references, moments, and allocator capacity. After all descriptors and envelopes, require every nonterminal group to contain at least `ceil(8 MiB / 24) == 349_526` code bytes and target at most `8 MiB / 16 == 524_288` code bytes; only the terminal group may be smaller. This makes every legal 8-MiB route executable under the hard 24-GET ceiling. Require bounded multi-batch S3 scratch runs with 64-MiB local buffers, exact source ordinals, no query/truth access, no corpus materialization, and complete scratch/final digest/length binding.
 
+  Freeze source blocks as exact-digest-bound Parquet shards with a canonical
+  source/archive/dimension/ordinal/row manifest and exact non-null
+  `source_ordinal:u64`, `id:u64`, `sequence:u64`, and
+  `source:fixed-size-list<f32,D>` columns. Preflight the footer at most 8,192
+  rows and reject before decompression when encoded bytes plus the decoded
+  Arrow batch plus owned source rows plus a 1-MiB decoder envelope can exceed
+  64 MiB. Reject alternate, nullable, reordered, nonfinite, or caller-projected
+  input.
+
 - [ ] **Step 2: Write delta semantics REDs**
 
   Require conditional publication, base-plus-ordered-delta pinning, a complete snapshot mutation directory, `(id,sequence)` latest-wins suppression before heap admission even when the replacement/tombstone route is unselected, four-run/one-million-row admission, checked 32-byte directory entries, reader-safe retirement, and deterministic compaction. Pin one-bit immutable active/retiring base-row liveness planes inside the exact 25,000,000-B cache component; replacement/delete publication changes these planes rather than rewriting full base code or vector pages. Require the same snapshot liveness decision before candidate-heap admission and after exact-page decode; stale rows may charge route work but never enter either result stage. Pin the single 64-MiB delta reservation across all old/new pinned directories, construction copies, hash-table capacity, run metadata, delta leaves, and delta trees; an old-reader publication race must backpressure before allocating an over-budget copy.

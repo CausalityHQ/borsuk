@@ -1,13 +1,18 @@
 //! V35 bounded streaming writer and immutable-delta contracts.
 
+use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ArtifactIdentity, V35BuildAuthority, V35BuildBlock, V35BuildBlockSource,
     V35BuildRow, V35BuildScratchSink, V35Dimensions, V35MortonModel, V35Projection,
-    build_v35_scratch_runs, build_v35_srht, decode_v35_build_run_arrow, open_v35_build_run_cursor,
-    project_v35_query_scalar, train_v35_morton_model,
+    build_v35_scratch_runs, build_v35_srht, decode_v35_build_run_arrow,
+    decode_v35_source_block_parquet, open_v35_build_run_cursor, project_v35_query_scalar,
+    train_v35_morton_model,
 };
+use bytes::Bytes;
+use parquet::arrow::ArrowWriter;
 use sha2::{Digest, Sha256};
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 fn training_rows() -> Vec<Vec<f32>> {
     (0..256)
@@ -40,6 +45,148 @@ fn build_authority(projection: &V35Projection) -> V35BuildAuthority {
         projection.checksum(),
     )
     .unwrap()
+}
+
+fn source_block_parquet(ordinals: Vec<u64>, source_field: Field) -> (V35ArtifactIdentity, Bytes) {
+    let rows = ordinals.len();
+    let manifest = format!(
+        "{{\"first_source_ordinal\":{},\"format\":\"borsuk-v35-source-block-parquet-v1\",\"rows\":{},\"source_archive_sha256\":\"{}\",\"source_dimensions\":384,\"source_id\":\"deep-image-100m\"}}",
+        ordinals[0],
+        rows,
+        "ab".repeat(32),
+    );
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new("id", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            source_field,
+        ],
+        [("borsuk.v35.source-block.manifest".to_owned(), manifest)]
+            .into_iter()
+            .collect(),
+    ));
+    let source_values = ordinals
+        .iter()
+        .flat_map(|ordinal| {
+            (0..384).map(move |dimension| (*ordinal * 17 + dimension) as f32 / 31.0)
+        })
+        .collect::<Vec<_>>();
+    let source = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        384,
+        Arc::new(Float32Array::from(source_values)),
+        None,
+    )
+    .unwrap();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(ordinals.clone())) as ArrayRef,
+            Arc::new(UInt64Array::from(
+                ordinals
+                    .iter()
+                    .map(|ordinal| 10_000 + ordinal)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(vec![1; rows])),
+            Arc::new(source),
+        ],
+    )
+    .unwrap();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let identity = V35ArtifactIdentity {
+        digest: format!("{:x}", Sha256::digest(&bytes)),
+        digest_algorithm: "sha256".to_owned(),
+        length: bytes.len() as u64,
+        role: "build-source-block".to_owned(),
+        uri: "s3://borsuk-source/deep-image-100m/blocks/00000000.parquet".to_owned(),
+    };
+    (identity, Bytes::from(bytes))
+}
+
+fn canonical_source_field() -> Field {
+    Field::new(
+        "source",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            384,
+        ),
+        false,
+    )
+}
+
+#[test]
+fn v35_build_source_parquet_authenticates_and_streams_without_projected_input() {
+    // Break caught: construction trusts caller-projected coordinates or cannot
+    // consume a strict bounded cross-language Parquet source shard.
+    let projection = projection();
+    let authority = build_authority(&projection);
+    let model = train_v35_morton_model(&training_rows(), &projection, authority.clone()).unwrap();
+    let (identity, bytes) = source_block_parquet((0..32).collect(), canonical_source_field());
+    let block =
+        decode_v35_source_block_parquet(bytes, &identity, &authority, projection.dimensions())
+            .unwrap();
+    let mut source = Blocks(VecDeque::from([block]));
+    let mut scratch = Scratch::default();
+    let receipt = build_v35_scratch_runs(&model, &projection, &mut source, &mut scratch).unwrap();
+    assert_eq!(receipt.source_rows(), 32);
+    let (registered, run) = &scratch.writes[0];
+    let mut cursor = open_v35_build_run_cursor(run, registered, &model).unwrap();
+    let batch = cursor.next_batch().unwrap().unwrap();
+    assert_eq!(batch.source(0).unwrap().len(), 384);
+    assert_eq!(batch.projected(0).unwrap().len(), 64);
+}
+
+#[test]
+fn v35_build_source_parquet_rejects_identity_schema_and_order_drift() {
+    // Break caught: a valid source shard can be relabeled, admit nullable or
+    // caller-projected schema, or reorder immutable source ordinals.
+    let projection = projection();
+    let authority = build_authority(&projection);
+    let dimensions = projection.dimensions();
+    let (identity, bytes) = source_block_parquet((0..4).collect(), canonical_source_field());
+    let mut changed_identity = identity.clone();
+    changed_identity.digest = "cd".repeat(32);
+    assert!(
+        decode_v35_source_block_parquet(bytes.clone(), &changed_identity, &authority, dimensions)
+            .is_err()
+    );
+
+    let nullable_source = Field::new(
+        "source",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            384,
+        ),
+        true,
+    );
+    let (nullable_identity, nullable_bytes) =
+        source_block_parquet((0..4).collect(), nullable_source);
+    assert!(
+        decode_v35_source_block_parquet(
+            nullable_bytes,
+            &nullable_identity,
+            &authority,
+            dimensions,
+        )
+        .is_err()
+    );
+
+    let (reordered_identity, reordered_bytes) =
+        source_block_parquet(vec![0, 2, 1, 3], canonical_source_field());
+    assert!(
+        decode_v35_source_block_parquet(
+            reordered_bytes,
+            &reordered_identity,
+            &authority,
+            dimensions,
+        )
+        .is_err()
+    );
 }
 
 #[test]
