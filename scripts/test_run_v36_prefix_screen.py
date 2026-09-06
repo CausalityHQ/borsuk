@@ -155,6 +155,32 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             self.assertNotIn("/home/", script)
             self.assertNotIn("devbox", script.lower())
 
+    def test_v36_prefix_screen_runs_bound_sidecar_concurrently_and_fails_fast(self) -> None:
+        # Break caught: checkpoints remain on ephemeral NVMe until Rust exits,
+        # or science keeps running after its only publisher has failed.
+        script = base64.b64decode(
+            subject.build_v36_prefix_launch_specs(
+                self.plan(), launch_nonce="7" * 32, attempt_ordinal=0
+            )[0]["UserData"]
+        ).decode()
+        self.assertIn(
+            'tar --zstd -xf "$root/source.tar.zst" -C "$root/sidecar-source" '
+            "scripts/run_v36_prefix_screen.py",
+            script,
+        )
+        self.assertIn('science_pid=$!', script)
+        self.assertIn('--publish-checkpoints', script)
+        self.assertIn('--producer-pid "$science_pid"', script)
+        self.assertIn('--first-generation 0', script)
+        self.assertIn('sidecar_pid=$!', script)
+        self.assertIn('kill -TERM "$science_pid"', script)
+        self.assertIn('sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py"', script)
+        self.assertIn('put-object --generate-cli-skeleton input', script)
+        self.assertIn(
+            'if [[ "$sidecar_status" != 0 && "$status" != 0 ]]', script
+        )
+        self.assertNotIn("CHECKPOINT.json", script)
+
     def test_v36_prefix_screen_publishes_artifacts_receipt_then_terminal(self) -> None:
         # Break caught: successful science is shut down before its artifacts
         # and authenticated terminal become durable in the attempt prefix.
@@ -655,6 +681,287 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             subject.read_v36_checkpoint_head(
                 S3(), "s3://fixture/checkpoints/runs/v36-prefix-fixture/latest.json"
             )
+
+    def test_v36_checkpoint_sidecar_streams_only_rust_committed_generation(self) -> None:
+        # Break caught: the supervisor recreates scientific JSON, reads a
+        # partial generation, buffers a run in RAM, or publishes the pointer
+        # before its dependency and manifest.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            for child in ("objects", "manifests", "pointers", "commits"):
+                (root / child).mkdir()
+            dependency = b"arrow-identity-run"
+            dependency_sha = hashlib.sha256(dependency).hexdigest()
+            dependency_identity = {
+                "blake3": "b" * 64,
+                "encoded_bytes": len(dependency),
+                "role": "population-identity-run-0000",
+                "sha256": dependency_sha,
+                "uri": f"s3://fixture/checkpoints/objects/{dependency_sha}-run.arrow",
+            }
+            manifest = subject.canonical_json_bytes(
+                {
+                    "generation": 0,
+                    "schema": "borsuk-v36-prefix-freeze-checkpoint-v1",
+                }
+            )
+            manifest_sha = hashlib.sha256(manifest).hexdigest()
+            manifest_identity = {
+                "blake3": "c" * 64,
+                "encoded_bytes": len(manifest),
+                "role": "checkpoint-manifest",
+                "sha256": manifest_sha,
+                "uri": f"s3://fixture/checkpoints/objects/{manifest_sha}-checkpoint.json",
+            }
+            pointer_uri = (
+                "s3://fixture/checkpoints/runs/v36-prefix-screen-fixture/latest.json"
+            )
+            pointer = subject.canonical_json_bytes(
+                {
+                    "claim_eligible": False,
+                    "generation": 0,
+                    "manifest": manifest_identity,
+                    "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
+                    "producer_attempt_ordinal": 0,
+                    "run_id": "v36-prefix-screen-fixture",
+                    "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+                }
+            )
+            pointer_sha = hashlib.sha256(pointer).hexdigest()
+            (root / "objects" / f"{dependency_sha}.blob").write_bytes(dependency)
+            (root / "manifests" / f"{manifest_sha}.json").write_bytes(manifest)
+            (root / "pointers" / f"{pointer_sha}.json").write_bytes(pointer)
+            ready = subject.canonical_json_bytes(
+                {
+                    "dependencies": [dependency_identity],
+                    "generation": 0,
+                    "manifest": manifest_identity,
+                    "pointer_encoded_bytes": len(pointer),
+                    "pointer_sha256": pointer_sha,
+                    "pointer_uri": pointer_uri,
+                    "previous_pointer_sha256": None,
+                    "schema": "borsuk-v36-prefix-checkpoint-outbox-v1",
+                }
+            )
+            (root / "commits" / "generation-00000000.json").write_bytes(ready)
+
+            calls: list[tuple[str, str, str | None]] = []
+
+            class Transport:
+                def put_immutable(
+                    self, identity: dict[str, object], path: pathlib.Path
+                ) -> None:
+                    self.assert_regular(path)
+                    calls.append(("immutable", str(identity["uri"]), path.name))
+
+                def put_pointer(
+                    self,
+                    uri: str,
+                    path: pathlib.Path,
+                    previous_sha256: str | None,
+                ) -> None:
+                    self.assert_regular(path)
+                    calls.append(("pointer", uri, previous_sha256))
+
+                @staticmethod
+                def assert_regular(path: pathlib.Path) -> None:
+                    if not path.is_file() or path.is_symlink():
+                        raise AssertionError("transport received non-file")
+
+            subject.publish_v36_checkpoint_outbox_generation(root, 0, Transport())
+            self.assertEqual(
+                calls,
+                [
+                    ("immutable", dependency_identity["uri"], f"{dependency_sha}.blob"),
+                    ("immutable", manifest_identity["uri"], f"{manifest_sha}.json"),
+                    ("pointer", pointer_uri, None),
+                ],
+            )
+
+            redirected = json.loads(ready)
+            redirected["dependencies"][0]["uri"] = "s3://other/escape.blob"
+            (root / "commits" / "generation-00000000.json").write_bytes(
+                subject.canonical_json_bytes(redirected)
+            )
+            with self.assertRaisesRegex(ValueError, "outbox identity differs"):
+                subject.publish_v36_checkpoint_outbox_generation(root, 0, Transport())
+            (root / "commits" / "generation-00000000.json").write_bytes(ready)
+
+            (root / "objects" / f"{dependency_sha}.blob").write_bytes(b"corrupt")
+            with self.assertRaisesRegex(ValueError, "outbox artifact authority differs"):
+                subject.publish_v36_checkpoint_outbox_generation(root, 0, Transport())
+
+    def test_v36_checkpoint_aws_cli_transport_is_conditional_and_lost_ack_safe(
+        self,
+    ) -> None:
+        # Break caught: the runtime boto model silently lacks conditional PUT,
+        # a replacement is not fenced by the authenticated predecessor, or a
+        # lost acknowledgement causes a blind duplicate pointer write.
+        payload = subject.canonical_json_bytes({"generation": 1})
+        previous = subject.canonical_json_bytes({"generation": 0})
+        identity = {
+            "blake3": "b" * 64,
+            "encoded_bytes": len(payload),
+            "role": "checkpoint-manifest",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "uri": "s3://fixture/checkpoints/objects/manifest.json",
+        }
+
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, ...]] = []
+                self.remote = previous
+
+            def json(self, arguments: list[str]) -> dict[str, object]:
+                self.calls.append(tuple(arguments))
+                if arguments[1:3] == ["s3api", "head-object"]:
+                    return {
+                        "ContentLength": len(self.remote),
+                        "ETag": '"etag-before"',
+                    }
+                if "--key" in arguments and arguments[arguments.index("--key") + 1].endswith(
+                    "latest.json"
+                ):
+                    self.remote = payload
+                    raise TimeoutError("pointer acknowledgement lost")
+                return {"ETag": '"etag-immutable"'}
+
+            def stream(self, arguments: list[str]) -> tuple[bytes, ...]:
+                self.calls.append(tuple(arguments))
+                return (self.remote[:3], self.remote[3:])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory, "payload.json")
+            path.write_bytes(payload)
+            runner = Runner()
+            transport = subject.V36AwsCliCheckpointTransport(runner=runner)
+            transport.put_immutable(identity, path)
+            transport.put_immutable(identity, path)
+            transport.put_pointer(
+                "s3://fixture/checkpoints/runs/run/latest.json",
+                path,
+                hashlib.sha256(previous).hexdigest(),
+            )
+
+        immutable_put, head, current_get, pointer_put, observed_get = runner.calls
+        self.assertIn("--if-none-match", immutable_put)
+        self.assertEqual(
+            immutable_put[immutable_put.index("--if-none-match") + 1], "*"
+        )
+        self.assertEqual(head[1:3], ("s3api", "head-object"))
+        self.assertEqual(current_get[1:3], ("s3", "cp"))
+        self.assertIn("--if-match", pointer_put)
+        self.assertEqual(pointer_put[pointer_put.index("--if-match") + 1], "etag-before")
+        self.assertEqual(observed_get[1:3], ("s3", "cp"))
+
+    def test_v36_checkpoint_aws_runner_is_retry_configured_and_time_bounded(
+        self,
+    ) -> None:
+        # Break caught: a throttled or wedged AWS CLI strands the producer or
+        # consumes an entire controller grace period without bounded retries.
+        runner = subject._AwsCliRunner()
+        with mock.patch.object(
+            subject.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, b"{}\n", b""),
+        ) as run:
+            self.assertEqual(runner.json(["aws", "fixture"]), {})
+        self.assertEqual(run.call_args.kwargs["timeout"], 120)
+        self.assertEqual(run.call_args.kwargs["env"]["AWS_RETRY_MODE"], "standard")
+        self.assertEqual(run.call_args.kwargs["env"]["AWS_MAX_ATTEMPTS"], "5")
+
+        process = mock.Mock(stdout=io.BytesIO(b"payload"))
+        process.wait.return_value = 0
+        with mock.patch.object(subject.subprocess, "Popen", return_value=process) as popen:
+            self.assertEqual(tuple(runner.stream(["aws", "fixture"])), (b"payload",))
+        self.assertEqual(
+            popen.call_args.args[0][:4],
+            ["timeout", "--signal=TERM", "--kill-after=5", "120"],
+        )
+        self.assertEqual(popen.call_args.kwargs["env"]["AWS_MAX_ATTEMPTS"], "5")
+
+    def test_v36_checkpoint_sidecar_watches_every_ready_generation_until_exit(
+        self,
+    ) -> None:
+        # Break caught: a long freeze publishes only its final boundary or the
+        # sidecar exits before draining the last crash-atomic ready descriptor.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "commits").mkdir()
+            for generation in range(2):
+                (root / "commits" / f"generation-{generation:08d}.json").touch()
+            alive = mock.Mock(side_effect=[True, False])
+            with mock.patch.object(
+                subject, "publish_v36_checkpoint_outbox_generation"
+            ) as publish:
+                self.assertEqual(
+                    subject.watch_v36_checkpoint_outbox(
+                        root,
+                        41,
+                        mock.sentinel.transport,
+                        producer_alive=alive,
+                        pause=mock.Mock(),
+                    ),
+                    2,
+                )
+            self.assertEqual(
+                [call.args[1] for call in publish.call_args_list], [0, 1]
+            )
+
+    def test_v36_checkpoint_sidecar_drains_commit_racing_producer_exit(self) -> None:
+        # Break caught: Rust commits its final ready descriptor between the
+        # sidecar's missing-file observation and producer-liveness check.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            commits = root / "commits"
+            commits.mkdir()
+
+            def producer_exits_after_commit(_pid: int) -> bool:
+                (commits / "generation-00000000.json").touch()
+                return False
+
+            with mock.patch.object(
+                subject, "publish_v36_checkpoint_outbox_generation"
+            ) as publish:
+                self.assertEqual(
+                    subject.watch_v36_checkpoint_outbox(
+                        root,
+                        41,
+                        mock.sentinel.transport,
+                        producer_alive=producer_exits_after_commit,
+                        pause=mock.Mock(),
+                    ),
+                    1,
+                )
+            publish.assert_called_once_with(root, 0, mock.sentinel.transport)
+
+    def test_v36_checkpoint_sidecar_cli_has_no_scientific_or_storage_surface(self) -> None:
+        # Break caught: the sidecar can alter science, discover storage, or run
+        # without an explicit local outbox and sole producer PID.
+        with mock.patch.object(
+            subject, "watch_v36_checkpoint_outbox", return_value=2
+        ) as watch:
+            self.assertEqual(
+                subject.main(
+                    [
+                        "--publish-checkpoints",
+                        "--checkpoint-outbox",
+                        "/tmp/outbox",
+                        "--producer-pid",
+                        "41",
+                        "--first-generation",
+                        "7",
+                    ]
+                ),
+                0,
+            )
+        watch.assert_called_once()
+        arguments = watch.call_args.args
+        self.assertEqual(arguments[:2], (pathlib.Path("/tmp/outbox"), 41))
+        self.assertIsInstance(arguments[2], subject.V36AwsCliCheckpointTransport)
+        self.assertEqual(watch.call_args.kwargs, {"first_generation": 7})
+        with self.assertRaises(SystemExit):
+            subject.main(["--publish-checkpoints", "--bucket", "fixture"])
 
 
 if __name__ == "__main__":

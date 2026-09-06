@@ -8,9 +8,11 @@ import base64
 import dataclasses
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shlex
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -28,6 +30,11 @@ TARGET_DISTINCT_ROWS = 1_100_000
 VECTOR_DIMENSIONS = 768
 CHECKPOINT_OBJECTS = 16
 CHECKPOINT_SECONDS = 300
+MAX_CHECKPOINT_DEPENDENCY_BYTES = 256 * 1024**2
+MAX_CHECKPOINT_MANIFEST_BYTES = 8 * 1024**2
+MAX_CHECKPOINT_POINTER_BYTES = 1024**2
+MAX_CHECKPOINT_READY_BYTES = 1024**2
+AWS_CLI_TIMEOUT_SECONDS = 120
 MAX_ATTEMPTS = 3
 SPOT_HOURLY_CAP_MICRO_USD = 3_000_000
 CAMPAIGN_CAP_MICRO_USD = 90_000_000
@@ -367,6 +374,378 @@ def read_v36_checkpoint_head(
     return pointer_bytes, manifest_bytes, etag
 
 
+def _outbox_artifact_identity(value: object) -> dict[str, object]:
+    if (
+        type(value) is not dict
+        or set(value) != {"blake3", "encoded_bytes", "role", "sha256", "uri"}
+        or type(value.get("blake3")) is not str
+        or _SHA256.fullmatch(value["blake3"]) is None
+        or type(value.get("encoded_bytes")) is not int
+        or value["encoded_bytes"] <= 0
+        or type(value.get("role")) is not str
+        or not value["role"]
+        or type(value.get("sha256")) is not str
+        or _SHA256.fullmatch(value["sha256"]) is None
+        or type(value.get("uri")) is not str
+    ):
+        raise ValueError("V36 checkpoint outbox identity differs")
+    _s3(value["uri"])
+    return value
+
+
+def _authenticate_outbox_file(
+    path: pathlib.Path, identity: dict[str, object]
+) -> pathlib.Path:
+    try:
+        stat = path.lstat()
+    except OSError as error:
+        raise ValueError("V36 checkpoint outbox artifact authority differs") from error
+    if not path.is_file() or path.is_symlink() or stat.st_size != identity["encoded_bytes"]:
+        raise ValueError("V36 checkpoint outbox artifact authority differs")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    if digest.hexdigest() != identity["sha256"]:
+        raise ValueError("V36 checkpoint outbox artifact authority differs")
+    return path
+
+
+def publish_v36_checkpoint_outbox_generation(
+    root: pathlib.Path, generation: int, transport: Any
+) -> None:
+    """Stream one Rust-committed generation through a conditional transport."""
+
+    if (
+        not isinstance(root, pathlib.Path)
+        or root.is_symlink()
+        or not root.is_dir()
+        or type(generation) is not int
+        or generation < 0
+    ):
+        raise ValueError("V36 checkpoint outbox root differs")
+    if any(
+        not (root / child).is_dir() or (root / child).is_symlink()
+        for child in ("objects", "manifests", "pointers", "commits")
+    ):
+        raise ValueError("V36 checkpoint outbox root differs")
+    ready_path = root / "commits" / f"generation-{generation:08d}.json"
+    try:
+        if ready_path.stat().st_size > MAX_CHECKPOINT_READY_BYTES:
+            raise ValueError("V36 checkpoint outbox commit differs")
+        ready_bytes = ready_path.read_bytes()
+        ready = json.loads(ready_bytes)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("V36 checkpoint outbox commit differs") from error
+    if (
+        ready_path.is_symlink()
+        or type(ready) is not dict
+        or canonical_json_bytes(ready) != ready_bytes
+        or set(ready)
+        != {
+            "dependencies",
+            "generation",
+            "manifest",
+            "pointer_encoded_bytes",
+            "pointer_sha256",
+            "pointer_uri",
+            "previous_pointer_sha256",
+            "schema",
+        }
+        or ready.get("schema") != "borsuk-v36-prefix-checkpoint-outbox-v1"
+        or ready.get("generation") != generation
+        or type(ready.get("dependencies")) is not list
+        or not ready["dependencies"]
+        or type(ready.get("pointer_encoded_bytes")) is not int
+        or ready["pointer_encoded_bytes"] <= 0
+        or type(ready.get("pointer_sha256")) is not str
+        or _SHA256.fullmatch(ready["pointer_sha256"]) is None
+        or type(ready.get("pointer_uri")) is not str
+        or (
+            generation == 0
+            and ready.get("previous_pointer_sha256") is not None
+        )
+        or (
+            generation > 0
+            and (
+                type(ready.get("previous_pointer_sha256")) is not str
+                or _SHA256.fullmatch(ready["previous_pointer_sha256"]) is None
+            )
+        )
+    ):
+        raise ValueError("V36 checkpoint outbox commit differs")
+    _s3(ready["pointer_uri"])
+    dependencies = [_outbox_artifact_identity(value) for value in ready["dependencies"]]
+    manifest = _outbox_artifact_identity(ready.get("manifest"))
+    if (
+        manifest["role"] != "checkpoint-manifest"
+        or manifest["encoded_bytes"] > MAX_CHECKPOINT_MANIFEST_BYTES
+        or ready["pointer_encoded_bytes"] > MAX_CHECKPOINT_POINTER_BYTES
+        or any(
+            identity["encoded_bytes"] > MAX_CHECKPOINT_DEPENDENCY_BYTES
+            for identity in dependencies
+        )
+    ):
+        raise ValueError("V36 checkpoint outbox manifest differs")
+    identities = [*dependencies, manifest]
+    if len({identity["uri"] for identity in identities}) != len(identities):
+        raise ValueError("V36 checkpoint outbox identity differs")
+    dependency_paths = [
+        _authenticate_outbox_file(
+            root / "objects" / f"{identity['sha256']}.blob", identity
+        )
+        for identity in dependencies
+    ]
+    manifest_path = _authenticate_outbox_file(
+        root / "manifests" / f"{manifest['sha256']}.json", manifest
+    )
+    manifest_bytes = manifest_path.read_bytes()
+    try:
+        manifest_value = json.loads(manifest_bytes)
+    except json.JSONDecodeError as error:
+        raise ValueError("V36 checkpoint outbox manifest differs") from error
+    if (
+        canonical_json_bytes(manifest_value) != manifest_bytes
+        or manifest_value.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest_value.get("generation") != generation
+    ):
+        raise ValueError("V36 checkpoint outbox manifest differs")
+    pointer_identity = {
+        "encoded_bytes": ready["pointer_encoded_bytes"],
+        "sha256": ready["pointer_sha256"],
+    }
+    pointer_path = _authenticate_outbox_file(
+        root / "pointers" / f"{ready['pointer_sha256']}.json", pointer_identity
+    )
+    pointer_bytes = pointer_path.read_bytes()
+    pointer = _checkpoint_pointer_value(pointer_bytes)
+    manifest_bucket, manifest_key = _s3(str(manifest["uri"]))
+    pointer_bucket, pointer_key = _s3(ready["pointer_uri"])
+    checkpoint_marker = "checkpoints/objects/"
+    campaign_prefix, marker, _ = manifest_key.partition(checkpoint_marker)
+    objects_prefix = f"{campaign_prefix}{checkpoint_marker}"
+    expected_pointer_key = (
+        f"{campaign_prefix}checkpoints/runs/{pointer['run_id']}/latest.json"
+    )
+    if (
+        pointer["generation"] != generation
+        or pointer["manifest"] != manifest
+        or marker != checkpoint_marker
+        or pointer_bucket != manifest_bucket
+        or pointer_key != expected_pointer_key
+    ):
+        raise ValueError("V36 checkpoint outbox pointer differs")
+    if any(
+        _s3(str(identity["uri"]))[0] != manifest_bucket
+        or not _s3(str(identity["uri"]))[1].startswith(objects_prefix)
+        or _s3(str(identity["uri"]))[1] == objects_prefix
+        for identity in identities
+    ):
+        raise ValueError("V36 checkpoint outbox identity differs")
+    for identity, path in zip(dependencies, dependency_paths, strict=True):
+        transport.put_immutable(identity, path)
+    transport.put_immutable(manifest, manifest_path)
+    transport.put_pointer(
+        ready["pointer_uri"], pointer_path, ready["previous_pointer_sha256"]
+    )
+
+
+class _AwsCliRunner:
+    @staticmethod
+    def _environment() -> dict[str, str]:
+        environment = os.environ.copy()
+        environment["AWS_RETRY_MODE"] = "standard"
+        environment["AWS_MAX_ATTEMPTS"] = "5"
+        return environment
+
+    def json(self, arguments: list[str]) -> dict[str, object]:
+        completed = subprocess.run(
+            arguments,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=AWS_CLI_TIMEOUT_SECONDS,
+            env=self._environment(),
+        )
+        value = json.loads(completed.stdout)
+        if type(value) is not dict:
+            raise ValueError("V36 checkpoint AWS response differs")
+        return value
+
+    def stream(self, arguments: list[str]) -> Any:
+        process = subprocess.Popen(
+            [
+                "timeout",
+                "--signal=TERM",
+                "--kill-after=5",
+                str(AWS_CLI_TIMEOUT_SECONDS),
+                *arguments,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=self._environment(),
+        )
+        if process.stdout is None:
+            process.kill()
+            raise ValueError("V36 checkpoint AWS stream differs")
+        while chunk := process.stdout.read(1024 * 1024):
+            yield chunk
+        if process.wait() != 0:
+            raise RuntimeError("V36 checkpoint AWS stream failed")
+
+
+class V36AwsCliCheckpointTransport:
+    """Streaming AWS CLI transport with immutable writes and pointer CAS."""
+
+    def __init__(self, *, runner: Any | None = None) -> None:
+        self._runner = _AwsCliRunner() if runner is None else runner
+        self._published: dict[str, tuple[int, str]] = {}
+
+    @staticmethod
+    def _put_arguments(
+        uri: str, path: pathlib.Path, condition: tuple[str, str]
+    ) -> list[str]:
+        bucket, key = _s3(uri)
+        return [
+            "aws",
+            "s3api",
+            "put-object",
+            "--region",
+            REGION,
+            "--bucket",
+            bucket,
+            "--key",
+            key,
+            "--body",
+            str(path.resolve()),
+            condition[0],
+            condition[1],
+            "--output",
+            "json",
+        ]
+
+    def _remote_identity(self, uri: str) -> tuple[int, str]:
+        digest = hashlib.sha256()
+        length = 0
+        for chunk in self._runner.stream(
+            ["aws", "s3", "cp", uri, "-", "--only-show-errors", "--region", REGION]
+        ):
+            if type(chunk) is not bytes or not chunk:
+                raise ValueError("V36 checkpoint AWS stream differs")
+            length += len(chunk)
+            digest.update(chunk)
+        return length, digest.hexdigest()
+
+    def put_immutable(
+        self, identity: dict[str, object], path: pathlib.Path
+    ) -> None:
+        _authenticate_outbox_file(path, identity)
+        expected = (identity["encoded_bytes"], identity["sha256"])
+        prior = self._published.get(str(identity["uri"]))
+        if prior is not None:
+            if prior != expected:
+                raise ValueError("V36 checkpoint immutable object differs")
+            return
+        try:
+            self._runner.json(
+                self._put_arguments(identity["uri"], path, ("--if-none-match", "*"))
+            )
+        except Exception:
+            if self._remote_identity(str(identity["uri"])) != expected:
+                raise ValueError("V36 checkpoint immutable object differs") from None
+        self._published[str(identity["uri"])] = expected
+
+    def put_pointer(
+        self,
+        uri: str,
+        path: pathlib.Path,
+        previous_sha256: str | None,
+    ) -> None:
+        stat = path.lstat()
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("V36 checkpoint pointer file differs")
+        intended = (stat.st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+        if previous_sha256 is None:
+            condition = ("--if-none-match", "*")
+        else:
+            if _SHA256.fullmatch(previous_sha256) is None:
+                raise ValueError("V36 checkpoint predecessor differs")
+            bucket, key = _s3(uri)
+            head = self._runner.json(
+                [
+                    "aws",
+                    "s3api",
+                    "head-object",
+                    "--region",
+                    REGION,
+                    "--bucket",
+                    bucket,
+                    "--key",
+                    key,
+                    "--output",
+                    "json",
+                ]
+            )
+            etag = head.get("ETag")
+            observed_previous = self._remote_identity(uri)
+            if (
+                type(etag) is not str
+                or not etag.strip('"')
+                or type(head.get("ContentLength")) is not int
+                or head["ContentLength"] != observed_previous[0]
+                or observed_previous[1] != previous_sha256
+            ):
+                raise ValueError("V36 checkpoint predecessor differs")
+            condition = ("--if-match", etag.strip('"'))
+        try:
+            self._runner.json(self._put_arguments(uri, path, condition))
+        except Exception:
+            if self._remote_identity(uri) != intended:
+                raise ValueError("V36 checkpoint pointer observation differs") from None
+
+
+def _pid_alive(pid: int) -> bool:
+    if type(pid) is not int or pid <= 1:
+        raise ValueError("V36 checkpoint producer PID differs")
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def watch_v36_checkpoint_outbox(
+    root: pathlib.Path,
+    producer_pid: int,
+    transport: Any,
+    *,
+    first_generation: int = 0,
+    producer_alive: Any = _pid_alive,
+    pause: Any = time.sleep,
+) -> int:
+    """Publish every ready generation while its sole Rust producer lives."""
+
+    if type(first_generation) is not int or first_generation < 0:
+        raise ValueError("V36 checkpoint first generation differs")
+    generation = first_generation
+    while True:
+        ready = root / "commits" / f"generation-{generation:08d}.json"
+        if ready.is_file() and not ready.is_symlink():
+            publish_v36_checkpoint_outbox_generation(root, generation, transport)
+            generation += 1
+            continue
+        if not producer_alive(producer_pid):
+            # The producer may atomically rename its final descriptor after
+            # the first observation but before the liveness check. Once it is
+            # dead the outbox is stable, so re-observe and drain that boundary.
+            if ready.is_file() and not ready.is_symlink():
+                publish_v36_checkpoint_outbox_generation(root, generation, transport)
+                generation += 1
+                continue
+            return generation
+        pause(1)
+
+
 def build_v36_prefix_screen_plan(**values: Any) -> V36PrefixScreenPlan:
     """Validate one immutable prefix-screen launch plan."""
 
@@ -480,6 +859,7 @@ def _user_data(plan: V36PrefixScreenPlan, *, attempt_ordinal: int) -> str:
     )
     execution_authority_b64 = base64.b64encode(execution_authority).decode()
     terminal_program_b64 = base64.b64encode(_GUEST_TERMINAL_PROGRAM.encode()).decode()
+    sidecar_sha256 = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
     return f"""#!/bin/bash
 set -euo pipefail
 trap 'shutdown -h now' EXIT
@@ -501,8 +881,12 @@ test "$(sha256sum "$root/authority.json" | cut -d' ' -f1)" = {plan.authority_sha
 test "$(stat -c %s "$root/source-registry.json")" = {plan.source_registry_bytes}
 test "$(sha256sum "$root/source-registry.json" | cut -d' ' -f1)" = {plan.source_registry_sha256}
 chmod 500 "$root/v36_prefix_freeze"
-mkdir "$root/output" "$root/scratch" "$root/checkpoint-outbox"
+mkdir "$root/output" "$root/scratch" "$root/checkpoint-outbox" "$root/sidecar-source"
 chmod 700 "$root/checkpoint-outbox"
+tar --zstd -xf "$root/source.tar.zst" -C "$root/sidecar-source" scripts/run_v36_prefix_screen.py
+test "$(sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py" | cut -d' ' -f1)" = {sidecar_sha256}
+python3 -m py_compile "$root/sidecar-source/scripts/run_v36_prefix_screen.py"
+aws s3api put-object --generate-cli-skeleton input | grep -q '"IfMatch"'
 token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
 instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 set +e
@@ -512,8 +896,33 @@ timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
   --authority "$root/authority.json" --source-registry "$root/source-registry.json" \
   --source-archive "$root/source.tar.zst" --output "$root/output" \
   --scratch "$root/scratch" --checkpoint-outbox "$root/checkpoint-outbox" \
-  --producer-instance-id "$instance_id"
-status=$?
+  --producer-instance-id "$instance_id" &
+science_pid=$!
+python3 "$root/sidecar-source/scripts/run_v36_prefix_screen.py" \
+  --publish-checkpoints --checkpoint-outbox "$root/checkpoint-outbox" \
+  --producer-pid "$science_pid" --first-generation 0 &
+sidecar_pid=$!
+status=
+while kill -0 "$science_pid" 2>/dev/null; do
+  if ! kill -0 "$sidecar_pid" 2>/dev/null; then
+    wait "$sidecar_pid"
+    sidecar_status=$?
+    kill -TERM "$science_pid" 2>/dev/null
+    wait "$science_pid"
+    status=70
+    break
+  fi
+  sleep 2
+done
+if [[ -z "$status" ]]; then
+  wait "$science_pid"
+  status=$?
+  wait "$sidecar_pid"
+  sidecar_status=$?
+  if [[ "$sidecar_status" != 0 && "$status" != 0 ]]; then
+    status=70
+  fi
+fi
 set -e
 if [[ "$status" = 0 ]]; then
   terminal_status=complete
@@ -521,7 +930,7 @@ if [[ "$status" = 0 ]]; then
 elif [[ "$status" = 42 ]]; then
   terminal_status=screen-source-insufficient
   terminal_marker=ATTEMPT_FAILED.json
-elif [[ "$status" = 124 || "$status" = 137 ]]; then
+elif [[ "$status" = 124 || "$status" = 137 || "$status" = 143 ]]; then
   terminal_status=interrupted
   terminal_marker=INTERRUPTED.json
 else
@@ -532,9 +941,6 @@ python3 "$root/write-terminal.py" \
   "$root/execution-authority.json" "$root/output/freeze-receipt.json" \
   "$root/output" "$instance_id" {quoted['run_id']} {quoted['source_commit']} \
   "$terminal_status" "$root/output/$terminal_marker"
-if [[ -f "$root/output/CHECKPOINT.json" ]]; then
-  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}CHECKPOINT.json --body "$root/output/CHECKPOINT.json"
-fi
 if [[ "$status" = 0 ]]; then
   aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}population-authority.json --body "$root/output/population-authority.json" --if-none-match '*'
   aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}source.parquet --body "$root/output/source.parquet" --if-none-match '*'
@@ -549,7 +955,7 @@ if [[ "$status" = 0 ]]; then
 fi
 if [[ "$status" = 0 ]]; then
   aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}ATTEMPT_COMPLETE.json --body "$root/output/ATTEMPT_COMPLETE.json" --if-none-match '*'
-elif [[ "$status" = 124 || "$status" = 137 ]]; then
+elif [[ "$status" = 124 || "$status" = 137 || "$status" = 143 ]]; then
   aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}INTERRUPTED.json --body "$root/output/INTERRUPTED.json" --if-none-match '*'
 else
   aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}ATTEMPT_FAILED.json --body "$root/output/ATTEMPT_FAILED.json" --if-none-match '*'
@@ -792,12 +1198,39 @@ def run_v36_prefix_screen(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Print a pure dry-run receipt; execution uses the typed Python API."""
+    """Run one explicit controller-only mode."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true", required=True)
-    parser.add_argument("--plan-json", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--publish-checkpoints", action="store_true")
+    parser.add_argument("--plan-json")
+    parser.add_argument("--checkpoint-outbox")
+    parser.add_argument("--producer-pid", type=int)
+    parser.add_argument("--first-generation", type=int)
     arguments = parser.parse_args(argv)
+    if arguments.publish_checkpoints:
+        if (
+            arguments.plan_json is not None
+            or arguments.checkpoint_outbox is None
+            or arguments.producer_pid is None
+            or arguments.first_generation is None
+        ):
+            parser.error("V36 checkpoint sidecar arguments differ")
+        watch_v36_checkpoint_outbox(
+            pathlib.Path(arguments.checkpoint_outbox),
+            arguments.producer_pid,
+            V36AwsCliCheckpointTransport(),
+            first_generation=arguments.first_generation,
+        )
+        return 0
+    if (
+        arguments.plan_json is None
+        or arguments.checkpoint_outbox is not None
+        or arguments.producer_pid is not None
+        or arguments.first_generation is not None
+    ):
+        parser.error("V36 prefix-screen dry-run arguments differ")
     try:
         raw = json.loads(arguments.plan_json)
         if type(raw) is not dict:
