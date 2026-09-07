@@ -592,7 +592,7 @@ fn v36_prefix_checkpoint_pointer_v2_rejects_legacy_schema() {
 fn v36_prefix_checkpoint_outbox_exposes_only_complete_generations() {
     let run = V36PrefixIdentityRun {
         physical_rows: 100,
-        rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+        rows: vec![identity(7, 9, 0), identity(41, 2, 0)],
         selected_object_ordinal: 0,
         source: source_object(),
     };
@@ -715,7 +715,7 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
         physical_rows: 100,
         run: V36PrefixIdentityRun {
             physical_rows: 100,
-            rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+            rows: vec![identity(7, 9, 0), identity(41, 2, 0)],
             selected_object_ordinal: 0,
             source: source_object(),
         },
@@ -919,7 +919,7 @@ fn v36_prefix_checkpoint_writer_file_backed_selected_phase_authenticates_before_
             physical_rows: 10,
             run: V36PrefixIdentityRun {
                 physical_rows: 10,
-                rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+                rows: vec![identity(7, 9, 0), identity(41, 2, 0)],
                 selected_object_ordinal: 0,
                 source: source_object(),
             },
@@ -979,7 +979,7 @@ fn v36_prefix_checkpoint_writer_file_backed_materialized_phase_preserves_selecti
             physical_rows: 10,
             run: V36PrefixIdentityRun {
                 physical_rows: 10,
-                rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+                rows: vec![identity(7, 9, 0), identity(41, 2, 0)],
                 selected_object_ordinal: 0,
                 source: source_object(),
             },
@@ -1095,7 +1095,7 @@ fn v36_prefix_checkpoint_writer_retry_after_publication_failure_is_not_poisoned(
         physical_rows: 100,
         run: V36PrefixIdentityRun {
             physical_rows: 100,
-            rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+            rows: vec![identity(7, 9, 0), identity(41, 2, 0)],
             selected_object_ordinal: 0,
             source: source_object(),
         },
@@ -1193,7 +1193,7 @@ fn v36_prefix_checkpoint_writer_round_trips_cohort_b_global_ordinal() {
 
 #[test]
 fn v36_prefix_checkpoint_identity_run_is_strict_arrow_ipc() {
-    let rows = vec![identity(41, 2, 3), identity(7, 9, 3)];
+    let rows = vec![identity(7, 9, 3), identity(41, 2, 3)];
     let run = V36PrefixIdentityRun {
         physical_rows: 12,
         rows: rows.clone(),
@@ -1271,10 +1271,45 @@ fn v36_prefix_checkpoint_identity_run_uses_fixed_bounded_batches() {
 }
 
 #[test]
+fn v36_prefix_checkpoint_identity_run_v3_is_feature_ordered_with_physical_winners() {
+    let run = V36PrefixIdentityRun {
+        physical_rows: 3,
+        rows: vec![identity(7, 2, 3), identity(41, 0, 3)],
+        selected_object_ordinal: 3,
+        source: source_object(),
+    };
+    let bytes = encode_v36_prefix_identity_run(&run).unwrap();
+    let reader = arrow_ipc::reader::FileReader::try_new(Cursor::new(&bytes), None).unwrap();
+    assert_eq!(
+        reader.schema().metadata().get("format").map(String::as_str),
+        Some("borsuk-v36-prefix-identity-run-v3")
+    );
+    assert_eq!(
+        decode_v36_prefix_identity_run(
+            &bytes,
+            &identity_run_artifact(&bytes, 3),
+            &source_object(),
+            3,
+        )
+        .unwrap(),
+        run
+    );
+
+    let mut row_offset_ordered = run;
+    row_offset_ordered.rows.swap(0, 1);
+    assert!(encode_v36_prefix_identity_run(&row_offset_ordered).is_err());
+
+    let mut duplicate_physical_winner = row_offset_ordered;
+    duplicate_physical_winner.rows.swap(0, 1);
+    duplicate_physical_winner.rows[1].row_offset = duplicate_physical_winner.rows[0].row_offset;
+    assert!(encode_v36_prefix_identity_run(&duplicate_physical_winner).is_err());
+}
+
+#[test]
 fn v36_prefix_checkpoint_identity_run_accepts_global_cohort_b_ordinal() {
     let run = V36PrefixIdentityRun {
         physical_rows: 3,
-        rows: vec![identity(41, 0, 16), identity(7, 2, 16)],
+        rows: vec![identity(7, 2, 16), identity(41, 0, 16)],
         selected_object_ordinal: 16,
         source: source_object(),
     };
@@ -1292,7 +1327,7 @@ fn v36_prefix_checkpoint_identity_run_accepts_global_cohort_b_ordinal() {
 fn v36_prefix_checkpoint_population_before_cutoff_is_resumable() {
     let run = V36PrefixIdentityRun {
         physical_rows: 3,
-        rows: vec![identity(41, 0, 0), identity(7, 2, 0)],
+        rows: vec![identity(7, 2, 0), identity(41, 0, 0)],
         selected_object_ordinal: 0,
         source: source_object(),
     };
@@ -1308,7 +1343,7 @@ fn v36_prefix_checkpoint_population_before_cutoff_is_resumable() {
             .iter()
             .map(|row| row.feature_row_id)
             .collect::<Vec<_>>(),
-        vec![41, 7],
+        vec![7, 41],
     );
 }
 

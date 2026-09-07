@@ -51,7 +51,7 @@ const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 8_192;
 const IDENTITY_RUN_BATCH_ROWS: usize = 65_536;
-const IDENTITY_RUN_FORMAT: &str = "borsuk-v36-prefix-identity-run-v2";
+const IDENTITY_RUN_FORMAT: &str = "borsuk-v36-prefix-identity-run-v3";
 const SELECTED_IDS_BATCH_ROWS: usize = 65_536;
 const POPULATION_SCORE_ALGORITHM: &str =
     "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2";
@@ -895,14 +895,18 @@ impl V36PrefixPopulationCheckpointWriter {
                 .and_then(|count| count.checked_sub(1))
                 .and_then(|index| usize::try_from(index).ok())
                 .ok_or_else(|| invalid("V36 population checkpoint cutoff overflows"))?;
+            let mut physical_offsets = boundary
+                .run
+                .rows
+                .iter()
+                .map(|row| row.row_offset)
+                .collect::<Vec<_>>();
+            physical_offsets.sort_unstable();
             Some((
                 boundary.run.selected_object_ordinal,
-                boundary
-                    .run
-                    .rows
+                *physical_offsets
                     .get(local_index)
-                    .ok_or_else(|| invalid("V36 population checkpoint cutoff differs"))?
-                    .row_offset,
+                    .ok_or_else(|| invalid("V36 population checkpoint cutoff differs"))?,
             ))
         } else {
             None
@@ -1617,7 +1621,7 @@ fn v36_prefix_object_sample_sha256(path: &str, encoded_bytes: u64) -> String {
 }
 
 fn validate_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<()> {
-    let mut feature_ids = HashSet::with_capacity(run.rows.len());
+    let mut row_offsets = HashSet::with_capacity(run.rows.len());
     if run.physical_rows == 0
         || run.rows.len() as u64 > run.physical_rows
         || run.source.path.is_empty()
@@ -1632,12 +1636,12 @@ fn validate_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<()> {
             row.selected_object_ordinal != run.selected_object_ordinal
                 || row.source_ordinal.is_some()
                 || row.row_offset >= run.physical_rows
-                || !feature_ids.insert(row.feature_row_id)
+                || !row_offsets.insert(row.row_offset)
         })
         || run
             .rows
             .windows(2)
-            .any(|pair| pair[0].row_offset >= pair[1].row_offset)
+            .any(|pair| pair[0].feature_row_id >= pair[1].feature_row_id)
     {
         return Err(invalid("V36 prefix identity-run rows differ"));
     }
@@ -1825,14 +1829,30 @@ pub fn restore_v36_prefix_population_state(
         physical_rows = physical_rows
             .checked_add(run.physical_rows)
             .ok_or_else(|| invalid("V36 prefix identity-run physical rows overflow"))?;
+        let previous_distinct = feature_ids.len();
         for row in &run.rows {
             if !feature_ids.insert(row.feature_row_id) {
                 return Err(invalid("V36 prefix identity-run global ID repeats"));
             }
             unique_rows.push(row.clone());
-            if unique_rows.len() == distinct_candidates {
-                cutoff = Some((run.selected_object_ordinal, row.row_offset));
-            }
+        }
+        if previous_distinct < distinct_candidates && feature_ids.len() >= distinct_candidates {
+            let local_index = distinct_candidates
+                .checked_sub(previous_distinct)
+                .and_then(|count| count.checked_sub(1))
+                .ok_or_else(|| invalid("V36 prefix identity-run cutoff overflows"))?;
+            let mut physical_offsets = run
+                .rows
+                .iter()
+                .map(|row| row.row_offset)
+                .collect::<Vec<_>>();
+            physical_offsets.sort_unstable();
+            cutoff = Some((
+                run.selected_object_ordinal,
+                *physical_offsets
+                    .get(local_index)
+                    .ok_or_else(|| invalid("V36 prefix identity-run cutoff differs"))?,
+            ));
         }
         consumed_objects.push(run.source.clone());
     }
@@ -2802,7 +2822,8 @@ fn stream_v36_prefix_identity_run_file(
     {
         return Err(invalid("V36 prefix identity-run schema differs"));
     }
-    let mut previous_offset = None;
+    let mut previous_feature_id = None;
+    let mut seen_row_offsets = HashSet::with_capacity(row_count_usize);
     let mut seen = 0_u64;
     for batch_index in 0..expected_batches {
         let batch = reader
@@ -2827,11 +2848,12 @@ fn stream_v36_prefix_identity_run_file(
         for (&feature_row_id, &row_offset) in feature_ids.values().iter().zip(row_offsets.values())
         {
             if row_offset >= physical_rows
-                || previous_offset.is_some_and(|prior| prior >= row_offset)
+                || previous_feature_id.is_some_and(|prior| prior >= feature_row_id)
+                || !seen_row_offsets.insert(row_offset)
             {
                 return Err(invalid("V36 prefix identity-run rows differ"));
             }
-            previous_offset = Some(row_offset);
+            previous_feature_id = Some(feature_row_id);
             consume(V36PrefixScoredIdentity {
                 score: score(seed, manifest, feature_row_id),
                 feature_row_id,
@@ -5650,6 +5672,8 @@ where
             } else {
                 None
             };
+        let mut durable_identities = object_identities;
+        durable_identities.sort_unstable_by_key(|identity| identity.feature_row_id);
         let boundary = V36PrefixPopulationCommit {
             cutoff: boundary_cutoff,
             distinct_rows,
@@ -5657,7 +5681,7 @@ where
             physical_rows,
             run: V36PrefixIdentityRun {
                 physical_rows: object_rows,
-                rows: object_identities,
+                rows: durable_identities,
                 selected_object_ordinal,
                 source,
             },
