@@ -2733,7 +2733,14 @@ fn open_v36_prefix_selected_stream(
     selected: &V36PrefixSelectedIdsFile,
     limits: &V36PrefixExternalSelectionLimits,
     attempt: &Path,
+    snapshot_filename: &'static str,
 ) -> Result<V36PrefixSelectedStream> {
+    if !matches!(
+        snapshot_filename,
+        "excluded-population.arrow" | "selected-population.arrow"
+    ) {
+        return Err(invalid("V36 prefix selected-ID snapshot role differs"));
+    }
     let file_type = fs::symlink_metadata(&selected.path)
         .map_err(|source| BorsukError::Io {
             path: selected.path.clone(),
@@ -2763,7 +2770,7 @@ fn open_v36_prefix_selected_stream(
     {
         return Err(resource_limit("scratch bytes"));
     }
-    let snapshot_path = attempt.join("excluded-population.arrow");
+    let snapshot_path = attempt.join(snapshot_filename);
     let mut snapshot = OpenOptions::new()
         .create_new(true)
         .read(true)
@@ -3025,7 +3032,14 @@ pub fn externally_select_v36_prefix_population_rows(
         source,
     })?;
     let mut exclusion_stream = exclusion
-        .map(|selected| open_v36_prefix_selected_stream(selected, limits, attempt.path()))
+        .map(|selected| {
+            open_v36_prefix_selected_stream(
+                selected,
+                limits,
+                attempt.path(),
+                "excluded-population.arrow",
+            )
+        })
         .transpose()?;
     let mut spills = Vec::new();
     let mut buffer = Vec::with_capacity(limits.sort_buffer_records);
@@ -5523,6 +5537,74 @@ mod tests {
 
         assert_eq!(error.code(), "v36_prefix_resource_limit");
         assert_eq!(snapshot, b"registered");
+    }
+
+    #[test]
+    fn v36_prefix_dataset_selected_stream_snapshots_have_distinct_roles() {
+        let directory = tempfile::tempdir().unwrap();
+        let contract = V36PrefixSelectedIdsContract {
+            cohort_ordinal: 0,
+            eligible_rows: 1,
+            excluded_population_identity: None,
+            excluded_rows: 0,
+            ordered_source_manifest_sha256: "1".repeat(64),
+            population_seed_sha256:
+                "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e".into(),
+            selected_object_count: 1,
+            selected_object_start: 0,
+            selected_rows: 1,
+        };
+        let rows = select_v36_prefix_population_rows(
+            vec![V36PrefixRowIdentity {
+                feature_row_id: 7,
+                row_offset: 3,
+                selected_object_ordinal: 0,
+                source_ordinal: None,
+            }],
+            &contract.ordered_source_manifest_sha256,
+            1,
+        )
+        .unwrap();
+        let bytes = encode_v36_prefix_selected_ids(&contract, &rows).unwrap();
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let path = directory.path().join("selected.arrow");
+        fs::write(&path, &bytes).unwrap();
+        let selected = V36PrefixSelectedIdsFile {
+            contract,
+            identity: V36ArtifactIdentity {
+                blake3: blake3::hash(&bytes).to_hex().to_string(),
+                encoded_bytes: bytes.len().try_into().unwrap(),
+                role: "population-selected-identities".into(),
+                sha256: sha256.clone(),
+                uri: format!("s3://fixture/v36/{sha256}-selected.arrow"),
+            },
+            path,
+        };
+        let limits = V36PrefixExternalSelectionLimits {
+            io_buffer_bytes: 64,
+            max_input_bytes: 1 << 20,
+            max_scratch_bytes: 1 << 20,
+            max_spills: 16,
+            merge_fan_in: 2,
+            sort_buffer_records: 2,
+        };
+
+        let mut primary = open_v36_prefix_selected_stream(
+            &selected,
+            &limits,
+            directory.path(),
+            "selected-population.arrow",
+        )
+        .unwrap();
+        let mut exclusion = open_v36_prefix_selected_stream(
+            &selected,
+            &limits,
+            directory.path(),
+            "excluded-population.arrow",
+        )
+        .unwrap();
+        assert_eq!(primary.next_record().unwrap().unwrap().feature_row_id, 7);
+        assert_eq!(exclusion.next_record().unwrap().unwrap().feature_row_id, 7);
     }
 
     #[test]
