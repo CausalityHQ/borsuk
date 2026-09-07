@@ -45,6 +45,17 @@ fn identity_run_artifact(bytes: &[u8], ordinal: u16) -> V36ArtifactIdentity {
     }
 }
 
+fn checkpoint_artifact_bytes(role: &str, filename: &str, bytes: &[u8]) -> V36ArtifactIdentity {
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    V36ArtifactIdentity {
+        blake3: blake3::hash(bytes).to_hex().to_string(),
+        encoded_bytes: bytes.len().try_into().unwrap(),
+        role: role.to_owned(),
+        sha256: sha256.clone(),
+        uri: format!("s3://fixture/v36/checkpoints/objects/{sha256}-{filename}"),
+    }
+}
+
 fn identity(feature_row_id: u64, row_offset: u64, ordinal: u16) -> V36PrefixRowIdentity {
     V36PrefixRowIdentity {
         feature_row_id,
@@ -867,6 +878,150 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
             .next()
             .is_none()
     );
+}
+
+#[test]
+fn v36_prefix_checkpoint_writer_file_backed_selected_phase_authenticates_before_ready() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &root,
+        checkpoint_context(2),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    writer
+        .commit(&V36PrefixPopulationCommit {
+            cutoff: Some((0, 9)),
+            distinct_rows: 2,
+            duplicate_rows: 8,
+            physical_rows: 10,
+            run: V36PrefixIdentityRun {
+                physical_rows: 10,
+                rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+                selected_object_ordinal: 0,
+                source: source_object(),
+            },
+        })
+        .unwrap();
+
+    let selected_bytes = b"selected-arrow-fixture";
+    let selected_path = directory.path().join("selected.arrow");
+    std::fs::write(&selected_path, selected_bytes).unwrap();
+    let selection = V36PrefixPopulationSelection {
+        cutoff_feature_row_id: 7,
+        cutoff_score_sha256: "a".repeat(64),
+        eligible_rows: 2,
+        excluded_rows: 0,
+        excluded_population_identity: None,
+        selected_ids: checkpoint_artifact_bytes(
+            "population-selected-identities",
+            "population-selected-identities.arrow",
+            selected_bytes,
+        ),
+        selected_rows: 2,
+    };
+
+    let corrupt_path = directory.path().join("corrupt-selected.arrow");
+    std::fs::write(&corrupt_path, b"wrong").unwrap();
+    assert!(writer.commit_selected(&selection, &corrupt_path).is_err());
+    assert!(!root.join("commits/generation-00000001.json").exists());
+
+    let ready = writer.commit_selected(&selection, &selected_path).unwrap();
+    assert_eq!(ready.file_name().unwrap(), "generation-00000001.json");
+    assert!(
+        root.join("objects")
+            .join(format!("{}.blob", selection.selected_ids.sha256))
+            .is_file()
+    );
+}
+
+#[test]
+fn v36_prefix_checkpoint_writer_file_backed_materialized_phase_preserves_selection() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &root,
+        checkpoint_context(2),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    writer
+        .commit(&V36PrefixPopulationCommit {
+            cutoff: Some((0, 9)),
+            distinct_rows: 2,
+            duplicate_rows: 8,
+            physical_rows: 10,
+            run: V36PrefixIdentityRun {
+                physical_rows: 10,
+                rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+                selected_object_ordinal: 0,
+                source: source_object(),
+            },
+        })
+        .unwrap();
+    let selected_bytes = b"selected-arrow-fixture";
+    let selected_path = directory.path().join("selected.arrow");
+    std::fs::write(&selected_path, selected_bytes).unwrap();
+    let selection = V36PrefixPopulationSelection {
+        cutoff_feature_row_id: 7,
+        cutoff_score_sha256: "a".repeat(64),
+        eligible_rows: 2,
+        excluded_rows: 0,
+        excluded_population_identity: None,
+        selected_ids: checkpoint_artifact_bytes(
+            "population-selected-identities",
+            "population-selected-identities.arrow",
+            selected_bytes,
+        ),
+        selected_rows: 2,
+    };
+    writer.commit_selected(&selection, &selected_path).unwrap();
+
+    let roles = [
+        ("population-authority", "population-authority.json"),
+        ("source", "source.parquet"),
+        ("development-query", "development-query.parquet"),
+        ("validation-query", "validation-query.parquet"),
+        ("sealed-holdout-query", "sealed-holdout-query.parquet"),
+        ("performance-query", "performance-query.parquet"),
+    ];
+    let mut files = Vec::new();
+    for (ordinal, (role, filename)) in roles.into_iter().enumerate() {
+        let bytes = format!("materialized-role-{ordinal}").into_bytes();
+        let path = directory.path().join(filename);
+        std::fs::write(&path, &bytes).unwrap();
+        files.push(V36PrefixCheckpointDependencyFile {
+            identity: checkpoint_artifact_bytes(role, filename, &bytes),
+            path,
+        });
+    }
+    let artifacts = V36PrefixMaterializedArtifacts {
+        population_authority: files[0].identity.clone(),
+        source: files[1].identity.clone(),
+        development_query: files[2].identity.clone(),
+        validation_query: files[3].identity.clone(),
+        sealed_holdout_query: files[4].identity.clone(),
+        performance_query: files[5].identity.clone(),
+    };
+    let ready = writer.commit_materialized(&artifacts, &files).unwrap();
+    assert_eq!(ready.file_name().unwrap(), "generation-00000002.json");
+    let ready_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(ready).unwrap()).unwrap();
+    assert_eq!(ready_value["dependencies"].as_array().unwrap().len(), 8);
+    assert!(files.iter().all(|dependency| {
+        root.join("objects")
+            .join(format!("{}.blob", dependency.identity.sha256))
+            .is_file()
+    }));
 }
 
 #[test]

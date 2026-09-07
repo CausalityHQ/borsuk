@@ -32,10 +32,11 @@ use crate::{
     BorsukError, Result, V36ArtifactIdentity, V36PrefixCheckpointContext,
     V36PrefixCheckpointManifest, V36PrefixCheckpointPhase, V36PrefixCheckpointPointer,
     V36PrefixCheckpointPublication, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixPopulationAuthority, V36PrefixPopulationCheckpoint,
-    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
-    bind_v36_prefix_population_authority, canonical_v36_prefix_checkpoint_manifest_bytes,
-    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixFreezeReceipt, V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
+    V36PrefixPopulationCheckpoint, V36PrefixPopulationSelection, V36PrefixRegisteredSourceObject,
+    V36PrefixRoleAuthority, V36PrefixSourceObject, bind_v36_prefix_population_authority,
+    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
+    canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, plan_v36_prefix_checkpoint_publication,
@@ -671,6 +672,126 @@ impl V36PrefixPopulationCheckpointWriter {
                 })
             })
             .collect()
+    }
+
+    fn publish_phase(
+        &mut self,
+        phase: V36PrefixCheckpointPhase,
+        new_dependencies: &[V36PrefixCheckpointDependencyFile],
+    ) -> Result<PathBuf> {
+        let previous = self
+            .previous_manifest
+            .as_ref()
+            .ok_or_else(|| invalid("V36 population checkpoint is empty"))?;
+        let generation = previous
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 population checkpoint generation overflows"))?;
+        let manifest = V36PrefixCheckpointManifest {
+            claim_eligible: false,
+            execution_authority_sha256: self.execution_authority_sha256.clone(),
+            freeze_authority_sha256: self.context.freeze_authority_sha256.clone(),
+            generation,
+            phase,
+            population: previous.population.clone(),
+            previous_checkpoint: self.previous_manifest_identity.clone(),
+            producer_attempt_id: self.producer_attempt_id.clone(),
+            producer_attempt_ordinal: self.producer_attempt_ordinal,
+            producer_instance_id: self.producer_instance_id.clone(),
+            run_id: self.context.run_id.clone(),
+            schema: "borsuk-v36-prefix-freeze-checkpoint-v2".to_owned(),
+            source_archive_sha256: self.context.source_archive_sha256.clone(),
+            source_commit: self.context.source_commit.clone(),
+            source_registry_sha256: self.context.source_registry_sha256.clone(),
+        };
+        validate_v36_prefix_checkpoint_transition(&self.context, previous, &manifest)?;
+        let publication = plan_v36_prefix_checkpoint_publication(
+            &self.context,
+            &manifest,
+            Some(previous),
+            self.previous_pointer_bytes
+                .as_deref()
+                .map(|pointer| (pointer, "local-predecessor")),
+        )?;
+        let dependencies = publication
+            .dependencies
+            .iter()
+            .map(|identity| {
+                new_dependencies
+                    .iter()
+                    .find(|dependency| &dependency.identity == identity)
+                    .cloned()
+                    .unwrap_or_else(|| V36PrefixCheckpointDependencyFile {
+                        identity: identity.clone(),
+                        path: self
+                            .outbox
+                            .root
+                            .join("objects")
+                            .join(format!("{}.blob", identity.sha256)),
+                    })
+            })
+            .collect::<Vec<_>>();
+        let ready = self.outbox.commit_files(&publication, &dependencies)?;
+        self.previous_manifest = Some(manifest);
+        self.previous_manifest_identity = Some(publication.manifest.clone());
+        self.previous_pointer_bytes = Some(publication.pointer_bytes);
+        Ok(ready)
+    }
+
+    /// Publish a complete authenticated population selection.
+    pub fn commit_selected(
+        &mut self,
+        selection: &V36PrefixPopulationSelection,
+        selected_path: &Path,
+    ) -> Result<PathBuf> {
+        self.publish_phase(
+            V36PrefixCheckpointPhase::Selected {
+                selection: selection.clone(),
+            },
+            &[V36PrefixCheckpointDependencyFile {
+                identity: selection.selected_ids.clone(),
+                path: selected_path.to_owned(),
+            }],
+        )
+    }
+
+    /// Publish complete authenticated source and query materialization files.
+    pub fn commit_materialized(
+        &mut self,
+        artifacts: &V36PrefixMaterializedArtifacts,
+        dependencies: &[V36PrefixCheckpointDependencyFile],
+    ) -> Result<PathBuf> {
+        let expected = [
+            &artifacts.population_authority,
+            &artifacts.source,
+            &artifacts.development_query,
+            &artifacts.validation_query,
+            &artifacts.sealed_holdout_query,
+            &artifacts.performance_query,
+        ];
+        if dependencies.len() != expected.len()
+            || dependencies
+                .iter()
+                .zip(expected)
+                .any(|(dependency, identity)| &dependency.identity != identity)
+        {
+            return Err(invalid("V36 materialized checkpoint dependencies differ"));
+        }
+        let selection = match self
+            .previous_manifest
+            .as_ref()
+            .map(|manifest| &manifest.phase)
+        {
+            Some(V36PrefixCheckpointPhase::Selected { selection }) => selection.clone(),
+            _ => return Err(invalid("V36 materialized checkpoint predecessor differs")),
+        };
+        self.publish_phase(
+            V36PrefixCheckpointPhase::Materialized {
+                selection,
+                artifacts: artifacts.clone(),
+            },
+            dependencies,
+        )
     }
 
     /// Commit one complete authenticated source-object boundary.
