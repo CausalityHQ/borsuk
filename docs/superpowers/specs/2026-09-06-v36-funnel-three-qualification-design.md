@@ -116,6 +116,21 @@ the newest complete boundary but never represents a partial object as durable.
 Therefore publication cadence is bounded to 300 seconds while maximum lost work
 is one complete object.
 
+The executable identity-run format is `borsuk-v36-prefix-identity-run-v3` and
+has no legacy reader. Rows are strictly increasing by unsigned
+`feature_row_id`, not by physical row offset. Construction externally sorts by
+`(feature_row_id,selected_object_ordinal,row_offset)`, retains the minimum
+physical pair for each ID, anti-joins earlier committed feature-ID-ordered runs,
+and emits the surviving ID with its winning object ordinal and row offset.
+This makes within-object deduplication, cross-object anti-join, and resume a
+bounded k-way merge without a second ordering pass. Physical location remains
+materialization evidence only; it never decides population-score order.
+Canonical Arrow IPC fixes schema metadata, non-null columns, 65,536-row batch
+boundaries, no compression or dictionary encoding, and deterministic writer
+options. The manifest binds the format, unsigned comparator, minimum-physical
+winner rule, selected-object window, per-run row count, and both artifact
+digests. Old row-offset-ordered experimental runs are rejected.
+
 GT scheduling still uses successive eight-query tiles inside one source scan,
 but the durable unit is a source-row block only after that block has updated all
 3,000 quality-query heaps. The checkpoint stores the next source ordinal and a

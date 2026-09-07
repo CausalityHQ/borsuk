@@ -265,7 +265,15 @@ conversion remains because BORSUK is prerelease.
   private identity spills; retain the minimum row offset per ID; anti-join the
   sorted stream against earlier committed runs so the globally earliest
   physical occurrence wins; then publish one immutable, possibly empty,
-  first-occurrence Arrow IPC run. Keep only file-backed authenticated
+  first-occurrence Arrow IPC run. Replace the experimental row-offset-ordered
+  run with `borsuk-v36-prefix-identity-run-v3`: strict unsigned feature-ID
+  order, retained winning object ordinal and row offset, fixed non-null schema
+  metadata, 65,536-row batches, and no compression or dictionaries. Bind the
+  comparator, minimum-physical winner rule, selected-object window, exact row
+  count, SHA-256, and BLAKE3 in the manifest. Reject prior run formats rather
+  than adding a compatibility reader. Feature-ID ordering is the durable
+  anti-join order; physical locations are regrouped only by the existing
+  bounded materialization merge. Keep only file-backed authenticated
   dependencies in the writer and restore path. Private attempt-local spills use
   explicit versioned little-endian records rather than Rust struct memory:
   identity records are 18 bytes (`u64 ID,u16 object,u64 offset`) and scored
