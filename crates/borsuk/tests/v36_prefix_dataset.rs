@@ -13,15 +13,17 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    V36ArtifactIdentity, V36PrefixExternalMaterializationRequest, V36PrefixExternalSelectionLimits,
+    V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
+    V36PrefixExternalMaterializationRequest, V36PrefixExternalSelectionLimits,
     V36PrefixExternalSelectionRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
     V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
     V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
-    V36PrefixPopulationAuthority, V36PrefixPopulationCommit, V36PrefixQualityRole,
-    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
-    V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
-    V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
-    V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
+    V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
+    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
+    V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
+    V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
+    V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
+    V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
@@ -29,19 +31,20 @@ use borsuk::{
     deduplicate_v36_prefix_row_identities, encode_v36_prefix_identity_run,
     encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_select_v36_prefix_population_rows, load_v36_prefix_freeze_preflight,
-    materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
-    rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
-    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
-    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
-    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
-    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
-    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    load_v36_prefix_population_checkpoint_head, materialize_v36_prefix_assigned_roles,
+    materialize_v36_prefix_role_parquets, rank_v36_prefix_source_objects,
+    restore_v36_prefix_population, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_resumed,
+    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
+    scan_v36_prefix_source_parquet, select_v36_prefix_population_rows, select_v36_prefix_roles,
+    v36_prefix_gt100_schema, v36_prefix_query_schema, v36_prefix_query_score_sha256,
+    v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -2777,6 +2780,58 @@ fn ranked_source_manifest_sha256(objects: &[V36PrefixRankedSourceObject]) -> Str
     format!("{:x}", manifest.finalize())
 }
 
+fn checkpoint_artifact_for_file(
+    role: &str,
+    filename: &str,
+    path: &Path,
+    object_prefix: &str,
+) -> V36ArtifactIdentity {
+    let bytes = fs::read(path).unwrap();
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes: bytes.len().try_into().unwrap(),
+        role: role.to_owned(),
+        sha256: sha256.clone(),
+        uri: format!("{object_prefix}{sha256}-{filename}"),
+    }
+}
+
+fn stage_checkpoint_head(outbox: &Path, ready: &Path, staged: &Path) {
+    fs::create_dir(staged).unwrap();
+    fs::create_dir(staged.join("objects")).unwrap();
+    let ready: serde_json::Value = serde_json::from_slice(&fs::read(ready).unwrap()).unwrap();
+    let manifest: V36ArtifactIdentity = serde_json::from_value(ready["manifest"].clone()).unwrap();
+    fs::copy(
+        outbox
+            .join("manifests")
+            .join(format!("{}.json", manifest.sha256)),
+        staged.join("manifest.json"),
+    )
+    .unwrap();
+    fs::copy(
+        outbox.join("pointers").join(format!(
+            "{}.json",
+            ready["pointer_sha256"].as_str().unwrap()
+        )),
+        staged.join("pointer.json"),
+    )
+    .unwrap();
+    for identity in
+        serde_json::from_value::<Vec<V36ArtifactIdentity>>(ready["dependencies"].clone()).unwrap()
+    {
+        fs::copy(
+            outbox
+                .join("objects")
+                .join(format!("{}.blob", identity.sha256)),
+            staged
+                .join("objects")
+                .join(format!("{}.blob", identity.sha256)),
+        )
+        .unwrap();
+    }
+}
+
 #[test]
 fn v36_prefix_dataset_external_materialization_merge_joins_physical_assignments() {
     let directory = tempfile::tempdir().unwrap();
@@ -2893,6 +2948,327 @@ fn v36_prefix_dataset_external_materialization_merge_joins_physical_assignments(
         assert_eq!(actual_ids, expected_ids);
     }
     assert!(scratch.read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize() {
+    let directory = tempfile::tempdir().unwrap();
+    let source_path = directory.path().join("source-input.parquet");
+    let mut ranked = vec![write_registered_rows(
+        &source_path,
+        &(1_i64..=24).collect::<Vec<_>>(),
+    )];
+    ranked[0].uri = format!(
+        "https://huggingface.co/datasets/andropar/relaion2b-natural-embeddings/resolve/{}/{}",
+        "bfc7465dcf1245bd605d35dcaf5d2177bbc2025a", ranked[0].path,
+    );
+    let object_prefix = "s3://fixture/v36/reduced/checkpoints/objects/";
+    let context = V36PrefixCheckpointContext {
+        cohort_ordinal: 0,
+        corpus_rows: 8,
+        distinct_candidates: 24,
+        excluded_population_identity: None,
+        freeze_authority_sha256: "2".repeat(64),
+        gt_block_rows: 8,
+        object_prefix: object_prefix.into(),
+        pointer_uri:
+            "s3://fixture/v36/reduced/checkpoints/runs/v36-prefix-screen-reduced/latest.json".into(),
+        ranked_objects: ranked
+            .iter()
+            .map(|object| V36PrefixRegisteredSourceObject {
+                encoded_bytes: object.encoded_bytes,
+                path: object.path.clone(),
+                sha256: object.sha256.clone(),
+                uri: object.uri.clone(),
+            })
+            .collect(),
+        run_id: "v36-prefix-screen-reduced".into(),
+        selected_object_count: 1,
+        selected_object_start: 0,
+        source_archive_sha256: "3".repeat(64),
+        source_byte_cap: ranked[0].encoded_bytes,
+        source_commit: "4".repeat(40),
+        source_registry_sha256: "5".repeat(64),
+    };
+    let first_outbox = directory.path().join("population-outbox");
+    fs::create_dir(&first_outbox).unwrap();
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &first_outbox,
+        context.clone(),
+        "1".repeat(64),
+        "v36-prefix-screen-reduced-attempt-0000".into(),
+        0,
+        "i-reduced-a".into(),
+    )
+    .unwrap();
+    let mut population_ready = None;
+    scan_v36_prefix_object_prefix_checkpointed(
+        &ranked,
+        0,
+        ranked[0].encoded_bytes,
+        24,
+        |_, _| Ok(source_path.clone()),
+        |boundary| {
+            population_ready = Some(writer.commit(boundary)?);
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    let staged = directory.path().join("staged-population");
+    stage_checkpoint_head(&first_outbox, &population_ready.unwrap(), &staged);
+    let head = load_v36_prefix_population_checkpoint_head(&staged, &context).unwrap();
+    let resumed_outbox = directory.path().join("resumed-outbox");
+    fs::create_dir(&resumed_outbox).unwrap();
+    let mut writer = V36PrefixPopulationCheckpointWriter::resume(
+        &resumed_outbox,
+        context,
+        "6".repeat(64),
+        "v36-prefix-screen-reduced-attempt-0001".into(),
+        1,
+        "i-reduced-b".into(),
+        head,
+    )
+    .unwrap();
+
+    let selection_scratch = directory.path().join("selection-scratch");
+    fs::create_dir(&selection_scratch).unwrap();
+    let selected_path = directory.path().join("selected.arrow");
+    let selected_contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: 0,
+        eligible_rows: 24,
+        excluded_population_identity: None,
+        excluded_rows: 0,
+        ordered_source_manifest_sha256: ranked_source_manifest_sha256(&ranked),
+        population_seed_sha256: "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e"
+            .into(),
+        selected_object_count: 1,
+        selected_object_start: 0,
+        selected_rows: 24,
+    };
+    let limits = external_selection_limits();
+    let selected_receipt =
+        externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+            contract: &selected_contract,
+            exclusion: None,
+            limits: &limits,
+            output: &selected_path,
+            output_uri_prefix: object_prefix,
+            runs: &writer.identity_run_files().unwrap(),
+            scratch_root: &selection_scratch,
+        })
+        .unwrap();
+    let selected = decode_v36_prefix_selected_ids(
+        &fs::read(&selected_path).unwrap(),
+        &selected_receipt.identity,
+        &selected_contract,
+    )
+    .unwrap();
+    let selection = V36PrefixPopulationSelection {
+        cutoff_feature_row_id: selected.cutoff_feature_row_id,
+        cutoff_score_sha256: selected.cutoff_score_sha256,
+        eligible_rows: selected_contract.eligible_rows,
+        excluded_rows: selected_contract.excluded_rows,
+        excluded_population_identity: None,
+        selected_ids: selected_receipt.identity.clone(),
+        selected_rows: selected_contract.selected_rows,
+    };
+    writer.commit_selected(&selection, &selected_path).unwrap();
+
+    let selected_file = V36PrefixSelectedIdsFile {
+        contract: selected_contract,
+        identity: selected_receipt.identity,
+        path: selected_path,
+    };
+    let assignment_contract = reduced_role_assignment_contract(&selected_file);
+    let mut expected_assignments = scalar_role_assignments(&selected.rows, &assignment_contract);
+    expected_assignments.sort_by_key(|assignment| (assignment.3, assignment.4));
+    let assignment_path = directory.path().join("role-assignments.arrow");
+    let assignment_receipt =
+        assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+            contract: &assignment_contract,
+            limits: &limits,
+            output: &assignment_path,
+            output_uri_prefix: object_prefix,
+            scratch_root: &selection_scratch,
+            selected: &selected_file,
+        })
+        .unwrap();
+    let assignment = V36PrefixRoleAssignmentFile {
+        contract: assignment_contract,
+        identity: assignment_receipt.identity,
+        path: assignment_path,
+    };
+    let materialization_scratch = directory.path().join("materialization-scratch");
+    fs::create_dir(&materialization_scratch).unwrap();
+    let materialized_root = directory.path().join("materialized");
+    let paths = materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+        assignment: &assignment,
+        limits: &limits,
+        output: &materialized_root,
+        ranked_objects: &ranked,
+        scratch_root: &materialization_scratch,
+        source_paths: std::slice::from_ref(&source_path),
+    })
+    .unwrap();
+
+    let assert_embedding = |feature_row_id: u64, embedding: &Float32Array| {
+        let mut expected = vec![0.0_f32; DIMENSIONS];
+        expected[usize::try_from(feature_row_id - 1).unwrap() % DIMENSIONS] = 1.0;
+        assert_eq!(embedding.values().as_ref(), expected.as_slice());
+    };
+    let expected_source_ids = expected_assignments
+        .iter()
+        .filter(|assignment| assignment.3 == 0)
+        .map(|assignment| assignment.2)
+        .collect::<Vec<_>>();
+    let mut actual_source_ids = Vec::new();
+    scan_v36_prefix_source_parquet(&paths.source, &expected_source_ids, |batch| {
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let embeddings = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            let feature_row_id = ids.value(row);
+            actual_source_ids.push(feature_row_id);
+            let embedding = embeddings.value(row);
+            assert_embedding(
+                feature_row_id,
+                embedding.as_any().downcast_ref::<Float32Array>().unwrap(),
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(actual_source_ids, expected_source_ids);
+    for (role, path) in [
+        paths.development.clone(),
+        paths.validation.clone(),
+        paths.sealed_holdout.clone(),
+        paths.performance.clone(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let expected_ids = expected_assignments
+            .iter()
+            .filter(|assignment| assignment.3 == u8::try_from(role + 1).unwrap())
+            .map(|assignment| assignment.2)
+            .collect::<Vec<_>>();
+        let mut actual_ids = Vec::new();
+        scan_v36_prefix_query_parquet(&path, expected_ids.len() as u64, |batch| {
+            let ordinals = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap();
+            let ids = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            let embeddings = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                let feature_row_id = ids.value(row);
+                assert_eq!(
+                    u64::from(ordinals.value(row)),
+                    u64::try_from(actual_ids.len()).unwrap()
+                );
+                actual_ids.push(feature_row_id);
+                let embedding = embeddings.value(row);
+                assert_embedding(
+                    feature_row_id,
+                    embedding.as_any().downcast_ref::<Float32Array>().unwrap(),
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(actual_ids, expected_ids);
+    }
+
+    let population_authority = materialized_root.join("population-authority.json");
+    let registry = ranked
+        .iter()
+        .map(|object| V36PrefixRegisteredSourceObject {
+            encoded_bytes: object.encoded_bytes,
+            path: object.path.clone(),
+            sha256: object.sha256.clone(),
+            uri: object.uri.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut population = population(&registry);
+    population.consumed_objects[0].blake3 = blake3::hash(&fs::read(&source_path).unwrap())
+        .to_hex()
+        .to_string();
+    fs::write(
+        &population_authority,
+        canonical_v36_prefix_population_authority_bytes(&population, &registry).unwrap(),
+    )
+    .unwrap();
+    let artifact_specs = [
+        (
+            "population-authority",
+            "population-authority.json",
+            population_authority,
+        ),
+        ("source", "source.parquet", paths.source.clone()),
+        (
+            "development-query",
+            "development-query.parquet",
+            paths.development.clone(),
+        ),
+        (
+            "validation-query",
+            "validation-query.parquet",
+            paths.validation.clone(),
+        ),
+        (
+            "sealed-holdout-query",
+            "sealed-holdout-query.parquet",
+            paths.sealed_holdout.clone(),
+        ),
+        (
+            "performance-query",
+            "performance-query.parquet",
+            paths.performance.clone(),
+        ),
+    ];
+    let dependencies = artifact_specs
+        .iter()
+        .map(|(role, filename, path)| V36PrefixCheckpointDependencyFile {
+            identity: checkpoint_artifact_for_file(role, filename, path, object_prefix),
+            path: path.clone(),
+        })
+        .collect::<Vec<_>>();
+    let artifacts = V36PrefixMaterializedArtifacts {
+        population_authority: dependencies[0].identity.clone(),
+        source: dependencies[1].identity.clone(),
+        development_query: dependencies[2].identity.clone(),
+        validation_query: dependencies[3].identity.clone(),
+        sealed_holdout_query: dependencies[4].identity.clone(),
+        performance_query: dependencies[5].identity.clone(),
+    };
+    let ready = writer
+        .commit_materialized(&artifacts, &dependencies)
+        .unwrap();
+    assert_eq!(ready.file_name().unwrap(), "generation-00000002.json");
+    assert_eq!(
+        resumed_outbox.join("commits").read_dir().unwrap().count(),
+        2
+    );
+    assert!(selection_scratch.read_dir().unwrap().next().is_none());
+    assert!(materialization_scratch.read_dir().unwrap().next().is_none());
 }
 
 #[test]
