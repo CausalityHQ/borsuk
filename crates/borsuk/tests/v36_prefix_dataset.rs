@@ -6,18 +6,25 @@ use arrow_array::{
     ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray,
     UInt16Array, UInt32Array, UInt64Array,
 };
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader as ArrowFileReader,
+    writer::{FileWriter as ArrowFileWriter, IpcWriteOptions},
+};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
     V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
     V36PrefixInputRow, V36PrefixPopulationAuthority, V36PrefixPopulationCommit,
     V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
-    V36PrefixResumeBinding, V36PrefixRoleAuthority, V36PrefixSourceObject,
-    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixResumeBinding, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
+    V36PrefixSourceObject, bind_v36_prefix_population_authority,
+    canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
-    exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
+    canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_selected_ids,
+    deduplicate_v36_prefix_row_identities, encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
+    load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
     scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
     scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
@@ -78,10 +85,10 @@ fn v36_prefix_dataset_registered_screen_rejects_smaller_or_future_windows() {
     future.excluded_population_identity = Some(V36ArtifactIdentity {
         blake3: "1".repeat(64),
         encoded_bytes: 1,
-        role: "cohort-a-selected-ids".into(),
+        role: "population-selected-identities".into(),
         sha256: "2".repeat(64),
         uri: format!(
-            "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/{}-cohort-a-selected-ids.json",
+            "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/{}-population-selected-identities.arrow",
             "2".repeat(64)
         ),
     });
@@ -447,6 +454,154 @@ fn v36_prefix_dataset_v2_population_hashes_all_selected_objects_before_cutoff() 
             ))
             .collect::<Vec<_>>(),
         vec![(1, 0, 0), (4, 2, 0), (8, 15, 0), (6, 4, 0)]
+    );
+}
+
+fn selected_ids_contract(selected_rows: u64) -> V36PrefixSelectedIdsContract {
+    V36PrefixSelectedIdsContract {
+        cohort_ordinal: 0,
+        eligible_rows: 8,
+        excluded_population_identity: None,
+        excluded_rows: 0,
+        ordered_source_manifest_sha256: "1".repeat(64),
+        population_seed_sha256: "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e"
+            .into(),
+        selected_object_count: 16,
+        selected_object_start: 0,
+        selected_rows,
+    }
+}
+
+fn selected_ids_identity(bytes: &[u8]) -> V36ArtifactIdentity {
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    V36ArtifactIdentity {
+        blake3: blake3::hash(bytes).to_hex().to_string(),
+        encoded_bytes: bytes.len().try_into().unwrap(),
+        role: "population-selected-identities".into(),
+        sha256: sha256.clone(),
+        uri: format!("s3://fixture/v36/{sha256}-population-selected-identities.arrow"),
+    }
+}
+
+#[test]
+fn v36_prefix_dataset_selected_ids_are_strict_self_certifying_arrow() {
+    let rows = vec![
+        (1, 0, 0),
+        (2, 0, 1),
+        (3, 1, 0),
+        (4, 2, 0),
+        (5, 3, 0),
+        (6, 4, 0),
+        (7, 5, 0),
+        (8, 15, 0),
+    ]
+    .into_iter()
+    .map(
+        |(feature_row_id, selected_object_ordinal, row_offset)| borsuk::V36PrefixRowIdentity {
+            feature_row_id,
+            source_ordinal: None,
+            selected_object_ordinal,
+            row_offset,
+        },
+    )
+    .collect();
+    let selected = select_v36_prefix_population_rows(rows, &"1".repeat(64), 4).unwrap();
+    let contract = selected_ids_contract(4);
+    let bytes = encode_v36_prefix_selected_ids(&contract, &selected).unwrap();
+    assert_eq!(
+        bytes,
+        encode_v36_prefix_selected_ids(&contract, &selected).unwrap()
+    );
+    let identity = selected_ids_identity(&bytes);
+    let decoded = decode_v36_prefix_selected_ids(&bytes, &identity, &contract).unwrap();
+    assert_eq!(decoded.rows, selected);
+    assert_eq!(
+        decoded.cutoff_feature_row_id,
+        selected.last().unwrap().feature_row_id
+    );
+    assert_eq!(decoded.cutoff_score_sha256.len(), 64);
+
+    let mut wrong_contract = contract.clone();
+    wrong_contract.population_seed_sha256 = "2".repeat(64);
+    assert!(decode_v36_prefix_selected_ids(&bytes, &identity, &wrong_contract).is_err());
+    let mut wrong_identity = identity.clone();
+    wrong_identity.sha256 = "3".repeat(64);
+    assert!(decode_v36_prefix_selected_ids(&bytes, &wrong_identity, &contract).is_err());
+
+    let mut unordered = selected;
+    unordered.swap(0, 1);
+    assert!(encode_v36_prefix_selected_ids(&contract, &unordered).is_err());
+
+    let reader = ArrowFileReader::try_new(std::io::Cursor::new(&bytes), None).unwrap();
+    let malformed_schema = Schema::new_with_metadata(
+        vec![Field::new("feature_row_id", DataType::UInt64, false)],
+        reader.schema().metadata().clone(),
+    );
+    let malformed_batch = RecordBatch::try_new(
+        Arc::new(malformed_schema.clone()),
+        vec![Arc::new(UInt64Array::from(vec![1, 4, 8, 6]))],
+    )
+    .unwrap();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+    let mut malformed_bytes = Vec::new();
+    let mut writer =
+        ArrowFileWriter::try_new_with_options(&mut malformed_bytes, &malformed_schema, options)
+            .unwrap();
+    writer.write(&malformed_batch).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    assert!(
+        decode_v36_prefix_selected_ids(
+            &malformed_bytes,
+            &selected_ids_identity(&malformed_bytes),
+            &contract,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn v36_prefix_dataset_selected_ids_bind_cohort_exclusion_metadata() {
+    let rows = (1_u64..=9)
+        .map(|feature_row_id| borsuk::V36PrefixRowIdentity {
+            feature_row_id,
+            source_ordinal: None,
+            selected_object_ordinal: u16::try_from(feature_row_id % 16).unwrap(),
+            row_offset: feature_row_id,
+        })
+        .collect::<Vec<_>>();
+    let initially_selected =
+        select_v36_prefix_population_rows(rows.clone(), &"1".repeat(64), 4).unwrap();
+    let excluded_id = initially_selected[0].feature_row_id;
+    let mut expected = select_v36_prefix_population_rows(
+        rows.iter()
+            .filter(|row| row.feature_row_id != excluded_id)
+            .cloned()
+            .collect(),
+        &"1".repeat(64),
+        4,
+    )
+    .unwrap();
+    for row in &mut expected {
+        row.selected_object_ordinal += 16;
+    }
+    let exclusion_bytes = b"cohort-a-selected-identities\n";
+    let exclusion_identity = selected_ids_identity(exclusion_bytes);
+    let mut contract = selected_ids_contract(4);
+    contract.cohort_ordinal = 1;
+    contract.eligible_rows = 8;
+    contract.excluded_rows = 1;
+    contract.excluded_population_identity = Some(exclusion_identity);
+    contract.selected_object_start = 16;
+    let bytes = encode_v36_prefix_selected_ids(&contract, &expected).unwrap();
+    let decoded =
+        decode_v36_prefix_selected_ids(&bytes, &selected_ids_identity(&bytes), &contract).unwrap();
+    assert_eq!(decoded.rows, expected);
+    assert!(
+        decoded
+            .rows
+            .iter()
+            .all(|row| row.feature_row_id != excluded_id)
     );
 }
 

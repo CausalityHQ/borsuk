@@ -902,7 +902,7 @@ fn validate_prefix_population(
                 .excluded_population_identity
                 .as_ref()
                 .is_some_and(|artifact| {
-                    valid_checkpoint_artifact(artifact, "cohort-a-selected-ids")
+                    valid_checkpoint_artifact(artifact, "population-selected-identities")
                 }),
             _ => true,
         }
@@ -1059,7 +1059,7 @@ pub fn validate_v36_prefix_freeze_authority(
                 .excluded_population_identity
                 .as_ref()
                 .is_some_and(|artifact| {
-                    valid_checkpoint_artifact(artifact, "cohort-a-selected-ids")
+                    valid_checkpoint_artifact(artifact, "population-selected-identities")
                 }),
             _ => true,
         }

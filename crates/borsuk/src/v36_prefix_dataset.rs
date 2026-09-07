@@ -8,8 +8,8 @@ use std::{
 };
 
 use arrow_array::{
-    Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch,
-    UInt16Array, UInt32Array, UInt64Array,
+    Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
+    Int64Array, RecordBatch, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     MetadataVersion,
@@ -49,6 +49,12 @@ const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 8_192;
 const IDENTITY_RUN_FORMAT: &str = "borsuk-v36-prefix-identity-run-v1";
+const SELECTED_IDS_BATCH_ROWS: usize = 65_536;
+const POPULATION_SCORE_ALGORITHM: &str =
+    "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2";
+const POPULATION_SEED_SHA256: &str =
+    "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e";
+const SELECTED_IDS_FORMAT: &str = "borsuk-v36-prefix-selected-identities-v2";
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -703,6 +709,16 @@ fn digest_bytes(value: &str) -> Result<[u8; 32]> {
     Ok(decoded)
 }
 
+fn digest_hex(digest: &[u8; 32]) -> String {
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut output, byte| {
+            std::fmt::Write::write_fmt(&mut output, format_args!("{byte:02x}"))
+                .expect("writing to a String cannot fail");
+            output
+        })
+}
+
 fn validate_embedding(embedding: &[f32]) -> Result<()> {
     if embedding.len() != DIMENSIONS
         || embedding.iter().any(|value| !value.is_finite())
@@ -750,6 +766,365 @@ pub struct V36PrefixIdentityRun {
     pub selected_object_ordinal: u16,
     /// Exact complete source object authenticated before the run was committed.
     pub source: V36PrefixSourceObject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact authority embedded in one immutable selected-population Arrow artifact.
+pub struct V36PrefixSelectedIdsContract {
+    /// Zero-based independently registered population cohort.
+    pub cohort_ordinal: u8,
+    /// Distinct rows eligible after applying the prior-cohort exclusion.
+    pub eligible_rows: u64,
+    /// Exact prior-cohort selected-ID artifact, absent only for cohort zero.
+    pub excluded_population_identity: Option<V36ArtifactIdentity>,
+    /// Distinct rows removed by the authenticated exclusion.
+    pub excluded_rows: u64,
+    /// SHA-256 of the complete ordered source manifest.
+    pub ordered_source_manifest_sha256: String,
+    /// SHA-256 population-row seed.
+    pub population_seed_sha256: String,
+    /// Number of complete source objects in the registered window.
+    pub selected_object_count: u16,
+    /// Global ordinal of the first source object in the window.
+    pub selected_object_start: u16,
+    /// Exact number of selected population rows.
+    pub selected_rows: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated selected population decoded from its immutable Arrow artifact.
+pub struct V36PrefixSelectedIds {
+    /// Feature-row ID at the inclusive population-score cutoff.
+    pub cutoff_feature_row_id: u64,
+    /// Population score at the inclusive cutoff.
+    pub cutoff_score_sha256: String,
+    /// Selected rows in strict `(score, unsigned feature ID)` order.
+    pub rows: Vec<V36PrefixRowIdentity>,
+}
+
+fn selected_ids_metadata(
+    contract: &V36PrefixSelectedIdsContract,
+    cutoff_feature_row_id: u64,
+    cutoff_score_sha256: &str,
+) -> HashMap<String, String> {
+    let mut metadata = HashMap::from([
+        (
+            "cohort_ordinal".to_owned(),
+            contract.cohort_ordinal.to_string(),
+        ),
+        (
+            "cutoff_feature_row_id".to_owned(),
+            cutoff_feature_row_id.to_string(),
+        ),
+        (
+            "cutoff_score_sha256".to_owned(),
+            cutoff_score_sha256.to_owned(),
+        ),
+        (
+            "eligible_rows".to_owned(),
+            contract.eligible_rows.to_string(),
+        ),
+        (
+            "excluded_rows".to_owned(),
+            contract.excluded_rows.to_string(),
+        ),
+        ("format".to_owned(), SELECTED_IDS_FORMAT.to_owned()),
+        (
+            "ordered_source_manifest_sha256".to_owned(),
+            contract.ordered_source_manifest_sha256.clone(),
+        ),
+        (
+            "population_seed_sha256".to_owned(),
+            contract.population_seed_sha256.clone(),
+        ),
+        (
+            "score_algorithm".to_owned(),
+            POPULATION_SCORE_ALGORITHM.to_owned(),
+        ),
+        (
+            "selected_object_count".to_owned(),
+            contract.selected_object_count.to_string(),
+        ),
+        (
+            "selected_object_start".to_owned(),
+            contract.selected_object_start.to_string(),
+        ),
+        (
+            "selected_rows".to_owned(),
+            contract.selected_rows.to_string(),
+        ),
+    ]);
+    match &contract.excluded_population_identity {
+        Some(identity) => {
+            metadata.insert(
+                "excluded_population_blake3".to_owned(),
+                identity.blake3.clone(),
+            );
+            metadata.insert(
+                "excluded_population_encoded_bytes".to_owned(),
+                identity.encoded_bytes.to_string(),
+            );
+            metadata.insert("excluded_population_role".to_owned(), identity.role.clone());
+            metadata.insert(
+                "excluded_population_sha256".to_owned(),
+                identity.sha256.clone(),
+            );
+            metadata.insert("excluded_population_uri".to_owned(), identity.uri.clone());
+        }
+        None => {
+            for key in [
+                "excluded_population_blake3",
+                "excluded_population_encoded_bytes",
+                "excluded_population_role",
+                "excluded_population_sha256",
+                "excluded_population_uri",
+            ] {
+                metadata.insert(key.to_owned(), "none".to_owned());
+            }
+        }
+    }
+    metadata
+}
+
+fn selected_ids_schema(
+    contract: &V36PrefixSelectedIdsContract,
+    cutoff_feature_row_id: u64,
+    cutoff_score_sha256: &str,
+) -> Schema {
+    Schema::new_with_metadata(
+        vec![
+            Field::new("feature_row_id", DataType::UInt64, false),
+            Field::new("population_score", DataType::FixedSizeBinary(32), false),
+            Field::new("selected_object_ordinal", DataType::UInt16, false),
+            Field::new("row_offset", DataType::UInt64, false),
+        ],
+        selected_ids_metadata(contract, cutoff_feature_row_id, cutoff_score_sha256),
+    )
+}
+
+fn validate_selected_ids_contract(
+    contract: &V36PrefixSelectedIdsContract,
+) -> Result<([u8; 32], [u8; 32])> {
+    let seed = digest_bytes(&contract.population_seed_sha256)?;
+    let manifest = digest_bytes(&contract.ordered_source_manifest_sha256)?;
+    let window_end = contract
+        .selected_object_start
+        .checked_add(contract.selected_object_count)
+        .ok_or_else(|| invalid("V36 prefix selected-ID object window overflows"))?;
+    if contract.population_seed_sha256 != POPULATION_SEED_SHA256
+        || contract.selected_object_count == 0
+        || contract.selected_rows == 0
+        || contract.selected_rows > contract.eligible_rows
+        || (contract.cohort_ordinal == 0
+            && (contract.excluded_rows != 0 || contract.excluded_population_identity.is_some()))
+        || (contract.cohort_ordinal != 0 && contract.excluded_population_identity.is_none())
+        || contract
+            .excluded_population_identity
+            .as_ref()
+            .is_some_and(|identity| {
+                identity.encoded_bytes == 0
+                    || identity.role != "population-selected-identities"
+                    || digest_bytes(&identity.sha256).is_err()
+                    || digest_bytes(&identity.blake3).is_err()
+                    || identity.uri.is_empty()
+            })
+        || window_end <= contract.selected_object_start
+    {
+        return Err(invalid("V36 prefix selected-ID contract differs"));
+    }
+    Ok((seed, manifest))
+}
+
+fn validate_selected_id_rows(
+    contract: &V36PrefixSelectedIdsContract,
+    rows: &[V36PrefixRowIdentity],
+) -> Result<()> {
+    let (seed, manifest) = validate_selected_ids_contract(contract)?;
+    if rows.len() as u64 != contract.selected_rows {
+        return Err(invalid("V36 prefix selected-ID row count differs"));
+    }
+    let window_end = contract.selected_object_start + contract.selected_object_count;
+    let mut physical = HashSet::with_capacity(rows.len());
+    let mut previous = None;
+    for row in rows {
+        let score = score(&seed, &manifest, row.feature_row_id);
+        let rank = (score, row.feature_row_id);
+        if row.source_ordinal.is_some()
+            || row.selected_object_ordinal < contract.selected_object_start
+            || row.selected_object_ordinal >= window_end
+            || !physical.insert((row.selected_object_ordinal, row.row_offset))
+            || previous.is_some_and(|prior| prior >= rank)
+        {
+            return Err(invalid("V36 prefix selected-ID rows differ"));
+        }
+        previous = Some(rank);
+    }
+    Ok(())
+}
+
+/// Encode one strict, deterministic selected-population Arrow IPC artifact.
+pub fn encode_v36_prefix_selected_ids(
+    contract: &V36PrefixSelectedIdsContract,
+    rows: &[V36PrefixRowIdentity],
+) -> Result<Vec<u8>> {
+    validate_selected_id_rows(contract, rows)?;
+    let cutoff = rows
+        .last()
+        .ok_or_else(|| invalid("V36 prefix selected-ID cutoff is missing"))?;
+    let (seed, manifest) = validate_selected_ids_contract(contract)?;
+    let cutoff_score = score(&seed, &manifest, cutoff.feature_row_id);
+    let schema = Arc::new(selected_ids_schema(
+        contract,
+        cutoff.feature_row_id,
+        &digest_hex(&cutoff_score),
+    ));
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = ArrowFileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    for rows in rows.chunks(SELECTED_IDS_BATCH_ROWS) {
+        let scores = rows
+            .iter()
+            .map(|row| score(&seed, &manifest, row.feature_row_id))
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(
+                    rows.iter()
+                        .map(|row| row.feature_row_id)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(FixedSizeBinaryArray::try_from_iter(
+                    scores.iter().map(<[u8; 32]>::as_slice),
+                )?),
+                Arc::new(UInt16Array::from(
+                    rows.iter()
+                        .map(|row| row.selected_object_ordinal)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt64Array::from(
+                    rows.iter().map(|row| row.row_offset).collect::<Vec<_>>(),
+                )),
+            ],
+        )?;
+        writer.write(&batch)?;
+    }
+    writer.finish()?;
+    drop(writer);
+    Ok(bytes)
+}
+
+/// Authenticate and decode one immutable selected-population Arrow IPC artifact.
+pub fn decode_v36_prefix_selected_ids(
+    bytes: &[u8],
+    registered: &V36ArtifactIdentity,
+    contract: &V36PrefixSelectedIdsContract,
+) -> Result<V36PrefixSelectedIds> {
+    validate_selected_ids_contract(contract)?;
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    let blake3 = blake3::hash(bytes).to_hex().to_string();
+    let content_addressed = url::Url::parse(&registered.uri)
+        .ok()
+        .filter(|uri| uri.scheme() == "s3" && uri.host_str().is_some())
+        .and_then(|uri| uri.path().rsplit('/').next().map(str::to_owned))
+        .is_some_and(|name| name.starts_with(&format!("{sha256}-")));
+    if registered.role != "population-selected-identities"
+        || registered.encoded_bytes != bytes.len() as u64
+        || registered.sha256 != sha256
+        || registered.blake3 != blake3
+        || !content_addressed
+    {
+        return Err(invalid("V36 prefix selected-ID artifact differs"));
+    }
+    let mut reader = ArrowFileReader::try_new(std::io::Cursor::new(bytes), None)?;
+    let selected_rows = usize::try_from(contract.selected_rows)
+        .map_err(|_| invalid("V36 prefix selected-ID row count overflows"))?;
+    let expected_batches = selected_rows.div_ceil(SELECTED_IDS_BATCH_ROWS);
+    if reader.num_batches() != expected_batches {
+        return Err(invalid("V36 prefix selected-ID batches differ"));
+    }
+    let schema = reader.schema();
+    let cutoff_feature_row_id = schema
+        .metadata()
+        .get("cutoff_feature_row_id")
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| invalid("V36 prefix selected-ID schema differs"))?;
+    let cutoff_score_sha256 = schema
+        .metadata()
+        .get("cutoff_score_sha256")
+        .ok_or_else(|| invalid("V36 prefix selected-ID schema differs"))?;
+    digest_bytes(cutoff_score_sha256)?;
+    if schema.as_ref() != &selected_ids_schema(contract, cutoff_feature_row_id, cutoff_score_sha256)
+    {
+        return Err(invalid("V36 prefix selected-ID schema differs"));
+    }
+    let (seed, manifest) = validate_selected_ids_contract(contract)?;
+    let mut rows = Vec::with_capacity(selected_rows);
+    for batch_ordinal in 0..expected_batches {
+        let batch = reader
+            .next()
+            .transpose()?
+            .ok_or_else(|| invalid("V36 prefix selected-ID batch is missing"))?;
+        let remaining = selected_rows - rows.len();
+        let expected_rows = remaining.min(SELECTED_IDS_BATCH_ROWS);
+        if batch.num_rows() != expected_rows || batch.num_columns() != 4 {
+            return Err(invalid("V36 prefix selected-ID batches differ"));
+        }
+        let feature_ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix selected-ID feature IDs differ"))?;
+        let encoded_scores = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| invalid("V36 prefix selected-ID scores differ"))?;
+        let object_ordinals = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .ok_or_else(|| invalid("V36 prefix selected-ID object ordinals differ"))?;
+        let row_offsets = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix selected-ID row offsets differ"))?;
+        for index in 0..batch.num_rows() {
+            let feature_row_id = feature_ids.value(index);
+            let expected_score = score(&seed, &manifest, feature_row_id);
+            if encoded_scores.value(index) != expected_score {
+                return Err(invalid("V36 prefix selected-ID scores differ"));
+            }
+            rows.push(V36PrefixRowIdentity {
+                feature_row_id,
+                source_ordinal: None,
+                selected_object_ordinal: object_ordinals.value(index),
+                row_offset: row_offsets.value(index),
+            });
+        }
+        if batch_ordinal + 1 < expected_batches && batch.num_rows() != SELECTED_IDS_BATCH_ROWS {
+            return Err(invalid("V36 prefix selected-ID batches differ"));
+        }
+    }
+    if reader.next().is_some() || rows.len() != selected_rows {
+        return Err(invalid("V36 prefix selected-ID row count differs"));
+    }
+    validate_selected_id_rows(contract, &rows)?;
+    let cutoff = rows
+        .last()
+        .ok_or_else(|| invalid("V36 prefix selected-ID cutoff is missing"))?;
+    let derived_cutoff_score_sha256 = digest_hex(&score(&seed, &manifest, cutoff.feature_row_id));
+    if cutoff.feature_row_id != cutoff_feature_row_id
+        || derived_cutoff_score_sha256 != *cutoff_score_sha256
+    {
+        return Err(invalid("V36 prefix selected-ID cutoff differs"));
+    }
+    Ok(V36PrefixSelectedIds {
+        cutoff_feature_row_id: cutoff.feature_row_id,
+        cutoff_score_sha256: derived_cutoff_score_sha256,
+        rows,
+    })
 }
 
 fn v36_prefix_identity_run_schema(run: &V36PrefixIdentityRun, row_count: usize) -> Schema {
