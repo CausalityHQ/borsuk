@@ -1004,6 +1004,36 @@ fn v36_prefix_checkpoint_identity_run_is_strict_arrow_ipc() {
 }
 
 #[test]
+fn v36_prefix_checkpoint_identity_run_uses_fixed_bounded_batches() {
+    let row_count = 65_537_u64;
+    let run = V36PrefixIdentityRun {
+        physical_rows: row_count,
+        rows: (0..row_count)
+            .map(|row_offset| identity(row_offset + 1, row_offset, 3))
+            .collect(),
+        selected_object_ordinal: 3,
+        source: source_object(),
+    };
+
+    let bytes = encode_v36_prefix_identity_run(&run).unwrap();
+    let mut reader = arrow_ipc::reader::FileReader::try_new(Cursor::new(&bytes), None).unwrap();
+    assert_eq!(reader.num_batches(), 2);
+    assert_eq!(reader.next().unwrap().unwrap().num_rows(), 65_536);
+    assert_eq!(reader.next().unwrap().unwrap().num_rows(), 1);
+    assert!(reader.next().is_none());
+    assert_eq!(
+        decode_v36_prefix_identity_run(
+            &bytes,
+            &identity_run_artifact(&bytes, 3),
+            &source_object(),
+            3,
+        )
+        .unwrap(),
+        run
+    );
+}
+
+#[test]
 fn v36_prefix_checkpoint_identity_run_accepts_global_cohort_b_ordinal() {
     let run = V36PrefixIdentityRun {
         physical_rows: 3,

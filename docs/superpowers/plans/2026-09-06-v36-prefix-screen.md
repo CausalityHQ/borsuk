@@ -262,25 +262,56 @@ conversion remains because BORSUK is prerelease.
   The population implementation is a bounded external merge, not a resident
   cross-object vector set or a target-sized hash heap. For each authenticated
   object, stream strict `(feature_row_id,row_offset)` records into capped
-  sorted Arrow IPC spills; retain the minimum row offset per ID; anti-join the
+  private identity spills; retain the minimum row offset per ID; anti-join the
   sorted stream against earlier committed runs so the globally earliest
   physical occurrence wins; then publish one immutable, possibly empty,
-  first-occurrence run. Keep only file-backed authenticated dependencies in the
-  writer and restore path. After all sixteen runs exist, externally score-sort
-  fixed records by `(population_sha256,unsigned_feature_row_id)` with bounded
-  fan-in, apply any authenticated prior-cohort exclusion, and emit exactly the
-  first 1,100,000 identities. A complete window with insufficient eligible IDs
-  is `screen-source-insufficient`; a spill/row/disk bound is infrastructure,
-  never scientific insufficiency.
+  first-occurrence Arrow IPC run. Keep only file-backed authenticated
+  dependencies in the writer and restore path. Private attempt-local spills use
+  explicit versioned little-endian records rather than Rust struct memory:
+  identity records are 18 bytes (`u64 ID,u16 object,u64 offset`) and scored
+  records are 50 bytes (identity plus 32-byte SHA-256). Reject malformed
+  headers, comparator/version drift, truncated or trailing records, decreasing
+  keys, and declared-count mismatches. Scratch is never resume authority.
 
-  Mutation-test multi-batch spills, duplicate-only empty runs, cross-object
+  After all sixteen durable runs exist, externally score-sort by
+  `(population_sha256,unsigned_feature_row_id)` with bounded fan-in and apply an
+  authenticated prior-cohort exclusion after physical-first deduplication.
+  Drain the complete valid merge to derive exact eligible and excluded counts,
+  while spooling only the first 1,100,000 winners. Because selected-Arrow schema
+  metadata binds the final cutoff and counts, authenticate that bounded spool
+  before opening the canonical Arrow writer; return only a file receipt, never
+  a resident row vector or artifact byte vector. A complete window with
+  insufficient eligible IDs is `screen-source-insufficient`; a
+  spill/row/disk/allocation bound is infrastructure, never scientific
+  insufficiency.
+
+  The production boundary is file-backed end to end: authenticated local
+  identity-run descriptors, optional authenticated predecessor selection,
+  explicit external-selection limits, attempt-owned scratch root, and a final
+  output path produce a selected-file receipt. Preflight Arrow footer, schema,
+  dictionary/compression absence, batch count, block extents and declared rows
+  before constructing the Arrow reader. Read fixed 65,536-row durable batches,
+  preserve ordering validation across batches, and release each batch before
+  advancing. Use `C=65,536`, `F=16`, `B=64 KiB` initially: fixed merge buffers
+  are 4.3125 MiB, additional descriptors are at most 21, and explicitly capped
+  Arrow/metadata working allocations keep owned working memory at or below
+  48 MiB. Reserve scratch before each generation; allow at most one input and
+  one output generation concurrently; delete inputs only after the output is
+  flushed, synced, closed and authenticated. Attempt-directory RAII handles
+  ordinary errors, while restart reclaims only non-authoritative abandoned
+  attempt directories.
+
+  Mutation-test multi-batch durable Arrow runs, multi-level private spills,
+  duplicate-only empty runs, cross-object
   duplicates, a winning row from the last object after the target was already
   reached, equal-score ID ties, malicious IPC metadata/nulls/counts, byte-cap
   overflow, writer failure followed by retry, interruption after every object,
   corrupt-newest-checkpoint rejection without fallback, and external/scalar
   equality with a three-row buffer. The selected-ID artifact binds seed,
   manifest, cohort/window, exclusion identity, count, winning positions and
-  cutoff. Role selection consumes that authenticated selection and never
+  cutoff. Test identical selected bytes across buffer capacities, fan-in and
+  resume boundaries, plus bounded/malicious IPC metadata before allocation.
+  Role selection consumes that authenticated selection and never
   silently performs population selection again.
 
   Population state advances `Population(1)..Population(16) -> Selected ->

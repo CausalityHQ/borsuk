@@ -48,7 +48,8 @@ const GT_NEIGHBORS: usize = 100;
 const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 8_192;
-const IDENTITY_RUN_FORMAT: &str = "borsuk-v36-prefix-identity-run-v1";
+const IDENTITY_RUN_BATCH_ROWS: usize = 65_536;
+const IDENTITY_RUN_FORMAT: &str = "borsuk-v36-prefix-identity-run-v2";
 const SELECTED_IDS_BATCH_ROWS: usize = 65_536;
 const POPULATION_SCORE_ALGORITHM: &str =
     "sha256-seed-sha256-manifest-sha256-feature-row-id-le-u64-v2";
@@ -1203,27 +1204,25 @@ fn validate_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<()> {
 pub fn encode_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<Vec<u8>> {
     validate_v36_prefix_identity_run(run)?;
     let schema = Arc::new(v36_prefix_identity_run_schema(run, run.rows.len()));
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(UInt64Array::from(
-                run.rows
-                    .iter()
-                    .map(|row| row.feature_row_id)
-                    .collect::<Vec<_>>(),
-            )),
-            Arc::new(UInt64Array::from(
-                run.rows
-                    .iter()
-                    .map(|row| row.row_offset)
-                    .collect::<Vec<_>>(),
-            )),
-        ],
-    )?;
     let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     let mut bytes = Vec::new();
     let mut writer = ArrowFileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
-    writer.write(&batch)?;
+    for rows in run.rows.chunks(IDENTITY_RUN_BATCH_ROWS) {
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(
+                    rows.iter()
+                        .map(|row| row.feature_row_id)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt64Array::from(
+                    rows.iter().map(|row| row.row_offset).collect::<Vec<_>>(),
+                )),
+            ],
+        )?;
+        writer.write(&batch)?;
+    }
     writer.finish()?;
     drop(writer);
     Ok(bytes)
@@ -1258,52 +1257,63 @@ pub fn decode_v36_prefix_identity_run(
     let row_count = schema
         .metadata()
         .get("rows")
-        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|value| value.parse::<u64>().ok())
         .ok_or_else(|| invalid("V36 prefix identity-run schema differs"))?;
     let physical_rows = schema
         .metadata()
         .get("physical_rows")
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or_else(|| invalid("V36 prefix identity-run schema differs"))?;
+    if row_count > physical_rows {
+        return Err(invalid("V36 prefix identity-run row count differs"));
+    }
+    let row_count = usize::try_from(row_count)
+        .map_err(|_| invalid("V36 prefix identity-run row count differs"))?;
     let expected_run = V36PrefixIdentityRun {
         physical_rows,
-        rows: Vec::with_capacity(row_count),
+        rows: Vec::new(),
         selected_object_ordinal,
         source: source.clone(),
     };
+    let expected_batches = row_count.div_ceil(IDENTITY_RUN_BATCH_ROWS);
     if schema.as_ref() != &v36_prefix_identity_run_schema(&expected_run, row_count)
-        || reader.num_batches() != 1
+        || reader.num_batches() != expected_batches
     {
         return Err(invalid("V36 prefix identity-run schema differs"));
     }
-    let batch = reader
-        .next()
-        .transpose()?
-        .ok_or_else(|| invalid("V36 prefix identity-run batch is missing"))?;
-    if reader.next().is_some() || batch.num_rows() != row_count {
+    let mut rows = Vec::with_capacity(row_count);
+    for batch_index in 0..expected_batches {
+        let batch = reader
+            .next()
+            .transpose()?
+            .ok_or_else(|| invalid("V36 prefix identity-run batch is missing"))?;
+        let expected_rows =
+            (row_count - batch_index * IDENTITY_RUN_BATCH_ROWS).min(IDENTITY_RUN_BATCH_ROWS);
+        if batch.num_rows() != expected_rows {
+            return Err(invalid("V36 prefix identity-run batches differ"));
+        }
+        let feature_ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix identity-run feature IDs differ"))?;
+        let row_offsets = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix identity-run row offsets differ"))?;
+        rows.extend(feature_ids.values().iter().zip(row_offsets.values()).map(
+            |(&feature_row_id, &row_offset)| V36PrefixRowIdentity {
+                feature_row_id,
+                source_ordinal: None,
+                selected_object_ordinal,
+                row_offset,
+            },
+        ));
+    }
+    if reader.next().is_some() || rows.len() != row_count {
         return Err(invalid("V36 prefix identity-run batches differ"));
     }
-    let feature_ids = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| invalid("V36 prefix identity-run feature IDs differ"))?;
-    let row_offsets = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| invalid("V36 prefix identity-run row offsets differ"))?;
-    let rows = feature_ids
-        .values()
-        .iter()
-        .zip(row_offsets.values())
-        .map(|(&feature_row_id, &row_offset)| V36PrefixRowIdentity {
-            feature_row_id,
-            source_ordinal: None,
-            selected_object_ordinal,
-            row_offset,
-        })
-        .collect::<Vec<_>>();
     let run = V36PrefixIdentityRun {
         physical_rows,
         rows,
