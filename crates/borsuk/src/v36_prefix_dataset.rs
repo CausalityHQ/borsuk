@@ -9,7 +9,7 @@ use std::{
 
 use arrow_array::{
     Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
-    Int64Array, RecordBatch, UInt16Array, UInt32Array, UInt64Array,
+    Int64Array, RecordBatch, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     MetadataVersion,
@@ -57,6 +57,8 @@ const POPULATION_SCORE_ALGORITHM: &str =
 const POPULATION_SEED_SHA256: &str =
     "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e";
 const SELECTED_IDS_FORMAT: &str = "borsuk-v36-prefix-selected-identities-v2";
+const ROLE_ASSIGNMENT_FORMAT: &str = "borsuk-v36-prefix-role-assignments-v1";
+const ROLE_ASSIGNMENT_MAX_OWNED_BYTES: u64 = 48 * 1024 * 1024;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -864,6 +866,52 @@ pub struct V36PrefixExternalSelectionRequest<'a> {
     pub runs: &'a [V36PrefixIdentityRunFile],
     /// Existing directory beneath which attempt-owned scratch is created.
     pub scratch_root: &'a Path,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact authority for assigning one selected population to disjoint roles.
+pub struct V36PrefixRoleAssignmentContract {
+    /// Exact number of source-corpus rows retained after query removal.
+    pub corpus_rows: u64,
+    /// Frozen corpus ordering seed label.
+    pub corpus_seed_label: String,
+    /// SHA-256 of the corpus seed label.
+    pub corpus_seed_sha256: String,
+    /// SHA-256 of the complete ordered source manifest.
+    pub ordered_source_manifest_sha256: String,
+    /// Priority-ordered disjoint query roles.
+    pub roles: Vec<V36PrefixRoleAuthority>,
+    /// Number of selected source objects.
+    pub selected_object_count: u16,
+    /// Global ordinal of the first selected source object.
+    pub selected_object_start: u16,
+    /// Exact immutable selected-population artifact.
+    pub selected_population_identity: V36ArtifactIdentity,
+    /// Exact selected-population row count.
+    pub selected_rows: u64,
+}
+
+/// File-backed request for bounded deterministic role assignment.
+pub struct V36PrefixRoleAssignmentRequest<'a> {
+    /// Role and selected-population authority.
+    pub contract: &'a V36PrefixRoleAssignmentContract,
+    /// Hard external-memory limits.
+    pub limits: &'a V36PrefixExternalSelectionLimits,
+    /// Final canonical Arrow destination.
+    pub output: &'a Path,
+    /// S3 URI prefix used for the content-addressed receipt.
+    pub output_uri_prefix: &'a str,
+    /// Existing directory beneath which attempt-owned scratch is created.
+    pub scratch_root: &'a Path,
+    /// Authenticated selected-population Arrow file.
+    pub selected: &'a V36PrefixSelectedIdsFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated receipt for one physical-order role-assignment artifact.
+pub struct V36PrefixRoleAssignmentReceipt {
+    /// Exact content-addressed Arrow identity.
+    pub identity: V36ArtifactIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3231,6 +3279,629 @@ pub fn externally_select_v36_prefix_population_rows(
             role: "population-selected-identities".to_owned(),
             sha256: sha256.clone(),
             uri: format!("{prefix}/{sha256}-population-selected-identities.arrow"),
+        },
+    })
+}
+
+fn validate_v36_prefix_role_assignment_contract(
+    contract: &V36PrefixRoleAssignmentContract,
+    selected: &V36PrefixSelectedIdsFile,
+) -> Result<([u8; 32], [u8; 32])> {
+    let expected_names = ["development", "validation", "sealed-holdout", "performance"];
+    let expected_labels = [
+        "borsuk-v36-prefix-screen-development-query-v2",
+        "borsuk-v36-prefix-screen-validation-query-v2",
+        "borsuk-v36-prefix-screen-sealed-holdout-query-v2",
+        "borsuk-v36-prefix-screen-performance-query-v2",
+    ];
+    let query_rows = contract.roles.iter().try_fold(0_u64, |sum, role| {
+        sum.checked_add(role.rows)
+            .ok_or_else(|| invalid("V36 prefix role row count overflows"))
+    })?;
+    if contract.roles.len() != 4
+        || contract.corpus_rows == 0
+        || contract.selected_rows != selected.contract.selected_rows
+        || contract.selected_population_identity != selected.identity
+        || contract.ordered_source_manifest_sha256
+            != selected.contract.ordered_source_manifest_sha256
+        || contract.selected_object_start != selected.contract.selected_object_start
+        || contract.selected_object_count != selected.contract.selected_object_count
+        || contract.corpus_seed_label != "borsuk-v36-prefix-screen-corpus-v2"
+        || contract.corpus_seed_sha256
+            != format!(
+                "{:x}",
+                Sha256::digest(contract.corpus_seed_label.as_bytes())
+            )
+        || query_rows
+            .checked_add(contract.corpus_rows)
+            .is_none_or(|assigned| assigned > contract.selected_rows)
+    {
+        return Err(invalid("V36 prefix role-assignment authority differs"));
+    }
+    for ((role, expected_name), expected_label) in contract
+        .roles
+        .iter()
+        .zip(expected_names)
+        .zip(expected_labels)
+    {
+        if role.role != expected_name
+            || role.seed_label != expected_label
+            || role.rows == 0
+            || role.seed_sha256 != format!("{:x}", Sha256::digest(role.seed_label.as_bytes()))
+        {
+            return Err(invalid("V36 prefix role-assignment authority differs"));
+        }
+    }
+    Ok((
+        digest_bytes(&contract.corpus_seed_sha256)?,
+        digest_bytes(&contract.ordered_source_manifest_sha256)?,
+    ))
+}
+
+fn project_v36_prefix_role_assignment_owned_bytes(
+    contract: &V36PrefixRoleAssignmentContract,
+    limits: &V36PrefixExternalSelectionLimits,
+) -> Result<u64> {
+    let record_bytes = u64::try_from(size_of::<V36PrefixScoredIdentity>()).unwrap();
+    let mut cumulative = 0_u64;
+    let mut heap_slots = 0_u64;
+    for role in &contract.roles {
+        cumulative = cumulative
+            .checked_add(role.rows)
+            .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+        let capacity = cumulative
+            .checked_next_power_of_two()
+            .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+        heap_slots = heap_slots
+            .checked_add(capacity)
+            .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+    }
+    let heap_bytes = heap_slots
+        .checked_mul(record_bytes)
+        .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+    let assignment_bytes = cumulative
+        .checked_mul(record_bytes)
+        .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+    let chosen_bytes = cumulative
+        .checked_mul(64)
+        .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+    let sort_bytes = u64::try_from(limits.sort_buffer_records)
+        .ok()
+        .and_then(|records| records.checked_mul(record_bytes))
+        .and_then(|bytes| bytes.checked_mul(2))
+        .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+    let io_bytes = u64::try_from(limits.merge_fan_in)
+        .ok()
+        .and_then(|readers| readers.checked_add(4))
+        .and_then(|buffers| buffers.checked_mul(limits.io_buffer_bytes as u64))
+        .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+    let arrow_bytes = u64::try_from(SELECTED_IDS_BATCH_ROWS)
+        .unwrap()
+        .checked_mul(64)
+        .and_then(|bytes| bytes.checked_add(EXTERNAL_MAX_ARROW_FOOTER_BYTES as u64))
+        .ok_or_else(|| resource_limit("role-assignment owned memory"))?;
+    heap_bytes
+        .checked_add(assignment_bytes)
+        .and_then(|bytes| bytes.checked_add(chosen_bytes))
+        .and_then(|bytes| bytes.checked_add(sort_bytes))
+        .and_then(|bytes| bytes.checked_add(io_bytes))
+        .and_then(|bytes| bytes.checked_add(arrow_bytes))
+        .ok_or_else(|| resource_limit("role-assignment owned memory"))
+}
+
+fn v36_prefix_role_assignment_score(
+    selected_object_ordinal: u16,
+    row_offset: u64,
+    role: u8,
+    role_ordinal: u64,
+) -> [u8; 32] {
+    let mut key = [0_u8; 32];
+    key[..2].copy_from_slice(&selected_object_ordinal.to_be_bytes());
+    key[2..10].copy_from_slice(&row_offset.to_be_bytes());
+    key[10] = role;
+    key[11..19].copy_from_slice(&role_ordinal.to_be_bytes());
+    key
+}
+
+fn v36_prefix_role_assignment_record(
+    row: V36PrefixScoredIdentity,
+    role: u8,
+    role_ordinal: u64,
+) -> V36PrefixScoredIdentity {
+    V36PrefixScoredIdentity {
+        score: v36_prefix_role_assignment_score(
+            row.selected_object_ordinal,
+            row.row_offset,
+            role,
+            role_ordinal,
+        ),
+        feature_row_id: row.feature_row_id,
+        selected_object_ordinal: row.selected_object_ordinal,
+        row_offset: row.row_offset,
+    }
+}
+
+fn push_v36_prefix_external_record(
+    record: V36PrefixScoredIdentity,
+    buffer: &mut Vec<V36PrefixScoredIdentity>,
+    spills: &mut Vec<PathBuf>,
+    next_spill: &mut usize,
+    attempt: &Path,
+    limits: &V36PrefixExternalSelectionLimits,
+) -> Result<()> {
+    buffer.push(record);
+    if buffer.len() == limits.sort_buffer_records {
+        if spills.len() >= limits.max_spills {
+            return Err(resource_limit("spill count"));
+        }
+        spills.push(create_v36_prefix_spill(
+            attempt,
+            *next_spill,
+            buffer,
+            limits.io_buffer_bytes,
+            limits.max_scratch_bytes,
+        )?);
+        *next_spill += 1;
+        buffer.clear();
+    }
+    Ok(())
+}
+
+fn finish_v36_prefix_external_spills(
+    buffer: &mut Vec<V36PrefixScoredIdentity>,
+    mut spills: Vec<PathBuf>,
+    next_spill: &mut usize,
+    attempt: &Path,
+    limits: &V36PrefixExternalSelectionLimits,
+) -> Result<PathBuf> {
+    if !buffer.is_empty() {
+        if spills.len() >= limits.max_spills {
+            return Err(resource_limit("spill count"));
+        }
+        spills.push(create_v36_prefix_spill(
+            attempt,
+            *next_spill,
+            buffer,
+            limits.io_buffer_bytes,
+            limits.max_scratch_bytes,
+        )?);
+        *next_spill += 1;
+        buffer.clear();
+    }
+    if spills.is_empty() {
+        return Err(invalid("V36 prefix role-assignment rows are missing"));
+    }
+    while spills.len() > limits.merge_fan_in {
+        let mut outputs = Vec::new();
+        for group in spills.chunks(limits.merge_fan_in) {
+            let output = attempt.join(format!("spill-{:08}.bin", *next_spill));
+            merge_v36_prefix_spills(
+                group,
+                &output,
+                limits.io_buffer_bytes,
+                limits.max_scratch_bytes,
+            )?;
+            *next_spill += 1;
+            outputs.push(output);
+        }
+        spills = outputs;
+    }
+    let output = attempt.join(format!("spill-{:08}.bin", *next_spill));
+    merge_v36_prefix_spills(
+        &spills,
+        &output,
+        limits.io_buffer_bytes,
+        limits.max_scratch_bytes,
+    )?;
+    *next_spill += 1;
+    Ok(output)
+}
+
+fn v36_prefix_role_assignment_schema(contract: &V36PrefixRoleAssignmentContract) -> Schema {
+    let query_rows = contract.roles.iter().map(|role| role.rows).sum::<u64>();
+    let assigned_rows = query_rows + contract.corpus_rows;
+    let metadata = HashMap::from([
+        ("assigned_rows".into(), assigned_rows.to_string()),
+        ("corpus_rows".into(), contract.corpus_rows.to_string()),
+        (
+            "corpus_seed_label".into(),
+            contract.corpus_seed_label.clone(),
+        ),
+        (
+            "corpus_seed_sha256".into(),
+            contract.corpus_seed_sha256.clone(),
+        ),
+        (
+            "dropped_rows".into(),
+            (contract.selected_rows - assigned_rows).to_string(),
+        ),
+        ("format".into(), ROLE_ASSIGNMENT_FORMAT.into()),
+        (
+            "ordered_source_manifest_sha256".into(),
+            contract.ordered_source_manifest_sha256.clone(),
+        ),
+        (
+            "role_rows".into(),
+            contract
+                .roles
+                .iter()
+                .map(|role| role.rows.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        (
+            "role_mapping".into(),
+            "0:corpus,1:development,2:validation,3:sealed-holdout,4:performance".into(),
+        ),
+        (
+            "role_seed_sha256".into(),
+            contract
+                .roles
+                .iter()
+                .map(|role| role.seed_sha256.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        (
+            "selected_identity_blake3".into(),
+            contract.selected_population_identity.blake3.clone(),
+        ),
+        (
+            "selected_identity_bytes".into(),
+            contract
+                .selected_population_identity
+                .encoded_bytes
+                .to_string(),
+        ),
+        (
+            "selected_identity_sha256".into(),
+            contract.selected_population_identity.sha256.clone(),
+        ),
+        (
+            "selected_identity_uri".into(),
+            contract.selected_population_identity.uri.clone(),
+        ),
+        (
+            "selected_object_count".into(),
+            contract.selected_object_count.to_string(),
+        ),
+        (
+            "selected_object_start".into(),
+            contract.selected_object_start.to_string(),
+        ),
+        ("selected_rows".into(), contract.selected_rows.to_string()),
+        (
+            "sort".into(),
+            "selected-object-ordinal-row-offset-role-role-ordinal".into(),
+        ),
+    ]);
+    Schema::new_with_metadata(
+        vec![
+            Field::new("selected_object_ordinal", DataType::UInt16, false),
+            Field::new("row_offset", DataType::UInt64, false),
+            Field::new("feature_row_id", DataType::UInt64, false),
+            Field::new("role", DataType::UInt8, false),
+            Field::new("role_ordinal", DataType::UInt64, false),
+        ],
+        metadata,
+    )
+}
+
+fn write_v36_prefix_role_assignment_file(
+    contract: &V36PrefixRoleAssignmentContract,
+    physical_spill: &Path,
+    limits: &V36PrefixExternalSelectionLimits,
+    output: &Path,
+) -> Result<(u64, String, String)> {
+    let schema = Arc::new(v36_prefix_role_assignment_schema(contract));
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut reader = V36PrefixSpillReader::open(physical_spill, limits.io_buffer_bytes)?;
+    let mut temporary = temporary_output(output)?;
+    let mut writer = ArrowFileWriter::try_new_with_options(
+        BufWriter::with_capacity(limits.io_buffer_bytes, temporary.as_file()),
+        schema.as_ref(),
+        options,
+    )?;
+    let mut rows = Vec::with_capacity(SELECTED_IDS_BATCH_ROWS);
+    let mut previous_physical = None;
+    while let Some(record) = reader.next_record()? {
+        let physical = (record.selected_object_ordinal, record.row_offset);
+        if previous_physical.is_some_and(|previous| previous >= physical)
+            || record.score[..10]
+                != v36_prefix_role_assignment_score(physical.0, physical.1, 0, 0)[..10]
+        {
+            return Err(invalid("V36 prefix role-assignment physical order differs"));
+        }
+        previous_physical = Some(physical);
+        rows.push(record);
+        if rows.len() == SELECTED_IDS_BATCH_ROWS {
+            write_v36_prefix_role_assignment_batch(&mut writer, schema.clone(), &rows)?;
+            rows.clear();
+        }
+    }
+    if !rows.is_empty() {
+        write_v36_prefix_role_assignment_batch(&mut writer, schema, &rows)?;
+    }
+    writer.finish()?;
+    let mut buffered = writer.into_inner()?;
+    v36_prefix_external_io(output, buffered.flush())?;
+    drop(buffered);
+    let identity =
+        v36_prefix_file_handle_digests(temporary.as_file_mut(), output, limits.io_buffer_bytes)?;
+    publish_output_noclobber(temporary, output)?;
+    Ok(identity)
+}
+
+fn write_v36_prefix_role_assignment_batch(
+    writer: &mut ArrowFileWriter<BufWriter<&File>>,
+    schema: Arc<Schema>,
+    rows: &[V36PrefixScoredIdentity],
+) -> Result<()> {
+    writer.write(&RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(UInt16Array::from(
+                rows.iter()
+                    .map(|row| row.selected_object_ordinal)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|row| row.row_offset).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter()
+                    .map(|row| row.feature_row_id)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt8Array::from(
+                rows.iter().map(|row| row.score[10]).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter()
+                    .map(|row| u64::from_be_bytes(row.score[11..19].try_into().unwrap()))
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )?)?;
+    Ok(())
+}
+
+/// Assign an authenticated selected population to roles without resident bulk state.
+pub fn assign_v36_prefix_roles_from_selected_file(
+    request: V36PrefixRoleAssignmentRequest<'_>,
+) -> Result<V36PrefixRoleAssignmentReceipt> {
+    let V36PrefixRoleAssignmentRequest {
+        contract,
+        limits,
+        output,
+        output_uri_prefix,
+        scratch_root,
+        selected,
+    } = request;
+    let (corpus_seed, manifest) = validate_v36_prefix_role_assignment_contract(contract, selected)?;
+    if limits.max_spills > EXTERNAL_MAX_SPILLS
+        || limits.merge_fan_in > EXTERNAL_MAX_FAN_IN
+        || limits.sort_buffer_records > EXTERNAL_MAX_SORT_BUFFER_RECORDS
+        || limits.io_buffer_bytes > EXTERNAL_MAX_IO_BUFFER_BYTES
+        || limits.io_buffer_bytes == 0
+        || limits.max_input_bytes == 0
+        || limits.max_scratch_bytes == 0
+        || limits.max_spills == 0
+        || limits.merge_fan_in < 2
+        || limits.sort_buffer_records == 0
+    {
+        return Err(resource_limit("external role-assignment configuration"));
+    }
+    if project_v36_prefix_role_assignment_owned_bytes(contract, limits)?
+        > ROLE_ASSIGNMENT_MAX_OWNED_BYTES
+    {
+        return Err(resource_limit("role-assignment owned memory"));
+    }
+    let output_uri = url::Url::parse(output_uri_prefix)
+        .map_err(|_| invalid("V36 prefix role-assignment output URI differs"))?;
+    let output_parent = output
+        .parent()
+        .ok_or_else(|| invalid("V36 prefix role-assignment output path differs"))?;
+    let scratch_type = fs::symlink_metadata(scratch_root)
+        .map_err(|source| BorsukError::Io {
+            path: scratch_root.to_owned(),
+            source,
+        })?
+        .file_type();
+    let output_parent_type = fs::symlink_metadata(output_parent)
+        .map_err(|source| BorsukError::Io {
+            path: output_parent.to_owned(),
+            source,
+        })?
+        .file_type();
+    if output_uri.scheme() != "s3"
+        || output_uri.host_str().is_none()
+        || output_uri.query().is_some()
+        || output_uri.fragment().is_some()
+        || output.exists()
+        || !scratch_type.is_dir()
+        || scratch_type.is_symlink()
+        || !output_parent_type.is_dir()
+        || output_parent_type.is_symlink()
+    {
+        return Err(invalid(
+            "V36 prefix external role-assignment output differs",
+        ));
+    }
+    let attempt = tempfile::tempdir_in(scratch_root).map_err(|source| BorsukError::Io {
+        path: scratch_root.to_owned(),
+        source,
+    })?;
+    let mut stream = open_v36_prefix_selected_stream(
+        selected,
+        limits,
+        attempt.path(),
+        "selected-population.arrow",
+    )?;
+    let mut cumulative = 0_usize;
+    let mut heaps = Vec::with_capacity(contract.roles.len());
+    for role in &contract.roles {
+        cumulative = cumulative
+            .checked_add(
+                usize::try_from(role.rows)
+                    .map_err(|_| invalid("V36 prefix role row count overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix role row count overflows"))?;
+        heaps.push((
+            digest_bytes(&role.seed_sha256)?,
+            cumulative,
+            BinaryHeap::new(),
+        ));
+    }
+    let mut physical = V36PrefixPhysicalUniqueness::new(attempt.path(), limits, 0);
+    while let Some(row) = stream.next_record()? {
+        physical.push(row)?;
+        for (seed, capacity, heap) in &mut heaps {
+            let ranked = V36PrefixScoredIdentity {
+                score: score(seed, &manifest, row.feature_row_id),
+                feature_row_id: row.feature_row_id,
+                selected_object_ordinal: row.selected_object_ordinal,
+                row_offset: row.row_offset,
+            };
+            if heap.len() < *capacity {
+                heap.push(ranked);
+            } else if heap.peek().is_some_and(|worst| ranked < *worst) {
+                heap.pop();
+                heap.push(ranked);
+            }
+        }
+    }
+    physical.finish()?;
+    drop(stream);
+    let selected_snapshot = attempt.path().join("selected-population.arrow");
+    fs::remove_file(&selected_snapshot).map_err(|source| BorsukError::Io {
+        path: selected_snapshot,
+        source,
+    })?;
+
+    let mut chosen = HashSet::with_capacity(cumulative);
+    let mut query_assignments = Vec::with_capacity(cumulative);
+    for (role_index, ((_, _, heap), role)) in heaps.into_iter().zip(&contract.roles).enumerate() {
+        let mut ordinal = 0_u64;
+        for row in heap.into_sorted_vec() {
+            if chosen.insert(row.feature_row_id) {
+                query_assignments.push(v36_prefix_role_assignment_record(
+                    row,
+                    u8::try_from(role_index + 1)
+                        .map_err(|_| invalid("V36 prefix role ordinal overflows"))?,
+                    ordinal,
+                ));
+                ordinal += 1;
+                if ordinal == role.rows {
+                    break;
+                }
+            }
+        }
+        if ordinal != role.rows {
+            return Err(invalid("V36 prefix query population is insufficient"));
+        }
+    }
+
+    let mut corpus_stream = open_v36_prefix_selected_stream(
+        selected,
+        limits,
+        attempt.path(),
+        "selected-population.arrow",
+    )?;
+    let mut next_spill = 0_usize;
+    let mut corpus_buffer = Vec::with_capacity(limits.sort_buffer_records);
+    let mut corpus_spills = Vec::new();
+    let mut remaining_rows = 0_u64;
+    while let Some(row) = corpus_stream.next_record()? {
+        if chosen.contains(&row.feature_row_id) {
+            continue;
+        }
+        remaining_rows += 1;
+        push_v36_prefix_external_record(
+            V36PrefixScoredIdentity {
+                score: score(&corpus_seed, &manifest, row.feature_row_id),
+                feature_row_id: row.feature_row_id,
+                selected_object_ordinal: row.selected_object_ordinal,
+                row_offset: row.row_offset,
+            },
+            &mut corpus_buffer,
+            &mut corpus_spills,
+            &mut next_spill,
+            attempt.path(),
+            limits,
+        )?;
+    }
+    drop(corpus_stream);
+    let selected_snapshot = attempt.path().join("selected-population.arrow");
+    fs::remove_file(&selected_snapshot).map_err(|source| BorsukError::Io {
+        path: selected_snapshot,
+        source,
+    })?;
+    if remaining_rows != contract.selected_rows - u64::try_from(chosen.len()).unwrap_or(u64::MAX)
+        || remaining_rows < contract.corpus_rows
+    {
+        return Err(invalid("V36 prefix corpus population is insufficient"));
+    }
+    let corpus = finish_v36_prefix_external_spills(
+        &mut corpus_buffer,
+        corpus_spills,
+        &mut next_spill,
+        attempt.path(),
+        limits,
+    )?;
+
+    let mut physical_buffer = Vec::with_capacity(limits.sort_buffer_records);
+    let mut physical_spills = Vec::new();
+    for assignment in query_assignments {
+        push_v36_prefix_external_record(
+            assignment,
+            &mut physical_buffer,
+            &mut physical_spills,
+            &mut next_spill,
+            attempt.path(),
+            limits,
+        )?;
+    }
+    let mut corpus_reader = V36PrefixSpillReader::open(&corpus, limits.io_buffer_bytes)?;
+    let mut corpus_ordinal = 0_u64;
+    while let Some(row) = corpus_reader.next_record()? {
+        if corpus_ordinal < contract.corpus_rows {
+            push_v36_prefix_external_record(
+                v36_prefix_role_assignment_record(row, 0, corpus_ordinal),
+                &mut physical_buffer,
+                &mut physical_spills,
+                &mut next_spill,
+                attempt.path(),
+                limits,
+            )?;
+            corpus_ordinal += 1;
+        }
+    }
+    if corpus_ordinal != contract.corpus_rows {
+        return Err(invalid("V36 prefix corpus population is insufficient"));
+    }
+    drop(corpus_reader);
+    fs::remove_file(&corpus).map_err(|source| BorsukError::Io {
+        path: corpus,
+        source,
+    })?;
+    let physical = finish_v36_prefix_external_spills(
+        &mut physical_buffer,
+        physical_spills,
+        &mut next_spill,
+        attempt.path(),
+        limits,
+    )?;
+    let (encoded_bytes, sha256, blake3) =
+        write_v36_prefix_role_assignment_file(contract, &physical, limits, output)?;
+    let prefix = output_uri_prefix.trim_end_matches('/');
+    Ok(V36PrefixRoleAssignmentReceipt {
+        identity: V36ArtifactIdentity {
+            blake3,
+            encoded_bytes,
+            role: "population-role-assignments".into(),
+            sha256: sha256.clone(),
+            uri: format!("{prefix}/{sha256}-population-role-assignments.arrow"),
         },
     })
 }

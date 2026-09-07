@@ -4,7 +4,7 @@ use std::{fs, path::Path, sync::Arc};
 
 use arrow_array::{
     Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
-    Int64Array, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
+    Int64Array, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     MetadataVersion,
@@ -18,8 +18,9 @@ use borsuk::{
     V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob, V36PrefixIdentityRun,
     V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixPopulationAuthority,
     V36PrefixPopulationCommit, V36PrefixQualityRole, V36PrefixRankedSourceObject,
-    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAuthority,
-    V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile, V36PrefixSourceObject,
+    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAssignmentContract,
+    V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
+    V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
@@ -684,6 +685,306 @@ fn rewrite_external_selected_file(
     drop(writer);
     selected.identity = selected_ids_identity(&output);
     fs::write(&selected.path, output).unwrap();
+}
+
+fn reduced_role_assignment_contract(
+    selected: &V36PrefixSelectedIdsFile,
+) -> V36PrefixRoleAssignmentContract {
+    let mut roles = role_authorities();
+    for (role, rows) in roles.iter_mut().zip([2, 2, 2, 4]) {
+        role.rows = rows;
+    }
+    V36PrefixRoleAssignmentContract {
+        corpus_rows: 8,
+        corpus_seed_label: "borsuk-v36-prefix-screen-corpus-v2".into(),
+        corpus_seed_sha256: "56b288d41e87d3b4ba97ac02b9944837e6bde8b402b8fab088861a27ef099f8c"
+            .into(),
+        ordered_source_manifest_sha256: "1".repeat(64),
+        roles: roles.into(),
+        selected_object_count: 1,
+        selected_object_start: 0,
+        selected_population_identity: selected.identity.clone(),
+        selected_rows: selected.contract.selected_rows,
+    }
+}
+
+fn scalar_role_assignments(
+    selected: &[borsuk::V36PrefixRowIdentity],
+    contract: &V36PrefixRoleAssignmentContract,
+) -> Vec<(u16, u64, u64, u8, u64)> {
+    let mut remaining = selected.to_vec();
+    let mut assignments = Vec::new();
+    for (role_index, role) in contract.roles.iter().enumerate() {
+        remaining.sort_by_key(|row| {
+            (
+                v36_prefix_query_score_sha256(
+                    &role.seed_label,
+                    &contract.ordered_source_manifest_sha256,
+                    row.feature_row_id,
+                )
+                .unwrap(),
+                row.feature_row_id,
+            )
+        });
+        let rest = remaining.split_off(role.rows.try_into().unwrap());
+        assignments.extend(remaining.into_iter().enumerate().map(|(ordinal, row)| {
+            (
+                row.selected_object_ordinal,
+                row.row_offset,
+                row.feature_row_id,
+                u8::try_from(role_index + 1).unwrap(),
+                u64::try_from(ordinal).unwrap(),
+            )
+        }));
+        remaining = rest;
+    }
+    remaining.sort_by_key(|row| {
+        (
+            v36_prefix_source_score_sha256(
+                &contract.ordered_source_manifest_sha256,
+                row.feature_row_id,
+            )
+            .unwrap(),
+            row.feature_row_id,
+        )
+    });
+    assignments.extend(
+        remaining
+            .into_iter()
+            .take(contract.corpus_rows.try_into().unwrap())
+            .enumerate()
+            .map(|(ordinal, row)| {
+                (
+                    row.selected_object_ordinal,
+                    row.row_offset,
+                    row.feature_row_id,
+                    0,
+                    u64::try_from(ordinal).unwrap(),
+                )
+            }),
+    );
+    assignments.sort_by_key(|assignment| (assignment.0, assignment.1));
+    assignments
+}
+
+fn read_role_assignments(path: &Path) -> Vec<(u16, u64, u64, u8, u64)> {
+    let mut reader = ArrowFileReader::try_new(fs::File::open(path).unwrap(), None).unwrap();
+    let mut rows = Vec::new();
+    for batch in &mut reader {
+        let batch = batch.unwrap();
+        let objects = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .unwrap();
+        let offsets = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let ids = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let roles = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        let ordinals = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        rows.extend((0..batch.num_rows()).map(|row| {
+            (
+                objects.value(row),
+                offsets.value(row),
+                ids.value(row),
+                roles.value(row),
+                ordinals.value(row),
+            )
+        }));
+    }
+    rows
+}
+
+#[test]
+fn v36_prefix_dataset_external_role_assignment_is_scalar_exact_and_limit_invariant() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let feature_ids = (1..=24).collect::<Vec<_>>();
+    let (selected, selected_rows) = external_selected_file(directory.path(), &feature_ids);
+    let contract = reduced_role_assignment_contract(&selected);
+    let expected = scalar_role_assignments(&selected_rows, &contract);
+    let output = directory.path().join("role-assignments.arrow");
+    let limits = external_selection_limits();
+
+    let receipt = assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+        contract: &contract,
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        scratch_root: &scratch,
+        selected: &selected,
+    })
+    .unwrap();
+    assert_eq!(read_role_assignments(&output), expected);
+    assert!(
+        expected
+            .iter()
+            .any(|assignment| assignment.2 == 19 && assignment.3 == 4 && assignment.4 == 3),
+        "performance ID 19 is globally rank 5 for a four-row role and proves cumulative heaps"
+    );
+    assert_eq!(
+        receipt.identity.encoded_bytes,
+        fs::metadata(&output).unwrap().len()
+    );
+    assert_eq!(receipt.identity.role, "population-role-assignments");
+    assert!(scratch.read_dir().unwrap().next().is_none());
+
+    let varied = directory.path().join("role-assignments-varied.arrow");
+    let varied_limits = V36PrefixExternalSelectionLimits {
+        io_buffer_bytes: 128,
+        merge_fan_in: 3,
+        sort_buffer_records: 3,
+        ..external_selection_limits()
+    };
+    assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+        contract: &contract,
+        limits: &varied_limits,
+        output: &varied,
+        output_uri_prefix: "s3://fixture/v36",
+        scratch_root: &scratch,
+        selected: &selected,
+    })
+    .unwrap();
+    assert_eq!(fs::read(varied).unwrap(), fs::read(output).unwrap());
+}
+
+#[test]
+fn v36_prefix_dataset_external_role_assignment_rejects_selected_and_role_drift() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let feature_ids = (1..=24).collect::<Vec<_>>();
+    let (mut selected, _) = external_selected_file(directory.path(), &feature_ids);
+    let mut contract = reduced_role_assignment_contract(&selected);
+    rewrite_external_selected_file(&mut selected, false, true);
+    contract.selected_population_identity = selected.identity.clone();
+    let output = directory.path().join("role-assignments.arrow");
+    let limits = external_selection_limits();
+    assert!(
+        assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+            contract: &contract,
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            scratch_root: &scratch,
+            selected: &selected,
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+
+    let (mut selected, _) = external_selected_file(directory.path(), &feature_ids);
+    let mut contract = reduced_role_assignment_contract(&selected);
+    rewrite_external_selected_file(&mut selected, true, false);
+    contract.selected_population_identity = selected.identity.clone();
+    assert!(
+        assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+            contract: &contract,
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            scratch_root: &scratch,
+            selected: &selected,
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+
+    let (selected, _) = external_selected_file(directory.path(), &feature_ids);
+    let mut contract = reduced_role_assignment_contract(&selected);
+    contract.roles[1].seed_label.push_str("-drift");
+    contract.roles[1].seed_sha256 = format!(
+        "{:x}",
+        Sha256::digest(contract.roles[1].seed_label.as_bytes())
+    );
+    assert!(
+        assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+            contract: &contract,
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            scratch_root: &scratch,
+            selected: &selected,
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_dataset_external_role_assignment_rejects_unbounded_query_heaps() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (mut selected, _) = external_selected_file(directory.path(), &[1]);
+    selected.contract.eligible_rows = 400_001;
+    selected.contract.selected_rows = 400_001;
+    let mut contract = reduced_role_assignment_contract(&selected);
+    for role in &mut contract.roles {
+        role.rows = 100_000;
+    }
+    contract.corpus_rows = 1;
+    contract.selected_rows = 400_001;
+    let output = directory.path().join("role-assignments.arrow");
+    let limits = external_selection_limits();
+
+    let error = assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+        contract: &contract,
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        scratch_root: &scratch,
+        selected: &selected,
+    })
+    .unwrap_err();
+    assert_eq!(error.code(), "v36_prefix_resource_limit");
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_dataset_external_role_assignment_never_clobbers_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (selected, _) = external_selected_file(directory.path(), &(1..=24).collect::<Vec<_>>());
+    let contract = reduced_role_assignment_contract(&selected);
+    let output = directory.path().join("role-assignments.arrow");
+    fs::write(&output, b"preserve").unwrap();
+    let limits = external_selection_limits();
+
+    assert!(
+        assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+            contract: &contract,
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            scratch_root: &scratch,
+            selected: &selected,
+        })
+        .is_err()
+    );
+    assert_eq!(fs::read(output).unwrap(), b"preserve");
+    assert!(scratch.read_dir().unwrap().next().is_none());
 }
 
 #[test]
