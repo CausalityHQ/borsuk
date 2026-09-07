@@ -1380,7 +1380,13 @@ pub fn decode_v36_prefix_identity_run(
             .ok_or_else(|| invalid("V36 prefix identity-run batch is missing"))?;
         let expected_rows =
             (row_count - batch_index * IDENTITY_RUN_BATCH_ROWS).min(IDENTITY_RUN_BATCH_ROWS);
-        if batch.num_rows() != expected_rows {
+        if batch.num_rows() != expected_rows
+            || batch.num_columns() != 2
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
             return Err(invalid("V36 prefix identity-run batches differ"));
         }
         let feature_ids = batch
@@ -1817,6 +1823,7 @@ const EXTERNAL_MAX_FAN_IN: usize = 16;
 const EXTERNAL_MAX_IO_BUFFER_BYTES: usize = 65_536;
 const EXTERNAL_MAX_SORT_BUFFER_RECORDS: usize = 65_536;
 const EXTERNAL_MAX_SPILLS: usize = 65_536;
+const EXTERNAL_MAX_ARROW_BATCHES: usize = 65_536;
 const EXTERNAL_MAX_ARROW_FOOTER_BYTES: usize = 1 << 20;
 
 fn v36_prefix_external_io<T>(path: &Path, result: std::io::Result<T>) -> Result<T> {
@@ -2143,7 +2150,38 @@ fn validate_v36_prefix_identity_batch_body(rows: u64, body_bytes: u64) -> Result
         .and_then(|column| column.checked_mul(2))
         .ok_or_else(|| resource_limit("Arrow batch body bytes"))?;
     if body_bytes != expected {
-        return Err(resource_limit("Arrow batch body bytes"));
+        return Err(invalid("V36 prefix Arrow batch body layout differs"));
+    }
+    Ok(())
+}
+
+fn align_v36_prefix_arrow_buffer(bytes: u64) -> Result<u64> {
+    bytes
+        .checked_add(7)
+        .map(|value| value / 8 * 8)
+        .ok_or_else(|| resource_limit("Arrow batch body bytes"))
+}
+
+fn validate_v36_prefix_selected_batch_body(rows: u64, body_bytes: u64) -> Result<()> {
+    let validity = align_v36_prefix_arrow_buffer(
+        rows.checked_add(7)
+            .map(|bits| bits / 8)
+            .ok_or_else(|| resource_limit("Arrow batch body bytes"))?,
+    )?;
+    let values = rows
+        .checked_mul(8 + 32 + 8)
+        .and_then(|bytes| {
+            rows.checked_mul(2)
+                .and_then(|u16_bytes| align_v36_prefix_arrow_buffer(u16_bytes).ok())
+                .and_then(|u16_bytes| bytes.checked_add(u16_bytes))
+        })
+        .ok_or_else(|| resource_limit("Arrow batch body bytes"))?;
+    let expected = validity
+        .checked_mul(4)
+        .and_then(|bytes| bytes.checked_add(values))
+        .ok_or_else(|| resource_limit("Arrow batch body bytes"))?;
+    if body_bytes != expected {
+        return Err(invalid("V36 prefix Arrow batch body layout differs"));
     }
     Ok(())
 }
@@ -2181,7 +2219,13 @@ fn copy_v36_prefix_snapshot_exact(
     ))
 }
 
-fn preflight_v36_prefix_arrow_file(file: &mut File, path: &Path, encoded_bytes: u64) -> Result<()> {
+fn preflight_v36_prefix_arrow_file(
+    file: &mut File,
+    path: &Path,
+    encoded_bytes: u64,
+    max_batch_rows: usize,
+    validate_body: fn(u64, u64) -> Result<()>,
+) -> Result<()> {
     const TRAILER_BYTES: u64 = 10;
     if encoded_bytes < TRAILER_BYTES {
         return Err(invalid("V36 prefix identity-run Arrow footer differs"));
@@ -2217,7 +2261,7 @@ fn preflight_v36_prefix_arrow_file(file: &mut File, path: &Path, encoded_bytes: 
     let batches = footer
         .recordBatches()
         .ok_or_else(|| invalid("V36 prefix identity-run Arrow batches differ"))?;
-    if batches.len() > EXTERNAL_MAX_SPILLS {
+    if batches.len() > EXTERNAL_MAX_ARROW_BATCHES {
         return Err(resource_limit("Arrow batch count"));
     }
     for block in batches {
@@ -2263,7 +2307,7 @@ fn preflight_v36_prefix_arrow_file(file: &mut File, path: &Path, encoded_bytes: 
         if batch.length() <= 0
             || usize::try_from(batch.length())
                 .ok()
-                .is_none_or(|rows| rows > IDENTITY_RUN_BATCH_ROWS)
+                .is_none_or(|rows| rows > max_batch_rows)
             || batch.compression().is_some()
         {
             return Err(invalid("V36 prefix identity-run Arrow message differs"));
@@ -2275,7 +2319,7 @@ fn preflight_v36_prefix_arrow_file(file: &mut File, path: &Path, encoded_bytes: 
         if message_body != body {
             return Err(invalid("V36 prefix identity-run Arrow block differs"));
         }
-        validate_v36_prefix_identity_batch_body(rows, body)?;
+        validate_body(rows, body)?;
     }
     v36_prefix_external_io(path, file.seek(SeekFrom::Start(0)))?;
     Ok(())
@@ -2368,7 +2412,13 @@ fn stream_v36_prefix_identity_run_file(
     {
         return Err(invalid("V36 prefix identity-run artifact differs"));
     }
-    preflight_v36_prefix_arrow_file(&mut file, &snapshot_path, encoded_bytes)?;
+    preflight_v36_prefix_arrow_file(
+        &mut file,
+        &snapshot_path,
+        encoded_bytes,
+        IDENTITY_RUN_BATCH_ROWS,
+        validate_v36_prefix_identity_batch_body,
+    )?;
     let mut reader = ArrowFileReader::try_new(file, None)?;
     let schema = reader.schema();
     let row_count = schema
@@ -2447,6 +2497,350 @@ fn stream_v36_prefix_identity_run_file(
         source,
     })?;
     Ok(())
+}
+
+struct V36PrefixSelectedStream {
+    reader: ArrowFileReader<File>,
+    batch: Option<RecordBatch>,
+    batch_index: usize,
+    contract: V36PrefixSelectedIdsContract,
+    cutoff_feature_row_id: u64,
+    cutoff_score_sha256: String,
+    expected_rows: usize,
+    finished: bool,
+    manifest: [u8; 32],
+    previous: Option<([u8; 32], u64)>,
+    seed: [u8; 32],
+    seen: usize,
+}
+
+#[derive(Clone, Copy)]
+struct V36PrefixSelectedStreamRecord {
+    feature_row_id: u64,
+    row_offset: u64,
+    score: [u8; 32],
+    selected_object_ordinal: u16,
+}
+
+impl V36PrefixSelectedStream {
+    fn next_record(&mut self) -> Result<Option<V36PrefixSelectedStreamRecord>> {
+        loop {
+            if let Some(batch) = &self.batch
+                && self.batch_index < batch.num_rows()
+            {
+                let index = self.batch_index;
+                self.batch_index += 1;
+                let feature_ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V36 prefix selected-ID feature IDs differ"))?;
+                let encoded_scores = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .ok_or_else(|| invalid("V36 prefix selected-ID scores differ"))?;
+                let object_ordinals = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<UInt16Array>()
+                    .ok_or_else(|| invalid("V36 prefix selected-ID object ordinals differ"))?;
+                let row_offsets = batch
+                    .column(3)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V36 prefix selected-ID row offsets differ"))?;
+                let feature_row_id = feature_ids.value(index);
+                let computed = score(&self.seed, &self.manifest, feature_row_id);
+                let rank = (computed, feature_row_id);
+                let window_end =
+                    self.contract.selected_object_start + self.contract.selected_object_count;
+                if encoded_scores.value(index) != computed
+                    || object_ordinals.value(index) < self.contract.selected_object_start
+                    || object_ordinals.value(index) >= window_end
+                    || self.previous.is_some_and(|previous| previous >= rank)
+                    || row_offsets.is_null(index)
+                {
+                    return Err(invalid("V36 prefix selected-ID rows differ"));
+                }
+                self.previous = Some(rank);
+                self.seen += 1;
+                return Ok(Some(V36PrefixSelectedStreamRecord {
+                    feature_row_id,
+                    row_offset: row_offsets.value(index),
+                    score: computed,
+                    selected_object_ordinal: object_ordinals.value(index),
+                }));
+            }
+            if self.finished {
+                return Ok(None);
+            }
+            match self.reader.next().transpose()? {
+                Some(batch) => {
+                    let remaining = self.expected_rows.saturating_sub(self.seen);
+                    let expected = remaining.min(SELECTED_IDS_BATCH_ROWS);
+                    if batch.num_rows() != expected
+                        || batch.num_columns() != 4
+                        || batch
+                            .columns()
+                            .iter()
+                            .any(|column| column.null_count() != 0)
+                    {
+                        return Err(invalid("V36 prefix selected-ID batches differ"));
+                    }
+                    self.batch = Some(batch);
+                    self.batch_index = 0;
+                }
+                None => {
+                    self.finished = true;
+                    let final_rank = self
+                        .previous
+                        .ok_or_else(|| invalid("V36 prefix selected-ID cutoff is missing"))?;
+                    if self.seen != self.expected_rows
+                        || final_rank.1 != self.cutoff_feature_row_id
+                        || digest_hex(&final_rank.0) != self.cutoff_score_sha256
+                    {
+                        return Err(invalid("V36 prefix selected-ID cutoff differs"));
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+    }
+}
+
+struct V36PrefixPhysicalUniqueness<'a> {
+    attempt: &'a Path,
+    buffer: Vec<V36PrefixScoredIdentity>,
+    limits: &'a V36PrefixExternalSelectionLimits,
+    next_spill: usize,
+    spills: Vec<PathBuf>,
+}
+
+impl<'a> V36PrefixPhysicalUniqueness<'a> {
+    fn new(
+        attempt: &'a Path,
+        limits: &'a V36PrefixExternalSelectionLimits,
+        next_spill: usize,
+    ) -> Self {
+        Self {
+            attempt,
+            buffer: Vec::with_capacity(limits.sort_buffer_records),
+            limits,
+            next_spill,
+            spills: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, selected: V36PrefixSelectedStreamRecord) -> Result<()> {
+        let mut physical_key = [0_u8; 32];
+        physical_key[..2].copy_from_slice(&selected.selected_object_ordinal.to_be_bytes());
+        physical_key[2..10].copy_from_slice(&selected.row_offset.to_be_bytes());
+        self.buffer.push(V36PrefixScoredIdentity {
+            score: physical_key,
+            feature_row_id: selected.feature_row_id,
+            selected_object_ordinal: selected.selected_object_ordinal,
+            row_offset: selected.row_offset,
+        });
+        if self.buffer.len() == self.limits.sort_buffer_records {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        if self.spills.len() >= self.limits.max_spills {
+            return Err(resource_limit("spill count"));
+        }
+        let path = create_v36_prefix_spill(
+            self.attempt,
+            self.next_spill,
+            &mut self.buffer,
+            self.limits.io_buffer_bytes,
+            self.limits.max_scratch_bytes,
+        )?;
+        self.spills.push(path);
+        self.next_spill += 1;
+        self.buffer.clear();
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<()> {
+        self.flush()?;
+        while self.spills.len() > self.limits.merge_fan_in {
+            let mut outputs = Vec::new();
+            for group in self.spills.chunks(self.limits.merge_fan_in) {
+                let output = self
+                    .attempt
+                    .join(format!("spill-{:08}.bin", self.next_spill));
+                merge_v36_prefix_spills(
+                    group,
+                    &output,
+                    self.limits.io_buffer_bytes,
+                    self.limits.max_scratch_bytes,
+                )?;
+                outputs.push(output);
+                self.next_spill += 1;
+            }
+            self.spills = outputs;
+        }
+        let physical = if self.spills.len() == 1 {
+            self.spills.pop().unwrap()
+        } else {
+            let output = self
+                .attempt
+                .join(format!("spill-{:08}.bin", self.next_spill));
+            merge_v36_prefix_spills(
+                &self.spills,
+                &output,
+                self.limits.io_buffer_bytes,
+                self.limits.max_scratch_bytes,
+            )?;
+            output
+        };
+        let mut reader = V36PrefixSpillReader::open(&physical, self.limits.io_buffer_bytes)?;
+        let mut previous_key = None;
+        while let Some(record) = reader.next_record()? {
+            if previous_key == Some(record.score) {
+                return Err(invalid("V36 prefix selected-ID rows differ"));
+            }
+            previous_key = Some(record.score);
+        }
+        drop(reader);
+        fs::remove_file(&physical).map_err(|source| BorsukError::Io {
+            path: physical,
+            source,
+        })?;
+        Ok(())
+    }
+}
+
+fn next_v36_prefix_excluded_rank(
+    stream: &mut V36PrefixSelectedStream,
+    physical: &mut V36PrefixPhysicalUniqueness<'_>,
+) -> Result<Option<([u8; 32], u64)>> {
+    let Some(record) = stream.next_record()? else {
+        return Ok(None);
+    };
+    physical.push(record)?;
+    Ok(Some((record.score, record.feature_row_id)))
+}
+
+fn open_v36_prefix_selected_stream(
+    selected: &V36PrefixSelectedIdsFile,
+    limits: &V36PrefixExternalSelectionLimits,
+    attempt: &Path,
+) -> Result<V36PrefixSelectedStream> {
+    let file_type = fs::symlink_metadata(&selected.path)
+        .map_err(|source| BorsukError::Io {
+            path: selected.path.clone(),
+            source,
+        })?
+        .file_type();
+    if !file_type.is_file() || file_type.is_symlink() {
+        return Err(invalid("V36 prefix local artifact path differs"));
+    }
+    let mut source = File::open(&selected.path).map_err(|source| BorsukError::Io {
+        path: selected.path.clone(),
+        source,
+    })?;
+    let encoded_bytes = source
+        .metadata()
+        .map_err(|source| BorsukError::Io {
+            path: selected.path.clone(),
+            source,
+        })?
+        .len();
+    if encoded_bytes == 0 || encoded_bytes > limits.max_input_bytes {
+        return Err(resource_limit("selected-ID input bytes"));
+    }
+    if v36_prefix_scratch_bytes(attempt)?
+        .checked_add(encoded_bytes)
+        .is_none_or(|peak| peak > limits.max_scratch_bytes)
+    {
+        return Err(resource_limit("scratch bytes"));
+    }
+    let snapshot_path = attempt.join("excluded-population.arrow");
+    let mut snapshot = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&snapshot_path)
+        .map_err(|source| BorsukError::Io {
+            path: snapshot_path.clone(),
+            source,
+        })?;
+    let (sha256, blake3) = copy_v36_prefix_snapshot_exact(
+        &mut source,
+        &mut snapshot,
+        (&selected.path, &snapshot_path),
+        encoded_bytes,
+        limits.io_buffer_bytes,
+    )?;
+    v36_prefix_external_io(&snapshot_path, snapshot.sync_all())?;
+    let content_addressed = url::Url::parse(&selected.identity.uri)
+        .ok()
+        .filter(|uri| uri.scheme() == "s3" && uri.host_str().is_some())
+        .and_then(|uri| uri.path().rsplit('/').next().map(str::to_owned))
+        .is_some_and(|name| name.starts_with(&format!("{sha256}-")));
+    if selected.identity.role != "population-selected-identities"
+        || selected.identity.encoded_bytes != encoded_bytes
+        || selected.identity.sha256 != sha256
+        || selected.identity.blake3 != blake3
+        || !content_addressed
+    {
+        return Err(invalid("V36 prefix selected-ID artifact differs"));
+    }
+    preflight_v36_prefix_arrow_file(
+        &mut snapshot,
+        &snapshot_path,
+        encoded_bytes,
+        SELECTED_IDS_BATCH_ROWS,
+        validate_v36_prefix_selected_batch_body,
+    )?;
+    let reader = ArrowFileReader::try_new(snapshot, None)?;
+    let expected_rows = usize::try_from(selected.contract.selected_rows)
+        .map_err(|_| invalid("V36 prefix selected-ID row count overflows"))?;
+    let expected_batches = expected_rows.div_ceil(SELECTED_IDS_BATCH_ROWS);
+    let schema = reader.schema();
+    let cutoff_feature_row_id = schema
+        .metadata()
+        .get("cutoff_feature_row_id")
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| invalid("V36 prefix selected-ID schema differs"))?;
+    let cutoff_score_sha256 = schema
+        .metadata()
+        .get("cutoff_score_sha256")
+        .ok_or_else(|| invalid("V36 prefix selected-ID schema differs"))?
+        .clone();
+    if schema.as_ref()
+        != &selected_ids_schema(
+            &selected.contract,
+            cutoff_feature_row_id,
+            &cutoff_score_sha256,
+        )
+        || reader.num_batches() != expected_batches
+    {
+        return Err(invalid("V36 prefix selected-ID schema differs"));
+    }
+    let (seed, manifest) = validate_selected_ids_contract(&selected.contract)?;
+    Ok(V36PrefixSelectedStream {
+        reader,
+        batch: None,
+        batch_index: 0,
+        contract: selected.contract.clone(),
+        cutoff_feature_row_id,
+        cutoff_score_sha256,
+        expected_rows,
+        finished: false,
+        manifest,
+        previous: None,
+        seed,
+        seen: 0,
+    })
 }
 
 fn write_v36_prefix_selected_file(
@@ -2577,10 +2971,25 @@ pub fn externally_select_v36_prefix_population_rows(
     {
         return Err(invalid("V36 prefix external selection output differs"));
     }
-    if exclusion.is_some()
-        || contract.excluded_population_identity.is_some()
-        || contract.excluded_rows != 0
-        || contract.cohort_ordinal != 0
+    let exclusion_is_valid = match (contract.cohort_ordinal, exclusion) {
+        (0, None) => contract.excluded_population_identity.is_none() && contract.excluded_rows == 0,
+        (0, Some(_)) | (_, None) => false,
+        (_, Some(selected)) => {
+            validate_selected_ids_contract(&selected.contract).is_ok()
+                && contract.excluded_population_identity.as_ref() == Some(&selected.identity)
+                && selected.contract.cohort_ordinal.checked_add(1) == Some(contract.cohort_ordinal)
+                && selected.contract.population_seed_sha256 == contract.population_seed_sha256
+                && selected.contract.ordered_source_manifest_sha256
+                    == contract.ordered_source_manifest_sha256
+                && selected
+                    .contract
+                    .selected_object_start
+                    .checked_add(selected.contract.selected_object_count)
+                    == Some(contract.selected_object_start)
+                && contract.excluded_rows <= selected.contract.selected_rows
+        }
+    };
+    if !exclusion_is_valid
         || runs.len() != usize::from(contract.selected_object_count)
         || runs.is_empty()
         || limits.io_buffer_bytes == 0
@@ -2615,6 +3024,9 @@ pub fn externally_select_v36_prefix_population_rows(
         path: scratch_root.to_owned(),
         source,
     })?;
+    let mut exclusion_stream = exclusion
+        .map(|selected| open_v36_prefix_selected_stream(selected, limits, attempt.path()))
+        .transpose()?;
     let mut spills = Vec::new();
     let mut buffer = Vec::with_capacity(limits.sort_buffer_records);
     let mut next_spill = 0_usize;
@@ -2676,6 +3088,11 @@ pub fn externally_select_v36_prefix_population_rows(
         next_spill += 1;
     }
     if spills.is_empty() {
+        if let Some(stream) = exclusion_stream.as_mut() {
+            let mut physical = V36PrefixPhysicalUniqueness::new(attempt.path(), limits, next_spill);
+            while next_v36_prefix_excluded_rank(stream, &mut physical)?.is_some() {}
+            physical.finish()?;
+        }
         return Err(BorsukError::V36PrefixSourceInsufficient);
     }
     while spills.len() > limits.merge_fan_in {
@@ -2732,23 +3149,54 @@ pub fn externally_select_v36_prefix_population_rows(
     let mut selected_hasher = blake3::Hasher::new();
     let mut merged_reader = V36PrefixSpillReader::open(&merged, limits.io_buffer_bytes)?;
     let mut eligible_rows = 0_u64;
+    let mut excluded_rows = 0_u64;
     let mut previous_id = None;
     let mut cutoff = None;
+    let mut exclusion_physical =
+        V36PrefixPhysicalUniqueness::new(attempt.path(), limits, next_spill + 1);
+    let mut excluded_rank = exclusion_stream
+        .as_mut()
+        .map(|stream| next_v36_prefix_excluded_rank(stream, &mut exclusion_physical))
+        .transpose()?
+        .flatten();
     while let Some(record) = merged_reader.next_record()? {
         if previous_id == Some(record.feature_row_id) {
             return Err(invalid("V36 prefix identity-run global ID repeats"));
         }
         previous_id = Some(record.feature_row_id);
+        let rank = (record.score, record.feature_row_id);
+        while excluded_rank.is_some_and(|excluded| excluded < rank) {
+            excluded_rank = next_v36_prefix_excluded_rank(
+                exclusion_stream
+                    .as_mut()
+                    .expect("V36 exclusion stream exists with an exclusion rank"),
+                &mut exclusion_physical,
+            )?;
+        }
+        if excluded_rank == Some(rank) {
+            excluded_rows += 1;
+            excluded_rank = next_v36_prefix_excluded_rank(
+                exclusion_stream
+                    .as_mut()
+                    .expect("V36 exclusion stream exists with an exclusion rank"),
+                &mut exclusion_physical,
+            )?;
+            continue;
+        }
         eligible_rows += 1;
         if eligible_rows <= contract.selected_rows {
             write_v36_prefix_scored_identity(&mut selected_writer, &mut selected_hasher, &record)?;
             cutoff = Some(record);
         }
     }
+    if let Some(stream) = exclusion_stream.as_mut() {
+        while next_v36_prefix_excluded_rank(stream, &mut exclusion_physical)?.is_some() {}
+        exclusion_physical.finish()?;
+    }
     if eligible_rows < contract.selected_rows {
         return Err(BorsukError::V36PrefixSourceInsufficient);
     }
-    if eligible_rows != contract.eligible_rows {
+    if eligible_rows != contract.eligible_rows || excluded_rows != contract.excluded_rows {
         return Err(invalid("V36 prefix selected-ID eligible rows differ"));
     }
     finish_v36_prefix_spill(&selected_path, &mut selected_writer, &selected_hasher)?;
@@ -5054,7 +5502,10 @@ mod tests {
     fn v36_prefix_dataset_external_arrow_batch_body_is_canonically_bounded() {
         assert!(validate_v36_prefix_identity_batch_body(4, 80).is_ok());
         let error = validate_v36_prefix_identity_batch_body(4, 1 << 20).unwrap_err();
-        assert_eq!(error.code(), "v36_prefix_resource_limit");
+        assert_ne!(error.code(), "v36_prefix_resource_limit");
+        assert!(validate_v36_prefix_selected_batch_body(4, 232).is_ok());
+        let error = validate_v36_prefix_selected_batch_body(4, 1 << 20).unwrap_err();
+        assert_ne!(error.code(), "v36_prefix_resource_limit");
     }
 
     #[test]

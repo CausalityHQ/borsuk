@@ -3,8 +3,8 @@
 use std::{fs, path::Path, sync::Arc};
 
 use arrow_array::{
-    ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray,
-    UInt16Array, UInt32Array, UInt64Array,
+    Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
+    Int64Array, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     MetadataVersion,
@@ -19,8 +19,8 @@ use borsuk::{
     V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixPopulationAuthority,
     V36PrefixPopulationCommit, V36PrefixQualityRole, V36PrefixRankedSourceObject,
     V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAuthority,
-    V36PrefixSelectedIdsContract, V36PrefixSourceObject, bind_v36_prefix_population_authority,
-    canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile, V36PrefixSourceObject,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_selected_ids,
@@ -569,6 +569,123 @@ fn rewrite_external_identity_file(file: &mut V36PrefixIdentityRunFile, bytes: &[
     fs::write(&file.path, bytes).unwrap();
 }
 
+fn external_selected_file(
+    root: &Path,
+    feature_ids: &[u64],
+) -> (V36PrefixSelectedIdsFile, Vec<borsuk::V36PrefixRowIdentity>) {
+    let mut rows = feature_ids
+        .iter()
+        .enumerate()
+        .map(
+            |(row_offset, &feature_row_id)| borsuk::V36PrefixRowIdentity {
+                feature_row_id,
+                row_offset: row_offset.try_into().unwrap(),
+                selected_object_ordinal: 0,
+                source_ordinal: None,
+            },
+        )
+        .collect::<Vec<_>>();
+    rows = select_v36_prefix_population_rows(rows, &"1".repeat(64), feature_ids.len()).unwrap();
+    let contract = V36PrefixSelectedIdsContract {
+        eligible_rows: feature_ids.len().try_into().unwrap(),
+        selected_object_count: 1,
+        selected_rows: feature_ids.len().try_into().unwrap(),
+        ..selected_ids_contract(feature_ids.len().try_into().unwrap())
+    };
+    let bytes = encode_v36_prefix_selected_ids(&contract, &rows).unwrap();
+    let identity = selected_ids_identity(&bytes);
+    let path = root.join("cohort-a-selected.arrow");
+    fs::write(&path, bytes).unwrap();
+    (
+        V36PrefixSelectedIdsFile {
+            contract,
+            identity,
+            path,
+        },
+        rows,
+    )
+}
+
+fn external_population_rank(feature_row_id: u64) -> [u8; 32] {
+    let seed: [u8; 32] = Sha256::digest(b"borsuk-v36-prefix-screen-population-row-v2").into();
+    let manifest = [0x11_u8; 32];
+    let mut hasher = Sha256::new();
+    hasher.update(seed);
+    hasher.update(manifest);
+    hasher.update(feature_row_id.to_le_bytes());
+    hasher.finalize().into()
+}
+
+fn rewrite_external_selected_file(
+    selected: &mut V36PrefixSelectedIdsFile,
+    duplicate_physical_row: bool,
+    corrupt_last_score: bool,
+) {
+    let bytes = fs::read(&selected.path).unwrap();
+    let mut reader = ArrowFileReader::try_new(std::io::Cursor::new(bytes), None).unwrap();
+    let schema = reader.schema();
+    let batch = reader.next().unwrap().unwrap();
+    assert!(reader.next().is_none());
+    let feature_ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    let scores = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .unwrap();
+    let mut score_values = (0..scores.len())
+        .map(|index| scores.value(index).to_vec())
+        .collect::<Vec<_>>();
+    let object_ordinals = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt16Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    let mut row_offsets = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    if duplicate_physical_row {
+        row_offsets[1] = row_offsets[0];
+    }
+    if corrupt_last_score {
+        score_values.last_mut().unwrap()[0] ^= 1;
+    }
+    let rewritten = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(feature_ids)),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter(
+                    score_values.iter().map(std::vec::Vec::as_slice),
+                )
+                .unwrap(),
+            ),
+            Arc::new(UInt16Array::from(object_ordinals)),
+            Arc::new(UInt64Array::from(row_offsets)),
+        ],
+    )
+    .unwrap();
+    let mut output = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+    let mut writer = ArrowFileWriter::try_new_with_options(&mut output, &schema, options).unwrap();
+    writer.write(&rewritten).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    selected.identity = selected_ids_identity(&output);
+    fs::write(&selected.path, output).unwrap();
+}
+
 #[test]
 fn v36_prefix_dataset_external_selection_is_file_backed_bounded_and_scalar_exact() {
     let directory = tempfile::tempdir().unwrap();
@@ -628,6 +745,317 @@ fn v36_prefix_dataset_external_selection_is_file_backed_bounded_and_scalar_exact
     })
     .unwrap();
     assert_eq!(fs::read(varied_output).unwrap(), bytes);
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_streams_authenticated_cohort_exclusion() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (exclusion, excluded) = external_selected_file(directory.path(), &[2, 5]);
+    let (first, mut rows) = external_identity_file(directory.path(), 1, &[2, 3, 4]);
+    let (second, second_rows) = external_identity_file(directory.path(), 2, &[5, 6, 7]);
+    rows.extend(second_rows);
+    let excluded_ids = excluded
+        .iter()
+        .map(|row| row.feature_row_id)
+        .collect::<std::collections::HashSet<_>>();
+    rows.retain(|row| !excluded_ids.contains(&row.feature_row_id));
+    let expected = select_v36_prefix_population_rows(rows, &"1".repeat(64), 3).unwrap();
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: 1,
+        eligible_rows: 4,
+        excluded_population_identity: Some(exclusion.identity.clone()),
+        excluded_rows: 2,
+        selected_object_count: 2,
+        selected_object_start: 1,
+        selected_rows: 3,
+        ..selected_ids_contract(3)
+    };
+    let runs = [first, second];
+    let limits = external_selection_limits();
+    let output = directory.path().join("cohort-b-selected.arrow");
+
+    let receipt = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+        contract: &contract,
+        exclusion: Some(&exclusion),
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        runs: &runs,
+        scratch_root: &scratch,
+    })
+    .unwrap();
+
+    let bytes = fs::read(&output).unwrap();
+    assert_eq!(
+        bytes,
+        encode_v36_prefix_selected_ids(&contract, &expected).unwrap()
+    );
+    assert_eq!(receipt.identity, selected_ids_identity(&bytes));
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_rejects_tampered_cohort_exclusion() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (exclusion, _) = external_selected_file(directory.path(), &[2, 5]);
+    let mut bytes = fs::read(&exclusion.path).unwrap();
+    bytes[16] ^= 1;
+    fs::write(&exclusion.path, bytes).unwrap();
+    let (run, _) = external_identity_file(directory.path(), 1, &[2, 3, 4]);
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: 1,
+        eligible_rows: 2,
+        excluded_population_identity: Some(exclusion.identity.clone()),
+        excluded_rows: 1,
+        selected_object_count: 1,
+        selected_object_start: 1,
+        selected_rows: 2,
+        ..selected_ids_contract(2)
+    };
+    let runs = [run];
+    let limits = external_selection_limits();
+    let output = directory.path().join("cohort-b-selected.arrow");
+
+    assert!(
+        externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+            contract: &contract,
+            exclusion: Some(&exclusion),
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            runs: &runs,
+            scratch_root: &scratch,
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_recomputes_excluded_count() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (exclusion, _) = external_selected_file(directory.path(), &[2, 5]);
+    let (first, _) = external_identity_file(directory.path(), 1, &[2, 3, 4]);
+    let (second, _) = external_identity_file(directory.path(), 2, &[5, 6, 7]);
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: 1,
+        eligible_rows: 5,
+        excluded_population_identity: Some(exclusion.identity.clone()),
+        excluded_rows: 1,
+        selected_object_count: 2,
+        selected_object_start: 1,
+        selected_rows: 3,
+        ..selected_ids_contract(3)
+    };
+    let runs = [first, second];
+    let limits = external_selection_limits();
+    let output = directory.path().join("cohort-b-selected.arrow");
+
+    let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+        contract: &contract,
+        exclusion: Some(&exclusion),
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        runs: &runs,
+        scratch_root: &scratch,
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("eligible rows differ"));
+    assert!(!output.exists());
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_rejects_duplicate_excluded_physical_row() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (mut exclusion, _) = external_selected_file(directory.path(), &[2, 5]);
+    rewrite_external_selected_file(&mut exclusion, true, false);
+    let (run, _) = external_identity_file(directory.path(), 1, &[2, 3, 4, 5]);
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: 1,
+        eligible_rows: 2,
+        excluded_population_identity: Some(exclusion.identity.clone()),
+        excluded_rows: 2,
+        selected_object_count: 1,
+        selected_object_start: 1,
+        selected_rows: 2,
+        ..selected_ids_contract(2)
+    };
+    let runs = [run];
+    let limits = external_selection_limits();
+    let output = directory.path().join("cohort-b-selected.arrow");
+
+    let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+        contract: &contract,
+        exclusion: Some(&exclusion),
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        runs: &runs,
+        scratch_root: &scratch,
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("selected-ID rows differ"));
+    assert!(!output.exists());
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_drains_multibatch_absent_exclusion() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let excluded_ids = (1_u64..=65_537).collect::<Vec<_>>();
+    let current_ids = [100_001_u64, 100_002, 100_003, 100_004];
+    let current_max = current_ids
+        .iter()
+        .map(|&feature_row_id| external_population_rank(feature_row_id))
+        .max()
+        .unwrap();
+    assert!(
+        excluded_ids
+            .iter()
+            .any(|&feature_row_id| external_population_rank(feature_row_id) < current_max)
+    );
+    assert!(
+        excluded_ids
+            .iter()
+            .any(|&feature_row_id| external_population_rank(feature_row_id) > current_max)
+    );
+    let (exclusion, _) = external_selected_file(directory.path(), &excluded_ids);
+    let (run, rows) = external_identity_file(directory.path(), 1, &current_ids);
+    let expected = select_v36_prefix_population_rows(rows, &"1".repeat(64), 4).unwrap();
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: 1,
+        eligible_rows: 4,
+        excluded_population_identity: Some(exclusion.identity.clone()),
+        excluded_rows: 0,
+        selected_object_count: 1,
+        selected_object_start: 1,
+        selected_rows: 4,
+        ..selected_ids_contract(4)
+    };
+    let runs = [run];
+    let limits = V36PrefixExternalSelectionLimits {
+        max_input_bytes: 8 << 20,
+        max_scratch_bytes: 32 << 20,
+        sort_buffer_records: 65_536,
+        ..external_selection_limits()
+    };
+    let output = directory.path().join("cohort-b-selected.arrow");
+
+    externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+        contract: &contract,
+        exclusion: Some(&exclusion),
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        runs: &runs,
+        scratch_root: &scratch,
+    })
+    .unwrap();
+
+    assert_eq!(
+        fs::read(&output).unwrap(),
+        encode_v36_prefix_selected_ids(&contract, &expected).unwrap()
+    );
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_rejects_exclusion_authority_drift() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (exclusion, _) = external_selected_file(directory.path(), &[2, 5]);
+    let (run, _) = external_identity_file(directory.path(), 1, &[2, 3, 4, 5]);
+    let mut wrong_manifest = exclusion.clone();
+    wrong_manifest.contract.ordered_source_manifest_sha256 = "2".repeat(64);
+    let mut nonadjacent = exclusion.clone();
+    nonadjacent.contract.selected_object_count = 2;
+    let mut wrong_role = exclusion.clone();
+    wrong_role.identity.role = "population-selected-identities-drift".into();
+    let variants = [wrong_manifest, nonadjacent, wrong_role];
+
+    for (ordinal, drifted) in variants.iter().enumerate() {
+        let contract = V36PrefixSelectedIdsContract {
+            cohort_ordinal: 1,
+            eligible_rows: 2,
+            excluded_population_identity: Some(drifted.identity.clone()),
+            excluded_rows: 2,
+            selected_object_count: 1,
+            selected_object_start: 1,
+            selected_rows: 2,
+            ..selected_ids_contract(2)
+        };
+        let runs = [run.clone()];
+        let limits = external_selection_limits();
+        let output = directory.path().join(format!("drifted-{ordinal}.arrow"));
+        assert!(
+            externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+                contract: &contract,
+                exclusion: Some(drifted),
+                limits: &limits,
+                output: &output,
+                output_uri_prefix: "s3://fixture/v36",
+                runs: &runs,
+                scratch_root: &scratch,
+            })
+            .is_err()
+        );
+        assert!(!output.exists());
+        assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_rejects_authenticated_invalid_exclusion_suffix() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (mut exclusion, _) = external_selected_file(directory.path(), &[2, 5, 9]);
+    rewrite_external_selected_file(&mut exclusion, false, true);
+    let (run, _) = external_identity_file(directory.path(), 1, &[100_001, 100_002, 100_003]);
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: 1,
+        eligible_rows: 3,
+        excluded_population_identity: Some(exclusion.identity.clone()),
+        excluded_rows: 0,
+        selected_object_count: 1,
+        selected_object_start: 1,
+        selected_rows: 2,
+        ..selected_ids_contract(2)
+    };
+    let runs = [run];
+    let limits = external_selection_limits();
+    let output = directory.path().join("cohort-b-selected.arrow");
+
+    let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+        contract: &contract,
+        exclusion: Some(&exclusion),
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        runs: &runs,
+        scratch_root: &scratch,
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("selected-ID rows differ"));
+    assert!(!output.exists());
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
 }
 
 #[test]
