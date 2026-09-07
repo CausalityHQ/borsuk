@@ -527,11 +527,21 @@ impl V36PrefixPopulationCheckpointWriter {
                 "V36 population checkpoint resume authority differs",
             ));
         }
+        let outbox = V36PrefixCheckpointOutbox::create(root)?;
+        for (identity, bytes) in &dependencies {
+            install_content_addressed(
+                &outbox
+                    .root
+                    .join("objects")
+                    .join(format!("{}.blob", identity.sha256)),
+                bytes,
+            )?;
+        }
         Ok(Self {
             context,
             dependencies,
             execution_authority_sha256,
-            outbox: V36PrefixCheckpointOutbox::create(root)?,
+            outbox,
             previous_manifest: Some(previous_manifest),
             previous_manifest_identity: Some(pointer.manifest),
             previous_pointer_bytes: Some(previous_pointer_bytes),
@@ -539,6 +549,50 @@ impl V36PrefixPopulationCheckpointWriter {
             producer_attempt_ordinal,
             producer_instance_id,
         })
+    }
+
+    /// Authenticate completed identity-run sidecars for file-backed selection.
+    pub fn identity_run_files(&self) -> Result<Vec<V36PrefixIdentityRunFile>> {
+        let population = self
+            .previous_manifest
+            .as_ref()
+            .map(|manifest| &manifest.population)
+            .ok_or_else(|| invalid("V36 population checkpoint is empty"))?;
+        if self.dependencies.len() != population.identity_runs.len()
+            || self.dependencies.len() != population.consumed_objects.len()
+        {
+            return Err(invalid("V36 population checkpoint dependencies differ"));
+        }
+        self.dependencies
+            .iter()
+            .zip(&population.identity_runs)
+            .zip(&population.consumed_objects)
+            .enumerate()
+            .map(|(index, (((identity, _), registered), source))| {
+                if identity != registered {
+                    return Err(invalid("V36 population checkpoint dependencies differ"));
+                }
+                let selected_object_ordinal = population
+                    .selected_object_start
+                    .checked_add(
+                        u16::try_from(index)
+                            .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?,
+                    )
+                    .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?;
+                let path = self
+                    .outbox
+                    .root
+                    .join("objects")
+                    .join(format!("{}.blob", identity.sha256));
+                authenticate_file(&path, identity)?;
+                Ok(V36PrefixIdentityRunFile {
+                    identity: identity.clone(),
+                    path,
+                    selected_object_ordinal,
+                    source: source.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Commit one complete authenticated source-object boundary.

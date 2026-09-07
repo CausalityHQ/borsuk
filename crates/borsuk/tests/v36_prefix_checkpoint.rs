@@ -656,6 +656,16 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
         },
     };
     let ready = writer.commit(&commit).unwrap();
+    let run_files = writer.identity_run_files().unwrap();
+    assert_eq!(run_files.len(), 1);
+    assert_eq!(run_files[0].selected_object_ordinal, 0);
+    assert_eq!(run_files[0].source, source_object());
+    assert_eq!(run_files[0].identity.role, "population-identity-run-0000");
+    assert_eq!(
+        run_files[0].path,
+        root.join("objects")
+            .join(format!("{}.blob", run_files[0].identity.sha256))
+    );
     assert_eq!(ready.file_name().unwrap(), "generation-00000000.json");
     assert_eq!(root.join("commits").read_dir().unwrap().count(), 1);
     assert_eq!(root.join("objects").read_dir().unwrap().count(), 1);
@@ -755,6 +765,7 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
         },
     )
     .unwrap();
+    assert_eq!(resumed_writer.identity_run_files().unwrap().len(), 1);
     let second_ready = resumed_writer
         .commit(&V36PrefixPopulationCommit {
             cutoff: Some((1, 4)),
