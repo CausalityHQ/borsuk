@@ -349,11 +349,12 @@ pub use v36_funnel::{
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
-    V36PrefixCheckpointOutbox, V36PrefixExternalMaterializationRequest,
-    V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest, V36PrefixFreezePreflight,
-    V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtNeighbor, V36PrefixGtParquetJob,
-    V36PrefixGtRunStats, V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
-    V36PrefixMaterializedRow, V36PrefixObjectPrefixScan, V36PrefixPopulationCheckpointHead,
+    V36PrefixCheckpointDependencyFile, V36PrefixCheckpointOutbox,
+    V36PrefixExternalMaterializationRequest, V36PrefixExternalSelectionLimits,
+    V36PrefixExternalSelectionRequest, V36PrefixFreezePreflight, V36PrefixFreezeRequest,
+    V36PrefixGtAccumulator, V36PrefixGtNeighbor, V36PrefixGtParquetJob, V36PrefixGtRunStats,
+    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixMaterializedRow,
+    V36PrefixObjectPrefixScan, V36PrefixPopulationCheckpointHead,
     V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixQualityRole,
     V36PrefixQueryRow, V36PrefixRankedSourceObject, V36PrefixRestoredPopulation,
     V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentReceipt,

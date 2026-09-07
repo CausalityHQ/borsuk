@@ -6,17 +6,17 @@ use arrow_array::{RecordBatch, UInt64Array};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointManifest,
-    V36PrefixCheckpointOutbox, V36PrefixCheckpointPhase, V36PrefixCheckpointPointer,
-    V36PrefixCheckpointPointerCondition, V36PrefixIdentityRun, V36PrefixMaterializedArtifacts,
-    V36PrefixPopulationCheckpoint, V36PrefixPopulationCheckpointHead,
-    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
-    V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
-    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
-    decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
-    load_v36_prefix_population_checkpoint_head, plan_v36_prefix_checkpoint_publication,
-    restore_v36_prefix_population, restore_v36_prefix_population_state,
-    validate_v36_prefix_checkpoint_manifest_with_context,
+    V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
+    V36PrefixCheckpointManifest, V36PrefixCheckpointOutbox, V36PrefixCheckpointPhase,
+    V36PrefixCheckpointPointer, V36PrefixCheckpointPointerCondition, V36PrefixIdentityRun,
+    V36PrefixMaterializedArtifacts, V36PrefixPopulationCheckpoint,
+    V36PrefixPopulationCheckpointHead, V36PrefixPopulationCheckpointWriter,
+    V36PrefixPopulationCommit, V36PrefixPopulationSelection, V36PrefixRegisteredSourceObject,
+    V36PrefixRowIdentity, V36PrefixSourceObject, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, decode_v36_prefix_identity_run,
+    encode_v36_prefix_identity_run, load_v36_prefix_population_checkpoint_head,
+    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
+    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -622,10 +622,64 @@ fn v36_prefix_checkpoint_outbox_exposes_only_complete_generations() {
     let other = directory.path().join("other");
     std::fs::create_dir(&other).unwrap();
     let outbox = V36PrefixCheckpointOutbox::create(&other).unwrap();
-    let mut corrupt = run_bytes;
+    let mut corrupt = run_bytes.clone();
     corrupt[0] ^= 1;
-    assert!(outbox.commit(&plan, &[(run_identity, corrupt)]).is_err());
+    assert!(
+        outbox
+            .commit(&plan, &[(run_identity.clone(), corrupt)])
+            .is_err()
+    );
     assert!(other.join("commits").read_dir().unwrap().next().is_none());
+
+    let file_root = directory.path().join("file-outbox");
+    std::fs::create_dir(&file_root).unwrap();
+    let dependency_path = directory.path().join("identity-run.arrow");
+    std::fs::write(&dependency_path, &run_bytes).unwrap();
+    let file_outbox = V36PrefixCheckpointOutbox::create(&file_root).unwrap();
+    let ready = file_outbox
+        .commit_files(
+            &plan,
+            &[V36PrefixCheckpointDependencyFile {
+                identity: run_identity.clone(),
+                path: dependency_path,
+            }],
+        )
+        .unwrap();
+    assert!(ready.is_file());
+    assert_eq!(
+        std::fs::read(
+            file_root
+                .join("objects")
+                .join(format!("{}.blob", run_identity.sha256))
+        )
+        .unwrap(),
+        run_bytes
+    );
+
+    let corrupt_file_root = directory.path().join("corrupt-file-outbox");
+    std::fs::create_dir(&corrupt_file_root).unwrap();
+    let corrupt_dependency_path = directory.path().join("corrupt-identity-run.arrow");
+    std::fs::write(&corrupt_dependency_path, b"wrong").unwrap();
+    let corrupt_file_outbox = V36PrefixCheckpointOutbox::create(&corrupt_file_root).unwrap();
+    assert!(
+        corrupt_file_outbox
+            .commit_files(
+                &plan,
+                &[V36PrefixCheckpointDependencyFile {
+                    identity: run_identity,
+                    path: corrupt_dependency_path,
+                }],
+            )
+            .is_err()
+    );
+    assert!(
+        corrupt_file_root
+            .join("commits")
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[test]

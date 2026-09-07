@@ -155,6 +155,44 @@ fn install_content_addressed(path: &Path, bytes: &[u8]) -> Result<()> {
     )
 }
 
+fn install_content_addressed_file(
+    path: &Path,
+    source_path: &Path,
+    identity: &V36ArtifactIdentity,
+) -> Result<()> {
+    if path.exists() {
+        authenticate_file(path, identity)?;
+        return Ok(());
+    }
+    let file_type = fs::symlink_metadata(source_path)
+        .map_err(|source| BorsukError::Io {
+            path: source_path.to_owned(),
+            source,
+        })?
+        .file_type();
+    if !file_type.is_file() || file_type.is_symlink() {
+        return Err(invalid("V36 checkpoint dependency path differs"));
+    }
+    let mut source = File::open(source_path).map_err(|source| BorsukError::Io {
+        path: source_path.to_owned(),
+        source,
+    })?;
+    let mut temporary = temporary_output(path)?;
+    let (sha256, blake3) = copy_v36_prefix_snapshot_exact(
+        &mut source,
+        &mut temporary,
+        (source_path, path),
+        identity.encoded_bytes,
+        65_536,
+    )?;
+    if sha256 != identity.sha256 || blake3 != identity.blake3 {
+        return Err(invalid(
+            "V36 checkpoint outbox dependency authority differs",
+        ));
+    }
+    publish_output_noclobber(temporary, path)
+}
+
 #[derive(serde::Serialize)]
 struct V36PrefixCheckpointReady<'a> {
     dependencies: &'a [V36ArtifactIdentity],
@@ -171,6 +209,15 @@ struct V36PrefixCheckpointReady<'a> {
 /// Private durable filesystem bridge from Rust science to the S3 supervisor.
 pub struct V36PrefixCheckpointOutbox {
     root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated local dependency installed without resident payload bytes.
+pub struct V36PrefixCheckpointDependencyFile {
+    /// Exact immutable artifact identity.
+    pub identity: V36ArtifactIdentity,
+    /// Exact local regular-file path.
+    pub path: PathBuf,
 }
 
 impl V36PrefixCheckpointOutbox {
@@ -239,6 +286,46 @@ impl V36PrefixCheckpointOutbox {
                 ));
             }
         }
+        for (identity, bytes) in dependencies {
+            install_content_addressed(
+                &self
+                    .root
+                    .join("objects")
+                    .join(format!("{}.blob", identity.sha256)),
+                bytes,
+            )?;
+        }
+        self.commit_metadata(publication)
+    }
+
+    /// Commit file-backed dependencies without materializing their payloads.
+    pub fn commit_files(
+        &self,
+        publication: &V36PrefixCheckpointPublication,
+        dependencies: &[V36PrefixCheckpointDependencyFile],
+    ) -> Result<PathBuf> {
+        if dependencies.len() != publication.dependencies.len()
+            || dependencies
+                .iter()
+                .zip(&publication.dependencies)
+                .any(|(dependency, expected)| &dependency.identity != expected)
+        {
+            return Err(invalid("V36 checkpoint outbox dependencies differ"));
+        }
+        for dependency in dependencies {
+            install_content_addressed_file(
+                &self
+                    .root
+                    .join("objects")
+                    .join(format!("{}.blob", dependency.identity.sha256)),
+                &dependency.path,
+                &dependency.identity,
+            )?;
+        }
+        self.commit_metadata(publication)
+    }
+
+    fn commit_metadata(&self, publication: &V36PrefixCheckpointPublication) -> Result<PathBuf> {
         let manifest: V36PrefixCheckpointManifest =
             serde_json::from_slice(&publication.manifest_bytes)
                 .map_err(|_| invalid("V36 checkpoint outbox manifest JSON differs"))?;
@@ -257,15 +344,6 @@ impl V36PrefixCheckpointOutbox {
             return Err(invalid(
                 "V36 checkpoint outbox publication authority differs",
             ));
-        }
-        for (identity, bytes) in dependencies {
-            install_content_addressed(
-                &self
-                    .root
-                    .join("objects")
-                    .join(format!("{}.blob", identity.sha256)),
-                bytes,
-            )?;
         }
         install_content_addressed(
             &self
