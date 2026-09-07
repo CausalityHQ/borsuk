@@ -915,6 +915,33 @@ pub struct V36PrefixRoleAssignmentReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated local role-assignment Arrow used for physical materialization.
+pub struct V36PrefixRoleAssignmentFile {
+    /// Exact assignment authority encoded by the artifact.
+    pub contract: V36PrefixRoleAssignmentContract,
+    /// Registered immutable Arrow identity.
+    pub identity: V36ArtifactIdentity,
+    /// Exact local regular-file path.
+    pub path: PathBuf,
+}
+
+/// File-backed request for one physical merge-join materialization.
+pub struct V36PrefixExternalMaterializationRequest<'a> {
+    /// Authenticated physical-order role assignment.
+    pub assignment: &'a V36PrefixRoleAssignmentFile,
+    /// Hard file and buffer limits.
+    pub limits: &'a V36PrefixExternalSelectionLimits,
+    /// Absent final output directory, atomically published after all roles close.
+    pub output: &'a Path,
+    /// Complete source registry in frozen sample-rank order.
+    pub ranked_objects: &'a [V36PrefixRankedSourceObject],
+    /// Existing directory for attempt-owned private spools.
+    pub scratch_root: &'a Path,
+    /// Authenticated local source objects corresponding one-to-one with the window.
+    pub source_paths: &'a [PathBuf],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Exact authority embedded in one immutable selected-population Arrow artifact.
 pub struct V36PrefixSelectedIdsContract {
     /// Zero-based independently registered population cohort.
@@ -3287,6 +3314,22 @@ fn validate_v36_prefix_role_assignment_contract(
     contract: &V36PrefixRoleAssignmentContract,
     selected: &V36PrefixSelectedIdsFile,
 ) -> Result<([u8; 32], [u8; 32])> {
+    let authority = validate_v36_prefix_role_assignment_contract_shape(contract)?;
+    if contract.selected_rows != selected.contract.selected_rows
+        || contract.selected_population_identity != selected.identity
+        || contract.ordered_source_manifest_sha256
+            != selected.contract.ordered_source_manifest_sha256
+        || contract.selected_object_start != selected.contract.selected_object_start
+        || contract.selected_object_count != selected.contract.selected_object_count
+    {
+        return Err(invalid("V36 prefix role-assignment authority differs"));
+    }
+    Ok(authority)
+}
+
+fn validate_v36_prefix_role_assignment_contract_shape(
+    contract: &V36PrefixRoleAssignmentContract,
+) -> Result<([u8; 32], [u8; 32])> {
     let expected_names = ["development", "validation", "sealed-holdout", "performance"];
     let expected_labels = [
         "borsuk-v36-prefix-screen-development-query-v2",
@@ -3300,12 +3343,11 @@ fn validate_v36_prefix_role_assignment_contract(
     })?;
     if contract.roles.len() != 4
         || contract.corpus_rows == 0
-        || contract.selected_rows != selected.contract.selected_rows
-        || contract.selected_population_identity != selected.identity
-        || contract.ordered_source_manifest_sha256
-            != selected.contract.ordered_source_manifest_sha256
-        || contract.selected_object_start != selected.contract.selected_object_start
-        || contract.selected_object_count != selected.contract.selected_object_count
+        || contract.selected_object_count == 0
+        || contract.selected_population_identity.role != "population-selected-identities"
+        || contract.selected_population_identity.encoded_bytes == 0
+        || digest_bytes(&contract.selected_population_identity.sha256).is_err()
+        || digest_bytes(&contract.selected_population_identity.blake3).is_err()
         || contract.corpus_seed_label != "borsuk-v36-prefix-screen-corpus-v2"
         || contract.corpus_seed_sha256
             != format!(
@@ -3585,6 +3627,294 @@ fn v36_prefix_role_assignment_schema(contract: &V36PrefixRoleAssignmentContract)
         ],
         metadata,
     )
+}
+
+fn validate_v36_prefix_role_assignment_batch_body(rows: u64, body_bytes: u64) -> Result<()> {
+    let validity = align_v36_prefix_arrow_buffer(
+        rows.checked_add(7)
+            .map(|bits| bits / 8)
+            .ok_or_else(|| resource_limit("Arrow batch body bytes"))?,
+    )?;
+    let values = rows
+        .checked_mul(24)
+        .and_then(|bytes| {
+            rows.checked_mul(2)
+                .and_then(|part| align_v36_prefix_arrow_buffer(part).ok())
+                .and_then(|part| bytes.checked_add(part))
+        })
+        .and_then(|bytes| {
+            align_v36_prefix_arrow_buffer(rows)
+                .ok()
+                .and_then(|part| bytes.checked_add(part))
+        })
+        .ok_or_else(|| resource_limit("Arrow batch body bytes"))?;
+    let expected = validity
+        .checked_mul(5)
+        .and_then(|bytes| bytes.checked_add(values))
+        .ok_or_else(|| resource_limit("Arrow batch body bytes"))?;
+    if body_bytes != expected {
+        return Err(invalid("V36 prefix role-assignment Arrow layout differs"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct V36PrefixRoleAssignmentRow {
+    feature_row_id: u64,
+    role: u8,
+    role_ordinal: u64,
+    row_offset: u64,
+    selected_object_ordinal: u16,
+}
+
+struct V36PrefixRoleAssignmentStream {
+    batch: Option<RecordBatch>,
+    batch_index: usize,
+    counts: [u64; 5],
+    expected_rows: usize,
+    finished: bool,
+    previous_physical: Option<(u16, u64)>,
+    reader: ArrowFileReader<File>,
+    seen: usize,
+    seen_ordinals: Vec<Vec<u64>>,
+    snapshot_path: PathBuf,
+    window_end: u16,
+    window_start: u16,
+}
+
+impl V36PrefixRoleAssignmentStream {
+    fn next_record(&mut self) -> Result<Option<V36PrefixRoleAssignmentRow>> {
+        loop {
+            if let Some(batch) = &self.batch
+                && self.batch_index < batch.num_rows()
+            {
+                let index = self.batch_index;
+                self.batch_index += 1;
+                let objects = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt16Array>()
+                    .ok_or_else(|| invalid("V36 prefix role-assignment objects differ"))?;
+                let offsets = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V36 prefix role-assignment offsets differ"))?;
+                let ids = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V36 prefix role-assignment IDs differ"))?;
+                let roles = batch
+                    .column(3)
+                    .as_any()
+                    .downcast_ref::<UInt8Array>()
+                    .ok_or_else(|| invalid("V36 prefix role-assignment roles differ"))?;
+                let ordinals = batch
+                    .column(4)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V36 prefix role-assignment ordinals differ"))?;
+                let object = objects.value(index);
+                let offset = offsets.value(index);
+                let role = usize::from(roles.value(index));
+                let ordinal = ordinals.value(index);
+                let physical = (object, offset);
+                if object < self.window_start
+                    || object >= self.window_end
+                    || self
+                        .previous_physical
+                        .is_some_and(|previous| previous >= physical)
+                    || role >= self.counts.len()
+                    || ordinal >= self.counts[role]
+                {
+                    return Err(invalid("V36 prefix role-assignment rows differ"));
+                }
+                let word = usize::try_from(ordinal / 64)
+                    .map_err(|_| invalid("V36 prefix role ordinal overflows"))?;
+                let bit = 1_u64 << (ordinal % 64);
+                if self.seen_ordinals[role][word] & bit != 0 {
+                    return Err(invalid("V36 prefix role-assignment ordinal repeats"));
+                }
+                self.seen_ordinals[role][word] |= bit;
+                self.previous_physical = Some(physical);
+                self.seen += 1;
+                return Ok(Some(V36PrefixRoleAssignmentRow {
+                    feature_row_id: ids.value(index),
+                    role: roles.value(index),
+                    role_ordinal: ordinal,
+                    row_offset: offset,
+                    selected_object_ordinal: object,
+                }));
+            }
+            if self.finished {
+                return Ok(None);
+            }
+            match self.reader.next().transpose()? {
+                Some(batch) => {
+                    let remaining = self.expected_rows.saturating_sub(self.seen);
+                    let expected = remaining.min(SELECTED_IDS_BATCH_ROWS);
+                    if batch.num_rows() != expected
+                        || batch.num_columns() != 5
+                        || batch
+                            .columns()
+                            .iter()
+                            .any(|column| column.null_count() != 0)
+                    {
+                        return Err(invalid("V36 prefix role-assignment batches differ"));
+                    }
+                    self.batch = Some(batch);
+                    self.batch_index = 0;
+                }
+                None => {
+                    self.finished = true;
+                    if self.seen != self.expected_rows
+                        || self
+                            .seen_ordinals
+                            .iter()
+                            .zip(self.counts)
+                            .any(|(words, count)| {
+                                words
+                                    .iter()
+                                    .map(|word| word.count_ones() as u64)
+                                    .sum::<u64>()
+                                    != count
+                            })
+                    {
+                        return Err(invalid("V36 prefix role-assignment row count differs"));
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+    }
+}
+
+fn open_v36_prefix_role_assignment_stream(
+    assignment: &V36PrefixRoleAssignmentFile,
+    limits: &V36PrefixExternalSelectionLimits,
+    attempt: &Path,
+) -> Result<V36PrefixRoleAssignmentStream> {
+    validate_v36_prefix_role_assignment_contract_shape(&assignment.contract)?;
+    let file_type = fs::symlink_metadata(&assignment.path)
+        .map_err(|source| BorsukError::Io {
+            path: assignment.path.clone(),
+            source,
+        })?
+        .file_type();
+    if !file_type.is_file() || file_type.is_symlink() {
+        return Err(invalid("V36 prefix local artifact path differs"));
+    }
+    let mut source = File::open(&assignment.path).map_err(|source| BorsukError::Io {
+        path: assignment.path.clone(),
+        source,
+    })?;
+    let encoded_bytes = source
+        .metadata()
+        .map_err(|source| BorsukError::Io {
+            path: assignment.path.clone(),
+            source,
+        })?
+        .len();
+    if encoded_bytes == 0 || encoded_bytes > limits.max_input_bytes {
+        return Err(resource_limit("role-assignment input bytes"));
+    }
+    if v36_prefix_scratch_bytes(attempt)?
+        .checked_add(encoded_bytes)
+        .is_none_or(|peak| peak > limits.max_scratch_bytes)
+    {
+        return Err(resource_limit("scratch bytes"));
+    }
+    let snapshot_path = attempt.join("role-assignments.arrow");
+    let mut snapshot = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&snapshot_path)
+        .map_err(|source| BorsukError::Io {
+            path: snapshot_path.clone(),
+            source,
+        })?;
+    let (sha256, blake3) = copy_v36_prefix_snapshot_exact(
+        &mut source,
+        &mut snapshot,
+        (&assignment.path, &snapshot_path),
+        encoded_bytes,
+        limits.io_buffer_bytes,
+    )?;
+    v36_prefix_external_io(&snapshot_path, snapshot.sync_all())?;
+    let content_addressed = url::Url::parse(&assignment.identity.uri)
+        .ok()
+        .filter(|uri| uri.scheme() == "s3" && uri.host_str().is_some())
+        .and_then(|uri| uri.path().rsplit('/').next().map(str::to_owned))
+        .is_some_and(|name| name.starts_with(&format!("{sha256}-")));
+    if assignment.identity.role != "population-role-assignments"
+        || assignment.identity.encoded_bytes != encoded_bytes
+        || assignment.identity.sha256 != sha256
+        || assignment.identity.blake3 != blake3
+        || !content_addressed
+    {
+        return Err(invalid("V36 prefix role-assignment artifact differs"));
+    }
+    preflight_v36_prefix_arrow_file(
+        &mut snapshot,
+        &snapshot_path,
+        encoded_bytes,
+        SELECTED_IDS_BATCH_ROWS,
+        validate_v36_prefix_role_assignment_batch_body,
+    )?;
+    let reader = ArrowFileReader::try_new(snapshot, None)?;
+    let query_counts: [u64; 4] = assignment
+        .contract
+        .roles
+        .iter()
+        .map(|role| role.rows)
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| invalid("V36 prefix role-assignment authority differs"))?;
+    let counts = [
+        assignment.contract.corpus_rows,
+        query_counts[0],
+        query_counts[1],
+        query_counts[2],
+        query_counts[3],
+    ];
+    let expected_rows = counts.iter().try_fold(0_usize, |sum, &count| {
+        usize::try_from(count)
+            .ok()
+            .and_then(|count| sum.checked_add(count))
+            .ok_or_else(|| invalid("V36 prefix role-assignment row count overflows"))
+    })?;
+    if reader.schema().as_ref() != &v36_prefix_role_assignment_schema(&assignment.contract)
+        || reader.num_batches() != expected_rows.div_ceil(SELECTED_IDS_BATCH_ROWS)
+    {
+        return Err(invalid("V36 prefix role-assignment schema differs"));
+    }
+    let window_end = assignment
+        .contract
+        .selected_object_start
+        .checked_add(assignment.contract.selected_object_count)
+        .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?;
+    let mut seen_ordinals = Vec::with_capacity(counts.len());
+    for count in counts {
+        let words = usize::try_from(count.div_ceil(64))
+            .map_err(|_| resource_limit("role-assignment ordinal bitmap"))?;
+        seen_ordinals.push(vec![0_u64; words]);
+    }
+    Ok(V36PrefixRoleAssignmentStream {
+        batch: None,
+        batch_index: 0,
+        counts,
+        expected_rows,
+        finished: false,
+        previous_physical: None,
+        reader,
+        seen: 0,
+        seen_ordinals,
+        snapshot_path,
+        window_end,
+        window_start: assignment.contract.selected_object_start,
+    })
 }
 
 fn write_v36_prefix_role_assignment_file(
@@ -4114,10 +4444,15 @@ fn registered_input_schema() -> Schema {
 }
 
 fn sha256_file(path: &Path) -> Result<(u64, String)> {
-    let file = File::open(path).map_err(|source| BorsukError::Io {
+    let mut file = File::open(path).map_err(|source| BorsukError::Io {
         path: path.to_owned(),
         source,
     })?;
+    sha256_file_handle(&mut file, path)
+}
+
+fn sha256_file_handle(file: &mut File, path: &Path) -> Result<(u64, String)> {
+    v36_prefix_external_io(path, file.seek(SeekFrom::Start(0)))?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut buffer = vec![0_u8; 1024 * 1024];
     let mut bytes = 0_u64;
@@ -4135,7 +4470,9 @@ fn sha256_file(path: &Path) -> Result<(u64, String)> {
             .ok_or_else(|| invalid("V36 prefix registered object length overflows"))?;
         hasher.update(&buffer[..read]);
     }
-    Ok((bytes, format!("{:x}", hasher.finalize())))
+    let digest = format!("{:x}", hasher.finalize());
+    v36_prefix_external_io(path, reader.seek(SeekFrom::Start(0)))?;
+    Ok((bytes, digest))
 }
 
 fn authenticate_file(path: &Path, expected: &V36ArtifactIdentity) -> Result<()> {
@@ -4790,14 +5127,23 @@ where
     {
         return Err(invalid("V36 prefix registered object identity differs"));
     }
-    let (encoded_bytes, sha256) = sha256_file(path)?;
-    if encoded_bytes != object.encoded_bytes || sha256 != object.sha256 {
-        return Err(invalid("V36 prefix registered object authority differs"));
+    let file_type = fs::symlink_metadata(path)
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?
+        .file_type();
+    if !file_type.is_file() || file_type.is_symlink() {
+        return Err(invalid("V36 prefix registered object path differs"));
     }
-    let file = File::open(path).map_err(|source| BorsukError::Io {
+    let mut file = File::open(path).map_err(|source| BorsukError::Io {
         path: path.to_owned(),
         source,
     })?;
+    let (encoded_bytes, sha256) = sha256_file_handle(&mut file, path)?;
+    if encoded_bytes != object.encoded_bytes || sha256 != object.sha256 {
+        return Err(invalid("V36 prefix registered object authority differs"));
+    }
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let expected_schema = registered_input_schema();
     validate_parquet_descriptor(builder.parquet_schema(), &expected_schema)?;
@@ -5217,7 +5563,7 @@ fn validate_source_batch(
     Ok(())
 }
 
-const MATERIALIZATION_BUCKET_ROWS: usize = 8_192;
+const MATERIALIZATION_BUCKET_ROWS: usize = 2_048;
 const MATERIALIZATION_RECORD_BYTES: usize = 16 + DIMENSIONS * 4;
 
 fn write_materialization_record<W: Write>(
@@ -5259,12 +5605,37 @@ fn materialization_rows(split: &V36PrefixRoleSplit) -> [&[V36PrefixRowIdentity];
 }
 
 fn read_materialization_bucket(path: &Path) -> Result<Vec<(u64, V36PrefixMaterializedRow)>> {
-    let bytes = read_file(path)?;
-    if bytes.is_empty() || bytes.len() % MATERIALIZATION_RECORD_BYTES != 0 {
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let encoded_bytes = file
+        .metadata()
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?
+        .len();
+    if encoded_bytes == 0
+        || encoded_bytes % u64::try_from(MATERIALIZATION_RECORD_BYTES).unwrap() != 0
+        || encoded_bytes
+            > u64::try_from(MATERIALIZATION_BUCKET_ROWS * MATERIALIZATION_RECORD_BYTES).unwrap()
+    {
         return Err(invalid("V36 prefix materialization spool differs"));
     }
-    let mut rows = Vec::with_capacity(bytes.len() / MATERIALIZATION_RECORD_BYTES);
-    for record in bytes.as_chunks::<MATERIALIZATION_RECORD_BYTES>().0 {
+    let row_count =
+        usize::try_from(encoded_bytes / u64::try_from(MATERIALIZATION_RECORD_BYTES).unwrap())
+            .map_err(|_| invalid("V36 prefix materialization spool differs"))?;
+    let mut reader = BufReader::with_capacity(65_536, file);
+    let mut rows = Vec::with_capacity(row_count);
+    for _ in 0..row_count {
+        let mut record = [0_u8; MATERIALIZATION_RECORD_BYTES];
+        reader
+            .read_exact(&mut record)
+            .map_err(|source| BorsukError::Io {
+                path: path.to_owned(),
+                source,
+            })?;
         let ordinal = u64::from_le_bytes(record[..8].try_into().unwrap());
         let feature_row_id = u64::from_le_bytes(record[8..16].try_into().unwrap());
         let mut embedding = Vec::with_capacity(DIMENSIONS);
@@ -5280,6 +5651,17 @@ fn read_materialization_bucket(path: &Path) -> Result<Vec<(u64, V36PrefixMateria
                 embedding,
             },
         ));
+    }
+    let mut trailing = [0_u8; 1];
+    if reader
+        .read(&mut trailing)
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?
+        != 0
+    {
+        return Err(invalid("V36 prefix materialization spool differs"));
     }
     rows.sort_by_key(|(ordinal, _)| *ordinal);
     Ok(rows)
@@ -5360,6 +5742,301 @@ fn write_spooled_output(
     }
     writer.close()?;
     publish_output(temporary, path)
+}
+
+fn write_spooled_output_counted(
+    path: &Path,
+    expected_rows: u64,
+    buckets: &[PathBuf],
+    query: bool,
+) -> Result<()> {
+    let schema = if query {
+        v36_prefix_query_schema()
+    } else {
+        v36_prefix_source_schema()
+    };
+    let mut temporary = temporary_output(path)?;
+    let mut writer = ArrowWriter::try_new(
+        temporary.as_file_mut(),
+        Arc::new(schema),
+        Some(parquet_writer_properties()),
+    )?;
+    let mut next_ordinal = 0_u64;
+    let mut query_ordinal = 0_u64;
+    let mut query_ids = BTreeSet::new();
+    for bucket in buckets {
+        let decoded = read_materialization_bucket(bucket)?;
+        for (ordinal, _) in &decoded {
+            if *ordinal != next_ordinal {
+                return Err(invalid("V36 prefix materialization ordinal differs"));
+            }
+            next_ordinal += 1;
+        }
+        let batch = materialized_batch(&decoded, query)?;
+        if query {
+            validate_query_batch(&batch, &mut query_ordinal, &mut query_ids)?;
+        }
+        writer.write(&batch)?;
+    }
+    if next_ordinal != expected_rows || (query && query_ordinal != expected_rows) {
+        return Err(invalid("V36 prefix materialization row count differs"));
+    }
+    writer.close()?;
+    publish_output(temporary, path)
+}
+
+fn v36_prefix_ranked_source_manifest_sha256(
+    ranked_objects: &[V36PrefixRankedSourceObject],
+) -> Result<String> {
+    let mut objects = ranked_objects.iter().collect::<Vec<_>>();
+    objects.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
+    let mut paths = BTreeSet::new();
+    let mut manifest = Sha256::new();
+    for object in objects {
+        if !paths.insert(object.path.as_str()) {
+            return Err(invalid("V36 prefix source manifest paths differ"));
+        }
+        digest_bytes(&object.sha256)?;
+        manifest.update(object.path.as_bytes());
+        manifest.update(b"\t");
+        manifest.update(object.sha256.as_bytes());
+        manifest.update(b"\t");
+        manifest.update(object.encoded_bytes.to_string().as_bytes());
+        manifest.update(b"\n");
+    }
+    Ok(format!("{:x}", manifest.finalize()))
+}
+
+/// Materialize role Parquets by merge-joining physical assignments with source rows.
+pub fn materialize_v36_prefix_assigned_roles(
+    request: V36PrefixExternalMaterializationRequest<'_>,
+) -> Result<V36PrefixRoleParquetPaths> {
+    let V36PrefixExternalMaterializationRequest {
+        assignment,
+        limits,
+        output,
+        ranked_objects,
+        scratch_root,
+        source_paths,
+    } = request;
+    validate_v36_prefix_role_assignment_contract_shape(&assignment.contract)?;
+    if limits.io_buffer_bytes > EXTERNAL_MAX_IO_BUFFER_BYTES {
+        return Err(resource_limit("external materialization configuration"));
+    }
+    let object_count = usize::from(assignment.contract.selected_object_count);
+    let object_start = usize::from(assignment.contract.selected_object_start);
+    let object_end = object_start
+        .checked_add(object_count)
+        .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?;
+    if source_paths.len() != object_count
+        || object_count == 0
+        || object_count > 16
+        || ranked_objects.get(object_start..object_end).is_none()
+        || ranked_objects.windows(2).any(|pair| {
+            (&pair[0].sample_sha256, &pair[0].path) >= (&pair[1].sample_sha256, &pair[1].path)
+        })
+        || ranked_objects.iter().any(|object| {
+            object.sample_sha256
+                != v36_prefix_object_sample_sha256(&object.path, object.encoded_bytes)
+        })
+        || v36_prefix_ranked_source_manifest_sha256(ranked_objects)?
+            != assignment.contract.ordered_source_manifest_sha256
+        || limits.io_buffer_bytes == 0
+        || limits.max_input_bytes == 0
+        || limits.max_scratch_bytes == 0
+    {
+        return Err(invalid(
+            "V36 prefix external materialization authority differs",
+        ));
+    }
+    let required_scratch_bytes = assignment
+        .contract
+        .selected_rows
+        .checked_mul(
+            u64::try_from(MATERIALIZATION_RECORD_BYTES)
+                .map_err(|_| resource_limit("materialization scratch bytes"))?,
+        )
+        .and_then(|bytes| bytes.checked_add(assignment.identity.encoded_bytes))
+        .ok_or_else(|| resource_limit("materialization scratch bytes"))?;
+    if required_scratch_bytes > limits.max_scratch_bytes {
+        return Err(resource_limit("materialization scratch bytes"));
+    }
+    let selected_objects = &ranked_objects[object_start..object_end];
+    if selected_objects
+        .iter()
+        .any(|object| object.encoded_bytes > limits.max_input_bytes)
+    {
+        return Err(resource_limit("materialization source input bytes"));
+    }
+    let scratch_type = fs::symlink_metadata(scratch_root)
+        .map_err(|source| BorsukError::Io {
+            path: scratch_root.to_owned(),
+            source,
+        })?
+        .file_type();
+    let output_parent = output
+        .parent()
+        .ok_or_else(|| invalid("V36 prefix materialization output path differs"))?;
+    let output_parent_type = fs::symlink_metadata(output_parent)
+        .map_err(|source| BorsukError::Io {
+            path: output_parent.to_owned(),
+            source,
+        })?
+        .file_type();
+    let names = [
+        "source.parquet",
+        "development-query.parquet",
+        "validation-query.parquet",
+        "sealed-holdout-query.parquet",
+        "performance-query.parquet",
+    ];
+    if !scratch_type.is_dir()
+        || scratch_type.is_symlink()
+        || !output_parent_type.is_dir()
+        || output_parent_type.is_symlink()
+        || output.exists()
+    {
+        return Err(invalid(
+            "V36 prefix external materialization output differs",
+        ));
+    }
+    let attempt = tempfile::tempdir_in(scratch_root).map_err(|source| BorsukError::Io {
+        path: scratch_root.to_owned(),
+        source,
+    })?;
+    let staging = tempfile::tempdir_in(output_parent).map_err(|source| BorsukError::Io {
+        path: output_parent.to_owned(),
+        source,
+    })?;
+    let mut assignments =
+        open_v36_prefix_role_assignment_stream(assignment, limits, attempt.path())?;
+    let counts = assignments.counts;
+    let mut spool_paths = Vec::new();
+    let mut spools = Vec::new();
+    for (role, count) in counts.into_iter().enumerate() {
+        let count = usize::try_from(count)
+            .map_err(|_| invalid("V36 prefix materialization row count overflows"))?;
+        let mut paths = Vec::new();
+        let mut files = Vec::new();
+        for bucket in 0..count.div_ceil(MATERIALIZATION_BUCKET_ROWS) {
+            let path = attempt
+                .path()
+                .join(format!("role-{role}-bucket-{bucket:06}.bin"));
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|source| BorsukError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            paths.push(path);
+            files.push(BufWriter::new(file));
+        }
+        spool_paths.push(paths);
+        spools.push(files);
+    }
+    let mut next_assignment = assignments.next_record()?;
+    for (local_ordinal, (path, object)) in source_paths.iter().zip(selected_objects).enumerate() {
+        let object_ordinal = assignment
+            .contract
+            .selected_object_start
+            .checked_add(
+                u16::try_from(local_ordinal)
+                    .map_err(|_| invalid("V36 prefix materialization ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix materialization ordinal overflows"))?;
+        scan_v36_prefix_registered_input_parquet(path, object, object_ordinal, |row| {
+            let physical = (row.selected_object_ordinal, row.row_offset);
+            if next_assignment.is_some_and(|assignment| {
+                (assignment.selected_object_ordinal, assignment.row_offset) < physical
+            }) {
+                return Err(invalid("V36 prefix materialization row is missing"));
+            }
+            if let Some(assignment_row) = next_assignment
+                && (
+                    assignment_row.selected_object_ordinal,
+                    assignment_row.row_offset,
+                ) == physical
+            {
+                if assignment_row.feature_row_id
+                    != u64::try_from(row.feature_row_id).unwrap_or(u64::MAX)
+                {
+                    return Err(invalid("V36 prefix materialization feature ID differs"));
+                }
+                let role = usize::from(assignment_row.role);
+                let ordinal = usize::try_from(assignment_row.role_ordinal)
+                    .map_err(|_| invalid("V36 prefix materialization ordinal overflows"))?;
+                let bucket = ordinal / MATERIALIZATION_BUCKET_ROWS;
+                write_materialization_record(
+                    &mut spools[role][bucket],
+                    &spool_paths[role][bucket],
+                    ordinal,
+                    &V36PrefixMaterializedRow {
+                        feature_row_id: assignment_row.feature_row_id,
+                        source_ordinal: (role == 0).then_some(assignment_row.role_ordinal),
+                        embedding: row.embedding,
+                    },
+                )?;
+                next_assignment = assignments.next_record()?;
+            }
+            Ok(())
+        })?;
+    }
+    if next_assignment.is_some() || assignments.next_record()?.is_some() {
+        return Err(invalid("V36 prefix materialization row is missing"));
+    }
+    let snapshot_path = assignments.snapshot_path.clone();
+    drop(assignments);
+    fs::remove_file(&snapshot_path).map_err(|source| BorsukError::Io {
+        path: snapshot_path,
+        source,
+    })?;
+    for (role, role_spools) in spools.iter_mut().enumerate() {
+        for (bucket, spool) in role_spools.iter_mut().enumerate() {
+            spool.flush().map_err(|source| BorsukError::Io {
+                path: spool_paths[role][bucket].clone(),
+                source,
+            })?;
+        }
+    }
+    drop(spools);
+    let staged_outputs = names.map(|name| staging.path().join(name));
+    for (role, ((path, count), buckets)) in staged_outputs
+        .iter()
+        .zip(counts)
+        .zip(&spool_paths)
+        .enumerate()
+    {
+        write_spooled_output_counted(path, count, buckets, role != 0)?;
+    }
+    for role in spool_paths {
+        for path in role {
+            fs::remove_file(&path).map_err(|source| BorsukError::Io { path, source })?;
+        }
+    }
+    sync_directory(staging.path())?;
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        staging.path(),
+        rustix::fs::CWD,
+        output,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|source| BorsukError::Io {
+        path: output.to_owned(),
+        source: source.into(),
+    })?;
+    sync_directory(output_parent)?;
+    let outputs = names.map(|name| output.join(name));
+    let [source, development, validation, sealed_holdout, performance] = outputs;
+    Ok(V36PrefixRoleParquetPaths {
+        development,
+        performance,
+        sealed_holdout,
+        source,
+        validation,
+    })
 }
 
 /// Materialize canonical source and query Parquet using bounded ordinal buckets.

@@ -13,14 +13,15 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    V36ArtifactIdentity, V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest,
-    V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt,
-    V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob, V36PrefixIdentityRun,
-    V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixPopulationAuthority,
-    V36PrefixPopulationCommit, V36PrefixQualityRole, V36PrefixRankedSourceObject,
-    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAssignmentContract,
-    V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
-    V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
+    V36ArtifactIdentity, V36PrefixExternalMaterializationRequest, V36PrefixExternalSelectionLimits,
+    V36PrefixExternalSelectionRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
+    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
+    V36PrefixPopulationAuthority, V36PrefixPopulationCommit, V36PrefixQualityRole,
+    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
+    V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
+    V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
+    V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
@@ -28,19 +29,19 @@ use borsuk::{
     deduplicate_v36_prefix_row_identities, encode_v36_prefix_identity_run,
     encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_select_v36_prefix_population_rows, load_v36_prefix_freeze_preflight,
-    materialize_v36_prefix_role_parquets, rank_v36_prefix_source_objects,
-    restore_v36_prefix_population, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
-    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_resumed,
-    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_population_rows, select_v36_prefix_roles,
-    v36_prefix_gt100_schema, v36_prefix_query_schema, v36_prefix_query_score_sha256,
-    v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
-    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
+    rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
+    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
+    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
+    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
+    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -574,6 +575,14 @@ fn external_selected_file(
     root: &Path,
     feature_ids: &[u64],
 ) -> (V36PrefixSelectedIdsFile, Vec<borsuk::V36PrefixRowIdentity>) {
+    external_selected_file_with_manifest(root, feature_ids, &"1".repeat(64))
+}
+
+fn external_selected_file_with_manifest(
+    root: &Path,
+    feature_ids: &[u64],
+    ordered_source_manifest_sha256: &str,
+) -> (V36PrefixSelectedIdsFile, Vec<borsuk::V36PrefixRowIdentity>) {
     let mut rows = feature_ids
         .iter()
         .enumerate()
@@ -586,9 +595,12 @@ fn external_selected_file(
             },
         )
         .collect::<Vec<_>>();
-    rows = select_v36_prefix_population_rows(rows, &"1".repeat(64), feature_ids.len()).unwrap();
+    rows =
+        select_v36_prefix_population_rows(rows, ordered_source_manifest_sha256, feature_ids.len())
+            .unwrap();
     let contract = V36PrefixSelectedIdsContract {
         eligible_rows: feature_ids.len().try_into().unwrap(),
+        ordered_source_manifest_sha256: ordered_source_manifest_sha256.into(),
         selected_object_count: 1,
         selected_rows: feature_ids.len().try_into().unwrap(),
         ..selected_ids_contract(feature_ids.len().try_into().unwrap())
@@ -699,7 +711,7 @@ fn reduced_role_assignment_contract(
         corpus_seed_label: "borsuk-v36-prefix-screen-corpus-v2".into(),
         corpus_seed_sha256: "56b288d41e87d3b4ba97ac02b9944837e6bde8b402b8fab088861a27ef099f8c"
             .into(),
-        ordered_source_manifest_sha256: "1".repeat(64),
+        ordered_source_manifest_sha256: selected.contract.ordered_source_manifest_sha256.clone(),
         roles: roles.into(),
         selected_object_count: 1,
         selected_object_start: 0,
@@ -808,6 +820,101 @@ fn read_role_assignments(path: &Path) -> Vec<(u16, u64, u64, u8, u64)> {
         }));
     }
     rows
+}
+
+enum RoleAssignmentMutation {
+    FeatureId,
+    RoleOrdinal,
+}
+
+fn rewrite_role_assignment_file(
+    assignment: &mut V36PrefixRoleAssignmentFile,
+    mutation: RoleAssignmentMutation,
+) {
+    let bytes = fs::read(&assignment.path).unwrap();
+    let mut reader = ArrowFileReader::try_new(std::io::Cursor::new(bytes), None).unwrap();
+    let schema = reader.schema();
+    let batch = reader.next().unwrap().unwrap();
+    assert!(reader.next().is_none());
+    let objects = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt16Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    let offsets = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    let mut ids = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    let roles = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<UInt8Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    let mut ordinals = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    match mutation {
+        RoleAssignmentMutation::FeatureId => ids[0] ^= 1,
+        RoleAssignmentMutation::RoleOrdinal => {
+            let role = roles[0];
+            let same_role = roles
+                .iter()
+                .position(|candidate| *candidate == role)
+                .unwrap();
+            let second = roles
+                .iter()
+                .enumerate()
+                .skip(same_role + 1)
+                .find(|(_, candidate)| **candidate == role)
+                .map(|(index, _)| index)
+                .unwrap();
+            ordinals[second] = ordinals[same_role];
+        }
+    }
+    let rewritten = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt16Array::from(objects)),
+            Arc::new(UInt64Array::from(offsets)),
+            Arc::new(UInt64Array::from(ids)),
+            Arc::new(UInt8Array::from(roles)),
+            Arc::new(UInt64Array::from(ordinals)),
+        ],
+    )
+    .unwrap();
+    let mut output = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+    let mut writer = ArrowFileWriter::try_new_with_options(&mut output, &schema, options).unwrap();
+    writer.write(&rewritten).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    let sha256 = format!("{:x}", Sha256::digest(&output));
+    assignment.identity = V36ArtifactIdentity {
+        blake3: blake3::hash(&output).to_hex().to_string(),
+        encoded_bytes: output.len().try_into().unwrap(),
+        role: "population-role-assignments".into(),
+        sha256: sha256.clone(),
+        uri: format!("s3://fixture/v36/{sha256}-population-role-assignments.arrow"),
+    };
+    fs::write(&assignment.path, output).unwrap();
 }
 
 #[test]
@@ -2653,6 +2760,297 @@ fn write_registered_rows(path: &Path, feature_ids: &[i64]) -> V36PrefixRankedSou
         sha256: format!("{:x}", Sha256::digest(&bytes)),
         uri: format!("https://example.invalid/{name}"),
     }
+}
+
+fn ranked_source_manifest_sha256(objects: &[V36PrefixRankedSourceObject]) -> String {
+    let mut ordered = objects.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
+    let mut manifest = Sha256::new();
+    for object in ordered {
+        manifest.update(object.path.as_bytes());
+        manifest.update(b"\t");
+        manifest.update(object.sha256.as_bytes());
+        manifest.update(b"\t");
+        manifest.update(object.encoded_bytes.to_string().as_bytes());
+        manifest.update(b"\n");
+    }
+    format!("{:x}", manifest.finalize())
+}
+
+#[test]
+fn v36_prefix_dataset_external_materialization_merge_joins_physical_assignments() {
+    let directory = tempfile::tempdir().unwrap();
+    let first_source = directory.path().join("source-input-a.parquet");
+    let second_source = directory.path().join("source-input-b.parquet");
+    let feature_ids = (1_i64..=24).collect::<Vec<_>>();
+    let mut sources = vec![
+        (
+            write_registered_rows(&first_source, &feature_ids),
+            first_source,
+        ),
+        (
+            write_registered_rows(&second_source, &feature_ids),
+            second_source,
+        ),
+    ];
+    sources.sort_by(|left, right| {
+        (&left.0.sample_sha256, &left.0.path).cmp(&(&right.0.sample_sha256, &right.0.path))
+    });
+    let source = sources[0].1.clone();
+    let ranked = sources
+        .into_iter()
+        .map(|(object, _)| object)
+        .collect::<Vec<_>>();
+    let manifest = ranked_source_manifest_sha256(&ranked);
+    let (selected, _) = external_selected_file_with_manifest(
+        directory.path(),
+        &(1_u64..=24).collect::<Vec<_>>(),
+        &manifest,
+    );
+    let contract = reduced_role_assignment_contract(&selected);
+    let assignment_scratch = directory.path().join("assignment-scratch");
+    fs::create_dir(&assignment_scratch).unwrap();
+    let assignment_path = directory.path().join("role-assignments.arrow");
+    let limits = external_selection_limits();
+    let receipt = assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+        contract: &contract,
+        limits: &limits,
+        output: &assignment_path,
+        output_uri_prefix: "s3://fixture/v36",
+        scratch_root: &assignment_scratch,
+        selected: &selected,
+    })
+    .unwrap();
+    let mut expected = read_role_assignments(&assignment_path);
+    expected.sort_by_key(|assignment| (assignment.3, assignment.4));
+    let assignment = V36PrefixRoleAssignmentFile {
+        contract,
+        identity: receipt.identity,
+        path: assignment_path,
+    };
+    let scratch = directory.path().join("materialization-scratch");
+    let output = directory.path().join("output");
+    fs::create_dir(&scratch).unwrap();
+
+    let mut reversed_registry = ranked.clone();
+    reversed_registry.reverse();
+    assert!(
+        materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+            assignment: &assignment,
+            limits: &limits,
+            output: &output,
+            ranked_objects: &reversed_registry,
+            scratch_root: &scratch,
+            source_paths: std::slice::from_ref(&source),
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+
+    let paths: borsuk::V36PrefixRoleParquetPaths =
+        materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+            assignment: &assignment,
+            limits: &limits,
+            output: &output,
+            ranked_objects: &ranked,
+            scratch_root: &scratch,
+            source_paths: std::slice::from_ref(&source),
+        })
+        .unwrap();
+
+    let source_ids = expected
+        .iter()
+        .filter(|assignment| assignment.3 == 0)
+        .map(|assignment| assignment.2)
+        .collect::<Vec<_>>();
+    scan_v36_prefix_source_parquet(&paths.source, &source_ids, |_| Ok(())).unwrap();
+    let query_paths = [
+        paths.development,
+        paths.validation,
+        paths.sealed_holdout,
+        paths.performance,
+    ];
+    for (role, path) in query_paths.into_iter().enumerate() {
+        let expected_ids = expected
+            .iter()
+            .filter(|assignment| assignment.3 == u8::try_from(role + 1).unwrap())
+            .map(|assignment| assignment.2)
+            .collect::<Vec<_>>();
+        let mut actual_ids = Vec::new();
+        scan_v36_prefix_query_parquet(&path, expected_ids.len() as u64, |batch| {
+            actual_ids.extend_from_slice(
+                batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap()
+                    .values(),
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(actual_ids, expected_ids);
+    }
+    assert!(scratch.read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_dataset_external_materialization_rejects_rehashed_semantic_drift() {
+    for mutation in [
+        RoleAssignmentMutation::FeatureId,
+        RoleAssignmentMutation::RoleOrdinal,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source-input.parquet");
+        let feature_ids = (1_i64..=24).collect::<Vec<_>>();
+        let ranked = vec![write_registered_rows(&source, &feature_ids)];
+        let manifest = ranked_source_manifest_sha256(&ranked);
+        let (selected, _) = external_selected_file_with_manifest(
+            directory.path(),
+            &(1_u64..=24).collect::<Vec<_>>(),
+            &manifest,
+        );
+        let contract = reduced_role_assignment_contract(&selected);
+        let assignment_scratch = directory.path().join("assignment-scratch");
+        fs::create_dir(&assignment_scratch).unwrap();
+        let assignment_path = directory.path().join("role-assignments.arrow");
+        let limits = external_selection_limits();
+        let receipt = assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+            contract: &contract,
+            limits: &limits,
+            output: &assignment_path,
+            output_uri_prefix: "s3://fixture/v36",
+            scratch_root: &assignment_scratch,
+            selected: &selected,
+        })
+        .unwrap();
+        let mut assignment = V36PrefixRoleAssignmentFile {
+            contract,
+            identity: receipt.identity,
+            path: assignment_path,
+        };
+        rewrite_role_assignment_file(&mut assignment, mutation);
+        let scratch = directory.path().join("materialization-scratch");
+        let output = directory.path().join("output");
+        fs::create_dir(&scratch).unwrap();
+
+        assert!(
+            materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+                assignment: &assignment,
+                limits: &limits,
+                output: &output,
+                ranked_objects: &ranked,
+                scratch_root: &scratch,
+                source_paths: std::slice::from_ref(&source),
+            })
+            .is_err()
+        );
+        assert!(!output.exists());
+        assert!(scratch.read_dir().unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn v36_prefix_dataset_external_materialization_rejects_source_drift_and_clobber() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source-input.parquet");
+    let ranked = vec![write_registered_rows(
+        &source,
+        &(1_i64..=24).collect::<Vec<_>>(),
+    )];
+    let manifest = ranked_source_manifest_sha256(&ranked);
+    let (selected, _) = external_selected_file_with_manifest(
+        directory.path(),
+        &(1_u64..=24).collect::<Vec<_>>(),
+        &manifest,
+    );
+    let contract = reduced_role_assignment_contract(&selected);
+    let assignment_scratch = directory.path().join("assignment-scratch");
+    fs::create_dir(&assignment_scratch).unwrap();
+    let assignment_path = directory.path().join("role-assignments.arrow");
+    let limits = external_selection_limits();
+    let receipt = assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+        contract: &contract,
+        limits: &limits,
+        output: &assignment_path,
+        output_uri_prefix: "s3://fixture/v36",
+        scratch_root: &assignment_scratch,
+        selected: &selected,
+    })
+    .unwrap();
+    let assignment = V36PrefixRoleAssignmentFile {
+        contract,
+        identity: receipt.identity,
+        path: assignment_path,
+    };
+    let scratch = directory.path().join("materialization-scratch");
+    let output = directory.path().join("output");
+    fs::create_dir(&scratch).unwrap();
+    let mut drifted = ranked.clone();
+    drifted[0].path.push_str("-drift");
+    assert!(
+        materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+            assignment: &assignment,
+            limits: &limits,
+            output: &output,
+            ranked_objects: &drifted,
+            scratch_root: &scratch,
+            source_paths: std::slice::from_ref(&source),
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    let tiny_scratch_limits = V36PrefixExternalSelectionLimits {
+        max_scratch_bytes: assignment.identity.encoded_bytes + 1,
+        ..external_selection_limits()
+    };
+    let error = materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+        assignment: &assignment,
+        limits: &tiny_scratch_limits,
+        output: &output,
+        ranked_objects: &ranked,
+        scratch_root: &scratch,
+        source_paths: std::slice::from_ref(&source),
+    })
+    .unwrap_err();
+    assert_eq!(error.code(), "v36_prefix_resource_limit");
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+    let oversized_io_limits = V36PrefixExternalSelectionLimits {
+        io_buffer_bytes: usize::MAX,
+        ..external_selection_limits()
+    };
+    let error = materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+        assignment: &assignment,
+        limits: &oversized_io_limits,
+        output: &output,
+        ranked_objects: &ranked,
+        scratch_root: &scratch,
+        source_paths: std::slice::from_ref(&source),
+    })
+    .unwrap_err();
+    assert_eq!(error.code(), "v36_prefix_resource_limit");
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+    fs::create_dir(&output).unwrap();
+    fs::write(output.join("source.parquet"), b"preserve").unwrap();
+    assert!(
+        materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+            assignment: &assignment,
+            limits: &limits,
+            output: &output,
+            ranked_objects: &ranked,
+            scratch_root: &scratch,
+            source_paths: std::slice::from_ref(&source),
+        })
+        .is_err()
+    );
+    assert_eq!(
+        fs::read(output.join("source.parquet")).unwrap(),
+        b"preserve"
+    );
+    assert!(scratch.read_dir().unwrap().next().is_none());
 }
 
 #[test]
