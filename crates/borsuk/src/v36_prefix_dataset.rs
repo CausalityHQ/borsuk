@@ -804,8 +804,8 @@ impl V36PrefixPopulationCheckpointWriter {
         )
     }
 
-    /// Commit one complete authenticated source-object boundary.
-    pub fn commit(&mut self, boundary: &V36PrefixPopulationCommit) -> Result<PathBuf> {
+    /// Commit one complete authenticated source-object boundary from a durable run file.
+    pub fn commit_file(&mut self, boundary: &V36PrefixPopulationFileCommit) -> Result<PathBuf> {
         let ordinal = self.dependencies.len();
         let previous_population = self
             .previous_manifest
@@ -820,6 +820,11 @@ impl V36PrefixPopulationCheckpointWriter {
             )
             .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?;
         if boundary.run.selected_object_ordinal != expected_global_ordinal
+            || boundary.run.identity.uri
+                != format!(
+                    "{}{}-population-identity-run-{expected_global_ordinal:04}.arrow",
+                    self.context.object_prefix, boundary.run.identity.sha256
+                )
             || self
                 .context
                 .ranked_objects
@@ -833,18 +838,63 @@ impl V36PrefixPopulationCheckpointWriter {
         {
             return Err(invalid("V36 population checkpoint object differs"));
         }
-        let bytes = encode_v36_prefix_identity_run(&boundary.run)?;
-        let sha256 = format!("{:x}", Sha256::digest(&bytes));
-        let identity = V36ArtifactIdentity {
-            blake3: blake3::hash(&bytes).to_hex().to_string(),
-            encoded_bytes: bytes.len().try_into().unwrap_or(u64::MAX),
-            role: format!("population-identity-run-{expected_global_ordinal:04}"),
-            sha256: sha256.clone(),
-            uri: format!(
-                "{}{sha256}-population-identity-run-{expected_global_ordinal:04}.arrow",
-                self.context.object_prefix
-            ),
+        let previous_distinct =
+            previous_population.map_or(0, |population| population.distinct_rows);
+        let cutoff_candidate = boundary
+            .cutoff
+            .map(|(object, offset)| {
+                if object != expected_global_ordinal {
+                    return Err(invalid("V36 population checkpoint cutoff differs"));
+                }
+                Ok(offset)
+            })
+            .transpose()?;
+        let mut cutoff_rows = 0_u64;
+        let mut cutoff_present = false;
+        let attempt =
+            tempfile::tempdir_in(&self.outbox.root).map_err(|source| BorsukError::Io {
+                path: self.outbox.root.clone(),
+                source,
+            })?;
+        let limits = V36PrefixExternalSelectionLimits {
+            io_buffer_bytes: 65_536,
+            max_input_bytes: boundary.run.identity.encoded_bytes,
+            max_scratch_bytes: boundary.run.identity.encoded_bytes,
+            max_spills: 1,
+            merge_fan_in: 2,
+            sort_buffer_records: 1,
         };
+        let (run_rows, run_physical_rows) = stream_v36_prefix_identity_run_file(
+            &boundary.run,
+            &limits,
+            attempt.path(),
+            &[0_u8; 32],
+            &[0_u8; 32],
+            &mut |row| {
+                if cutoff_candidate.is_some_and(|cutoff| row.row_offset <= cutoff) {
+                    cutoff_rows += 1;
+                }
+                if cutoff_candidate == Some(row.row_offset) {
+                    cutoff_present = true;
+                }
+                Ok(())
+            },
+        )?;
+        let installed_path = self
+            .outbox
+            .root
+            .join("objects")
+            .join(format!("{}.blob", boundary.run.identity.sha256));
+        install_content_addressed_file(
+            &installed_path,
+            &boundary.run.path,
+            &boundary.run.identity,
+        )?;
+        for previous in &self.dependencies {
+            authenticate_file(&previous.path, &previous.identity)?;
+            validate_v36_prefix_identity_run_files_disjoint(&previous.path, &installed_path)?;
+        }
+        let identity = boundary.run.identity.clone();
         let mut consumed_objects = self
             .previous_manifest
             .as_ref()
@@ -865,22 +915,13 @@ impl V36PrefixPopulationCheckpointWriter {
                 .checked_add(1)
                 .ok_or_else(|| invalid("V36 population checkpoint generation overflows"))
         })?;
-        let previous_distinct =
-            previous_population.map_or(0, |population| population.distinct_rows);
         let previous_physical =
             previous_population.map_or(0, |population| population.physical_rows);
         let distinct_rows = previous_distinct
-            .checked_add(
-                boundary
-                    .run
-                    .rows
-                    .len()
-                    .try_into()
-                    .map_err(|_| invalid("V36 population checkpoint distinct rows overflow"))?,
-            )
+            .checked_add(run_rows)
             .ok_or_else(|| invalid("V36 population checkpoint distinct rows overflow"))?;
         let physical_rows = previous_physical
-            .checked_add(boundary.run.physical_rows)
+            .checked_add(run_physical_rows)
             .ok_or_else(|| invalid("V36 population checkpoint physical rows overflow"))?;
         let duplicate_rows = physical_rows
             .checked_sub(distinct_rows)
@@ -888,26 +929,15 @@ impl V36PrefixPopulationCheckpointWriter {
         let cutoff = if previous_distinct < self.context.distinct_candidates
             && distinct_rows >= self.context.distinct_candidates
         {
-            let local_index = self
+            let local_count = self
                 .context
                 .distinct_candidates
                 .checked_sub(previous_distinct)
-                .and_then(|count| count.checked_sub(1))
-                .and_then(|index| usize::try_from(index).ok())
                 .ok_or_else(|| invalid("V36 population checkpoint cutoff overflows"))?;
-            let mut physical_offsets = boundary
-                .run
-                .rows
-                .iter()
-                .map(|row| row.row_offset)
-                .collect::<Vec<_>>();
-            physical_offsets.sort_unstable();
-            Some((
-                boundary.run.selected_object_ordinal,
-                *physical_offsets
-                    .get(local_index)
-                    .ok_or_else(|| invalid("V36 population checkpoint cutoff differs"))?,
-            ))
+            let offset = cutoff_candidate
+                .filter(|_| cutoff_present && cutoff_rows == local_count)
+                .ok_or_else(|| invalid("V36 population checkpoint cutoff differs"))?;
+            Some((boundary.run.selected_object_ordinal, offset))
         } else {
             None
         };
@@ -956,14 +986,10 @@ impl V36PrefixPopulationCheckpointWriter {
                 .as_deref()
                 .map(|pointer| (pointer, "local-predecessor")),
         )?;
-        let path = self
-            .outbox
-            .root
-            .join("objects")
-            .join(format!("{}.blob", identity.sha256));
-        install_content_addressed(&path, &bytes)?;
-        self.dependencies
-            .push(V36PrefixCheckpointDependencyFile { identity, path });
+        self.dependencies.push(V36PrefixCheckpointDependencyFile {
+            identity,
+            path: boundary.run.path.clone(),
+        });
         let ready = match self.outbox.commit_files(&publication, &self.dependencies) {
             Ok(ready) => ready,
             Err(error) => {
@@ -971,10 +997,51 @@ impl V36PrefixPopulationCheckpointWriter {
                 return Err(error);
             }
         };
+        self.dependencies
+            .last_mut()
+            .ok_or_else(|| invalid("V36 population checkpoint dependency is missing"))?
+            .path = installed_path;
         self.previous_manifest = Some(manifest);
         self.previous_manifest_identity = Some(publication.manifest.clone());
         self.previous_pointer_bytes = Some(publication.pointer_bytes);
         Ok(ready)
+    }
+
+    /// Encode and commit one resident run through the file-backed publication boundary.
+    pub fn commit(&mut self, boundary: &V36PrefixPopulationCommit) -> Result<PathBuf> {
+        let bytes = encode_v36_prefix_identity_run(&boundary.run)?;
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let identity = V36ArtifactIdentity {
+            blake3: blake3::hash(&bytes).to_hex().to_string(),
+            encoded_bytes: bytes.len().try_into().unwrap_or(u64::MAX),
+            role: format!(
+                "population-identity-run-{:04}",
+                boundary.run.selected_object_ordinal
+            ),
+            sha256: sha256.clone(),
+            uri: format!(
+                "{}{sha256}-population-identity-run-{:04}.arrow",
+                self.context.object_prefix, boundary.run.selected_object_ordinal
+            ),
+        };
+        let path = self
+            .outbox
+            .root
+            .join("objects")
+            .join(format!("{}.blob", identity.sha256));
+        install_content_addressed(&path, &bytes)?;
+        self.commit_file(&V36PrefixPopulationFileCommit {
+            cutoff: boundary.cutoff,
+            distinct_rows: boundary.distinct_rows,
+            duplicate_rows: boundary.duplicate_rows,
+            physical_rows: boundary.physical_rows,
+            run: V36PrefixIdentityRunFile {
+                identity,
+                path,
+                selected_object_ordinal: boundary.run.selected_object_ordinal,
+                source: boundary.run.source.clone(),
+            },
+        })
     }
 }
 
@@ -1068,7 +1135,7 @@ pub struct V36PrefixRowIdentity {
 pub struct V36PrefixIdentityRun {
     /// Physical rows validated in the complete source object.
     pub physical_rows: u64,
-    /// Global first occurrences contributed by this object in row-offset order.
+    /// Global first occurrences contributed by this object in feature-ID order.
     pub rows: Vec<V36PrefixRowIdentity>,
     /// Position of the complete object in registered sample order.
     pub selected_object_ordinal: u16,
@@ -2027,6 +2094,21 @@ pub struct V36PrefixPopulationCommit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// One file-backed durable population boundary after a complete authenticated object.
+pub struct V36PrefixPopulationFileCommit {
+    /// Cutoff position once the requested distinct prefix has been reached.
+    pub cutoff: Option<(u16, u64)>,
+    /// Distinct IDs observed through this complete object.
+    pub distinct_rows: u64,
+    /// Duplicate physical rows observed through this complete object.
+    pub duplicate_rows: u64,
+    /// Physical rows observed through this complete object.
+    pub physical_rows: u64,
+    /// Authenticated complete-object first-occurrence Arrow file.
+    pub run: V36PrefixIdentityRunFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Strict role-separated Parquet outputs from one prefix population.
 pub struct V36PrefixRoleParquetPaths {
     /// Development queries.
@@ -2705,7 +2787,7 @@ fn stream_v36_prefix_identity_run_file(
     seed: &[u8; 32],
     manifest: &[u8; 32],
     consume: &mut impl FnMut(V36PrefixScoredIdentity) -> Result<()>,
-) -> Result<()> {
+) -> Result<(u64, u64)> {
     let file_type = fs::symlink_metadata(&input.path)
         .map_err(|source| BorsukError::Io {
             path: input.path.clone(),
@@ -2823,7 +2905,13 @@ fn stream_v36_prefix_identity_run_file(
         return Err(invalid("V36 prefix identity-run schema differs"));
     }
     let mut previous_feature_id = None;
-    let mut seen_row_offsets = HashSet::with_capacity(row_count_usize);
+    let bitmap_words = usize::try_from(physical_rows.div_ceil(64)).ok();
+    let mut offset_bitmap = bitmap_words
+        .filter(|words| *words <= row_count_usize)
+        .map(|words| vec![0_u64; words]);
+    let mut offset_rows = offset_bitmap
+        .is_none()
+        .then(|| Vec::with_capacity(row_count_usize));
     let mut seen = 0_u64;
     for batch_index in 0..expected_batches {
         let batch = reader
@@ -2849,8 +2937,24 @@ fn stream_v36_prefix_identity_run_file(
         {
             if row_offset >= physical_rows
                 || previous_feature_id.is_some_and(|prior| prior >= feature_row_id)
-                || !seen_row_offsets.insert(row_offset)
             {
+                return Err(invalid("V36 prefix identity-run rows differ"));
+            }
+            let duplicate_offset = if let Some(bitmap) = &mut offset_bitmap {
+                let word = usize::try_from(row_offset / 64)
+                    .map_err(|_| invalid("V36 prefix identity-run row offset differs"))?;
+                let mask = 1_u64 << (row_offset % 64);
+                let duplicate = bitmap[word] & mask != 0;
+                bitmap[word] |= mask;
+                duplicate
+            } else {
+                offset_rows
+                    .as_mut()
+                    .ok_or_else(|| invalid("V36 prefix identity-run offset state differs"))?
+                    .push(row_offset);
+                false
+            };
+            if duplicate_offset {
                 return Err(invalid("V36 prefix identity-run rows differ"));
             }
             previous_feature_id = Some(feature_row_id);
@@ -2866,11 +2970,78 @@ fn stream_v36_prefix_identity_run_file(
     if reader.next().is_some() || seen != row_count {
         return Err(invalid("V36 prefix identity-run batches differ"));
     }
+    if let Some(offsets) = &mut offset_rows {
+        offsets.sort_unstable();
+        if offsets.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(invalid("V36 prefix identity-run rows differ"));
+        }
+    }
     drop(reader);
     fs::remove_file(&snapshot_path).map_err(|source| BorsukError::Io {
         path: snapshot_path,
         source,
     })?;
+    Ok((row_count, physical_rows))
+}
+
+struct V36PrefixIdentityFeatureStream {
+    reader: ArrowFileReader<File>,
+    batch: Option<RecordBatch>,
+    index: usize,
+}
+
+impl V36PrefixIdentityFeatureStream {
+    fn open(path: &Path) -> Result<Self> {
+        let file = File::open(path).map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        Ok(Self {
+            reader: ArrowFileReader::try_new(file, None)?,
+            batch: None,
+            index: 0,
+        })
+    }
+
+    fn next_id(&mut self) -> Result<Option<u64>> {
+        loop {
+            if let Some(batch) = &self.batch
+                && self.index < batch.num_rows()
+            {
+                let feature_ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V36 prefix identity-run feature IDs differ"))?;
+                let feature_row_id = feature_ids.value(self.index);
+                self.index += 1;
+                return Ok(Some(feature_row_id));
+            }
+            match self.reader.next().transpose()? {
+                Some(batch) => {
+                    self.batch = Some(batch);
+                    self.index = 0;
+                }
+                None => return Ok(None),
+            }
+        }
+    }
+}
+
+fn validate_v36_prefix_identity_run_files_disjoint(left: &Path, right: &Path) -> Result<()> {
+    let mut left = V36PrefixIdentityFeatureStream::open(left)?;
+    let mut right = V36PrefixIdentityFeatureStream::open(right)?;
+    let mut left_id = left.next_id()?;
+    let mut right_id = right.next_id()?;
+    while let (Some(existing), Some(candidate)) = (left_id, right_id) {
+        match existing.cmp(&candidate) {
+            Ordering::Less => left_id = left.next_id()?,
+            Ordering::Greater => right_id = right.next_id()?,
+            Ordering::Equal => {
+                return Err(invalid("V36 prefix identity-run global ID repeats"));
+            }
+        }
+    }
     Ok(())
 }
 

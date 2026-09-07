@@ -9,14 +9,14 @@ use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
     V36PrefixCheckpointManifest, V36PrefixCheckpointOutbox, V36PrefixCheckpointPhase,
     V36PrefixCheckpointPointer, V36PrefixCheckpointPointerCondition, V36PrefixIdentityRun,
-    V36PrefixMaterializedArtifacts, V36PrefixPopulationCheckpoint,
-    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
-    V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
-    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
-    decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
-    load_v36_prefix_population_checkpoint_head, plan_v36_prefix_checkpoint_publication,
-    restore_v36_prefix_population, restore_v36_prefix_population_state,
-    validate_v36_prefix_checkpoint_manifest_with_context,
+    V36PrefixIdentityRunFile, V36PrefixMaterializedArtifacts, V36PrefixPopulationCheckpoint,
+    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationFileCommit,
+    V36PrefixPopulationSelection, V36PrefixRegisteredSourceObject, V36PrefixRowIdentity,
+    V36PrefixSourceObject, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, decode_v36_prefix_identity_run,
+    encode_v36_prefix_identity_run, load_v36_prefix_population_checkpoint_head,
+    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
+    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -889,6 +889,108 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
     assert!(invalid_writer.commit(&inconsistent).is_err());
     assert!(
         invalid_root
+            .join("commits")
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn v36_prefix_checkpoint_population_writer_commits_authenticated_run_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let run = V36PrefixIdentityRun {
+        physical_rows: 100,
+        rows: vec![identity(7, 9, 0), identity(41, 2, 0)],
+        selected_object_ordinal: 0,
+        source: source_object(),
+    };
+    let run_bytes = encode_v36_prefix_identity_run(&run).unwrap();
+    let run_path = directory.path().join("identity-run.arrow");
+    std::fs::write(&run_path, &run_bytes).unwrap();
+    let boundary = V36PrefixPopulationFileCommit {
+        cutoff: None,
+        distinct_rows: 2,
+        duplicate_rows: 98,
+        physical_rows: 100,
+        run: V36PrefixIdentityRunFile {
+            identity: identity_run_artifact(&run_bytes, 0),
+            path: run_path.clone(),
+            selected_object_ordinal: 0,
+            source: source_object(),
+        },
+    };
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &root,
+        two_object_checkpoint_context(3),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    let ready = writer.commit_file(&boundary).unwrap();
+    assert!(ready.is_file());
+    let installed = writer.identity_run_files().unwrap();
+    assert_eq!(installed.len(), 1);
+    assert_eq!(
+        installed[0].path.parent(),
+        Some(root.join("objects").as_path())
+    );
+    std::fs::remove_file(&run_path).unwrap();
+
+    let duplicate_run = V36PrefixIdentityRun {
+        physical_rows: 5,
+        rows: vec![identity(41, 4, 1)],
+        selected_object_ordinal: 1,
+        source: source_object_at(1),
+    };
+    let second_path = directory.path().join("identity-run-0001.arrow");
+    let duplicate_bytes = encode_v36_prefix_identity_run(&duplicate_run).unwrap();
+    std::fs::write(&second_path, &duplicate_bytes).unwrap();
+    let mut duplicate_boundary = V36PrefixPopulationFileCommit {
+        cutoff: Some((1, 4)),
+        distinct_rows: 3,
+        duplicate_rows: 102,
+        physical_rows: 105,
+        run: V36PrefixIdentityRunFile {
+            identity: identity_run_artifact(&duplicate_bytes, 1),
+            path: second_path.clone(),
+            selected_object_ordinal: 1,
+            source: source_object_at(1),
+        },
+    };
+    assert!(writer.commit_file(&duplicate_boundary).is_err());
+
+    let second_run = V36PrefixIdentityRun {
+        physical_rows: 5,
+        rows: vec![identity(99, 4, 1)],
+        selected_object_ordinal: 1,
+        source: source_object_at(1),
+    };
+    let second_bytes = encode_v36_prefix_identity_run(&second_run).unwrap();
+    std::fs::write(&second_path, &second_bytes).unwrap();
+    duplicate_boundary.run.identity = identity_run_artifact(&second_bytes, 1);
+    writer.commit_file(&duplicate_boundary).unwrap();
+
+    let corrupt_root = directory.path().join("corrupt-outbox");
+    std::fs::create_dir(&corrupt_root).unwrap();
+    let mut corrupt_writer = V36PrefixPopulationCheckpointWriter::create(
+        &corrupt_root,
+        two_object_checkpoint_context(3),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    std::fs::write(&run_path, b"corrupt after descriptor creation").unwrap();
+    assert!(corrupt_writer.commit_file(&boundary).is_err());
+    assert!(
+        corrupt_root
             .join("commits")
             .read_dir()
             .unwrap()
