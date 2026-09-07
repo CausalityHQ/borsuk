@@ -8,6 +8,9 @@ pub type Result<T> = std::result::Result<T, BorsukError>;
 /// Errors returned by BORSUK operations.
 #[derive(Debug, thiserror::Error)]
 pub enum BorsukError {
+    /// A bounded V36 external operation exceeded a registered resource limit.
+    #[error("V36 prefix resource limit exceeded: {0}")]
+    V36PrefixResourceLimit(String),
     /// The bounded V36 source prefix cannot supply the preregistered distinct population.
     #[error("V36 prefix source is insufficient")]
     V36PrefixSourceInsufficient,
@@ -226,6 +229,7 @@ impl BorsukError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::V36PrefixResourceLimit(_) => "v36_prefix_resource_limit",
             Self::V36PrefixSourceInsufficient => "v36_prefix_source_insufficient",
             Self::Shared(error) => error.code(),
             Self::DimensionMismatch { .. } => "dimension_mismatch",
