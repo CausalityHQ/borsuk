@@ -2366,6 +2366,27 @@ fn select_v36_prefix_cutoff_offset(bitmap: &[u64], rank: u64) -> Option<u64> {
     }
     None
 }
+
+fn v36_prefix_identity_offset_bitmap_selected(
+    physical_rows: u64,
+    row_count: usize,
+) -> Result<bool> {
+    let bitmap_words = usize::try_from(physical_rows.div_ceil(64))
+        .map_err(|_| resource_limit("identity-run offset state bytes"))?;
+    let bitmap_bytes = bitmap_words
+        .checked_mul(size_of::<u64>())
+        .ok_or_else(|| resource_limit("identity-run offset state bytes"))?;
+    if bitmap_words <= row_count && bitmap_bytes <= EXTERNAL_MAX_CUTOFF_BITMAP_BYTES {
+        return Ok(true);
+    }
+    let offset_bytes = row_count
+        .checked_mul(size_of::<u64>())
+        .ok_or_else(|| resource_limit("identity-run offset state bytes"))?;
+    if offset_bytes > EXTERNAL_MAX_CUTOFF_BITMAP_BYTES {
+        return Err(resource_limit("identity-run offset state bytes"));
+    }
+    Ok(false)
+}
 const IDENTITY_SPILL_MAGIC: [u8; 8] = *b"V36IDR03";
 const IDENTITY_SPILL_RECORD_BYTES: u64 = 18;
 
@@ -3262,13 +3283,19 @@ fn stream_v36_prefix_identity_run_file(
         return Err(invalid("V36 prefix identity-run schema differs"));
     }
     let mut previous_feature_id = None;
-    let bitmap_words = usize::try_from(physical_rows.div_ceil(64)).ok();
-    let mut offset_bitmap = bitmap_words
-        .filter(|words| *words <= row_count_usize)
-        .map(|words| vec![0_u64; words]);
-    let mut offset_rows = offset_bitmap
-        .is_none()
-        .then(|| Vec::with_capacity(row_count_usize));
+    let use_bitmap = v36_prefix_identity_offset_bitmap_selected(physical_rows, row_count_usize)?;
+    let mut offset_bitmap = use_bitmap
+        .then(|| allocate_v36_prefix_cutoff_bitmap(physical_rows))
+        .transpose()?;
+    let mut offset_rows = if use_bitmap {
+        None
+    } else {
+        let mut offsets = Vec::new();
+        offsets
+            .try_reserve_exact(row_count_usize)
+            .map_err(|_| resource_limit("identity-run offset state bytes"))?;
+        Some(offsets)
+    };
     let mut seen = 0_u64;
     for batch_index in 0..expected_batches {
         let batch = reader
@@ -8430,6 +8457,19 @@ mod tests {
     use axum::{Router, body::Body, http::Response, routing::get};
 
     use super::*;
+
+    #[test]
+    fn v36_prefix_identity_run_offset_uniqueness_allocation_is_bounded() {
+        assert!(v36_prefix_identity_offset_bitmap_selected(64, 64).unwrap());
+        assert!(!v36_prefix_identity_offset_bitmap_selected(u64::MAX, 8).unwrap());
+        assert!(
+            v36_prefix_identity_offset_bitmap_selected(
+                u64::MAX,
+                EXTERNAL_MAX_CUTOFF_BITMAP_BYTES / size_of::<u64>() + 1,
+            )
+            .is_err()
+        );
+    }
 
     struct CountingWriter {
         calls: Rc<Cell<usize>>,
