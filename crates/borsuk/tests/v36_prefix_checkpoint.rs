@@ -155,6 +155,13 @@ fn two_object_checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpoin
     context
 }
 
+fn three_object_checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpointContext {
+    let mut context = two_object_checkpoint_context(distinct_candidates);
+    context.selected_object_count = 3;
+    context.ranked_objects.push(registered_source_at(2));
+    context
+}
+
 fn materialized_artifacts() -> V36PrefixMaterializedArtifacts {
     V36PrefixMaterializedArtifacts {
         population_authority: artifact("population-authority", "population-authority.json", '1'),
@@ -798,6 +805,39 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
 }
 
 #[test]
+fn v36_prefix_checkpoint_writer_accepts_complete_objects_after_target_crossing() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &root,
+        three_object_checkpoint_context(1),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    for ordinal in 0_u16..3 {
+        writer
+            .commit(&V36PrefixPopulationCommit {
+                cutoff: (ordinal == 0).then_some((0, 0)),
+                distinct_rows: u64::from(ordinal) + 1,
+                duplicate_rows: 0,
+                physical_rows: u64::from(ordinal) + 1,
+                run: V36PrefixIdentityRun {
+                    physical_rows: 1,
+                    rows: vec![identity(u64::from(ordinal) + 41, 0, ordinal)],
+                    selected_object_ordinal: ordinal,
+                    source: source_object_at(ordinal),
+                },
+            })
+            .unwrap();
+    }
+    assert_eq!(root.join("commits").read_dir().unwrap().count(), 3);
+}
+
+#[test]
 fn v36_prefix_checkpoint_writer_retry_after_publication_failure_is_not_poisoned() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("outbox");
@@ -1025,7 +1065,10 @@ fn v36_prefix_checkpoint_restores_complete_window_after_selection_target_is_reac
     assert_eq!(restored.consumed_objects.len(), 2);
     assert_eq!(restored.distinct_rows_observed, 2);
     assert_eq!(restored.next_object_ordinal, 2);
-    assert_eq!(restored.unique_rows, vec![identity(41, 0, 0)]);
+    assert_eq!(
+        restored.unique_rows,
+        vec![identity(41, 0, 0), identity(7, 0, 1)]
+    );
 }
 
 fn empty_identity_run(selected_object_ordinal: u16, physical_rows: u64) -> V36PrefixIdentityRun {
@@ -1064,7 +1107,7 @@ fn v36_prefix_checkpoint_identity_run_rejects_noncanonical_schema() {
 }
 
 #[test]
-fn v36_prefix_checkpoint_identity_runs_restore_complete_cutoff_object() {
+fn v36_prefix_checkpoint_identity_runs_restore_complete_window() {
     let mut second_source = source_object();
     second_source.path = "data/part-0001.parquet".into();
     second_source.uri = "https://example.invalid/data/part-0001.parquet".into();
@@ -1101,7 +1144,7 @@ fn v36_prefix_checkpoint_identity_runs_restore_complete_cutoff_object() {
             .iter()
             .map(|row| row.feature_row_id)
             .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4]
+        vec![1, 2, 3, 4, 5]
     );
 
     let mut duplicate = runs.clone();

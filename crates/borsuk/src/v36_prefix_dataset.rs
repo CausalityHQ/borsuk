@@ -1369,11 +1369,9 @@ pub fn restore_v36_prefix_population_state(
             if !feature_ids.insert(row.feature_row_id) {
                 return Err(invalid("V36 prefix identity-run global ID repeats"));
             }
-            if unique_rows.len() < distinct_candidates {
-                unique_rows.push(row.clone());
-                if unique_rows.len() == distinct_candidates {
-                    cutoff = Some((run.selected_object_ordinal, row.row_offset));
-                }
+            unique_rows.push(row.clone());
+            if unique_rows.len() == distinct_candidates {
+                cutoff = Some((run.selected_object_ordinal, row.row_offset));
             }
         }
         consumed_objects.push(run.source.clone());
@@ -1496,9 +1494,9 @@ pub struct V36PrefixFreezePreflight {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Complete bounded source-prefix scan evidence before role selection.
+/// Complete bounded source-window scan evidence before role selection.
 pub struct V36PrefixObjectPrefixScan {
-    /// Complete authenticated objects through the cutoff object.
+    /// Every authenticated object in the registered window.
     pub consumed_objects: Vec<crate::V36PrefixSourceObject>,
     /// Selected-object ordinal containing the target distinct row.
     pub cutoff_object_ordinal: u16,
@@ -1510,7 +1508,7 @@ pub struct V36PrefixObjectPrefixScan {
     pub duplicate_rows: u64,
     /// Physical rows scanned across every complete consumed object.
     pub physical_rows: u64,
-    /// First-occurrence identities for the exact requested distinct prefix.
+    /// Every first-occurrence identity in the registered window.
     pub unique_rows: Vec<V36PrefixRowIdentity>,
 }
 
@@ -1529,7 +1527,7 @@ pub struct V36PrefixRestoredPopulation {
     pub next_object_ordinal: u16,
     /// Physical rows observed through the complete object prefix.
     pub physical_rows: u64,
-    /// First occurrences retained up to the requested distinct-row target.
+    /// Every first occurrence retained through the completed object prefix.
     pub unique_rows: Vec<V36PrefixRowIdentity>,
 }
 
@@ -1716,14 +1714,28 @@ pub fn validate_v36_prefix_cutoff_membership(
     consumed_objects: usize,
     distinct_candidates: usize,
 ) -> Result<()> {
+    validate_v36_prefix_cutoff_membership_from_start(rows, 0, consumed_objects, distinct_candidates)
+}
+
+fn validate_v36_prefix_cutoff_membership_from_start(
+    rows: &[V36PrefixRowIdentity],
+    selected_object_start: u16,
+    consumed_objects: usize,
+    distinct_candidates: usize,
+) -> Result<()> {
+    let selected_object_end = selected_object_start
+        .checked_add(
+            u16::try_from(consumed_objects)
+                .map_err(|_| invalid("V36 prefix consumed-object count overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 prefix consumed-object window overflows"))?;
     if consumed_objects == 0
         || rows.len() < distinct_candidates
         || distinct_candidates == 0
-        || rows
-            .iter()
-            .any(|row| usize::from(row.selected_object_ordinal) >= consumed_objects)
-        || usize::from(rows[distinct_candidates - 1].selected_object_ordinal)
-            != consumed_objects - 1
+        || rows.iter().any(|row| {
+            row.selected_object_ordinal < selected_object_start
+                || row.selected_object_ordinal >= selected_object_end
+        })
     {
         return Err(invalid("V36 prefix consumed-object membership differs"));
     }
@@ -1983,9 +1995,9 @@ fn acquire_v36_prefix_object(
     runtime: &tokio::runtime::Runtime,
     object: &V36PrefixRankedSourceObject,
     scratch: &Path,
-    ordinal: usize,
+    ordinal: u16,
 ) -> Result<PathBuf> {
-    if ordinal >= 16 || !scratch.is_dir() || object.encoded_bytes == 0 {
+    if !scratch.is_dir() || object.encoded_bytes == 0 {
         return Err(invalid("V36 prefix object acquisition request differs"));
     }
     digest_bytes(&object.sha256)?;
@@ -2151,7 +2163,15 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
         tokio::runtime::Runtime::new().map_err(|_| invalid("V36 prefix object runtime differs"))?;
     let mut acquired = V36PrefixAcquiredObjects { paths: Vec::new() };
     let mut acquired_by_ordinal = BTreeMap::new();
-    let object_cap = usize::from(preflight.authority.object_cap);
+    let selected_object_start = preflight.authority.selected_object_start;
+    let selected_object_count = usize::from(preflight.authority.selected_object_count);
+    let selected_object_end = usize::from(selected_object_start)
+        .checked_add(selected_object_count)
+        .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?;
+    let ranked_window = preflight
+        .ranked_objects
+        .get(usize::from(selected_object_start)..selected_object_end)
+        .ok_or_else(|| invalid("V36 prefix selected object window differs"))?;
     let distinct_candidates = usize::try_from(preflight.authority.distinct_candidates)
         .map_err(|_| invalid("V36 prefix distinct row count overflows"))?;
     let scan = {
@@ -2169,8 +2189,8 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
         };
         match prior_runs.as_deref() {
             Some(runs) => scan_v36_prefix_object_prefix_resumed(
-                &preflight.ranked_objects,
-                object_cap,
+                ranked_window,
+                selected_object_start,
                 preflight.authority.source_byte_cap,
                 distinct_candidates,
                 runs,
@@ -2178,8 +2198,8 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
                 &mut commit,
             )?,
             None => scan_v36_prefix_object_prefix_checkpointed(
-                &preflight.ranked_objects,
-                object_cap,
+                ranked_window,
+                selected_object_start,
                 preflight.authority.source_byte_cap,
                 distinct_candidates,
                 &mut acquire,
@@ -2187,16 +2207,21 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
             )?,
         }
     };
-    for ordinal in 0..scan.consumed_objects.len() {
+    for (local_ordinal, object) in ranked_window
+        .iter()
+        .enumerate()
+        .take(scan.consumed_objects.len())
+    {
+        let ordinal = selected_object_start
+            .checked_add(
+                u16::try_from(local_ordinal)
+                    .map_err(|_| invalid("V36 prefix acquired object ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix acquired object ordinal overflows"))?;
         if let std::collections::btree_map::Entry::Vacant(entry) =
             acquired_by_ordinal.entry(ordinal)
         {
-            let path = acquire_v36_prefix_object(
-                &runtime,
-                &preflight.ranked_objects[ordinal],
-                &request.scratch,
-                ordinal,
-            )?;
+            let path = acquire_v36_prefix_object(&runtime, object, &request.scratch, ordinal)?;
             acquired.paths.push(path.clone());
             entry.insert(path);
         }
@@ -2210,7 +2235,8 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
     let split = select_v36_prefix_roles(scan.unique_rows, &population, &preflight.registry)?;
     let paths = materialize_v36_prefix_role_parquets(
         &ordered_paths,
-        &preflight.ranked_objects[..scan.consumed_objects.len()],
+        ranked_window,
+        selected_object_start,
         &split,
         &request.scratch,
         &request.output,
@@ -2655,7 +2681,7 @@ fn blake3_file(path: &Path) -> Result<String> {
 
 fn scan_v36_prefix_object_prefix_from_state<F, C>(
     ranked_objects: &[V36PrefixRankedSourceObject],
-    object_cap: usize,
+    selected_object_start: u16,
     byte_cap: u64,
     distinct_candidates: usize,
     restored: Option<V36PrefixRestoredPopulation>,
@@ -2663,14 +2689,19 @@ fn scan_v36_prefix_object_prefix_from_state<F, C>(
     mut commit: C,
 ) -> Result<V36PrefixObjectPrefixScan>
 where
-    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    F: FnMut(u16, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
     C: FnMut(&V36PrefixPopulationCommit) -> Result<()>,
 {
-    if object_cap == 0
-        || object_cap > 16
+    if ranked_objects.is_empty()
+        || ranked_objects.len() > 16
         || byte_cap == 0
         || distinct_candidates == 0
-        || ranked_objects.is_empty()
+        || selected_object_start
+            .checked_add(
+                u16::try_from(ranked_objects.len())
+                    .map_err(|_| invalid("V36 prefix source window count overflows"))?,
+            )
+            .is_none()
     {
         return Err(invalid("V36 prefix source scan limits differ"));
     }
@@ -2679,13 +2710,17 @@ where
         cutoff: None,
         distinct_rows_observed: 0,
         duplicate_rows: 0,
-        next_object_ordinal: 0,
+        next_object_ordinal: selected_object_start,
         physical_rows: 0,
         unique_rows: Vec::new(),
     });
-    let start = usize::from(restored.next_object_ordinal);
-    if start > object_cap
-        || start > ranked_objects.len()
+    let start = restored
+        .next_object_ordinal
+        .checked_sub(selected_object_start)
+        .map(usize::from)
+        .ok_or_else(|| invalid("V36 prefix restored source authority differs"))?;
+    if start > ranked_objects.len()
+        || restored.consumed_objects.len() != start
         || restored
             .consumed_objects
             .iter()
@@ -2699,22 +2734,6 @@ where
             })
     {
         return Err(invalid("V36 prefix restored source authority differs"));
-    }
-    if let Some((cutoff_object_ordinal, cutoff_row_offset)) = restored.cutoff {
-        validate_v36_prefix_cutoff_membership(
-            &restored.unique_rows,
-            restored.consumed_objects.len(),
-            distinct_candidates,
-        )?;
-        return Ok(V36PrefixObjectPrefixScan {
-            consumed_objects: restored.consumed_objects,
-            cutoff_object_ordinal,
-            cutoff_row_offset,
-            distinct_rows_observed: restored.distinct_rows_observed,
-            duplicate_rows: restored.duplicate_rows,
-            physical_rows: restored.physical_rows,
-            unique_rows: restored.unique_rows,
-        });
     }
     let mut consumed_objects = restored.consumed_objects;
     let mut seen = restored
@@ -2734,22 +2753,28 @@ where
             .checked_add(object.encoded_bytes)
             .ok_or_else(|| invalid("V36 prefix source scan bytes overflow"))
     })?;
+    if encoded_bytes > byte_cap {
+        return Err(invalid(
+            "V36 prefix complete source window exceeds byte cap",
+        ));
+    }
     let mut cutoff = restored.cutoff;
-    for (ordinal, object) in ranked_objects
-        .iter()
-        .enumerate()
-        .take(object_cap)
-        .skip(start)
-    {
+    for (ordinal, object) in ranked_objects.iter().enumerate().skip(start) {
         encoded_bytes = encoded_bytes
             .checked_add(object.encoded_bytes)
             .ok_or_else(|| invalid("V36 prefix source scan bytes overflow"))?;
         if encoded_bytes > byte_cap {
-            break;
+            return Err(invalid(
+                "V36 prefix complete source window exceeds byte cap",
+            ));
         }
-        let path = acquire(ordinal, object)?;
-        let selected_object_ordinal = u16::try_from(ordinal)
-            .map_err(|_| invalid("V36 prefix source object ordinal overflows"))?;
+        let selected_object_ordinal = selected_object_start
+            .checked_add(
+                u16::try_from(ordinal)
+                    .map_err(|_| invalid("V36 prefix source object ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix source object ordinal overflows"))?;
+        let path = acquire(selected_object_ordinal, object)?;
         let mut object_seen = HashSet::new();
         let mut object_identities = Vec::new();
         let object_rows = scan_v36_prefix_registered_input_parquet(
@@ -2780,15 +2805,14 @@ where
         physical_rows = physical_rows
             .checked_add(object_rows)
             .ok_or_else(|| invalid("V36 prefix physical rows overflow"))?;
+        let previous_distinct = seen.len();
         for identity in &object_identities {
             if !seen.insert(identity.feature_row_id) {
                 return Err(invalid("V36 prefix provisional identity commit differs"));
             }
-            if unique_rows.len() < distinct_candidates {
-                unique_rows.push(identity.clone());
-                if unique_rows.len() == distinct_candidates {
-                    cutoff = Some((selected_object_ordinal, identity.row_offset));
-                }
+            unique_rows.push(identity.clone());
+            if unique_rows.len() == distinct_candidates {
+                cutoff = Some((selected_object_ordinal, identity.row_offset));
             }
         }
         consumed_objects.push(source.clone());
@@ -2796,8 +2820,14 @@ where
         let duplicate_rows = physical_rows
             .checked_sub(distinct_rows)
             .ok_or_else(|| invalid("V36 prefix duplicate rows underflow"))?;
+        let boundary_cutoff =
+            if previous_distinct < distinct_candidates && seen.len() >= distinct_candidates {
+                cutoff
+            } else {
+                None
+            };
         let boundary = V36PrefixPopulationCommit {
-            cutoff,
+            cutoff: boundary_cutoff,
             distinct_rows,
             duplicate_rows,
             physical_rows,
@@ -2810,14 +2840,12 @@ where
         };
         validate_v36_prefix_identity_run(&boundary.run)?;
         commit(&boundary)?;
-        if cutoff.is_some() {
-            break;
-        }
     }
     let (cutoff_object_ordinal, cutoff_row_offset) =
         cutoff.ok_or(BorsukError::V36PrefixSourceInsufficient)?;
-    validate_v36_prefix_cutoff_membership(
+    validate_v36_prefix_cutoff_membership_from_start(
         &unique_rows,
+        selected_object_start,
         consumed_objects.len(),
         distinct_candidates,
     )?;
@@ -2838,19 +2866,19 @@ where
 /// Scan authenticated objects and emit a durable boundary only after each completes.
 pub fn scan_v36_prefix_object_prefix_checkpointed<F, C>(
     ranked_objects: &[V36PrefixRankedSourceObject],
-    object_cap: usize,
+    selected_object_start: u16,
     byte_cap: u64,
     distinct_candidates: usize,
     acquire: F,
     commit: C,
 ) -> Result<V36PrefixObjectPrefixScan>
 where
-    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    F: FnMut(u16, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
     C: FnMut(&V36PrefixPopulationCommit) -> Result<()>,
 {
     scan_v36_prefix_object_prefix_from_state(
         ranked_objects,
-        object_cap,
+        selected_object_start,
         byte_cap,
         distinct_candidates,
         None,
@@ -2862,7 +2890,7 @@ where
 /// Resume a source scan strictly after an authenticated complete-object prefix.
 pub fn scan_v36_prefix_object_prefix_resumed<F, C>(
     ranked_objects: &[V36PrefixRankedSourceObject],
-    object_cap: usize,
+    selected_object_start: u16,
     byte_cap: u64,
     distinct_candidates: usize,
     prior_runs: &[V36PrefixIdentityRun],
@@ -2870,13 +2898,13 @@ pub fn scan_v36_prefix_object_prefix_resumed<F, C>(
     commit: C,
 ) -> Result<V36PrefixObjectPrefixScan>
 where
-    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    F: FnMut(u16, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
     C: FnMut(&V36PrefixPopulationCommit) -> Result<()>,
 {
     let restored = restore_v36_prefix_population_state(prior_runs, distinct_candidates)?;
     scan_v36_prefix_object_prefix_from_state(
         ranked_objects,
-        object_cap,
+        selected_object_start,
         byte_cap,
         distinct_candidates,
         Some(restored),
@@ -2885,20 +2913,20 @@ where
     )
 }
 
-/// Scan authenticated complete objects through a distinct-ID cutoff.
+/// Scan every authenticated object in one complete registered window.
 pub fn scan_v36_prefix_object_prefix<F>(
     ranked_objects: &[V36PrefixRankedSourceObject],
-    object_cap: usize,
+    selected_object_start: u16,
     byte_cap: u64,
     distinct_candidates: usize,
     acquire: F,
 ) -> Result<V36PrefixObjectPrefixScan>
 where
-    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    F: FnMut(u16, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
 {
     scan_v36_prefix_object_prefix_checkpointed(
         ranked_objects,
-        object_cap,
+        selected_object_start,
         byte_cap,
         distinct_candidates,
         acquire,
@@ -3140,6 +3168,7 @@ fn write_spooled_output(
 pub fn materialize_v36_prefix_role_parquets(
     source_paths: &[PathBuf],
     ranked_objects: &[V36PrefixRankedSourceObject],
+    selected_object_start: u16,
     split: &V36PrefixRoleSplit,
     scratch: &Path,
     output: &Path,
@@ -3192,35 +3221,34 @@ pub fn materialize_v36_prefix_role_parquets(
         spool_paths.push(role_paths);
         spools.push(role_files);
     }
-    for (object_ordinal, (path, object)) in source_paths.iter().zip(ranked_objects).enumerate() {
-        scan_v36_prefix_registered_input_parquet(
-            path,
-            object,
-            object_ordinal
-                .try_into()
-                .map_err(|_| invalid("V36 prefix materialization object ordinal overflows"))?,
-            |row| {
-                if let Some((role, ordinal, feature_row_id)) =
-                    destinations.remove(&(row.selected_object_ordinal, row.row_offset))
-                {
-                    if feature_row_id != u64::try_from(row.feature_row_id).unwrap_or(u64::MAX) {
-                        return Err(invalid("V36 prefix materialization feature ID differs"));
-                    }
-                    let file = &mut spools[role][ordinal / MATERIALIZATION_BUCKET_ROWS];
-                    write_materialization_record(
-                        file,
-                        &spool_paths[role][ordinal / MATERIALIZATION_BUCKET_ROWS],
-                        ordinal,
-                        &V36PrefixMaterializedRow {
-                            feature_row_id,
-                            source_ordinal: Some(ordinal as u64),
-                            embedding: row.embedding,
-                        },
-                    )?;
+    for (local_ordinal, (path, object)) in source_paths.iter().zip(ranked_objects).enumerate() {
+        let object_ordinal = selected_object_start
+            .checked_add(
+                u16::try_from(local_ordinal)
+                    .map_err(|_| invalid("V36 prefix materialization object ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix materialization object ordinal overflows"))?;
+        scan_v36_prefix_registered_input_parquet(path, object, object_ordinal, |row| {
+            if let Some((role, ordinal, feature_row_id)) =
+                destinations.remove(&(row.selected_object_ordinal, row.row_offset))
+            {
+                if feature_row_id != u64::try_from(row.feature_row_id).unwrap_or(u64::MAX) {
+                    return Err(invalid("V36 prefix materialization feature ID differs"));
                 }
-                Ok(())
-            },
-        )?;
+                let file = &mut spools[role][ordinal / MATERIALIZATION_BUCKET_ROWS];
+                write_materialization_record(
+                    file,
+                    &spool_paths[role][ordinal / MATERIALIZATION_BUCKET_ROWS],
+                    ordinal,
+                    &V36PrefixMaterializedRow {
+                        feature_row_id,
+                        source_ordinal: Some(ordinal as u64),
+                        embedding: row.embedding,
+                    },
+                )?;
+            }
+            Ok(())
+        })?;
     }
     if !destinations.is_empty() {
         return Err(invalid("V36 prefix materialization row is missing"));

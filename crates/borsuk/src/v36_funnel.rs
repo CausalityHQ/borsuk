@@ -1901,8 +1901,13 @@ pub fn validate_v36_prefix_freeze_receipt(
             .physical_rows
             .checked_sub(receipt.distinct_rows_observed)
             != Some(receipt.duplicate_rows)
-        || usize::from(receipt.cutoff_object_ordinal) + 1
-            != receipt.population.consumed_objects.len()
+        || receipt.cutoff_object_ordinal < receipt.population.selected_object_start
+        || receipt.cutoff_object_ordinal
+            >= receipt
+                .population
+                .selected_object_start
+                .checked_add(receipt.population.selected_object_count)
+                .ok_or_else(|| invalid("V36 prefix freeze receipt object window overflows"))?
         || receipt.cutoff_row_offset >= receipt.physical_rows
     {
         return Err(invalid("V36 prefix freeze receipt differs"));

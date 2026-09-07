@@ -812,7 +812,7 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
     .collect();
     let receipt = V36PrefixFreezeReceipt {
         claim_eligible: false,
-        cutoff_object_ordinal: 1,
+        cutoff_object_ordinal: 0,
         cutoff_row_offset: 99,
         distinct_rows_observed: 1_100_000,
         duplicate_rows: 100_000,
@@ -863,6 +863,9 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
     mutations.push(changed);
     let mut changed = receipt.clone();
     changed.execution_authority_sha256 = "f".repeat(64);
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.cutoff_object_ordinal = 2;
     mutations.push(changed);
     for mutation in mutations {
         assert!(
@@ -1511,7 +1514,7 @@ fn write_registered_rows(path: &Path, feature_ids: &[i64]) -> V36PrefixRankedSou
 }
 
 #[test]
-fn v36_prefix_dataset_scans_complete_cutoff_object_and_records_duplicate_evidence() {
+fn v36_prefix_dataset_scans_complete_window_after_cutoff_and_records_duplicate_evidence() {
     let directory = tempfile::tempdir().unwrap();
     let first = directory.path().join("first.parquet");
     let second = directory.path().join("second.parquet");
@@ -1522,13 +1525,13 @@ fn v36_prefix_dataset_scans_complete_cutoff_object_and_records_duplicate_evidenc
     let paths = [first, second];
     let scan = scan_v36_prefix_object_prefix(
         &ranked,
-        2,
+        0,
         ranked.iter().map(|object| object.encoded_bytes).sum(),
         3,
-        |ordinal, _| Ok(paths[ordinal].clone()),
+        |ordinal, _| Ok(paths[usize::from(ordinal)].clone()),
     )
     .unwrap();
-    assert_eq!(scan.unique_rows.len(), 3);
+    assert_eq!(scan.unique_rows.len(), 4);
     assert_eq!(scan.consumed_objects.len(), 2);
     assert_eq!(scan.cutoff_object_ordinal, 1);
     assert_eq!(scan.cutoff_row_offset, 1);
@@ -1537,11 +1540,65 @@ fn v36_prefix_dataset_scans_complete_cutoff_object_and_records_duplicate_evidenc
     assert_eq!(scan.duplicate_rows, 1);
 
     assert!(
-        scan_v36_prefix_object_prefix(&ranked, 1, u64::MAX, 3, |ordinal, _| {
-            Ok(paths[ordinal].clone())
-        })
+        scan_v36_prefix_object_prefix(&ranked[..1], 0, u64::MAX, 3, |ordinal, _| Ok(paths
+            [usize::from(ordinal)]
+        .clone()))
         .is_err()
     );
+}
+
+#[test]
+fn v36_prefix_dataset_scans_exact_cohort_b_window_with_global_ordinals() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("sixteen.parquet");
+    let second = directory.path().join("seventeen.parquet");
+    let ranked = vec![
+        write_registered_rows(&first, &[7, 9]),
+        write_registered_rows(&second, &[11, 13]),
+    ];
+    let paths = [first, second];
+    let mut acquired = Vec::new();
+    let scan = scan_v36_prefix_object_prefix(
+        &ranked,
+        16,
+        ranked.iter().map(|object| object.encoded_bytes).sum(),
+        2,
+        |ordinal, _| {
+            acquired.push(ordinal);
+            Ok(paths[usize::from(ordinal - 16)].clone())
+        },
+    )
+    .unwrap();
+    assert_eq!(acquired, vec![16, 17]);
+    assert_eq!(scan.consumed_objects.len(), 2);
+    assert_eq!(scan.distinct_rows_observed, 4);
+    assert_eq!(
+        scan.unique_rows
+            .iter()
+            .map(|row| row.selected_object_ordinal)
+            .collect::<Vec<_>>(),
+        vec![16, 16, 17, 17]
+    );
+}
+
+#[test]
+fn v36_prefix_dataset_rejects_window_that_exceeds_byte_cap() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first.parquet");
+    let second = directory.path().join("second.parquet");
+    let ranked = vec![
+        write_registered_rows(&first, &[7, 9]),
+        write_registered_rows(&second, &[11, 13]),
+    ];
+    let paths = [first, second];
+    let mut acquired = Vec::new();
+    let result =
+        scan_v36_prefix_object_prefix(&ranked, 0, ranked[0].encoded_bytes, 2, |ordinal, _| {
+            acquired.push(ordinal);
+            Ok(paths[usize::from(ordinal)].clone())
+        });
+    assert!(result.is_err());
+    assert_eq!(acquired, vec![0]);
 }
 
 #[test]
@@ -1557,10 +1614,10 @@ fn v36_prefix_dataset_checkpoints_only_complete_authenticated_objects() {
     let mut commits = Vec::<V36PrefixPopulationCommit>::new();
     let scan = scan_v36_prefix_object_prefix_checkpointed(
         &ranked,
-        2,
+        0,
         ranked.iter().map(|object| object.encoded_bytes).sum(),
         3,
-        |ordinal, _| Ok(paths[ordinal].clone()),
+        |ordinal, _| Ok(paths[usize::from(ordinal)].clone()),
         |commit| {
             commits.push(commit.clone());
             Ok(())
@@ -1591,10 +1648,10 @@ fn v36_prefix_dataset_checkpoints_only_complete_authenticated_objects() {
     assert!(
         scan_v36_prefix_object_prefix_checkpointed(
             &invalid_ranked,
-            2,
+            0,
             u64::MAX,
             3,
-            |ordinal, _| Ok(invalid_paths[ordinal].clone()),
+            |ordinal, _| Ok(invalid_paths[usize::from(ordinal)].clone()),
             |commit| {
                 committed_ordinals.push(commit.run.selected_object_ordinal);
                 Ok(())
@@ -1620,25 +1677,33 @@ fn v36_prefix_dataset_resume_matches_uninterrupted_complete_object_scan() {
     let mut uninterrupted_commits = Vec::new();
     let uninterrupted = scan_v36_prefix_object_prefix_checkpointed(
         &ranked,
-        3,
+        0,
         u64::MAX,
         3,
-        |ordinal, _| Ok(paths[ordinal].clone()),
+        |ordinal, _| Ok(paths[usize::from(ordinal)].clone()),
         |commit| {
             uninterrupted_commits.push(commit.clone());
             Ok(())
         },
     )
     .unwrap();
+    assert_eq!(uninterrupted_commits.len(), 3);
+    assert_eq!(
+        uninterrupted_commits
+            .iter()
+            .map(|commit| commit.cutoff)
+            .collect::<Vec<_>>(),
+        vec![None, Some((1, 1)), None]
+    );
 
     let mut first_commits = Vec::new();
     assert!(
         scan_v36_prefix_object_prefix_checkpointed(
             &ranked,
-            1,
-            u64::MAX,
+            0,
+            ranked[0].encoded_bytes,
             3,
-            |ordinal, _| Ok(paths[ordinal].clone()),
+            |ordinal, _| Ok(paths[usize::from(ordinal)].clone()),
             |commit| {
                 first_commits.push(commit.clone());
                 Ok(())
@@ -1653,18 +1718,18 @@ fn v36_prefix_dataset_resume_matches_uninterrupted_complete_object_scan() {
     let mut acquired = Vec::new();
     let resumed = scan_v36_prefix_object_prefix_resumed(
         &ranked,
-        3,
+        0,
         u64::MAX,
         3,
         &prior_runs,
         |ordinal, _| {
             acquired.push(ordinal);
-            Ok(paths[ordinal].clone())
+            Ok(paths[usize::from(ordinal)].clone())
         },
         |_| Ok(()),
     )
     .unwrap();
-    assert_eq!(acquired, vec![1]);
+    assert_eq!(acquired, vec![1, 2]);
     assert_eq!(resumed, uninterrupted);
 
     let complete_runs = uninterrupted_commits
@@ -1674,19 +1739,36 @@ fn v36_prefix_dataset_resume_matches_uninterrupted_complete_object_scan() {
     let mut acquired_after_cutoff = Vec::new();
     let resumed_complete = scan_v36_prefix_object_prefix_resumed(
         &ranked,
-        3,
+        0,
         u64::MAX,
         3,
         &complete_runs,
         |ordinal, _| {
             acquired_after_cutoff.push(ordinal);
-            Ok(paths[ordinal].clone())
+            Ok(paths[usize::from(ordinal)].clone())
         },
         |_| Ok(()),
     )
     .unwrap();
     assert!(acquired_after_cutoff.is_empty());
     assert_eq!(resumed_complete, uninterrupted);
+
+    let completed_window_bytes = ranked
+        .iter()
+        .map(|object| object.encoded_bytes)
+        .sum::<u64>();
+    assert!(
+        scan_v36_prefix_object_prefix_resumed(
+            &ranked,
+            0,
+            completed_window_bytes - 1,
+            3,
+            &complete_runs,
+            |_, _| panic!("a complete restored window must not reacquire source objects"),
+            |_| Ok(()),
+        )
+        .is_err()
+    );
 }
 
 fn identity(
@@ -1704,7 +1786,7 @@ fn identity(
 }
 
 #[test]
-fn v36_prefix_dataset_materializes_canonical_roles_with_bounded_spools() {
+fn v36_prefix_dataset_materializes_cohort_b_roles_with_global_ordinals() {
     let directory = tempfile::tempdir().unwrap();
     let first = directory.path().join("first.parquet");
     let second = directory.path().join("second.parquet");
@@ -1713,19 +1795,25 @@ fn v36_prefix_dataset_materializes_canonical_roles_with_bounded_spools() {
         write_registered_rows(&second, &[13, 15, 17]),
     ];
     let split = borsuk::V36PrefixRoleSplit {
-        corpus: vec![identity(17, 1, 2, Some(0)), identity(7, 0, 0, Some(1))],
-        development: vec![identity(9, 0, 1, None)],
-        validation: vec![identity(11, 0, 2, None)],
-        sealed_holdout: vec![identity(13, 1, 0, None)],
-        performance: vec![identity(15, 1, 1, None)],
+        corpus: vec![identity(17, 17, 2, Some(0)), identity(7, 16, 0, Some(1))],
+        development: vec![identity(9, 16, 1, None)],
+        validation: vec![identity(11, 16, 2, None)],
+        sealed_holdout: vec![identity(13, 17, 0, None)],
+        performance: vec![identity(15, 17, 1, None)],
     };
     let output = directory.path().join("output");
     let scratch = directory.path().join("scratch");
     fs::create_dir(&output).unwrap();
     fs::create_dir(&scratch).unwrap();
-    let paths =
-        materialize_v36_prefix_role_parquets(&[first, second], &ranked, &split, &scratch, &output)
-            .unwrap();
+    let paths = materialize_v36_prefix_role_parquets(
+        &[first, second],
+        &ranked,
+        16,
+        &split,
+        &scratch,
+        &output,
+    )
+    .unwrap();
 
     let mut source_rows = 0;
     scan_v36_prefix_source_parquet(&paths.source, &[17, 7], |batch| {
