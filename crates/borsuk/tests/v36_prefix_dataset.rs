@@ -15,10 +15,11 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
-    V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest, V36PrefixFreezeAuthority,
-    V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixFreezeRequest,
-    V36PrefixGtAccumulator, V36PrefixGtParquetJob, V36PrefixIdentityRun, V36PrefixIdentityRunFile,
-    V36PrefixInputRow, V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
+    V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest,
+    V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
+    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
+    V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
     V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
     V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
     V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
@@ -35,16 +36,17 @@ use borsuk::{
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
     scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
-    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
-    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
-    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
-    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    scan_v36_prefix_object_prefix_file_backed, scan_v36_prefix_object_prefix_resumed,
+    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
+    scan_v36_prefix_source_parquet, select_v36_prefix_population_rows, select_v36_prefix_roles,
+    v36_prefix_gt100_schema, v36_prefix_query_schema, v36_prefix_query_score_sha256,
+    v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -1264,6 +1266,130 @@ fn v36_prefix_dataset_external_identity_run_rejects_resource_and_predecessor_dri
     );
     assert_eq!(fs::read(output).unwrap(), b"preserve");
     assert!(scratch.read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_dataset_file_backed_population_scan_commits_without_resident_identity_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    let run_output = directory.path().join("run-output");
+    let outbox = directory.path().join("outbox");
+    fs::create_dir(&scratch).unwrap();
+    fs::create_dir(&run_output).unwrap();
+    fs::create_dir(&outbox).unwrap();
+    let source_path = directory.path().join("source.parquet");
+    let ranked = vec![write_registered_rows(&source_path, &[41, 7, 41, 9])];
+    let object_prefix = "s3://fixture/v36/file-backed/checkpoints/objects/";
+    let context = V36PrefixCheckpointContext {
+        cohort_ordinal: 0,
+        corpus_rows: 1,
+        distinct_candidates: 3,
+        excluded_population_identity: None,
+        freeze_authority_sha256: "2".repeat(64),
+        gt_block_rows: 1,
+        object_prefix: object_prefix.into(),
+        pointer_uri:
+            "s3://fixture/v36/file-backed/checkpoints/runs/v36-prefix-screen-file-backed/latest.json"
+                .into(),
+        ranked_objects: ranked
+            .iter()
+            .map(|object| V36PrefixRegisteredSourceObject {
+                encoded_bytes: object.encoded_bytes,
+                path: object.path.clone(),
+                sha256: object.sha256.clone(),
+                uri: object.uri.clone(),
+            })
+            .collect(),
+        run_id: "v36-prefix-screen-file-backed".into(),
+        selected_object_count: 1,
+        selected_object_start: 0,
+        source_archive_sha256: "3".repeat(64),
+        source_byte_cap: ranked[0].encoded_bytes,
+        source_commit: "4".repeat(40),
+        source_registry_sha256: "5".repeat(64),
+    };
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &outbox,
+        context,
+        "1".repeat(64),
+        "v36-prefix-screen-file-backed-attempt-0000".into(),
+        0,
+        "i-file-backed".into(),
+    )
+    .unwrap();
+    let limits = external_selection_limits();
+    let scan = scan_v36_prefix_object_prefix_file_backed(
+        V36PrefixFileBackedScanRequest {
+            byte_cap: ranked[0].encoded_bytes,
+            distinct_candidates: 3,
+            limits: &limits,
+            output_uri_prefix: object_prefix,
+            prior: None,
+            ranked_objects: &ranked,
+            run_output_root: &run_output,
+            scratch_root: &scratch,
+            selected_object_start: 0,
+        },
+        |_, _| Ok(source_path.clone()),
+        |boundary| {
+            writer.commit_file(boundary)?;
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(scan.cutoff, Some((0, 3)));
+    assert_eq!(scan.distinct_rows, 3);
+    assert_eq!(scan.duplicate_rows, 1);
+    assert_eq!(scan.physical_rows, 4);
+    assert_eq!(scan.consumed_objects.len(), 1);
+    assert_eq!(scan.runs.len(), 1);
+    assert_eq!(writer.identity_run_files().unwrap().len(), 1);
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+
+    let resumed_output = directory.path().join("resumed-run-output");
+    fs::create_dir(&resumed_output).unwrap();
+    let resume_request = |prior| V36PrefixFileBackedScanRequest {
+        byte_cap: ranked[0].encoded_bytes,
+        distinct_candidates: 3,
+        limits: &limits,
+        output_uri_prefix: object_prefix,
+        prior: Some(prior),
+        ranked_objects: &ranked,
+        run_output_root: &resumed_output,
+        scratch_root: &scratch,
+        selected_object_start: 0,
+    };
+    assert_eq!(
+        scan_v36_prefix_object_prefix_file_backed(
+            resume_request(&scan),
+            |_, _| panic!("complete resume must not acquire a source"),
+            |_| panic!("complete resume must not publish another checkpoint"),
+        )
+        .unwrap(),
+        scan
+    );
+    let mut forged = scan.clone();
+    forged.distinct_rows += 1;
+    forged.physical_rows += 1;
+    assert!(
+        scan_v36_prefix_object_prefix_file_backed(
+            resume_request(&forged),
+            |_, _| panic!("forged resume must not acquire a source"),
+            |_| panic!("forged resume must not publish a checkpoint"),
+        )
+        .is_err()
+    );
+    let mut forged = scan.clone();
+    forged.cutoff = Some((0, 2));
+    assert!(
+        scan_v36_prefix_object_prefix_file_backed(
+            resume_request(&forged),
+            |_, _| panic!("forged resume must not acquire a source"),
+            |_| panic!("forged resume must not publish a checkpoint"),
+        )
+        .is_err()
+    );
 }
 
 #[test]

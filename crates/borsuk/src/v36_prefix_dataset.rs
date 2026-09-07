@@ -2105,6 +2105,45 @@ pub struct V36PrefixObjectPrefixScan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// File-backed population progress without a resident cross-object identity set.
+pub struct V36PrefixFileBackedPopulationScan {
+    /// Complete authenticated source objects incorporated in ranked order.
+    pub consumed_objects: Vec<V36PrefixSourceObject>,
+    /// Exact target position once the distinct prefix is complete.
+    pub cutoff: Option<(u16, u64)>,
+    /// Complete distinct first occurrences observed so far.
+    pub distinct_rows: u64,
+    /// Complete duplicate physical rows observed so far.
+    pub duplicate_rows: u64,
+    /// Complete physical rows observed so far.
+    pub physical_rows: u64,
+    /// Authenticated per-object first-occurrence runs in source order.
+    pub runs: Vec<V36PrefixIdentityRunFile>,
+}
+
+/// Request for one bounded, checkpointed, file-backed population scan.
+pub struct V36PrefixFileBackedScanRequest<'a> {
+    /// Maximum encoded bytes across the complete consumed source prefix.
+    pub byte_cap: u64,
+    /// Exact distinct population target.
+    pub distinct_candidates: u64,
+    /// Hard external-memory and scratch limits.
+    pub limits: &'a V36PrefixExternalSelectionLimits,
+    /// Content-addressed object prefix for identity-run receipts.
+    pub output_uri_prefix: &'a str,
+    /// Optional authenticated complete-object prefix from an interrupted attempt.
+    pub prior: Option<&'a V36PrefixFileBackedPopulationScan>,
+    /// Complete query-independent ranked source window.
+    pub ranked_objects: &'a [V36PrefixRankedSourceObject],
+    /// Existing empty directory for completed attempt-local run files.
+    pub run_output_root: &'a Path,
+    /// Existing private directory for bounded merge scratch.
+    pub scratch_root: &'a Path,
+    /// Global ordinal of the first source object in this cohort.
+    pub selected_object_start: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated population progress at any complete source-object boundary.
 pub struct V36PrefixRestoredPopulation {
     /// Complete source objects incorporated in ranked order.
@@ -2326,6 +2365,47 @@ const EXTERNAL_MAX_SPILLS: usize = 65_536;
 const EXTERNAL_MAX_ARROW_BATCHES: usize = 65_536;
 const EXTERNAL_MAX_ARROW_FOOTER_BYTES: usize = 1 << 20;
 const EXTERNAL_MAX_CUTOFF_BITMAP_BYTES: usize = 32 << 20;
+
+fn allocate_v36_prefix_cutoff_bitmap(physical_rows: u64) -> Result<Vec<u64>> {
+    let words = usize::try_from(physical_rows.div_ceil(64))
+        .map_err(|_| resource_limit("cutoff bitmap bytes"))?;
+    let bytes = words
+        .checked_mul(size_of::<u64>())
+        .ok_or_else(|| resource_limit("cutoff bitmap bytes"))?;
+    if bytes > EXTERNAL_MAX_CUTOFF_BITMAP_BYTES {
+        return Err(resource_limit("cutoff bitmap bytes"));
+    }
+    let mut bitmap = Vec::new();
+    bitmap
+        .try_reserve_exact(words)
+        .map_err(|_| resource_limit("cutoff bitmap bytes"))?;
+    bitmap.resize(words, 0_u64);
+    Ok(bitmap)
+}
+
+fn select_v36_prefix_cutoff_offset(bitmap: &[u64], rank: u64) -> Option<u64> {
+    if rank == 0 {
+        return None;
+    }
+    let mut remaining = rank;
+    for (word_index, &word) in bitmap.iter().enumerate() {
+        let population = u64::from(word.count_ones());
+        if remaining > population {
+            remaining -= population;
+            continue;
+        }
+        let mut candidates = word;
+        for _ in 1..remaining {
+            candidates &= candidates - 1;
+        }
+        let bit = u64::from(candidates.trailing_zeros());
+        return u64::try_from(word_index)
+            .ok()
+            .and_then(|index| index.checked_mul(64))
+            .and_then(|base| base.checked_add(bit));
+    }
+    None
+}
 const IDENTITY_SPILL_MAGIC: [u8; 8] = *b"V36IDR03";
 const IDENTITY_SPILL_RECORD_BYTES: u64 = 18;
 
@@ -4084,22 +4164,7 @@ pub fn externally_build_v36_prefix_identity_run(
         collapse_v36_prefix_identity_spills(attempt.path(), spills, limits, &mut next_spill)?;
     let mut cutoff_bitmap = request
         .cutoff_local_rank
-        .map(|_| {
-            let words = usize::try_from(physical_rows.div_ceil(64))
-                .map_err(|_| resource_limit("cutoff bitmap bytes"))?;
-            let bytes = words
-                .checked_mul(size_of::<u64>())
-                .ok_or_else(|| resource_limit("cutoff bitmap bytes"))?;
-            if bytes > EXTERNAL_MAX_CUTOFF_BITMAP_BYTES {
-                return Err(resource_limit("cutoff bitmap bytes"));
-            }
-            let mut bitmap = Vec::new();
-            bitmap
-                .try_reserve_exact(words)
-                .map_err(|_| resource_limit("cutoff bitmap bytes"))?;
-            bitmap.resize(words, 0_u64);
-            Ok(bitmap)
-        })
+        .map(|_| allocate_v36_prefix_cutoff_bitmap(physical_rows))
         .transpose()?;
     let mut reader = V36PrefixRawIdentityReader::open(&merged, limits.io_buffer_bytes)?;
     let mut prior =
@@ -4120,26 +4185,9 @@ pub fn externally_build_v36_prefix_identity_run(
             }
         }
     }
-    let cutoff_row_offset = request.cutoff_local_rank.and_then(|rank| {
-        let mut remaining = rank;
-        for (word_index, &word) in cutoff_bitmap.as_ref()?.iter().enumerate() {
-            let population = u64::from(word.count_ones());
-            if remaining > population {
-                remaining -= population;
-                continue;
-            }
-            let mut candidates = word;
-            for _ in 1..remaining {
-                candidates &= candidates - 1;
-            }
-            let bit = u64::from(candidates.trailing_zeros());
-            return u64::try_from(word_index)
-                .ok()
-                .and_then(|index| index.checked_mul(64))
-                .and_then(|base| base.checked_add(bit));
-        }
-        None
-    });
+    let cutoff_row_offset = request
+        .cutoff_local_rank
+        .and_then(|rank| select_v36_prefix_cutoff_offset(cutoff_bitmap.as_deref()?, rank));
     let source = V36PrefixSourceObject {
         blake3: source_blake3,
         encoded_bytes: request.source.encoded_bytes,
@@ -6460,6 +6508,326 @@ fn blake3_file(path: &Path) -> Result<String> {
         hasher.update(&buffer[..read]);
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn authenticate_v36_prefix_file_backed_population_scan(
+    state: &V36PrefixFileBackedPopulationScan,
+    limits: &V36PrefixExternalSelectionLimits,
+    scratch_root: &Path,
+    distinct_candidates: u64,
+) -> Result<V36PrefixFileBackedPopulationScan> {
+    let attempt = tempfile::tempdir_in(scratch_root).map_err(|source| BorsukError::Io {
+        path: scratch_root.to_owned(),
+        source,
+    })?;
+    let mut run_paths = BTreeSet::new();
+    let mut source_paths = BTreeSet::new();
+    let mut source_uris = BTreeSet::new();
+    let mut source_digests = BTreeSet::new();
+    let mut stable_paths = Vec::with_capacity(state.runs.len());
+    let mut stable_handles = Vec::with_capacity(state.runs.len());
+    let mut run_rows = Vec::with_capacity(state.runs.len());
+    let mut run_physical_rows = Vec::with_capacity(state.runs.len());
+    let mut physical_rows = 0_u64;
+    let mut distinct_rows = 0_u64;
+    for (index, run) in state.runs.iter().enumerate() {
+        if !run_paths.insert(run.path.clone())
+            || !source_paths.insert(run.source.path.clone())
+            || !source_uris.insert(run.source.uri.clone())
+            || !source_digests.insert(run.source.sha256.clone())
+        {
+            return Err(invalid("V36 file-backed restored population differs"));
+        }
+        let stable_path = attempt.path().join(format!("prior-{index:04}.arrow"));
+        let (stable_handle, _) = snapshot_v36_prefix_authenticated_file(
+            &run.path,
+            &stable_path,
+            run.identity.encoded_bytes,
+            &run.identity.sha256,
+            Some(&run.identity.blake3),
+            limits,
+        )?;
+        let stable_run = V36PrefixIdentityRunFile {
+            identity: run.identity.clone(),
+            path: stable_path.clone(),
+            selected_object_ordinal: run.selected_object_ordinal,
+            source: run.source.clone(),
+        };
+        let (rows, physical) = stream_v36_prefix_identity_run_file(
+            &stable_run,
+            limits,
+            attempt.path(),
+            &[0_u8; 32],
+            &[0_u8; 32],
+            &mut |_| Ok(()),
+        )?;
+        distinct_rows = distinct_rows
+            .checked_add(rows)
+            .ok_or_else(|| invalid("V36 prefix distinct rows overflow"))?;
+        physical_rows = physical_rows
+            .checked_add(physical)
+            .ok_or_else(|| invalid("V36 prefix physical rows overflow"))?;
+        run_rows.push(rows);
+        run_physical_rows.push(physical);
+        stable_paths.push(stable_path);
+        stable_handles.push(stable_handle);
+    }
+    for left in 0..stable_handles.len() {
+        for right in left + 1..stable_handles.len() {
+            validate_v36_prefix_identity_run_handles_disjoint(
+                &stable_handles[left],
+                &stable_handles[right],
+                (&stable_paths[left], &stable_paths[right]),
+            )?;
+        }
+    }
+    let duplicate_rows = physical_rows
+        .checked_sub(distinct_rows)
+        .ok_or_else(|| invalid("V36 prefix duplicate rows underflow"))?;
+    let mut prior_distinct = 0_u64;
+    let mut cutoff = None;
+    for (index, &rows) in run_rows.iter().enumerate() {
+        let cumulative = prior_distinct
+            .checked_add(rows)
+            .ok_or_else(|| invalid("V36 prefix distinct rows overflow"))?;
+        if prior_distinct < distinct_candidates && cumulative >= distinct_candidates {
+            if index + 1 != run_rows.len() {
+                return Err(invalid("V36 file-backed restored population differs"));
+            }
+            let local_rank = distinct_candidates - prior_distinct;
+            let mut bitmap = allocate_v36_prefix_cutoff_bitmap(run_physical_rows[index])?;
+            stream_v36_prefix_identity_run_file(
+                &V36PrefixIdentityRunFile {
+                    identity: state.runs[index].identity.clone(),
+                    path: stable_paths[index].clone(),
+                    selected_object_ordinal: state.runs[index].selected_object_ordinal,
+                    source: state.runs[index].source.clone(),
+                },
+                limits,
+                attempt.path(),
+                &[0_u8; 32],
+                &[0_u8; 32],
+                &mut |row| {
+                    let word = usize::try_from(row.row_offset / 64)
+                        .map_err(|_| invalid("V36 identity-run cutoff offset differs"))?;
+                    bitmap[word] |= 1_u64 << (row.row_offset % 64);
+                    Ok(())
+                },
+            )?;
+            cutoff = Some((
+                state.runs[index].selected_object_ordinal,
+                select_v36_prefix_cutoff_offset(&bitmap, local_rank)
+                    .ok_or_else(|| invalid("V36 file-backed restored cutoff differs"))?,
+            ));
+        }
+        prior_distinct = cumulative;
+    }
+    Ok(V36PrefixFileBackedPopulationScan {
+        consumed_objects: state.consumed_objects.clone(),
+        cutoff,
+        distinct_rows,
+        duplicate_rows,
+        physical_rows,
+        runs: state.runs.clone(),
+    })
+}
+
+/// Scan and checkpoint a complete ranked source prefix without resident identity state.
+pub fn scan_v36_prefix_object_prefix_file_backed<F, C>(
+    request: V36PrefixFileBackedScanRequest<'_>,
+    mut acquire: F,
+    mut commit: C,
+) -> Result<V36PrefixFileBackedPopulationScan>
+where
+    F: FnMut(u16, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    C: FnMut(&V36PrefixPopulationFileCommit) -> Result<()>,
+{
+    let output_type = fs::symlink_metadata(request.run_output_root)
+        .map_err(|source| BorsukError::Io {
+            path: request.run_output_root.to_owned(),
+            source,
+        })?
+        .file_type();
+    if request.ranked_objects.is_empty()
+        || request.ranked_objects.len() > 16
+        || request.byte_cap == 0
+        || request.distinct_candidates == 0
+        || request
+            .selected_object_start
+            .checked_add(
+                u16::try_from(request.ranked_objects.len())
+                    .map_err(|_| invalid("V36 prefix source window count overflows"))?,
+            )
+            .is_none()
+        || !output_type.is_dir()
+        || output_type.is_symlink()
+        || request.run_output_root == request.scratch_root
+        || request
+            .run_output_root
+            .read_dir()
+            .map_err(|source| BorsukError::Io {
+                path: request.run_output_root.to_owned(),
+                source,
+            })?
+            .next()
+            .is_some()
+    {
+        return Err(invalid("V36 file-backed population scan limits differ"));
+    }
+    let mut state = request
+        .prior
+        .cloned()
+        .unwrap_or(V36PrefixFileBackedPopulationScan {
+            consumed_objects: Vec::new(),
+            cutoff: None,
+            distinct_rows: 0,
+            duplicate_rows: 0,
+            physical_rows: 0,
+            runs: Vec::new(),
+        });
+    if state.runs.len() != state.consumed_objects.len()
+        || state.runs.len() > request.ranked_objects.len()
+        || state
+            .physical_rows
+            .checked_sub(state.distinct_rows)
+            .is_none_or(|duplicates| duplicates != state.duplicate_rows)
+        || (state.distinct_rows >= request.distinct_candidates) != state.cutoff.is_some()
+    {
+        return Err(invalid("V36 file-backed restored population differs"));
+    }
+    for (local_ordinal, ((source, run), ranked)) in state
+        .consumed_objects
+        .iter()
+        .zip(&state.runs)
+        .zip(request.ranked_objects)
+        .enumerate()
+    {
+        let ordinal = request
+            .selected_object_start
+            .checked_add(
+                u16::try_from(local_ordinal)
+                    .map_err(|_| invalid("V36 prefix source object ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix source object ordinal overflows"))?;
+        if run.selected_object_ordinal != ordinal
+            || &run.source != source
+            || source.encoded_bytes != ranked.encoded_bytes
+            || source.path != ranked.path
+            || source.sample_sha256 != ranked.sample_sha256
+            || source.sha256 != ranked.sha256
+            || source.uri != ranked.uri
+        {
+            return Err(invalid("V36 file-backed restored population differs"));
+        }
+    }
+    let mut encoded_bytes = state
+        .consumed_objects
+        .iter()
+        .try_fold(0_u64, |total, source| {
+            total
+                .checked_add(source.encoded_bytes)
+                .ok_or_else(|| invalid("V36 prefix source scan bytes overflow"))
+        })?;
+    if encoded_bytes > request.byte_cap {
+        return Err(invalid(
+            "V36 prefix complete source window exceeds byte cap",
+        ));
+    }
+    if request.prior.is_some() {
+        let authenticated = authenticate_v36_prefix_file_backed_population_scan(
+            &state,
+            request.limits,
+            request.scratch_root,
+            request.distinct_candidates,
+        )?;
+        if authenticated != state {
+            return Err(invalid("V36 file-backed restored population differs"));
+        }
+        state = authenticated;
+    }
+    if state.cutoff.is_some() {
+        return Ok(state);
+    }
+
+    for (local_ordinal, object) in request
+        .ranked_objects
+        .iter()
+        .enumerate()
+        .skip(state.runs.len())
+    {
+        encoded_bytes = encoded_bytes
+            .checked_add(object.encoded_bytes)
+            .ok_or_else(|| invalid("V36 prefix source scan bytes overflow"))?;
+        if encoded_bytes > request.byte_cap {
+            return Err(invalid(
+                "V36 prefix complete source window exceeds byte cap",
+            ));
+        }
+        let ordinal = request
+            .selected_object_start
+            .checked_add(
+                u16::try_from(local_ordinal)
+                    .map_err(|_| invalid("V36 prefix source object ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix source object ordinal overflows"))?;
+        let input = acquire(ordinal, object)?;
+        let output = request
+            .run_output_root
+            .join(format!("identity-run-{ordinal:04}.arrow"));
+        let needed = request
+            .distinct_candidates
+            .checked_sub(state.distinct_rows)
+            .ok_or_else(|| invalid("V36 prefix distinct population overflows"))?;
+        let receipt =
+            externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+                cutoff_local_rank: Some(needed),
+                input: &input,
+                limits: request.limits,
+                output: &output,
+                output_uri_prefix: request.output_uri_prefix,
+                prior_runs: &state.runs,
+                scratch_root: request.scratch_root,
+                selected_object_ordinal: ordinal,
+                source: object,
+            })?;
+        let prior_distinct = state.distinct_rows;
+        state.distinct_rows = state
+            .distinct_rows
+            .checked_add(receipt.distinct_rows)
+            .ok_or_else(|| invalid("V36 prefix distinct rows overflow"))?;
+        state.physical_rows = state
+            .physical_rows
+            .checked_add(receipt.physical_rows)
+            .ok_or_else(|| invalid("V36 prefix physical rows overflow"))?;
+        state.duplicate_rows = state
+            .physical_rows
+            .checked_sub(state.distinct_rows)
+            .ok_or_else(|| invalid("V36 prefix duplicate rows underflow"))?;
+        let crossed = prior_distinct < request.distinct_candidates
+            && state.distinct_rows >= request.distinct_candidates;
+        if crossed != receipt.cutoff_row_offset.is_some() {
+            return Err(invalid("V36 prefix file-backed cutoff differs"));
+        }
+        let boundary_cutoff = receipt.cutoff_row_offset.map(|offset| (ordinal, offset));
+        let boundary = V36PrefixPopulationFileCommit {
+            cutoff: boundary_cutoff,
+            distinct_rows: state.distinct_rows,
+            duplicate_rows: state.duplicate_rows,
+            physical_rows: state.physical_rows,
+            run: receipt.run.clone(),
+        };
+        commit(&boundary)?;
+        state.consumed_objects.push(receipt.run.source.clone());
+        state.runs.push(receipt.run);
+        if crossed {
+            state.cutoff = boundary_cutoff;
+            break;
+        }
+    }
+    if state.cutoff.is_none() {
+        return Err(BorsukError::V36PrefixSourceInsufficient);
+    }
+    Ok(state)
 }
 
 fn scan_v36_prefix_object_prefix_from_state<F, C>(
