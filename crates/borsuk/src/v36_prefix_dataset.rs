@@ -1175,6 +1175,8 @@ pub struct V36PrefixExternalSelectionLimits {
 
 /// File-backed request to construct one v3 first-occurrence identity run.
 pub struct V36PrefixExternalIdentityRunRequest<'a> {
+    /// One-based local distinct-row rank whose physical offset is requested.
+    pub cutoff_local_rank: Option<u64>,
     /// Complete authenticated source Parquet path.
     pub input: &'a Path,
     /// Hard memory, spill, and disk limits.
@@ -1196,6 +1198,8 @@ pub struct V36PrefixExternalIdentityRunRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated accounting and durable v3 run produced without resident object rows.
 pub struct V36PrefixExternalIdentityRunReceipt {
+    /// Physical source offset at the requested local rank, if that rank was reached.
+    pub cutoff_row_offset: Option<u64>,
     /// Physical source rows rejected as local or prior-run duplicates.
     pub duplicate_rows: u64,
     /// New global first occurrences written to the run.
@@ -2321,6 +2325,7 @@ const EXTERNAL_MAX_SORT_BUFFER_RECORDS: usize = 65_536;
 const EXTERNAL_MAX_SPILLS: usize = 65_536;
 const EXTERNAL_MAX_ARROW_BATCHES: usize = 65_536;
 const EXTERNAL_MAX_ARROW_FOOTER_BYTES: usize = 1 << 20;
+const EXTERNAL_MAX_CUTOFF_BITMAP_BYTES: usize = 32 << 20;
 const IDENTITY_SPILL_MAGIC: [u8; 8] = *b"V36IDR03";
 const IDENTITY_SPILL_RECORD_BYTES: u64 = 18;
 
@@ -3902,6 +3907,7 @@ pub fn externally_build_v36_prefix_identity_run(
         || limits.io_buffer_bytes == 0
         || limits.io_buffer_bytes > EXTERNAL_MAX_IO_BUFFER_BYTES
         || request.prior_runs.len() > 16
+        || request.cutoff_local_rank == Some(0)
         || request.output.exists()
     {
         return Err(resource_limit("external identity-run configuration"));
@@ -4076,6 +4082,25 @@ pub fn externally_build_v36_prefix_identity_run(
     }
     let merged =
         collapse_v36_prefix_identity_spills(attempt.path(), spills, limits, &mut next_spill)?;
+    let mut cutoff_bitmap = request
+        .cutoff_local_rank
+        .map(|_| {
+            let words = usize::try_from(physical_rows.div_ceil(64))
+                .map_err(|_| resource_limit("cutoff bitmap bytes"))?;
+            let bytes = words
+                .checked_mul(size_of::<u64>())
+                .ok_or_else(|| resource_limit("cutoff bitmap bytes"))?;
+            if bytes > EXTERNAL_MAX_CUTOFF_BITMAP_BYTES {
+                return Err(resource_limit("cutoff bitmap bytes"));
+            }
+            let mut bitmap = Vec::new();
+            bitmap
+                .try_reserve_exact(words)
+                .map_err(|_| resource_limit("cutoff bitmap bytes"))?;
+            bitmap.resize(words, 0_u64);
+            Ok(bitmap)
+        })
+        .transpose()?;
     let mut reader = V36PrefixRawIdentityReader::open(&merged, limits.io_buffer_bytes)?;
     let mut prior =
         V36PrefixPriorFeatureMerge::from_handles(&stable_prior_handles, &stable_prior_paths)?;
@@ -4088,8 +4113,33 @@ pub fn externally_build_v36_prefix_identity_run(
         previous_id = Some(row.feature_row_id);
         if !prior.contains(row.feature_row_id)? {
             distinct_rows += 1;
+            if let Some(bitmap) = &mut cutoff_bitmap {
+                let word = usize::try_from(row.row_offset / 64)
+                    .map_err(|_| invalid("V36 identity-run cutoff offset differs"))?;
+                bitmap[word] |= 1_u64 << (row.row_offset % 64);
+            }
         }
     }
+    let cutoff_row_offset = request.cutoff_local_rank.and_then(|rank| {
+        let mut remaining = rank;
+        for (word_index, &word) in cutoff_bitmap.as_ref()?.iter().enumerate() {
+            let population = u64::from(word.count_ones());
+            if remaining > population {
+                remaining -= population;
+                continue;
+            }
+            let mut candidates = word;
+            for _ in 1..remaining {
+                candidates &= candidates - 1;
+            }
+            let bit = u64::from(candidates.trailing_zeros());
+            return u64::try_from(word_index)
+                .ok()
+                .and_then(|index| index.checked_mul(64))
+                .and_then(|base| base.checked_add(bit));
+        }
+        None
+    });
     let source = V36PrefixSourceObject {
         blake3: source_blake3,
         encoded_bytes: request.source.encoded_bytes,
@@ -4171,6 +4221,7 @@ pub fn externally_build_v36_prefix_identity_run(
     })?;
     publish_output_noclobber(temporary, request.output)?;
     Ok(V36PrefixExternalIdentityRunReceipt {
+        cutoff_row_offset,
         duplicate_rows,
         distinct_rows,
         physical_rows,

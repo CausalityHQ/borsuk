@@ -1124,6 +1124,7 @@ fn v36_prefix_dataset_external_identity_run_is_bounded_deduplicated_and_determin
     limits.sort_buffer_records = 1;
     limits.max_spills = 4;
     let first = externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+        cutoff_local_rank: Some(2),
         input: &input,
         limits: &limits,
         output: &first_output,
@@ -1136,6 +1137,7 @@ fn v36_prefix_dataset_external_identity_run_is_bounded_deduplicated_and_determin
     .unwrap();
     limits.sort_buffer_records = 3;
     let second = externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+        cutoff_local_rank: Some(2),
         input: &input,
         limits: &limits,
         output: &second_output,
@@ -1150,6 +1152,7 @@ fn v36_prefix_dataset_external_identity_run_is_bounded_deduplicated_and_determin
     assert_eq!(first.physical_rows, 4);
     assert_eq!(first.distinct_rows, 2);
     assert_eq!(first.duplicate_rows, 2);
+    assert_eq!(first.cutoff_row_offset, Some(3));
     assert_eq!(first.run.identity, second.run.identity);
     assert_eq!(
         fs::read(&first_output).unwrap(),
@@ -1187,6 +1190,7 @@ fn v36_prefix_dataset_external_identity_run_rejects_resource_and_predecessor_dri
 
     assert!(
         externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            cutoff_local_rank: None,
             input: &input,
             limits: &limits,
             output: &output,
@@ -1207,6 +1211,7 @@ fn v36_prefix_dataset_external_identity_run_rejects_resource_and_predecessor_dri
     duplicate_source.sha256 = first.source.sha256.clone();
     assert!(
         externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            cutoff_local_rank: None,
             input: &input,
             limits: &limits,
             output: &output,
@@ -1227,6 +1232,7 @@ fn v36_prefix_dataset_external_identity_run_rejects_resource_and_predecessor_dri
     };
     assert!(
         externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            cutoff_local_rank: None,
             input: &input,
             limits: &tiny_input_limit,
             output: &output,
@@ -1244,6 +1250,7 @@ fn v36_prefix_dataset_external_identity_run_rejects_resource_and_predecessor_dri
     fs::write(&output, b"preserve").unwrap();
     assert!(
         externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            cutoff_local_rank: None,
             input: &input,
             limits: &limits,
             output: &output,
