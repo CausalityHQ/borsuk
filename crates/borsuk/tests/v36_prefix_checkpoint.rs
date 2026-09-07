@@ -798,6 +798,42 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
 }
 
 #[test]
+fn v36_prefix_checkpoint_writer_retry_after_publication_failure_is_not_poisoned() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &root,
+        checkpoint_context(100),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    let boundary = V36PrefixPopulationCommit {
+        cutoff: None,
+        distinct_rows: 2,
+        duplicate_rows: 98,
+        physical_rows: 100,
+        run: V36PrefixIdentityRun {
+            physical_rows: 100,
+            rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+            selected_object_ordinal: 0,
+            source: source_object(),
+        },
+    };
+    let blocked_ready = root.join("commits/generation-00000000.json");
+    std::fs::create_dir(&blocked_ready).unwrap();
+    assert!(writer.commit(&boundary).is_err());
+    std::fs::remove_dir(&blocked_ready).unwrap();
+
+    let ready = writer.commit(&boundary).unwrap();
+    assert_eq!(ready, blocked_ready);
+    assert_eq!(root.join("commits").read_dir().unwrap().count(), 1);
+}
+
+#[test]
 fn v36_prefix_checkpoint_writer_round_trips_cohort_b_global_ordinal() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("outbox");

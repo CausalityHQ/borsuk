@@ -662,7 +662,13 @@ impl V36PrefixPopulationCheckpointWriter {
                 .map(|pointer| (pointer, "local-predecessor")),
         )?;
         self.dependencies.push((identity, bytes));
-        let ready = self.outbox.commit(&publication, &self.dependencies)?;
+        let ready = match self.outbox.commit(&publication, &self.dependencies) {
+            Ok(ready) => ready,
+            Err(error) => {
+                self.dependencies.pop();
+                return Err(error);
+            }
+        };
         self.previous_manifest = Some(manifest);
         self.previous_manifest_identity = Some(publication.manifest.clone());
         self.previous_pointer_bytes = Some(publication.pointer_bytes);
