@@ -10,13 +10,13 @@ use borsuk::{
     V36PrefixCheckpointManifest, V36PrefixCheckpointOutbox, V36PrefixCheckpointPhase,
     V36PrefixCheckpointPointer, V36PrefixCheckpointPointerCondition, V36PrefixIdentityRun,
     V36PrefixMaterializedArtifacts, V36PrefixPopulationCheckpoint,
-    V36PrefixPopulationCheckpointHead, V36PrefixPopulationCheckpointWriter,
-    V36PrefixPopulationCommit, V36PrefixPopulationSelection, V36PrefixRegisteredSourceObject,
-    V36PrefixRowIdentity, V36PrefixSourceObject, canonical_v36_prefix_checkpoint_manifest_bytes,
-    canonical_v36_prefix_checkpoint_pointer_bytes, decode_v36_prefix_identity_run,
-    encode_v36_prefix_identity_run, load_v36_prefix_population_checkpoint_head,
-    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
-    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
+    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
+    V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
+    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
+    decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
+    load_v36_prefix_population_checkpoint_head, plan_v36_prefix_checkpoint_publication,
+    restore_v36_prefix_population, restore_v36_prefix_population_state,
+    validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -780,9 +780,15 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
             .unwrap();
     assert_eq!(loaded.manifest, previous_manifest);
     assert_eq!(loaded.pointer_bytes, previous_pointer_bytes);
+    let staged_dependency = staged
+        .join("objects")
+        .join(format!("{}.blob", first_identity.sha256));
     assert_eq!(
         loaded.dependencies,
-        vec![(first_identity.clone(), first_bytes.clone())]
+        vec![V36PrefixCheckpointDependencyFile {
+            identity: first_identity.clone(),
+            path: staged_dependency.clone(),
+        }]
     );
     let inconsistent_root = directory.path().join("inconsistent-resume-outbox");
     std::fs::create_dir(&inconsistent_root).unwrap();
@@ -798,6 +804,9 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
         &inconsistent_pointer,
     )
     .unwrap();
+    let mut inconsistent_head = loaded.clone();
+    inconsistent_head.manifest = inconsistent_manifest;
+    inconsistent_head.pointer_bytes = inconsistent_pointer_bytes;
     assert!(
         V36PrefixPopulationCheckpointWriter::resume(
             &inconsistent_root,
@@ -806,14 +815,26 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
             "v36-prefix-screen-fixture-attempt-0001".into(),
             1,
             "i-replacement".into(),
-            V36PrefixPopulationCheckpointHead {
-                dependencies: vec![(first_identity.clone(), first_bytes.clone())],
-                manifest: inconsistent_manifest,
-                pointer_bytes: inconsistent_pointer_bytes,
-            },
+            inconsistent_head,
         )
         .is_err()
     );
+    let corrupt_root = directory.path().join("corrupt-resume-outbox");
+    std::fs::create_dir(&corrupt_root).unwrap();
+    std::fs::write(&staged_dependency, b"corrupt after load").unwrap();
+    assert!(
+        V36PrefixPopulationCheckpointWriter::resume(
+            &corrupt_root,
+            two_object_checkpoint_context(3),
+            "a".repeat(64),
+            "v36-prefix-screen-fixture-attempt-0001".into(),
+            1,
+            "i-replacement".into(),
+            loaded.clone(),
+        )
+        .is_err()
+    );
+    std::fs::write(&staged_dependency, &first_bytes).unwrap();
     let resumed_root = directory.path().join("resumed-outbox");
     std::fs::create_dir(&resumed_root).unwrap();
     let mut resumed_writer = V36PrefixPopulationCheckpointWriter::resume(
@@ -823,11 +844,7 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
         "v36-prefix-screen-fixture-attempt-0001".into(),
         1,
         "i-replacement".into(),
-        V36PrefixPopulationCheckpointHead {
-            dependencies: vec![(first_identity, first_bytes)],
-            manifest: previous_manifest,
-            pointer_bytes: previous_pointer_bytes,
-        },
+        loaded,
     )
     .unwrap();
     assert_eq!(resumed_writer.identity_run_files().unwrap().len(), 1);

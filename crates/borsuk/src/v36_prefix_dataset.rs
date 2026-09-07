@@ -387,7 +387,7 @@ impl V36PrefixCheckpointOutbox {
 /// Stateful producer for crash-atomic complete-object population checkpoints.
 pub struct V36PrefixPopulationCheckpointWriter {
     context: V36PrefixCheckpointContext,
-    dependencies: Vec<(V36ArtifactIdentity, Vec<u8>)>,
+    dependencies: Vec<V36PrefixCheckpointDependencyFile>,
     execution_authority_sha256: String,
     outbox: V36PrefixCheckpointOutbox,
     previous_manifest: Option<V36PrefixCheckpointManifest>,
@@ -401,8 +401,8 @@ pub struct V36PrefixPopulationCheckpointWriter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Fully authenticated local material needed to continue one published head.
 pub struct V36PrefixPopulationCheckpointHead {
-    /// Cumulative identity-run artifacts and their exact local bytes.
-    pub dependencies: Vec<(V36ArtifactIdentity, Vec<u8>)>,
+    /// Cumulative identity-run artifacts and their authenticated local files.
+    pub dependencies: Vec<V36PrefixCheckpointDependencyFile>,
     /// Newest immutable population manifest.
     pub manifest: V36PrefixCheckpointManifest,
     /// Exact canonical pointer bytes naming `manifest`.
@@ -415,7 +415,7 @@ impl V36PrefixPopulationCheckpointHead {
         self.dependencies
             .iter()
             .enumerate()
-            .map(|(ordinal, (identity, bytes))| {
+            .map(|(ordinal, dependency)| {
                 let selected_object_ordinal = selected_object_start
                     .checked_add(
                         u16::try_from(ordinal)
@@ -428,7 +428,13 @@ impl V36PrefixPopulationCheckpointHead {
                     .consumed_objects
                     .get(ordinal)
                     .ok_or_else(|| invalid("V36 population checkpoint resume state differs"))?;
-                decode_v36_prefix_identity_run(bytes, identity, source, selected_object_ordinal)
+                let bytes = read_file(&dependency.path)?;
+                decode_v36_prefix_identity_run(
+                    &bytes,
+                    &dependency.identity,
+                    source,
+                    selected_object_ordinal,
+                )
             })
             .collect()
     }
@@ -487,7 +493,10 @@ pub fn load_v36_prefix_population_checkpoint_head(
             .join("objects")
             .join(format!("{}.blob", identity.sha256));
         authenticate_file(&path, identity)?;
-        dependencies.push((identity.clone(), regular_bytes(&path)?));
+        dependencies.push(V36PrefixCheckpointDependencyFile {
+            identity: identity.clone(),
+            path,
+        });
     }
     Ok(V36PrefixPopulationCheckpointHead {
         dependencies,
@@ -563,11 +572,9 @@ impl V36PrefixPopulationCheckpointWriter {
             || dependencies
                 .iter()
                 .zip(&previous_manifest.population.identity_runs)
-                .any(|((identity, bytes), expected)| {
-                    identity != expected
-                        || identity.encoded_bytes != bytes.len() as u64
-                        || identity.sha256 != format!("{:x}", Sha256::digest(bytes))
-                        || identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+                .any(|(dependency, expected)| {
+                    &dependency.identity != expected
+                        || authenticate_file(&dependency.path, &dependency.identity).is_err()
                 })
         {
             return Err(invalid(
@@ -607,18 +614,21 @@ impl V36PrefixPopulationCheckpointWriter {
             ));
         }
         let outbox = V36PrefixCheckpointOutbox::create(root)?;
-        for (identity, bytes) in &dependencies {
-            install_content_addressed(
-                &outbox
-                    .root
-                    .join("objects")
-                    .join(format!("{}.blob", identity.sha256)),
-                bytes,
-            )?;
+        let mut installed_dependencies = Vec::with_capacity(dependencies.len());
+        for dependency in dependencies {
+            let path = outbox
+                .root
+                .join("objects")
+                .join(format!("{}.blob", dependency.identity.sha256));
+            install_content_addressed_file(&path, &dependency.path, &dependency.identity)?;
+            installed_dependencies.push(V36PrefixCheckpointDependencyFile {
+                identity: dependency.identity,
+                path,
+            });
         }
         Ok(Self {
             context,
-            dependencies,
+            dependencies: installed_dependencies,
             execution_authority_sha256,
             outbox,
             previous_manifest: Some(previous_manifest),
@@ -647,8 +657,8 @@ impl V36PrefixPopulationCheckpointWriter {
             .zip(&population.identity_runs)
             .zip(&population.consumed_objects)
             .enumerate()
-            .map(|(index, (((identity, _), registered), source))| {
-                if identity != registered {
+            .map(|(index, ((dependency, registered), source))| {
+                if &dependency.identity != registered {
                     return Err(invalid("V36 population checkpoint dependencies differ"));
                 }
                 let selected_object_ordinal = population
@@ -662,10 +672,10 @@ impl V36PrefixPopulationCheckpointWriter {
                     .outbox
                     .root
                     .join("objects")
-                    .join(format!("{}.blob", identity.sha256));
-                authenticate_file(&path, identity)?;
+                    .join(format!("{}.blob", dependency.identity.sha256));
+                authenticate_file(&path, &dependency.identity)?;
                 Ok(V36PrefixIdentityRunFile {
-                    identity: identity.clone(),
+                    identity: dependency.identity.clone(),
                     path,
                     selected_object_ordinal,
                     source: source.clone(),
@@ -942,8 +952,15 @@ impl V36PrefixPopulationCheckpointWriter {
                 .as_deref()
                 .map(|pointer| (pointer, "local-predecessor")),
         )?;
-        self.dependencies.push((identity, bytes));
-        let ready = match self.outbox.commit(&publication, &self.dependencies) {
+        let path = self
+            .outbox
+            .root
+            .join("objects")
+            .join(format!("{}.blob", identity.sha256));
+        install_content_addressed(&path, &bytes)?;
+        self.dependencies
+            .push(V36PrefixCheckpointDependencyFile { identity, path });
+        let ready = match self.outbox.commit_files(&publication, &self.dependencies) {
             Ok(ready) => ready,
             Err(error) => {
                 self.dependencies.pop();
