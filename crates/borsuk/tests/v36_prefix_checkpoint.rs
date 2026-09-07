@@ -912,7 +912,6 @@ fn v36_prefix_checkpoint_population_writer_commits_authenticated_run_file() {
     let run_path = directory.path().join("identity-run.arrow");
     std::fs::write(&run_path, &run_bytes).unwrap();
     let boundary = V36PrefixPopulationFileCommit {
-        cutoff: None,
         distinct_rows: 2,
         duplicate_rows: 98,
         physical_rows: 100,
@@ -952,7 +951,6 @@ fn v36_prefix_checkpoint_population_writer_commits_authenticated_run_file() {
     let duplicate_bytes = encode_v36_prefix_identity_run(&duplicate_run).unwrap();
     std::fs::write(&second_path, &duplicate_bytes).unwrap();
     let mut duplicate_boundary = V36PrefixPopulationFileCommit {
-        cutoff: Some((1, 4)),
         distinct_rows: 3,
         duplicate_rows: 102,
         physical_rows: 105,

@@ -34,19 +34,19 @@ use borsuk::{
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_freeze_preflight, load_v36_prefix_population_checkpoint_head,
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
-    rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
-    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
-    scan_v36_prefix_object_prefix_file_backed, scan_v36_prefix_object_prefix_resumed,
-    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_population_rows, select_v36_prefix_roles,
-    v36_prefix_gt100_schema, v36_prefix_query_schema, v36_prefix_query_score_sha256,
-    v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
-    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    rank_v36_prefix_source_objects, restore_v36_prefix_file_backed_population_scan,
+    restore_v36_prefix_population, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
+    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
+    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
+    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -1277,8 +1277,17 @@ fn v36_prefix_dataset_file_backed_population_scan_commits_without_resident_ident
     fs::create_dir(&scratch).unwrap();
     fs::create_dir(&run_output).unwrap();
     fs::create_dir(&outbox).unwrap();
-    let source_path = directory.path().join("source.parquet");
-    let ranked = vec![write_registered_rows(&source_path, &[41, 7, 41, 9])];
+    let source_paths = [
+        directory.path().join("source-0000.parquet"),
+        directory.path().join("source-0001.parquet"),
+        directory.path().join("source-0002.parquet"),
+    ];
+    let ranked = vec![
+        write_registered_rows(&source_paths[0], &[41, 7, 41, 9]),
+        write_registered_rows(&source_paths[1], &[41, 9, 99]),
+        write_registered_rows(&source_paths[2], &[41, 99]),
+    ];
+    let source_byte_cap = ranked.iter().map(|object| object.encoded_bytes).sum();
     let object_prefix = "s3://fixture/v36/file-backed/checkpoints/objects/";
     let context = V36PrefixCheckpointContext {
         cohort_ordinal: 0,
@@ -1301,10 +1310,10 @@ fn v36_prefix_dataset_file_backed_population_scan_commits_without_resident_ident
             })
             .collect(),
         run_id: "v36-prefix-screen-file-backed".into(),
-        selected_object_count: 1,
+        selected_object_count: 3,
         selected_object_start: 0,
         source_archive_sha256: "3".repeat(64),
-        source_byte_cap: ranked[0].encoded_bytes,
+        source_byte_cap,
         source_commit: "4".repeat(40),
         source_registry_sha256: "5".repeat(64),
     };
@@ -1320,7 +1329,7 @@ fn v36_prefix_dataset_file_backed_population_scan_commits_without_resident_ident
     let limits = external_selection_limits();
     let scan = scan_v36_prefix_object_prefix_file_backed(
         V36PrefixFileBackedScanRequest {
-            byte_cap: ranked[0].encoded_bytes,
+            byte_cap: source_byte_cap,
             distinct_candidates: 3,
             limits: &limits,
             output_uri_prefix: object_prefix,
@@ -1330,7 +1339,7 @@ fn v36_prefix_dataset_file_backed_population_scan_commits_without_resident_ident
             scratch_root: &scratch,
             selected_object_start: 0,
         },
-        |_, _| Ok(source_path.clone()),
+        |ordinal, _| Ok(source_paths[usize::from(ordinal)].clone()),
         |boundary| {
             writer.commit_file(boundary)?;
             Ok(())
@@ -1338,19 +1347,18 @@ fn v36_prefix_dataset_file_backed_population_scan_commits_without_resident_ident
     )
     .unwrap();
 
-    assert_eq!(scan.cutoff, Some((0, 3)));
-    assert_eq!(scan.distinct_rows, 3);
-    assert_eq!(scan.duplicate_rows, 1);
-    assert_eq!(scan.physical_rows, 4);
-    assert_eq!(scan.consumed_objects.len(), 1);
-    assert_eq!(scan.runs.len(), 1);
-    assert_eq!(writer.identity_run_files().unwrap().len(), 1);
+    assert_eq!(scan.distinct_rows, 4);
+    assert_eq!(scan.duplicate_rows, 5);
+    assert_eq!(scan.physical_rows, 9);
+    assert_eq!(scan.consumed_objects.len(), 3);
+    assert_eq!(scan.runs.len(), 3);
+    assert_eq!(writer.identity_run_files().unwrap().len(), 3);
     assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
 
     let resumed_output = directory.path().join("resumed-run-output");
     fs::create_dir(&resumed_output).unwrap();
     let resume_request = |prior| V36PrefixFileBackedScanRequest {
-        byte_cap: ranked[0].encoded_bytes,
+        byte_cap: source_byte_cap,
         distinct_candidates: 3,
         limits: &limits,
         output_uri_prefix: object_prefix,
@@ -1372,16 +1380,6 @@ fn v36_prefix_dataset_file_backed_population_scan_commits_without_resident_ident
     let mut forged = scan.clone();
     forged.distinct_rows += 1;
     forged.physical_rows += 1;
-    assert!(
-        scan_v36_prefix_object_prefix_file_backed(
-            resume_request(&forged),
-            |_, _| panic!("forged resume must not acquire a source"),
-            |_| panic!("forged resume must not publish a checkpoint"),
-        )
-        .is_err()
-    );
-    let mut forged = scan.clone();
-    forged.cutoff = Some((0, 2));
     assert!(
         scan_v36_prefix_object_prefix_file_backed(
             resume_request(&forged),
@@ -3313,6 +3311,23 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let staged = directory.path().join("staged-population");
     stage_checkpoint_head(&first_outbox, &population_ready.unwrap(), &staged);
     let head = load_v36_prefix_population_checkpoint_head(&staged, &context).unwrap();
+    let restore_scratch = directory.path().join("restore-scratch");
+    fs::create_dir(&restore_scratch).unwrap();
+    let limits = external_selection_limits();
+    let restored =
+        restore_v36_prefix_file_backed_population_scan(&head, &limits, &restore_scratch).unwrap();
+    assert_eq!(restored.distinct_rows, 24);
+    assert_eq!(restored.duplicate_rows, 0);
+    assert_eq!(restored.physical_rows, 24);
+    assert_eq!(restored.runs.len(), 1);
+    assert!(restore_scratch.read_dir().unwrap().next().is_none());
+    let mut forged = head.clone();
+    forged.manifest.population.distinct_rows -= 1;
+    forged.manifest.population.duplicate_rows += 1;
+    assert!(
+        restore_v36_prefix_file_backed_population_scan(&forged, &limits, &restore_scratch,)
+            .is_err()
+    );
     let resumed_outbox = directory.path().join("resumed-outbox");
     fs::create_dir(&resumed_outbox).unwrap();
     let mut writer = V36PrefixPopulationCheckpointWriter::resume(
@@ -3341,7 +3356,6 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         selected_object_start: 0,
         selected_rows: 24,
     };
-    let limits = external_selection_limits();
     let selected_receipt =
         externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
             contract: &selected_contract,

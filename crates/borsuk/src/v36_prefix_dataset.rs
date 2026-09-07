@@ -840,17 +840,6 @@ impl V36PrefixPopulationCheckpointWriter {
         }
         let previous_distinct =
             previous_population.map_or(0, |population| population.distinct_rows);
-        let cutoff_candidate = boundary
-            .cutoff
-            .map(|(object, offset)| {
-                if object != expected_global_ordinal {
-                    return Err(invalid("V36 population checkpoint cutoff differs"));
-                }
-                Ok(offset)
-            })
-            .transpose()?;
-        let mut cutoff_rows = 0_u64;
-        let mut cutoff_present = false;
         let attempt =
             tempfile::tempdir_in(&self.outbox.root).map_err(|source| BorsukError::Io {
                 path: self.outbox.root.clone(),
@@ -870,15 +859,7 @@ impl V36PrefixPopulationCheckpointWriter {
             attempt.path(),
             &[0_u8; 32],
             &[0_u8; 32],
-            &mut |row| {
-                if cutoff_candidate.is_some_and(|cutoff| row.row_offset <= cutoff) {
-                    cutoff_rows += 1;
-                }
-                if cutoff_candidate == Some(row.row_offset) {
-                    cutoff_present = true;
-                }
-                Ok(())
-            },
+            &mut |_| Ok(()),
         )?;
         let installed_path = self
             .outbox
@@ -926,25 +907,9 @@ impl V36PrefixPopulationCheckpointWriter {
         let duplicate_rows = physical_rows
             .checked_sub(distinct_rows)
             .ok_or_else(|| invalid("V36 population checkpoint duplicate rows underflow"))?;
-        let cutoff = if previous_distinct < self.context.distinct_candidates
-            && distinct_rows >= self.context.distinct_candidates
-        {
-            let local_count = self
-                .context
-                .distinct_candidates
-                .checked_sub(previous_distinct)
-                .ok_or_else(|| invalid("V36 population checkpoint cutoff overflows"))?;
-            let offset = cutoff_candidate
-                .filter(|_| cutoff_present && cutoff_rows == local_count)
-                .ok_or_else(|| invalid("V36 population checkpoint cutoff differs"))?;
-            Some((boundary.run.selected_object_ordinal, offset))
-        } else {
-            None
-        };
         if boundary.distinct_rows != distinct_rows
             || boundary.duplicate_rows != duplicate_rows
             || boundary.physical_rows != physical_rows
-            || boundary.cutoff != cutoff
         {
             return Err(invalid("V36 population checkpoint accounting differs"));
         }
@@ -1031,7 +996,6 @@ impl V36PrefixPopulationCheckpointWriter {
             .join(format!("{}.blob", identity.sha256));
         install_content_addressed(&path, &bytes)?;
         self.commit_file(&V36PrefixPopulationFileCommit {
-            cutoff: boundary.cutoff,
             distinct_rows: boundary.distinct_rows,
             duplicate_rows: boundary.duplicate_rows,
             physical_rows: boundary.physical_rows,
@@ -2109,8 +2073,6 @@ pub struct V36PrefixObjectPrefixScan {
 pub struct V36PrefixFileBackedPopulationScan {
     /// Complete authenticated source objects incorporated in ranked order.
     pub consumed_objects: Vec<V36PrefixSourceObject>,
-    /// Exact target position once the distinct prefix is complete.
-    pub cutoff: Option<(u16, u64)>,
     /// Complete distinct first occurrences observed so far.
     pub distinct_rows: u64,
     /// Complete duplicate physical rows observed so far.
@@ -2180,8 +2142,6 @@ pub struct V36PrefixPopulationCommit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// One file-backed durable population boundary after a complete authenticated object.
 pub struct V36PrefixPopulationFileCommit {
-    /// Cutoff position once the requested distinct prefix has been reached.
-    pub cutoff: Option<(u16, u64)>,
     /// Distinct IDs observed through this complete object.
     pub distinct_rows: u64,
     /// Duplicate physical rows observed through this complete object.
@@ -6514,7 +6474,6 @@ fn authenticate_v36_prefix_file_backed_population_scan(
     state: &V36PrefixFileBackedPopulationScan,
     limits: &V36PrefixExternalSelectionLimits,
     scratch_root: &Path,
-    distinct_candidates: u64,
 ) -> Result<V36PrefixFileBackedPopulationScan> {
     let attempt = tempfile::tempdir_in(scratch_root).map_err(|source| BorsukError::Io {
         path: scratch_root.to_owned(),
@@ -6526,8 +6485,6 @@ fn authenticate_v36_prefix_file_backed_population_scan(
     let mut source_digests = BTreeSet::new();
     let mut stable_paths = Vec::with_capacity(state.runs.len());
     let mut stable_handles = Vec::with_capacity(state.runs.len());
-    let mut run_rows = Vec::with_capacity(state.runs.len());
-    let mut run_physical_rows = Vec::with_capacity(state.runs.len());
     let mut physical_rows = 0_u64;
     let mut distinct_rows = 0_u64;
     for (index, run) in state.runs.iter().enumerate() {
@@ -6567,8 +6524,6 @@ fn authenticate_v36_prefix_file_backed_population_scan(
         physical_rows = physical_rows
             .checked_add(physical)
             .ok_or_else(|| invalid("V36 prefix physical rows overflow"))?;
-        run_rows.push(rows);
-        run_physical_rows.push(physical);
         stable_paths.push(stable_path);
         stable_handles.push(stable_handle);
     }
@@ -6584,52 +6539,87 @@ fn authenticate_v36_prefix_file_backed_population_scan(
     let duplicate_rows = physical_rows
         .checked_sub(distinct_rows)
         .ok_or_else(|| invalid("V36 prefix duplicate rows underflow"))?;
-    let mut prior_distinct = 0_u64;
-    let mut cutoff = None;
-    for (index, &rows) in run_rows.iter().enumerate() {
-        let cumulative = prior_distinct
-            .checked_add(rows)
-            .ok_or_else(|| invalid("V36 prefix distinct rows overflow"))?;
-        if prior_distinct < distinct_candidates && cumulative >= distinct_candidates {
-            if index + 1 != run_rows.len() {
-                return Err(invalid("V36 file-backed restored population differs"));
-            }
-            let local_rank = distinct_candidates - prior_distinct;
-            let mut bitmap = allocate_v36_prefix_cutoff_bitmap(run_physical_rows[index])?;
-            stream_v36_prefix_identity_run_file(
-                &V36PrefixIdentityRunFile {
-                    identity: state.runs[index].identity.clone(),
-                    path: stable_paths[index].clone(),
-                    selected_object_ordinal: state.runs[index].selected_object_ordinal,
-                    source: state.runs[index].source.clone(),
-                },
-                limits,
-                attempt.path(),
-                &[0_u8; 32],
-                &[0_u8; 32],
-                &mut |row| {
-                    let word = usize::try_from(row.row_offset / 64)
-                        .map_err(|_| invalid("V36 identity-run cutoff offset differs"))?;
-                    bitmap[word] |= 1_u64 << (row.row_offset % 64);
-                    Ok(())
-                },
-            )?;
-            cutoff = Some((
-                state.runs[index].selected_object_ordinal,
-                select_v36_prefix_cutoff_offset(&bitmap, local_rank)
-                    .ok_or_else(|| invalid("V36 file-backed restored cutoff differs"))?,
-            ));
-        }
-        prior_distinct = cumulative;
-    }
     Ok(V36PrefixFileBackedPopulationScan {
         consumed_objects: state.consumed_objects.clone(),
-        cutoff,
         distinct_rows,
         duplicate_rows,
         physical_rows,
         runs: state.runs.clone(),
     })
+}
+
+/// Reconstruct bounded file-backed population state from one authenticated checkpoint head.
+pub fn restore_v36_prefix_file_backed_population_scan(
+    head: &V36PrefixPopulationCheckpointHead,
+    limits: &V36PrefixExternalSelectionLimits,
+    scratch_root: &Path,
+) -> Result<V36PrefixFileBackedPopulationScan> {
+    if !matches!(&head.manifest.phase, V36PrefixCheckpointPhase::Population)
+        || usize::from(head.manifest.population.completed_objects)
+            != head.manifest.population.identity_runs.len()
+        || head.dependencies.len() != head.manifest.population.identity_runs.len()
+        || head.dependencies.len() != head.manifest.population.consumed_objects.len()
+    {
+        return Err(invalid("V36 file-backed checkpoint population differs"));
+    }
+    let pointer: V36PrefixCheckpointPointer = serde_json::from_slice(&head.pointer_bytes)
+        .map_err(|_| invalid("V36 population checkpoint pointer JSON differs"))?;
+    let manifest_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(&head.manifest)?;
+    if pointer.generation != head.manifest.generation
+        || pointer.run_id != head.manifest.run_id
+        || pointer.producer_attempt_id != head.manifest.producer_attempt_id
+        || pointer.producer_attempt_ordinal != head.manifest.producer_attempt_ordinal
+        || pointer.manifest.encoded_bytes != manifest_bytes.len() as u64
+        || pointer.manifest.sha256 != format!("{:x}", Sha256::digest(&manifest_bytes))
+        || pointer.manifest.blake3 != blake3::hash(&manifest_bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 file-backed checkpoint authority differs"));
+    }
+    let runs = head
+        .dependencies
+        .iter()
+        .zip(&head.manifest.population.identity_runs)
+        .zip(&head.manifest.population.consumed_objects)
+        .enumerate()
+        .map(|(index, ((dependency, registered), source))| {
+            let selected_object_ordinal = head
+                .manifest
+                .population
+                .selected_object_start
+                .checked_add(
+                    u16::try_from(index)
+                        .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?,
+                )
+                .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?;
+            if &dependency.identity != registered {
+                return Err(invalid("V36 file-backed checkpoint dependencies differ"));
+            }
+            Ok(V36PrefixIdentityRunFile {
+                identity: dependency.identity.clone(),
+                path: dependency.path.clone(),
+                selected_object_ordinal,
+                source: source.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let claimed = V36PrefixFileBackedPopulationScan {
+        consumed_objects: head.manifest.population.consumed_objects.clone(),
+        distinct_rows: head.manifest.population.distinct_rows,
+        duplicate_rows: head.manifest.population.duplicate_rows,
+        physical_rows: head.manifest.population.physical_rows,
+        runs,
+    };
+    let authenticated =
+        authenticate_v36_prefix_file_backed_population_scan(&claimed, limits, scratch_root)?;
+    if authenticated.consumed_objects != claimed.consumed_objects
+        || authenticated.distinct_rows != claimed.distinct_rows
+        || authenticated.duplicate_rows != claimed.duplicate_rows
+        || authenticated.physical_rows != claimed.physical_rows
+        || authenticated.runs != claimed.runs
+    {
+        return Err(invalid("V36 file-backed checkpoint population differs"));
+    }
+    Ok(authenticated)
 }
 
 /// Scan and checkpoint a complete ranked source prefix without resident identity state.
@@ -6679,7 +6669,6 @@ where
         .cloned()
         .unwrap_or(V36PrefixFileBackedPopulationScan {
             consumed_objects: Vec::new(),
-            cutoff: None,
             distinct_rows: 0,
             duplicate_rows: 0,
             physical_rows: 0,
@@ -6691,7 +6680,6 @@ where
             .physical_rows
             .checked_sub(state.distinct_rows)
             .is_none_or(|duplicates| duplicates != state.duplicate_rows)
-        || (state.distinct_rows >= request.distinct_candidates) != state.cutoff.is_some()
     {
         return Err(invalid("V36 file-backed restored population differs"));
     }
@@ -6738,14 +6726,16 @@ where
             &state,
             request.limits,
             request.scratch_root,
-            request.distinct_candidates,
         )?;
         if authenticated != state {
             return Err(invalid("V36 file-backed restored population differs"));
         }
         state = authenticated;
     }
-    if state.cutoff.is_some() {
+    if state.runs.len() == request.ranked_objects.len() {
+        if state.distinct_rows < request.distinct_candidates {
+            return Err(BorsukError::V36PrefixSourceInsufficient);
+        }
         return Ok(state);
     }
 
@@ -6774,13 +6764,9 @@ where
         let output = request
             .run_output_root
             .join(format!("identity-run-{ordinal:04}.arrow"));
-        let needed = request
-            .distinct_candidates
-            .checked_sub(state.distinct_rows)
-            .ok_or_else(|| invalid("V36 prefix distinct population overflows"))?;
         let receipt =
             externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
-                cutoff_local_rank: Some(needed),
+                cutoff_local_rank: None,
                 input: &input,
                 limits: request.limits,
                 output: &output,
@@ -6790,7 +6776,6 @@ where
                 selected_object_ordinal: ordinal,
                 source: object,
             })?;
-        let prior_distinct = state.distinct_rows;
         state.distinct_rows = state
             .distinct_rows
             .checked_add(receipt.distinct_rows)
@@ -6803,14 +6788,10 @@ where
             .physical_rows
             .checked_sub(state.distinct_rows)
             .ok_or_else(|| invalid("V36 prefix duplicate rows underflow"))?;
-        let crossed = prior_distinct < request.distinct_candidates
-            && state.distinct_rows >= request.distinct_candidates;
-        if crossed != receipt.cutoff_row_offset.is_some() {
+        if receipt.cutoff_row_offset.is_some() {
             return Err(invalid("V36 prefix file-backed cutoff differs"));
         }
-        let boundary_cutoff = receipt.cutoff_row_offset.map(|offset| (ordinal, offset));
         let boundary = V36PrefixPopulationFileCommit {
-            cutoff: boundary_cutoff,
             distinct_rows: state.distinct_rows,
             duplicate_rows: state.duplicate_rows,
             physical_rows: state.physical_rows,
@@ -6819,12 +6800,8 @@ where
         commit(&boundary)?;
         state.consumed_objects.push(receipt.run.source.clone());
         state.runs.push(receipt.run);
-        if crossed {
-            state.cutoff = boundary_cutoff;
-            break;
-        }
     }
-    if state.cutoff.is_none() {
+    if state.distinct_rows < request.distinct_candidates {
         return Err(BorsukError::V36PrefixSourceInsufficient);
     }
     Ok(state)
