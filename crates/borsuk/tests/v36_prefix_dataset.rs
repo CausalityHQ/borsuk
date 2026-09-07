@@ -16,10 +16,10 @@ use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
     V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest,
-    V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
-    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
-    V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
+    V36PrefixFileBackedResumeRequest, V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority,
+    V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixFreezeRequest,
+    V36PrefixGtAccumulator, V36PrefixGtParquetJob, V36PrefixIdentityRun, V36PrefixIdentityRunFile,
+    V36PrefixInputRow, V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
     V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
     V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
     V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
@@ -3330,16 +3330,22 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     );
     let resumed_outbox = directory.path().join("resumed-outbox");
     fs::create_dir(&resumed_outbox).unwrap();
-    let mut writer = V36PrefixPopulationCheckpointWriter::resume(
-        &resumed_outbox,
-        context,
-        "6".repeat(64),
-        "v36-prefix-screen-reduced-attempt-0001".into(),
-        1,
-        "i-reduced-b".into(),
-        head,
-    )
-    .unwrap();
+    let (mut writer, restored) =
+        V36PrefixPopulationCheckpointWriter::resume_file_backed(V36PrefixFileBackedResumeRequest {
+            execution_authority_sha256: "6".repeat(64),
+            head,
+            context,
+            limits: &limits,
+            producer_attempt_id: "v36-prefix-screen-reduced-attempt-0001".into(),
+            producer_attempt_ordinal: 1,
+            producer_instance_id: "i-reduced-b".into(),
+            root: &resumed_outbox,
+            scratch_root: &restore_scratch,
+        })
+        .unwrap();
+    assert_eq!(restored.distinct_rows, 24);
+    assert_eq!(restored.physical_rows, 24);
+    assert_eq!(restored.runs, writer.identity_run_files().unwrap());
 
     let selection_scratch = directory.path().join("selection-scratch");
     fs::create_dir(&selection_scratch).unwrap();

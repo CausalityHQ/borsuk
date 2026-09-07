@@ -640,6 +640,85 @@ impl V36PrefixPopulationCheckpointWriter {
         })
     }
 
+    /// Resume from one population head without decoding identity rows into resident state.
+    pub fn resume_file_backed(
+        request: V36PrefixFileBackedResumeRequest<'_>,
+    ) -> Result<(Self, V36PrefixFileBackedPopulationScan)> {
+        let V36PrefixFileBackedResumeRequest {
+            execution_authority_sha256,
+            head,
+            context,
+            limits,
+            producer_attempt_id,
+            producer_attempt_ordinal,
+            producer_instance_id,
+            root,
+            scratch_root,
+        } = request;
+        let mut restored =
+            restore_v36_prefix_file_backed_population_scan(&head, limits, scratch_root)?;
+        let V36PrefixPopulationCheckpointHead {
+            dependencies,
+            manifest: previous_manifest,
+            pointer_bytes: previous_pointer_bytes,
+        } = head;
+        digest_bytes(&execution_authority_sha256)?;
+        validate_v36_prefix_checkpoint_manifest_with_context(&context, &previous_manifest)?;
+        let pointer: V36PrefixCheckpointPointer =
+            serde_json::from_slice(&previous_pointer_bytes)
+                .map_err(|_| invalid("V36 population checkpoint pointer JSON differs"))?;
+        if canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)?
+            != previous_pointer_bytes
+            || pointer.generation != previous_manifest.generation
+            || pointer.run_id != previous_manifest.run_id
+            || pointer.producer_attempt_id != previous_manifest.producer_attempt_id
+            || pointer.producer_attempt_ordinal != previous_manifest.producer_attempt_ordinal
+            || producer_attempt_id
+                != format!("{}-attempt-{producer_attempt_ordinal:04}", context.run_id)
+            || producer_attempt_ordinal >= 3
+            || producer_attempt_ordinal < previous_manifest.producer_attempt_ordinal
+            || producer_instance_id.is_empty()
+        {
+            return Err(invalid(
+                "V36 population checkpoint resume authority differs",
+            ));
+        }
+        let outbox = V36PrefixCheckpointOutbox::create(root)?;
+        let mut installed_dependencies = Vec::with_capacity(dependencies.len());
+        for dependency in dependencies {
+            let path = outbox
+                .root
+                .join("objects")
+                .join(format!("{}.blob", dependency.identity.sha256));
+            install_content_addressed_file(&path, &dependency.path, &dependency.identity)?;
+            installed_dependencies.push(V36PrefixCheckpointDependencyFile {
+                identity: dependency.identity,
+                path,
+            });
+        }
+        for (run, dependency) in restored.runs.iter_mut().zip(&installed_dependencies) {
+            if run.identity != dependency.identity {
+                return Err(invalid("V36 population checkpoint dependencies differ"));
+            }
+            run.path = dependency.path.clone();
+        }
+        Ok((
+            Self {
+                context,
+                dependencies: installed_dependencies,
+                execution_authority_sha256,
+                outbox,
+                previous_manifest: Some(previous_manifest),
+                previous_manifest_identity: Some(pointer.manifest),
+                previous_pointer_bytes: Some(previous_pointer_bytes),
+                producer_attempt_id,
+                producer_attempt_ordinal,
+                producer_instance_id,
+            },
+            restored,
+        ))
+    }
+
     /// Authenticate completed identity-run sidecars for file-backed selection.
     pub fn identity_run_files(&self) -> Result<Vec<V36PrefixIdentityRunFile>> {
         let population = self
@@ -2081,6 +2160,28 @@ pub struct V36PrefixFileBackedPopulationScan {
     pub physical_rows: u64,
     /// Authenticated per-object first-occurrence runs in source order.
     pub runs: Vec<V36PrefixIdentityRunFile>,
+}
+
+/// Inputs for bounded restoration of one population checkpoint writer and scan state.
+pub struct V36PrefixFileBackedResumeRequest<'a> {
+    /// Exact execution-authority digest for the replacement attempt.
+    pub execution_authority_sha256: String,
+    /// Fully staged checkpoint head to authenticate and install.
+    pub head: V36PrefixPopulationCheckpointHead,
+    /// Frozen campaign and source-window authority.
+    pub context: V36PrefixCheckpointContext,
+    /// Hard external-memory and scratch limits.
+    pub limits: &'a V36PrefixExternalSelectionLimits,
+    /// Exact replacement-attempt identifier.
+    pub producer_attempt_id: String,
+    /// Zero-based replacement-attempt ordinal.
+    pub producer_attempt_ordinal: u8,
+    /// Exact replacement instance identifier.
+    pub producer_instance_id: String,
+    /// Existing empty checkpoint outbox root.
+    pub root: &'a Path,
+    /// Existing private directory for bounded authentication scratch.
+    pub scratch_root: &'a Path,
 }
 
 /// Request for one bounded, checkpointed, file-backed population scan.
