@@ -14,11 +14,11 @@ use arrow_ipc::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
-    V36PrefixExternalMaterializationRequest, V36PrefixExternalSelectionLimits,
-    V36PrefixExternalSelectionRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
-    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
-    V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
+    V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
+    V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest, V36PrefixFreezeAuthority,
+    V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixFreezeRequest,
+    V36PrefixGtAccumulator, V36PrefixGtParquetJob, V36PrefixIdentityRun, V36PrefixIdentityRunFile,
+    V36PrefixInputRow, V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
     V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
     V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
     V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
@@ -27,24 +27,24 @@ use borsuk::{
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_selected_ids,
-    deduplicate_v36_prefix_row_identities, encode_v36_prefix_identity_run,
-    encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
-    externally_select_v36_prefix_population_rows, load_v36_prefix_freeze_preflight,
-    load_v36_prefix_population_checkpoint_head, materialize_v36_prefix_assigned_roles,
-    materialize_v36_prefix_role_parquets, rank_v36_prefix_source_objects,
-    restore_v36_prefix_population, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
-    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_resumed,
-    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_population_rows, select_v36_prefix_roles,
-    v36_prefix_gt100_schema, v36_prefix_query_schema, v36_prefix_query_score_sha256,
-    v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
-    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_identity_run,
+    decode_v36_prefix_selected_ids, deduplicate_v36_prefix_row_identities,
+    encode_v36_prefix_identity_run, encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
+    externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
+    load_v36_prefix_freeze_preflight, load_v36_prefix_population_checkpoint_head,
+    materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
+    rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
+    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
+    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
+    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
+    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -513,7 +513,20 @@ fn external_identity_file(
     ordinal: u16,
     feature_ids: &[u64],
 ) -> (V36PrefixIdentityRunFile, Vec<borsuk::V36PrefixRowIdentity>) {
-    let source = external_identity_source(ordinal);
+    external_identity_file_with_source(
+        root,
+        ordinal,
+        feature_ids,
+        external_identity_source(ordinal),
+    )
+}
+
+fn external_identity_file_with_source(
+    root: &Path,
+    ordinal: u16,
+    feature_ids: &[u64],
+    source: V36PrefixSourceObject,
+) -> (V36PrefixIdentityRunFile, Vec<borsuk::V36PrefixRowIdentity>) {
     let rows = feature_ids
         .iter()
         .enumerate()
@@ -1090,6 +1103,155 @@ fn v36_prefix_dataset_external_role_assignment_never_clobbers_output() {
             output_uri_prefix: "s3://fixture/v36",
             scratch_root: &scratch,
             selected: &selected,
+        })
+        .is_err()
+    );
+    assert_eq!(fs::read(output).unwrap(), b"preserve");
+    assert!(scratch.read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_dataset_external_identity_run_is_bounded_deduplicated_and_deterministic() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let input = directory.path().join("source.parquet");
+    let source = write_registered_rows(&input, &[41, 7, 41, 9]);
+    let (prior, _) = external_identity_file(directory.path(), 0, &[7]);
+    let first_output = directory.path().join("identity-first.arrow");
+    let second_output = directory.path().join("identity-second.arrow");
+    let mut limits = external_selection_limits();
+    limits.sort_buffer_records = 1;
+    limits.max_spills = 4;
+    let first = externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+        input: &input,
+        limits: &limits,
+        output: &first_output,
+        output_uri_prefix: "s3://fixture/v36",
+        prior_runs: std::slice::from_ref(&prior),
+        scratch_root: &scratch,
+        selected_object_ordinal: 1,
+        source: &source,
+    })
+    .unwrap();
+    limits.sort_buffer_records = 3;
+    let second = externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+        input: &input,
+        limits: &limits,
+        output: &second_output,
+        output_uri_prefix: "s3://fixture/v36",
+        prior_runs: &[prior],
+        scratch_root: &scratch,
+        selected_object_ordinal: 1,
+        source: &source,
+    })
+    .unwrap();
+
+    assert_eq!(first.physical_rows, 4);
+    assert_eq!(first.distinct_rows, 2);
+    assert_eq!(first.duplicate_rows, 2);
+    assert_eq!(first.run.identity, second.run.identity);
+    assert_eq!(
+        fs::read(&first_output).unwrap(),
+        fs::read(&second_output).unwrap()
+    );
+    let decoded = decode_v36_prefix_identity_run(
+        &fs::read(&first_output).unwrap(),
+        &first.run.identity,
+        &first.run.source,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        decoded
+            .rows
+            .iter()
+            .map(|row| (row.feature_row_id, row.row_offset))
+            .collect::<Vec<_>>(),
+        vec![(9, 3), (41, 0)]
+    );
+    assert!(scratch.read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_dataset_external_identity_run_rejects_resource_and_predecessor_drift() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let input = directory.path().join("source.parquet");
+    let source = write_registered_rows(&input, &[41, 7, 9]);
+    let output = directory.path().join("identity.arrow");
+    let (first, _) = external_identity_file(directory.path(), 0, &[7]);
+    let (overlapping, _) = external_identity_file(directory.path(), 1, &[7]);
+    let limits = external_selection_limits();
+
+    assert!(
+        externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            input: &input,
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            prior_runs: &[first.clone(), overlapping],
+            scratch_root: &scratch,
+            selected_object_ordinal: 2,
+            source: &source,
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+
+    let mut duplicate_source = source.clone();
+    duplicate_source.path = first.source.path.clone();
+    duplicate_source.uri = first.source.uri.clone();
+    duplicate_source.sha256 = first.source.sha256.clone();
+    assert!(
+        externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            input: &input,
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            prior_runs: &[first],
+            scratch_root: &scratch,
+            selected_object_ordinal: 1,
+            source: &duplicate_source,
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+
+    let tiny_input_limit = V36PrefixExternalSelectionLimits {
+        max_input_bytes: source.encoded_bytes - 1,
+        ..limits
+    };
+    assert!(
+        externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            input: &input,
+            limits: &tiny_input_limit,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            prior_runs: &[],
+            scratch_root: &scratch,
+            selected_object_ordinal: 0,
+            source: &source,
+        })
+        .is_err()
+    );
+    assert!(!output.exists());
+    assert!(scratch.read_dir().unwrap().next().is_none());
+
+    fs::write(&output, b"preserve").unwrap();
+    assert!(
+        externally_build_v36_prefix_identity_run(V36PrefixExternalIdentityRunRequest {
+            input: &input,
+            limits: &limits,
+            output: &output,
+            output_uri_prefix: "s3://fixture/v36",
+            prior_runs: &[],
+            scratch_root: &scratch,
+            selected_object_ordinal: 0,
+            source: &source,
         })
         .is_err()
     );

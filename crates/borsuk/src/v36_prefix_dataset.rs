@@ -1173,6 +1173,39 @@ pub struct V36PrefixExternalSelectionLimits {
     pub sort_buffer_records: usize,
 }
 
+/// File-backed request to construct one v3 first-occurrence identity run.
+pub struct V36PrefixExternalIdentityRunRequest<'a> {
+    /// Complete authenticated source Parquet path.
+    pub input: &'a Path,
+    /// Hard memory, spill, and disk limits.
+    pub limits: &'a V36PrefixExternalSelectionLimits,
+    /// Final canonical Arrow IPC output path.
+    pub output: &'a Path,
+    /// Content-addressed object-store prefix for the result identity.
+    pub output_uri_prefix: &'a str,
+    /// Earlier feature-ID-ordered runs used for global first-occurrence exclusion.
+    pub prior_runs: &'a [V36PrefixIdentityRunFile],
+    /// Existing private directory beneath which one attempt directory is created.
+    pub scratch_root: &'a Path,
+    /// Global ordinal of this complete selected object.
+    pub selected_object_ordinal: u16,
+    /// Registered immutable source object.
+    pub source: &'a V36PrefixRankedSourceObject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated accounting and durable v3 run produced without resident object rows.
+pub struct V36PrefixExternalIdentityRunReceipt {
+    /// Physical source rows rejected as local or prior-run duplicates.
+    pub duplicate_rows: u64,
+    /// New global first occurrences written to the run.
+    pub distinct_rows: u64,
+    /// Complete physical rows authenticated in the source object.
+    pub physical_rows: u64,
+    /// Canonical file-backed v3 run.
+    pub run: V36PrefixIdentityRunFile,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated receipt for one file-backed selected-population artifact.
 pub struct V36PrefixSelectedFileReceipt {
@@ -1715,6 +1748,27 @@ fn validate_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<()> {
     Ok(())
 }
 
+fn write_v36_prefix_identity_run_batch<W: Write>(
+    writer: &mut ArrowFileWriter<W>,
+    schema: Arc<Schema>,
+    rows: &[V36PrefixRowIdentity],
+) -> Result<()> {
+    writer.write(&RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(UInt64Array::from(
+                rows.iter()
+                    .map(|row| row.feature_row_id)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|row| row.row_offset).collect::<Vec<_>>(),
+            )),
+        ],
+    )?)?;
+    Ok(())
+}
+
 /// Encode the first-occurrence identities contributed by one complete source object.
 pub fn encode_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<Vec<u8>> {
     validate_v36_prefix_identity_run(run)?;
@@ -1723,20 +1777,7 @@ pub fn encode_v36_prefix_identity_run(run: &V36PrefixIdentityRun) -> Result<Vec<
     let mut bytes = Vec::new();
     let mut writer = ArrowFileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
     for rows in run.rows.chunks(IDENTITY_RUN_BATCH_ROWS) {
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(UInt64Array::from(
-                    rows.iter()
-                        .map(|row| row.feature_row_id)
-                        .collect::<Vec<_>>(),
-                )),
-                Arc::new(UInt64Array::from(
-                    rows.iter().map(|row| row.row_offset).collect::<Vec<_>>(),
-                )),
-            ],
-        )?;
-        writer.write(&batch)?;
+        write_v36_prefix_identity_run_batch(&mut writer, schema.clone(), rows)?;
     }
     writer.finish()?;
     drop(writer);
@@ -2280,6 +2321,8 @@ const EXTERNAL_MAX_SORT_BUFFER_RECORDS: usize = 65_536;
 const EXTERNAL_MAX_SPILLS: usize = 65_536;
 const EXTERNAL_MAX_ARROW_BATCHES: usize = 65_536;
 const EXTERNAL_MAX_ARROW_FOOTER_BYTES: usize = 1 << 20;
+const IDENTITY_SPILL_MAGIC: [u8; 8] = *b"V36IDR03";
+const IDENTITY_SPILL_RECORD_BYTES: u64 = 18;
 
 fn v36_prefix_external_io<T>(path: &Path, result: std::io::Result<T>) -> Result<T> {
     result.map_err(|source| BorsukError::Io {
@@ -2294,6 +2337,207 @@ struct V36PrefixScoredIdentity {
     feature_row_id: u64,
     selected_object_ordinal: u16,
     row_offset: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct V36PrefixRawIdentity {
+    feature_row_id: u64,
+    selected_object_ordinal: u16,
+    row_offset: u64,
+}
+
+struct V36PrefixRawIdentityReader {
+    path: PathBuf,
+    reader: BufReader<File>,
+    remaining: u64,
+    expected_blake3: [u8; 32],
+    payload_hasher: blake3::Hasher,
+}
+
+impl V36PrefixRawIdentityReader {
+    fn open(path: &Path, io_buffer_bytes: usize) -> Result<Self> {
+        let file = File::open(path).map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        let encoded_bytes = file
+            .metadata()
+            .map_err(|source| BorsukError::Io {
+                path: path.to_owned(),
+                source,
+            })?
+            .len();
+        let mut reader = BufReader::with_capacity(io_buffer_bytes, file);
+        let mut magic = [0_u8; 8];
+        let mut count = [0_u8; 8];
+        v36_prefix_external_io(path, reader.read_exact(&mut magic))?;
+        v36_prefix_external_io(path, reader.read_exact(&mut count))?;
+        let remaining = u64::from_le_bytes(count);
+        let expected_bytes = EXTERNAL_SPILL_HEADER_BYTES
+            .checked_add(
+                remaining
+                    .checked_mul(IDENTITY_SPILL_RECORD_BYTES)
+                    .ok_or_else(|| invalid("V36 identity spill length overflows"))?,
+            )
+            .and_then(|bytes| bytes.checked_add(EXTERNAL_SPILL_DIGEST_BYTES))
+            .ok_or_else(|| invalid("V36 identity spill length overflows"))?;
+        if magic != IDENTITY_SPILL_MAGIC || encoded_bytes != expected_bytes {
+            return Err(invalid("V36 identity spill header differs"));
+        }
+        v36_prefix_external_io(path, reader.seek(SeekFrom::End(-32)))?;
+        let mut expected_blake3 = [0_u8; 32];
+        v36_prefix_external_io(path, reader.read_exact(&mut expected_blake3))?;
+        v36_prefix_external_io(path, reader.seek(SeekFrom::Start(16)))?;
+        Ok(Self {
+            path: path.to_owned(),
+            reader,
+            remaining,
+            expected_blake3,
+            payload_hasher: blake3::Hasher::new(),
+        })
+    }
+
+    fn next_record(&mut self) -> Result<Option<V36PrefixRawIdentity>> {
+        if self.remaining == 0 {
+            return Ok(None);
+        }
+        let mut bytes = [0_u8; IDENTITY_SPILL_RECORD_BYTES as usize];
+        v36_prefix_external_io(&self.path, self.reader.read_exact(&mut bytes))?;
+        self.payload_hasher.update(&bytes);
+        self.remaining -= 1;
+        if self.remaining == 0 && self.payload_hasher.finalize().as_bytes() != &self.expected_blake3
+        {
+            return Err(invalid("V36 identity spill digest differs"));
+        }
+        Ok(Some(V36PrefixRawIdentity {
+            feature_row_id: u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+            selected_object_ordinal: u16::from_le_bytes(bytes[8..10].try_into().unwrap()),
+            row_offset: u64::from_le_bytes(bytes[10..18].try_into().unwrap()),
+        }))
+    }
+}
+
+fn write_v36_prefix_raw_identity(
+    writer: &mut impl Write,
+    hasher: &mut blake3::Hasher,
+    record: V36PrefixRawIdentity,
+) -> Result<()> {
+    let mut bytes = [0_u8; IDENTITY_SPILL_RECORD_BYTES as usize];
+    bytes[..8].copy_from_slice(&record.feature_row_id.to_le_bytes());
+    bytes[8..10].copy_from_slice(&record.selected_object_ordinal.to_le_bytes());
+    bytes[10..18].copy_from_slice(&record.row_offset.to_le_bytes());
+    v36_prefix_external_io(Path::new("V36 identity spill"), writer.write_all(&bytes))?;
+    hasher.update(&bytes);
+    Ok(())
+}
+
+fn create_v36_prefix_identity_spill(
+    attempt: &Path,
+    ordinal: usize,
+    records: &mut [V36PrefixRawIdentity],
+    limits: &V36PrefixExternalSelectionLimits,
+) -> Result<PathBuf> {
+    records.sort_unstable();
+    let path = attempt.join(format!("identity-{ordinal:08}.bin"));
+    let count =
+        u64::try_from(records.len()).map_err(|_| invalid("V36 identity spill count overflows"))?;
+    let bytes = 16_u64
+        .checked_add(
+            count
+                .checked_mul(IDENTITY_SPILL_RECORD_BYTES)
+                .ok_or_else(|| invalid("V36 identity spill length overflows"))?,
+        )
+        .and_then(|value| value.checked_add(32))
+        .ok_or_else(|| invalid("V36 identity spill length overflows"))?;
+    if v36_prefix_scratch_bytes(attempt)?
+        .checked_add(bytes)
+        .is_none_or(|peak| peak > limits.max_scratch_bytes)
+    {
+        return Err(resource_limit("scratch bytes"));
+    }
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .map_err(|source| BorsukError::Io {
+            path: path.clone(),
+            source,
+        })?;
+    let mut writer = BufWriter::with_capacity(limits.io_buffer_bytes, file);
+    v36_prefix_external_io(&path, writer.write_all(&IDENTITY_SPILL_MAGIC))?;
+    v36_prefix_external_io(&path, writer.write_all(&count.to_le_bytes()))?;
+    let mut hasher = blake3::Hasher::new();
+    for record in records.iter().copied() {
+        write_v36_prefix_raw_identity(&mut writer, &mut hasher, record)?;
+    }
+    finish_v36_prefix_spill(&path, &mut writer, &hasher)?;
+    Ok(path)
+}
+
+fn merge_v36_prefix_identity_spills(
+    inputs: &[PathBuf],
+    output: &Path,
+    limits: &V36PrefixExternalSelectionLimits,
+) -> Result<()> {
+    let mut readers = inputs
+        .iter()
+        .map(|path| V36PrefixRawIdentityReader::open(path, limits.io_buffer_bytes))
+        .collect::<Result<Vec<_>>>()?;
+    let count = readers.iter().try_fold(0_u64, |total, reader| {
+        total
+            .checked_add(reader.remaining)
+            .ok_or_else(|| invalid("V36 identity spill count overflows"))
+    })?;
+    let bytes = 16_u64
+        .checked_add(
+            count
+                .checked_mul(IDENTITY_SPILL_RECORD_BYTES)
+                .ok_or_else(|| invalid("V36 identity spill length overflows"))?,
+        )
+        .and_then(|value| value.checked_add(32))
+        .ok_or_else(|| invalid("V36 identity spill length overflows"))?;
+    let attempt = output
+        .parent()
+        .ok_or_else(|| invalid("V36 identity spill path differs"))?;
+    if v36_prefix_scratch_bytes(attempt)?
+        .checked_add(bytes)
+        .is_none_or(|peak| peak > limits.max_scratch_bytes)
+    {
+        return Err(resource_limit("scratch bytes"));
+    }
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(output)
+        .map_err(|source| BorsukError::Io {
+            path: output.to_owned(),
+            source,
+        })?;
+    let mut writer = BufWriter::with_capacity(limits.io_buffer_bytes, file);
+    v36_prefix_external_io(output, writer.write_all(&IDENTITY_SPILL_MAGIC))?;
+    v36_prefix_external_io(output, writer.write_all(&count.to_le_bytes()))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut heap = BinaryHeap::new();
+    for (index, reader) in readers.iter_mut().enumerate() {
+        if let Some(record) = reader.next_record()? {
+            heap.push(Reverse((record, index)));
+        }
+    }
+    while let Some(Reverse((record, index))) = heap.pop() {
+        write_v36_prefix_raw_identity(&mut writer, &mut hasher, record)?;
+        if let Some(next) = readers[index].next_record()? {
+            heap.push(Reverse((next, index)));
+        }
+    }
+    finish_v36_prefix_spill(output, &mut writer, &hasher)?;
+    drop(writer);
+    for reader in readers {
+        fs::remove_file(&reader.path).map_err(|source| BorsukError::Io {
+            path: reader.path,
+            source,
+        })?;
+    }
+    Ok(())
 }
 
 fn write_v36_prefix_spill_header(writer: &mut impl Write, records: u64) -> Result<()> {
@@ -2674,6 +2918,74 @@ fn copy_v36_prefix_snapshot_exact(
     ))
 }
 
+fn snapshot_v36_prefix_authenticated_file(
+    source_path: &Path,
+    snapshot_path: &Path,
+    expected_bytes: u64,
+    expected_sha256: &str,
+    expected_blake3: Option<&str>,
+    limits: &V36PrefixExternalSelectionLimits,
+) -> Result<(File, String)> {
+    let file_type = fs::symlink_metadata(source_path)
+        .map_err(|source| BorsukError::Io {
+            path: source_path.to_owned(),
+            source,
+        })?
+        .file_type();
+    if !file_type.is_file() || file_type.is_symlink() || expected_bytes == 0 {
+        return Err(invalid("V36 prefix local artifact path differs"));
+    }
+    if expected_bytes > limits.max_input_bytes {
+        return Err(resource_limit("identity-run input bytes"));
+    }
+    let attempt = snapshot_path
+        .parent()
+        .ok_or_else(|| invalid("V36 prefix snapshot path differs"))?;
+    if v36_prefix_scratch_bytes(attempt)?
+        .checked_add(expected_bytes)
+        .is_none_or(|peak| peak > limits.max_scratch_bytes)
+    {
+        return Err(resource_limit("scratch bytes"));
+    }
+    let mut source = File::open(source_path).map_err(|source| BorsukError::Io {
+        path: source_path.to_owned(),
+        source,
+    })?;
+    if source
+        .metadata()
+        .map_err(|source| BorsukError::Io {
+            path: source_path.to_owned(),
+            source,
+        })?
+        .len()
+        != expected_bytes
+    {
+        return Err(invalid("V36 prefix local input authority differs"));
+    }
+    let mut snapshot = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(snapshot_path)
+        .map_err(|source| BorsukError::Io {
+            path: snapshot_path.to_owned(),
+            source,
+        })?;
+    let (sha256, blake3) = copy_v36_prefix_snapshot_exact(
+        &mut source,
+        &mut snapshot,
+        (source_path, snapshot_path),
+        expected_bytes,
+        limits.io_buffer_bytes,
+    )?;
+    v36_prefix_external_io(snapshot_path, snapshot.sync_all())?;
+    if sha256 != expected_sha256 || expected_blake3.is_some_and(|expected| expected != blake3) {
+        return Err(invalid("V36 prefix local input authority differs"));
+    }
+    v36_prefix_external_io(snapshot_path, snapshot.seek(SeekFrom::Start(0)))?;
+    Ok((snapshot, blake3))
+}
+
 fn preflight_v36_prefix_arrow_file(
     file: &mut File,
     path: &Path,
@@ -2991,11 +3303,8 @@ struct V36PrefixIdentityFeatureStream {
 }
 
 impl V36PrefixIdentityFeatureStream {
-    fn open(path: &Path) -> Result<Self> {
-        let file = File::open(path).map_err(|source| BorsukError::Io {
-            path: path.to_owned(),
-            source,
-        })?;
+    fn from_file(mut file: File, path: &Path) -> Result<Self> {
+        v36_prefix_external_io(path, file.seek(SeekFrom::Start(0)))?;
         Ok(Self {
             reader: ArrowFileReader::try_new(file, None)?,
             batch: None,
@@ -3028,9 +3337,25 @@ impl V36PrefixIdentityFeatureStream {
     }
 }
 
-fn validate_v36_prefix_identity_run_files_disjoint(left: &Path, right: &Path) -> Result<()> {
-    let mut left = V36PrefixIdentityFeatureStream::open(left)?;
-    let mut right = V36PrefixIdentityFeatureStream::open(right)?;
+fn validate_v36_prefix_identity_run_handles_disjoint(
+    left: &File,
+    right: &File,
+    paths: (&Path, &Path),
+) -> Result<()> {
+    let mut left = V36PrefixIdentityFeatureStream::from_file(
+        left.try_clone().map_err(|source| BorsukError::Io {
+            path: paths.0.to_owned(),
+            source,
+        })?,
+        paths.0,
+    )?;
+    let mut right = V36PrefixIdentityFeatureStream::from_file(
+        right.try_clone().map_err(|source| BorsukError::Io {
+            path: paths.1.to_owned(),
+            source,
+        })?,
+        paths.1,
+    )?;
     let mut left_id = left.next_id()?;
     let mut right_id = right.next_id()?;
     while let (Some(existing), Some(candidate)) = (left_id, right_id) {
@@ -3043,6 +3368,95 @@ fn validate_v36_prefix_identity_run_files_disjoint(left: &Path, right: &Path) ->
         }
     }
     Ok(())
+}
+
+fn validate_v36_prefix_identity_run_files_disjoint(left: &Path, right: &Path) -> Result<()> {
+    let left_file = File::open(left).map_err(|source| BorsukError::Io {
+        path: left.to_owned(),
+        source,
+    })?;
+    let right_file = File::open(right).map_err(|source| BorsukError::Io {
+        path: right.to_owned(),
+        source,
+    })?;
+    validate_v36_prefix_identity_run_handles_disjoint(&left_file, &right_file, (left, right))
+}
+
+struct V36PrefixPriorFeatureMerge {
+    streams: Vec<V36PrefixIdentityFeatureStream>,
+    heap: BinaryHeap<Reverse<(u64, usize)>>,
+}
+
+impl V36PrefixPriorFeatureMerge {
+    fn from_handles(handles: &[File], paths: &[PathBuf]) -> Result<Self> {
+        if handles.len() != paths.len() {
+            return Err(invalid("V36 identity-run predecessor handles differ"));
+        }
+        let mut streams = handles
+            .iter()
+            .zip(paths)
+            .map(|(file, path)| {
+                V36PrefixIdentityFeatureStream::from_file(
+                    file.try_clone().map_err(|source| BorsukError::Io {
+                        path: path.clone(),
+                        source,
+                    })?,
+                    path,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut heap = BinaryHeap::new();
+        for (index, stream) in streams.iter_mut().enumerate() {
+            if let Some(id) = stream.next_id()? {
+                heap.push(Reverse((id, index)));
+            }
+        }
+        Ok(Self { streams, heap })
+    }
+
+    fn contains(&mut self, candidate: u64) -> Result<bool> {
+        while self
+            .heap
+            .peek()
+            .is_some_and(|Reverse((id, _))| *id < candidate)
+        {
+            let Reverse((_, index)) = self.heap.pop().unwrap();
+            if let Some(id) = self.streams[index].next_id()? {
+                self.heap.push(Reverse((id, index)));
+            }
+        }
+        Ok(self
+            .heap
+            .peek()
+            .is_some_and(|Reverse((id, _))| *id == candidate))
+    }
+}
+
+fn collapse_v36_prefix_identity_spills(
+    attempt: &Path,
+    mut spills: Vec<PathBuf>,
+    limits: &V36PrefixExternalSelectionLimits,
+    next_spill: &mut usize,
+) -> Result<PathBuf> {
+    if spills.is_empty() {
+        return Err(invalid("V36 identity spill set is empty"));
+    }
+    while spills.len() > 1 {
+        let mut outputs = Vec::new();
+        for group in spills.chunks(limits.merge_fan_in) {
+            if outputs.len() >= limits.max_spills {
+                return Err(resource_limit("spill count"));
+            }
+            let output = attempt.join(format!("identity-{:08}.bin", *next_spill));
+            merge_v36_prefix_identity_spills(group, &output, limits)?;
+            outputs.push(output);
+            *next_spill = next_spill
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 identity spill ordinal overflows"))?;
+        }
+        spills = outputs;
+    }
+    Ok(spills.pop().unwrap())
 }
 
 struct V36PrefixSelectedStream {
@@ -3472,6 +3886,301 @@ fn write_v36_prefix_selected_batch(
         ],
     )?)?;
     Ok(())
+}
+
+/// Build one feature-ID-ordered v3 identity run with bounded external memory.
+pub fn externally_build_v36_prefix_identity_run(
+    request: V36PrefixExternalIdentityRunRequest<'_>,
+) -> Result<V36PrefixExternalIdentityRunReceipt> {
+    let limits = request.limits;
+    if limits.max_spills == 0
+        || limits.max_spills > EXTERNAL_MAX_SPILLS
+        || limits.merge_fan_in < 2
+        || limits.merge_fan_in > EXTERNAL_MAX_FAN_IN
+        || limits.sort_buffer_records == 0
+        || limits.sort_buffer_records > EXTERNAL_MAX_SORT_BUFFER_RECORDS
+        || limits.io_buffer_bytes == 0
+        || limits.io_buffer_bytes > EXTERNAL_MAX_IO_BUFFER_BYTES
+        || request.prior_runs.len() > 16
+        || request.output.exists()
+    {
+        return Err(resource_limit("external identity-run configuration"));
+    }
+    let output_uri = url::Url::parse(request.output_uri_prefix)
+        .map_err(|_| invalid("V36 identity-run output URI differs"))?;
+    let scratch_type = fs::symlink_metadata(request.scratch_root)
+        .map_err(|source| BorsukError::Io {
+            path: request.scratch_root.to_owned(),
+            source,
+        })?
+        .file_type();
+    let output_parent = request
+        .output
+        .parent()
+        .ok_or_else(|| invalid("V36 identity-run output path differs"))?;
+    let output_parent_type = fs::symlink_metadata(output_parent)
+        .map_err(|source| BorsukError::Io {
+            path: output_parent.to_owned(),
+            source,
+        })?
+        .file_type();
+    if output_uri.scheme() != "s3"
+        || output_uri.host_str().is_none()
+        || output_uri.query().is_some()
+        || output_uri.fragment().is_some()
+        || !scratch_type.is_dir()
+        || scratch_type.is_symlink()
+        || !output_parent_type.is_dir()
+        || output_parent_type.is_symlink()
+    {
+        return Err(invalid("V36 identity-run output authority differs"));
+    }
+    let prior_start = request
+        .selected_object_ordinal
+        .checked_sub(
+            request
+                .prior_runs
+                .len()
+                .try_into()
+                .map_err(|_| invalid("V36 identity-run predecessor count overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 identity-run predecessor sequence differs"))?;
+    for (index, prior) in request.prior_runs.iter().enumerate() {
+        let expected = prior_start
+            .checked_add(
+                index
+                    .try_into()
+                    .map_err(|_| invalid("V36 identity-run predecessor count overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 identity-run predecessor sequence differs"))?;
+        if prior.selected_object_ordinal != expected {
+            return Err(invalid("V36 identity-run predecessor sequence differs"));
+        }
+    }
+    let attempt = tempfile::tempdir_in(request.scratch_root).map_err(|source| BorsukError::Io {
+        path: request.scratch_root.to_owned(),
+        source,
+    })?;
+    if request.source.encoded_bytes == 0 || request.source.encoded_bytes > limits.max_input_bytes {
+        return Err(resource_limit("identity-run input bytes"));
+    }
+    let mut prior_local_paths = BTreeSet::new();
+    let mut source_paths = BTreeSet::new();
+    let mut source_uris = BTreeSet::new();
+    let mut source_digests = BTreeSet::new();
+    let mut stable_prior_paths = Vec::with_capacity(request.prior_runs.len());
+    let mut stable_prior_handles = Vec::with_capacity(request.prior_runs.len());
+    for (index, prior) in request.prior_runs.iter().enumerate() {
+        if !prior_local_paths.insert(prior.path.clone())
+            || !source_paths.insert(prior.source.path.clone())
+            || !source_uris.insert(prior.source.uri.clone())
+            || !source_digests.insert(prior.source.sha256.clone())
+        {
+            return Err(invalid("V36 identity-run predecessor sources differ"));
+        }
+        let stable_path = attempt.path().join(format!("prior-{index:04}.arrow"));
+        let (stable_handle, _) = snapshot_v36_prefix_authenticated_file(
+            &prior.path,
+            &stable_path,
+            prior.identity.encoded_bytes,
+            &prior.identity.sha256,
+            Some(&prior.identity.blake3),
+            limits,
+        )?;
+        let stable_prior = V36PrefixIdentityRunFile {
+            identity: prior.identity.clone(),
+            path: stable_path.clone(),
+            selected_object_ordinal: prior.selected_object_ordinal,
+            source: prior.source.clone(),
+        };
+        stream_v36_prefix_identity_run_file(
+            &stable_prior,
+            limits,
+            attempt.path(),
+            &[0_u8; 32],
+            &[0_u8; 32],
+            &mut |_| Ok(()),
+        )?;
+        stable_prior_paths.push(stable_path);
+        stable_prior_handles.push(stable_handle);
+    }
+    if !source_paths.insert(request.source.path.clone())
+        || !source_uris.insert(request.source.uri.clone())
+        || !source_digests.insert(request.source.sha256.clone())
+    {
+        return Err(invalid("V36 identity-run predecessor sources differ"));
+    }
+    for left in 0..stable_prior_handles.len() {
+        for right in left + 1..stable_prior_handles.len() {
+            validate_v36_prefix_identity_run_handles_disjoint(
+                &stable_prior_handles[left],
+                &stable_prior_handles[right],
+                (&stable_prior_paths[left], &stable_prior_paths[right]),
+            )?;
+        }
+    }
+    let source_snapshot_path = attempt.path().join("source.parquet");
+    let (_source_snapshot, source_blake3) = snapshot_v36_prefix_authenticated_file(
+        request.input,
+        &source_snapshot_path,
+        request.source.encoded_bytes,
+        &request.source.sha256,
+        None,
+        limits,
+    )?;
+    let mut buffer = Vec::with_capacity(limits.sort_buffer_records);
+    let mut spills = Vec::new();
+    let mut next_spill = 0_usize;
+    let physical_rows = scan_v36_prefix_registered_input_parquet(
+        &source_snapshot_path,
+        request.source,
+        request.selected_object_ordinal,
+        |row| {
+            let identity = validate_v36_prefix_input_row(&row)?;
+            buffer.push(V36PrefixRawIdentity {
+                feature_row_id: identity.feature_row_id,
+                selected_object_ordinal: identity.selected_object_ordinal,
+                row_offset: identity.row_offset,
+            });
+            if buffer.len() == limits.sort_buffer_records {
+                if spills.len() >= limits.max_spills {
+                    return Err(resource_limit("spill count"));
+                }
+                spills.push(create_v36_prefix_identity_spill(
+                    attempt.path(),
+                    next_spill,
+                    &mut buffer,
+                    limits,
+                )?);
+                next_spill = next_spill
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V36 identity spill ordinal overflows"))?;
+                buffer.clear();
+            }
+            Ok(())
+        },
+    )?;
+    if !buffer.is_empty() {
+        if spills.len() >= limits.max_spills {
+            return Err(resource_limit("spill count"));
+        }
+        spills.push(create_v36_prefix_identity_spill(
+            attempt.path(),
+            next_spill,
+            &mut buffer,
+            limits,
+        )?);
+        next_spill = next_spill
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 identity spill ordinal overflows"))?;
+    }
+    let merged =
+        collapse_v36_prefix_identity_spills(attempt.path(), spills, limits, &mut next_spill)?;
+    let mut reader = V36PrefixRawIdentityReader::open(&merged, limits.io_buffer_bytes)?;
+    let mut prior =
+        V36PrefixPriorFeatureMerge::from_handles(&stable_prior_handles, &stable_prior_paths)?;
+    let mut previous_id = None;
+    let mut distinct_rows = 0_u64;
+    while let Some(row) = reader.next_record()? {
+        if previous_id == Some(row.feature_row_id) {
+            continue;
+        }
+        previous_id = Some(row.feature_row_id);
+        if !prior.contains(row.feature_row_id)? {
+            distinct_rows += 1;
+        }
+    }
+    let source = V36PrefixSourceObject {
+        blake3: source_blake3,
+        encoded_bytes: request.source.encoded_bytes,
+        path: request.source.path.clone(),
+        sample_sha256: request.source.sample_sha256.clone(),
+        sha256: request.source.sha256.clone(),
+        uri: request.source.uri.clone(),
+    };
+    let run = V36PrefixIdentityRun {
+        physical_rows,
+        rows: Vec::new(),
+        selected_object_ordinal: request.selected_object_ordinal,
+        source: source.clone(),
+    };
+    let row_count = usize::try_from(distinct_rows)
+        .map_err(|_| invalid("V36 identity-run row count overflows"))?;
+    let schema = Arc::new(v36_prefix_identity_run_schema(&run, row_count));
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut temporary = temporary_output(request.output)?;
+    let mut writer = ArrowFileWriter::try_new_with_options(
+        BufWriter::with_capacity(limits.io_buffer_bytes, temporary.as_file()),
+        schema.as_ref(),
+        options,
+    )?;
+    let mut reader = V36PrefixRawIdentityReader::open(&merged, limits.io_buffer_bytes)?;
+    let mut prior =
+        V36PrefixPriorFeatureMerge::from_handles(&stable_prior_handles, &stable_prior_paths)?;
+    let mut previous_id = None;
+    let mut batch = Vec::with_capacity(IDENTITY_RUN_BATCH_ROWS);
+    while let Some(row) = reader.next_record()? {
+        if previous_id == Some(row.feature_row_id) {
+            continue;
+        }
+        previous_id = Some(row.feature_row_id);
+        if prior.contains(row.feature_row_id)? {
+            continue;
+        }
+        batch.push(V36PrefixRowIdentity {
+            feature_row_id: row.feature_row_id,
+            selected_object_ordinal: row.selected_object_ordinal,
+            row_offset: row.row_offset,
+            source_ordinal: None,
+        });
+        if batch.len() == IDENTITY_RUN_BATCH_ROWS {
+            write_v36_prefix_identity_run_batch(&mut writer, schema.clone(), &batch)?;
+            batch.clear();
+        }
+    }
+    if !batch.is_empty() {
+        write_v36_prefix_identity_run_batch(&mut writer, schema, &batch)?;
+    }
+    writer.finish()?;
+    drop(writer);
+    let (encoded_bytes, sha256, blake3) = v36_prefix_file_handle_digests(
+        temporary.as_file_mut(),
+        request.output,
+        limits.io_buffer_bytes,
+    )?;
+    let identity = V36ArtifactIdentity {
+        blake3,
+        encoded_bytes,
+        role: format!(
+            "population-identity-run-{:04}",
+            request.selected_object_ordinal
+        ),
+        sha256: sha256.clone(),
+        uri: format!(
+            "{}/{sha256}-population-identity-run-{:04}.arrow",
+            request.output_uri_prefix.trim_end_matches('/'),
+            request.selected_object_ordinal
+        ),
+    };
+    let duplicate_rows = physical_rows
+        .checked_sub(distinct_rows)
+        .ok_or_else(|| invalid("V36 identity-run duplicate rows underflow"))?;
+    fs::remove_file(&merged).map_err(|source| BorsukError::Io {
+        path: merged,
+        source,
+    })?;
+    publish_output_noclobber(temporary, request.output)?;
+    Ok(V36PrefixExternalIdentityRunReceipt {
+        duplicate_rows,
+        distinct_rows,
+        physical_rows,
+        run: V36PrefixIdentityRunFile {
+            identity,
+            path: request.output.to_owned(),
+            selected_object_ordinal: request.selected_object_ordinal,
+            source,
+        },
+    })
 }
 
 /// Externally select one complete authenticated population without resident bulk state.
@@ -4949,10 +5658,19 @@ fn sha256_file_handle(file: &mut File, path: &Path) -> Result<(u64, String)> {
 }
 
 fn authenticate_file(path: &Path, expected: &V36ArtifactIdentity) -> Result<()> {
-    let file = File::open(path).map_err(|source| BorsukError::Io {
+    let mut file = File::open(path).map_err(|source| BorsukError::Io {
         path: path.to_owned(),
         source,
     })?;
+    let (bytes, sha256, blake3) = digest_file_handle(&mut file, path)?;
+    if bytes != expected.encoded_bytes || sha256 != expected.sha256 || blake3 != expected.blake3 {
+        return Err(invalid("V36 prefix local input authority differs"));
+    }
+    Ok(())
+}
+
+fn digest_file_handle(file: &mut File, path: &Path) -> Result<(u64, String, String)> {
+    v36_prefix_external_io(path, file.seek(SeekFrom::Start(0)))?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut buffer = vec![0_u8; 1024 * 1024];
     let mut bytes = 0_u64;
@@ -4972,13 +5690,10 @@ fn authenticate_file(path: &Path, expected: &V36ArtifactIdentity) -> Result<()> 
         sha256.update(&buffer[..read]);
         blake3.update(&buffer[..read]);
     }
-    if bytes != expected.encoded_bytes
-        || format!("{:x}", sha256.finalize()) != expected.sha256
-        || blake3.finalize().to_hex().as_str() != expected.blake3
-    {
-        return Err(invalid("V36 prefix local input authority differs"));
-    }
-    Ok(())
+    let sha256 = format!("{:x}", sha256.finalize());
+    let blake3 = blake3.finalize().to_hex().to_string();
+    v36_prefix_external_io(path, reader.seek(SeekFrom::Start(0)))?;
+    Ok((bytes, sha256, blake3))
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>> {
