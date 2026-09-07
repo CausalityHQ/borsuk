@@ -1105,6 +1105,14 @@ pub struct V36PrefixExternalSelectionLimits {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated receipt for one file-backed selected-population artifact.
 pub struct V36PrefixSelectedFileReceipt {
+    /// Feature-row ID at the inclusive population-score cutoff.
+    pub cutoff_feature_row_id: u64,
+    /// Population score at the inclusive cutoff.
+    pub cutoff_score_sha256: String,
+    /// Complete distinct population remaining after exclusion.
+    pub eligible_rows: u64,
+    /// Complete distinct population removed by predecessor exclusion.
+    pub excluded_rows: u64,
     /// Exact content-addressed selected-ID Arrow identity.
     pub identity: V36ArtifactIdentity,
 }
@@ -3561,15 +3569,17 @@ pub fn externally_select_v36_prefix_population_rows(
     finish_v36_prefix_spill(&selected_path, &mut selected_writer, &selected_hasher)?;
     drop(selected_writer);
     validate_v36_prefix_scratch_limit(attempt.path(), limits.max_scratch_bytes)?;
-    let (encoded_bytes, sha256, blake3) = write_v36_prefix_selected_file(
-        contract,
-        &selected_path,
-        cutoff.ok_or(BorsukError::V36PrefixSourceInsufficient)?,
-        limits,
-        output,
-    )?;
+    let cutoff = cutoff.ok_or(BorsukError::V36PrefixSourceInsufficient)?;
+    let cutoff_feature_row_id = cutoff.feature_row_id;
+    let cutoff_score_sha256 = digest_hex(&cutoff.score);
+    let (encoded_bytes, sha256, blake3) =
+        write_v36_prefix_selected_file(contract, &selected_path, cutoff, limits, output)?;
     let prefix = output_uri_prefix.trim_end_matches('/');
     Ok(V36PrefixSelectedFileReceipt {
+        cutoff_feature_row_id,
+        cutoff_score_sha256,
+        eligible_rows,
+        excluded_rows,
         identity: V36ArtifactIdentity {
             blake3,
             encoded_bytes,

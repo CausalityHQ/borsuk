@@ -3064,11 +3064,27 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         &selected_contract,
     )
     .unwrap();
+    assert_eq!(
+        selected_receipt.cutoff_feature_row_id,
+        selected.cutoff_feature_row_id
+    );
+    assert_eq!(
+        selected_receipt.cutoff_score_sha256,
+        selected.cutoff_score_sha256
+    );
+    assert_eq!(
+        selected_receipt.eligible_rows,
+        selected_contract.eligible_rows
+    );
+    assert_eq!(
+        selected_receipt.excluded_rows,
+        selected_contract.excluded_rows
+    );
     let selection = V36PrefixPopulationSelection {
-        cutoff_feature_row_id: selected.cutoff_feature_row_id,
-        cutoff_score_sha256: selected.cutoff_score_sha256,
-        eligible_rows: selected_contract.eligible_rows,
-        excluded_rows: selected_contract.excluded_rows,
+        cutoff_feature_row_id: selected_receipt.cutoff_feature_row_id,
+        cutoff_score_sha256: selected_receipt.cutoff_score_sha256.clone(),
+        eligible_rows: selected_receipt.eligible_rows,
+        excluded_rows: selected_receipt.excluded_rows,
         excluded_population_identity: None,
         selected_ids: selected_receipt.identity.clone(),
         selected_rows: selected_contract.selected_rows,
