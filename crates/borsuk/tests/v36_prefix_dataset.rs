@@ -3294,15 +3294,27 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         "i-reduced-a".into(),
     )
     .unwrap();
+    let population_scratch = directory.path().join("population-scratch");
+    let population_runs = directory.path().join("population-runs");
+    fs::create_dir(&population_scratch).unwrap();
+    fs::create_dir(&population_runs).unwrap();
+    let limits = external_selection_limits();
     let mut population_ready = None;
-    scan_v36_prefix_object_prefix_checkpointed(
-        &ranked,
-        0,
-        ranked[0].encoded_bytes,
-        24,
+    scan_v36_prefix_object_prefix_file_backed(
+        V36PrefixFileBackedScanRequest {
+            byte_cap: ranked[0].encoded_bytes,
+            distinct_candidates: 24,
+            limits: &limits,
+            output_uri_prefix: object_prefix,
+            prior: None,
+            ranked_objects: &ranked,
+            run_output_root: &population_runs,
+            scratch_root: &population_scratch,
+            selected_object_start: 0,
+        },
         |_, _| Ok(source_path.clone()),
         |boundary| {
-            population_ready = Some(writer.commit(boundary)?);
+            population_ready = Some(writer.commit_file(boundary)?);
             Ok(())
         },
     )
@@ -3313,7 +3325,6 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let head = load_v36_prefix_population_checkpoint_head(&staged, &context).unwrap();
     let restore_scratch = directory.path().join("restore-scratch");
     fs::create_dir(&restore_scratch).unwrap();
-    let limits = external_selection_limits();
     let restored =
         restore_v36_prefix_file_backed_population_scan(&head, &limits, &restore_scratch).unwrap();
     assert_eq!(restored.distinct_rows, 24);
