@@ -212,6 +212,7 @@ mod v35_projection;
 mod v35_remote;
 mod v35_route;
 mod v36_funnel;
+mod v36_funnel_code;
 mod v36_funnel_geometry;
 mod v36_prefix_dataset;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
@@ -348,6 +349,10 @@ pub use v36_funnel::{
     validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
     validate_v36_prefix_freeze_receipt, validate_v36_prefix_population_authority,
     validate_v36_prefix_registered_screen_authority, validate_v36_prefix_screen_manifest,
+};
+pub use v36_funnel_code::{
+    V36CoarseAssignmentIdentity, V36Sign24Record, V36UniqueLiveTopK, encode_v36_sign24_record,
+    score_v36_sign24_record,
 };
 #[doc(hidden)]
 pub use v36_funnel_geometry::{

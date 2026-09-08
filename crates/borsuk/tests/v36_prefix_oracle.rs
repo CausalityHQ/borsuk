@@ -11,14 +11,15 @@ use arrow_ipc::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
-    V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryStop,
-    V36PostingGaussianSummary, admit_v36_geometry, allocate_v36_hamilton_postings,
-    assign_v36_postings, build_v36_srht192_control, decode_v36_centered_projection_arrow,
-    encode_v36_centered_projection_arrow, project_v35_query_scalar, project_v35_query_simd,
+    V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
+    V36GeometryStop, V36PostingGaussianSummary, V36UniqueLiveTopK, admit_v36_geometry,
+    allocate_v36_hamilton_postings, assign_v36_postings, build_v36_srht192_control,
+    decode_v36_centered_projection_arrow, encode_v36_centered_projection_arrow,
+    encode_v36_sign24_record, project_v35_query_scalar, project_v35_query_simd,
     project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
-    score_v36_posting_gaussian, score_v36_posting_prototype_six, select_v36_closure_owners,
-    train_v36_centered_subspace, train_v36_posting_centroids, train_v36_posting_gaussian,
-    train_v36_posting_prototype_six,
+    score_v36_posting_gaussian, score_v36_posting_prototype_six, score_v36_sign24_record,
+    select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
+    train_v36_posting_gaussian, train_v36_posting_prototype_six,
 };
 use sha2::{Digest, Sha256};
 
@@ -363,6 +364,77 @@ fn v36_geometry_admission_rejects_threshold_overflow() {
     // Break caught: saturating threshold arithmetic silently turns malformed
     // oversized authority into an effectively unbounded admission gate.
     assert!(admit_v36_geometry(&[1], &[1], u64::MAX).is_err());
+}
+
+#[test]
+fn v36_coarse_identity_and_sign24_are_owner_relative_and_exact() {
+    // Break caught: source, dense, and feature identities are aliased; a
+    // replica is encoded against its primary owner; or sign bit/norm/scoring
+    // arithmetic drifts from the frozen 44-byte control.
+    let identity = V36CoarseAssignmentIdentity::new(7, 3, u64::try_from(i32::MAX).unwrap() + 9, 1);
+    assert_eq!(identity.source_ordinal(), 7);
+    assert_eq!(identity.owner_posting_ordinal(), 1);
+    let mut row = vec![0.0_f32; 192];
+    row[0] = 4.0;
+    row[1] = -3.0;
+    let mut owner = vec![0.0_f32; 192];
+    owner[0] = 1.0;
+    owner[1] = -3.0;
+    let record = encode_v36_sign24_record(&identity, &row, &owner).unwrap();
+    assert!(record.code().iter().all(|byte| *byte == u8::MAX));
+    assert_eq!(record.residual_norm(), 3.0);
+    assert_eq!(record.dense_ordinal(), 3);
+    assert_eq!(
+        record.source_feature_id(),
+        u64::try_from(i32::MAX).unwrap() + 9
+    );
+    assert_eq!(record.to_bytes().len(), 44);
+
+    let mut query = owner.clone();
+    query[0] = 4.0;
+    let scale = 3.0_f64 / 192.0_f64.sqrt();
+    let expected = (3.0 - scale).powi(2) + 191.0 * scale.powi(2);
+    assert_eq!(
+        score_v36_sign24_record(&record, &query, &owner).unwrap(),
+        expected
+    );
+
+    let zero = encode_v36_sign24_record(
+        &V36CoarseAssignmentIdentity::new(8, 4, 99, 0),
+        &owner,
+        &owner,
+    )
+    .unwrap();
+    assert_eq!(zero.residual_norm(), 0.0);
+    assert!(zero.code().iter().all(|byte| *byte == 0));
+    let mut negative_zero = owner.clone();
+    negative_zero[9] = -0.0;
+    assert!(encode_v36_sign24_record(&identity, &negative_zero, &owner).is_err());
+}
+
+#[test]
+fn v36_unique_live_topk_is_bounded_replica_minimum_and_dense_tied() {
+    // Break caught: first replica wins, tombstones consume K, an evicted ID
+    // cannot re-enter, or the heap/global-seen state grows with scanned rows.
+    let mut top = V36UniqueLiveTopK::try_new(2).unwrap();
+    top.offer(9.0, 90, 900, true).unwrap();
+    top.offer(8.0, 80, 800, false).unwrap();
+    top.offer(7.0, 70, 700, true).unwrap();
+    top.offer(6.0, 60, 600, true).unwrap(); // evicts feature 900
+    top.offer(5.0, 50, 900, true).unwrap(); // better replica re-enters
+    top.offer(4.0, 40, 700, true).unwrap(); // retained replica improves
+    assert_eq!(top.ranked(), vec![(4.0, 40, 700), (5.0, 50, 900)]);
+    assert_eq!(top.retained_len(), 2);
+    assert!(top.membership_len() <= 2);
+    assert!(top.offer(3.0, 41, 700, true).is_err());
+
+    let mut tied = V36UniqueLiveTopK::try_new(2).unwrap();
+    tied.offer(1.0, 9, 2, true).unwrap();
+    tied.offer(1.0, 7, 3, true).unwrap();
+    tied.offer(1.0, 8, 1, true).unwrap();
+    assert_eq!(tied.ranked(), vec![(1.0, 7, 3), (1.0, 8, 1)]);
+    assert!(tied.offer(f64::NAN, 1, 1, true).is_err());
+    assert!(V36UniqueLiveTopK::try_new(0).is_err());
 }
 
 #[test]
