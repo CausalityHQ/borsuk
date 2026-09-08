@@ -138,3 +138,131 @@ pub fn select_v36_closure_owners(
         .map(|ordinal| u32::try_from(ordinal).map_err(|_| invalid("V36 posting ordinal overflows")))
         .collect()
 }
+
+/// First registered construction-side reason a V36 geometry is rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V36GeometryStop {
+    /// Mean stored assignments exceed three per primary row.
+    MeanReplication,
+    /// Primary posting p99 exceeds twice the target occupancy.
+    PrimaryP99,
+    /// A primary posting exceeds four times the target occupancy.
+    PrimaryMaximum,
+    /// Stored-assignment p99 exceeds six times the target occupancy.
+    StoredP99,
+    /// A stored posting exceeds eight times the target occupancy.
+    StoredMaximum,
+}
+
+/// Exact construction statistics and first-stop disposition for one geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V36GeometryAdmission {
+    /// Mean stored assignments per primary row in parts per million.
+    pub mean_replication_ppm: u64,
+    /// Nearest-rank 99th percentile of primary posting occupancy.
+    pub primary_p99: u64,
+    /// Maximum primary posting occupancy.
+    pub primary_maximum: u64,
+    /// Nearest-rank 99th percentile of stored posting occupancy.
+    pub stored_p99: u64,
+    /// Maximum stored posting occupancy.
+    pub stored_maximum: u64,
+    /// First registered rejection reason, or `None` when admitted.
+    pub stop: Option<V36GeometryStop>,
+}
+
+fn percentile_99(values: &[u64]) -> Result<u64> {
+    let mut ordered = values.to_vec();
+    ordered.sort_unstable();
+    let numerator = ordered
+        .len()
+        .checked_mul(99)
+        .ok_or_else(|| invalid("V36 geometry percentile overflows"))?;
+    let rank = numerator
+        .checked_add(99)
+        .ok_or_else(|| invalid("V36 geometry percentile overflows"))?
+        / 100;
+    ordered
+        .get(rank.saturating_sub(1))
+        .copied()
+        .ok_or_else(|| invalid("V36 geometry occupancy is empty"))
+}
+
+/// Compute exact occupancy evidence and reject at the first registered gate.
+pub fn admit_v36_geometry(
+    primary_occupancy: &[u64],
+    stored_occupancy: &[u64],
+    target_primary_rows: u64,
+) -> Result<V36GeometryAdmission> {
+    if primary_occupancy.is_empty()
+        || primary_occupancy.len() != stored_occupancy.len()
+        || target_primary_rows == 0
+        || primary_occupancy
+            .iter()
+            .zip(stored_occupancy)
+            .any(|(primary, stored)| *primary == 0 || stored < primary)
+    {
+        return Err(invalid("V36 geometry occupancy authority differs"));
+    }
+    let primary_rows = primary_occupancy.iter().try_fold(0_u64, |sum, rows| {
+        sum.checked_add(*rows)
+            .ok_or_else(|| invalid("V36 geometry primary rows overflow"))
+    })?;
+    let stored_rows = stored_occupancy.iter().try_fold(0_u64, |sum, rows| {
+        sum.checked_add(*rows)
+            .ok_or_else(|| invalid("V36 geometry stored rows overflow"))
+    })?;
+    let replication_numerator = u128::from(stored_rows)
+        .checked_mul(1_000_000)
+        .ok_or_else(|| invalid("V36 geometry replication overflows"))?;
+    let mean_replication_ppm = u64::try_from(
+        replication_numerator
+            .checked_add(u128::from(primary_rows - 1))
+            .ok_or_else(|| invalid("V36 geometry replication overflows"))?
+            / u128::from(primary_rows),
+    )
+    .map_err(|_| invalid("V36 geometry replication overflows"))?;
+    let primary_p99 = percentile_99(primary_occupancy)?;
+    let stored_p99 = percentile_99(stored_occupancy)?;
+    let primary_maximum = *primary_occupancy
+        .iter()
+        .max()
+        .ok_or_else(|| invalid("V36 geometry occupancy is empty"))?;
+    let stored_maximum = *stored_occupancy
+        .iter()
+        .max()
+        .ok_or_else(|| invalid("V36 geometry occupancy is empty"))?;
+    let primary_p99_limit = target_primary_rows
+        .checked_mul(2)
+        .ok_or_else(|| invalid("V36 geometry threshold overflows"))?;
+    let primary_maximum_limit = target_primary_rows
+        .checked_mul(4)
+        .ok_or_else(|| invalid("V36 geometry threshold overflows"))?;
+    let stored_p99_limit = target_primary_rows
+        .checked_mul(6)
+        .ok_or_else(|| invalid("V36 geometry threshold overflows"))?;
+    let stored_maximum_limit = target_primary_rows
+        .checked_mul(8)
+        .ok_or_else(|| invalid("V36 geometry threshold overflows"))?;
+    let stop = if u128::from(stored_rows) > u128::from(primary_rows) * 3 {
+        Some(V36GeometryStop::MeanReplication)
+    } else if primary_p99 > primary_p99_limit {
+        Some(V36GeometryStop::PrimaryP99)
+    } else if primary_maximum > primary_maximum_limit {
+        Some(V36GeometryStop::PrimaryMaximum)
+    } else if stored_p99 > stored_p99_limit {
+        Some(V36GeometryStop::StoredP99)
+    } else if stored_maximum > stored_maximum_limit {
+        Some(V36GeometryStop::StoredMaximum)
+    } else {
+        None
+    };
+    Ok(V36GeometryAdmission {
+        mean_replication_ppm,
+        primary_p99,
+        primary_maximum,
+        stored_p99,
+        stored_maximum,
+        stop,
+    })
+}

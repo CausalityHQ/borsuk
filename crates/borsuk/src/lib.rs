@@ -350,7 +350,10 @@ pub use v36_funnel::{
     validate_v36_prefix_registered_screen_authority, validate_v36_prefix_screen_manifest,
 };
 #[doc(hidden)]
-pub use v36_funnel_geometry::{allocate_v36_hamilton_postings, select_v36_closure_owners};
+pub use v36_funnel_geometry::{
+    V36GeometryAdmission, V36GeometryStop, admit_v36_geometry, allocate_v36_hamilton_postings,
+    select_v36_closure_owners,
+};
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
     V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointAction, V36PrefixCheckpointCompletion,
