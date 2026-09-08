@@ -382,6 +382,15 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             self.assertNotIn("--checkpoint-objects", script)
             self.assertNotIn("--checkpoint-seconds", script)
             self.assertIn(f"test \"$available\" -ge {subject.DISK_PREFLIGHT_BYTES}", script)
+            self.assertIn('root_source=$(findmnt -n -o SOURCE /)', script)
+            self.assertIn("cache_device=$(lsblk -dpno NAME,TYPE", script)
+            self.assertIn('mkfs.xfs -f "$cache_device"', script)
+            self.assertIn('mount -o noatime "$cache_device" /mnt', script)
+            self.assertIn("swapoff -a", script)
+            self.assertLess(
+                script.index('mount -o noatime "$cache_device" /mnt'),
+                script.index("root=$(mktemp -d /mnt/v36-prefix."),
+            )
             self.assertNotIn("--resume-checkpoint", script)
             self.assertIn("set +e", script)
             self.assertIn("status=$?", script)

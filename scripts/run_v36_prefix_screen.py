@@ -1658,6 +1658,17 @@ def _user_data(
     return f"""#!/bin/bash
 set -euo pipefail
 trap 'shutdown -h now' EXIT
+root_source=$(findmnt -n -o SOURCE /)
+root_parent=$(lsblk -no PKNAME "$root_source")
+root_device=${{root_parent:+/dev/$root_parent}}
+[[ -n "$root_device" ]] || root_device=$root_source
+cache_device=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" {{print $1}}' | while read -r candidate; do
+  if [[ "$candidate" != "$root_device" ]]; then printf '%s\n' "$candidate"; break; fi
+done)
+test -b "$cache_device"
+mkfs.xfs -f "$cache_device" >/dev/null
+mount -o noatime "$cache_device" /mnt
+swapoff -a
 root=$(mktemp -d /mnt/v36-prefix.XXXXXX)
 available=$(df --output=avail -B1 /mnt | tail -1)
 test "$available" -ge {DISK_PREFLIGHT_BYTES}
