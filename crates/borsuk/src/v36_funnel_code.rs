@@ -175,6 +175,202 @@ pub fn score_v36_sign24_record(
     Ok(distance)
 }
 
+/// Frozen residual PQ4 code width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V36ResidualPq4Width {
+    /// 64 contiguous three-dimensional subquantizers.
+    Code32,
+    /// 96 contiguous two-dimensional subquantizers.
+    Code48,
+}
+
+impl V36ResidualPq4Width {
+    /// Number of four-bit subquantizers.
+    pub const fn subquantizers(self) -> usize {
+        match self {
+            Self::Code32 => 64,
+            Self::Code48 => 96,
+        }
+    }
+
+    /// Persisted PQ bytes per assignment.
+    pub const fn code_bytes(self) -> usize {
+        self.subquantizers() / 2
+    }
+
+    /// Persisted bytes including both u64 identities.
+    pub const fn record_bytes(self) -> usize {
+        self.code_bytes() + 16
+    }
+
+    const fn subvector_dimensions(self) -> usize {
+        PROJECTED_DIMENSIONS / self.subquantizers()
+    }
+}
+
+/// One global residual PQ4 model with 16 binary32 codewords per subquantizer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V36ResidualPq4Codebook {
+    width: V36ResidualPq4Width,
+    centroids: Vec<f32>,
+}
+
+impl V36ResidualPq4Codebook {
+    /// Validate a subquantizer-major, codeword-major, component-major model.
+    pub fn try_new(width: V36ResidualPq4Width, centroids: Vec<f32>) -> Result<Self> {
+        if centroids.len() != 16 * PROJECTED_DIMENSIONS
+            || centroids
+                .iter()
+                .any(|value| !value.is_finite() || value.to_bits() == (-0.0_f32).to_bits())
+        {
+            return Err(invalid("V36 residual PQ4 codebook differs"));
+        }
+        Ok(Self { width, centroids })
+    }
+
+    /// Exact raw binary32 model bytes.
+    pub const fn raw_bytes(&self) -> usize {
+        16 * PROJECTED_DIMENSIONS * size_of::<f32>()
+    }
+
+    /// Frozen arm width.
+    pub const fn width(&self) -> V36ResidualPq4Width {
+        self.width
+    }
+
+    fn codeword(&self, subquantizer: usize, codeword: usize) -> &[f32] {
+        let dimensions = self.width.subvector_dimensions();
+        let start = (subquantizer * 16 + codeword) * dimensions;
+        &self.centroids[start..start + dimensions]
+    }
+}
+
+/// One fixed-capacity owner-relative residual PQ4 coarse record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V36ResidualPq4Record {
+    width: V36ResidualPq4Width,
+    code: [u8; 48],
+    dense_ordinal: u64,
+    source_feature_id: u64,
+}
+
+impl V36ResidualPq4Record {
+    /// Row-major PQ bytes with the even subquantizer in the low nibble.
+    pub fn code(&self) -> &[u8] {
+        &self.code[..self.width.code_bytes()]
+    }
+
+    /// Final primary-plane physical identity.
+    pub const fn dense_ordinal(&self) -> u64 {
+        self.dense_ordinal
+    }
+
+    /// External feature identity.
+    pub const fn source_feature_id(&self) -> u64 {
+        self.source_feature_id
+    }
+
+    /// Encode the exact variable-width record bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.width.record_bytes());
+        bytes.extend_from_slice(self.code());
+        bytes.extend_from_slice(&self.dense_ordinal.to_le_bytes());
+        bytes.extend_from_slice(&self.source_feature_id.to_le_bytes());
+        bytes
+    }
+}
+
+fn pq4_subvector_distance(residual: &[f64], codeword: &[f32]) -> f64 {
+    let mut distance = 0.0_f64;
+    for (value, center) in residual.iter().zip(codeword) {
+        let delta = *value - f64::from(*center);
+        distance += delta * delta;
+    }
+    distance
+}
+
+/// Encode one row against the centroid of the owner containing this replica.
+pub fn encode_v36_residual_pq4_record(
+    identity: &V36CoarseAssignmentIdentity,
+    projected_row: &[f32],
+    owner_centroid: &[f32],
+    codebook: &V36ResidualPq4Codebook,
+) -> Result<V36ResidualPq4Record> {
+    if !valid_vector(projected_row) || !valid_vector(owner_centroid) {
+        return Err(invalid("V36 residual PQ4 vector authority differs"));
+    }
+    let dimensions = codebook.width.subvector_dimensions();
+    let mut code = [0_u8; 48];
+    let mut residual = [0.0_f64; 3];
+    for subquantizer in 0..codebook.width.subquantizers() {
+        let start = subquantizer * dimensions;
+        for component in 0..dimensions {
+            residual[component] = f64::from(projected_row[start + component])
+                - f64::from(owner_centroid[start + component]);
+        }
+        let residual = &residual[..dimensions];
+        let mut best = (
+            pq4_subvector_distance(residual, codebook.codeword(subquantizer, 0)),
+            0,
+        );
+        for codeword in 1..16 {
+            let distance =
+                pq4_subvector_distance(residual, codebook.codeword(subquantizer, codeword));
+            if distance < best.0 {
+                best = (distance, codeword);
+            }
+        }
+        let nibble = u8::try_from(best.1).map_err(|_| invalid("V36 PQ4 codeword overflows"))?;
+        if subquantizer % 2 == 0 {
+            code[subquantizer / 2] = nibble;
+        } else {
+            code[subquantizer / 2] |= nibble << 4;
+        }
+    }
+    Ok(V36ResidualPq4Record {
+        width: codebook.width,
+        code,
+        dense_ordinal: identity.dense_ordinal,
+        source_feature_id: identity.source_feature_id,
+    })
+}
+
+/// Score one residual PQ4 record by exact increasing-subquantizer ADC.
+pub fn score_v36_residual_pq4_record(
+    record: &V36ResidualPq4Record,
+    projected_query: &[f32],
+    owner_centroid: &[f32],
+    codebook: &V36ResidualPq4Codebook,
+) -> Result<f64> {
+    if record.width != codebook.width
+        || !valid_vector(projected_query)
+        || !valid_vector(owner_centroid)
+    {
+        return Err(invalid("V36 residual PQ4 score authority differs"));
+    }
+    let dimensions = codebook.width.subvector_dimensions();
+    let mut distance = 0.0_f64;
+    let mut residual = [0.0_f64; 3];
+    for subquantizer in 0..codebook.width.subquantizers() {
+        let start = subquantizer * dimensions;
+        for component in 0..dimensions {
+            residual[component] = f64::from(projected_query[start + component])
+                - f64::from(owner_centroid[start + component]);
+        }
+        let byte = record.code[subquantizer / 2];
+        let codeword = if subquantizer % 2 == 0 {
+            byte & 0x0f
+        } else {
+            byte >> 4
+        };
+        distance += pq4_subvector_distance(
+            &residual[..dimensions],
+            codebook.codeword(subquantizer, usize::from(codeword)),
+        );
+    }
+    Ok(distance)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Candidate {
     distance: f64,

@@ -12,12 +12,13 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
-    V36GeometryStop, V36PostingGaussianSummary, V36UniqueLiveTopK, admit_v36_geometry,
-    allocate_v36_hamilton_postings, assign_v36_postings, build_v36_srht192_control,
-    decode_v36_centered_projection_arrow, encode_v36_centered_projection_arrow,
-    encode_v36_sign24_record, project_v35_query_scalar, project_v35_query_simd,
-    project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
-    score_v36_posting_gaussian, score_v36_posting_prototype_six, score_v36_sign24_record,
+    V36GeometryStop, V36PostingGaussianSummary, V36ResidualPq4Codebook, V36ResidualPq4Width,
+    V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
+    build_v36_srht192_control, decode_v36_centered_projection_arrow,
+    encode_v36_centered_projection_arrow, encode_v36_residual_pq4_record, encode_v36_sign24_record,
+    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
+    project_v36_centered_row_simd, score_v36_posting_centroid, score_v36_posting_gaussian,
+    score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
     select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
     train_v36_posting_gaussian, train_v36_posting_prototype_six,
 };
@@ -435,6 +436,76 @@ fn v36_unique_live_topk_is_bounded_replica_minimum_and_dense_tied() {
     assert_eq!(tied.ranked(), vec![(1.0, 7, 3), (1.0, 8, 1)]);
     assert!(tied.offer(f64::NAN, 1, 1, true).is_err());
     assert!(V36UniqueLiveTopK::try_new(0).is_err());
+}
+
+#[test]
+fn v36_residual_pq4_records_are_owner_relative_row_major_and_exact() {
+    // Break caught: PQ4 subspaces are strided, nibbles are reversed, lookup
+    // distances use f32/reassociated sums, or replica codes use the primary
+    // centroid instead of the owner whose object stores them.
+    for width in [V36ResidualPq4Width::Code32, V36ResidualPq4Width::Code48] {
+        let subquantizers = width.subquantizers();
+        let subvector_dimensions = 192 / subquantizers;
+        let mut centroids = vec![0.0_f32; 16 * 192];
+        for subquantizer in 0..subquantizers {
+            for codeword in 0..16 {
+                for component in 0..subvector_dimensions {
+                    let offset = subquantizer * 16 * subvector_dimensions
+                        + codeword * subvector_dimensions
+                        + component;
+                    centroids[offset] = codeword as f32;
+                }
+            }
+        }
+        let codebook = V36ResidualPq4Codebook::try_new(width, centroids).unwrap();
+        assert_eq!(codebook.raw_bytes(), 12_288);
+        let mut row = vec![0.0_f32; 192];
+        for (dimension, value) in row.iter_mut().enumerate() {
+            *value = ((dimension / subvector_dimensions) % 16) as f32;
+        }
+        let owner = vec![0.0_f32; 192];
+        let identity = V36CoarseAssignmentIdentity::new(19, 23, u64::MAX - 1, 5);
+        let record = encode_v36_residual_pq4_record(&identity, &row, &owner, &codebook).unwrap();
+        assert_eq!(record.code().len(), width.code_bytes());
+        for (byte_ordinal, byte) in record.code().iter().copied().enumerate() {
+            assert_eq!(byte & 0x0f, u8::try_from((2 * byte_ordinal) % 16).unwrap());
+            assert_eq!(
+                byte >> 4,
+                u8::try_from((2 * byte_ordinal + 1) % 16).unwrap()
+            );
+        }
+        assert_eq!(record.dense_ordinal(), 23);
+        assert_eq!(record.source_feature_id(), u64::MAX - 1);
+        assert_eq!(record.to_bytes().len(), width.record_bytes());
+        assert_eq!(
+            score_v36_residual_pq4_record(&record, &row, &owner, &codebook).unwrap(),
+            0.0
+        );
+        let mut query = row.clone();
+        let mut expected = 0.0_f64;
+        for (dimension, value) in query.iter_mut().enumerate() {
+            *value += (dimension % 7) as f32 * 0.001;
+            let delta = f64::from(*value) - f64::from(row[dimension]);
+            expected += delta * delta;
+        }
+        assert_eq!(
+            score_v36_residual_pq4_record(&record, &query, &owner, &codebook).unwrap(),
+            expected
+        );
+
+        let mut shifted_owner = vec![0.0_f32; 192];
+        shifted_owner.fill(1.0);
+        let shifted =
+            encode_v36_residual_pq4_record(&identity, &row, &shifted_owner, &codebook).unwrap();
+        assert_ne!(shifted.code(), record.code());
+    }
+
+    assert!(
+        V36ResidualPq4Codebook::try_new(V36ResidualPq4Width::Code32, vec![0.0; 3_071]).is_err()
+    );
+    let mut invalid = vec![0.0_f32; 3_072];
+    invalid[3] = -0.0;
+    assert!(V36ResidualPq4Codebook::try_new(V36ResidualPq4Width::Code48, invalid).is_err());
 }
 
 #[test]
