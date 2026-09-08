@@ -3697,7 +3697,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let source_path = directory.path().join("source-input.parquet");
     let mut ranked = vec![write_registered_rows(
         &source_path,
-        &(1_i64..=24).collect::<Vec<_>>(),
+        &(1_i64..=144).collect::<Vec<_>>(),
     )];
     ranked[0].uri = format!(
         "https://huggingface.co/datasets/andropar/relaion2b-natural-embeddings/resolve/{}/{}",
@@ -3706,11 +3706,11 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let object_prefix = "s3://fixture/v36/reduced/checkpoints/objects/";
     let context = V36PrefixCheckpointContext {
         cohort_ordinal: 0,
-        corpus_rows: 8,
-        distinct_candidates: 24,
+        corpus_rows: 128,
+        distinct_candidates: 144,
         excluded_population_identity: None,
         freeze_authority_sha256: "2".repeat(64),
-        gt_block_rows: 8,
+        gt_block_rows: 128,
         object_prefix: object_prefix.into(),
         pointer_uri:
             "s3://fixture/v36/reduced/checkpoints/runs/v36-prefix-screen-reduced/latest.json".into(),
@@ -3746,12 +3746,13 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let population_runs = directory.path().join("population-runs");
     fs::create_dir(&population_scratch).unwrap();
     fs::create_dir(&population_runs).unwrap();
-    let limits = external_selection_limits();
+    let mut limits = external_selection_limits();
+    limits.sort_buffer_records = 64;
     let mut population_ready = None;
     scan_v36_prefix_object_prefix_file_backed(
         V36PrefixFileBackedScanRequest {
             byte_cap: ranked[0].encoded_bytes,
-            distinct_candidates: 24,
+            distinct_candidates: 144,
             limits: &limits,
             output_uri_prefix: object_prefix,
             prior: None,
@@ -3775,9 +3776,9 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     fs::create_dir(&restore_scratch).unwrap();
     let restored =
         restore_v36_prefix_file_backed_population_scan(&head, &limits, &restore_scratch).unwrap();
-    assert_eq!(restored.distinct_rows, 24);
+    assert_eq!(restored.distinct_rows, 144);
     assert_eq!(restored.duplicate_rows, 0);
-    assert_eq!(restored.physical_rows, 24);
+    assert_eq!(restored.physical_rows, 144);
     assert_eq!(restored.runs.len(), 1);
     assert!(restore_scratch.read_dir().unwrap().next().is_none());
     let V36PrefixCheckpointResumeState::Population {
@@ -3786,7 +3787,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     else {
         panic!("population checkpoint resumed at the wrong phase")
     };
-    assert_eq!(resumed_population.distinct_rows, 24);
+    assert_eq!(resumed_population.distinct_rows, 144);
     let mut forged = head.clone();
     forged.manifest.population.distinct_rows -= 1;
     forged.manifest.population.duplicate_rows += 1;
@@ -3809,8 +3810,8 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
             scratch_root: &restore_scratch,
         })
         .unwrap();
-    assert_eq!(restored.distinct_rows, 24);
-    assert_eq!(restored.physical_rows, 24);
+    assert_eq!(restored.distinct_rows, 144);
+    assert_eq!(restored.physical_rows, 144);
     assert_eq!(restored.runs, writer.identity_run_files().unwrap());
 
     let selection_scratch = directory.path().join("selection-scratch");
@@ -3818,7 +3819,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let selected_path = directory.path().join("selected.arrow");
     let selected_contract = V36PrefixSelectedIdsContract {
         cohort_ordinal: 0,
-        eligible_rows: 24,
+        eligible_rows: 144,
         excluded_population_identity: None,
         excluded_rows: 0,
         ordered_source_manifest_sha256: ranked_source_manifest_sha256(&ranked),
@@ -3826,7 +3827,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
             .into(),
         selected_object_count: 1,
         selected_object_start: 0,
-        selected_rows: 24,
+        selected_rows: 144,
     };
     let selected_receipt =
         externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
@@ -3892,7 +3893,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     else {
         panic!("selected checkpoint resumed at the wrong phase")
     };
-    assert_eq!(resumed_population.distinct_rows, 24);
+    assert_eq!(resumed_population.distinct_rows, 144);
     assert_eq!(resumed_selected.contract, selected_contract);
     assert_eq!(resumed_selected.identity, selection.selected_ids);
     assert_eq!(
@@ -3931,7 +3932,8 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         identity: selected_receipt.identity,
         path: selected_path,
     };
-    let assignment_contract = reduced_role_assignment_contract(&selected_file);
+    let mut assignment_contract = reduced_role_assignment_contract(&selected_file);
+    assignment_contract.corpus_rows = 128;
     let mut expected_assignments = scalar_role_assignments(&selected.rows, &assignment_contract);
     expected_assignments.sort_by_key(|assignment| (assignment.3, assignment.4));
     let assignment_path = directory.path().join("role-assignments.arrow");
@@ -4142,7 +4144,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     else {
         panic!("materialized checkpoint resumed at the wrong phase")
     };
-    assert_eq!(resumed_population.distinct_rows, 24);
+    assert_eq!(resumed_population.distinct_rows, 144);
     assert_eq!(resumed_selected.identity, selection.selected_ids);
     assert_eq!(
         restored_artifacts.population_authority.identity,
@@ -4166,17 +4168,112 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         artifacts.performance_query
     );
 
-    let heaps_path = directory.path().join("gt-heaps-00000008.arrow");
-    fs::write(&heaps_path, b"authenticated reduced heap boundary").unwrap();
+    let heaps_path = directory.path().join("gt-heaps-00000128.arrow");
+    let heap_checkpoint = V36PrefixGtHeapCheckpoint {
+        entries: [
+            V36PrefixQualityRole::Development,
+            V36PrefixQualityRole::Validation,
+            V36PrefixQualityRole::SealedHoldout,
+        ]
+        .into_iter()
+        .flat_map(|role| {
+            let source_ids = &expected_source_ids;
+            (0_u32..2).flat_map(move |query_ordinal| {
+                source_ids
+                    .iter()
+                    .take(101)
+                    .enumerate()
+                    .map(move |(rank, feature_row_id)| V36PrefixGtHeapEntry {
+                        feature_row_id: *feature_row_id,
+                        query_ordinal,
+                        rank: u16::try_from(rank).unwrap(),
+                        role,
+                        squared_distance: rank as f64 + f64::from(query_ordinal) / 10.0,
+                    })
+            })
+        })
+        .collect(),
+        next_source_ordinal: 128,
+        query_counts: [2, 2, 2],
+    };
+    fs::write(
+        &heaps_path,
+        encode_v36_prefix_gt_heap_checkpoint(&heap_checkpoint).unwrap(),
+    )
+    .unwrap();
     let heaps = V36PrefixCheckpointDependencyFile {
         identity: checkpoint_artifact_for_file(
             "gt-heaps",
-            "gt-heaps-00000008.arrow",
+            "gt-heaps-00000128.arrow",
             &heaps_path,
             object_prefix,
         ),
         path: heaps_path,
     };
+    let wrong_query_heap_path = directory.path().join("gt-heaps-wrong-query-count.arrow");
+    let wrong_query_heap_checkpoint = V36PrefixGtHeapCheckpoint {
+        entries: heap_checkpoint
+            .entries
+            .iter()
+            .filter(|entry| entry.query_ordinal == 0)
+            .cloned()
+            .collect(),
+        next_source_ordinal: 128,
+        query_counts: [1, 1, 1],
+    };
+    fs::write(
+        &wrong_query_heap_path,
+        encode_v36_prefix_gt_heap_checkpoint(&wrong_query_heap_checkpoint).unwrap(),
+    )
+    .unwrap();
+    let wrong_query_heaps = V36PrefixCheckpointDependencyFile {
+        identity: checkpoint_artifact_for_file(
+            "gt-heaps",
+            "gt-heaps-wrong-query-count.arrow",
+            &wrong_query_heap_path,
+            object_prefix,
+        ),
+        path: wrong_query_heap_path,
+    };
+    let wrong_query_outbox = directory.path().join("wrong-query-outbox");
+    fs::create_dir(&wrong_query_outbox).unwrap();
+    let (mut wrong_query_writer, _) =
+        V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
+            execution_authority_sha256: "7".repeat(64),
+            head: materialized_head.clone(),
+            context: context.clone(),
+            limits: &limits,
+            producer_attempt_id: "v36-prefix-screen-reduced-attempt-0002".into(),
+            producer_attempt_ordinal: 2,
+            producer_instance_id: "i-reduced-wrong-query".into(),
+            root: &wrong_query_outbox,
+            scratch_root: &restore_scratch,
+            selected_contract: Some(&selected_file.contract),
+        })
+        .unwrap();
+    let wrong_query_ready = wrong_query_writer
+        .commit_ground_truth(&wrong_query_heaps, 128)
+        .unwrap();
+    let wrong_query_staged = directory.path().join("wrong-query-staged");
+    stage_checkpoint_head(&wrong_query_outbox, &wrong_query_ready, &wrong_query_staged);
+    let wrong_query_head = load_v36_prefix_checkpoint_head(&wrong_query_staged, &context).unwrap();
+    let wrong_query_resume_outbox = directory.path().join("wrong-query-resume-outbox");
+    fs::create_dir(&wrong_query_resume_outbox).unwrap();
+    assert!(
+        V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
+            execution_authority_sha256: "7".repeat(64),
+            head: wrong_query_head,
+            context: context.clone(),
+            limits: &limits,
+            producer_attempt_id: "v36-prefix-screen-reduced-attempt-0002".into(),
+            producer_attempt_ordinal: 2,
+            producer_instance_id: "i-reduced-wrong-query".into(),
+            root: &wrong_query_resume_outbox,
+            scratch_root: &restore_scratch,
+            selected_contract: Some(&selected_file.contract),
+        })
+        .is_err()
+    );
     let same_attempt_outbox = directory.path().join("same-attempt-resume-outbox");
     fs::create_dir(&same_attempt_outbox).unwrap();
     assert!(
@@ -4232,7 +4329,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     );
     assert_eq!(phase_resumed_head.dependencies.len(), 9);
 
-    let ground_truth_ready = writer.commit_ground_truth(&heaps, 8).unwrap();
+    let ground_truth_ready = writer.commit_ground_truth(&heaps, 128).unwrap();
     let staged_ground_truth = directory.path().join("staged-ground-truth");
     stage_checkpoint_head(&resumed_outbox, &ground_truth_ready, &staged_ground_truth);
     let ground_truth_head =
@@ -4253,8 +4350,8 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     else {
         panic!("ground-truth checkpoint resumed at the wrong phase")
     };
-    assert_eq!(next_source_ordinal, 8);
-    assert_eq!(resumed_population.distinct_rows, 24);
+    assert_eq!(next_source_ordinal, 128);
+    assert_eq!(resumed_population.distinct_rows, 144);
     assert_eq!(resumed_selected.identity, selection.selected_ids);
     assert_eq!(restored_artifacts.source.identity, artifacts.source);
     assert_eq!(restored_heaps.identity, heaps.identity);
@@ -4293,7 +4390,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     else {
         unreachable!()
     };
-    *next_source_ordinal = 16;
+    *next_source_ordinal = 256;
     let rewritten_manifest_bytes =
         canonical_v36_prefix_checkpoint_manifest_bytes(&rewritten_ground_truth.manifest).unwrap();
     let rewritten_manifest_sha256 = format!("{:x}", Sha256::digest(&rewritten_manifest_bytes));

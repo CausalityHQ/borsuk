@@ -7493,6 +7493,64 @@ fn validate_v36_prefix_checkpoint_dependency_file(
     Ok(())
 }
 
+fn validate_v36_prefix_checkpoint_query_metadata_rows(
+    declared_rows: i64,
+    row_group_rows: &[i64],
+    maximum_rows: u32,
+) -> Result<()> {
+    let mut total = 0_i64;
+    for rows in row_group_rows {
+        if *rows <= 0 {
+            return Err(invalid("V36 prefix query Parquet row count differs"));
+        }
+        total = total
+            .checked_add(*rows)
+            .ok_or_else(|| invalid("V36 prefix query Parquet row count overflows"))?;
+    }
+    if maximum_rows == 0
+        || row_group_rows.is_empty()
+        || declared_rows != total
+        || total > i64::from(maximum_rows)
+    {
+        return Err(invalid("V36 prefix query Parquet row count differs"));
+    }
+    Ok(())
+}
+
+fn validate_v36_prefix_checkpoint_query_file(path: &Path, maximum_rows: u32) -> Result<u32> {
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_query_schema())?;
+    validate_v36_prefix_checkpoint_query_metadata_rows(
+        builder.metadata().file_metadata().num_rows(),
+        &builder
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|group| group.num_rows())
+            .collect::<Vec<_>>(),
+        maximum_rows,
+    )?;
+    if builder.schema().as_ref() != &v36_prefix_query_schema() {
+        return Err(invalid("V36 prefix query Parquet physical schema differs"));
+    }
+    let mut feature_ids = BTreeSet::new();
+    let mut next_ordinal = 0_u64;
+    for batch in builder.build()? {
+        validate_query_batch(&batch?, &mut next_ordinal, &mut feature_ids)?;
+        if next_ordinal > u64::from(maximum_rows) {
+            return Err(invalid("V36 prefix query Parquet row count differs"));
+        }
+    }
+    u32::try_from(next_ordinal)
+        .ok()
+        .filter(|count| *count != 0)
+        .ok_or_else(|| invalid("V36 prefix query Parquet row count differs"))
+}
+
 /// Reconstruct the exact phase-specific file-backed continuation from one authenticated head.
 pub fn restore_v36_prefix_checkpoint_phase(
     head: &V36PrefixCheckpointHead,
@@ -7588,13 +7646,36 @@ pub fn restore_v36_prefix_checkpoint_phase(
         V36PrefixCheckpointPhase::GroundTruth {
             next_source_ordinal,
             ..
-        } => Ok(V36PrefixCheckpointResumeState::GroundTruth {
-            artifacts,
-            heaps: dependency(6)?,
-            next_source_ordinal: *next_source_ordinal,
-            population,
-            selected,
-        }),
+        } => {
+            let mut remaining_queries = u32::try_from(GT_HEAP_CHECKPOINT_MAX_QUERIES).unwrap();
+            let mut query_counts = [0_u32; 3];
+            for (count, artifact) in query_counts.iter_mut().zip([
+                &artifacts.development_query,
+                &artifacts.validation_query,
+                &artifacts.sealed_holdout_query,
+            ]) {
+                *count =
+                    validate_v36_prefix_checkpoint_query_file(&artifact.path, remaining_queries)?;
+                remaining_queries = remaining_queries
+                    .checked_sub(*count)
+                    .ok_or_else(|| invalid("V36 prefix GT heap query count differs"))?;
+            }
+            let heaps = dependency(6)?;
+            let heap_bytes = read_file(&heaps.path)?;
+            decode_v36_prefix_gt_heap_checkpoint(
+                &heap_bytes,
+                &heaps.identity,
+                *next_source_ordinal,
+                query_counts,
+            )?;
+            Ok(V36PrefixCheckpointResumeState::GroundTruth {
+                artifacts,
+                heaps,
+                next_source_ordinal: *next_source_ordinal,
+                population,
+                selected,
+            })
+        }
         V36PrefixCheckpointPhase::Population | V36PrefixCheckpointPhase::Selected { .. } => {
             unreachable!()
         }
@@ -9829,6 +9910,43 @@ mod tests {
     use axum::{Router, body::Body, http::Response, routing::get};
 
     use super::*;
+
+    #[test]
+    fn v36_prefix_checkpoint_query_file_rejects_total_limit_during_scan() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("too-many-queries.parquet");
+        let rows = (0_u64..=GT_HEAP_CHECKPOINT_MAX_QUERIES)
+            .map(|ordinal| {
+                let mut embedding = vec![0.0_f32; DIMENSIONS];
+                embedding[usize::try_from(ordinal).unwrap() % DIMENSIONS] = 1.0;
+                (
+                    ordinal,
+                    V36PrefixMaterializedRow {
+                        embedding,
+                        feature_row_id: ordinal + 1,
+                        source_ordinal: Some(ordinal),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        write_v36_prefix_query_parquet(&path, [materialized_batch(&rows, true).unwrap()]).unwrap();
+
+        assert!(validate_v36_prefix_checkpoint_query_file(&path, 3_000).is_err());
+    }
+
+    #[test]
+    fn v36_prefix_checkpoint_query_metadata_binds_every_row_group_to_limit() {
+        assert!(
+            validate_v36_prefix_checkpoint_query_metadata_rows(3_000, &[1_024, 1_976], 3_000)
+                .is_ok()
+        );
+        assert!(
+            validate_v36_prefix_checkpoint_query_metadata_rows(2_999, &[3_000], 3_000).is_err()
+        );
+        assert!(
+            validate_v36_prefix_checkpoint_query_metadata_rows(3_000, &[3_001], 3_000).is_err()
+        );
+    }
 
     #[test]
     fn v36_prefix_identity_run_offset_uniqueness_allocation_is_bounded() {
