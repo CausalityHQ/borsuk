@@ -647,7 +647,7 @@ fn add_nonnegative_up(left: f64, right: f64) -> f64 {
     }
 }
 
-fn deterministic_ln_u32(value: u32) -> f64 {
+pub(crate) fn deterministic_ln_u32(value: u32) -> f64 {
     if value == 1 {
         return 0.0;
     }

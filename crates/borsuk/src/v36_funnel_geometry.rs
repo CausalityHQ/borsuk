@@ -4,7 +4,9 @@ use std::{collections::HashMap, io::Cursor, sync::Arc};
 
 use crate::{
     BorsukError, Result, V35Dimensions, V36ArtifactIdentity,
+    v35_patch::deterministic_ln_u32,
     v35_projection::{V35Projection, V35ProjectionBackend, build_v35_srht},
+    v36_funnel::POSTING_SUMMARY_SLOT_BYTES,
 };
 use arrow_array::{Array, FixedSizeListArray, Float32Array, Float64Array, RecordBatch};
 use arrow_ipc::{
@@ -1514,6 +1516,244 @@ fn squared_l2(left: &[f32], right: &[f32]) -> Result<f64> {
             .then_some(next)
             .ok_or_else(|| invalid("V36 posting distance is nonfinite"))
     })
+}
+
+/// Authenticated rank-four Gaussian posting summary for the V36 screen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V36PostingGaussianSummary {
+    rank: u8,
+    population: u32,
+    mean: [f32; 192],
+    residual_diagonal: [f32; 192],
+    eigenvalues: [f32; 4],
+    directions: [[f32; 192]; 4],
+    trace: f64,
+    trace_square: f64,
+    population_factor: f64,
+}
+
+impl V36PostingGaussianSummary {
+    /// Validate one complete 192-dimensional rank-four summary.
+    ///
+    /// Direction signs must be canonicalized after rounding to binary32.
+    pub fn try_new(
+        rank: u8,
+        population: u32,
+        mean: Vec<f32>,
+        residual_diagonal: Vec<f32>,
+        eigenvalues: [f32; 4],
+        directions: [Vec<f32>; 4],
+    ) -> Result<Self> {
+        if !matches!(rank, 0 | 2 | 4)
+            || population == 0
+            || mean.len() != 192
+            || residual_diagonal.len() != 192
+            || directions.iter().any(|direction| direction.len() != 192)
+            || mean.iter().any(|value| !value.is_finite())
+            || residual_diagonal
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+            || eigenvalues
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+            || eigenvalues.windows(2).any(|pair| pair[0] < pair[1])
+            || directions.iter().flatten().any(|value| !value.is_finite())
+            || mean
+                .iter()
+                .chain(&residual_diagonal)
+                .chain(&eigenvalues)
+                .chain(directions.iter().flatten())
+                .any(|value| value.to_bits() == (-0.0_f32).to_bits())
+        {
+            return Err(invalid("V36 posting Gaussian summary differs"));
+        }
+        for component in 0..4 {
+            let direction = &directions[component];
+            if component >= usize::from(rank)
+                && (eigenvalues[component] != 0.0 || direction.iter().any(|value| *value != 0.0))
+            {
+                return Err(invalid("V36 inactive posting component differs"));
+            }
+            if eigenvalues[component] == 0.0 {
+                if direction.iter().any(|value| *value != 0.0) {
+                    return Err(invalid("V36 zero posting component differs"));
+                }
+                continue;
+            }
+            let norm = direction.iter().fold(0.0_f64, |sum, value| {
+                f64::from(*value).mul_add(f64::from(*value), sum)
+            });
+            if (norm - 1.0).abs() > 1e-5 {
+                return Err(invalid("V36 posting direction norm differs"));
+            }
+            let pivot = direction
+                .iter()
+                .enumerate()
+                .max_by(|left, right| {
+                    left.1
+                        .abs()
+                        .total_cmp(&right.1.abs())
+                        .then_with(|| right.0.cmp(&left.0))
+                })
+                .map(|(_, value)| *value)
+                .ok_or_else(|| invalid("V36 posting direction authority differs"))?;
+            if pivot <= 0.0 {
+                return Err(invalid("V36 posting direction sign differs"));
+            }
+            for prior in &directions[..component] {
+                let dot = direction
+                    .iter()
+                    .zip(prior)
+                    .fold(0.0_f64, |sum, (left, right)| {
+                        f64::from(*left).mul_add(f64::from(*right), sum)
+                    });
+                if dot.abs() > 1e-5 {
+                    return Err(invalid("V36 posting directions are not orthogonal"));
+                }
+            }
+        }
+        let mut trace = residual_diagonal
+            .iter()
+            .map(|value| f64::from(*value))
+            .sum::<f64>();
+        let mut trace_square = residual_diagonal
+            .iter()
+            .map(|value| f64::from(*value).powi(2))
+            .sum::<f64>();
+        let active_components = usize::from(rank);
+        for component in 0..active_components {
+            let eigenvalue = f64::from(eigenvalues[component]);
+            let direction = &directions[component];
+            let norm = direction.iter().fold(0.0_f64, |sum, value| {
+                f64::from(*value).mul_add(f64::from(*value), sum)
+            });
+            trace += eigenvalue * norm;
+            for (basis, diagonal) in direction.iter().zip(&residual_diagonal) {
+                let basis = f64::from(*basis);
+                trace_square += 2.0 * eigenvalue * f64::from(*diagonal) * basis * basis;
+            }
+            for other in 0..active_components {
+                let dot = direction
+                    .iter()
+                    .zip(&directions[other])
+                    .fold(0.0_f64, |sum, (left, right)| {
+                        f64::from(*left).mul_add(f64::from(*right), sum)
+                    });
+                trace_square += eigenvalue * f64::from(eigenvalues[other]) * dot * dot;
+            }
+        }
+        if !trace.is_finite() || !trace_square.is_finite() {
+            return Err(invalid("V36 posting Gaussian moments are nonfinite"));
+        }
+        let population_factor = (2.0 * deterministic_ln_u32(population)).sqrt();
+        if !population_factor.is_finite() {
+            return Err(invalid("V36 posting population factor is nonfinite"));
+        }
+        let [direction_0, direction_1, direction_2, direction_3] = directions;
+        Ok(Self {
+            rank,
+            population,
+            mean: mean
+                .try_into()
+                .map_err(|_| invalid("V36 posting mean shape differs"))?,
+            residual_diagonal: residual_diagonal
+                .try_into()
+                .map_err(|_| invalid("V36 posting residual shape differs"))?,
+            eigenvalues,
+            directions: [
+                direction_0
+                    .try_into()
+                    .map_err(|_| invalid("V36 posting direction shape differs"))?,
+                direction_1
+                    .try_into()
+                    .map_err(|_| invalid("V36 posting direction shape differs"))?,
+                direction_2
+                    .try_into()
+                    .map_err(|_| invalid("V36 posting direction shape differs"))?,
+                direction_3
+                    .try_into()
+                    .map_err(|_| invalid("V36 posting direction shape differs"))?,
+            ],
+            trace,
+            trace_square,
+            population_factor,
+        })
+    }
+
+    /// Posting mean shared by the centroid and Gaussian arms.
+    pub fn mean(&self) -> &[f32] {
+        &self.mean
+    }
+
+    /// Rank-specific residual diagonal after removing active components.
+    pub fn residual_diagonal(&self) -> &[f32] {
+        &self.residual_diagonal
+    }
+
+    /// Number of unique primary rows summarized by this posting.
+    pub const fn population(&self) -> u32 {
+        self.population
+    }
+
+    /// Raw persisted bytes for this rank-specific summary.
+    pub const fn raw_bytes(&self) -> u64 {
+        1_540 + self.rank as u64 * 772
+    }
+
+    /// Resident bytes including three cached binary64 scoring moments.
+    pub const fn used_bytes(&self) -> u64 {
+        self.raw_bytes() + 24
+    }
+
+    /// Equal resident charge applied to every posting-score arm.
+    pub const fn resident_slot_bytes(&self) -> u64 {
+        POSTING_SUMMARY_SLOT_BYTES
+    }
+}
+
+/// Score one posting by centroid squared-L2.
+pub fn score_v36_posting_centroid(mean: &[f32], query: &[f32]) -> Result<f64> {
+    if mean.len() != 192 || query.len() != 192 {
+        return Err(invalid("V36 centroid score shape differs"));
+    }
+    squared_l2(mean, query)
+}
+
+/// Score one posting with the frozen diagonal, rank-two, or rank-four lower tail.
+pub fn score_v36_posting_gaussian(
+    summary: &V36PostingGaussianSummary,
+    query: &[f32],
+) -> Result<f64> {
+    if query.len() != 192 || query.iter().any(|v| !v.is_finite()) {
+        return Err(invalid("V36 Gaussian score authority differs"));
+    }
+    let mut delta = [0.0_f64; 192];
+    let mut distance = 0.0_f64;
+    let mut covariance_projection = 0.0_f64;
+    for dimension in 0..192 {
+        let value = f64::from(query[dimension]) - f64::from(summary.mean[dimension]);
+        delta[dimension] = value;
+        distance = value.mul_add(value, distance);
+        let diagonal = f64::from(summary.residual_diagonal[dimension]);
+        covariance_projection = diagonal.mul_add(value * value, covariance_projection);
+    }
+    for component in 0..usize::from(summary.rank) {
+        let eigenvalue = f64::from(summary.eigenvalues[component]);
+        let direction = &summary.directions[component];
+        let projection = direction
+            .iter()
+            .zip(&delta)
+            .fold(0.0_f64, |sum, (basis, value)| {
+                f64::from(*basis).mul_add(*value, sum)
+            });
+        covariance_projection += eigenvalue * projection * projection;
+    }
+    let radicand = 2.0 * summary.trace_square + 4.0 * covariance_projection;
+    let score = distance + summary.trace - summary.population_factor * radicand.max(0.0).sqrt();
+    score
+        .is_finite()
+        .then_some(score)
+        .ok_or_else(|| invalid("V36 Gaussian score is nonfinite"))
 }
 
 /// Select deterministic primary and closure owners for one projected row.

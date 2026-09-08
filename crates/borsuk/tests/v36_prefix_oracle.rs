@@ -11,11 +11,12 @@ use arrow_ipc::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
-    V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryStop, admit_v36_geometry,
-    allocate_v36_hamilton_postings, build_v36_srht192_control,
-    decode_v36_centered_projection_arrow, encode_v36_centered_projection_arrow,
-    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
-    project_v36_centered_row_simd, select_v36_closure_owners, train_v36_centered_subspace,
+    V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryStop,
+    V36PostingGaussianSummary, admit_v36_geometry, allocate_v36_hamilton_postings,
+    build_v36_srht192_control, decode_v36_centered_projection_arrow,
+    encode_v36_centered_projection_arrow, project_v35_query_scalar, project_v35_query_simd,
+    project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
+    score_v36_posting_gaussian, select_v36_closure_owners, train_v36_centered_subspace,
 };
 use sha2::{Digest, Sha256};
 
@@ -188,6 +189,229 @@ fn v36_geometry_admission_rejects_threshold_overflow() {
     // Break caught: saturating threshold arithmetic silently turns malformed
     // oversized authority into an effectively unbounded admission gate.
     assert!(admit_v36_geometry(&[1], &[1], u64::MAX).is_err());
+}
+
+#[test]
+fn v36_posting_scores_share_slot_and_match_lower_tail_authority() {
+    // Break caught: covariance arms receive more resident bytes than the
+    // centroid control, or the generalized 192-D lower-tail formula drifts.
+    let mut mean = vec![0.0_f32; 192];
+    mean[2] = 1.0;
+    let mut residual = vec![0.0_f32; 192];
+    residual[0] = 1.0;
+    residual[1] = 2.0;
+    let mut directions = [(); 4].map(|_| vec![0.0_f32; 192]);
+    directions[0][..4].copy_from_slice(&[0.5, 0.5, 0.5, 0.5]);
+    directions[1][..4].copy_from_slice(&[0.5, -0.5, 0.5, -0.5]);
+    let rank_two = V36PostingGaussianSummary::try_new(
+        2,
+        16,
+        mean.clone(),
+        residual,
+        [4.0, 3.0, 0.0, 0.0],
+        directions.clone(),
+    )
+    .unwrap();
+    let mut diagonal = vec![0.0_f32; 192];
+    diagonal[..4].copy_from_slice(&[2.75, 3.75, 1.75, 1.75]);
+    let diagonal = V36PostingGaussianSummary::try_new(
+        0,
+        16,
+        mean,
+        diagonal,
+        [0.0; 4],
+        [(); 4].map(|_| vec![0.0; 192]),
+    )
+    .unwrap();
+    let rank_four = V36PostingGaussianSummary::try_new(
+        4,
+        16,
+        rank_two.mean().to_vec(),
+        rank_two.residual_diagonal().to_vec(),
+        [4.0, 3.0, 0.0, 0.0],
+        directions,
+    )
+    .unwrap();
+    let mut query = vec![0.0_f32; 192];
+    query[0] = 2.0;
+    query[1] = 3.0;
+    query[2] = 1.0;
+
+    let population_factor = (2.0 * 16.0_f64.ln()).sqrt();
+    assert_eq!(
+        score_v36_posting_centroid(rank_two.mean(), &query).unwrap(),
+        13.0
+    );
+    assert_eq!(
+        score_v36_posting_gaussian(&diagonal, &query).unwrap(),
+        23.0 - population_factor * 234.5_f64.sqrt()
+    );
+    assert_eq!(
+        score_v36_posting_gaussian(&rank_two, &query).unwrap(),
+        23.0 - population_factor * 272.0_f64.sqrt()
+    );
+    assert_eq!(
+        score_v36_posting_gaussian(&rank_four, &query).unwrap(),
+        score_v36_posting_gaussian(&rank_two, &query).unwrap()
+    );
+    assert_eq!(diagonal.raw_bytes(), 1_540);
+    assert_eq!(rank_two.raw_bytes(), 3_084);
+    assert_eq!(rank_four.raw_bytes(), 4_628);
+    assert_eq!(rank_four.population(), 16);
+    assert_eq!(diagonal.used_bytes(), 1_564);
+    assert_eq!(rank_two.used_bytes(), 3_108);
+    assert_eq!(rank_four.used_bytes(), 4_652);
+    assert_eq!(rank_four.resident_slot_bytes(), 4_736);
+    assert!(std::mem::size_of::<V36PostingGaussianSummary>() <= 4_736);
+
+    // Break caught: binary32-rounded directions are treated as perfectly
+    // orthonormal instead of using their actual norms and dot products.
+    let a = std::f32::consts::FRAC_1_SQRT_2;
+    let mut rounded = [(); 4].map(|_| vec![0.0_f32; 192]);
+    rounded[0][..2].copy_from_slice(&[a, a]);
+    rounded[1][..2].copy_from_slice(&[a, -a]);
+    let rounded = V36PostingGaussianSummary::try_new(
+        2,
+        16,
+        rank_two.mean().to_vec(),
+        rank_two.residual_diagonal().to_vec(),
+        [4.0, 3.0, 0.0, 0.0],
+        rounded,
+    )
+    .unwrap();
+    let a = f64::from(a);
+    let norm = 2.0 * a * a;
+    let expected_trace = 3.0 + 7.0 * norm;
+    let expected_trace_square = 5.0 + 42.0 * a * a + 25.0 * norm * norm;
+    let expected_covariance_projection = 22.0 + 103.0 * a * a;
+    let expected = 13.0 + expected_trace
+        - population_factor
+            * (2.0 * expected_trace_square + 4.0 * expected_covariance_projection).sqrt();
+    assert_eq!(
+        score_v36_posting_gaussian(&rounded, &query).unwrap(),
+        expected
+    );
+
+    // Break caught: rank-four scoring truncates after two components or drops
+    // the small cross-component terms introduced by binary32 rounding.
+    let mut dense_directions = [(); 4].map(|_| vec![0.0_f32; 192]);
+    dense_directions[0][..2].copy_from_slice(&[a as f32, a as f32]);
+    dense_directions[1][..2].copy_from_slice(&[a as f32, -a as f32 + 1e-6]);
+    dense_directions[2][2..4].copy_from_slice(&[a as f32, a as f32]);
+    dense_directions[3][2..4].copy_from_slice(&[a as f32, -a as f32 + 2e-6]);
+    let dense_residual = (0..192)
+        .map(|dimension| match dimension {
+            0 => 1.0,
+            1 => 2.0,
+            2 => 3.0,
+            3 => 4.0,
+            _ => 0.0,
+        })
+        .collect::<Vec<_>>();
+    let dense = V36PostingGaussianSummary::try_new(
+        4,
+        16,
+        rank_two.mean().to_vec(),
+        dense_residual.clone(),
+        [4.0, 3.0, 2.0, 1.0],
+        dense_directions.clone(),
+    )
+    .unwrap();
+    let mut dense_query = vec![0.0_f32; 192];
+    dense_query[..4].copy_from_slice(&[2.0, 3.0, 1.0, 4.0]);
+    let delta = dense_query
+        .iter()
+        .zip(dense.mean())
+        .map(|(query, mean)| f64::from(*query) - f64::from(*mean))
+        .collect::<Vec<_>>();
+    let mut covariance = vec![vec![0.0_f64; 192]; 192];
+    for dimension in 0..192 {
+        covariance[dimension][dimension] = f64::from(dense_residual[dimension]);
+    }
+    for (eigenvalue, direction) in [4.0_f64, 3.0, 2.0, 1.0].into_iter().zip(&dense_directions) {
+        for row in 0..192 {
+            for column in 0..192 {
+                covariance[row][column] +=
+                    eigenvalue * f64::from(direction[row]) * f64::from(direction[column]);
+            }
+        }
+    }
+    let expected_trace = (0..192).map(|i| covariance[i][i]).sum::<f64>();
+    let expected_trace_square = covariance
+        .iter()
+        .flatten()
+        .map(|value| value * value)
+        .sum::<f64>();
+    let expected_covariance_projection = (0..192)
+        .flat_map(|row| (0..192).map(move |column| (row, column)))
+        .map(|(row, column)| delta[row] * covariance[row][column] * delta[column])
+        .sum::<f64>();
+    let expected_distance = delta.iter().map(|value| value * value).sum::<f64>();
+    let expected = expected_distance + expected_trace
+        - population_factor
+            * (2.0 * expected_trace_square + 4.0 * expected_covariance_projection).sqrt();
+    let actual = score_v36_posting_gaussian(&dense, &dense_query).unwrap();
+    assert!((actual - expected).abs() <= 1e-12, "{actual} != {expected}");
+
+    // Break caught: the shared deterministic logarithm drifts on a
+    // non-power-of-two population where its fixed series is exercised.
+    let population_twelve = V36PostingGaussianSummary::try_new(
+        0,
+        12,
+        diagonal.mean().to_vec(),
+        diagonal.residual_diagonal().to_vec(),
+        [0.0; 4],
+        [(); 4].map(|_| vec![0.0; 192]),
+    )
+    .unwrap();
+    assert_eq!(
+        score_v36_posting_gaussian(&population_twelve, &query)
+            .unwrap()
+            .to_bits(),
+        0xc026_46ca_d39d_07d8
+    );
+
+    // Break caught: eigensolver sign ambiguity leaks into persisted authority.
+    let mut negative_pivot = [(); 4].map(|_| vec![0.0_f32; 192]);
+    negative_pivot[0][0] = -1.0;
+    assert!(
+        V36PostingGaussianSummary::try_new(
+            2,
+            16,
+            rank_two.mean().to_vec(),
+            rank_two.residual_diagonal().to_vec(),
+            [4.0, 0.0, 0.0, 0.0],
+            negative_pivot,
+        )
+        .is_err()
+    );
+    let mut negative_zero_residual = vec![0.0; 192];
+    negative_zero_residual[17] = -0.0;
+    assert!(
+        V36PostingGaussianSummary::try_new(
+            0,
+            16,
+            vec![0.0; 192],
+            negative_zero_residual,
+            [0.0; 4],
+            [(); 4].map(|_| vec![0.0; 192]),
+        )
+        .is_err()
+    );
+
+    assert!(
+        V36PostingGaussianSummary::try_new(
+            1,
+            16,
+            vec![0.0; 192],
+            vec![0.0; 192],
+            [0.0; 4],
+            [(); 4].map(|_| vec![0.0; 192]),
+        )
+        .is_err()
+    );
+    query[7] = f32::NAN;
+    assert!(score_v36_posting_gaussian(&rank_four, &query).is_err());
 }
 
 #[test]
