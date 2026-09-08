@@ -1687,9 +1687,24 @@ impl V36PostingGaussianSummary {
         &self.mean
     }
 
+    /// Active covariance rank, restricted to zero, two, or four.
+    pub const fn rank(&self) -> u8 {
+        self.rank
+    }
+
     /// Rank-specific residual diagonal after removing active components.
     pub fn residual_diagonal(&self) -> &[f32] {
         &self.residual_diagonal
+    }
+
+    /// Rank-ordered binary32 covariance eigenvalues.
+    pub const fn eigenvalues(&self) -> &[f32; 4] {
+        &self.eigenvalues
+    }
+
+    /// Canonical rank-ordered binary32 covariance directions.
+    pub const fn directions(&self) -> &[[f32; 192]; 4] {
+        &self.directions
     }
 
     /// Number of unique primary rows summarized by this posting.
@@ -1711,6 +1726,179 @@ impl V36PostingGaussianSummary {
     pub const fn resident_slot_bytes(&self) -> u64 {
         POSTING_SUMMARY_SLOT_BYTES
     }
+}
+
+/// Train one rank-specific V36 Gaussian summary from unique primary rows.
+pub fn train_v36_posting_gaussian(
+    rows: &[(u64, Vec<f32>)],
+    rank: u8,
+) -> Result<V36PostingGaussianSummary> {
+    if rows.is_empty() || rows.len() > u32::MAX as usize || !matches!(rank, 0 | 2 | 4) {
+        return Err(invalid("V36 posting Gaussian training authority differs"));
+    }
+    let mut ordered = rows.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+    if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0)
+        || ordered.iter().any(|(_, vector)| {
+            vector.len() != 192
+                || vector
+                    .iter()
+                    .any(|value| !value.is_finite() || (*value == 0.0 && value.to_bits() != 0))
+        })
+    {
+        return Err(invalid("V36 posting Gaussian training row differs"));
+    }
+    let population = u32::try_from(ordered.len())
+        .map_err(|_| invalid("V36 posting Gaussian population overflows"))?;
+    let divisor = f64::from(population);
+    let mut mean_f64 = vec![0.0_f64; 192];
+    for (_, row) in &ordered {
+        for (sum, value) in mean_f64.iter_mut().zip(row.iter()) {
+            *sum += f64::from(*value);
+        }
+    }
+    mean_f64.iter_mut().for_each(|value| *value /= divisor);
+    let mean = mean_f64
+        .iter()
+        .map(|value| {
+            let rounded = *value as f32;
+            if rounded == 0.0 { 0.0 } else { rounded }
+        })
+        .collect::<Vec<_>>();
+
+    let mut covariance = vec![0.0_f64; 192 * 192];
+    for (_, row) in &ordered {
+        let mut delta = [0.0_f64; 192];
+        for dimension in 0..192 {
+            delta[dimension] = f64::from(row[dimension]) - mean_f64[dimension];
+        }
+        for column in 0..192 {
+            for row_index in 0..=column {
+                let index = row_index + column * 192;
+                covariance[index] = delta[row_index].mul_add(delta[column], covariance[index]);
+            }
+        }
+    }
+    for column in 0..192 {
+        for row_index in 0..=column {
+            let value = covariance[row_index + column * 192] / divisor;
+            covariance[row_index + column * 192] = value;
+            covariance[column + row_index * 192] = value;
+        }
+    }
+    let covariance_diagonal = (0..192)
+        .map(|dimension| covariance[dimension + dimension * 192])
+        .collect::<Vec<_>>();
+
+    let mut eigenvalues = [0.0_f32; 4];
+    let mut directions = [(); 4].map(|_| vec![0.0_f32; 192]);
+    if rank > 0 && covariance.iter().any(|value| *value != 0.0) {
+        let matrix = DMatrix::<f64>::from_vec(192, 192, covariance);
+        let eigen = SymmetricEigen::try_new(
+            matrix,
+            f64::EPSILON,
+            192 * CENTERED_EIGEN_MAX_ITERATIONS_PER_DIMENSION,
+        )
+        .ok_or_else(|| invalid("V36 posting Gaussian eigensolver did not converge"))?;
+        let trace = eigen.eigenvalues.iter().sum::<f64>();
+        let negative_tolerance = (trace.abs() * 1e-12).max(1e-15);
+        if eigen
+            .eigenvalues
+            .iter()
+            .any(|value| !value.is_finite() || *value < -negative_tolerance)
+            || eigen.eigenvectors.iter().any(|value| !value.is_finite())
+        {
+            return Err(invalid("V36 posting Gaussian eigensystem differs"));
+        }
+        let values = eigen
+            .eigenvalues
+            .iter()
+            .map(|value| value.max(0.0))
+            .collect::<Vec<_>>();
+        let mut order = (0..192).collect::<Vec<_>>();
+        order.sort_by(|left, right| {
+            values[*right]
+                .total_cmp(&values[*left])
+                .then_with(|| left.cmp(right))
+        });
+        let mut retained = 0_usize;
+        let mut start = 0_usize;
+        while start < order.len() && retained < usize::from(rank) {
+            let reference = values[order[start]];
+            let mut end = start + 1;
+            while end < order.len() {
+                let candidate = values[order[end]];
+                let local_scale = reference.abs().max(candidate.abs());
+                if (candidate - reference).abs()
+                    > CENTERED_EIGEN_CLUSTER_RELATIVE_TOLERANCE * local_scale
+                {
+                    break;
+                }
+                end += 1;
+            }
+            let cluster_value = order[start..end]
+                .iter()
+                .fold(0.0_f64, |sum, ordinal| sum + values[*ordinal])
+                / (end - start) as f64;
+            if cluster_value > 0.0 {
+                for vector in canonicalize_v36_eigenspace(&eigen.eigenvectors, &order[start..end])?
+                {
+                    if retained == usize::from(rank) {
+                        break;
+                    }
+                    let rounded_value = cluster_value as f32;
+                    if !rounded_value.is_finite() || rounded_value < 0.0 {
+                        return Err(invalid("V36 posting Gaussian eigenvalue differs"));
+                    }
+                    let mut rounded = vector
+                        .iter()
+                        .map(|value| {
+                            let value = *value as f32;
+                            if value == 0.0 { 0.0 } else { value }
+                        })
+                        .collect::<Vec<_>>();
+                    let pivot = rounded
+                        .iter()
+                        .enumerate()
+                        .max_by(|left, right| {
+                            left.1
+                                .abs()
+                                .total_cmp(&right.1.abs())
+                                .then_with(|| right.0.cmp(&left.0))
+                        })
+                        .map(|(dimension, _)| dimension)
+                        .ok_or_else(|| invalid("V36 posting Gaussian direction is empty"))?;
+                    if rounded[pivot].is_sign_negative() {
+                        rounded.iter_mut().for_each(|value| *value = -*value);
+                    }
+                    rounded
+                        .iter_mut()
+                        .filter(|value| **value == 0.0)
+                        .for_each(|value| *value = 0.0);
+                    eigenvalues[retained] = rounded_value;
+                    directions[retained] = rounded;
+                    retained += 1;
+                }
+            }
+            start = end;
+        }
+    }
+
+    let mut residual = Vec::with_capacity(192);
+    for dimension in 0..192 {
+        let retained = (0..usize::from(rank)).fold(0.0_f64, |sum, component| {
+            let direction = f64::from(directions[component][dimension]);
+            f64::from(eigenvalues[component]).mul_add(direction * direction, sum)
+        });
+        let raw = covariance_diagonal[dimension] - retained;
+        let tolerance = (covariance_diagonal[dimension].abs() * 1e-5).max(1e-7);
+        if raw < -tolerance {
+            return Err(invalid("V36 posting Gaussian residual differs"));
+        }
+        let rounded = raw.max(0.0) as f32;
+        residual.push(if rounded == 0.0 { 0.0 } else { rounded });
+    }
+    V36PostingGaussianSummary::try_new(rank, population, mean, residual, eigenvalues, directions)
 }
 
 /// Score one posting by centroid squared-L2.

@@ -17,7 +17,7 @@ use borsuk::{
     encode_v36_centered_projection_arrow, project_v35_query_scalar, project_v35_query_simd,
     project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
     score_v36_posting_gaussian, score_v36_posting_prototype_six, select_v36_closure_owners,
-    train_v36_centered_subspace, train_v36_posting_prototype_six,
+    train_v36_centered_subspace, train_v36_posting_gaussian, train_v36_posting_prototype_six,
 };
 use sha2::{Digest, Sha256};
 
@@ -520,6 +520,108 @@ fn v36_prototype_six_is_equal_byte_deterministic_and_padded() {
     let mut nonfinite = row(1, 0.0);
     nonfinite.1[3] = f32::NAN;
     assert!(train_v36_posting_prototype_six(&[nonfinite]).is_err());
+}
+
+#[test]
+fn v36_gaussian_training_reconstructs_rotated_covariance_by_rank() {
+    // Break caught: covariance training uses the wrong divisor, loses rotated
+    // components, or fails to fold omitted variance into a rank-specific
+    // residual diagonal.
+    let row = |ordinal: u64, x: f32, y: f32| {
+        let mut vector = vec![0.0_f32; 192];
+        vector[0] = x;
+        vector[1] = y;
+        (ordinal, vector)
+    };
+    let rows = vec![
+        row(40, -1.0, 1.0),
+        row(10, 2.0, 2.0),
+        row(30, 1.0, -1.0),
+        row(20, -2.0, -2.0),
+    ];
+    let diagonal = train_v36_posting_gaussian(&rows, 0).unwrap();
+    let rank_two = train_v36_posting_gaussian(&rows, 2).unwrap();
+    let rank_four = train_v36_posting_gaussian(&rows, 4).unwrap();
+    assert_eq!(diagonal.rank(), 0);
+    assert_eq!(rank_two.rank(), 2);
+    assert_eq!(rank_four.rank(), 4);
+    assert_eq!(diagonal.mean(), &[0.0; 192]);
+    assert_eq!(&diagonal.residual_diagonal()[..2], &[2.5, 2.5]);
+    assert_eq!(&rank_two.eigenvalues()[..2], &[4.0, 1.0]);
+    assert_eq!(&rank_four.eigenvalues()[..2], &[4.0, 1.0]);
+    assert_eq!(&rank_four.eigenvalues()[2..], &[0.0, 0.0]);
+    assert!(
+        rank_two.residual_diagonal()[..2]
+            .iter()
+            .all(|value| *value <= 1e-6)
+    );
+    assert!(rank_two.directions()[0][0] > 0.0);
+    assert!(rank_two.directions()[0][1] > 0.0);
+    assert!(rank_two.directions()[1][0] > 0.0);
+    assert!(rank_two.directions()[1][1] < 0.0);
+    let mut query = vec![0.0_f32; 192];
+    query[0] = 3.0;
+    query[1] = -2.0;
+    let diagonal_score = score_v36_posting_gaussian(&diagonal, &query).unwrap();
+    let rank_two_score = score_v36_posting_gaussian(&rank_two, &query).unwrap();
+    let rank_four_score = score_v36_posting_gaussian(&rank_four, &query).unwrap();
+    assert!((rank_two_score - rank_four_score).abs() <= 1e-12);
+    assert!((diagonal_score - rank_two_score).abs() > 1.0);
+
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    assert_eq!(train_v36_posting_gaussian(&reversed, 4).unwrap(), rank_four);
+    let singleton = train_v36_posting_gaussian(&[row(7, 3.0, -4.0)], 4).unwrap();
+    assert_eq!(&singleton.mean()[..2], &[3.0, -4.0]);
+    assert_eq!(singleton.eigenvalues(), &[0.0; 4]);
+    assert!(
+        singleton
+            .directions()
+            .iter()
+            .flatten()
+            .all(|value| *value == 0.0 && !value.is_sign_negative())
+    );
+    let isotropic = train_v36_posting_gaussian(
+        &[
+            row(1, 1.0, 0.0),
+            row(2, -1.0, 0.0),
+            row(3, 0.0, 1.0),
+            row(4, 0.0, -1.0),
+        ],
+        2,
+    )
+    .unwrap();
+    assert_eq!(&isotropic.eigenvalues()[..2], &[0.5, 0.5]);
+    assert_eq!(&isotropic.directions()[0][..2], &[1.0, 0.0]);
+    assert_eq!(&isotropic.directions()[1][..2], &[0.0, 1.0]);
+    let mut large = vec![0.0_f32; 192];
+    large[0] = 1_000_000.0;
+    let mut negative_large = vec![0.0_f32; 192];
+    negative_large[0] = -1_000_000.0;
+    let mut small = vec![0.0_f32; 192];
+    small[191] = 1.0;
+    let mut negative_small = vec![0.0_f32; 192];
+    negative_small[191] = -1.0;
+    let separated = train_v36_posting_gaussian(
+        &[
+            (1, large.clone()),
+            (2, negative_large),
+            (3, small.clone()),
+            (4, negative_small),
+        ],
+        2,
+    )
+    .unwrap();
+    assert_eq!(&separated.eigenvalues()[..2], &[5e11_f32, 0.5]);
+    assert_eq!(separated.directions()[0][0], 1.0);
+    assert_eq!(separated.directions()[1][191], 1.0);
+    assert_eq!(separated.residual_diagonal()[0], 2_048.0);
+    assert_eq!(separated.residual_diagonal()[191], 0.0);
+    assert!(train_v36_posting_gaussian(&[row(1, 0.0, 0.0), row(1, 1.0, 1.0)], 2).is_err());
+    let mut negative_zero = row(1, 0.0, 0.0);
+    negative_zero.1[9] = -0.0;
+    assert!(train_v36_posting_gaussian(&[negative_zero], 0).is_err());
+    assert!(train_v36_posting_gaussian(&rows, 1).is_err());
 }
 
 #[test]

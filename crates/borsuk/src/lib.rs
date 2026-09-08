@@ -358,7 +358,7 @@ pub use v36_funnel_geometry::{
     decode_v36_centered_projection_arrow, encode_v36_centered_projection_arrow,
     project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
     score_v36_posting_gaussian, score_v36_posting_prototype_six, select_v36_closure_owners,
-    train_v36_centered_subspace, train_v36_posting_prototype_six,
+    train_v36_centered_subspace, train_v36_posting_gaussian, train_v36_posting_prototype_six,
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
