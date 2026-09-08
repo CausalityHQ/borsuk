@@ -15,11 +15,12 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
-    V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest,
-    V36PrefixFileBackedResumeRequest, V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority,
-    V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixFreezeRequest,
-    V36PrefixGtAccumulator, V36PrefixGtParquetJob, V36PrefixIdentityRun, V36PrefixIdentityRunFile,
-    V36PrefixInputRow, V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
+    V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
+    V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
+    V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
+    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
+    V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
     V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
     V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
     V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
@@ -479,6 +480,21 @@ fn selected_ids_contract(selected_rows: u64) -> V36PrefixSelectedIdsContract {
         selected_object_count: 16,
         selected_object_start: 0,
         selected_rows,
+    }
+}
+
+fn external_selection_authority(
+    contract: &V36PrefixSelectedIdsContract,
+) -> V36PrefixExternalSelectionAuthority {
+    V36PrefixExternalSelectionAuthority {
+        cohort_ordinal: contract.cohort_ordinal,
+        distinct_rows: contract.eligible_rows + contract.excluded_rows,
+        excluded_population_identity: contract.excluded_population_identity.clone(),
+        ordered_source_manifest_sha256: contract.ordered_source_manifest_sha256.clone(),
+        population_seed_sha256: contract.population_seed_sha256.clone(),
+        selected_object_count: contract.selected_object_count,
+        selected_object_start: contract.selected_object_start,
+        selected_rows: contract.selected_rows,
     }
 }
 
@@ -1408,7 +1424,7 @@ fn v36_prefix_dataset_external_selection_is_file_backed_bounded_and_scalar_exact
     let runs = [first, second];
     let limits = external_selection_limits();
     let receipt = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &limits,
         output: &output,
@@ -1419,6 +1435,7 @@ fn v36_prefix_dataset_external_selection_is_file_backed_bounded_and_scalar_exact
     .unwrap();
 
     let bytes = fs::read(&output).unwrap();
+    assert_eq!(receipt.contract, contract);
     assert_eq!(
         bytes,
         encode_v36_prefix_selected_ids(&contract, &expected).unwrap()
@@ -1439,7 +1456,7 @@ fn v36_prefix_dataset_external_selection_is_file_backed_bounded_and_scalar_exact
         ..external_selection_limits()
     };
     externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &varied_limits,
         output: &varied_output,
@@ -1449,6 +1466,67 @@ fn v36_prefix_dataset_external_selection_is_file_backed_bounded_and_scalar_exact
     })
     .unwrap();
     assert_eq!(fs::read(varied_output).unwrap(), bytes);
+}
+
+#[test]
+fn v36_prefix_dataset_external_selection_derives_complete_exclusion_counts() {
+    let directory = tempfile::tempdir().unwrap();
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let (exclusion, _) = external_selected_file(directory.path(), &[2, 5]);
+    let (first, _) = external_identity_file(directory.path(), 1, &[2, 3, 4]);
+    let (second, _) = external_identity_file(directory.path(), 2, &[5, 6, 7]);
+    let authority = V36PrefixExternalSelectionAuthority {
+        cohort_ordinal: 1,
+        distinct_rows: 6,
+        excluded_population_identity: Some(exclusion.identity.clone()),
+        ordered_source_manifest_sha256: "1".repeat(64),
+        population_seed_sha256: "bcb490ff7944bfa3a0a6d5abe6d35ba34ecaba60b615e214edb057a1a5b63b8e"
+            .into(),
+        selected_object_count: 2,
+        selected_object_start: 1,
+        selected_rows: 3,
+    };
+    let output = directory.path().join("selected-derived.arrow");
+    let runs = [first, second];
+    let limits = external_selection_limits();
+
+    let receipt = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+        authority: &authority,
+        exclusion: Some(&exclusion),
+        limits: &limits,
+        output: &output,
+        output_uri_prefix: "s3://fixture/v36",
+        runs: &runs,
+        scratch_root: &scratch,
+    })
+    .unwrap();
+
+    assert_eq!(receipt.contract.eligible_rows, 4);
+    assert_eq!(receipt.contract.excluded_rows, 2);
+    assert_eq!(receipt.contract.selected_rows, 3);
+    decode_v36_prefix_selected_ids(
+        &fs::read(output).unwrap(),
+        &receipt.identity,
+        &receipt.contract,
+    )
+    .unwrap();
+
+    let mut drifted = authority;
+    drifted.distinct_rows = 7;
+    let drifted_output = directory.path().join("selected-drifted.arrow");
+    let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+        authority: &drifted,
+        exclusion: Some(&exclusion),
+        limits: &limits,
+        output: &drifted_output,
+        output_uri_prefix: "s3://fixture/v36",
+        runs: &runs,
+        scratch_root: &scratch,
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("population count differs"));
+    assert!(!drifted_output.exists());
 }
 
 #[test]
@@ -1481,7 +1559,7 @@ fn v36_prefix_dataset_external_selection_streams_authenticated_cohort_exclusion(
     let output = directory.path().join("cohort-b-selected.arrow");
 
     let receipt = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: Some(&exclusion),
         limits: &limits,
         output: &output,
@@ -1492,6 +1570,7 @@ fn v36_prefix_dataset_external_selection_streams_authenticated_cohort_exclusion(
     .unwrap();
 
     let bytes = fs::read(&output).unwrap();
+    assert_eq!(receipt.contract, contract);
     assert_eq!(
         bytes,
         encode_v36_prefix_selected_ids(&contract, &expected).unwrap()
@@ -1526,7 +1605,7 @@ fn v36_prefix_dataset_external_selection_rejects_tampered_cohort_exclusion() {
 
     assert!(
         externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-            contract: &contract,
+            authority: &external_selection_authority(&contract),
             exclusion: Some(&exclusion),
             limits: &limits,
             output: &output,
@@ -1536,44 +1615,6 @@ fn v36_prefix_dataset_external_selection_rejects_tampered_cohort_exclusion() {
         })
         .is_err()
     );
-    assert!(!output.exists());
-    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
-}
-
-#[test]
-fn v36_prefix_dataset_external_selection_recomputes_excluded_count() {
-    let directory = tempfile::tempdir().unwrap();
-    let scratch = directory.path().join("scratch");
-    fs::create_dir(&scratch).unwrap();
-    let (exclusion, _) = external_selected_file(directory.path(), &[2, 5]);
-    let (first, _) = external_identity_file(directory.path(), 1, &[2, 3, 4]);
-    let (second, _) = external_identity_file(directory.path(), 2, &[5, 6, 7]);
-    let contract = V36PrefixSelectedIdsContract {
-        cohort_ordinal: 1,
-        eligible_rows: 5,
-        excluded_population_identity: Some(exclusion.identity.clone()),
-        excluded_rows: 1,
-        selected_object_count: 2,
-        selected_object_start: 1,
-        selected_rows: 3,
-        ..selected_ids_contract(3)
-    };
-    let runs = [first, second];
-    let limits = external_selection_limits();
-    let output = directory.path().join("cohort-b-selected.arrow");
-
-    let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
-        exclusion: Some(&exclusion),
-        limits: &limits,
-        output: &output,
-        output_uri_prefix: "s3://fixture/v36",
-        runs: &runs,
-        scratch_root: &scratch,
-    })
-    .unwrap_err();
-
-    assert!(error.to_string().contains("eligible rows differ"));
     assert!(!output.exists());
     assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
 }
@@ -1601,7 +1642,7 @@ fn v36_prefix_dataset_external_selection_rejects_duplicate_excluded_physical_row
     let output = directory.path().join("cohort-b-selected.arrow");
 
     let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: Some(&exclusion),
         limits: &limits,
         output: &output,
@@ -1661,7 +1702,7 @@ fn v36_prefix_dataset_external_selection_drains_multibatch_absent_exclusion() {
     let output = directory.path().join("cohort-b-selected.arrow");
 
     externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: Some(&exclusion),
         limits: &limits,
         output: &output,
@@ -1709,7 +1750,7 @@ fn v36_prefix_dataset_external_selection_rejects_exclusion_authority_drift() {
         let output = directory.path().join(format!("drifted-{ordinal}.arrow"));
         assert!(
             externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-                contract: &contract,
+                authority: &external_selection_authority(&contract),
                 exclusion: Some(drifted),
                 limits: &limits,
                 output: &output,
@@ -1747,7 +1788,7 @@ fn v36_prefix_dataset_external_selection_rejects_authenticated_invalid_exclusion
     let output = directory.path().join("cohort-b-selected.arrow");
 
     let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: Some(&exclusion),
         limits: &limits,
         output: &output,
@@ -1778,7 +1819,7 @@ fn v36_prefix_dataset_external_selection_rejects_committed_duplicates_and_cleans
     let limits = external_selection_limits();
     let output = directory.path().join("selected.arrow");
     let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &limits,
         output: &output,
@@ -1811,7 +1852,7 @@ fn v36_prefix_dataset_external_selection_enforces_peak_scratch_bytes_and_cleans(
     let runs = [first, second];
     let output = directory.path().join("selected.arrow");
     let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &limits,
         output: &output,
@@ -1840,7 +1881,7 @@ fn v36_prefix_dataset_external_selection_classifies_complete_window_insufficienc
     let output = directory.path().join("selected.arrow");
 
     let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &limits,
         output: &output,
@@ -1873,7 +1914,7 @@ fn v36_prefix_dataset_external_selection_never_clobbers_existing_output() {
 
     assert!(
         externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-            contract: &contract,
+            authority: &external_selection_authority(&contract),
             exclusion: None,
             limits: &limits,
             output: &output,
@@ -1905,7 +1946,7 @@ fn v36_prefix_dataset_external_selection_preflights_arrow_before_allocation() {
     let output = directory.path().join("selected.arrow");
 
     let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &limits,
         output: &output,
@@ -1937,7 +1978,7 @@ fn v36_prefix_dataset_external_selection_authenticates_input_before_decoding() {
     let output = directory.path().join("selected.arrow");
 
     let error = externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &limits,
         output: &output,
@@ -1973,7 +2014,7 @@ fn v36_prefix_dataset_external_selection_rejects_symlinked_input() {
 
     assert!(
         externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-            contract: &contract,
+            authority: &external_selection_authority(&contract),
             exclusion: None,
             limits: &limits,
             output: &output,
@@ -2008,7 +2049,7 @@ fn v36_prefix_dataset_external_selection_writes_fixed_selected_arrow_batches() {
     let output = directory.path().join("selected.arrow");
 
     externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-        contract: &contract,
+        authority: &external_selection_authority(&contract),
         exclusion: None,
         limits: &limits,
         output: &output,
@@ -3375,7 +3416,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     };
     let selected_receipt =
         externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
-            contract: &selected_contract,
+            authority: &external_selection_authority(&selected_contract),
             exclusion: None,
             limits: &limits,
             output: &selected_path,
@@ -3399,18 +3440,18 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         selected.cutoff_score_sha256
     );
     assert_eq!(
-        selected_receipt.eligible_rows,
+        selected_receipt.contract.eligible_rows,
         selected_contract.eligible_rows
     );
     assert_eq!(
-        selected_receipt.excluded_rows,
+        selected_receipt.contract.excluded_rows,
         selected_contract.excluded_rows
     );
     let selection = V36PrefixPopulationSelection {
         cutoff_feature_row_id: selected_receipt.cutoff_feature_row_id,
         cutoff_score_sha256: selected_receipt.cutoff_score_sha256.clone(),
-        eligible_rows: selected_receipt.eligible_rows,
-        excluded_rows: selected_receipt.excluded_rows,
+        eligible_rows: selected_receipt.contract.eligible_rows,
+        excluded_rows: selected_receipt.contract.excluded_rows,
         excluded_population_identity: None,
         selected_ids: selected_receipt.identity.clone(),
         selected_rows: selected_contract.selected_rows,

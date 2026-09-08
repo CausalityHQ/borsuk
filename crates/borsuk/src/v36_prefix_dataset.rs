@@ -1260,12 +1260,31 @@ pub struct V36PrefixSelectedFileReceipt {
     pub cutoff_feature_row_id: u64,
     /// Population score at the inclusive cutoff.
     pub cutoff_score_sha256: String,
-    /// Complete distinct population remaining after exclusion.
-    pub eligible_rows: u64,
-    /// Complete distinct population removed by predecessor exclusion.
-    pub excluded_rows: u64,
+    /// Final artifact contract including counts derived by the complete anti-join.
+    pub contract: V36PrefixSelectedIdsContract,
     /// Exact content-addressed selected-ID Arrow identity.
     pub identity: V36ArtifactIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Precomputable authority for one external population selection.
+pub struct V36PrefixExternalSelectionAuthority {
+    /// Zero-based independently registered population cohort.
+    pub cohort_ordinal: u8,
+    /// Complete distinct first-occurrence population before cohort exclusion.
+    pub distinct_rows: u64,
+    /// Exact predecessor selected-ID artifact, absent only for cohort zero.
+    pub excluded_population_identity: Option<V36ArtifactIdentity>,
+    /// SHA-256 of the complete ordered source manifest.
+    pub ordered_source_manifest_sha256: String,
+    /// SHA-256 population-row seed.
+    pub population_seed_sha256: String,
+    /// Number of complete source objects in the registered window.
+    pub selected_object_count: u16,
+    /// Global ordinal of the first source object in the window.
+    pub selected_object_start: u16,
+    /// Exact number of population rows to select.
+    pub selected_rows: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1281,8 +1300,8 @@ pub struct V36PrefixSelectedIdsFile {
 
 /// Complete file-backed request for one bounded external population selection.
 pub struct V36PrefixExternalSelectionRequest<'a> {
-    /// Selected-ID authority and derived-count contract.
-    pub contract: &'a V36PrefixSelectedIdsContract,
+    /// Selection authority containing only values knowable before the anti-join.
+    pub authority: &'a V36PrefixExternalSelectionAuthority,
     /// Optional authenticated predecessor selected-ID artifact.
     pub exclusion: Option<&'a V36PrefixSelectedIdsFile>,
     /// Hard resource limits for the attempt.
@@ -1533,6 +1552,39 @@ fn validate_selected_ids_contract(
         || window_end <= contract.selected_object_start
     {
         return Err(invalid("V36 prefix selected-ID contract differs"));
+    }
+    Ok((seed, manifest))
+}
+
+fn validate_external_selection_authority(
+    authority: &V36PrefixExternalSelectionAuthority,
+) -> Result<([u8; 32], [u8; 32])> {
+    let seed = digest_bytes(&authority.population_seed_sha256)?;
+    let manifest = digest_bytes(&authority.ordered_source_manifest_sha256)?;
+    let window_end = authority
+        .selected_object_start
+        .checked_add(authority.selected_object_count)
+        .ok_or_else(|| invalid("V36 prefix selected-ID object window overflows"))?;
+    if authority.population_seed_sha256 != POPULATION_SEED_SHA256
+        || authority.selected_object_count == 0
+        || authority.distinct_rows == 0
+        || authority.selected_rows == 0
+        || authority.selected_rows > authority.distinct_rows
+        || (authority.cohort_ordinal == 0 && authority.excluded_population_identity.is_some())
+        || (authority.cohort_ordinal != 0 && authority.excluded_population_identity.is_none())
+        || authority
+            .excluded_population_identity
+            .as_ref()
+            .is_some_and(|identity| {
+                identity.encoded_bytes == 0
+                    || identity.role != "population-selected-identities"
+                    || digest_bytes(&identity.sha256).is_err()
+                    || digest_bytes(&identity.blake3).is_err()
+                    || identity.uri.is_empty()
+            })
+        || window_end <= authority.selected_object_start
+    {
+        return Err(invalid("V36 prefix external selection authority differs"));
     }
     Ok((seed, manifest))
 }
@@ -4375,7 +4427,7 @@ pub fn externally_select_v36_prefix_population_rows(
     request: V36PrefixExternalSelectionRequest<'_>,
 ) -> Result<V36PrefixSelectedFileReceipt> {
     let V36PrefixExternalSelectionRequest {
-        contract,
+        authority,
         exclusion,
         limits,
         output,
@@ -4383,7 +4435,7 @@ pub fn externally_select_v36_prefix_population_rows(
         runs,
         scratch_root,
     } = request;
-    validate_selected_ids_contract(contract)?;
+    validate_external_selection_authority(authority)?;
     if limits.max_spills > EXTERNAL_MAX_SPILLS
         || limits.merge_fan_in > EXTERNAL_MAX_FAN_IN
         || limits.sort_buffer_records > EXTERNAL_MAX_SORT_BUFFER_RECORDS
@@ -4420,26 +4472,25 @@ pub fn externally_select_v36_prefix_population_rows(
     {
         return Err(invalid("V36 prefix external selection output differs"));
     }
-    let exclusion_is_valid = match (contract.cohort_ordinal, exclusion) {
-        (0, None) => contract.excluded_population_identity.is_none() && contract.excluded_rows == 0,
+    let exclusion_is_valid = match (authority.cohort_ordinal, exclusion) {
+        (0, None) => authority.excluded_population_identity.is_none(),
         (0, Some(_)) | (_, None) => false,
         (_, Some(selected)) => {
             validate_selected_ids_contract(&selected.contract).is_ok()
-                && contract.excluded_population_identity.as_ref() == Some(&selected.identity)
-                && selected.contract.cohort_ordinal.checked_add(1) == Some(contract.cohort_ordinal)
-                && selected.contract.population_seed_sha256 == contract.population_seed_sha256
+                && authority.excluded_population_identity.as_ref() == Some(&selected.identity)
+                && selected.contract.cohort_ordinal.checked_add(1) == Some(authority.cohort_ordinal)
+                && selected.contract.population_seed_sha256 == authority.population_seed_sha256
                 && selected.contract.ordered_source_manifest_sha256
-                    == contract.ordered_source_manifest_sha256
+                    == authority.ordered_source_manifest_sha256
                 && selected
                     .contract
                     .selected_object_start
                     .checked_add(selected.contract.selected_object_count)
-                    == Some(contract.selected_object_start)
-                && contract.excluded_rows <= selected.contract.selected_rows
+                    == Some(authority.selected_object_start)
         }
     };
     if !exclusion_is_valid
-        || runs.len() != usize::from(contract.selected_object_count)
+        || runs.len() != usize::from(authority.selected_object_count)
         || runs.is_empty()
         || limits.io_buffer_bytes == 0
         || limits.max_input_bytes == 0
@@ -4452,11 +4503,11 @@ pub fn externally_select_v36_prefix_population_rows(
     {
         return Err(invalid("V36 prefix external selection authority differs"));
     }
-    let seed = digest_bytes(&contract.population_seed_sha256)?;
-    let manifest = digest_bytes(&contract.ordered_source_manifest_sha256)?;
+    let seed = digest_bytes(&authority.population_seed_sha256)?;
+    let manifest = digest_bytes(&authority.ordered_source_manifest_sha256)?;
     let mut source_paths = BTreeSet::new();
     for (index, run) in runs.iter().enumerate() {
-        let expected_ordinal = contract
+        let expected_ordinal = authority
             .selected_object_start
             .checked_add(
                 u16::try_from(index)
@@ -4579,7 +4630,7 @@ pub fn externally_select_v36_prefix_population_rows(
     let selected_path = attempt.path().join(format!("spill-{next_spill:08}.bin"));
     let selected_bytes = EXTERNAL_SPILL_HEADER_BYTES
         .checked_add(
-            contract
+            authority
                 .selected_rows
                 .checked_mul(EXTERNAL_SPILL_RECORD_BYTES)
                 .ok_or_else(|| invalid("V36 prefix spill length overflows"))?,
@@ -4601,7 +4652,7 @@ pub fn externally_select_v36_prefix_population_rows(
             source,
         })?;
     let mut selected_writer = BufWriter::with_capacity(limits.io_buffer_bytes, selected_file);
-    write_v36_prefix_spill_header(&mut selected_writer, contract.selected_rows)?;
+    write_v36_prefix_spill_header(&mut selected_writer, authority.selected_rows)?;
     let mut selected_hasher = blake3::Hasher::new();
     let mut merged_reader = V36PrefixSpillReader::open(&merged, limits.io_buffer_bytes)?;
     let mut eligible_rows = 0_u64;
@@ -4640,7 +4691,7 @@ pub fn externally_select_v36_prefix_population_rows(
             continue;
         }
         eligible_rows += 1;
-        if eligible_rows <= contract.selected_rows {
+        if eligible_rows <= authority.selected_rows {
             write_v36_prefix_scored_identity(&mut selected_writer, &mut selected_hasher, &record)?;
             cutoff = Some(record);
         }
@@ -4649,11 +4700,14 @@ pub fn externally_select_v36_prefix_population_rows(
         while next_v36_prefix_excluded_rank(stream, &mut exclusion_physical)?.is_some() {}
         exclusion_physical.finish()?;
     }
-    if eligible_rows < contract.selected_rows {
+    if eligible_rows < authority.selected_rows {
         return Err(BorsukError::V36PrefixSourceInsufficient);
     }
-    if eligible_rows != contract.eligible_rows || excluded_rows != contract.excluded_rows {
-        return Err(invalid("V36 prefix selected-ID eligible rows differ"));
+    if eligible_rows
+        .checked_add(excluded_rows)
+        .is_none_or(|rows| rows != authority.distinct_rows)
+    {
+        return Err(invalid("V36 prefix selected-ID population count differs"));
     }
     finish_v36_prefix_spill(&selected_path, &mut selected_writer, &selected_hasher)?;
     drop(selected_writer);
@@ -4661,14 +4715,24 @@ pub fn externally_select_v36_prefix_population_rows(
     let cutoff = cutoff.ok_or(BorsukError::V36PrefixSourceInsufficient)?;
     let cutoff_feature_row_id = cutoff.feature_row_id;
     let cutoff_score_sha256 = digest_hex(&cutoff.score);
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: authority.cohort_ordinal,
+        eligible_rows,
+        excluded_population_identity: authority.excluded_population_identity.clone(),
+        excluded_rows,
+        ordered_source_manifest_sha256: authority.ordered_source_manifest_sha256.clone(),
+        population_seed_sha256: authority.population_seed_sha256.clone(),
+        selected_object_count: authority.selected_object_count,
+        selected_object_start: authority.selected_object_start,
+        selected_rows: authority.selected_rows,
+    };
     let (encoded_bytes, sha256, blake3) =
-        write_v36_prefix_selected_file(contract, &selected_path, cutoff, limits, output)?;
+        write_v36_prefix_selected_file(&contract, &selected_path, cutoff, limits, output)?;
     let prefix = output_uri_prefix.trim_end_matches('/');
     Ok(V36PrefixSelectedFileReceipt {
         cutoff_feature_row_id,
         cutoff_score_sha256,
-        eligible_rows,
-        excluded_rows,
+        contract,
         identity: V36ArtifactIdentity {
             blake3,
             encoded_bytes,
