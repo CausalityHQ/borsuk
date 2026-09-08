@@ -14,6 +14,7 @@ use arrow_ipc::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
+    V36PrefixCheckpointPointer, V36PrefixCheckpointResumeState,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
     V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
     V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
@@ -26,7 +27,8 @@ use borsuk::{
     V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
     V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
     V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
-    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_identity_run,
@@ -35,8 +37,9 @@ use borsuk::{
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
-    rank_v36_prefix_source_objects, restore_v36_prefix_file_backed_population_scan,
-    restore_v36_prefix_population, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    rank_v36_prefix_source_objects, restore_v36_prefix_checkpoint_phase,
+    restore_v36_prefix_file_backed_population_scan, restore_v36_prefix_population,
+    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
     scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
     scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
@@ -3374,6 +3377,13 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     assert_eq!(restored.physical_rows, 24);
     assert_eq!(restored.runs.len(), 1);
     assert!(restore_scratch.read_dir().unwrap().next().is_none());
+    let V36PrefixCheckpointResumeState::Population {
+        population: resumed_population,
+    } = restore_v36_prefix_checkpoint_phase(&head, None, &limits, &restore_scratch).unwrap()
+    else {
+        panic!("population checkpoint resumed at the wrong phase")
+    };
+    assert_eq!(resumed_population.distinct_rows, 24);
     let mut forged = head.clone();
     forged.manifest.population.distinct_rows -= 1;
     forged.manifest.population.duplicate_rows += 1;
@@ -3466,6 +3476,52 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         borsuk::V36PrefixCheckpointPhase::Selected { .. }
     ));
     assert_eq!(selected_head.dependencies.len(), 2);
+    let V36PrefixCheckpointResumeState::Selected {
+        population: resumed_population,
+        selected: resumed_selected,
+    } = restore_v36_prefix_checkpoint_phase(
+        &selected_head,
+        Some(&selected_contract),
+        &limits,
+        &restore_scratch,
+    )
+    .unwrap()
+    else {
+        panic!("selected checkpoint resumed at the wrong phase")
+    };
+    assert_eq!(resumed_population.distinct_rows, 24);
+    assert_eq!(resumed_selected.contract, selected_contract);
+    assert_eq!(resumed_selected.identity, selection.selected_ids);
+    assert_eq!(
+        resumed_selected.path,
+        staged_selected
+            .join("objects")
+            .join(format!("{}.blob", selection.selected_ids.sha256))
+    );
+    let mut drifted_contract = selected_contract.clone();
+    drifted_contract.ordered_source_manifest_sha256 = "f".repeat(64);
+    assert!(
+        restore_v36_prefix_checkpoint_phase(
+            &selected_head,
+            Some(&drifted_contract),
+            &limits,
+            &restore_scratch,
+        )
+        .is_err()
+    );
+    let substituted_selected_path = directory.path().join("substituted-selected.arrow");
+    fs::copy(&resumed_selected.path, &substituted_selected_path).unwrap();
+    let mut substituted_head = selected_head.clone();
+    substituted_head.dependencies[1].path = substituted_selected_path;
+    assert!(
+        restore_v36_prefix_checkpoint_phase(
+            &substituted_head,
+            Some(&selected_contract),
+            &limits,
+            &restore_scratch,
+        )
+        .is_err()
+    );
 
     let selected_file = V36PrefixSelectedIdsFile {
         contract: selected_contract,
@@ -3669,15 +3725,156 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         borsuk::V36PrefixCheckpointPhase::Materialized { .. }
     ));
     assert_eq!(materialized_head.dependencies.len(), 8);
+    let V36PrefixCheckpointResumeState::Materialized {
+        artifacts: restored_artifacts,
+        population: resumed_population,
+        selected: resumed_selected,
+    } = restore_v36_prefix_checkpoint_phase(
+        &materialized_head,
+        Some(&selected_file.contract),
+        &limits,
+        &restore_scratch,
+    )
+    .unwrap()
+    else {
+        panic!("materialized checkpoint resumed at the wrong phase")
+    };
+    assert_eq!(resumed_population.distinct_rows, 24);
+    assert_eq!(resumed_selected.identity, selection.selected_ids);
     assert_eq!(
-        restore_v36_prefix_file_backed_population_scan(
-            &materialized_head,
+        restored_artifacts.population_authority.identity,
+        artifacts.population_authority
+    );
+    assert_eq!(restored_artifacts.source.identity, artifacts.source);
+    assert_eq!(
+        restored_artifacts.development_query.identity,
+        artifacts.development_query
+    );
+    assert_eq!(
+        restored_artifacts.validation_query.identity,
+        artifacts.validation_query
+    );
+    assert_eq!(
+        restored_artifacts.sealed_holdout_query.identity,
+        artifacts.sealed_holdout_query
+    );
+    assert_eq!(
+        restored_artifacts.performance_query.identity,
+        artifacts.performance_query
+    );
+
+    let heaps_path = directory.path().join("gt-heaps-00000008.arrow");
+    fs::write(&heaps_path, b"authenticated reduced heap boundary").unwrap();
+    let heaps = V36PrefixCheckpointDependencyFile {
+        identity: checkpoint_artifact_for_file(
+            "gt-heaps",
+            "gt-heaps-00000008.arrow",
+            &heaps_path,
+            object_prefix,
+        ),
+        path: heaps_path,
+    };
+    let ground_truth_ready = writer.commit_ground_truth(&heaps, 8).unwrap();
+    let staged_ground_truth = directory.path().join("staged-ground-truth");
+    stage_checkpoint_head(&resumed_outbox, &ground_truth_ready, &staged_ground_truth);
+    let ground_truth_head =
+        load_v36_prefix_checkpoint_head(&staged_ground_truth, &context).unwrap();
+    let V36PrefixCheckpointResumeState::GroundTruth {
+        artifacts: restored_artifacts,
+        heaps: restored_heaps,
+        next_source_ordinal,
+        population: resumed_population,
+        selected: resumed_selected,
+    } = restore_v36_prefix_checkpoint_phase(
+        &ground_truth_head,
+        Some(&selected_file.contract),
+        &limits,
+        &restore_scratch,
+    )
+    .unwrap()
+    else {
+        panic!("ground-truth checkpoint resumed at the wrong phase")
+    };
+    assert_eq!(next_source_ordinal, 8);
+    assert_eq!(resumed_population.distinct_rows, 24);
+    assert_eq!(resumed_selected.identity, selection.selected_ids);
+    assert_eq!(restored_artifacts.source.identity, artifacts.source);
+    assert_eq!(restored_heaps.identity, heaps.identity);
+    assert_eq!(
+        restored_heaps.path,
+        staged_ground_truth
+            .join("objects")
+            .join(format!("{}.blob", heaps.identity.sha256))
+    );
+
+    let mut rewritten_ground_truth = ground_truth_head.clone();
+    let borsuk::V36PrefixCheckpointPhase::GroundTruth {
+        next_source_ordinal,
+        ..
+    } = &mut rewritten_ground_truth.manifest.phase
+    else {
+        unreachable!()
+    };
+    *next_source_ordinal = 16;
+    let rewritten_manifest_bytes =
+        canonical_v36_prefix_checkpoint_manifest_bytes(&rewritten_ground_truth.manifest).unwrap();
+    let rewritten_manifest_sha256 = format!("{:x}", Sha256::digest(&rewritten_manifest_bytes));
+    let rewritten_manifest_blake3 = blake3::hash(&rewritten_manifest_bytes).to_hex().to_string();
+    let mut rewritten_pointer: V36PrefixCheckpointPointer =
+        serde_json::from_slice(&rewritten_ground_truth.pointer_bytes).unwrap();
+    rewritten_pointer.manifest = V36ArtifactIdentity {
+        role: "checkpoint-manifest".into(),
+        uri: format!("{object_prefix}{rewritten_manifest_sha256}-checkpoint-manifest.json"),
+        encoded_bytes: rewritten_manifest_bytes.len() as u64,
+        sha256: rewritten_manifest_sha256,
+        blake3: rewritten_manifest_blake3,
+    };
+    rewritten_ground_truth.pointer_bytes =
+        canonical_v36_prefix_checkpoint_pointer_bytes(&context, &rewritten_pointer).unwrap();
+    assert!(
+        restore_v36_prefix_checkpoint_phase(
+            &rewritten_ground_truth,
+            Some(&selected_file.contract),
             &limits,
             &restore_scratch,
         )
-        .unwrap()
-        .distinct_rows,
-        24
+        .is_err()
+    );
+
+    let mut reordered_ground_truth = ground_truth_head.clone();
+    let last = reordered_ground_truth.dependencies.len() - 1;
+    reordered_ground_truth.dependencies.swap(last - 1, last);
+    assert!(
+        restore_v36_prefix_checkpoint_phase(
+            &reordered_ground_truth,
+            Some(&selected_file.contract),
+            &limits,
+            &restore_scratch,
+        )
+        .is_err()
+    );
+    let substituted_heaps_path = directory.path().join("substituted-heaps.arrow");
+    fs::copy(&restored_heaps.path, &substituted_heaps_path).unwrap();
+    let mut substituted_ground_truth = ground_truth_head.clone();
+    substituted_ground_truth.dependencies[last].path = substituted_heaps_path;
+    assert!(
+        restore_v36_prefix_checkpoint_phase(
+            &substituted_ground_truth,
+            Some(&selected_file.contract),
+            &limits,
+            &restore_scratch,
+        )
+        .is_err()
+    );
+    fs::remove_file(&restored_heaps.path).unwrap();
+    assert!(
+        restore_v36_prefix_checkpoint_phase(
+            &ground_truth_head,
+            Some(&selected_file.contract),
+            &limits,
+            &restore_scratch,
+        )
+        .is_err()
     );
     assert!(selection_scratch.read_dir().unwrap().next().is_none());
     assert!(materialization_scratch.read_dir().unwrap().next().is_none());
