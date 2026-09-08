@@ -1655,6 +1655,81 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "resume binding differs"):
             subject.v36_checkpoint_resume_binding(plan, 0, pointer, manifest)
 
+    def test_v36_checkpoint_resume_closure_tracks_selected_and_materialized_phases(self) -> None:
+        object_prefix = "s3://fixture/v36/checkpoints/objects/"
+
+        def identity(role: str, ordinal: int, encoded_bytes: int = 1_024) -> dict[str, object]:
+            digest = f"{ordinal:064x}"
+            return {
+                "blake3": f"{ordinal + 100:064x}",
+                "encoded_bytes": encoded_bytes,
+                "role": role,
+                "sha256": digest,
+                "uri": f"{object_prefix}{digest}-{role}.blob",
+            }
+
+        run = identity("population-identity-run-0000", 1)
+        selected = identity("population-selected-identities", 2)
+        selection = {
+            "cutoff_feature_row_id": 7,
+            "cutoff_score_sha256": "a" * 64,
+            "eligible_rows": 24,
+            "excluded_population_identity": None,
+            "excluded_rows": 0,
+            "selected_ids": selected,
+            "selected_rows": 24,
+        }
+        artifacts = {
+            "population_authority": identity("population-authority", 3),
+            "source": identity("source", 4, subject.MAX_CHECKPOINT_DEPENDENCY_BYTES + 1),
+            "development_query": identity("development-query", 5),
+            "validation_query": identity("validation-query", 6),
+            "sealed_holdout_query": identity("sealed-holdout-query", 7),
+            "performance_query": identity("performance-query", 8),
+        }
+        pointer = {
+            "generation": 2,
+            "producer_attempt_id": "v36-prefix-fixture-attempt-0000",
+            "producer_attempt_ordinal": 0,
+            "run_id": "v36-prefix-fixture",
+        }
+        binding = {
+            "generation": 2,
+            "manifest": identity("checkpoint-manifest", 9),
+            "pointer_uri": "s3://fixture/v36/checkpoints/runs/v36-prefix-fixture/latest.json",
+        }
+
+        def closure(phase: dict[str, object]) -> list[dict[str, object]]:
+            manifest = subject.canonical_json_bytes(
+                {
+                    "generation": 2,
+                    "phase": phase,
+                    "population": {"identity_runs": [run]},
+                    "producer_attempt_id": pointer["producer_attempt_id"],
+                    "producer_attempt_ordinal": 0,
+                    "run_id": pointer["run_id"],
+                    "schema": "borsuk-v36-prefix-freeze-checkpoint-v2",
+                }
+            )
+            return subject._validate_v36_resume_closure(
+                binding, pointer, manifest
+            )
+
+        self.assertEqual(
+            closure({"kind": "selected", "selection": selection}),
+            [run, selected],
+        )
+        self.assertEqual(
+            closure(
+                {
+                    "artifacts": artifacts,
+                    "kind": "materialized",
+                    "selection": selection,
+                }
+            ),
+            [run, selected, *artifacts.values()],
+        )
+
     def test_v36_checkpoint_resume_materializes_only_newest_dependency_closure(self) -> None:
         # Break caught: resume lists a prefix, falls back to history, or stages
         # bytes not named by the exact bound newest population manifest.

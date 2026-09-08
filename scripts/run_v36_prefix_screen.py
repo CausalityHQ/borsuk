@@ -43,6 +43,7 @@ MAX_ATTEMPTS = 3
 SPOT_HOURLY_CAP_MICRO_USD = 3_000_000
 CAMPAIGN_CAP_MICRO_USD = 90_000_000
 RAW_POPULATION_BYTES = TARGET_DISTINCT_ROWS * VECTOR_DIMENSIONS * 4
+MAX_CHECKPOINT_SOURCE_BYTES = RAW_POPULATION_BYTES * 5 // 4
 # Complete source objects coexist with the 1.1M-row materialization spool and
 # the final Parquet population plus 25% writer/query/GT workspace.
 DISK_PREFLIGHT_BYTES = MAX_SOURCE_BYTES + RAW_POPULATION_BYTES * 9 // 4
@@ -706,14 +707,17 @@ def _validate_v36_resume_closure(
     pointer: dict[str, object],
     manifest_bytes: bytes,
 ) -> list[dict[str, object]]:
-    """Validate the bounded population dependency closure before a launch."""
+    """Validate the bounded phase-specific dependency closure before a launch."""
 
     try:
         manifest = json.loads(manifest_bytes)
     except (TypeError, json.JSONDecodeError) as error:
         raise ValueError("V36 checkpoint resume manifest differs") from error
     population = manifest.get("population") if type(manifest) is dict else None
-    dependencies = population.get("identity_runs") if type(population) is dict else None
+    population_dependencies = (
+        population.get("identity_runs") if type(population) is dict else None
+    )
+    phase = manifest.get("phase") if type(manifest) is dict else None
     if (
         canonical_json_bytes(manifest) != manifest_bytes
         or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v2"
@@ -722,11 +726,55 @@ def _validate_v36_resume_closure(
         or manifest.get("producer_attempt_id") != pointer["producer_attempt_id"]
         or manifest.get("producer_attempt_ordinal")
         != pointer["producer_attempt_ordinal"]
-        or manifest.get("phase") != {"kind": "population"}
-        or type(dependencies) is not list
-        or not 0 < len(dependencies) <= CHECKPOINT_OBJECTS
+        or type(phase) is not dict
+        or type(population_dependencies) is not list
+        or not 0 < len(population_dependencies) <= CHECKPOINT_OBJECTS
     ):
         raise ValueError("V36 checkpoint resume manifest differs")
+    dependency_roles = [
+        (dependency, f"population-identity-run-{ordinal:04d}")
+        for ordinal, dependency in enumerate(population_dependencies)
+    ]
+    if phase == {"kind": "population"}:
+        pass
+    else:
+        selection = phase.get("selection")
+        if (
+            set(phase) not in ({"kind", "selection"}, {"artifacts", "kind", "selection"})
+            or phase.get("kind") not in {"selected", "materialized"}
+            or type(selection) is not dict
+            or set(selection)
+            != {
+                "cutoff_feature_row_id",
+                "cutoff_score_sha256",
+                "eligible_rows",
+                "excluded_population_identity",
+                "excluded_rows",
+                "selected_ids",
+                "selected_rows",
+            }
+        ):
+            raise ValueError("V36 checkpoint resume phase differs")
+        dependency_roles.append(
+            (selection["selected_ids"], "population-selected-identities")
+        )
+        if phase["kind"] == "materialized":
+            artifacts = phase.get("artifacts")
+            artifact_roles = (
+                ("population_authority", "population-authority"),
+                ("source", "source"),
+                ("development_query", "development-query"),
+                ("validation_query", "validation-query"),
+                ("sealed_holdout_query", "sealed-holdout-query"),
+                ("performance_query", "performance-query"),
+            )
+            if type(artifacts) is not dict or set(artifacts) != {
+                name for name, _ in artifact_roles
+            }:
+                raise ValueError("V36 checkpoint resume phase differs")
+            dependency_roles.extend(
+                (artifacts[name], role) for name, role in artifact_roles
+            )
     manifest_identity = _outbox_artifact_identity(binding["manifest"])
     manifest_bucket, manifest_key = _s3(manifest_identity["uri"])
     object_marker = "checkpoints/objects/"
@@ -739,12 +787,12 @@ def _validate_v36_resume_closure(
     if marker != object_marker or binding["pointer_uri"] != expected_pointer:
         raise ValueError("V36 checkpoint resume namespace differs")
     identities = []
-    for ordinal, raw in enumerate(dependencies):
+    for raw, expected_role in dependency_roles:
         identity = _outbox_artifact_identity(raw)
         bucket, key = _s3(identity["uri"])
         if (
-            identity["role"] != f"population-identity-run-{ordinal:04d}"
-            or identity["encoded_bytes"] > MAX_CHECKPOINT_DEPENDENCY_BYTES
+            identity["role"] != expected_role
+            or identity["encoded_bytes"] > _v36_checkpoint_dependency_limit(expected_role)
             or bucket != manifest_bucket
             or not key.startswith(object_prefix)
             or key == object_prefix
@@ -752,6 +800,16 @@ def _validate_v36_resume_closure(
             raise ValueError("V36 checkpoint resume dependency differs")
         identities.append(identity)
     return identities
+
+
+def _v36_checkpoint_dependency_limit(role: str) -> int:
+    """Return the exact bounded transfer cap for one checkpoint artifact role."""
+
+    return (
+        MAX_CHECKPOINT_SOURCE_BYTES
+        if role == "source"
+        else MAX_CHECKPOINT_DEPENDENCY_BYTES
+    )
 
 
 def materialize_v36_checkpoint_resume(
@@ -983,7 +1041,8 @@ def publish_v36_checkpoint_outbox_generation(
         or manifest["encoded_bytes"] > MAX_CHECKPOINT_MANIFEST_BYTES
         or ready["pointer_encoded_bytes"] > MAX_CHECKPOINT_POINTER_BYTES
         or any(
-            identity["encoded_bytes"] > MAX_CHECKPOINT_DEPENDENCY_BYTES
+            identity["encoded_bytes"]
+            > _v36_checkpoint_dependency_limit(str(identity["role"]))
             for identity in dependencies
         )
     ):
