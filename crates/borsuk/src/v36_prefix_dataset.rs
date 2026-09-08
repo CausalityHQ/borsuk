@@ -8985,11 +8985,12 @@ pub struct V36PrefixGtAccumulator {
     corpus_ids: BTreeSet<u64>,
     heaps: Vec<BinaryHeap<RankedNeighbor>>,
     next_source_ordinal: u64,
+    role: V36PrefixQualityRole,
 }
 
 impl V36PrefixGtAccumulator {
     /// Create a GT tile accumulator for one quality-query role.
-    pub fn new(_role: V36PrefixQualityRole, queries: Vec<V36PrefixQueryRow>) -> Result<Self> {
+    pub fn new(role: V36PrefixQualityRole, queries: Vec<V36PrefixQueryRow>) -> Result<Self> {
         let first_ordinal = queries.first().map(|row| row.query_ordinal);
         if queries.is_empty()
             || queries.iter().enumerate().any(|(ordinal, row)| {
@@ -9009,7 +9010,7 @@ impl V36PrefixGtAccumulator {
             return Err(invalid("V36 prefix exact truth query membership differs"));
         }
         let heaps = (0..queries.len())
-            .map(|_| BinaryHeap::with_capacity(GT_NEIGHBORS))
+            .map(|_| BinaryHeap::with_capacity(GT_HEAP_CHECKPOINT_NEIGHBORS))
             .collect();
         Ok(Self {
             queries,
@@ -9017,7 +9018,105 @@ impl V36PrefixGtAccumulator {
             corpus_ids: BTreeSet::new(),
             heaps,
             next_source_ordinal: 0,
+            role,
         })
+    }
+
+    /// Restore one role from a validated top-101 source-block boundary.
+    pub fn restore(
+        role: V36PrefixQualityRole,
+        queries: Vec<V36PrefixQueryRow>,
+        next_source_ordinal: u64,
+        prefix_feature_ids: &[u64],
+        entries: Vec<V36PrefixGtHeapEntry>,
+    ) -> Result<Self> {
+        let mut accumulator = Self::new(role, queries)?;
+        let expected_entries = accumulator
+            .queries
+            .len()
+            .checked_mul(GT_HEAP_CHECKPOINT_NEIGHBORS)
+            .ok_or_else(|| invalid("V36 prefix GT heap row count overflows"))?;
+        if next_source_ordinal < GT_HEAP_CHECKPOINT_NEIGHBORS as u64
+            || usize::try_from(next_source_ordinal).ok() != Some(prefix_feature_ids.len())
+            || entries.len() != expected_entries
+        {
+            return Err(invalid("V36 prefix GT heap checkpoint differs"));
+        }
+        for &feature_row_id in prefix_feature_ids {
+            if accumulator.query_ids.contains(&feature_row_id)
+                || !accumulator.corpus_ids.insert(feature_row_id)
+            {
+                return Err(invalid("V36 prefix exact truth corpus input differs"));
+            }
+        }
+        let (entry_chunks, remainder) = entries.as_chunks::<GT_HEAP_CHECKPOINT_NEIGHBORS>();
+        if !remainder.is_empty() {
+            return Err(invalid("V36 prefix GT heap checkpoint differs"));
+        }
+        for (query_index, (query, entries)) in
+            accumulator.queries.iter().zip(entry_chunks).enumerate()
+        {
+            let mut feature_ids = BTreeSet::new();
+            let mut previous: Option<(f64, u64)> = None;
+            for (rank, entry) in entries.iter().enumerate() {
+                let ordered = previous.is_none_or(|(distance, feature_row_id)| {
+                    distance
+                        .total_cmp(&entry.squared_distance)
+                        .then(feature_row_id.cmp(&entry.feature_row_id))
+                        .is_le()
+                });
+                if entry.role != role
+                    || entry.query_ordinal != query.query_ordinal
+                    || usize::from(entry.rank) != rank
+                    || !entry.squared_distance.is_finite()
+                    || entry.squared_distance.is_sign_negative()
+                    || !accumulator.corpus_ids.contains(&entry.feature_row_id)
+                    || !feature_ids.insert(entry.feature_row_id)
+                    || !ordered
+                {
+                    return Err(invalid("V36 prefix GT heap entry differs"));
+                }
+                accumulator.heaps[query_index].push(RankedNeighbor {
+                    distance: entry.squared_distance,
+                    feature_row_id: entry.feature_row_id,
+                });
+                previous = Some((entry.squared_distance, entry.feature_row_id));
+            }
+        }
+        accumulator.next_source_ordinal = next_source_ordinal;
+        Ok(accumulator)
+    }
+
+    /// Snapshot this role's canonical top-101 heaps for durable publication.
+    pub fn checkpoint_entries(&self) -> Result<Vec<V36PrefixGtHeapEntry>> {
+        if self.next_source_ordinal < GT_HEAP_CHECKPOINT_NEIGHBORS as u64
+            || self
+                .heaps
+                .iter()
+                .any(|heap| heap.len() != GT_HEAP_CHECKPOINT_NEIGHBORS)
+        {
+            return Err(invalid("V36 prefix exact truth corpus is insufficient"));
+        }
+        let mut entries = Vec::with_capacity(
+            self.queries
+                .len()
+                .checked_mul(GT_HEAP_CHECKPOINT_NEIGHBORS)
+                .ok_or_else(|| invalid("V36 prefix GT heap row count overflows"))?,
+        );
+        for (query, heap) in self.queries.iter().zip(&self.heaps) {
+            let mut neighbors = heap.clone().into_vec();
+            neighbors.sort();
+            entries.extend(neighbors.into_iter().enumerate().map(|(rank, neighbor)| {
+                V36PrefixGtHeapEntry {
+                    feature_row_id: neighbor.feature_row_id,
+                    query_ordinal: query.query_ordinal,
+                    rank: u16::try_from(rank).unwrap(),
+                    role: self.role,
+                    squared_distance: neighbor.distance,
+                }
+            }));
+        }
+        Ok(entries)
     }
 
     /// Absorb one validated, source-ordered corpus batch.
@@ -9035,7 +9134,7 @@ impl V36PrefixGtAccumulator {
                     distance: squared_l2(&row.embedding, &query.embedding),
                     feature_row_id: row.feature_row_id,
                 };
-                if heap.len() < GT_NEIGHBORS {
+                if heap.len() < GT_HEAP_CHECKPOINT_NEIGHBORS {
                     heap.push(candidate);
                 } else if heap.peek().is_some_and(|worst| candidate < *worst) {
                     heap.pop();
@@ -9052,8 +9151,11 @@ impl V36PrefixGtAccumulator {
 
     /// Finish one complete GT tile in `(query_ordinal,rank)` order.
     pub fn finish(self) -> Result<Vec<V36PrefixGtNeighbor>> {
-        if self.next_source_ordinal < GT_NEIGHBORS as u64
-            || self.heaps.iter().any(|heap| heap.len() != GT_NEIGHBORS)
+        if self.next_source_ordinal < GT_HEAP_CHECKPOINT_NEIGHBORS as u64
+            || self
+                .heaps
+                .iter()
+                .any(|heap| heap.len() != GT_HEAP_CHECKPOINT_NEIGHBORS)
         {
             return Err(invalid("V36 prefix exact truth corpus is insufficient"));
         }
@@ -9061,14 +9163,14 @@ impl V36PrefixGtAccumulator {
         for (query, heap) in self.queries.iter().zip(self.heaps) {
             let mut neighbors = heap.into_vec();
             neighbors.sort();
-            truth.extend(neighbors.into_iter().enumerate().map(|(rank, neighbor)| {
-                V36PrefixGtNeighbor {
+            truth.extend(neighbors.into_iter().take(GT_NEIGHBORS).enumerate().map(
+                |(rank, neighbor)| V36PrefixGtNeighbor {
                     query_ordinal: query.query_ordinal,
                     rank: u16::try_from(rank).unwrap(),
                     feature_row_id: neighbor.feature_row_id,
                     squared_distance: neighbor.distance,
-                }
-            }));
+                },
+            ));
         }
         Ok(truth)
     }

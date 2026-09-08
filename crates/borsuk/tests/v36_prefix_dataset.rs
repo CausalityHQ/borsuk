@@ -2807,6 +2807,81 @@ fn v36_prefix_dataset_gt_heap_checkpoint_arrow_is_exact_and_resumable() {
 }
 
 #[test]
+fn v36_prefix_dataset_gt_accumulator_resumes_rank_101_without_output_drift() {
+    let query = borsuk::V36PrefixQueryRow {
+        query_ordinal: 0,
+        feature_row_id: 9_999,
+        embedding: vector(1, 0.0),
+    };
+    let corpus = (0_u64..202)
+        .map(|ordinal| borsuk::V36PrefixMaterializedRow {
+            feature_row_id: 20_000 + ordinal,
+            source_ordinal: Some(ordinal),
+            embedding: vector(1, ordinal as f32 / 202.0),
+        })
+        .collect::<Vec<_>>();
+    let mut uninterrupted =
+        V36PrefixGtAccumulator::new(V36PrefixQualityRole::Development, vec![query.clone()])
+            .unwrap();
+    uninterrupted.absorb(&corpus).unwrap();
+
+    let mut interrupted =
+        V36PrefixGtAccumulator::new(V36PrefixQualityRole::Development, vec![query.clone()])
+            .unwrap();
+    interrupted.absorb(&corpus[..111]).unwrap();
+    let checkpoint_entries = interrupted.checkpoint_entries().unwrap();
+    let prefix_feature_ids = corpus[..111]
+        .iter()
+        .map(|row| row.feature_row_id)
+        .collect::<Vec<_>>();
+    assert_eq!(checkpoint_entries.len(), 101);
+    assert_eq!(checkpoint_entries[100].rank, 100);
+    let mut resumed = V36PrefixGtAccumulator::restore(
+        V36PrefixQualityRole::Development,
+        vec![query.clone()],
+        111,
+        &prefix_feature_ids,
+        checkpoint_entries.clone(),
+    )
+    .unwrap();
+    resumed.absorb(&corpus[111..]).unwrap();
+    assert_eq!(resumed.finish().unwrap(), uninterrupted.finish().unwrap());
+    let mut duplicate_resume = V36PrefixGtAccumulator::restore(
+        V36PrefixQualityRole::Development,
+        vec![query.clone()],
+        111,
+        &prefix_feature_ids,
+        checkpoint_entries.clone(),
+    )
+    .unwrap();
+    let mut duplicated = corpus[111].clone();
+    duplicated.feature_row_id = prefix_feature_ids[0];
+    assert!(duplicate_resume.absorb(&[duplicated]).is_err());
+    let mut injected = checkpoint_entries.clone();
+    injected[100].feature_row_id = 50_000;
+    assert!(
+        V36PrefixGtAccumulator::restore(
+            V36PrefixQualityRole::Development,
+            vec![query.clone()],
+            111,
+            &prefix_feature_ids,
+            injected,
+        )
+        .is_err()
+    );
+    assert!(
+        V36PrefixGtAccumulator::restore(
+            V36PrefixQualityRole::Development,
+            vec![query],
+            100,
+            &prefix_feature_ids,
+            checkpoint_entries,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn v36_prefix_dataset_writes_all_quality_truth_with_one_corpus_scan() {
     let directory = tempfile::tempdir().unwrap();
     let source_path = directory.path().join("source.parquet");
