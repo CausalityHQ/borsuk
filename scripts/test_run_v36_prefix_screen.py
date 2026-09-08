@@ -372,7 +372,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 spec["InstanceMarketOptions"]["SpotOptions"]["MaxPrice"], "3.000000"
             )
             self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
-            script = base64.b64decode(spec["UserData"]).decode()
+            script = spec["UserData"]
+            self.assertIsInstance(script, str)
+            self.assertLessEqual(len(base64.b64encode(script.encode())), 25_600)
             self.assertIn("--execution-authority", script)
             self.assertIn("--scratch", script)
             self.assertNotIn("--max-source-objects", script)
@@ -768,11 +770,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
     def test_v36_prefix_screen_runs_bound_sidecar_concurrently_and_fails_fast(self) -> None:
         # Break caught: checkpoints remain on ephemeral NVMe until Rust exits,
         # or science keeps running after its only publisher has failed.
-        script = base64.b64decode(
-            subject.build_v36_prefix_launch_specs(
-                self.plan(), launch_nonce="7" * 32, attempt_ordinal=0
-            )[0]["UserData"]
-        ).decode()
+        script = subject.build_v36_prefix_launch_specs(
+            self.plan(), launch_nonce="7" * 32, attempt_ordinal=0
+        )[0]["UserData"]
         self.assertIn(
             'tar --zstd -xf "$root/source.tar.zst" -C "$root/sidecar-source" '
             "scripts/run_v36_prefix_screen.py",
@@ -795,11 +795,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
     def test_v36_prefix_screen_publishes_artifacts_receipt_then_terminal(self) -> None:
         # Break caught: successful science is shut down before its artifacts
         # and authenticated terminal become durable in the attempt prefix.
-        script = base64.b64decode(
-            subject.build_v36_prefix_launch_specs(
-                self.plan(), launch_nonce="f" * 32, attempt_ordinal=0
-            )[0]["UserData"]
-        ).decode()
+        script = subject.build_v36_prefix_launch_specs(
+            self.plan(), launch_nonce="f" * 32, attempt_ordinal=0
+        )[0]["UserData"]
         artifacts = (
             "population-authority.json",
             "source.parquet",
@@ -827,11 +825,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
     def test_v36_prefix_screen_source_insufficiency_is_terminal_not_retryable(self) -> None:
         # Break caught: exhausting the registered source prefix is mislabeled
         # as infrastructure and spends a second or third Spot attempt.
-        script = base64.b64decode(
-            subject.build_v36_prefix_launch_specs(
-                self.plan(), launch_nonce="e" * 32, attempt_ordinal=0
-            )[0]["UserData"]
-        ).decode()
+        script = subject.build_v36_prefix_launch_specs(
+            self.plan(), launch_nonce="e" * 32, attempt_ordinal=0
+        )[0]["UserData"]
         self.assertIn('elif [[ "$status" = 42 ]]; then', script)
         self.assertIn("terminal_status=screen-source-insufficient", script)
 
@@ -1897,14 +1893,12 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             "pointer_sha256": "c" * 64,
             "pointer_uri": f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json",
         }
-        script = base64.b64decode(
-            subject.build_v36_prefix_launch_specs(
-                plan,
-                launch_nonce="9" * 32,
-                attempt_ordinal=1,
-                resume=resume,
-            )[0]["UserData"]
-        ).decode()
+        script = subject.build_v36_prefix_launch_specs(
+            plan,
+            launch_nonce="9" * 32,
+            attempt_ordinal=1,
+            resume=resume,
+        )[0]["UserData"]
         materialize = script.index("--materialize-resume")
         science = script.index("--execute-prefix-freeze")
         self.assertLess(materialize, science)

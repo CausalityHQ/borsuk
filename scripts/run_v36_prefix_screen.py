@@ -1788,9 +1788,10 @@ def build_v36_prefix_launch_specs(
 
     if re.fullmatch(r"[0-9a-f]{32}", launch_nonce) is None:
         raise ValueError("V36 prefix-screen launch nonce differs")
-    data = base64.b64encode(
-        _user_data(plan, attempt_ordinal=attempt_ordinal, resume=resume).encode()
-    ).decode()
+    # Botocore base64-encodes RunInstances.UserData during serialization.
+    # Supplying pre-encoded bytes double-encodes the bootstrap and can exceed
+    # EC2's 25,600-byte encoded request limit.
+    data = _user_data(plan, attempt_ordinal=attempt_ordinal, resume=resume)
     specs: list[dict[str, object]] = []
     for zone_ordinal, (zone, subnet) in enumerate(SPOT_TARGETS):
         token = hashlib.sha256(
