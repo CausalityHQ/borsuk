@@ -24,10 +24,10 @@ use borsuk::{
     V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixMaterializedArtifacts,
     V36PrefixPhaseResumeRequest, V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter,
     V36PrefixPopulationCommit, V36PrefixPopulationSelection, V36PrefixQualityRole,
-    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
-    V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
-    V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
-    V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
+    V36PrefixQueryRow, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
+    V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
+    V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
+    V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
     bind_v36_prefix_population_authority, canonical_v36_prefix_checkpoint_manifest_bytes,
     canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
@@ -41,19 +41,19 @@ use borsuk::{
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, restore_v36_prefix_checkpoint_phase,
     restore_v36_prefix_file_backed_population_scan, restore_v36_prefix_population,
-    run_v36_prefix_gt100_checkpointed, scan_v36_prefix_gt100_parquet,
-    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
-    scan_v36_prefix_object_prefix_file_backed, scan_v36_prefix_object_prefix_resumed,
-    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_population_rows, select_v36_prefix_roles,
-    v36_prefix_gt100_schema, v36_prefix_query_schema, v36_prefix_query_score_sha256,
-    v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
-    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    run_v36_prefix_checkpoint_gt100, run_v36_prefix_gt100_checkpointed,
+    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
+    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
+    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
+    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -4168,34 +4168,38 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         artifacts.performance_query
     );
 
-    let heaps_path = directory.path().join("gt-heaps-00000128.arrow");
-    let heap_checkpoint = V36PrefixGtHeapCheckpoint {
-        entries: [
-            V36PrefixQualityRole::Development,
-            V36PrefixQualityRole::Validation,
-            V36PrefixQualityRole::SealedHoldout,
-        ]
-        .into_iter()
-        .flat_map(|role| {
-            let source_ids = &expected_source_ids;
-            (0_u32..2).flat_map(move |query_ordinal| {
-                source_ids
-                    .iter()
-                    .take(101)
-                    .enumerate()
-                    .map(move |(rank, feature_row_id)| V36PrefixGtHeapEntry {
-                        feature_row_id: *feature_row_id,
-                        query_ordinal,
-                        rank: u16::try_from(rank).unwrap(),
-                        role,
-                        squared_distance: rank as f64 + f64::from(query_ordinal) / 10.0,
-                    })
+    let expected_queries = [1_u8, 2, 3].map(|role| {
+        expected_assignments
+            .iter()
+            .filter(|assignment| assignment.3 == role)
+            .enumerate()
+            .map(|(query_ordinal, assignment)| {
+                let mut embedding = vec![0.0_f32; DIMENSIONS];
+                embedding[usize::try_from(assignment.2 - 1).unwrap() % DIMENSIONS] = 1.0;
+                V36PrefixQueryRow {
+                    query_ordinal: u32::try_from(query_ordinal).unwrap(),
+                    feature_row_id: assignment.2,
+                    embedding,
+                }
             })
-        })
-        .collect(),
-        next_source_ordinal: 128,
-        query_counts: [2, 2, 2],
-    };
+            .collect::<Vec<_>>()
+    });
+    let mut final_heap_checkpoint = None;
+    let (expected_truth, expected_gt_stats) = run_v36_prefix_gt100_checkpointed(
+        &paths.source,
+        &expected_source_ids,
+        expected_queries,
+        None,
+        128,
+        2,
+        |checkpoint| {
+            final_heap_checkpoint = Some(checkpoint.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+    let heap_checkpoint = final_heap_checkpoint.unwrap();
+    let heaps_path = directory.path().join("gt-heaps-00000128.arrow");
     fs::write(
         &heaps_path,
         encode_v36_prefix_gt_heap_checkpoint(&heap_checkpoint).unwrap(),
@@ -4308,9 +4312,13 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         })
         .unwrap();
     assert!(matches!(
-        phase_resumed_state,
+        &phase_resumed_state,
         V36PrefixCheckpointResumeState::Materialized { .. }
     ));
+    let (resumed_truth, resumed_gt_stats) =
+        run_v36_prefix_checkpoint_gt100(&phase_resumed_state, 128, 2, |_| Ok(())).unwrap();
+    assert_eq!(resumed_truth, expected_truth);
+    assert_eq!(resumed_gt_stats, expected_gt_stats);
     let phase_resumed_ready = phase_resumed_writer
         .commit_ground_truth(&heaps, context.corpus_rows)
         .unwrap();
@@ -4378,9 +4386,19 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         })
         .unwrap();
     assert!(matches!(
-        ground_truth_resume_state,
+        &ground_truth_resume_state,
         V36PrefixCheckpointResumeState::GroundTruth { .. }
     ));
+    let mut eof_resume_checkpoints = 0_usize;
+    let (eof_resume_truth, eof_resume_stats) =
+        run_v36_prefix_checkpoint_gt100(&ground_truth_resume_state, 128, 2, |_| {
+            eof_resume_checkpoints += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(eof_resume_checkpoints, 0);
+    assert_eq!(eof_resume_truth, expected_truth);
+    assert_eq!(eof_resume_stats, expected_gt_stats);
 
     let mut rewritten_ground_truth = ground_truth_head.clone();
     let borsuk::V36PrefixCheckpointPhase::GroundTruth {

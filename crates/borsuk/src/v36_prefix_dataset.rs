@@ -21,7 +21,10 @@ use arrow_schema::{DataType, Field, Schema};
 use futures_util::StreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, ObjectStoreScheme};
 use parquet::{
-    arrow::{ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    arrow::{
+        ArrowSchemaConverter, ArrowWriter, ProjectionMask,
+        arrow_reader::ParquetRecordBatchReaderBuilder,
+    },
     file::properties::WriterProperties,
     schema::types::SchemaDescriptor,
 };
@@ -401,6 +404,7 @@ pub struct V36PrefixPopulationCheckpointWriter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Fully authenticated local material needed to continue one published head.
 pub struct V36PrefixCheckpointHead {
+    authenticated_corpus_rows: u64,
     authenticated_dependencies: Vec<V36PrefixCheckpointDependencyFile>,
     authenticated_manifest: V36PrefixCheckpointManifest,
     authenticated_pointer_bytes: Vec<u8>,
@@ -415,6 +419,7 @@ pub struct V36PrefixCheckpointHead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated local files produced by the completed materialization phase.
 pub struct V36PrefixMaterializedCheckpointFiles {
+    expected_source_rows: u64,
     /// Canonical population authority JSON.
     pub population_authority: V36PrefixCheckpointDependencyFile,
     /// Query-excluded source Parquet.
@@ -575,6 +580,7 @@ pub fn load_v36_prefix_checkpoint_head(
         });
     }
     Ok(V36PrefixCheckpointHead {
+        authenticated_corpus_rows: context.corpus_rows,
         authenticated_dependencies: dependencies.clone(),
         authenticated_manifest: manifest.clone(),
         authenticated_pointer_bytes: pointer_bytes.clone(),
@@ -627,7 +633,9 @@ impl V36PrefixPopulationCheckpointWriter {
         head: V36PrefixCheckpointHead,
     ) -> Result<Self> {
         let runs = head.identity_runs()?;
+        let authenticated_corpus_rows = head.authenticated_corpus_rows;
         let V36PrefixCheckpointHead {
+            authenticated_corpus_rows: _,
             authenticated_dependencies: _,
             authenticated_manifest: _,
             authenticated_pointer_bytes: _,
@@ -640,8 +648,9 @@ impl V36PrefixPopulationCheckpointWriter {
         let pointer: V36PrefixCheckpointPointer =
             serde_json::from_slice(&previous_pointer_bytes)
                 .map_err(|_| invalid("V36 population checkpoint pointer JSON differs"))?;
-        if canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)?
-            != previous_pointer_bytes
+        if authenticated_corpus_rows != context.corpus_rows
+            || canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)?
+                != previous_pointer_bytes
             || pointer.generation != previous_manifest.generation
             || pointer.run_id != previous_manifest.run_id
             || pointer.producer_attempt_id != previous_manifest.producer_attempt_id
@@ -740,9 +749,11 @@ impl V36PrefixPopulationCheckpointWriter {
         if !matches!(&head.manifest.phase, V36PrefixCheckpointPhase::Population) {
             return Err(invalid("V36 population checkpoint resume phase differs"));
         }
+        let authenticated_corpus_rows = head.authenticated_corpus_rows;
         let mut restored =
             restore_v36_prefix_file_backed_population_scan(&head, limits, scratch_root)?;
         let V36PrefixCheckpointHead {
+            authenticated_corpus_rows: _,
             authenticated_dependencies: _,
             authenticated_manifest: _,
             authenticated_pointer_bytes: _,
@@ -755,8 +766,9 @@ impl V36PrefixPopulationCheckpointWriter {
         let pointer: V36PrefixCheckpointPointer =
             serde_json::from_slice(&previous_pointer_bytes)
                 .map_err(|_| invalid("V36 population checkpoint pointer JSON differs"))?;
-        if canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)?
-            != previous_pointer_bytes
+        if authenticated_corpus_rows != context.corpus_rows
+            || canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)?
+                != previous_pointer_bytes
             || pointer.generation != previous_manifest.generation
             || pointer.run_id != previous_manifest.run_id
             || pointer.producer_attempt_id != previous_manifest.producer_attempt_id
@@ -832,7 +844,9 @@ impl V36PrefixPopulationCheckpointWriter {
             || (producer_attempt_id == head.manifest.producer_attempt_id
                 && execution_authority_sha256 == head.manifest.execution_authority_sha256
                 && producer_instance_id == head.manifest.producer_instance_id);
-        if canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)? != head.pointer_bytes
+        if head.authenticated_corpus_rows != context.corpus_rows
+            || canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)?
+                != head.pointer_bytes
             || pointer.generation != head.manifest.generation
             || pointer.run_id != head.manifest.run_id
             || pointer.producer_attempt_id != head.manifest.producer_attempt_id
@@ -863,6 +877,7 @@ impl V36PrefixPopulationCheckpointWriter {
             });
         }
         let installed_head = V36PrefixCheckpointHead {
+            authenticated_corpus_rows: context.corpus_rows,
             authenticated_dependencies: installed_dependencies.clone(),
             authenticated_manifest: head.manifest.clone(),
             authenticated_pointer_bytes: head.pointer_bytes.clone(),
@@ -7628,6 +7643,7 @@ pub fn restore_v36_prefix_checkpoint_phase(
         Ok(dependency)
     };
     let artifacts = V36PrefixMaterializedCheckpointFiles {
+        expected_source_rows: head.authenticated_corpus_rows,
         population_authority: dependency(0)?,
         source: dependency(1)?,
         development_query: dependency(2)?,
@@ -9717,6 +9733,167 @@ fn v36_prefix_query_rows_from_batch(
         .collect()
 }
 
+fn validate_v36_prefix_checkpoint_source_metadata_rows(
+    declared_rows: i64,
+    row_group_rows: &[i64],
+    expected_rows: u64,
+) -> Result<usize> {
+    let expected = i64::try_from(expected_rows)
+        .ok()
+        .filter(|rows| *rows >= i64::try_from(GT_HEAP_CHECKPOINT_NEIGHBORS).unwrap())
+        .ok_or_else(|| invalid("V36 prefix source Parquet row count differs"))?;
+    let mut total = 0_i64;
+    for rows in row_group_rows {
+        if *rows <= 0 {
+            return Err(invalid("V36 prefix source Parquet row count differs"));
+        }
+        total = total
+            .checked_add(*rows)
+            .ok_or_else(|| invalid("V36 prefix source Parquet row count overflows"))?;
+    }
+    if row_group_rows.is_empty() || declared_rows != total || total != expected {
+        return Err(invalid("V36 prefix source Parquet row count differs"));
+    }
+    usize::try_from(expected).map_err(|_| invalid("V36 prefix source Parquet row count overflows"))
+}
+
+fn load_v36_prefix_checkpoint_source_ids(path: &Path, expected_rows: u64) -> Result<Vec<u64>> {
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_source_schema())?;
+    if builder.schema().as_ref() != &v36_prefix_source_schema() {
+        return Err(invalid("V36 prefix source Parquet physical schema differs"));
+    }
+    let declared_rows = validate_v36_prefix_checkpoint_source_metadata_rows(
+        builder.metadata().file_metadata().num_rows(),
+        &builder
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|group| group.num_rows())
+            .collect::<Vec<_>>(),
+        expected_rows,
+    )?;
+    let projection = ProjectionMask::roots(builder.parquet_schema(), [0]);
+    builder = builder.with_projection(projection);
+    let mut ids = Vec::with_capacity(declared_rows);
+    let mut unique = BTreeSet::new();
+    for batch in builder.build()? {
+        let batch = batch?;
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix source Parquet ID column differs"))?;
+        if batch.num_columns() != 1
+            || batch.num_rows() == 0
+            || values.null_count() != 0
+            || values.iter().flatten().any(|id| !unique.insert(id))
+        {
+            return Err(invalid("V36 prefix source Parquet membership differs"));
+        }
+        ids.extend(values.values());
+        if ids.len() > declared_rows {
+            return Err(invalid("V36 prefix source Parquet row count differs"));
+        }
+    }
+    if ids.len() != declared_rows {
+        return Err(invalid("V36 prefix source Parquet row count differs"));
+    }
+    Ok(ids)
+}
+
+fn load_v36_prefix_checkpoint_queries(
+    artifacts: &V36PrefixMaterializedCheckpointFiles,
+) -> Result<[Vec<V36PrefixQueryRow>; 3]> {
+    let mut remaining = u32::try_from(GT_HEAP_CHECKPOINT_MAX_QUERIES).unwrap();
+    let mut output = [Vec::new(), Vec::new(), Vec::new()];
+    for (queries, artifact) in output.iter_mut().zip([
+        &artifacts.development_query,
+        &artifacts.validation_query,
+        &artifacts.sealed_holdout_query,
+    ]) {
+        let count = validate_v36_prefix_checkpoint_query_file(&artifact.path, remaining)?;
+        scan_v36_prefix_query_parquet(&artifact.path, u64::from(count), |batch| {
+            queries.extend(v36_prefix_query_rows_from_batch(
+                &batch,
+                0,
+                batch.num_rows(),
+            )?);
+            Ok(())
+        })?;
+        remaining = remaining
+            .checked_sub(count)
+            .ok_or_else(|| invalid("V36 prefix exact truth query count differs"))?;
+    }
+    Ok(output)
+}
+
+/// Continue exact GT from authenticated Materialized or GroundTruth checkpoint files.
+pub fn run_v36_prefix_checkpoint_gt100<C>(
+    state: &V36PrefixCheckpointResumeState,
+    block_rows: usize,
+    worker_threads: usize,
+    consume_checkpoint: C,
+) -> Result<([Vec<V36PrefixGtNeighbor>; 3], V36PrefixGtRunStats)>
+where
+    C: FnMut(&V36PrefixGtHeapCheckpoint) -> Result<()>,
+{
+    let (artifacts, prior) = match state {
+        V36PrefixCheckpointResumeState::Materialized { artifacts, .. } => (artifacts, None),
+        V36PrefixCheckpointResumeState::GroundTruth {
+            artifacts,
+            heaps,
+            next_source_ordinal,
+            ..
+        } => {
+            let queries = load_v36_prefix_checkpoint_queries(artifacts)?;
+            let query_counts = queries.each_ref().map(|role| role.len() as u32);
+            let bytes = read_file(&heaps.path)?;
+            let checkpoint = decode_v36_prefix_gt_heap_checkpoint(
+                &bytes,
+                &heaps.identity,
+                *next_source_ordinal,
+                query_counts,
+            )?;
+            let source_ids = load_v36_prefix_checkpoint_source_ids(
+                &artifacts.source.path,
+                artifacts.expected_source_rows,
+            )?;
+            return run_v36_prefix_gt100_checkpointed(
+                &artifacts.source.path,
+                &source_ids,
+                queries,
+                Some(checkpoint),
+                block_rows,
+                worker_threads,
+                consume_checkpoint,
+            );
+        }
+        V36PrefixCheckpointResumeState::Population { .. }
+        | V36PrefixCheckpointResumeState::Selected { .. } => {
+            return Err(invalid("V36 prefix exact truth continuation phase differs"));
+        }
+    };
+    let queries = load_v36_prefix_checkpoint_queries(artifacts)?;
+    let source_ids = load_v36_prefix_checkpoint_source_ids(
+        &artifacts.source.path,
+        artifacts.expected_source_rows,
+    )?;
+    run_v36_prefix_gt100_checkpointed(
+        &artifacts.source.path,
+        &source_ids,
+        queries,
+        prior,
+        block_rows,
+        worker_threads,
+        consume_checkpoint,
+    )
+}
+
 fn v36_prefix_source_rows_from_batch(
     batch: &RecordBatch,
     next_source_ordinal: &mut u64,
@@ -9945,6 +10122,18 @@ mod tests {
         );
         assert!(
             validate_v36_prefix_checkpoint_query_metadata_rows(3_000, &[3_001], 3_000).is_err()
+        );
+    }
+
+    #[test]
+    fn v36_prefix_checkpoint_source_metadata_binds_rows_before_allocation() {
+        assert!(validate_v36_prefix_checkpoint_source_metadata_rows(128, &[64, 64], 128).is_ok());
+        assert!(validate_v36_prefix_checkpoint_source_metadata_rows(129, &[64, 65], 128).is_err());
+        assert!(validate_v36_prefix_checkpoint_source_metadata_rows(128, &[127], 128).is_err());
+        assert!(validate_v36_prefix_checkpoint_source_metadata_rows(128, &[128, 0], 128).is_err());
+        assert!(
+            validate_v36_prefix_checkpoint_source_metadata_rows(i64::MAX, &[i64::MAX, 1], 128)
+                .is_err()
         );
     }
 
