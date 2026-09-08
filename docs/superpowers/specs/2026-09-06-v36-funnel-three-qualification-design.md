@@ -295,7 +295,8 @@ seed 36, with a bounded-memory **centered** principal subspace, both from source
 dimension to `M=192`. The centered arm subtracts the corpus-only binary64 mean,
 forms the exact 768-by-768 binary64 covariance of the registered geometry
 reservoir, and uses the lockfile-pinned `nalgebra 0.33` single-threaded
-`SymmetricEigen` implementation with contraction disabled. It accepts the
+`SymmetricEigen::try_new(f64::EPSILON, 30 * source_dimensions)` implementation.
+Exhausting that exact iteration cap is a terminal numerical failure. It accepts the
 decomposition only when every eigenpair has relative residual at most `1e-10`
 and the reconstructed covariance has relative Frobenius error at most `1e-10`.
 It orders eigenpairs by descending
