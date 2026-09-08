@@ -351,8 +351,10 @@ pub use v36_funnel::{
 };
 #[doc(hidden)]
 pub use v36_funnel_geometry::{
-    V36GeometryAdmission, V36GeometryStop, admit_v36_geometry, allocate_v36_hamilton_postings,
-    build_v36_srht192_control, select_v36_closure_owners,
+    V36CenteredProjection, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
+    V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryAdmission,
+    V36GeometryStop, admit_v36_geometry, allocate_v36_hamilton_postings, build_v36_srht192_control,
+    select_v36_closure_owners, train_v36_centered_subspace,
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
