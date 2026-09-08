@@ -17,6 +17,8 @@ use arrow_ipc::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk_fma::{FmaBackend, FusedProjection4};
 use nalgebra::{DMatrix, SymmetricEigen};
+use rand_chacha::ChaCha8Rng;
+use rand_core::{RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -1754,6 +1756,190 @@ pub fn score_v36_posting_gaussian(
         .is_finite()
         .then_some(score)
         .ok_or_else(|| invalid("V36 Gaussian score is nonfinite"))
+}
+
+/// Equal-byte six-vector posting summary: one centroid plus five sub-prototypes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V36PostingPrototypeSummary {
+    population: u32,
+    active_subprototypes: u8,
+    prototypes: [[f32; 192]; 6],
+}
+
+impl V36PostingPrototypeSummary {
+    /// Unique primary-row population represented by this summary.
+    pub const fn population(&self) -> u32 {
+        self.population
+    }
+
+    /// Number of active sub-prototypes after the posting centroid.
+    pub const fn active_subprototypes(&self) -> u8 {
+        self.active_subprototypes
+    }
+
+    /// Posting centroid in slot zero.
+    pub const fn centroid(&self) -> &[f32; 192] {
+        &self.prototypes[0]
+    }
+
+    /// All six slots, including centroid padding in inactive slots.
+    pub const fn prototypes(&self) -> &[[f32; 192]; 6] {
+        &self.prototypes
+    }
+
+    /// Raw persisted bytes for exactly six projected vectors.
+    pub const fn raw_bytes(&self) -> u64 {
+        6 * 192 * 4
+    }
+
+    /// Resident bytes including fixed population and activity metadata.
+    pub const fn used_bytes(&self) -> u64 {
+        self.raw_bytes() + 8
+    }
+
+    /// Equal resident charge applied to every posting-score arm.
+    pub const fn resident_slot_bytes(&self) -> u64 {
+        POSTING_SUMMARY_SLOT_BYTES
+    }
+}
+
+fn v36_prototype_unit_interval(rng: &mut ChaCha8Rng) -> f64 {
+    const TWO_POW_NEG_53: f64 = 1.0 / 9_007_199_254_740_992.0;
+    (rng.next_u64() >> 11) as f64 * TWO_POW_NEG_53
+}
+
+/// Train the frozen seed-36 prototype-six control over unique primary rows.
+pub fn train_v36_posting_prototype_six(
+    rows: &[(u64, Vec<f32>)],
+) -> Result<V36PostingPrototypeSummary> {
+    if rows.is_empty() || rows.len() > u32::MAX as usize {
+        return Err(invalid("V36 prototype-six population differs"));
+    }
+    let mut ordered = rows.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+    if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0)
+        || ordered.iter().any(|(_, vector)| {
+            vector.len() != 192
+                || vector
+                    .iter()
+                    .any(|value| !value.is_finite() || (*value == 0.0 && value.to_bits() != 0))
+        })
+    {
+        return Err(invalid("V36 prototype-six row authority differs"));
+    }
+
+    let population = u32::try_from(ordered.len())
+        .map_err(|_| invalid("V36 prototype-six population overflows"))?;
+    let mut centroid = [0.0_f32; 192];
+    for dimension in 0..192 {
+        let sum = ordered
+            .iter()
+            .fold(0.0_f64, |sum, (_, row)| sum + f64::from(row[dimension]));
+        let value = (sum / f64::from(population)) as f32;
+        centroid[dimension] = if value == 0.0 { 0.0 } else { value };
+    }
+
+    let active = ordered.len().min(5);
+    let mut selected = Vec::with_capacity(active);
+    selected.push(0_usize);
+    let mut nearest = ordered
+        .iter()
+        .map(|(_, row)| squared_l2(row, &ordered[0].1))
+        .collect::<Result<Vec<_>>>()?;
+    let mut rng = ChaCha8Rng::seed_from_u64(36);
+    while selected.len() < active {
+        let total = nearest.iter().sum::<f64>();
+        let next = if total == 0.0 {
+            (0..ordered.len())
+                .find(|candidate| !selected.contains(candidate))
+                .ok_or_else(|| invalid("V36 prototype-six seed authority differs"))?
+        } else {
+            let target = v36_prototype_unit_interval(&mut rng) * total;
+            let mut cumulative = 0.0_f64;
+            nearest
+                .iter()
+                .enumerate()
+                .find_map(|(candidate, distance)| {
+                    cumulative += *distance;
+                    (cumulative > target && !selected.contains(&candidate)).then_some(candidate)
+                })
+                .or_else(|| {
+                    (0..ordered.len()).rev().find(|candidate| {
+                        nearest[*candidate] > 0.0 && !selected.contains(candidate)
+                    })
+                })
+                .ok_or_else(|| invalid("V36 prototype-six draw authority differs"))?
+        };
+        selected.push(next);
+        for (row, nearest_distance) in ordered.iter().zip(&mut nearest) {
+            *nearest_distance = nearest_distance.min(squared_l2(&row.1, &ordered[next].1)?);
+        }
+    }
+
+    let mut subprototypes = selected
+        .iter()
+        .map(|index| {
+            ordered[*index]
+                .1
+                .clone()
+                .try_into()
+                .map_err(|_| invalid("V36 prototype-six shape differs"))
+        })
+        .collect::<Result<Vec<[f32; 192]>>>()?;
+    for _ in 0..10 {
+        let mut sums = vec![[0.0_f64; 192]; active];
+        let mut counts = vec![0_u32; active];
+        for (_, row) in &ordered {
+            let owner = subprototypes
+                .iter()
+                .enumerate()
+                .map(|(index, prototype)| Ok((squared_l2(row, prototype)?, index)))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .min_by(|left, right| {
+                    left.0
+                        .total_cmp(&right.0)
+                        .then_with(|| left.1.cmp(&right.1))
+                })
+                .map(|(_, index)| index)
+                .ok_or_else(|| invalid("V36 prototype-six assignment differs"))?;
+            counts[owner] += 1;
+            for dimension in 0..192 {
+                sums[owner][dimension] += f64::from(row[dimension]);
+            }
+        }
+        for prototype in 0..active {
+            if counts[prototype] == 0 {
+                continue;
+            }
+            for dimension in 0..192 {
+                let value = (sums[prototype][dimension] / f64::from(counts[prototype])) as f32;
+                subprototypes[prototype][dimension] = if value == 0.0 { 0.0 } else { value };
+            }
+        }
+    }
+
+    let mut prototypes = [centroid; 6];
+    prototypes[1..=active].copy_from_slice(&subprototypes);
+    Ok(V36PostingPrototypeSummary {
+        population,
+        active_subprototypes: active as u8,
+        prototypes,
+    })
+}
+
+/// Score a query by the nearest active vector in the prototype-six summary.
+pub fn score_v36_posting_prototype_six(
+    summary: &V36PostingPrototypeSummary,
+    query: &[f32],
+) -> Result<f64> {
+    let mut best = f64::INFINITY;
+    for prototype in &summary.prototypes[..=usize::from(summary.active_subprototypes)] {
+        best = best.min(squared_l2(prototype, query)?);
+    }
+    best.is_finite()
+        .then_some(best)
+        .ok_or_else(|| invalid("V36 prototype-six score differs"))
 }
 
 /// Select deterministic primary and closure owners for one projected row.

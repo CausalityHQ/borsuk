@@ -390,6 +390,8 @@ dependencies = [
  "nalgebra",
  "object_store 0.14.1",
  "parquet",
+ "rand_chacha",
+ "rand_core 0.9.5",
  "rayon",
  "regex",
  "rustix",

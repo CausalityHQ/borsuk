@@ -16,7 +16,8 @@ use borsuk::{
     build_v36_srht192_control, decode_v36_centered_projection_arrow,
     encode_v36_centered_projection_arrow, project_v35_query_scalar, project_v35_query_simd,
     project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
-    score_v36_posting_gaussian, select_v36_closure_owners, train_v36_centered_subspace,
+    score_v36_posting_gaussian, score_v36_posting_prototype_six, select_v36_closure_owners,
+    train_v36_centered_subspace, train_v36_posting_prototype_six,
 };
 use sha2::{Digest, Sha256};
 
@@ -412,6 +413,113 @@ fn v36_posting_scores_share_slot_and_match_lower_tail_authority() {
     );
     query[7] = f32::NAN;
     assert!(score_v36_posting_gaussian(&rank_four, &query).is_err());
+}
+
+#[test]
+fn v36_prototype_six_is_equal_byte_deterministic_and_padded() {
+    // Break caught: prototype-six becomes centroid plus six extra vectors,
+    // depends on caller order, or scores padded slots as active prototypes.
+    let row = |ordinal: u64, value: f32| {
+        let mut vector = vec![0.0_f32; 192];
+        vector[0] = value;
+        (ordinal, vector)
+    };
+    let rows = vec![
+        row(50, 10.0),
+        row(10, 0.0),
+        row(40, 8.0),
+        row(20, 2.0),
+        row(60, 12.0),
+        row(30, 4.0),
+    ];
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    let summary = train_v36_posting_prototype_six(&rows).unwrap();
+    assert_eq!(
+        summary
+            .prototypes()
+            .iter()
+            .map(|prototype| prototype[0])
+            .collect::<Vec<_>>(),
+        vec![6.0, 0.0, 4.0, 12.0, 2.0, 9.0]
+    );
+    let reordered = train_v36_posting_prototype_six(&reversed).unwrap();
+    assert_eq!(summary, reordered);
+    assert_eq!(summary.population(), 6);
+    assert_eq!(summary.active_subprototypes(), 5);
+    assert_eq!(summary.raw_bytes(), 4_608);
+    assert!(summary.used_bytes() <= summary.resident_slot_bytes());
+    assert_eq!(summary.resident_slot_bytes(), 4_736);
+    assert!(std::mem::size_of_val(&summary) <= 4_736);
+    assert_eq!(summary.centroid()[0], 6.0);
+    let mut query = vec![0.0_f32; 192];
+    query[0] = 6.0;
+    assert_eq!(
+        score_v36_posting_prototype_six(&summary, &query).unwrap(),
+        0.0
+    );
+    query[0] = 11.0;
+    assert_eq!(
+        score_v36_posting_prototype_six(&summary, &query).unwrap(),
+        1.0
+    );
+
+    let singleton = train_v36_posting_prototype_six(&[row(7, 3.0)]).unwrap();
+    assert_eq!(singleton.active_subprototypes(), 1);
+    assert!(
+        singleton
+            .prototypes()
+            .iter()
+            .skip(2)
+            .all(|prototype| prototype == singleton.centroid())
+    );
+    let duplicates =
+        train_v36_posting_prototype_six(&[row(9, 3.0), row(7, 3.0), row(8, 3.0)]).unwrap();
+    assert_eq!(duplicates.active_subprototypes(), 3);
+    assert!(
+        duplicates
+            .prototypes()
+            .iter()
+            .all(|prototype| prototype == duplicates.centroid())
+    );
+    let empty_cluster = train_v36_posting_prototype_six(&[
+        row(1, 0.0),
+        row(2, 0.0),
+        row(3, 10.0),
+        row(4, 10.0),
+        row(5, 20.0),
+    ])
+    .unwrap();
+    assert_eq!(
+        empty_cluster
+            .prototypes()
+            .iter()
+            .map(|prototype| prototype[0])
+            .collect::<Vec<_>>(),
+        vec![8.0, 0.0, 10.0, 20.0, 0.0, 10.0]
+    );
+    let assignment_tie = train_v36_posting_prototype_six(&[
+        row(1, 0.0),
+        row(2, 2.0),
+        row(3, 4.0),
+        row(4, 6.0),
+        row(5, 8.0),
+        row(6, 10.0),
+    ])
+    .unwrap();
+    assert_eq!(
+        assignment_tie
+            .prototypes()
+            .iter()
+            .map(|prototype| prototype[0])
+            .collect::<Vec<_>>(),
+        vec![5.0, 0.0, 5.0, 10.0, 2.0, 8.0]
+    );
+    assert!(train_v36_posting_prototype_six(&[row(7, 1.0), row(7, 2.0)]).is_err());
+    assert!(train_v36_posting_prototype_six(&[(1, vec![0.0; 191])]).is_err());
+    let mut nonfinite = row(1, 0.0);
+    nonfinite.1[3] = f32::NAN;
+    assert!(train_v36_posting_prototype_six(&[nonfinite]).is_err());
 }
 
 #[test]
