@@ -1784,7 +1784,7 @@ if [[ "$status" != 0 ]]; then
   if [[ -f "$root/attempt.log" ]]; then
     tail -c 65000 "$root/attempt.log" >> "$root/failure.log"
   fi
-  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}FAILURE_DIAGNOSTIC.log --body "$root/failure.log" --if-none-match '*' || true
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}ERROR.log --body "$root/failure.log" --if-none-match '*' || true
 fi
 python3 "$root/write-terminal.py" \
   "$root/execution-authority.json" "$root/output/freeze-receipt.json" \

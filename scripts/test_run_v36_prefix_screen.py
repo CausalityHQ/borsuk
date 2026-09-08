@@ -809,7 +809,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertIn('>> "$root/attempt.log" 2>&1 &', script)
         diagnostic = (
             "put-object --bucket fixture --key "
-            "v36/prefix-results/attempt-0000/FAILURE_DIAGNOSTIC.log "
+            "v36/prefix-results/attempt-0000/ERROR.log "
             '--body "$root/failure.log" --if-none-match \'*\''
         )
         self.assertIn(diagnostic, script)
