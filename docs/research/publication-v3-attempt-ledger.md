@@ -4416,3 +4416,44 @@ replay PQ/pages or open fresh data. The result shows that two correlated axes
 are insufficient while four may be viable, but rank four requires a new
 query-independent preregistration and memory/latency decision rather than
 outcome selection. D3, production defaults and paid scale claims remain fenced.
+
+### V36 real-768D prefix population and exact truth are frozen
+
+Source `31445a91ee1cd68ff17010b1bf5205a47e8237bf` completed the separately
+registered V36 cohort-A prefix freeze on one causality Spot `r8gd.8xlarge` in
+`eu-central-1c`, instance `i-0b437d33f97910236`. The instance launched at
+2026-09-08T17:46:54Z, the terminal was published at 17:59:54Z, and the
+instance is confirmed terminated. The approximately 13-minute interval is
+end-to-end infrastructure time, not an ANN build or query latency claim.
+
+The freezer authenticated all 16 query-independently hash-ranked complete
+source objects, totaling 5,485,265,954 encoded bytes. It observed 3,583,054
+physical rows, 3,579,759 distinct feature IDs, and 3,295 duplicates. The exact
+population selector retained 1,100,000 rows; after removing all query roles,
+the materialized corpus contains 1,000,000 f32[768] vectors. The source
+Parquet is 1,458,450,077 bytes, SHA256
+`2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86`.
+
+Disjoint development, validation, and sealed-holdout roles each contain 1,000
+queries with exact binary64 no-FMA GT@100. Their GT artifacts are respectively
+2,046,505 bytes / SHA256
+`fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11`,
+2,045,045 bytes / SHA256
+`bf0fb0c934c986d05282e3d1c63dc351c553976ea05bfcab0cd3f06d2979e871`,
+and 2,043,861 bytes / SHA256
+`f8d6510235d6a9b3e551de1e467117ff94d30fc1d7db9d566cd60316a3c7e8e4`.
+A separate 10,000-query performance artifact is 14,736,967 bytes, SHA256
+`c7565e985dab928fdb275858d518dd63d0dab0b1087a93a5c1e4b2d9e2b8d647`;
+it has no GT and cannot tune quality arms.
+
+The canonical freeze receipt is 14,421 bytes, SHA256
+`47a29c338af6c3366aaa02af3205e6f7c7c1ac4a95462a87e1e6d4b387a71173`.
+The 4,719-byte `ATTEMPT_COMPLETE.json` terminal has SHA256
+`e08ac93eecd9dda22aa4611884bf3f072fcee7ea5918966607d271630bc0f385`
+and is preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/`.
+Every output is immutable and SHA256-bound. This evidence is
+`claim_eligible=false`: it freezes an unbiased high-dimensional screening
+population and exact truth but reports no ANN recall, query latency, S3 GETs,
+or serving throughput. Those measurements begin only with the sequential V36
+offline funnel; no 10M/100M or cold-S3 cell is authorized by this milestone.

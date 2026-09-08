@@ -158,7 +158,7 @@ total, population-row and corpus seed labels, the four future-exclusion roles,
 and an exclusion artifact required for nonzero cohorts. No v1 reader, alias, or
 conversion remains because BORSUK is prerelease.
 
-- [ ] **Step 0: Implement the v2 representativeness authority**
+- [x] **Step 0: Implement the v2 representativeness authority**
 
   Mutation-test upstream authority digest, object algorithm/version, exact
   cohort ordinal/start/count/window byte total, population-row and corpus
@@ -188,7 +188,7 @@ conversion remains because BORSUK is prerelease.
   and the immutable 1,100,000-row selected-identity Arrow artifact. Later
   phases must bind that selection byte-for-byte.
 
-- [ ] **Step 1: Write dataset and GT REDs**
+- [x] **Step 1: Write dataset and GT REDs**
 
   Test object selection by registered hash then path, and first occurrence by
   `(selected_object_ordinal,row_offset)`, nonnegative u64 feature
@@ -229,7 +229,7 @@ conversion remains because BORSUK is prerelease.
   Require a non-mutating `--dry-run` that prints exact object/byte/disk/wall/
   attempt/cost caps and creates no instance, bucket object, or local corpus.
 
-- [ ] **Step 3: Run focused REDs**
+- [x] **Step 3: Run focused REDs**
 
   Run the Rust test, then:
 
@@ -239,7 +239,7 @@ conversion remains because BORSUK is prerelease.
 
   Expected: missing freezer/launcher boundaries only.
 
-- [ ] **Step 4: Implement bounded streaming materialization**
+- [x] **Step 4: Implement bounded streaming materialization**
 
   Stream complete authenticated objects from their registered immutable HTTPS
   URIs to encrypted ephemeral NVMe, authenticate SHA-256 before decoding, and
@@ -374,14 +374,14 @@ conversion remains because BORSUK is prerelease.
   identity/distance-bit equality. Existing identical immutable objects succeed
   only after exact length/SHA-256/BLAKE3 verification; conflicting bytes fail.
 
-- [ ] **Step 5: Execute one dry run and one Spot freeze**
+- [x] **Step 5: Execute one dry run and one Spot freeze**
 
   The dry run must print instance candidates, maximum source objects/bytes,
   disk, wall, and cost caps without AWS mutation. Then run one original Spot
   cell, preserve its terminal, terminate it, and authenticate every produced
   object before any oracle consumes it.
 
-- [ ] **Step 6: Verify and commit evidence**
+- [x] **Step 6: Verify and commit evidence**
 
   Run focused Rust/Python tests, pinned Ruff, py_compile, scoped Clippy, fmt,
   docs validation, and diff-check. Commit the code plus completed authority and
