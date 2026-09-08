@@ -2549,6 +2549,7 @@ fn v36_prefix_dataset_preflight_authenticates_every_local_input_before_network()
     assert_eq!(preflight.ranked_objects.len(), registry.len());
     assert_eq!(preflight.authority.object_cap, 16);
     assert_eq!(preflight.producer_attempt_ordinal, 1);
+    assert_eq!(preflight.checkpoint_context.gt_block_rows, 65_536);
     assert_eq!(preflight.checkpoint_context.run_id, "v36-prefix-screen-r01");
     assert_eq!(
         preflight.checkpoint_context.object_prefix,
