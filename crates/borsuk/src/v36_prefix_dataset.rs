@@ -8950,6 +8950,82 @@ where
     Ok(())
 }
 
+fn scan_v36_prefix_source_parquet_suffix<F>(
+    path: &Path,
+    expected_feature_ids: &[u64],
+    first_unscored_row: u64,
+    mut consume: F,
+) -> Result<()>
+where
+    F: FnMut(RecordBatch, u64) -> Result<()>,
+{
+    validate_expected_feature_ids(expected_feature_ids)?;
+    let first_unscored_row = usize::try_from(first_unscored_row)
+        .ok()
+        .filter(|row| *row <= expected_feature_ids.len())
+        .ok_or_else(|| invalid("V36 prefix exact truth checkpoint boundary differs"))?;
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_source_schema())?;
+    if builder.schema().as_ref() != &v36_prefix_source_schema() {
+        return Err(invalid("V36 prefix source Parquet physical schema differs"));
+    }
+    let row_group_rows = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .map(|group| group.num_rows())
+        .collect::<Vec<_>>();
+    validate_v36_prefix_checkpoint_source_metadata_rows(
+        builder.metadata().file_metadata().num_rows(),
+        &row_group_rows,
+        u64::try_from(expected_feature_ids.len())
+            .map_err(|_| invalid("V36 prefix source Parquet row count overflows"))?,
+    )?;
+    let mut row_start = 0_usize;
+    let mut selected_start = expected_feature_ids.len();
+    let mut selected_row_groups = Vec::new();
+    for (index, rows) in row_group_rows.into_iter().enumerate() {
+        let rows = usize::try_from(rows)
+            .map_err(|_| invalid("V36 prefix source Parquet row count differs"))?;
+        let row_end = row_start
+            .checked_add(rows)
+            .ok_or_else(|| invalid("V36 prefix source Parquet row count overflows"))?;
+        if row_end > first_unscored_row {
+            if selected_row_groups.is_empty() {
+                selected_start = row_start;
+            }
+            selected_row_groups.push(index);
+        }
+        row_start = row_end;
+    }
+    if selected_row_groups.is_empty() {
+        return Ok(());
+    }
+    builder = builder.with_row_groups(selected_row_groups);
+    let expected_suffix = &expected_feature_ids[selected_start..];
+    let mut next_ordinal = 0_usize;
+    for batch in builder.build()? {
+        let batch = batch?;
+        let batch_start = selected_start
+            .checked_add(next_ordinal)
+            .ok_or_else(|| invalid("V36 prefix source Parquet row count overflows"))?;
+        validate_source_batch(&batch, expected_suffix, &mut next_ordinal)?;
+        consume(
+            batch,
+            u64::try_from(batch_start)
+                .map_err(|_| invalid("V36 prefix source Parquet row count overflows"))?,
+        )?;
+    }
+    if next_ordinal != expected_suffix.len() {
+        return Err(invalid("V36 prefix source Parquet row count differs"));
+    }
+    Ok(())
+}
+
 fn validate_query_batch(
     batch: &RecordBatch,
     next_ordinal: &mut u64,
@@ -9704,22 +9780,27 @@ where
         .num_threads(worker_threads)
         .build()
         .map_err(|_| invalid("V36 prefix exact truth worker pool differs"))?;
-    let mut decoded_source_rows = 0_u64;
     let mut pending = Vec::with_capacity(block_rows);
-    scan_v36_prefix_source_parquet(source_path, expected_source_feature_ids, |source_batch| {
-        let rows = v36_prefix_source_rows_from_batch(&source_batch, &mut decoded_source_rows)?;
-        pending.extend(rows.into_iter().filter(|row| {
-            row.source_ordinal
-                .is_some_and(|ordinal| ordinal >= prior_next)
-        }));
-        while pending.len() >= block_rows {
-            let remaining = pending.split_off(block_rows);
-            accumulator.absorb_with_pool(&pending, &pool)?;
-            consume_checkpoint(&accumulator.checkpoint()?)?;
-            pending = remaining;
-        }
-        Ok(())
-    })?;
+    scan_v36_prefix_source_parquet_suffix(
+        source_path,
+        expected_source_feature_ids,
+        prior_next,
+        |source_batch, batch_start| {
+            let mut decoded_source_rows = batch_start;
+            let rows = v36_prefix_source_rows_from_batch(&source_batch, &mut decoded_source_rows)?;
+            pending.extend(rows.into_iter().filter(|row| {
+                row.source_ordinal
+                    .is_some_and(|ordinal| ordinal >= prior_next)
+            }));
+            while pending.len() >= block_rows {
+                let remaining = pending.split_off(block_rows);
+                accumulator.absorb_with_pool(&pending, &pool)?;
+                consume_checkpoint(&accumulator.checkpoint()?)?;
+                pending = remaining;
+            }
+            Ok(())
+        },
+    )?;
     if !pending.is_empty() {
         accumulator.absorb_with_pool(&pending, &pool)?;
         consume_checkpoint(&accumulator.checkpoint()?)?;

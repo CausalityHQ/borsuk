@@ -3044,6 +3044,103 @@ fn v36_prefix_dataset_file_gt_runner_resumes_only_after_complete_all_query_block
 }
 
 #[test]
+fn v36_prefix_dataset_file_gt_resume_skips_completed_parquet_row_groups() {
+    let directory = tempfile::tempdir().unwrap();
+    let valid_path = directory.path().join("valid-source.parquet");
+    let poisoned_prefix_path = directory.path().join("poisoned-prefix-source.parquet");
+    let source_ids = (20_000_u64..20_202).collect::<Vec<_>>();
+    let write_two_row_groups = |path: &Path, poison_completed_prefix: bool| {
+        let file = fs::File::create(path).unwrap();
+        let schema = Arc::new(v36_prefix_source_schema());
+        let mut writer = parquet::arrow::ArrowWriter::try_new(file, schema.clone(), None).unwrap();
+        for (start, rows) in [(0_usize, 128_usize), (128, 74)] {
+            let embeddings = FixedSizeListArray::try_new(
+                Arc::new(Field::new("item", DataType::Float32, false)),
+                DIMENSIONS as i32,
+                Arc::new(Float32Array::from(
+                    (start..start + rows)
+                        .flat_map(|ordinal| {
+                            if poison_completed_prefix && start == 0 {
+                                vec![0.0_f32; DIMENSIONS]
+                            } else {
+                                vector(1, ordinal as f32 / 202.0)
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+                None,
+            )
+            .unwrap();
+            writer
+                .write(
+                    &RecordBatch::try_new(
+                        schema.clone(),
+                        vec![
+                            Arc::new(UInt64Array::from(source_ids[start..start + rows].to_vec()))
+                                as ArrayRef,
+                            Arc::new(embeddings),
+                        ],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            writer.flush().unwrap();
+        }
+        writer.close().unwrap();
+    };
+    write_two_row_groups(&valid_path, false);
+    write_two_row_groups(&poisoned_prefix_path, true);
+    let queries = [0_u64, 1, 2].map(|ordinal| {
+        vec![V36PrefixQueryRow {
+            query_ordinal: 0,
+            feature_row_id: 90_000 + ordinal,
+            embedding: vector(1, ordinal as f32 / 10.0),
+        }]
+    });
+
+    let (full_truth, _) = run_v36_prefix_gt100_checkpointed(
+        &valid_path,
+        &source_ids,
+        queries.clone(),
+        None,
+        128,
+        2,
+        |_| Ok(()),
+    )
+    .unwrap();
+    let mut completed_prefix = None;
+    assert!(
+        run_v36_prefix_gt100_checkpointed(
+            &valid_path,
+            &source_ids,
+            queries.clone(),
+            None,
+            128,
+            2,
+            |checkpoint| {
+                completed_prefix = Some(checkpoint.clone());
+                Err(BorsukError::InvalidStorage("fixture interruption".into()))
+            },
+        )
+        .is_err()
+    );
+    let completed_prefix = completed_prefix.unwrap();
+    assert_eq!(completed_prefix.next_source_ordinal, 128);
+
+    let (resumed_truth, _) = run_v36_prefix_gt100_checkpointed(
+        &poisoned_prefix_path,
+        &source_ids,
+        queries,
+        Some(completed_prefix),
+        128,
+        2,
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(resumed_truth, full_truth);
+}
+
+#[test]
 fn v36_prefix_dataset_file_gt_runner_rejects_query_state_above_checkpoint_cap() {
     let mut next_id = 90_000_u64;
     let queries = [1_001_usize; 3].map(|count| {
