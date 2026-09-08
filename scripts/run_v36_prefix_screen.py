@@ -524,10 +524,12 @@ def _put_immutable_s3_bytes(s3_client: Any, uri: str, body: bytes) -> None:
             IfNoneMatch="*",
         )
     except Exception as error:
-        code = getattr(error, "response", {}).get("Error", {}).get("Code")
-        if code not in {"PreconditionFailed", "ConditionalRequestConflict", "412"}:
-            raise
-        observed, _ = _read_s3_bytes(s3_client, uri, len(body))
+        # A conditional conflict and a lost successful acknowledgement are
+        # indistinguishable until the exact remote bytes are observed.
+        try:
+            observed, _ = _read_s3_bytes(s3_client, uri, len(body))
+        except Exception:
+            raise error from None
         if observed != body:
             raise ValueError("V36 checkpoint immutable object differs") from None
 
@@ -1209,6 +1211,73 @@ class _AwsCliRunner:
             yield chunk
         if process.wait() != 0:
             raise RuntimeError("V36 checkpoint AWS stream failed")
+
+
+class V36AwsCliConditionalS3Client:
+    """Boto reads plus AWS CLI conditional writes with the current S3 model."""
+
+    def __init__(self, base: Any, *, runner: Any | None = None) -> None:
+        self._base = base
+        self._runner = _AwsCliRunner() if runner is None else runner
+
+    def get_object(self, **values: object) -> dict[str, object]:
+        """Delegate bounded reads to the configured Boto client."""
+
+        return self._base.get_object(**values)
+
+    def put_object(
+        self,
+        *,
+        Bucket: str,
+        Key: str,
+        Body: bytes,
+        IfNoneMatch: str | None = None,
+        IfMatch: str | None = None,
+    ) -> dict[str, object]:
+        """Perform one conditional byte upload without Botocore model drift."""
+
+        if (
+            type(Bucket) is not str
+            or not Bucket
+            or type(Key) is not str
+            or not Key
+            or type(Body) is not bytes
+            or not Body
+            or (IfNoneMatch is None) == (IfMatch is None)
+            or (IfNoneMatch is not None and IfNoneMatch != "*")
+            or (IfMatch is not None and (type(IfMatch) is not str or not IfMatch))
+        ):
+            raise ValueError("V36 controller conditional S3 write differs")
+        condition = (
+            ["--if-none-match", IfNoneMatch]
+            if IfNoneMatch is not None
+            else ["--if-match", IfMatch]
+        )
+        with tempfile.NamedTemporaryFile(prefix="v36-s3-put-", suffix=".blob") as payload:
+            payload.write(Body)
+            payload.flush()
+            os.fsync(payload.fileno())
+            response = self._runner.json(
+                [
+                    "aws",
+                    "--profile",
+                    PROFILE,
+                    "s3api",
+                    "put-object",
+                    "--region",
+                    REGION,
+                    "--bucket",
+                    Bucket,
+                    "--key",
+                    Key,
+                    "--body",
+                    payload.name,
+                    *condition,
+                    "--output",
+                    "json",
+                ]
+            )
+        return response
 
 
 class V36AwsCliCheckpointTransport:
@@ -2515,7 +2584,7 @@ def _v36_aws_clients() -> tuple[Any, Any]:
     import boto3
 
     session = boto3.Session(profile_name=PROFILE, region_name=REGION)
-    return session.client("ec2"), session.client("s3")
+    return session.client("ec2"), V36AwsCliConditionalS3Client(session.client("s3"))
 
 
 def main(argv: list[str] | None = None) -> int:

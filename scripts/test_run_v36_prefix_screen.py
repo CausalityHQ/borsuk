@@ -2111,6 +2111,33 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         )
         self.assertEqual(popen.call_args.kwargs["env"]["AWS_MAX_ATTEMPTS"], "5")
 
+    def test_v36_controller_s3_adapter_uses_cli_for_conditional_puts(self) -> None:
+        # Break caught: the devbox Botocore model rejects current S3
+        # If-None-Match/If-Match parameters before any request is sent.
+        runner = mock.Mock()
+        runner.json.return_value = {"ETag": '"etag-next"'}
+        base = mock.Mock()
+        client = subject.V36AwsCliConditionalS3Client(base, runner=runner)
+        self.assertEqual(
+            client.put_object(
+                Bucket="fixture",
+                Key="runs/launch.json",
+                Body=b"payload",
+                IfNoneMatch="*",
+            ),
+            {"ETag": '"etag-next"'},
+        )
+        arguments = runner.json.call_args.args[0]
+        self.assertEqual(arguments[:3], ["aws", "--profile", "causality"])
+        self.assertEqual(arguments[3:5], ["s3api", "put-object"])
+        self.assertEqual(arguments[arguments.index("--if-none-match") + 1], "*")
+        body_path = pathlib.Path(arguments[arguments.index("--body") + 1])
+        self.assertFalse(body_path.exists())
+        client.get_object(Bucket="fixture", Key="runs/launch.json")
+        base.get_object.assert_called_once_with(
+            Bucket="fixture", Key="runs/launch.json"
+        )
+
     def test_v36_checkpoint_sidecar_watches_every_ready_generation_until_exit(
         self,
     ) -> None:
