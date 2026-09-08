@@ -1,11 +1,21 @@
 //! Fast-fail scalar contracts for the V36 sequential prefix oracle.
 
+use std::{collections::HashMap, io::Cursor, sync::Arc};
+
+use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, Float64Array, RecordBatch};
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryStop, admit_v36_geometry,
-    allocate_v36_hamilton_postings, build_v36_srht192_control, project_v35_query_scalar,
-    project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
-    select_v36_closure_owners, train_v36_centered_subspace,
+    allocate_v36_hamilton_postings, build_v36_srht192_control,
+    decode_v36_centered_projection_arrow, encode_v36_centered_projection_arrow,
+    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
+    project_v36_centered_row_simd, select_v36_closure_owners, train_v36_centered_subspace,
 };
 use sha2::{Digest, Sha256};
 
@@ -73,6 +83,33 @@ fn centered_source_digest(domain: &[u8], rows: &[Vec<f32>]) -> String {
         }
     }
     format!("{:x}", digest.finalize())
+}
+
+fn decode_base64_fixture(encoded: &str) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut accumulator = 0_u32;
+    let mut bits = 0_u32;
+    for byte in encoded.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        if byte == b'=' {
+            break;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => panic!("invalid checked-in base64 fixture"),
+        };
+        accumulator = (accumulator << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push(((accumulator >> bits) & 0xff) as u8);
+            accumulator &= (1_u32 << bits).wrapping_sub(1);
+        }
+    }
+    output
 }
 
 #[test]
@@ -605,4 +642,522 @@ fn v36_centered_projection_matches_dense_ordered_f64_reference() {
     .unwrap();
     assert!(project_v36_centered_row_scalar(&odd_projection, &source).is_ok());
     assert!(project_v36_centered_row_simd(&odd_projection, &source).is_err());
+}
+
+#[test]
+fn v36_centered_projection_arrow_binds_training_and_complete_object_identity() {
+    // Break caught: a valid-looking basis from a different training population
+    // is substituted after arm selection, or Arrow framing changes unnoticed.
+    let rows = vec![
+        vec![2.0, 0.0, 0.0, 0.0],
+        vec![-2.0, 0.0, 0.0, 0.0],
+        vec![0.0, 1.0, 0.0, 0.0],
+        vec![0.0, -1.0, 0.0, 0.0],
+        vec![0.0, 0.0, 0.5, 0.0],
+        vec![0.0, 0.0, -0.5, 0.0],
+        vec![0.0, 0.0, 0.0, 0.25],
+        vec![0.0, 0.0, 0.0, -0.25],
+    ];
+    let spec = V36CenteredProjectionTrainingSpec {
+        source_dimensions: 4,
+        retained_dimensions: 4,
+        corpus_rows: 8,
+        corpus_sha256: centered_source_digest(b"borsuk-v36-centered-corpus-v1\n", &rows),
+        reservoir_rows: 8,
+        reservoir_sha256: centered_source_digest(b"borsuk-v36-centered-reservoir-v1\n", &rows),
+        maximum_block_rows: 3,
+        energy_dimensions: vec![1, 2, 4],
+    };
+    let projection = train_v36_centered_subspace(
+        &spec,
+        &mut TestProjectionSource {
+            corpus_rows: rows.clone(),
+            reservoir_rows: rows.clone(),
+            block_rows: 3,
+            mutate_reservoir: false,
+        },
+    )
+    .unwrap();
+    let uri = "s3://borsuk-v36-test/projections/centered.arrow";
+    let (bytes, identity) =
+        encode_v36_centered_projection_arrow(&projection, "centered-projection-basis", uri)
+            .unwrap();
+    let pyarrow_bytes =
+        decode_base64_fixture(include_str!("fixtures/v36_centered_projection_pyarrow.b64"));
+    assert_eq!(pyarrow_bytes.len(), 3_482);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&pyarrow_bytes)),
+        "d5dc7479da5012cbeff7d794f4033a11fb306bfb93bf74aeb089d32f092d2a71"
+    );
+    let pyarrow_identity = borsuk::V36ArtifactIdentity {
+        blake3: blake3::hash(&pyarrow_bytes).to_hex().to_string(),
+        encoded_bytes: pyarrow_bytes.len() as u64,
+        role: "centered-projection-basis".to_owned(),
+        sha256: format!("{:x}", Sha256::digest(&pyarrow_bytes)),
+        uri: uri.to_owned(),
+    };
+    assert_eq!(
+        decode_v36_centered_projection_arrow(&pyarrow_bytes, &pyarrow_identity, &spec).unwrap(),
+        projection
+    );
+    assert_eq!(identity.role, "centered-projection-basis");
+    assert_eq!(identity.uri, uri);
+    assert_eq!(identity.encoded_bytes, bytes.len() as u64);
+    assert!(identity.encoded_bytes < 3 * 1_048_576);
+    assert_eq!(identity.sha256, format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(identity.blake3, blake3::hash(&bytes).to_hex().as_str());
+    let manifest = {
+        let reader = FileReader::try_new(Cursor::new(&bytes), None).unwrap();
+        serde_json::from_str::<serde_json::Value>(
+            reader
+                .schema()
+                .metadata()
+                .get("borsuk.v36.centered_projection.manifest")
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    for key in [
+        "max_eigenpair_relative_residual_bits",
+        "reconstruction_relative_error_bits",
+    ] {
+        let bits = manifest.get(key).unwrap().as_str().unwrap();
+        assert_eq!(bits.len(), 16);
+        assert!(
+            bits.bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+    }
+    assert_eq!(
+        decode_v36_centered_projection_arrow(&bytes, &identity, &spec).unwrap(),
+        projection
+    );
+
+    let mut baseline_reader = FileReader::try_new(Cursor::new(&bytes), None).unwrap();
+    let baseline_schema = baseline_reader.schema();
+    let baseline_batch = baseline_reader.next().unwrap().unwrap();
+    assert!(baseline_reader.next().is_none());
+    let emit =
+        |fields: Vec<Field>, columns: Vec<ArrayRef>, manifest_text: String, batch_count: usize| {
+            let mut metadata = HashMap::new();
+            metadata.insert(
+                "borsuk.v36.centered_projection.manifest".to_owned(),
+                manifest_text,
+            );
+            let changed_schema = Arc::new(Schema::new_with_metadata(fields, metadata));
+            let changed_batch = RecordBatch::try_new(changed_schema.clone(), columns).unwrap();
+            let mut changed_bytes = Vec::new();
+            let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(&mut changed_bytes, &changed_schema, options)
+                    .unwrap();
+            for _ in 0..batch_count {
+                writer.write(&changed_batch).unwrap();
+            }
+            writer.finish().unwrap();
+            drop(writer);
+            let mut changed_identity = identity.clone();
+            changed_identity.encoded_bytes = changed_bytes.len() as u64;
+            changed_identity.sha256 = format!("{:x}", Sha256::digest(&changed_bytes));
+            changed_identity.blake3 = blake3::hash(&changed_bytes).to_hex().to_string();
+            (changed_bytes, changed_identity)
+        };
+    let rewrite_manifest = |mutate: &dyn Fn(&mut serde_json::Value)| {
+        let manifest_text = baseline_schema
+            .metadata()
+            .get("borsuk.v36.centered_projection.manifest")
+            .unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_str(manifest_text).unwrap();
+        mutate(&mut manifest);
+        emit(
+            baseline_schema
+                .fields()
+                .iter()
+                .map(|field| field.as_ref().clone())
+                .collect(),
+            baseline_batch.columns().to_vec(),
+            serde_json::to_string(&manifest).unwrap(),
+            1,
+        )
+    };
+    let rewrite_numerical_evidence = |key: &str, value: serde_json::Value| {
+        rewrite_manifest(&|manifest| {
+            manifest
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), value.clone());
+        })
+    };
+    for (key, bits) in [
+        ("max_eigenpair_relative_residual_bits", (-1.0_f64).to_bits()),
+        ("max_eigenpair_relative_residual_bits", f64::NAN.to_bits()),
+        (
+            "max_eigenpair_relative_residual_bits",
+            f64::INFINITY.to_bits(),
+        ),
+        (
+            "max_eigenpair_relative_residual_bits",
+            (1.1e-10_f64).to_bits(),
+        ),
+        ("reconstruction_relative_error_bits", (-1.0_f64).to_bits()),
+        ("reconstruction_relative_error_bits", f64::NAN.to_bits()),
+        (
+            "reconstruction_relative_error_bits",
+            f64::INFINITY.to_bits(),
+        ),
+        (
+            "reconstruction_relative_error_bits",
+            (1.1e-10_f64).to_bits(),
+        ),
+    ] {
+        let (changed_bytes, changed_identity) =
+            rewrite_numerical_evidence(key, format!("{bits:016x}").into());
+        assert!(
+            decode_v36_centered_projection_arrow(&changed_bytes, &changed_identity, &spec).is_err()
+        );
+    }
+    for malformed in [
+        serde_json::Value::from(0_u64),
+        serde_json::Value::from("000000000000000"),
+        serde_json::Value::from("000000000000000G"),
+        serde_json::Value::from("000000000000000A"),
+    ] {
+        let (changed_bytes, changed_identity) =
+            rewrite_numerical_evidence("max_eigenpair_relative_residual_bits", malformed);
+        assert!(
+            decode_v36_centered_projection_arrow(&changed_bytes, &changed_identity, &spec).is_err()
+        );
+    }
+    for (changed_bytes, changed_identity) in [
+        rewrite_manifest(&|manifest| {
+            manifest["retained_energy_ppm"][0] = 0_u64.into();
+        }),
+        rewrite_manifest(&|manifest| {
+            manifest["basis_sha256"] = "1".repeat(64).into();
+        }),
+        {
+            let manifest = baseline_schema
+                .metadata()
+                .get("borsuk.v36.centered_projection.manifest")
+                .unwrap();
+            let mut noncanonical = manifest.clone();
+            noncanonical.insert(1, ' ');
+            emit(
+                baseline_schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.as_ref().clone())
+                    .collect(),
+                baseline_batch.columns().to_vec(),
+                noncanonical,
+                1,
+            )
+        },
+        {
+            let mut fields = baseline_schema
+                .fields()
+                .iter()
+                .map(|field| field.as_ref().clone())
+                .collect::<Vec<_>>();
+            fields[0] = Field::new("mean", DataType::Float64, true);
+            emit(
+                fields,
+                baseline_batch.columns().to_vec(),
+                baseline_schema
+                    .metadata()
+                    .get("borsuk.v36.centered_projection.manifest")
+                    .unwrap()
+                    .clone(),
+                1,
+            )
+        },
+        {
+            let mut fields = baseline_schema
+                .fields()
+                .iter()
+                .map(|field| field.as_ref().clone())
+                .collect::<Vec<_>>();
+            fields[2] = Field::new(
+                "basis",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 4),
+                false,
+            );
+            let basis = baseline_batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .unwrap();
+            let mut columns = baseline_batch.columns().to_vec();
+            columns[2] = Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new("item", DataType::Float32, false)),
+                    4,
+                    basis.values().clone(),
+                    None,
+                )
+                .unwrap(),
+            );
+            emit(
+                fields,
+                columns,
+                baseline_schema
+                    .metadata()
+                    .get("borsuk.v36.centered_projection.manifest")
+                    .unwrap()
+                    .clone(),
+                1,
+            )
+        },
+        emit(
+            baseline_schema
+                .fields()
+                .iter()
+                .map(|field| field.as_ref().clone())
+                .collect(),
+            baseline_batch.columns().to_vec(),
+            baseline_schema
+                .metadata()
+                .get("borsuk.v36.centered_projection.manifest")
+                .unwrap()
+                .clone(),
+            2,
+        ),
+        {
+            let mut changed_bytes = Vec::new();
+            let options = IpcWriteOptions::default()
+                .try_with_compression(Some(arrow_ipc::CompressionType::ZSTD))
+                .unwrap();
+            let mut writer = FileWriter::try_new_with_options(
+                &mut changed_bytes,
+                baseline_schema.as_ref(),
+                options,
+            )
+            .unwrap();
+            writer.write(&baseline_batch).unwrap();
+            writer.finish().unwrap();
+            drop(writer);
+            let mut changed_identity = identity.clone();
+            changed_identity.encoded_bytes = changed_bytes.len() as u64;
+            changed_identity.sha256 = format!("{:x}", Sha256::digest(&changed_bytes));
+            changed_identity.blake3 = blake3::hash(&changed_bytes).to_hex().to_string();
+            (changed_bytes, changed_identity)
+        },
+        {
+            let mut changed_bytes = Vec::new();
+            let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+            let mut writer = FileWriter::try_new_with_options(
+                &mut changed_bytes,
+                baseline_schema.as_ref(),
+                options,
+            )
+            .unwrap();
+            writer.write(&baseline_batch).unwrap();
+            writer.write_metadata("forbidden", "footer metadata");
+            writer.finish().unwrap();
+            drop(writer);
+            let mut changed_identity = identity.clone();
+            changed_identity.encoded_bytes = changed_bytes.len() as u64;
+            changed_identity.sha256 = format!("{:x}", Sha256::digest(&changed_bytes));
+            changed_identity.blake3 = blake3::hash(&changed_bytes).to_hex().to_string();
+            (changed_bytes, changed_identity)
+        },
+        {
+            let mut columns = baseline_batch.columns().to_vec();
+            let mut eigenvalues = columns[1]
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .values()
+                .to_vec();
+            eigenvalues.reverse();
+            columns[1] = Arc::new(Float64Array::new(eigenvalues.into(), None));
+            emit(
+                baseline_schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.as_ref().clone())
+                    .collect(),
+                columns,
+                baseline_schema
+                    .metadata()
+                    .get("borsuk.v36.centered_projection.manifest")
+                    .unwrap()
+                    .clone(),
+                1,
+            )
+        },
+        {
+            let mut columns = baseline_batch.columns().to_vec();
+            let basis = columns[2]
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .unwrap();
+            let mut coefficients = basis
+                .values()
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap()
+                .values()
+                .to_vec();
+            coefficients[0] = 0.5;
+            columns[2] = Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    4,
+                    Arc::new(Float32Array::new(coefficients.into(), None)),
+                    None,
+                )
+                .unwrap(),
+            );
+            emit(
+                baseline_schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.as_ref().clone())
+                    .collect(),
+                columns,
+                baseline_schema
+                    .metadata()
+                    .get("borsuk.v36.centered_projection.manifest")
+                    .unwrap()
+                    .clone(),
+                1,
+            )
+        },
+    ] {
+        assert!(
+            decode_v36_centered_projection_arrow(&changed_bytes, &changed_identity, &spec).is_err()
+        );
+    }
+    assert!(encode_v36_centered_projection_arrow(&projection, "wrong-role", uri).is_err());
+    assert!(
+        encode_v36_centered_projection_arrow(&projection, "centered-projection-basis", "").is_err()
+    );
+
+    for changed_identity in [
+        {
+            let mut value = identity.clone();
+            value.uri.push_str(".other");
+            value
+        },
+        {
+            let mut value = identity.clone();
+            value.role = "other-role".to_owned();
+            value
+        },
+        {
+            let mut value = identity.clone();
+            value.encoded_bytes += 1;
+            value
+        },
+        {
+            let mut value = identity.clone();
+            value.sha256 = "1".repeat(64);
+            value
+        },
+        {
+            let mut value = identity.clone();
+            value.blake3 = "2".repeat(64);
+            value
+        },
+    ] {
+        assert!(decode_v36_centered_projection_arrow(&bytes, &changed_identity, &spec).is_err());
+    }
+    let mut corrupted = bytes.clone();
+    let middle = corrupted.len() / 2;
+    corrupted[middle] ^= 1;
+    assert!(decode_v36_centered_projection_arrow(&corrupted, &identity, &spec).is_err());
+    let rewrite_footer_body_length = |body_length: i64| {
+        let mut value = bytes.clone();
+        let trailer = value.len() - 10;
+        let footer_length =
+            u32::from_le_bytes(value[trailer..trailer + 4].try_into().unwrap()) as usize;
+        let footer_start = trailer - footer_length;
+        let block_offset = {
+            let footer = arrow_ipc::root_as_footer(&value[footer_start..trailer]).unwrap();
+            let block = footer.recordBatches().unwrap().get(0);
+            block.0.as_ptr() as usize - value.as_ptr() as usize
+        };
+        value[block_offset + 16..block_offset + 24].copy_from_slice(&body_length.to_le_bytes());
+        value
+    };
+    let missing_manifest_key = {
+        let mut value = bytes.clone();
+        let trailer = value.len() - 10;
+        let footer_length =
+            u32::from_le_bytes(value[trailer..trailer + 4].try_into().unwrap()) as usize;
+        let footer_start = trailer - footer_length;
+        let key_slot = {
+            let footer = arrow_ipc::root_as_footer(&value[footer_start..trailer]).unwrap();
+            let key_value = footer.schema().unwrap().custom_metadata().unwrap().get(0);
+            let table = key_value._tab.loc();
+            let displacement = i32::from_le_bytes(
+                value[footer_start + table..footer_start + table + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let vtable = (table as i64 - i64::from(displacement)) as usize;
+            footer_start + vtable + usize::from(arrow_ipc::KeyValue::VT_KEY)
+        };
+        value[key_slot..key_slot + 2].fill(0);
+        value
+    };
+    for malformed in [
+        b"ARROW1\0\0\0\0\0\0ARROW1".to_vec(),
+        {
+            let mut value = bytes.clone();
+            let footer_length_offset = value.len() - 10;
+            value[footer_length_offset..footer_length_offset + 4]
+                .copy_from_slice(&u32::MAX.to_le_bytes());
+            value
+        },
+        rewrite_footer_body_length(-1),
+        rewrite_footer_body_length(i64::MAX),
+        missing_manifest_key,
+    ] {
+        let mut malformed_identity = identity.clone();
+        malformed_identity.encoded_bytes = malformed.len() as u64;
+        malformed_identity.sha256 = format!("{:x}", Sha256::digest(&malformed));
+        malformed_identity.blake3 = blake3::hash(&malformed).to_hex().to_string();
+        assert!(
+            decode_v36_centered_projection_arrow(&malformed, &malformed_identity, &spec).is_err()
+        );
+    }
+    assert!(
+        decode_v36_centered_projection_arrow(
+            &bytes,
+            &identity,
+            &V36CenteredProjectionTrainingSpec {
+                retained_dimensions: 3,
+                ..spec.clone()
+            },
+        )
+        .is_err()
+    );
+
+    let mut changed_rows = rows.clone();
+    changed_rows[7][3] = -0.5;
+    let changed_spec = V36CenteredProjectionTrainingSpec {
+        reservoir_sha256: centered_source_digest(
+            b"borsuk-v36-centered-reservoir-v1\n",
+            &changed_rows,
+        ),
+        ..spec.clone()
+    };
+    let changed_projection = train_v36_centered_subspace(
+        &changed_spec,
+        &mut TestProjectionSource {
+            corpus_rows: rows,
+            reservoir_rows: changed_rows,
+            block_rows: 3,
+            mutate_reservoir: false,
+        },
+    )
+    .unwrap();
+    let (changed_bytes, changed_identity) =
+        encode_v36_centered_projection_arrow(&changed_projection, "centered-projection-basis", uri)
+            .unwrap();
+    assert!(
+        decode_v36_centered_projection_arrow(&changed_bytes, &changed_identity, &spec).is_err()
+    );
 }

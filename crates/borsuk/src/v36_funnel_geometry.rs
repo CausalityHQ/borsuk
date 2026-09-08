@@ -1,11 +1,21 @@
 //! Deterministic posting geometry for the V36 qualification funnel.
 
+use std::{collections::HashMap, io::Cursor, sync::Arc};
+
 use crate::{
-    BorsukError, Result, V35Dimensions,
+    BorsukError, Result, V35Dimensions, V36ArtifactIdentity,
     v35_projection::{V35Projection, V35ProjectionBackend, build_v35_srht},
 };
+use arrow_array::{Array, FixedSizeListArray, Float32Array, Float64Array, RecordBatch};
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
 use borsuk_fma::{FmaBackend, FusedProjection4};
 use nalgebra::{DMatrix, SymmetricEigen};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const CENTERED_EIGEN_MAX_ITERATIONS_PER_DIMENSION: usize = 30;
@@ -13,6 +23,13 @@ const CENTERED_AXIS_DEPENDENCE_THRESHOLD: f64 = 1e-12;
 const CENTERED_EIGEN_CLUSTER_RELATIVE_TOLERANCE: f64 = 1e-10;
 const CENTERED_TRAINING_WORKSPACE_LIMIT_BYTES: u64 = 64 * 1_048_576;
 const CENTERED_MATRIX_WORKSPACE_COPIES: u64 = 7;
+const CENTERED_PROJECTION_FORMAT: &str = "borsuk-v36-centered-projection-arrow-v1";
+const CENTERED_PROJECTION_ALGORITHM: &str = "centered-exact-covariance-symmetric-eigen-v1";
+const CENTERED_PROJECTION_SOLVER: &str = "nalgebra-0.33-symmetric-eigen-try-new-epsilon-30d-v1";
+const CENTERED_PROJECTION_STORAGE_ORDER: &str = "source-major-f32-v1";
+const CENTERED_PROJECTION_MANIFEST_KEY: &str = "borsuk.v36.centered_projection.manifest";
+const CENTERED_PROJECTION_ROLE: &str = "centered-projection-basis";
+const CENTERED_PROJECTION_MAXIMUM_ENCODED_BYTES: u64 = 3 * 1_048_576;
 
 #[derive(Debug, Clone, PartialEq)]
 struct V36CenteredCovarianceAnalysis {
@@ -48,7 +65,8 @@ pub trait V36CenteredProjectionSource {
 }
 
 /// Complete authority for one bounded centered principal-subspace training.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V36CenteredProjectionTrainingSpec {
     /// Source vector dimensions.
     pub source_dimensions: usize,
@@ -71,6 +89,7 @@ pub struct V36CenteredProjectionTrainingSpec {
 /// Deterministic centered principal-subspace training result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct V36CenteredProjection {
+    training_spec: V36CenteredProjectionTrainingSpec,
     retained_dimensions: usize,
     mean: Vec<f64>,
     mean_sha256: String,
@@ -83,6 +102,11 @@ pub struct V36CenteredProjection {
 }
 
 impl V36CenteredProjection {
+    /// Exact query-independent training population and bounded scan authority.
+    pub fn training_spec(&self) -> &V36CenteredProjectionTrainingSpec {
+        &self.training_spec
+    }
+
     /// Explicit retained routing width bound by the trained basis.
     pub fn retained_dimensions(&self) -> usize {
         self.retained_dimensions
@@ -127,6 +151,703 @@ impl V36CenteredProjection {
     pub fn reconstruction_relative_error(&self) -> f64 {
         self.reconstruction_relative_error
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36CenteredProjectionManifest {
+    algorithm: String,
+    basis_sha256: String,
+    covariance_sha256: String,
+    energy_dimensions: Vec<usize>,
+    eigenvalues_sha256: String,
+    format: String,
+    max_eigenpair_relative_residual_bits: String,
+    mean_sha256: String,
+    reconstruction_relative_error_bits: String,
+    retained_energy_ppm: Vec<u32>,
+    role: String,
+    solver: String,
+    storage_order: String,
+    training: V36CenteredProjectionTrainingSpec,
+    uri: String,
+}
+
+fn v36_canonical_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(v36_canonical_json_value).collect())
+        }
+        serde_json::Value::Object(values) => {
+            let mut entries = values.into_iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, v36_canonical_json_value(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        scalar => scalar,
+    }
+}
+
+fn canonical_v36_projection_manifest(manifest: &V36CenteredProjectionManifest) -> Result<String> {
+    let value = serde_json::to_value(manifest)
+        .map_err(|_| invalid("V36 centered projection manifest differs"))?;
+    serde_json::to_string(&v36_canonical_json_value(value))
+        .map_err(|_| invalid("V36 centered projection manifest differs"))
+}
+
+fn v36_centered_f32_digest(
+    domain: &[u8],
+    source_dimensions: usize,
+    retained_dimensions: usize,
+    values: &[f32],
+) -> Result<String> {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(
+        u64::try_from(source_dimensions)
+            .map_err(|_| invalid("V36 centered dimensions overflow"))?
+            .to_le_bytes(),
+    );
+    digest.update(
+        u64::try_from(retained_dimensions)
+            .map_err(|_| invalid("V36 centered dimensions overflow"))?
+            .to_le_bytes(),
+    );
+    for value in values {
+        digest.update(value.to_bits().to_le_bytes());
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn v36_centered_projection_manifest(
+    projection: &V36CenteredProjection,
+    role: &str,
+    uri: &str,
+) -> Result<V36CenteredProjectionManifest> {
+    Ok(V36CenteredProjectionManifest {
+        algorithm: CENTERED_PROJECTION_ALGORITHM.to_owned(),
+        basis_sha256: v36_centered_f32_digest(
+            b"borsuk-v36-centered-basis-v1\n",
+            projection.mean.len(),
+            projection.retained_dimensions,
+            &projection.basis_source_major,
+        )?,
+        covariance_sha256: projection.covariance_sha256.clone(),
+        energy_dimensions: projection.training_spec.energy_dimensions.clone(),
+        eigenvalues_sha256: v36_centered_f64_digest(
+            b"borsuk-v36-centered-eigenvalues-v1\n",
+            projection.mean.len(),
+            &projection.eigenvalues,
+        )?,
+        format: CENTERED_PROJECTION_FORMAT.to_owned(),
+        max_eigenpair_relative_residual_bits: format!(
+            "{:016x}",
+            projection.max_eigenpair_relative_residual.to_bits()
+        ),
+        mean_sha256: projection.mean_sha256.clone(),
+        reconstruction_relative_error_bits: format!(
+            "{:016x}",
+            projection.reconstruction_relative_error.to_bits()
+        ),
+        retained_energy_ppm: projection.retained_energy_ppm.clone(),
+        role: role.to_owned(),
+        solver: CENTERED_PROJECTION_SOLVER.to_owned(),
+        storage_order: CENTERED_PROJECTION_STORAGE_ORDER.to_owned(),
+        training: projection.training_spec.clone(),
+        uri: uri.to_owned(),
+    })
+}
+
+fn validate_v36_projection_artifact_identity(
+    identity: &V36ArtifactIdentity,
+    bytes: &[u8],
+) -> Result<()> {
+    let valid_digest = |value: &str| valid_sha256(value) && value.bytes().any(|byte| byte != b'0');
+    if identity.role != CENTERED_PROJECTION_ROLE
+        || identity.uri.is_empty()
+        || identity.encoded_bytes != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        || identity.encoded_bytes > CENTERED_PROJECTION_MAXIMUM_ENCODED_BYTES
+        || !valid_digest(&identity.sha256)
+        || !valid_digest(&identity.blake3)
+        || identity.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 centered projection artifact identity differs"));
+    }
+    Ok(())
+}
+
+fn v36_projection_untrusted_manifest(bytes: &[u8]) -> Result<String> {
+    if bytes.len() < 18
+        || bytes.len() > usize::try_from(CENTERED_PROJECTION_MAXIMUM_ENCODED_BYTES).unwrap()
+        || !bytes.starts_with(b"ARROW1\0\0")
+        || !bytes.ends_with(b"ARROW1")
+    {
+        return Err(invalid("V36 centered projection IPC envelope differs"));
+    }
+    let trailer = bytes.len() - 10;
+    let footer_len = u32::from_le_bytes(
+        bytes[trailer..trailer + 4]
+            .try_into()
+            .map_err(|_| invalid("V36 centered projection footer length differs"))?,
+    ) as usize;
+    let footer_start = trailer
+        .checked_sub(footer_len)
+        .filter(|offset| *offset >= 8)
+        .ok_or_else(|| invalid("V36 centered projection footer extent differs"))?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer])
+        .map_err(|_| invalid("V36 centered projection footer differs"))?;
+    if footer.version() != MetadataVersion::V5
+        || footer
+            .custom_metadata()
+            .is_some_and(|values| !values.is_empty())
+        || footer
+            .dictionaries()
+            .is_some_and(|values| !values.is_empty())
+        || footer.recordBatches().map_or(0, |values| values.len()) != 1
+    {
+        return Err(invalid("V36 centered projection footer authority differs"));
+    }
+    let metadata = footer
+        .schema()
+        .and_then(|schema| schema.custom_metadata())
+        .ok_or_else(|| invalid("V36 centered projection manifest is missing"))?;
+    if metadata.len() != 1 || metadata.get(0).key() != Some(CENTERED_PROJECTION_MANIFEST_KEY) {
+        return Err(invalid("V36 centered projection manifest differs"));
+    }
+    metadata
+        .get(0)
+        .value()
+        .map(str::to_owned)
+        .ok_or_else(|| invalid("V36 centered projection manifest differs"))
+}
+
+fn validate_v36_projection_ipc_field(field: arrow_ipc::Field<'_>, expected: &Field) -> Result<()> {
+    if field.name() != Some(expected.name().as_str())
+        || field.nullable()
+        || field.dictionary().is_some()
+        || field
+            .custom_metadata()
+            .is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 centered projection IPC field differs"));
+    }
+    let expected_children = match expected.data_type() {
+        DataType::Float32 | DataType::Float64 => {
+            let floating = field
+                .type_as_floating_point()
+                .ok_or_else(|| invalid("V36 centered projection IPC float differs"))?;
+            let precision = if expected.data_type() == &DataType::Float32 {
+                arrow_ipc::Precision::SINGLE
+            } else {
+                arrow_ipc::Precision::DOUBLE
+            };
+            if floating.precision() != precision {
+                return Err(invalid("V36 centered projection IPC float differs"));
+            }
+            Vec::new()
+        }
+        DataType::FixedSizeList(child, width) => {
+            if field
+                .type_as_fixed_size_list()
+                .is_none_or(|list| list.listSize() != *width)
+            {
+                return Err(invalid("V36 centered projection IPC list differs"));
+            }
+            vec![child.as_ref()]
+        }
+        _ => return Err(invalid("V36 centered projection IPC type differs")),
+    };
+    let actual_children = field.children();
+    if actual_children.map_or(0, |values| values.len()) != expected_children.len() {
+        return Err(invalid("V36 centered projection IPC children differ"));
+    }
+    for (index, child) in expected_children.iter().enumerate() {
+        validate_v36_projection_ipc_field(
+            actual_children
+                .ok_or_else(|| invalid("V36 centered projection IPC child is missing"))?
+                .get(index),
+            child,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_v36_projection_ipc_schema(
+    schema: arrow_ipc::Schema<'_>,
+    expected: &Schema,
+) -> Result<()> {
+    if schema.endianness() != arrow_ipc::Endianness::Little
+        || schema.features().is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 centered projection IPC schema differs"));
+    }
+    let metadata = schema
+        .custom_metadata()
+        .ok_or_else(|| invalid("V36 centered projection manifest is missing"))?;
+    let expected_manifest = expected
+        .metadata()
+        .get(CENTERED_PROJECTION_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V36 centered projection manifest differs"))?;
+    if metadata.len() != 1
+        || metadata.get(0).key() != Some(CENTERED_PROJECTION_MANIFEST_KEY)
+        || metadata.get(0).value() != Some(expected_manifest.as_str())
+    {
+        return Err(invalid("V36 centered projection manifest differs"));
+    }
+    let fields = schema
+        .fields()
+        .ok_or_else(|| invalid("V36 centered projection IPC fields are missing"))?;
+    if fields.len() != expected.fields().len() {
+        return Err(invalid("V36 centered projection IPC field count differs"));
+    }
+    for (index, expected_field) in expected.fields().iter().enumerate() {
+        validate_v36_projection_ipc_field(fields.get(index), expected_field)?;
+    }
+    Ok(())
+}
+
+fn validate_v36_projection_ipc_envelope(
+    bytes: &[u8],
+    expected_schema: &Schema,
+    dimensions: usize,
+    retained: usize,
+) -> Result<()> {
+    if bytes.len() < 18 {
+        return Err(invalid("V36 centered projection IPC envelope differs"));
+    }
+    let trailer = bytes.len() - 10;
+    let footer_len = u32::from_le_bytes(
+        bytes
+            .get(trailer..trailer + 4)
+            .and_then(|value| value.try_into().ok())
+            .ok_or_else(|| invalid("V36 centered projection footer length differs"))?,
+    ) as usize;
+    let footer_start = trailer
+        .checked_sub(footer_len)
+        .filter(|offset| *offset >= 8)
+        .ok_or_else(|| invalid("V36 centered projection footer extent differs"))?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer])
+        .map_err(|_| invalid("V36 centered projection footer differs"))?;
+    validate_v36_projection_ipc_schema(
+        footer
+            .schema()
+            .ok_or_else(|| invalid("V36 centered projection footer schema is missing"))?,
+        expected_schema,
+    )?;
+    let block = footer
+        .recordBatches()
+        .ok_or_else(|| invalid("V36 centered projection batch is missing"))?
+        .get(0);
+    let block_offset = usize::try_from(block.offset())
+        .map_err(|_| invalid("V36 centered projection batch offset differs"))?;
+    let metadata_len = usize::try_from(block.metaDataLength())
+        .map_err(|_| invalid("V36 centered projection batch metadata differs"))?;
+    let body_len = usize::try_from(block.bodyLength())
+        .map_err(|_| invalid("V36 centered projection batch body differs"))?;
+    let body_start = block_offset
+        .checked_add(metadata_len)
+        .ok_or_else(|| invalid("V36 centered projection batch extent overflows"))?;
+    let body_end = body_start
+        .checked_add(body_len)
+        .ok_or_else(|| invalid("V36 centered projection batch extent overflows"))?;
+    if block_offset < 8 || metadata_len < 8 || body_end > footer_start {
+        return Err(invalid("V36 centered projection batch extent differs"));
+    }
+    let parse_message = |start: usize, end: usize| {
+        let metadata = bytes
+            .get(start..end)
+            .ok_or_else(|| invalid("V36 centered projection message extent differs"))?;
+        if metadata.len() < 4 {
+            return Err(invalid("V36 centered projection message is truncated"));
+        }
+        let prefix = if metadata.starts_with(&[255; 4]) {
+            8
+        } else {
+            4
+        };
+        let length = u32::from_le_bytes(
+            metadata
+                .get(prefix - 4..prefix)
+                .and_then(|value| value.try_into().ok())
+                .ok_or_else(|| invalid("V36 centered projection message length differs"))?,
+        ) as usize;
+        let message_end = prefix
+            .checked_add(length)
+            .filter(|value| *value <= metadata.len())
+            .ok_or_else(|| invalid("V36 centered projection message extent differs"))?;
+        arrow_ipc::root_as_message(&metadata[prefix..message_end])
+            .map_err(|_| invalid("V36 centered projection message differs"))
+    };
+    let leading = parse_message(8, block_offset)?;
+    if leading.version() != MetadataVersion::V5 || leading.bodyLength() != 0 {
+        return Err(invalid("V36 centered projection leading schema differs"));
+    }
+    validate_v36_projection_ipc_schema(
+        leading
+            .header_as_schema()
+            .ok_or_else(|| invalid("V36 centered projection leading schema is missing"))?,
+        expected_schema,
+    )?;
+    let record_message = parse_message(block_offset, body_start)?;
+    let record = record_message
+        .header_as_record_batch()
+        .ok_or_else(|| invalid("V36 centered projection record differs"))?;
+    if record_message.version() != MetadataVersion::V5
+        || record.compression().is_some()
+        || record
+            .variadicBufferCounts()
+            .is_some_and(|values| !values.is_empty())
+        || usize::try_from(record.length()).ok() != Some(dimensions)
+        || usize::try_from(record_message.bodyLength()).ok() != Some(body_len)
+    {
+        return Err(invalid("V36 centered projection record authority differs"));
+    }
+    let nodes = record
+        .nodes()
+        .ok_or_else(|| invalid("V36 centered projection nodes are missing"))?;
+    let basis_values = dimensions
+        .checked_mul(retained)
+        .ok_or_else(|| invalid("V36 centered projection node length overflows"))?;
+    let expected_nodes = [dimensions, dimensions, dimensions, basis_values];
+    if nodes.len() != expected_nodes.len()
+        || nodes.iter().zip(expected_nodes).any(|(node, expected)| {
+            usize::try_from(node.length()).ok() != Some(expected) || node.null_count() != 0
+        })
+    {
+        return Err(invalid("V36 centered projection node shape differs"));
+    }
+    let buffers = record
+        .buffers()
+        .ok_or_else(|| invalid("V36 centered projection buffers are missing"))?;
+    let f64_bytes = dimensions
+        .checked_mul(8)
+        .ok_or_else(|| invalid("V36 centered projection buffer length overflows"))?;
+    let validity_bytes = |rows: usize| {
+        rows.checked_add(7)
+            .map(|bits| bits / 8)
+            .ok_or_else(|| invalid("V36 centered projection validity length overflows"))
+    };
+    let expected_lengths = [
+        validity_bytes(dimensions)?,
+        f64_bytes,
+        validity_bytes(dimensions)?,
+        f64_bytes,
+        validity_bytes(dimensions)?,
+        validity_bytes(basis_values)?,
+        dimensions
+            .checked_mul(retained)
+            .and_then(|values| values.checked_mul(4))
+            .ok_or_else(|| invalid("V36 centered projection buffer length overflows"))?,
+    ];
+    if buffers.len() != expected_lengths.len() {
+        return Err(invalid("V36 centered projection buffer count differs"));
+    }
+    let mut previous_end = 0_usize;
+    for (index, (buffer, expected_length)) in buffers.iter().zip(expected_lengths).enumerate() {
+        let start = usize::try_from(buffer.offset())
+            .map_err(|_| invalid("V36 centered projection buffer offset differs"))?;
+        let length = usize::try_from(buffer.length())
+            .map_err(|_| invalid("V36 centered projection buffer length differs"))?;
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| invalid("V36 centered projection buffer extent overflows"))?;
+        let is_validity = matches!(index, 0 | 2 | 4 | 5);
+        if start < previous_end
+            || (length != expected_length && !(is_validity && length == 0))
+            || end > body_len
+        {
+            return Err(invalid(&format!(
+                "V36 centered projection buffer extent differs: index={index} start={start} \
+                 length={length} expected={expected_length} previous_end={previous_end} \
+                 body_length={body_len}"
+            )));
+        }
+        previous_end = end;
+    }
+    Ok(())
+}
+
+fn parse_v36_f64_bits(value: &str) -> Result<f64> {
+    if value.len() != 16
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid(
+            "V36 centered projection numerical evidence differs",
+        ));
+    }
+    u64::from_str_radix(value, 16)
+        .map(f64::from_bits)
+        .map_err(|_| invalid("V36 centered projection numerical evidence differs"))
+}
+
+fn validate_v36_projection_values(projection: &V36CenteredProjection) -> Result<()> {
+    validate_v36_centered_training_spec(&projection.training_spec)?;
+    let dimensions = projection.mean.len();
+    let retained = projection.retained_dimensions;
+    if dimensions == 0
+        || retained == 0
+        || retained > dimensions
+        || projection.training_spec.source_dimensions != dimensions
+        || projection.training_spec.retained_dimensions != retained
+        || projection.eigenvalues.len() != dimensions
+        || dimensions
+            .checked_mul(retained)
+            .is_none_or(|length| projection.basis_source_major.len() != length)
+        || projection.mean.iter().any(|value| !value.is_finite())
+        || projection
+            .eigenvalues
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        || projection
+            .eigenvalues
+            .windows(2)
+            .any(|pair| pair[0] < pair[1])
+        || projection
+            .basis_source_major
+            .iter()
+            .any(|value| !value.is_finite())
+        || !projection.max_eigenpair_relative_residual.is_finite()
+        || projection.max_eigenpair_relative_residual < 0.0
+        || projection.max_eigenpair_relative_residual > 1e-10
+        || !projection.reconstruction_relative_error.is_finite()
+        || projection.reconstruction_relative_error < 0.0
+        || projection.reconstruction_relative_error > 1e-10
+        || !valid_sha256(&projection.mean_sha256)
+        || !valid_sha256(&projection.covariance_sha256)
+    {
+        return Err(invalid("V36 centered projection values differ"));
+    }
+    let total = projection.eigenvalues.iter().sum::<f64>();
+    if !total.is_finite() || total <= 0.0 {
+        return Err(invalid("V36 centered projection spectrum differs"));
+    }
+    let energy = projection
+        .training_spec
+        .energy_dimensions
+        .iter()
+        .map(|dimension| {
+            let retained_energy = projection.eigenvalues[..*dimension].iter().sum::<f64>();
+            Ok((retained_energy / total * 1_000_000.0).round() as u32)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if energy != projection.retained_energy_ppm
+        || v36_centered_f64_digest(
+            b"borsuk-v36-centered-mean-v1\n",
+            dimensions,
+            &projection.mean,
+        )? != projection.mean_sha256
+    {
+        return Err(invalid("V36 centered projection evidence differs"));
+    }
+    for left in 0..retained {
+        for right in 0..retained {
+            let dot = (0..dimensions).fold(0.0_f64, |sum, dimension| {
+                let left_value =
+                    f64::from(projection.basis_source_major[dimension * retained + left]);
+                let right_value =
+                    f64::from(projection.basis_source_major[dimension * retained + right]);
+                left_value.mul_add(right_value, sum)
+            });
+            let expected = if left == right { 1.0 } else { 0.0 };
+            if (dot - expected).abs() > 5e-6 {
+                return Err(invalid("V36 centered projection basis differs"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Encode one V36 centered projection as a strict cross-language Arrow IPC file.
+pub fn encode_v36_centered_projection_arrow(
+    projection: &V36CenteredProjection,
+    role: &str,
+    uri: &str,
+) -> Result<(Vec<u8>, V36ArtifactIdentity)> {
+    validate_v36_projection_values(projection)?;
+    if role != CENTERED_PROJECTION_ROLE || uri.is_empty() {
+        return Err(invalid("V36 centered projection artifact identity differs"));
+    }
+    let retained = projection.retained_dimensions;
+    let list_size = i32::try_from(retained)
+        .map_err(|_| invalid("V36 centered projection dimensions overflow"))?;
+    let child = Arc::new(Field::new("element", DataType::Float32, false));
+    let basis = Arc::new(FixedSizeListArray::try_new(
+        child.clone(),
+        list_size,
+        Arc::new(Float32Array::new(
+            projection.basis_source_major.clone().into(),
+            None,
+        )),
+        None,
+    )?);
+    let manifest = v36_centered_projection_manifest(projection, role, uri)?;
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        CENTERED_PROJECTION_MANIFEST_KEY.to_owned(),
+        canonical_v36_projection_manifest(&manifest)?,
+    );
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("mean", DataType::Float64, false),
+            Field::new("eigenvalue", DataType::Float64, false),
+            Field::new("basis", DataType::FixedSizeList(child, list_size), false),
+        ],
+        metadata,
+    ));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Float64Array::new(projection.mean.clone().into(), None)),
+            Arc::new(Float64Array::new(
+                projection.eigenvalues.clone().into(),
+                None,
+            )),
+            basis,
+        ],
+    )?;
+    let mut bytes = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > CENTERED_PROJECTION_MAXIMUM_ENCODED_BYTES {
+        return Err(invalid(
+            "V36 centered projection encoded bytes exceed admission",
+        ));
+    }
+    let identity = V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes: u64::try_from(bytes.len())
+            .map_err(|_| invalid("V36 centered projection artifact length overflows"))?,
+        role: role.to_owned(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri: uri.to_owned(),
+    };
+    Ok((bytes, identity))
+}
+
+/// Authenticate and decode one strict V36 centered projection Arrow IPC file.
+pub fn decode_v36_centered_projection_arrow(
+    bytes: &[u8],
+    identity: &V36ArtifactIdentity,
+    expected_training: &V36CenteredProjectionTrainingSpec,
+) -> Result<V36CenteredProjection> {
+    validate_v36_projection_artifact_identity(identity, bytes)?;
+    validate_v36_centered_training_spec(expected_training)?;
+    let manifest_text = v36_projection_untrusted_manifest(bytes)?;
+    let manifest: V36CenteredProjectionManifest = serde_json::from_str(&manifest_text)
+        .map_err(|_| invalid("V36 centered projection manifest differs"))?;
+    if canonical_v36_projection_manifest(&manifest)? != manifest_text
+        || manifest.format != CENTERED_PROJECTION_FORMAT
+        || manifest.algorithm != CENTERED_PROJECTION_ALGORITHM
+        || manifest.solver != CENTERED_PROJECTION_SOLVER
+        || manifest.storage_order != CENTERED_PROJECTION_STORAGE_ORDER
+        || manifest.role != identity.role
+        || manifest.uri != identity.uri
+        || &manifest.training != expected_training
+        || manifest.energy_dimensions != expected_training.energy_dimensions
+        || !valid_sha256(&manifest.basis_sha256)
+        || !valid_sha256(&manifest.eigenvalues_sha256)
+        || !valid_sha256(&manifest.mean_sha256)
+        || !valid_sha256(&manifest.covariance_sha256)
+    {
+        return Err(invalid(
+            "V36 centered projection manifest authority differs",
+        ));
+    }
+    let dimensions = expected_training.source_dimensions;
+    let retained = expected_training.retained_dimensions;
+    let list_size = i32::try_from(retained)
+        .map_err(|_| invalid("V36 centered projection dimensions overflow"))?;
+    let child = Arc::new(Field::new("element", DataType::Float32, false));
+    let expected_fields = vec![
+        Field::new("mean", DataType::Float64, false),
+        Field::new("eigenvalue", DataType::Float64, false),
+        Field::new("basis", DataType::FixedSizeList(child, list_size), false),
+    ];
+    let mut metadata = HashMap::new();
+    metadata.insert(CENTERED_PROJECTION_MANIFEST_KEY.to_owned(), manifest_text);
+    let expected_schema = Schema::new_with_metadata(expected_fields.clone(), metadata);
+    validate_v36_projection_ipc_envelope(bytes, &expected_schema, dimensions, retained)?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    let schema = reader.schema();
+    if reader.num_batches() != 1 || schema.as_ref() != &expected_schema {
+        return Err(invalid("V36 centered projection Arrow schema differs"));
+    }
+    if schema
+        .fields()
+        .iter()
+        .zip(&expected_fields)
+        .any(|(actual, expected)| actual.as_ref() != expected)
+    {
+        return Err(invalid("V36 centered projection Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .ok_or_else(|| invalid("V36 centered projection Arrow batch is missing"))??;
+    if batch.num_rows() != dimensions || batch.num_columns() != 3 {
+        return Err(invalid("V36 centered projection Arrow batch differs"));
+    }
+    let mean = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| invalid("V36 centered projection mean differs"))?;
+    let eigenvalues = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| invalid("V36 centered projection eigenvalues differ"))?;
+    let basis = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V36 centered projection basis differs"))?;
+    let basis_values = basis
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V36 centered projection basis differs"))?;
+    if mean.null_count() != 0
+        || eigenvalues.null_count() != 0
+        || basis.null_count() != 0
+        || basis_values.null_count() != 0
+        || basis_values.len() != dimensions.saturating_mul(retained)
+    {
+        return Err(invalid("V36 centered projection Arrow nullability differs"));
+    }
+    let projection = V36CenteredProjection {
+        training_spec: manifest.training,
+        retained_dimensions: retained,
+        mean: mean.values().to_vec(),
+        mean_sha256: manifest.mean_sha256,
+        covariance_sha256: manifest.covariance_sha256,
+        eigenvalues: eigenvalues.values().to_vec(),
+        basis_source_major: basis_values.values().to_vec(),
+        retained_energy_ppm: manifest.retained_energy_ppm,
+        max_eigenpair_relative_residual: parse_v36_f64_bits(
+            &manifest.max_eigenpair_relative_residual_bits,
+        )?,
+        reconstruction_relative_error: parse_v36_f64_bits(
+            &manifest.reconstruction_relative_error_bits,
+        )?,
+    };
+    validate_v36_projection_values(&projection)?;
+    let expected_manifest =
+        v36_centered_projection_manifest(&projection, CENTERED_PROJECTION_ROLE, &identity.uri)?;
+    if expected_manifest.basis_sha256 != manifest.basis_sha256
+        || expected_manifest.eigenvalues_sha256 != manifest.eigenvalues_sha256
+    {
+        return Err(invalid("V36 centered projection logical digest differs"));
+    }
+    Ok(projection)
 }
 
 /// One centered projection result with explicit arithmetic-backend evidence.
@@ -254,6 +975,31 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_v36_centered_training_spec(spec: &V36CenteredProjectionTrainingSpec) -> Result<()> {
+    if spec.source_dimensions == 0
+        || spec.retained_dimensions == 0
+        || spec.retained_dimensions > spec.source_dimensions
+        || spec.corpus_rows == 0
+        || spec.reservoir_rows == 0
+        || !valid_sha256(&spec.corpus_sha256)
+        || !valid_sha256(&spec.reservoir_sha256)
+        || spec.maximum_block_rows == 0
+        || spec.maximum_block_rows > 2_048
+        || spec.energy_dimensions.is_empty()
+        || spec
+            .energy_dimensions
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || spec
+            .energy_dimensions
+            .iter()
+            .any(|dimension| *dimension == 0 || *dimension > spec.source_dimensions)
+    {
+        return Err(invalid("V36 centered training authority differs"));
+    }
+    Ok(())
 }
 
 fn v36_centered_f64_digest(domain: &[u8], dimensions: usize, values: &[f64]) -> Result<String> {
@@ -578,27 +1324,7 @@ pub fn train_v36_centered_subspace(
     spec: &V36CenteredProjectionTrainingSpec,
     source: &mut dyn V36CenteredProjectionSource,
 ) -> Result<V36CenteredProjection> {
-    if spec.source_dimensions == 0
-        || spec.retained_dimensions == 0
-        || spec.retained_dimensions > spec.source_dimensions
-        || spec.corpus_rows == 0
-        || spec.reservoir_rows == 0
-        || !valid_sha256(&spec.corpus_sha256)
-        || !valid_sha256(&spec.reservoir_sha256)
-        || spec.maximum_block_rows == 0
-        || spec.maximum_block_rows > 2_048
-        || spec.energy_dimensions.is_empty()
-        || spec
-            .energy_dimensions
-            .windows(2)
-            .any(|pair| pair[0] >= pair[1])
-        || spec
-            .energy_dimensions
-            .iter()
-            .any(|dimension| *dimension == 0 || *dimension > spec.source_dimensions)
-    {
-        return Err(invalid("V36 centered training authority differs"));
-    }
+    validate_v36_centered_training_spec(spec)?;
     validate_v36_centered_workspace(spec)?;
     let matrix_entries = spec
         .source_dimensions
@@ -683,6 +1409,7 @@ pub fn train_v36_centered_subspace(
         })
         .collect::<Vec<_>>();
     Ok(V36CenteredProjection {
+        training_spec: spec.clone(),
         retained_dimensions: spec.retained_dimensions,
         mean: analysis.mean,
         mean_sha256,
