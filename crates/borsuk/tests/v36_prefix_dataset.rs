@@ -14,7 +14,8 @@ use arrow_ipc::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V36ArtifactIdentity, V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointContext,
-    V36PrefixCheckpointDependencyFile, V36PrefixCheckpointMaterialization,
+    V36PrefixCheckpointDependencyFile, V36PrefixCheckpointGroundTruth,
+    V36PrefixCheckpointGroundTruthRequest, V36PrefixCheckpointMaterialization,
     V36PrefixCheckpointMaterializationRequest, V36PrefixCheckpointPointer,
     V36PrefixCheckpointResumeState, V36PrefixCheckpointSelectionRequest,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
@@ -45,20 +46,21 @@ use borsuk::{
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_checkpoint_selection,
     materialize_v36_prefix_role_parquets, rank_v36_prefix_source_objects,
     restore_v36_prefix_checkpoint_phase, restore_v36_prefix_file_backed_population_scan,
-    restore_v36_prefix_population, run_v36_prefix_checkpoint_gt100,
-    run_v36_prefix_gt100_checkpointed, scan_v36_prefix_gt100_parquet,
-    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
-    scan_v36_prefix_object_prefix_file_backed, scan_v36_prefix_object_prefix_resumed,
-    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_checkpoint_population,
-    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
-    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    restore_v36_prefix_population, run_v36_prefix_checkpoint_ground_truth,
+    run_v36_prefix_checkpoint_gt100, run_v36_prefix_gt100_checkpointed,
+    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
+    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_checkpoint_population, select_v36_prefix_population_rows,
+    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
+    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -4462,13 +4464,37 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     assert!(
         run_v36_prefix_checkpoint_gt100(&drifted_phase_resumed_state, 128, 2, |_| Ok(())).is_err()
     );
-    let (resumed_truth, resumed_gt_stats) =
-        run_v36_prefix_checkpoint_gt100(&phase_resumed_state, 128, 2, |_| Ok(())).unwrap();
-    assert_eq!(resumed_truth, expected_truth);
-    assert_eq!(resumed_gt_stats, expected_gt_stats);
-    let phase_resumed_ready = phase_resumed_writer
-        .commit_ground_truth(&heaps, context.corpus_rows)
+    let phase_resumed_gt_root = directory.path().join("phase-resumed-gt");
+    fs::create_dir(&phase_resumed_gt_root).unwrap();
+    let preexisting_heap_path = phase_resumed_gt_root.join("gt-heaps-00000128.arrow");
+    fs::write(&preexisting_heap_path, b"conflicting heap bytes").unwrap();
+    assert!(
+        run_v36_prefix_checkpoint_ground_truth(V36PrefixCheckpointGroundTruthRequest {
+            block_rows: 128,
+            output_root: &phase_resumed_gt_root,
+            output_uri_prefix: object_prefix,
+            state: &phase_resumed_state,
+            worker_threads: 2,
+            writer: &mut phase_resumed_writer,
+        })
+        .is_err()
+    );
+    fs::remove_file(&preexisting_heap_path).unwrap();
+    fs::copy(&heaps.path, &preexisting_heap_path).unwrap();
+    let phase_resumed_gt: V36PrefixCheckpointGroundTruth =
+        run_v36_prefix_checkpoint_ground_truth(V36PrefixCheckpointGroundTruthRequest {
+            block_rows: 128,
+            output_root: &phase_resumed_gt_root,
+            output_uri_prefix: object_prefix,
+            state: &phase_resumed_state,
+            worker_threads: 2,
+            writer: &mut phase_resumed_writer,
+        })
         .unwrap();
+    assert_eq!(phase_resumed_gt.truth, expected_truth);
+    assert_eq!(phase_resumed_gt.stats, expected_gt_stats);
+    assert_eq!(phase_resumed_gt.heaps.identity, heaps.identity);
+    let phase_resumed_ready = phase_resumed_gt.checkpoint_ready.unwrap();
     let phase_resumed_staged = directory.path().join("phase-resumed-staged");
     stage_checkpoint_head(
         &phase_resumed_outbox,
@@ -4518,7 +4544,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     );
     let ground_truth_resume_outbox = directory.path().join("ground-truth-resume-outbox");
     fs::create_dir(&ground_truth_resume_outbox).unwrap();
-    let (_, ground_truth_resume_state) =
+    let (mut ground_truth_resume_writer, ground_truth_resume_state) =
         V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
             execution_authority_sha256: "8".repeat(64),
             head: ground_truth_head.clone(),
@@ -4550,16 +4576,23 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         run_v36_prefix_checkpoint_gt100(&substituted_ground_truth_state, 128, 2, |_| Ok(()))
             .is_err()
     );
-    let mut eof_resume_checkpoints = 0_usize;
-    let (eof_resume_truth, eof_resume_stats) =
-        run_v36_prefix_checkpoint_gt100(&ground_truth_resume_state, 128, 2, |_| {
-            eof_resume_checkpoints += 1;
-            Ok(())
+    let eof_gt_root = directory.path().join("eof-gt");
+    fs::create_dir(&eof_gt_root).unwrap();
+    let eof_resume =
+        run_v36_prefix_checkpoint_ground_truth(V36PrefixCheckpointGroundTruthRequest {
+            block_rows: 128,
+            output_root: &eof_gt_root,
+            output_uri_prefix: object_prefix,
+            state: &ground_truth_resume_state,
+            worker_threads: 2,
+            writer: &mut ground_truth_resume_writer,
         })
         .unwrap();
-    assert_eq!(eof_resume_checkpoints, 0);
-    assert_eq!(eof_resume_truth, expected_truth);
-    assert_eq!(eof_resume_stats, expected_gt_stats);
+    assert!(eof_resume.checkpoint_ready.is_none());
+    assert_eq!(eof_resume.heaps.identity, restored_heaps.identity);
+    assert_eq!(eof_resume.truth, expected_truth);
+    assert_eq!(eof_resume.stats, expected_gt_stats);
+    assert!(eof_gt_root.read_dir().unwrap().next().is_none());
 
     let mut rewritten_ground_truth = ground_truth_head.clone();
     let borsuk::V36PrefixCheckpointPhase::GroundTruth {

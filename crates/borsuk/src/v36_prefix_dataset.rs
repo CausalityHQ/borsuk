@@ -1781,6 +1781,35 @@ pub struct V36PrefixCheckpointMaterialization {
     pub paths: V36PrefixRoleParquetPaths,
 }
 
+/// Inputs for one bounded Materialized-to-GroundTruth checkpoint transition.
+pub struct V36PrefixCheckpointGroundTruthRequest<'a> {
+    /// Complete source-row block size used by the existing exact-GT engine.
+    pub block_rows: usize,
+    /// Existing directory receiving immutable heap Arrow files.
+    pub output_root: &'a Path,
+    /// Content-addressed checkpoint object prefix.
+    pub output_uri_prefix: &'a str,
+    /// Authenticated Materialized continuation state.
+    pub state: &'a V36PrefixCheckpointResumeState,
+    /// Fixed worker count for the exact kernel.
+    pub worker_threads: usize,
+    /// Checkpoint writer restored from the same Materialized head.
+    pub writer: &'a mut V36PrefixPopulationCheckpointWriter,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Exact truth and durable heap boundary produced by one transition.
+pub struct V36PrefixCheckpointGroundTruth {
+    /// Ready-file path for a newly published boundary, absent at authenticated EOF.
+    pub checkpoint_ready: Option<PathBuf>,
+    /// Authenticated newest all-query heap Arrow file.
+    pub heaps: V36PrefixCheckpointDependencyFile,
+    /// Bounded work evidence from the exact-GT engine.
+    pub stats: V36PrefixGtRunStats,
+    /// Exact GT@100 for the three quality roles.
+    pub truth: [Vec<V36PrefixGtNeighbor>; 3],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Exact authority embedded in one immutable selected-population Arrow artifact.
 pub struct V36PrefixSelectedIdsContract {
@@ -10418,6 +10447,139 @@ where
         worker_threads,
         consume_checkpoint,
     )
+}
+
+/// Run exact GT from one authenticated Materialized head and publish every heap boundary.
+pub fn run_v36_prefix_checkpoint_ground_truth(
+    request: V36PrefixCheckpointGroundTruthRequest<'_>,
+) -> Result<V36PrefixCheckpointGroundTruth> {
+    let V36PrefixCheckpointGroundTruthRequest {
+        block_rows,
+        output_root,
+        output_uri_prefix,
+        state,
+        worker_threads,
+        writer,
+    } = request;
+    let (state_artifacts, state_population, state_selected, state_ground_truth) = match state {
+        V36PrefixCheckpointResumeState::Materialized {
+            artifacts,
+            population,
+            selected,
+        } => (artifacts, population, selected, None),
+        V36PrefixCheckpointResumeState::GroundTruth {
+            artifacts,
+            heaps,
+            next_source_ordinal,
+            population,
+            selected,
+        } => (
+            artifacts,
+            population,
+            selected,
+            Some((heaps, *next_source_ordinal)),
+        ),
+        V36PrefixCheckpointResumeState::Population { .. }
+        | V36PrefixCheckpointResumeState::Selected { .. } => {
+            return Err(invalid("V36 ground-truth driver phase differs"));
+        }
+    };
+    state_artifacts.validate_authenticated_seal()?;
+    let (writer_selection, writer_artifacts, writer_population, writer_ground_truth) = match writer
+        .previous_manifest
+        .as_ref()
+        .map(|manifest| (&manifest.phase, &manifest.population))
+    {
+        Some((
+            V36PrefixCheckpointPhase::Materialized {
+                selection,
+                artifacts,
+            },
+            population,
+        )) => (selection, artifacts, population, None),
+        Some((
+            V36PrefixCheckpointPhase::GroundTruth {
+                selection,
+                materialized,
+                heaps,
+                next_source_ordinal,
+            },
+            population,
+        )) => (
+            selection,
+            materialized,
+            population,
+            Some((heaps, *next_source_ordinal)),
+        ),
+        _ => return Err(invalid("V36 ground-truth driver predecessor differs")),
+    };
+    let artifact_files = [
+        &state_artifacts.population_authority,
+        &state_artifacts.source,
+        &state_artifacts.development_query,
+        &state_artifacts.validation_query,
+        &state_artifacts.sealed_holdout_query,
+        &state_artifacts.performance_query,
+    ];
+    let artifact_identities = [
+        &writer_artifacts.population_authority,
+        &writer_artifacts.source,
+        &writer_artifacts.development_query,
+        &writer_artifacts.validation_query,
+        &writer_artifacts.sealed_holdout_query,
+        &writer_artifacts.performance_query,
+    ];
+    let state_run_identities = state_population
+        .runs
+        .iter()
+        .map(|run| &run.identity)
+        .collect::<Vec<_>>();
+    if !output_root.is_dir()
+        || state_selected.identity != writer_selection.selected_ids
+        || state_population.consumed_objects != writer_population.consumed_objects
+        || state_population.distinct_rows != writer_population.distinct_rows
+        || state_population.duplicate_rows != writer_population.duplicate_rows
+        || state_population.physical_rows != writer_population.physical_rows
+        || state_run_identities != writer_population.identity_runs.iter().collect::<Vec<_>>()
+        || state_ground_truth.map(|(heaps, ordinal)| (&heaps.identity, ordinal))
+            != writer_ground_truth
+        || artifact_files
+            .iter()
+            .zip(artifact_identities)
+            .any(|(file, identity)| &file.identity != identity)
+    {
+        return Err(invalid("V36 ground-truth driver authority differs"));
+    }
+
+    let mut newest_heaps = state_ground_truth.map(|(heaps, _)| heaps.clone());
+    let mut newest_ready = None;
+    let (truth, stats) =
+        run_v36_prefix_checkpoint_gt100(state, block_rows, worker_threads, |checkpoint| {
+            let filename = format!("gt-heaps-{:08}.arrow", checkpoint.next_source_ordinal);
+            let path = output_root.join(&filename);
+            let bytes = encode_v36_prefix_gt_heap_checkpoint(checkpoint)?;
+            install_content_addressed(&path, &bytes)?;
+            let heaps = V36PrefixCheckpointDependencyFile {
+                identity: v36_prefix_checkpoint_output_identity(
+                    "gt-heaps",
+                    &filename,
+                    output_uri_prefix,
+                    &path,
+                )?,
+                path,
+            };
+            let ready = writer.commit_ground_truth(&heaps, checkpoint.next_source_ordinal)?;
+            newest_heaps = Some(heaps);
+            newest_ready = Some(ready);
+            Ok(())
+        })?;
+    Ok(V36PrefixCheckpointGroundTruth {
+        checkpoint_ready: newest_ready,
+        heaps: newest_heaps
+            .ok_or_else(|| invalid("V36 ground-truth driver emitted no checkpoint"))?,
+        stats,
+        truth,
+    })
 }
 
 fn v36_prefix_source_rows_from_batch(
