@@ -9176,6 +9176,165 @@ impl V36PrefixGtAccumulator {
     }
 }
 
+/// All quality roles advanced at one common exact-GT source boundary.
+pub struct V36PrefixAllQueryGtAccumulator {
+    accumulators: [V36PrefixGtAccumulator; 3],
+    query_ids: BTreeSet<u64>,
+}
+
+impl V36PrefixAllQueryGtAccumulator {
+    /// Create synchronized development, validation, and sealed-holdout heaps.
+    pub fn new(queries: [Vec<V36PrefixQueryRow>; 3]) -> Result<Self> {
+        let mut query_ids = BTreeSet::new();
+        if queries
+            .iter()
+            .flatten()
+            .any(|query| !query_ids.insert(query.feature_row_id))
+        {
+            return Err(invalid("V36 prefix exact truth query membership differs"));
+        }
+        let [development, validation, holdout] = queries;
+        Ok(Self {
+            accumulators: [
+                V36PrefixGtAccumulator::new(V36PrefixQualityRole::Development, development)?,
+                V36PrefixGtAccumulator::new(V36PrefixQualityRole::Validation, validation)?,
+                V36PrefixGtAccumulator::new(V36PrefixQualityRole::SealedHoldout, holdout)?,
+            ],
+            query_ids,
+        })
+    }
+
+    /// Restore all roles from one authenticated all-query heap checkpoint.
+    pub fn restore(
+        queries: [Vec<V36PrefixQueryRow>; 3],
+        prefix_feature_ids: &[u64],
+        checkpoint: V36PrefixGtHeapCheckpoint,
+    ) -> Result<Self> {
+        let expected_counts = queries
+            .each_ref()
+            .map(|rows| u32::try_from(rows.len()).ok());
+        if expected_counts.map(|count| count.unwrap_or(u32::MAX)) != checkpoint.query_counts {
+            return Err(invalid("V36 prefix GT heap query count differs"));
+        }
+        let mut query_ids = BTreeSet::new();
+        if queries
+            .iter()
+            .flatten()
+            .any(|query| !query_ids.insert(query.feature_row_id))
+        {
+            return Err(invalid("V36 prefix exact truth query membership differs"));
+        }
+        let [development, validation, holdout] = queries;
+        let first = usize::try_from(checkpoint.query_counts[0])
+            .ok()
+            .and_then(|count| count.checked_mul(GT_HEAP_CHECKPOINT_NEIGHBORS))
+            .ok_or_else(|| invalid("V36 prefix GT heap row count overflows"))?;
+        let second = usize::try_from(checkpoint.query_counts[1])
+            .ok()
+            .and_then(|count| count.checked_mul(GT_HEAP_CHECKPOINT_NEIGHBORS))
+            .and_then(|count| first.checked_add(count))
+            .ok_or_else(|| invalid("V36 prefix GT heap row count overflows"))?;
+        let holdout_entries = checkpoint
+            .entries
+            .get(second..)
+            .unwrap_or_default()
+            .to_vec();
+        let validation_entries = checkpoint
+            .entries
+            .get(first..second)
+            .unwrap_or_default()
+            .to_vec();
+        let development_entries = checkpoint.entries.get(..first).unwrap_or_default().to_vec();
+        Ok(Self {
+            accumulators: [
+                V36PrefixGtAccumulator::restore(
+                    V36PrefixQualityRole::Development,
+                    development,
+                    checkpoint.next_source_ordinal,
+                    prefix_feature_ids,
+                    development_entries,
+                )?,
+                V36PrefixGtAccumulator::restore(
+                    V36PrefixQualityRole::Validation,
+                    validation,
+                    checkpoint.next_source_ordinal,
+                    prefix_feature_ids,
+                    validation_entries,
+                )?,
+                V36PrefixGtAccumulator::restore(
+                    V36PrefixQualityRole::SealedHoldout,
+                    holdout,
+                    checkpoint.next_source_ordinal,
+                    prefix_feature_ids,
+                    holdout_entries,
+                )?,
+            ],
+            query_ids,
+        })
+    }
+
+    /// Absorb one complete canonical source block into every quality role.
+    pub fn absorb(&mut self, corpus: &[V36PrefixMaterializedRow]) -> Result<()> {
+        let mut ordinal = self.accumulators[0].next_source_ordinal;
+        let mut batch_ids = BTreeSet::new();
+        for row in corpus {
+            if row.source_ordinal != Some(ordinal)
+                || validate_embedding(&row.embedding).is_err()
+                || self.query_ids.contains(&row.feature_row_id)
+                || self.accumulators[0]
+                    .corpus_ids
+                    .contains(&row.feature_row_id)
+                || !batch_ids.insert(row.feature_row_id)
+            {
+                return Err(invalid("V36 prefix exact truth corpus input differs"));
+            }
+            ordinal = ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 prefix exact truth corpus size overflows"))?;
+        }
+        for accumulator in &mut self.accumulators {
+            accumulator.absorb(corpus)?;
+        }
+        Ok(())
+    }
+
+    /// Snapshot every role at their shared next source ordinal.
+    pub fn checkpoint(&self) -> Result<V36PrefixGtHeapCheckpoint> {
+        let next_source_ordinal = self.accumulators[0].next_source_ordinal;
+        if self
+            .accumulators
+            .iter()
+            .any(|accumulator| accumulator.next_source_ordinal != next_source_ordinal)
+        {
+            return Err(invalid("V36 prefix GT heap checkpoint differs"));
+        }
+        let mut entries = Vec::new();
+        for accumulator in &self.accumulators {
+            entries.extend(accumulator.checkpoint_entries()?);
+        }
+        let query_counts = self.accumulators.each_ref().map(|accumulator| {
+            u32::try_from(accumulator.queries.len()).expect("validated query count fits u32")
+        });
+        let checkpoint = V36PrefixGtHeapCheckpoint {
+            entries,
+            next_source_ordinal,
+            query_counts,
+        };
+        validate_v36_prefix_gt_heap_checkpoint(&checkpoint)?;
+        Ok(checkpoint)
+    }
+
+    /// Finish every role as canonical GT@100 after retaining rank 101 evidence.
+    pub fn finish(self) -> Result<[Vec<V36PrefixGtNeighbor>; 3]> {
+        let [development, validation, holdout] = self.accumulators;
+        Ok([
+            development.finish()?,
+            validation.finish()?,
+            holdout.finish()?,
+        ])
+    }
+}
+
 /// Exact binary64 no-explicit-FMA GT@100 for quality queries.
 pub fn exact_v36_prefix_gt100(
     role: V36PrefixQualityRole,

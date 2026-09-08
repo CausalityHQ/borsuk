@@ -349,8 +349,8 @@ pub use v36_funnel::{
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
-    V36PrefixCheckpointDependencyFile, V36PrefixCheckpointHead, V36PrefixCheckpointOutbox,
-    V36PrefixCheckpointResumeState, V36PrefixExternalIdentityRunReceipt,
+    V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointDependencyFile, V36PrefixCheckpointHead,
+    V36PrefixCheckpointOutbox, V36PrefixCheckpointResumeState, V36PrefixExternalIdentityRunReceipt,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
     V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
     V36PrefixExternalSelectionRequest, V36PrefixFileBackedPopulationScan,

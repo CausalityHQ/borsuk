@@ -13,8 +13,8 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile,
-    V36PrefixCheckpointPointer, V36PrefixCheckpointResumeState,
+    V36ArtifactIdentity, V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointContext,
+    V36PrefixCheckpointDependencyFile, V36PrefixCheckpointPointer, V36PrefixCheckpointResumeState,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
     V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
     V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
@@ -2879,6 +2879,47 @@ fn v36_prefix_dataset_gt_accumulator_resumes_rank_101_without_output_drift() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn v36_prefix_dataset_all_query_gt_checkpoint_resumes_one_source_scan_boundary() {
+    let queries = [
+        V36PrefixQualityRole::Development,
+        V36PrefixQualityRole::Validation,
+        V36PrefixQualityRole::SealedHoldout,
+    ]
+    .map(|role| {
+        vec![borsuk::V36PrefixQueryRow {
+            query_ordinal: 0,
+            feature_row_id: 90_000 + role as u64,
+            embedding: vector(1, role as u8 as f32 / 10.0),
+        }]
+    });
+    let corpus = (0_u64..202)
+        .map(|ordinal| borsuk::V36PrefixMaterializedRow {
+            feature_row_id: 20_000 + ordinal,
+            source_ordinal: Some(ordinal),
+            embedding: vector(1, ordinal as f32 / 202.0),
+        })
+        .collect::<Vec<_>>();
+    let mut uninterrupted = V36PrefixAllQueryGtAccumulator::new(queries.clone()).unwrap();
+    uninterrupted.absorb(&corpus).unwrap();
+    let expected = uninterrupted.finish().unwrap();
+
+    let mut interrupted = V36PrefixAllQueryGtAccumulator::new(queries.clone()).unwrap();
+    interrupted.absorb(&corpus[..111]).unwrap();
+    let checkpoint = interrupted.checkpoint().unwrap();
+    assert_eq!(checkpoint.next_source_ordinal, 111);
+    assert_eq!(checkpoint.query_counts, [1, 1, 1]);
+    assert_eq!(checkpoint.entries.len(), 303);
+    let prefix_ids = corpus[..111]
+        .iter()
+        .map(|row| row.feature_row_id)
+        .collect::<Vec<_>>();
+    let mut resumed =
+        V36PrefixAllQueryGtAccumulator::restore(queries, &prefix_ids, checkpoint).unwrap();
+    resumed.absorb(&corpus[111..]).unwrap();
+    assert_eq!(resumed.finish().unwrap(), expected);
 }
 
 #[test]
