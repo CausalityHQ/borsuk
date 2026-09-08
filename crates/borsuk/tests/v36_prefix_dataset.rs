@@ -4315,6 +4315,18 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         &phase_resumed_state,
         V36PrefixCheckpointResumeState::Materialized { .. }
     ));
+    let mut drifted_phase_resumed_state = phase_resumed_state.clone();
+    let V36PrefixCheckpointResumeState::Materialized {
+        artifacts: drifted_artifacts,
+        ..
+    } = &mut drifted_phase_resumed_state
+    else {
+        unreachable!()
+    };
+    drifted_artifacts.source.identity.sha256 = "9".repeat(64);
+    assert!(
+        run_v36_prefix_checkpoint_gt100(&drifted_phase_resumed_state, 128, 2, |_| Ok(())).is_err()
+    );
     let (resumed_truth, resumed_gt_stats) =
         run_v36_prefix_checkpoint_gt100(&phase_resumed_state, 128, 2, |_| Ok(())).unwrap();
     assert_eq!(resumed_truth, expected_truth);
@@ -4389,6 +4401,20 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         &ground_truth_resume_state,
         V36PrefixCheckpointResumeState::GroundTruth { .. }
     ));
+    let mut substituted_ground_truth_state = ground_truth_resume_state.clone();
+    let V36PrefixCheckpointResumeState::GroundTruth { heaps, .. } =
+        &mut substituted_ground_truth_state
+    else {
+        unreachable!()
+    };
+    heaps.identity.uri = format!(
+        "s3://fixture/v36/substituted/{}-gt-heaps.arrow",
+        heaps.identity.sha256
+    );
+    assert!(
+        run_v36_prefix_checkpoint_gt100(&substituted_ground_truth_state, 128, 2, |_| Ok(()))
+            .is_err()
+    );
     let mut eof_resume_checkpoints = 0_usize;
     let (eof_resume_truth, eof_resume_stats) =
         run_v36_prefix_checkpoint_gt100(&ground_truth_resume_state, 128, 2, |_| {

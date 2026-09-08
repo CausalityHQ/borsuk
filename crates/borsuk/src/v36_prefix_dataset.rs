@@ -419,6 +419,8 @@ pub struct V36PrefixCheckpointHead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated local files produced by the completed materialization phase.
 pub struct V36PrefixMaterializedCheckpointFiles {
+    authenticated_dependencies: Vec<V36PrefixCheckpointDependencyFile>,
+    authenticated_ground_truth: Option<(V36PrefixCheckpointDependencyFile, u64)>,
     expected_source_rows: u64,
     /// Canonical population authority JSON.
     pub population_authority: V36PrefixCheckpointDependencyFile,
@@ -432,6 +434,43 @@ pub struct V36PrefixMaterializedCheckpointFiles {
     pub sealed_holdout_query: V36PrefixCheckpointDependencyFile,
     /// Performance query Parquet.
     pub performance_query: V36PrefixCheckpointDependencyFile,
+}
+
+impl V36PrefixMaterializedCheckpointFiles {
+    fn validate_authenticated_seal(&self) -> Result<()> {
+        let current = [
+            &self.population_authority,
+            &self.source,
+            &self.development_query,
+            &self.validation_query,
+            &self.sealed_holdout_query,
+            &self.performance_query,
+        ];
+        if self.authenticated_dependencies.len() != current.len()
+            || self
+                .authenticated_dependencies
+                .iter()
+                .zip(current)
+                .any(|(authenticated, current)| authenticated != current)
+        {
+            return Err(invalid(
+                "V36 checkpoint authenticated materialization differs",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_ground_truth_seal(
+        &self,
+        heaps: &V36PrefixCheckpointDependencyFile,
+        next_source_ordinal: u64,
+    ) -> Result<()> {
+        self.validate_authenticated_seal()?;
+        if self.authenticated_ground_truth.as_ref() != Some(&(heaps.clone(), next_source_ordinal)) {
+            return Err(invalid("V36 checkpoint authenticated ground truth differs"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7642,14 +7681,17 @@ pub fn restore_v36_prefix_checkpoint_phase(
         validate_v36_prefix_checkpoint_dependency_file(&dependency)?;
         Ok(dependency)
     };
-    let artifacts = V36PrefixMaterializedCheckpointFiles {
+    let materialized_dependencies = (0..6).map(dependency).collect::<Result<Vec<_>>>()?;
+    let mut artifacts = V36PrefixMaterializedCheckpointFiles {
+        authenticated_dependencies: materialized_dependencies.clone(),
+        authenticated_ground_truth: None,
         expected_source_rows: head.authenticated_corpus_rows,
-        population_authority: dependency(0)?,
-        source: dependency(1)?,
-        development_query: dependency(2)?,
-        validation_query: dependency(3)?,
-        sealed_holdout_query: dependency(4)?,
-        performance_query: dependency(5)?,
+        population_authority: materialized_dependencies[0].clone(),
+        source: materialized_dependencies[1].clone(),
+        development_query: materialized_dependencies[2].clone(),
+        validation_query: materialized_dependencies[3].clone(),
+        sealed_holdout_query: materialized_dependencies[4].clone(),
+        performance_query: materialized_dependencies[5].clone(),
     };
     match &head.manifest.phase {
         V36PrefixCheckpointPhase::Materialized { .. } => {
@@ -7677,6 +7719,7 @@ pub fn restore_v36_prefix_checkpoint_phase(
                     .ok_or_else(|| invalid("V36 prefix GT heap query count differs"))?;
             }
             let heaps = dependency(6)?;
+            artifacts.authenticated_ground_truth = Some((heaps.clone(), *next_source_ordinal));
             let heap_bytes = read_file(&heaps.path)?;
             decode_v36_prefix_gt_heap_checkpoint(
                 &heap_bytes,
@@ -9850,6 +9893,8 @@ where
             next_source_ordinal,
             ..
         } => {
+            artifacts.validate_ground_truth_seal(heaps, *next_source_ordinal)?;
+            authenticate_file(&heaps.path, &heaps.identity)?;
             let queries = load_v36_prefix_checkpoint_queries(artifacts)?;
             let query_counts = queries.each_ref().map(|role| role.len() as u32);
             let bytes = read_file(&heaps.path)?;
@@ -9878,6 +9923,7 @@ where
             return Err(invalid("V36 prefix exact truth continuation phase differs"));
         }
     };
+    artifacts.validate_authenticated_seal()?;
     let queries = load_v36_prefix_checkpoint_queries(artifacts)?;
     let source_ids = load_v36_prefix_checkpoint_source_ids(
         &artifacts.source.path,
