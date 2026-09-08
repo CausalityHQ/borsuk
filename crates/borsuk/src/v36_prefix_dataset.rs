@@ -8989,6 +8989,43 @@ pub struct V36PrefixGtAccumulator {
 }
 
 impl V36PrefixGtAccumulator {
+    fn record_corpus(&mut self, corpus: &[V36PrefixMaterializedRow]) -> Result<()> {
+        for row in corpus {
+            if row.source_ordinal != Some(self.next_source_ordinal)
+                || validate_embedding(&row.embedding).is_err()
+                || self.query_ids.contains(&row.feature_row_id)
+                || !self.corpus_ids.insert(row.feature_row_id)
+            {
+                return Err(invalid("V36 prefix exact truth corpus input differs"));
+            }
+            self.next_source_ordinal = self
+                .next_source_ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 prefix exact truth corpus size overflows"))?;
+        }
+        Ok(())
+    }
+
+    fn absorb_with_pool(
+        &mut self,
+        corpus: &[V36PrefixMaterializedRow],
+        pool: &rayon::ThreadPool,
+    ) -> Result<()> {
+        self.record_corpus(corpus)?;
+        let queries = &self.queries;
+        pool.install(|| {
+            self.heaps
+                .par_iter_mut()
+                .zip(queries.par_iter())
+                .for_each(|(heap, query)| {
+                    for row in corpus {
+                        update_v36_prefix_gt_heap(heap, query, row);
+                    }
+                });
+        });
+        Ok(())
+    }
+
     /// Create a GT tile accumulator for one quality-query role.
     pub fn new(role: V36PrefixQualityRole, queries: Vec<V36PrefixQueryRow>) -> Result<Self> {
         let first_ordinal = queries.first().map(|row| row.query_ordinal);
@@ -9121,30 +9158,11 @@ impl V36PrefixGtAccumulator {
 
     /// Absorb one validated, source-ordered corpus batch.
     pub fn absorb(&mut self, corpus: &[V36PrefixMaterializedRow]) -> Result<()> {
+        self.record_corpus(corpus)?;
         for row in corpus {
-            if row.source_ordinal != Some(self.next_source_ordinal)
-                || validate_embedding(&row.embedding).is_err()
-                || self.query_ids.contains(&row.feature_row_id)
-                || !self.corpus_ids.insert(row.feature_row_id)
-            {
-                return Err(invalid("V36 prefix exact truth corpus input differs"));
-            }
             for (query, heap) in self.queries.iter().zip(&mut self.heaps) {
-                let candidate = RankedNeighbor {
-                    distance: squared_l2(&row.embedding, &query.embedding),
-                    feature_row_id: row.feature_row_id,
-                };
-                if heap.len() < GT_HEAP_CHECKPOINT_NEIGHBORS {
-                    heap.push(candidate);
-                } else if heap.peek().is_some_and(|worst| candidate < *worst) {
-                    heap.pop();
-                    heap.push(candidate);
-                }
+                update_v36_prefix_gt_heap(heap, query, row);
             }
-            self.next_source_ordinal = self
-                .next_source_ordinal
-                .checked_add(1)
-                .ok_or_else(|| invalid("V36 prefix exact truth corpus size overflows"))?;
         }
         Ok(())
     }
@@ -9176,6 +9194,23 @@ impl V36PrefixGtAccumulator {
     }
 }
 
+fn update_v36_prefix_gt_heap(
+    heap: &mut BinaryHeap<RankedNeighbor>,
+    query: &V36PrefixQueryRow,
+    row: &V36PrefixMaterializedRow,
+) {
+    let candidate = RankedNeighbor {
+        distance: squared_l2(&row.embedding, &query.embedding),
+        feature_row_id: row.feature_row_id,
+    };
+    if heap.len() < GT_HEAP_CHECKPOINT_NEIGHBORS {
+        heap.push(candidate);
+    } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+        heap.pop();
+        heap.push(candidate);
+    }
+}
+
 /// All quality roles advanced at one common exact-GT source boundary.
 pub struct V36PrefixAllQueryGtAccumulator {
     accumulators: [V36PrefixGtAccumulator; 3],
@@ -9183,6 +9218,39 @@ pub struct V36PrefixAllQueryGtAccumulator {
 }
 
 impl V36PrefixAllQueryGtAccumulator {
+    fn absorb_with_pool(
+        &mut self,
+        corpus: &[V36PrefixMaterializedRow],
+        pool: &rayon::ThreadPool,
+    ) -> Result<()> {
+        self.prevalidate_corpus(corpus)?;
+        for accumulator in &mut self.accumulators {
+            accumulator.absorb_with_pool(corpus, pool)?;
+        }
+        Ok(())
+    }
+
+    fn prevalidate_corpus(&self, corpus: &[V36PrefixMaterializedRow]) -> Result<()> {
+        let mut ordinal = self.accumulators[0].next_source_ordinal;
+        let mut batch_ids = BTreeSet::new();
+        for row in corpus {
+            if row.source_ordinal != Some(ordinal)
+                || validate_embedding(&row.embedding).is_err()
+                || self.query_ids.contains(&row.feature_row_id)
+                || self.accumulators[0]
+                    .corpus_ids
+                    .contains(&row.feature_row_id)
+                || !batch_ids.insert(row.feature_row_id)
+            {
+                return Err(invalid("V36 prefix exact truth corpus input differs"));
+            }
+            ordinal = ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 prefix exact truth corpus size overflows"))?;
+        }
+        Ok(())
+    }
+
     /// Create synchronized development, validation, and sealed-holdout heaps.
     pub fn new(queries: [Vec<V36PrefixQueryRow>; 3]) -> Result<Self> {
         let mut query_ids = BTreeSet::new();
@@ -9275,23 +9343,7 @@ impl V36PrefixAllQueryGtAccumulator {
 
     /// Absorb one complete canonical source block into every quality role.
     pub fn absorb(&mut self, corpus: &[V36PrefixMaterializedRow]) -> Result<()> {
-        let mut ordinal = self.accumulators[0].next_source_ordinal;
-        let mut batch_ids = BTreeSet::new();
-        for row in corpus {
-            if row.source_ordinal != Some(ordinal)
-                || validate_embedding(&row.embedding).is_err()
-                || self.query_ids.contains(&row.feature_row_id)
-                || self.accumulators[0]
-                    .corpus_ids
-                    .contains(&row.feature_row_id)
-                || !batch_ids.insert(row.feature_row_id)
-            {
-                return Err(invalid("V36 prefix exact truth corpus input differs"));
-            }
-            ordinal = ordinal
-                .checked_add(1)
-                .ok_or_else(|| invalid("V36 prefix exact truth corpus size overflows"))?;
-        }
+        self.prevalidate_corpus(corpus)?;
         for accumulator in &mut self.accumulators {
             accumulator.absorb(corpus)?;
         }
@@ -9344,6 +9396,94 @@ pub fn exact_v36_prefix_gt100(
     let mut accumulator = V36PrefixGtAccumulator::new(role, queries.to_vec())?;
     accumulator.absorb(corpus)?;
     accumulator.finish()
+}
+
+/// Compute every quality role from one schema-validated source scan, exposing only
+/// complete source-block checkpoints that can be resumed without rescoring the prefix.
+///
+/// The caller owns artifact authentication and must bind each consumed checkpoint
+/// through the authenticated ground-truth checkpoint manifest before publication.
+pub fn run_v36_prefix_gt100_checkpointed<F>(
+    source_path: &Path,
+    expected_source_feature_ids: &[u64],
+    queries: [Vec<V36PrefixQueryRow>; 3],
+    prior: Option<V36PrefixGtHeapCheckpoint>,
+    block_rows: usize,
+    worker_threads: usize,
+    mut consume_checkpoint: F,
+) -> Result<([Vec<V36PrefixGtNeighbor>; 3], V36PrefixGtRunStats)>
+where
+    F: FnMut(&V36PrefixGtHeapCheckpoint) -> Result<()>,
+{
+    if !(GT_HEAP_CHECKPOINT_NEIGHBORS..=PARQUET_ROW_GROUP_ROWS).contains(&block_rows)
+        || !(1..=16).contains(&worker_threads)
+    {
+        return Err(invalid("V36 prefix exact truth checkpoint run differs"));
+    }
+    let query_counts = [
+        u32::try_from(queries[0].len())
+            .map_err(|_| invalid("V36 prefix exact truth query count overflows"))?,
+        u32::try_from(queries[1].len())
+            .map_err(|_| invalid("V36 prefix exact truth query count overflows"))?,
+        u32::try_from(queries[2].len())
+            .map_err(|_| invalid("V36 prefix exact truth query count overflows"))?,
+    ];
+    v36_prefix_gt_heap_expected_rows(query_counts)?;
+    let quality_queries = query_counts.into_iter().sum();
+    let prior_next = prior
+        .as_ref()
+        .map_or(0, |checkpoint| checkpoint.next_source_ordinal);
+    let prior_rows = usize::try_from(prior_next)
+        .ok()
+        .filter(|rows| *rows <= expected_source_feature_ids.len())
+        .ok_or_else(|| invalid("V36 prefix exact truth checkpoint boundary differs"))?;
+    if prior_rows % block_rows != 0 {
+        return Err(invalid(
+            "V36 prefix exact truth checkpoint boundary differs",
+        ));
+    }
+    let mut accumulator = match prior {
+        Some(checkpoint) => V36PrefixAllQueryGtAccumulator::restore(
+            queries,
+            &expected_source_feature_ids[..prior_rows],
+            checkpoint,
+        )?,
+        None => V36PrefixAllQueryGtAccumulator::new(queries)?,
+    };
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .build()
+        .map_err(|_| invalid("V36 prefix exact truth worker pool differs"))?;
+    let mut decoded_source_rows = 0_u64;
+    let mut pending = Vec::with_capacity(block_rows);
+    scan_v36_prefix_source_parquet(source_path, expected_source_feature_ids, |source_batch| {
+        let rows = v36_prefix_source_rows_from_batch(&source_batch, &mut decoded_source_rows)?;
+        pending.extend(rows.into_iter().filter(|row| {
+            row.source_ordinal
+                .is_some_and(|ordinal| ordinal >= prior_next)
+        }));
+        while pending.len() >= block_rows {
+            let remaining = pending.split_off(block_rows);
+            accumulator.absorb_with_pool(&pending, &pool)?;
+            consume_checkpoint(&accumulator.checkpoint()?)?;
+            pending = remaining;
+        }
+        Ok(())
+    })?;
+    if !pending.is_empty() {
+        accumulator.absorb_with_pool(&pending, &pool)?;
+    }
+    let truth = accumulator.finish()?;
+    let source_rows = u64::try_from(expected_source_feature_ids.len())
+        .map_err(|_| invalid("V36 prefix exact truth corpus size overflows"))?;
+    Ok((
+        truth,
+        V36PrefixGtRunStats {
+            quality_queries,
+            source_scans: 1,
+            source_rows,
+        },
+    ))
 }
 
 fn v36_prefix_query_rows_from_batch(

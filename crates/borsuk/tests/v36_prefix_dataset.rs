@@ -13,7 +13,7 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    V36ArtifactIdentity, V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointContext,
+    BorsukError, V36ArtifactIdentity, V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointContext,
     V36PrefixCheckpointDependencyFile, V36PrefixCheckpointPointer, V36PrefixCheckpointResumeState,
     V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
     V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
@@ -41,18 +41,19 @@ use borsuk::{
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, restore_v36_prefix_checkpoint_phase,
     restore_v36_prefix_file_backed_population_scan, restore_v36_prefix_population,
-    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
-    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
-    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
-    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
-    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
-    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    run_v36_prefix_gt100_checkpointed, scan_v36_prefix_gt100_parquet,
+    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
+    scan_v36_prefix_object_prefix_file_backed, scan_v36_prefix_object_prefix_resumed,
+    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
+    scan_v36_prefix_source_parquet, select_v36_prefix_population_rows, select_v36_prefix_roles,
+    v36_prefix_gt100_schema, v36_prefix_query_schema, v36_prefix_query_score_sha256,
+    v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -2921,6 +2922,127 @@ fn v36_prefix_dataset_all_query_gt_checkpoint_resumes_one_source_scan_boundary()
         V36PrefixAllQueryGtAccumulator::restore(queries, &prefix_ids, checkpoint).unwrap();
     resumed.absorb(&corpus[111..]).unwrap();
     assert_eq!(resumed.finish().unwrap(), expected);
+}
+
+#[test]
+fn v36_prefix_dataset_file_gt_runner_resumes_only_after_complete_all_query_block() {
+    let directory = tempfile::tempdir().unwrap();
+    let source_path = directory.path().join("source.parquet");
+    let source_ids = (20_000_u64..20_202).collect::<Vec<_>>();
+    let embeddings = FixedSizeListArray::try_new(
+        Arc::new(Field::new("item", DataType::Float32, false)),
+        DIMENSIONS as i32,
+        Arc::new(Float32Array::from(
+            (0_u64..202)
+                .flat_map(|ordinal| vector(1, ordinal as f32 / 202.0))
+                .collect::<Vec<_>>(),
+        )),
+        None,
+    )
+    .unwrap();
+    let source_batch = RecordBatch::try_new(
+        Arc::new(v36_prefix_source_schema()),
+        vec![
+            Arc::new(UInt64Array::from(source_ids.clone())) as ArrayRef,
+            Arc::new(embeddings),
+        ],
+    )
+    .unwrap();
+    write_v36_prefix_source_parquet(&source_path, &source_ids, [source_batch]).unwrap();
+    let queries = [0_u64, 1, 2].map(|ordinal| {
+        vec![borsuk::V36PrefixQueryRow {
+            query_ordinal: 0,
+            feature_row_id: 90_000 + ordinal,
+            embedding: vector(1, ordinal as f32 / 10.0),
+        }]
+    });
+
+    let mut full_boundaries = Vec::new();
+    let (full_truth, full_stats) = run_v36_prefix_gt100_checkpointed(
+        &source_path,
+        &source_ids,
+        queries.clone(),
+        None,
+        101,
+        2,
+        |checkpoint| {
+            full_boundaries.push(checkpoint.next_source_ordinal);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(full_boundaries, [101, 202]);
+    assert_eq!(full_stats.source_scans, 1);
+    assert_eq!(full_stats.source_rows, 202);
+    assert_eq!(full_stats.quality_queries, 3);
+
+    let mut interrupted_checkpoint = None;
+    let error = run_v36_prefix_gt100_checkpointed(
+        &source_path,
+        &source_ids,
+        queries.clone(),
+        None,
+        101,
+        2,
+        |checkpoint| {
+            interrupted_checkpoint = Some(checkpoint.clone());
+            Err(BorsukError::InvalidStorage("fixture interruption".into()))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "invalid_storage");
+    let checkpoint = interrupted_checkpoint.unwrap();
+    assert_eq!(checkpoint.next_source_ordinal, 101);
+
+    let mut resumed_boundaries = Vec::new();
+    let (resumed_truth, resumed_stats) = run_v36_prefix_gt100_checkpointed(
+        &source_path,
+        &source_ids,
+        queries,
+        Some(checkpoint),
+        101,
+        2,
+        |checkpoint| {
+            resumed_boundaries.push(checkpoint.next_source_ordinal);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(resumed_boundaries, [202]);
+    assert_eq!(resumed_stats, full_stats);
+    assert_eq!(resumed_truth, full_truth);
+}
+
+#[test]
+fn v36_prefix_dataset_file_gt_runner_rejects_query_state_above_checkpoint_cap() {
+    let mut next_id = 90_000_u64;
+    let queries = [1_001_usize; 3].map(|count| {
+        (0..count)
+            .map(|query_ordinal| {
+                let feature_row_id = next_id;
+                next_id += 1;
+                borsuk::V36PrefixQueryRow {
+                    query_ordinal: u32::try_from(query_ordinal).unwrap(),
+                    feature_row_id,
+                    embedding: vector(1, query_ordinal as f32 / count as f32),
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    let error = run_v36_prefix_gt100_checkpointed(
+        Path::new("missing-source.parquet"),
+        &[1],
+        queries,
+        None,
+        101,
+        1,
+        |_| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid storage: V36 prefix GT heap query count differs"
+    );
 }
 
 #[test]
