@@ -330,12 +330,13 @@ smallest `(SHA-256("borsuk-v36-geometry-reservoir-v1" ||
 little_endian(source_ordinal)),source_ordinal)` rows. Super-cell Lloyd runs exactly 25
 iterations; local posting Lloyd runs exactly 10. Initialization is deterministic
 farthest-first: the first centroid is the smallest reservoir source ordinal, each
-next centroid maximizes distance to its nearest retained centroid, and ties use
-row ordinal. Assignment ties use centroid ordinal. Sums accumulate binary64 in
+next centroid is the not-yet-selected row that maximizes distance to its nearest
+retained centroid, and ties use row ordinal. Assignment ties use centroid ordinal. Sums accumulate binary64 in
 increasing row-ordinal order and centroid components round once to binary32.
-An empty centroid takes the row farthest from its assigned centroid, breaking
-ties by source ordinal, and that row is removed from its previous accumulation
-before recomputation.
+Empty centroids are repaired in increasing centroid-ordinal order. Each takes
+the row farthest from its assigned centroid among rows whose current centroid
+owns more than one row, breaking ties by source ordinal; that row is removed
+from its previous accumulation before recomputation.
 
 Let `P=ceil(rows/B)` and `R` be the number of non-empty super-cell runs. A
 checked precondition rejects `P<R`. Give every run one posting, then apportion

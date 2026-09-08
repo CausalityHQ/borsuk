@@ -17,7 +17,8 @@ use borsuk::{
     encode_v36_centered_projection_arrow, project_v35_query_scalar, project_v35_query_simd,
     project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
     score_v36_posting_gaussian, score_v36_posting_prototype_six, select_v36_closure_owners,
-    train_v36_centered_subspace, train_v36_posting_gaussian, train_v36_posting_prototype_six,
+    train_v36_centered_subspace, train_v36_posting_centroids, train_v36_posting_gaussian,
+    train_v36_posting_prototype_six,
 };
 use sha2::{Digest, Sha256};
 
@@ -122,6 +123,100 @@ fn v36_hamilton_postings_preserve_every_nonempty_run() {
 
     assert_eq!(allocation, [120, 1, 1, 1]);
     assert_eq!(allocation.iter().sum::<u32>(), 123);
+}
+
+#[test]
+fn v36_posting_centroids_use_farthest_first_and_ordered_lloyd() {
+    // Break caught: local posting construction depends on caller order, uses
+    // probabilistic seeding, or changes the registered ten-iteration result.
+    let row = |ordinal: u64, x: f32| {
+        let mut vector = vec![0.0_f32; 192];
+        vector[0] = x;
+        (ordinal, vector)
+    };
+    let rows = vec![row(40, 10.0), row(10, 0.0), row(30, 8.0), row(20, 2.0)];
+    let trained = train_v36_posting_centroids(&rows, 2).unwrap();
+    assert_eq!(trained.len(), 2);
+    assert_eq!(trained[0][0], 1.0);
+    assert_eq!(trained[1][0], 9.0);
+    assert!(
+        trained
+            .iter()
+            .flatten()
+            .all(|value| !value.is_sign_negative())
+    );
+
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    assert_eq!(train_v36_posting_centroids(&reversed, 2).unwrap(), trained);
+
+    // The middle row is equidistant from the initialized endpoints and must
+    // join centroid zero before the ordered binary64 recomputation.
+    let tie = train_v36_posting_centroids(&[row(1, 0.0), row(2, 4.0), row(3, 8.0)], 2).unwrap();
+    assert_eq!(tie[0][0], 2.0);
+    assert_eq!(tie[1][0], 8.0);
+
+    // Duplicate vectors exercise the registered empty-centroid transfer while
+    // retaining deterministic, finite centroid bytes.
+    let duplicate =
+        train_v36_posting_centroids(&[row(1, 7.0), row(2, 7.0), row(3, 7.0)], 2).unwrap();
+    assert_eq!(duplicate[0][0], 7.0);
+    assert_eq!(duplicate[1][0], 7.0);
+    assert!(train_v36_posting_centroids(&rows, 0).is_err());
+    assert!(train_v36_posting_centroids(&rows[..1], 2).is_err());
+    assert!(train_v36_posting_centroids(&[row(1, 0.0), row(1, 1.0)], 1).is_err());
+    let mut negative_zero = row(1, 0.0);
+    negative_zero.1[11] = -0.0;
+    assert!(train_v36_posting_centroids(&[negative_zero], 1).is_err());
+
+    // This fixture changes on the tenth pass; fewer Lloyd iterations produce
+    // different literal centroid bits.
+    let points = [
+        (8.0, 16.0),
+        (11.0, 24.0),
+        (2.0, 11.0),
+        (15.0, 23.0),
+        (20.0, 16.0),
+        (33.0, 34.0),
+        (15.0, 6.0),
+        (5.0, 9.0),
+        (16.0, 21.0),
+        (48.0, 45.0),
+        (6.0, 47.0),
+        (2.0, 48.0),
+        (26.0, 11.0),
+        (3.0, 5.0),
+        (15.0, 1.0),
+        (39.0, 44.0),
+        (21.0, 11.0),
+        (38.0, 2.0),
+        (2.0, 19.0),
+        (11.0, 47.0),
+    ];
+    let iterative = points
+        .iter()
+        .enumerate()
+        .map(|(ordinal, (x, y))| {
+            let mut vector = vec![0.0_f32; 192];
+            vector[0] = *x;
+            vector[1] = *y;
+            (u64::try_from(ordinal).unwrap(), vector)
+        })
+        .collect::<Vec<_>>();
+    let iterative = train_v36_posting_centroids(&iterative, 3).unwrap();
+    assert_eq!(iterative[0][0].to_bits(), 0x40ca_aaab);
+    assert_eq!(iterative[0][1].to_bits(), 0x423d_5555);
+    assert_eq!(iterative[1][0].to_bits(), 0x4220_0000);
+    assert_eq!(iterative[1][1].to_bits(), 0x4224_0000);
+    assert_eq!(iterative[2][0].to_bits(), 0x4161_2492);
+    assert_eq!(iterative[2][1].to_bits(), 0x4148_0000);
+
+    let precise = train_v36_posting_centroids(
+        &[row(1, 16_777_216.0), row(2, 1.0), row(3, -16_777_216.0)],
+        1,
+    )
+    .unwrap();
+    assert_eq!(precise[0][0].to_bits(), 0x3eaa_aaab);
 }
 
 #[test]

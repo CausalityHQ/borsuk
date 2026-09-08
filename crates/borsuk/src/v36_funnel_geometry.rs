@@ -1504,6 +1504,132 @@ pub fn allocate_v36_hamilton_postings(run_rows: &[u64], total_postings: u32) -> 
     Ok(allocation)
 }
 
+// Give every empty centroid one deterministic row without emptying its donor.
+fn repair_v36_empty_posting_assignments(
+    ordered: &[&(u64, Vec<f32>)],
+    assignments: &mut [usize],
+    assigned_distances: &[f64],
+    counts: &mut [usize],
+) -> Result<()> {
+    for empty in 0..counts.len() {
+        if counts[empty] != 0 {
+            continue;
+        }
+        let candidate = (0..ordered.len())
+            .filter(|row_index| counts[assignments[*row_index]] > 1)
+            .max_by(|left, right| {
+                assigned_distances[*left]
+                    .total_cmp(&assigned_distances[*right])
+                    .then_with(|| ordered[*right].0.cmp(&ordered[*left].0))
+            })
+            .ok_or_else(|| invalid("V36 posting empty-centroid repair differs"))?;
+        let donor = assignments[candidate];
+        counts[donor] -= 1;
+        counts[empty] = 1;
+        assignments[candidate] = empty;
+    }
+    Ok(())
+}
+
+/// Train local posting centroids with deterministic farthest-first seeding and
+/// exactly ten source-ordinal-ordered Lloyd iterations.
+pub fn train_v36_posting_centroids(
+    rows: &[(u64, Vec<f32>)],
+    posting_count: u32,
+) -> Result<Vec<Vec<f32>>> {
+    let posting_count =
+        usize::try_from(posting_count).map_err(|_| invalid("V36 posting count overflows"))?;
+    if rows.is_empty() || posting_count == 0 || posting_count > rows.len() {
+        return Err(invalid("V36 posting centroid authority differs"));
+    }
+    let mut ordered = rows.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+    if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0)
+        || ordered.iter().any(|(_, vector)| {
+            vector.len() != 192
+                || vector
+                    .iter()
+                    .any(|value| !value.is_finite() || (*value == 0.0 && value.to_bits() != 0))
+        })
+    {
+        return Err(invalid("V36 posting centroid training row differs"));
+    }
+
+    let mut selected = vec![false; ordered.len()];
+    selected[0] = true;
+    let mut centroids = vec![ordered[0].1.clone()];
+    let mut nearest_distances = vec![f64::INFINITY; ordered.len()];
+    while centroids.len() < posting_count {
+        let mut best: Option<(f64, u64, usize)> = None;
+        let newest = centroids
+            .last()
+            .ok_or_else(|| invalid("V36 posting centroid initialization differs"))?;
+        for (row_index, (ordinal, vector)) in ordered.iter().enumerate() {
+            if selected[row_index] {
+                continue;
+            }
+            nearest_distances[row_index] =
+                nearest_distances[row_index].min(squared_l2(vector, newest)?);
+            let nearest = nearest_distances[row_index];
+            if best.as_ref().is_none_or(|(distance, best_ordinal, _)| {
+                nearest > *distance || (nearest == *distance && *ordinal < *best_ordinal)
+            }) {
+                best = Some((nearest, *ordinal, row_index));
+            }
+        }
+        let (_, _, row_index) =
+            best.ok_or_else(|| invalid("V36 posting centroid initialization differs"))?;
+        selected[row_index] = true;
+        centroids.push(ordered[row_index].1.clone());
+    }
+
+    let mut assignments = vec![0_usize; ordered.len()];
+    let mut assigned_distances = vec![0.0_f64; ordered.len()];
+    for _ in 0..10 {
+        let mut counts = vec![0_usize; posting_count];
+        for (row_index, (_, vector)) in ordered.iter().enumerate() {
+            let mut best = (squared_l2(vector, &centroids[0])?, 0_usize);
+            for (centroid_index, centroid) in centroids.iter().enumerate().skip(1) {
+                let distance = squared_l2(vector, centroid)?;
+                if distance < best.0 {
+                    best = (distance, centroid_index);
+                }
+            }
+            assignments[row_index] = best.1;
+            assigned_distances[row_index] = best.0;
+            counts[best.1] = counts[best.1]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 posting assignment count overflows"))?;
+        }
+
+        repair_v36_empty_posting_assignments(
+            &ordered,
+            &mut assignments,
+            &assigned_distances,
+            &mut counts,
+        )?;
+
+        let mut sums = vec![vec![0.0_f64; 192]; posting_count];
+        for (row_index, (_, vector)) in ordered.iter().enumerate() {
+            let centroid = assignments[row_index];
+            for (sum, value) in sums[centroid].iter_mut().zip(vector) {
+                *sum += f64::from(*value);
+            }
+        }
+        for centroid in 0..posting_count {
+            let divisor = counts[centroid] as f64;
+            for dimension in 0..192 {
+                let rounded = (sums[centroid][dimension] / divisor) as f32;
+                if !rounded.is_finite() {
+                    return Err(invalid("V36 posting centroid is nonfinite"));
+                }
+                centroids[centroid][dimension] = if rounded == 0.0 { 0.0 } else { rounded };
+            }
+        }
+    }
+    Ok(centroids)
+}
+
 fn squared_l2(left: &[f32], right: &[f32]) -> Result<f64> {
     if left.len() != right.len() || left.is_empty() {
         return Err(invalid("V36 posting vector shape differs"));
@@ -2307,4 +2433,30 @@ pub fn admit_v36_geometry(
         stored_maximum,
         stop,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repair_v36_empty_posting_assignments;
+
+    #[test]
+    fn v36_empty_posting_repair_uses_farthest_donor_then_source_ordinal() {
+        let vector = vec![0.0_f32; 192];
+        let rows = [
+            (10_u64, vector.clone()),
+            (20_u64, vector.clone()),
+            (30_u64, vector.clone()),
+            (40_u64, vector),
+        ];
+        let ordered = rows.iter().collect::<Vec<_>>();
+        let mut assignments = vec![0_usize, 0, 0, 1];
+        let distances = [9.0_f64, 9.0, 1.0, 100.0];
+        let mut counts = vec![3_usize, 1, 0, 0];
+
+        repair_v36_empty_posting_assignments(&ordered, &mut assignments, &distances, &mut counts)
+            .unwrap();
+
+        assert_eq!(assignments, [2, 3, 0, 1]);
+        assert_eq!(counts, [1, 1, 1, 1]);
+    }
 }
