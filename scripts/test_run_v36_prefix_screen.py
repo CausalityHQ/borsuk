@@ -5,6 +5,7 @@ import contextlib
 import dataclasses
 import datetime
 import hashlib
+import inspect
 import io
 import json
 import pathlib
@@ -817,6 +818,15 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             script.index(diagnostic), script.index('python3 "$root/write-terminal.py"')
         )
         self.assertNotIn("CHECKPOINT.json", script)
+
+    def test_v36_prefix_screen_guest_code_avoids_newer_python_zip_contract(self) -> None:
+        # Break caught: Amazon Linux 2023's guest Python rejects zip(strict=),
+        # killing the publisher after Rust commits its first checkpoint.
+        self.assertNotIn("strict=True", subject._GUEST_TERMINAL_PROGRAM)
+        self.assertNotIn(
+            "strict=True",
+            inspect.getsource(subject.publish_v36_checkpoint_outbox_generation),
+        )
 
     def test_v36_prefix_screen_uses_authenticated_cli_before_conditional_storage(
         self,

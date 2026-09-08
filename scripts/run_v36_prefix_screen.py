@@ -119,7 +119,7 @@ if status == "complete":
     identities = receipt.get("outputs")
     if not isinstance(identities, list) or len(identities) != len(expected):
         raise SystemExit("freeze receipt outputs differ")
-    for identity, (role, filename) in zip(identities, expected, strict=True):
+    for identity, (role, filename) in zip(identities, expected):
         path = pathlib.Path(output_path, filename)
         payload = path.read_bytes()
         if (
@@ -1165,7 +1165,8 @@ def publish_v36_checkpoint_outbox_generation(
         for identity in identities
     ):
         raise ValueError("V36 checkpoint outbox identity differs")
-    for identity, path in zip(dependencies, dependency_paths, strict=True):
+    for ordinal, identity in enumerate(dependencies):
+        path = dependency_paths[ordinal]
         transport.put_immutable(identity, path)
     transport.put_immutable(manifest, manifest_path)
     transport.put_pointer(
