@@ -8002,13 +8002,13 @@ where
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let expected_schema = registered_input_schema();
     validate_parquet_descriptor(builder.parquet_schema(), &expected_schema)?;
-    if builder.schema().as_ref() != &expected_schema {
+    if builder.schema().fields() != expected_schema.fields() {
         return Err(invalid("V36 prefix registered object schema differs"));
     }
     let mut row_offset = 0_u64;
     for batch in builder.build()? {
         let batch = batch?;
-        if batch.schema().as_ref() != &expected_schema
+        if batch.schema().fields() != expected_schema.fields()
             || batch.num_columns() != 4
             || batch.num_rows() == 0
         {

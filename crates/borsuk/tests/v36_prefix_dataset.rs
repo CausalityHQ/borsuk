@@ -1,6 +1,6 @@
 //! Contract tests for the bounded V36 diagnostic population and exact truth.
 
-use std::{fs, path::Path, sync::Arc};
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
 use arrow_array::{
     Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
@@ -3597,16 +3597,25 @@ fn v36_prefix_dataset_registered_input_is_authenticated_and_strict() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("registered.parquet");
     let child = Arc::new(Field::new("item", DataType::Float32, true));
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("url", DataType::Utf8, true),
-        Field::new("natural_score", DataType::Float32, true),
-        Field::new("feature_row_id", DataType::Int64, true),
-        Field::new(
-            "embedding",
-            DataType::FixedSizeList(child.clone(), DIMENSIONS as i32),
-            true,
-        ),
-    ]));
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("url", DataType::Utf8, true),
+            Field::new("natural_score", DataType::Float32, true),
+            Field::new("feature_row_id", DataType::Int64, true),
+            Field::new(
+                "embedding",
+                DataType::FixedSizeList(child.clone(), DIMENSIONS as i32),
+                true,
+            ),
+        ],
+        HashMap::from([
+            ("embedding_dim".to_owned(), DIMENSIONS.to_string()),
+            (
+                "created_by".to_owned(),
+                "create_relaion_feature_dataset.py".to_owned(),
+            ),
+        ]),
+    ));
     let mut values = vec![0.0_f32; 2 * DIMENSIONS];
     values[0] = 1.0;
     values[DIMENSIONS + 1] = 1.0;
