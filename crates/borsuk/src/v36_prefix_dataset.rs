@@ -1379,7 +1379,7 @@ pub struct V36PrefixExternalMaterializationRequest<'a> {
     pub assignment: &'a V36PrefixRoleAssignmentFile,
     /// Hard file and buffer limits.
     pub limits: &'a V36PrefixExternalSelectionLimits,
-    /// Absent final output directory, atomically published after all roles close.
+    /// Existing empty output directory receiving no-clobber role files after all roles close.
     pub output: &'a Path,
     /// Complete source registry in frozen sample-rank order.
     pub ranked_objects: &'a [V36PrefixRankedSourceObject],
@@ -7668,11 +7668,26 @@ pub fn materialize_v36_prefix_assigned_roles(
         "sealed-holdout-query.parquet",
         "performance-query.parquet",
     ];
+    let output_type = fs::symlink_metadata(output)
+        .map_err(|source| BorsukError::Io {
+            path: output.to_owned(),
+            source,
+        })?
+        .file_type();
     if !scratch_type.is_dir()
         || scratch_type.is_symlink()
         || !output_parent_type.is_dir()
         || output_parent_type.is_symlink()
-        || output.exists()
+        || !output_type.is_dir()
+        || output_type.is_symlink()
+        || output
+            .read_dir()
+            .map_err(|source| BorsukError::Io {
+                path: output.to_owned(),
+                source,
+            })?
+            .next()
+            .is_some()
     {
         return Err(invalid(
             "V36 prefix external materialization output differs",
@@ -7794,18 +7809,21 @@ pub fn materialize_v36_prefix_assigned_roles(
         }
     }
     sync_directory(staging.path())?;
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        staging.path(),
-        rustix::fs::CWD,
-        output,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(|source| BorsukError::Io {
-        path: output.to_owned(),
-        source: source.into(),
-    })?;
-    sync_directory(output_parent)?;
+    for (staged, name) in staged_outputs.iter().zip(names) {
+        let destination = output.join(name);
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            staged,
+            rustix::fs::CWD,
+            &destination,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(|source| BorsukError::Io {
+            path: destination,
+            source: source.into(),
+        })?;
+    }
+    sync_directory(output)?;
     let outputs = names.map(|name| output.join(name));
     let [source, development, validation, sealed_holdout, performance] = outputs;
     Ok(V36PrefixRoleParquetPaths {

@@ -3236,6 +3236,7 @@ fn v36_prefix_dataset_external_materialization_merge_joins_physical_assignments(
     );
     assert!(!output.exists());
     assert!(scratch.read_dir().unwrap().next().is_none());
+    fs::create_dir(&output).unwrap();
 
     let paths: borsuk::V36PrefixRoleParquetPaths =
         materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
@@ -3485,6 +3486,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let materialization_scratch = directory.path().join("materialization-scratch");
     fs::create_dir(&materialization_scratch).unwrap();
     let materialized_root = directory.path().join("materialized");
+    fs::create_dir(&materialized_root).unwrap();
     let paths = materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
         assignment: &assignment,
         limits: &limits,
@@ -3693,6 +3695,7 @@ fn v36_prefix_dataset_external_materialization_rejects_rehashed_semantic_drift()
         let scratch = directory.path().join("materialization-scratch");
         let output = directory.path().join("output");
         fs::create_dir(&scratch).unwrap();
+        fs::create_dir(&output).unwrap();
 
         assert!(
             materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
@@ -3705,7 +3708,7 @@ fn v36_prefix_dataset_external_materialization_rejects_rehashed_semantic_drift()
             })
             .is_err()
         );
-        assert!(!output.exists());
+        assert!(output.read_dir().unwrap().next().is_none());
         assert!(scratch.read_dir().unwrap().next().is_none());
     }
 }
