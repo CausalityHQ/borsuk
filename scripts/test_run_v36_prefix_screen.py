@@ -1439,7 +1439,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
 
         dependency = b"identity-run\n"
         manifest = subject.canonical_json_bytes(
-            {"generation": 2, "schema": "borsuk-v36-prefix-freeze-checkpoint-v1"}
+            {"generation": 2, "schema": "borsuk-v36-prefix-freeze-checkpoint-v2"}
         )
         pointer = subject.canonical_json_bytes(
             {
@@ -1455,7 +1455,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-screen-fixture",
-                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v2",
             }
         )
         etag = subject.publish_v36_checkpoint(
@@ -1481,11 +1481,39 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             ],
         )
 
+    def test_v36_checkpoint_sidecar_accepts_only_current_v2_schemas(self) -> None:
+        manifest = subject.canonical_json_bytes(
+            {"generation": 0, "schema": "borsuk-v36-prefix-freeze-checkpoint-v2"}
+        )
+        pointer_value = {
+            "claim_eligible": False,
+            "generation": 0,
+            "manifest": {
+                "blake3": "b" * 64,
+                "encoded_bytes": len(manifest),
+                "role": "checkpoint-manifest",
+                "sha256": hashlib.sha256(manifest).hexdigest(),
+                "uri": "s3://fixture/checkpoints/manifests/m0.json",
+            },
+            "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
+            "producer_attempt_ordinal": 0,
+            "run_id": "v36-prefix-screen-fixture",
+            "schema": "borsuk-v36-prefix-checkpoint-pointer-v2",
+        }
+        pointer = subject.canonical_json_bytes(pointer_value)
+        self.assertEqual(subject._checkpoint_pointer_value(pointer), pointer_value)
+
+        pointer_value["schema"] = "borsuk-v36-prefix-checkpoint-pointer-v1"
+        with self.assertRaisesRegex(ValueError, "checkpoint pointer authority differs"):
+            subject._checkpoint_pointer_value(
+                subject.canonical_json_bytes(pointer_value)
+            )
+
     def test_v36_checkpoint_lost_pointer_ack_accepts_only_intended_bytes(self) -> None:
         # Break caught: a timed-out CAS is retried blindly or a concurrent
         # writer's pointer is accepted as this generation's publication.
         manifest = subject.canonical_json_bytes(
-            {"generation": 1, "schema": "borsuk-v36-prefix-freeze-checkpoint-v1"}
+            {"generation": 1, "schema": "borsuk-v36-prefix-freeze-checkpoint-v2"}
         )
         pointer = subject.canonical_json_bytes(
             {
@@ -1501,7 +1529,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-screen-fixture",
-                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v2",
             }
         )
 
@@ -1556,7 +1584,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-screen-fixture",
-                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v2",
             }
         )
 
@@ -1590,7 +1618,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": f"{plan.run_id}-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": plan.run_id,
-                "schema": "borsuk-v36-prefix-freeze-checkpoint-v1",
+                "schema": "borsuk-v36-prefix-freeze-checkpoint-v2",
             }
         )
         manifest_identity = {
@@ -1608,7 +1636,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": f"{plan.run_id}-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": plan.run_id,
-                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v2",
             }
         )
         expected = {
@@ -1647,7 +1675,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-fixture",
-                "schema": "borsuk-v36-prefix-freeze-checkpoint-v1",
+                "schema": "borsuk-v36-prefix-freeze-checkpoint-v2",
             }
         )
         manifest_sha = hashlib.sha256(manifest).hexdigest()
@@ -1667,7 +1695,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "producer_attempt_id": "v36-prefix-fixture-attempt-0000",
                 "producer_attempt_ordinal": 0,
                 "run_id": "v36-prefix-fixture",
-                "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+                "schema": "borsuk-v36-prefix-checkpoint-pointer-v2",
             }
         )
         binding = {
@@ -1795,7 +1823,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             manifest = subject.canonical_json_bytes(
                 {
                     "generation": 0,
-                    "schema": "borsuk-v36-prefix-freeze-checkpoint-v1",
+                    "schema": "borsuk-v36-prefix-freeze-checkpoint-v2",
                 }
             )
             manifest_sha = hashlib.sha256(manifest).hexdigest()
@@ -1817,7 +1845,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                     "producer_attempt_id": "v36-prefix-screen-fixture-attempt-0000",
                     "producer_attempt_ordinal": 0,
                     "run_id": "v36-prefix-screen-fixture",
-                    "schema": "borsuk-v36-prefix-checkpoint-pointer-v1",
+                    "schema": "borsuk-v36-prefix-checkpoint-pointer-v2",
                 }
             )
             pointer_sha = hashlib.sha256(pointer).hexdigest()

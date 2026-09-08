@@ -503,7 +503,7 @@ def _checkpoint_pointer_value(pointer_bytes: bytes) -> dict[str, object]:
         or _RUN_ID.fullmatch(value["run_id"]) is None
         or value.get("producer_attempt_id")
         != f"{value.get('run_id')}-attempt-{value.get('producer_attempt_ordinal'):04d}"
-        or value.get("schema") != "borsuk-v36-prefix-checkpoint-pointer-v1"
+        or value.get("schema") != "borsuk-v36-prefix-checkpoint-pointer-v2"
     ):
         raise ValueError("V36 checkpoint pointer authority differs")
     _s3(value["manifest"]["uri"])
@@ -566,7 +566,7 @@ def publish_v36_checkpoint(
         type(manifest_value) is not dict
         or canonical_json_bytes(manifest_value) != manifest_bytes
         or manifest_value.get("schema")
-        != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        != "borsuk-v36-prefix-freeze-checkpoint-v2"
         or manifest_value.get("generation") != pointer["generation"]
     ):
         raise ValueError("V36 checkpoint manifest authority differs")
@@ -636,7 +636,7 @@ def _read_v36_checkpoint_manifest(s3_client: Any, pointer_bytes: bytes) -> bytes
         or hashlib.sha256(manifest_bytes).hexdigest() != manifest_identity["sha256"]
         or type(manifest) is not dict
         or canonical_json_bytes(manifest) != manifest_bytes
-        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v2"
         or manifest.get("generation") != pointer["generation"]
     ):
         raise ValueError("V36 checkpoint manifest authority differs")
@@ -684,7 +684,7 @@ def v36_checkpoint_resume_binding(
         or hashlib.sha256(manifest_bytes).hexdigest() != manifest_identity["sha256"]
         or type(manifest) is not dict
         or canonical_json_bytes(manifest) != manifest_bytes
-        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v2"
         or manifest.get("generation") != pointer["generation"]
     ):
         raise ValueError("V36 checkpoint resume binding differs")
@@ -716,7 +716,7 @@ def _validate_v36_resume_closure(
     dependencies = population.get("identity_runs") if type(population) is dict else None
     if (
         canonical_json_bytes(manifest) != manifest_bytes
-        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v2"
         or manifest.get("generation") != binding["generation"]
         or manifest.get("run_id") != pointer["run_id"]
         or manifest.get("producer_attempt_id") != pointer["producer_attempt_id"]
@@ -1007,7 +1007,7 @@ def publish_v36_checkpoint_outbox_generation(
         raise ValueError("V36 checkpoint outbox manifest differs") from error
     if (
         canonical_json_bytes(manifest_value) != manifest_bytes
-        or manifest_value.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v1"
+        or manifest_value.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v2"
         or manifest_value.get("generation") != generation
     ):
         raise ValueError("V36 checkpoint outbox manifest differs")
