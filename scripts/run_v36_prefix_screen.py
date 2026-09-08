@@ -738,10 +738,23 @@ def _validate_v36_resume_closure(
     if phase == {"kind": "population"}:
         pass
     else:
+        phase_kind = phase.get("kind")
+        phase_fields = {
+            "selected": {"kind", "selection"},
+            "materialized": {"artifacts", "kind", "selection"},
+            "ground-truth": {
+                "heaps",
+                "kind",
+                "materialized",
+                "next_source_ordinal",
+                "selection",
+            },
+            "complete": {"ground_truth", "kind", "materialized", "selection"},
+        }
         selection = phase.get("selection")
         if (
-            set(phase) not in ({"kind", "selection"}, {"artifacts", "kind", "selection"})
-            or phase.get("kind") not in {"selected", "materialized"}
+            phase_kind not in phase_fields
+            or set(phase) != phase_fields[phase_kind]
             or type(selection) is not dict
             or set(selection)
             != {
@@ -758,8 +771,10 @@ def _validate_v36_resume_closure(
         dependency_roles.append(
             (selection["selected_ids"], "population-selected-identities")
         )
-        if phase["kind"] == "materialized":
-            artifacts = phase.get("artifacts")
+        if phase_kind != "selected":
+            artifacts = phase.get(
+                "artifacts" if phase_kind == "materialized" else "materialized"
+            )
             artifact_roles = (
                 ("population_authority", "population-authority"),
                 ("source", "source"),
@@ -774,6 +789,28 @@ def _validate_v36_resume_closure(
                 raise ValueError("V36 checkpoint resume phase differs")
             dependency_roles.extend(
                 (artifacts[name], role) for name, role in artifact_roles
+            )
+        if phase_kind == "ground-truth":
+            if (
+                type(phase["next_source_ordinal"]) is not int
+                or phase["next_source_ordinal"] <= 0
+            ):
+                raise ValueError("V36 checkpoint resume phase differs")
+            dependency_roles.append((phase["heaps"], "gt-heaps"))
+        elif phase_kind == "complete":
+            ground_truth = phase.get("ground_truth")
+            ground_truth_roles = (
+                ("heaps", "gt-heaps"),
+                ("development", "development-gt100"),
+                ("validation", "validation-gt100"),
+                ("sealed_holdout", "sealed-holdout-gt100"),
+            )
+            if type(ground_truth) is not dict or set(ground_truth) != {
+                name for name, _ in ground_truth_roles
+            }:
+                raise ValueError("V36 checkpoint resume phase differs")
+            dependency_roles.extend(
+                (ground_truth[name], role) for name, role in ground_truth_roles
             )
     manifest_identity = _outbox_artifact_identity(binding["manifest"])
     manifest_bucket, manifest_key = _s3(manifest_identity["uri"])

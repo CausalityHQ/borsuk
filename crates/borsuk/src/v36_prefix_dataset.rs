@@ -514,6 +514,17 @@ pub enum V36PrefixCheckpointResumeState {
         /// Authenticated selected-identity Arrow file.
         selected: V36PrefixSelectedIdsFile,
     },
+    /// Exact quality GT Parquets are complete and authenticated.
+    Complete {
+        /// Authenticated materialized output files.
+        artifacts: V36PrefixMaterializedCheckpointFiles,
+        /// Authenticated heap and three exact-GT Parquet files.
+        ground_truth: [V36PrefixCheckpointDependencyFile; 4],
+        /// Authenticated complete-object population prefix.
+        population: V36PrefixFileBackedPopulationScan,
+        /// Authenticated selected-identity Arrow file.
+        selected: V36PrefixSelectedIdsFile,
+    },
 }
 
 impl V36PrefixCheckpointHead {
@@ -1145,6 +1156,104 @@ impl V36PrefixPopulationCheckpointWriter {
                 next_source_ordinal,
             },
             std::slice::from_ref(heaps),
+        )
+    }
+
+    /// Publish terminal authenticated exact-GT Parquets from a complete heap boundary.
+    pub fn commit_complete(
+        &mut self,
+        ground_truth: &crate::V36PrefixGroundTruthArtifacts,
+        dependencies: &[V36PrefixCheckpointDependencyFile],
+    ) -> Result<PathBuf> {
+        let (selection, materialized, heaps, next_source_ordinal) = match self
+            .previous_manifest
+            .as_ref()
+            .map(|manifest| &manifest.phase)
+        {
+            Some(V36PrefixCheckpointPhase::GroundTruth {
+                selection,
+                materialized,
+                heaps,
+                next_source_ordinal,
+            }) => (
+                selection.clone(),
+                materialized.clone(),
+                heaps,
+                *next_source_ordinal,
+            ),
+            _ => return Err(invalid("V36 complete checkpoint predecessor differs")),
+        };
+        if next_source_ordinal != self.context.corpus_rows
+            || &ground_truth.heaps != heaps
+            || dependencies.len() != 3
+            || dependencies
+                .iter()
+                .map(|dependency| &dependency.identity)
+                .ne([
+                    &ground_truth.development,
+                    &ground_truth.validation,
+                    &ground_truth.sealed_holdout,
+                ])
+        {
+            return Err(invalid("V36 complete checkpoint authority differs"));
+        }
+        let object_path = |identity: &V36ArtifactIdentity| {
+            self.outbox
+                .root
+                .join("objects")
+                .join(format!("{}.blob", identity.sha256))
+        };
+        let mut remaining_queries = u32::try_from(GT_HEAP_CHECKPOINT_MAX_QUERIES).unwrap();
+        let mut query_counts = [0_u32; 3];
+        for (count, identity) in query_counts.iter_mut().zip([
+            &materialized.development_query,
+            &materialized.validation_query,
+            &materialized.sealed_holdout_query,
+        ]) {
+            *count = validate_v36_prefix_checkpoint_query_file(
+                &object_path(identity),
+                remaining_queries,
+            )?;
+            remaining_queries = remaining_queries
+                .checked_sub(*count)
+                .ok_or_else(|| invalid("V36 complete checkpoint query count differs"))?;
+        }
+        let heap_path = object_path(heaps);
+        authenticate_file(&heap_path, heaps)?;
+        let checkpoint = decode_v36_prefix_gt_heap_checkpoint(
+            &read_file(&heap_path)?,
+            heaps,
+            next_source_ordinal,
+            query_counts,
+        )?;
+        let mut expected_truth = [Vec::new(), Vec::new(), Vec::new()];
+        for entry in checkpoint
+            .entries
+            .into_iter()
+            .filter(|entry| usize::from(entry.rank) < GT_NEIGHBORS)
+        {
+            expected_truth[usize::from(v36_prefix_gt_role_ordinal(entry.role))].push(
+                V36PrefixGtNeighbor {
+                    query_ordinal: entry.query_ordinal,
+                    rank: entry.rank,
+                    feature_row_id: entry.feature_row_id,
+                    squared_distance: entry.squared_distance,
+                },
+            );
+        }
+        for ((dependency, expected_queries), expected) in
+            dependencies.iter().zip(query_counts).zip(&expected_truth)
+        {
+            authenticate_file(&dependency.path, &dependency.identity)?;
+            validate_v36_prefix_gt100_matches_heap(&dependency.path, expected, expected_queries)?;
+        }
+        self.publish_phase(
+            V36PrefixCheckpointPhase::Complete {
+                selection,
+                materialized,
+                ground_truth: ground_truth.clone(),
+            },
+            dependencies,
         )
     }
 
@@ -1808,6 +1917,27 @@ pub struct V36PrefixCheckpointGroundTruth {
     pub stats: V36PrefixGtRunStats,
     /// Exact GT@100 for the three quality roles.
     pub truth: [Vec<V36PrefixGtNeighbor>; 3],
+}
+
+/// Inputs for one terminal GroundTruth-to-Complete checkpoint transition.
+pub struct V36PrefixCheckpointCompletionRequest<'a> {
+    /// Existing empty directory receiving exact-GT Parquets.
+    pub output_root: &'a Path,
+    /// Content-addressed checkpoint object prefix.
+    pub output_uri_prefix: &'a str,
+    /// Authenticated GroundTruth state at corpus EOF.
+    pub state: &'a V36PrefixCheckpointResumeState,
+    /// Writer restored from the same GroundTruth head.
+    pub writer: &'a mut V36PrefixPopulationCheckpointWriter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Terminal exact-GT artifacts and checkpoint publication.
+pub struct V36PrefixCheckpointCompletion {
+    /// Ready-file path for the atomic Complete publication.
+    pub checkpoint_ready: PathBuf,
+    /// Exact heap plus development, validation, and sealed-holdout identities.
+    pub ground_truth: crate::V36PrefixGroundTruthArtifacts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7882,7 +8012,8 @@ pub fn restore_v36_prefix_checkpoint_phase(
     let selection = match &head.manifest.phase {
         V36PrefixCheckpointPhase::Selected { selection }
         | V36PrefixCheckpointPhase::Materialized { selection, .. }
-        | V36PrefixCheckpointPhase::GroundTruth { selection, .. } => selection,
+        | V36PrefixCheckpointPhase::GroundTruth { selection, .. }
+        | V36PrefixCheckpointPhase::Complete { selection, .. } => selection,
         V36PrefixCheckpointPhase::Population => unreachable!(),
     };
     let contract = selected_contract
@@ -7980,6 +8111,63 @@ pub fn restore_v36_prefix_checkpoint_phase(
                 artifacts,
                 heaps,
                 next_source_ordinal: *next_source_ordinal,
+                population,
+                selected,
+            })
+        }
+        V36PrefixCheckpointPhase::Complete { .. } => {
+            let mut remaining_queries = u32::try_from(GT_HEAP_CHECKPOINT_MAX_QUERIES).unwrap();
+            let mut query_counts = [0_u32; 3];
+            for (count, artifact) in query_counts.iter_mut().zip([
+                &artifacts.development_query,
+                &artifacts.validation_query,
+                &artifacts.sealed_holdout_query,
+            ]) {
+                *count =
+                    validate_v36_prefix_checkpoint_query_file(&artifact.path, remaining_queries)?;
+                remaining_queries = remaining_queries
+                    .checked_sub(*count)
+                    .ok_or_else(|| invalid("V36 prefix complete query count differs"))?;
+            }
+            let ground_truth = [
+                dependency(6)?,
+                dependency(7)?,
+                dependency(8)?,
+                dependency(9)?,
+            ];
+            artifacts.authenticated_ground_truth =
+                Some((ground_truth[0].clone(), head.authenticated_corpus_rows));
+            let checkpoint = decode_v36_prefix_gt_heap_checkpoint(
+                &read_file(&ground_truth[0].path)?,
+                &ground_truth[0].identity,
+                head.authenticated_corpus_rows,
+                query_counts,
+            )?;
+            let mut expected_truth = [Vec::new(), Vec::new(), Vec::new()];
+            for entry in checkpoint
+                .entries
+                .into_iter()
+                .filter(|entry| usize::from(entry.rank) < GT_NEIGHBORS)
+            {
+                expected_truth[usize::from(v36_prefix_gt_role_ordinal(entry.role))].push(
+                    V36PrefixGtNeighbor {
+                        query_ordinal: entry.query_ordinal,
+                        rank: entry.rank,
+                        feature_row_id: entry.feature_row_id,
+                        squared_distance: entry.squared_distance,
+                    },
+                );
+            }
+            for ((artifact, expected_queries), expected) in ground_truth[1..]
+                .iter()
+                .zip(query_counts)
+                .zip(&expected_truth)
+            {
+                validate_v36_prefix_gt100_matches_heap(&artifact.path, expected, expected_queries)?;
+            }
+            Ok(V36PrefixCheckpointResumeState::Complete {
+                artifacts,
+                ground_truth,
                 population,
                 selected,
             })
@@ -9695,6 +9883,54 @@ where
     Ok(())
 }
 
+fn validate_v36_prefix_gt100_matches_heap(
+    path: &Path,
+    expected: &[V36PrefixGtNeighbor],
+    expected_queries: u32,
+) -> Result<()> {
+    let mut next = 0_usize;
+    scan_v36_prefix_gt100_parquet(path, expected_queries, |batch| {
+        let queries = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V36 prefix GT query column differs"))?;
+        let ranks = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .ok_or_else(|| invalid("V36 prefix GT rank column differs"))?;
+        let ids = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix GT ID column differs"))?;
+        let distances = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| invalid("V36 prefix GT distance column differs"))?;
+        for row in 0..batch.num_rows() {
+            let expected = expected
+                .get(next)
+                .ok_or_else(|| invalid("V36 prefix GT heap binding differs"))?;
+            if queries.value(row) != expected.query_ordinal
+                || ranks.value(row) != expected.rank
+                || ids.value(row) != expected.feature_row_id
+                || distances.value(row).to_bits() != expected.squared_distance.to_bits()
+            {
+                return Err(invalid("V36 prefix GT heap binding differs"));
+            }
+            next += 1;
+        }
+        Ok(())
+    })?;
+    if next != expected.len() {
+        return Err(invalid("V36 prefix GT heap binding differs"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 struct RankedNeighbor {
     distance: f64,
@@ -10428,7 +10664,8 @@ where
             );
         }
         V36PrefixCheckpointResumeState::Population { .. }
-        | V36PrefixCheckpointResumeState::Selected { .. } => {
+        | V36PrefixCheckpointResumeState::Selected { .. }
+        | V36PrefixCheckpointResumeState::Complete { .. } => {
             return Err(invalid("V36 prefix exact truth continuation phase differs"));
         }
     };
@@ -10480,7 +10717,8 @@ pub fn run_v36_prefix_checkpoint_ground_truth(
             Some((heaps, *next_source_ordinal)),
         ),
         V36PrefixCheckpointResumeState::Population { .. }
-        | V36PrefixCheckpointResumeState::Selected { .. } => {
+        | V36PrefixCheckpointResumeState::Selected { .. }
+        | V36PrefixCheckpointResumeState::Complete { .. } => {
             return Err(invalid("V36 ground-truth driver phase differs"));
         }
     };
@@ -10579,6 +10817,157 @@ pub fn run_v36_prefix_checkpoint_ground_truth(
             .ok_or_else(|| invalid("V36 ground-truth driver emitted no checkpoint"))?,
         stats,
         truth,
+    })
+}
+
+/// Materialize exact GT@100 Parquets from an authenticated EOF heap and publish Complete.
+pub fn complete_v36_prefix_checkpoint_ground_truth(
+    request: V36PrefixCheckpointCompletionRequest<'_>,
+) -> Result<V36PrefixCheckpointCompletion> {
+    let V36PrefixCheckpointCompletionRequest {
+        output_root,
+        output_uri_prefix,
+        state,
+        writer,
+    } = request;
+    let (artifacts, heaps, next_source_ordinal, state_population, state_selected) = match state {
+        V36PrefixCheckpointResumeState::GroundTruth {
+            artifacts,
+            heaps,
+            next_source_ordinal,
+            population,
+            selected,
+        } => (artifacts, heaps, *next_source_ordinal, population, selected),
+        _ => return Err(invalid("V36 completion phase differs")),
+    };
+    if !output_root.is_dir()
+        || output_uri_prefix.trim_end_matches('/')
+            != writer.context.object_prefix.trim_end_matches('/')
+        || next_source_ordinal != writer.context.corpus_rows
+    {
+        return Err(invalid("V36 completion boundary differs"));
+    }
+    artifacts.validate_ground_truth_seal(heaps, next_source_ordinal)?;
+    authenticate_file(&heaps.path, &heaps.identity)?;
+    let (writer_selection, writer_materialized, writer_population, writer_heaps, writer_ordinal) =
+        match writer
+            .previous_manifest
+            .as_ref()
+            .map(|manifest| (&manifest.phase, &manifest.population))
+        {
+            Some((
+                V36PrefixCheckpointPhase::GroundTruth {
+                    heaps,
+                    materialized,
+                    next_source_ordinal,
+                    selection,
+                },
+                population,
+            )) => (
+                selection,
+                materialized,
+                population,
+                heaps,
+                *next_source_ordinal,
+            ),
+            _ => return Err(invalid("V36 completion predecessor differs")),
+        };
+    let artifact_files = [
+        &artifacts.population_authority,
+        &artifacts.source,
+        &artifacts.development_query,
+        &artifacts.validation_query,
+        &artifacts.sealed_holdout_query,
+        &artifacts.performance_query,
+    ];
+    let artifact_identities = [
+        &writer_materialized.population_authority,
+        &writer_materialized.source,
+        &writer_materialized.development_query,
+        &writer_materialized.validation_query,
+        &writer_materialized.sealed_holdout_query,
+        &writer_materialized.performance_query,
+    ];
+    let state_run_identities = state_population
+        .runs
+        .iter()
+        .map(|run| &run.identity)
+        .collect::<Vec<_>>();
+    if writer_heaps != &heaps.identity
+        || writer_ordinal != next_source_ordinal
+        || state_selected.identity != writer_selection.selected_ids
+        || state_population.consumed_objects != writer_population.consumed_objects
+        || state_population.distinct_rows != writer_population.distinct_rows
+        || state_population.duplicate_rows != writer_population.duplicate_rows
+        || state_population.physical_rows != writer_population.physical_rows
+        || state_run_identities != writer_population.identity_runs.iter().collect::<Vec<_>>()
+        || artifact_files
+            .iter()
+            .zip(artifact_identities)
+            .any(|(file, identity)| &file.identity != identity)
+    {
+        return Err(invalid("V36 completion authority differs"));
+    }
+    let mut remaining_queries = u32::try_from(GT_HEAP_CHECKPOINT_MAX_QUERIES).unwrap();
+    let mut query_counts = [0_u32; 3];
+    for (count, artifact) in query_counts.iter_mut().zip([
+        &artifacts.development_query,
+        &artifacts.validation_query,
+        &artifacts.sealed_holdout_query,
+    ]) {
+        *count = validate_v36_prefix_checkpoint_query_file(&artifact.path, remaining_queries)?;
+        remaining_queries = remaining_queries
+            .checked_sub(*count)
+            .ok_or_else(|| invalid("V36 completion query count differs"))?;
+    }
+    let checkpoint = decode_v36_prefix_gt_heap_checkpoint(
+        &read_file(&heaps.path)?,
+        &heaps.identity,
+        next_source_ordinal,
+        query_counts,
+    )?;
+    let mut truth = [Vec::new(), Vec::new(), Vec::new()];
+    for entry in checkpoint
+        .entries
+        .into_iter()
+        .filter(|entry| usize::from(entry.rank) < GT_NEIGHBORS)
+    {
+        truth[usize::from(v36_prefix_gt_role_ordinal(entry.role))].push(V36PrefixGtNeighbor {
+            query_ordinal: entry.query_ordinal,
+            rank: entry.rank,
+            feature_row_id: entry.feature_row_id,
+            squared_distance: entry.squared_distance,
+        });
+    }
+    let attempt = tempfile::tempdir_in(output_root).map_err(|source| BorsukError::Io {
+        path: output_root.to_owned(),
+        source,
+    })?;
+    let specifications = [
+        ("development-gt100", "development-gt100.parquet"),
+        ("validation-gt100", "validation-gt100.parquet"),
+        ("sealed-holdout-gt100", "sealed-holdout-gt100.parquet"),
+    ];
+    let mut dependencies = Vec::with_capacity(3);
+    for ((role, filename), rows) in specifications.into_iter().zip(&truth) {
+        let temporary = attempt.path().join(filename);
+        write_v36_prefix_gt100_parquet(&temporary, [v36_prefix_gt_batch(rows)?])?;
+        let identity =
+            v36_prefix_checkpoint_output_identity(role, filename, output_uri_prefix, &temporary)?;
+        let path = output_root.join(filename);
+        install_content_addressed_file(&path, &temporary, &identity)?;
+        dependencies.push(V36PrefixCheckpointDependencyFile { identity, path });
+    }
+    let ground_truth = crate::V36PrefixGroundTruthArtifacts {
+        heaps: heaps.identity.clone(),
+        development: dependencies[0].identity.clone(),
+        validation: dependencies[1].identity.clone(),
+        sealed_holdout: dependencies[2].identity.clone(),
+    };
+    let checkpoint_ready = writer.commit_complete(&ground_truth, &dependencies)?;
+    Ok(V36PrefixCheckpointCompletion {
+        checkpoint_ready,
+        ground_truth,
     })
 }
 

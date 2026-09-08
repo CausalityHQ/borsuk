@@ -13,8 +13,9 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    BorsukError, V36ArtifactIdentity, V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointContext,
-    V36PrefixCheckpointDependencyFile, V36PrefixCheckpointGroundTruth,
+    BorsukError, V36ArtifactIdentity, V36PrefixAllQueryGtAccumulator,
+    V36PrefixCheckpointCompletion, V36PrefixCheckpointCompletionRequest,
+    V36PrefixCheckpointContext, V36PrefixCheckpointDependencyFile, V36PrefixCheckpointGroundTruth,
     V36PrefixCheckpointGroundTruthRequest, V36PrefixCheckpointMaterialization,
     V36PrefixCheckpointMaterializationRequest, V36PrefixCheckpointPointer,
     V36PrefixCheckpointResumeState, V36PrefixCheckpointSelectionRequest,
@@ -37,10 +38,11 @@ use borsuk::{
     canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_gt_heap_checkpoint,
-    decode_v36_prefix_identity_run, decode_v36_prefix_selected_ids,
-    deduplicate_v36_prefix_row_identities, encode_v36_prefix_gt_heap_checkpoint,
-    encode_v36_prefix_identity_run, encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
+    canonical_v36_prefix_source_registry_bytes, complete_v36_prefix_checkpoint_ground_truth,
+    decode_v36_prefix_gt_heap_checkpoint, decode_v36_prefix_identity_run,
+    decode_v36_prefix_selected_ids, deduplicate_v36_prefix_row_identities,
+    encode_v36_prefix_gt_heap_checkpoint, encode_v36_prefix_identity_run,
+    encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_checkpoint_selection,
@@ -2427,6 +2429,31 @@ fn file_identity(role: &str, uri: &str, path: &Path) -> V36ArtifactIdentity {
     }
 }
 
+fn gt_neighbor_batch(rows: &[borsuk::V36PrefixGtNeighbor]) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(v36_prefix_gt100_schema()),
+        vec![
+            Arc::new(UInt32Array::from(
+                rows.iter().map(|row| row.query_ordinal).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(UInt16Array::from(
+                rows.iter().map(|row| row.rank).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter()
+                    .map(|row| row.feature_row_id)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(Float64Array::from(
+                rows.iter()
+                    .map(|row| row.squared_distance)
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .unwrap()
+}
+
 #[test]
 fn v36_prefix_dataset_execution_authority_binds_provenance_and_lifecycle() {
     let authority = execution_authority();
@@ -4593,6 +4620,117 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     assert_eq!(eof_resume.truth, expected_truth);
     assert_eq!(eof_resume.stats, expected_gt_stats);
     assert!(eof_gt_root.read_dir().unwrap().next().is_none());
+    let completed_root = directory.path().join("completed-gt");
+    fs::create_dir(&completed_root).unwrap();
+    let completed: V36PrefixCheckpointCompletion =
+        complete_v36_prefix_checkpoint_ground_truth(V36PrefixCheckpointCompletionRequest {
+            output_root: &completed_root,
+            output_uri_prefix: object_prefix,
+            state: &ground_truth_resume_state,
+            writer: &mut ground_truth_resume_writer,
+        })
+        .unwrap();
+    let completed_staged = directory.path().join("completed-staged");
+    stage_checkpoint_head(
+        &ground_truth_resume_outbox,
+        &completed.checkpoint_ready,
+        &completed_staged,
+    );
+    let completed_head = load_v36_prefix_checkpoint_head(&completed_staged, &context).unwrap();
+    assert!(matches!(
+        completed_head.manifest.phase,
+        borsuk::V36PrefixCheckpointPhase::Complete { .. }
+    ));
+    let V36PrefixCheckpointResumeState::Complete {
+        artifacts: completed_artifacts,
+        ground_truth: completed_ground_truth,
+        population: completed_population,
+        selected: completed_selected,
+    } = restore_v36_prefix_checkpoint_phase(
+        &completed_head,
+        Some(&selected_file.contract),
+        &limits,
+        &restore_scratch,
+    )
+    .unwrap()
+    else {
+        panic!("complete checkpoint resumed at the wrong phase")
+    };
+    assert_eq!(completed_population.distinct_rows, 144);
+    assert_eq!(completed_selected.identity, selection.selected_ids);
+    assert_eq!(completed_artifacts.source.identity, artifacts.source);
+    assert_eq!(
+        completed_ground_truth[0].identity,
+        completed.ground_truth.heaps
+    );
+    assert_eq!(
+        completed_ground_truth[1].identity,
+        completed.ground_truth.development
+    );
+    assert_eq!(
+        completed_ground_truth[2].identity,
+        completed.ground_truth.validation
+    );
+    assert_eq!(
+        completed_ground_truth[3].identity,
+        completed.ground_truth.sealed_holdout
+    );
+
+    let malicious_outbox = directory.path().join("malicious-complete-outbox");
+    fs::create_dir(&malicious_outbox).unwrap();
+    let (mut malicious_writer, _) =
+        V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
+            execution_authority_sha256: "8".repeat(64),
+            head: ground_truth_head.clone(),
+            context: context.clone(),
+            limits: &limits,
+            producer_attempt_id: "v36-prefix-screen-reduced-attempt-0002".into(),
+            producer_attempt_ordinal: 2,
+            producer_instance_id: "i-reduced-malicious-complete".into(),
+            root: &malicious_outbox,
+            scratch_root: &restore_scratch,
+            selected_contract: Some(&selected_file.contract),
+        })
+        .unwrap();
+    let wrong_development_path = directory.path().join("wrong-development-gt100.parquet");
+    let mut wrong_development = expected_truth[0].clone();
+    wrong_development[99].squared_distance += 1.0;
+    write_v36_prefix_gt100_parquet(
+        &wrong_development_path,
+        [gt_neighbor_batch(&wrong_development)],
+    )
+    .unwrap();
+    let mut wrong_development_identity = file_identity(
+        "development-gt100",
+        "s3://fixture/v36/temporary-wrong-development-gt100.parquet",
+        &wrong_development_path,
+    );
+    wrong_development_identity.uri = format!(
+        "{}/{}-development-gt100.parquet",
+        object_prefix.trim_end_matches('/'),
+        wrong_development_identity.sha256
+    );
+    let wrong_dependencies = [
+        V36PrefixCheckpointDependencyFile {
+            identity: wrong_development_identity.clone(),
+            path: wrong_development_path,
+        },
+        V36PrefixCheckpointDependencyFile {
+            identity: completed.ground_truth.validation.clone(),
+            path: completed_root.join("validation-gt100.parquet"),
+        },
+        V36PrefixCheckpointDependencyFile {
+            identity: completed.ground_truth.sealed_holdout.clone(),
+            path: completed_root.join("sealed-holdout-gt100.parquet"),
+        },
+    ];
+    let mut wrong_ground_truth = completed.ground_truth.clone();
+    wrong_ground_truth.development = wrong_development_identity;
+    assert!(
+        malicious_writer
+            .commit_complete(&wrong_ground_truth, &wrong_dependencies)
+            .is_err()
+    );
 
     let mut rewritten_ground_truth = ground_truth_head.clone();
     let borsuk::V36PrefixCheckpointPhase::GroundTruth {

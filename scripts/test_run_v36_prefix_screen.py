@@ -1655,7 +1655,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "resume binding differs"):
             subject.v36_checkpoint_resume_binding(plan, 0, pointer, manifest)
 
-    def test_v36_checkpoint_resume_closure_tracks_selected_and_materialized_phases(self) -> None:
+    def test_v36_checkpoint_resume_closure_tracks_every_phase(self) -> None:
         object_prefix = "s3://fixture/v36/checkpoints/objects/"
 
         def identity(role: str, ordinal: int, encoded_bytes: int = 1_024) -> dict[str, object]:
@@ -1686,6 +1686,13 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             "validation_query": identity("validation-query", 6),
             "sealed_holdout_query": identity("sealed-holdout-query", 7),
             "performance_query": identity("performance-query", 8),
+        }
+        heaps = identity("gt-heaps", 10)
+        ground_truth = {
+            "heaps": heaps,
+            "development": identity("development-gt100", 11),
+            "validation": identity("validation-gt100", 12),
+            "sealed_holdout": identity("sealed-holdout-gt100", 13),
         }
         pointer = {
             "generation": 2,
@@ -1728,6 +1735,29 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 }
             ),
             [run, selected, *artifacts.values()],
+        )
+        self.assertEqual(
+            closure(
+                {
+                    "heaps": heaps,
+                    "kind": "ground-truth",
+                    "materialized": artifacts,
+                    "next_source_ordinal": 1_000_000,
+                    "selection": selection,
+                }
+            ),
+            [run, selected, *artifacts.values(), heaps],
+        )
+        self.assertEqual(
+            closure(
+                {
+                    "ground_truth": ground_truth,
+                    "kind": "complete",
+                    "materialized": artifacts,
+                    "selection": selection,
+                }
+            ),
+            [run, selected, *artifacts.values(), *ground_truth.values()],
         )
 
     def test_v36_checkpoint_resume_materializes_only_newest_dependency_closure(self) -> None:

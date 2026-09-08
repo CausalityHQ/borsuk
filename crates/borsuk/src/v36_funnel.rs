@@ -486,6 +486,15 @@ pub enum V36PrefixCheckpointPhase {
         /// First source row not incorporated into every query heap.
         next_source_ordinal: u64,
     },
+    /// Exact GT@100 Parquets and their authenticated terminal heap.
+    Complete {
+        /// Exact population selection consumed by materialization.
+        selection: V36PrefixPopulationSelection,
+        /// Exact materialized lineage consumed by exact GT.
+        materialized: V36PrefixMaterializedArtifacts,
+        /// Named immutable exact-GT artifacts.
+        ground_truth: V36PrefixGroundTruthArtifacts,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -546,6 +555,20 @@ pub struct V36PrefixMaterializedArtifacts {
     pub sealed_holdout_query: V36ArtifactIdentity,
     /// Performance-only query Parquet.
     pub performance_query: V36ArtifactIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Immutable exact-ground-truth outputs at the completed checkpoint boundary.
+pub struct V36PrefixGroundTruthArtifacts {
+    /// Final canonical all-query heap snapshot.
+    pub heaps: V36ArtifactIdentity,
+    /// Development GT@100 Parquet.
+    pub development: V36ArtifactIdentity,
+    /// Validation GT@100 Parquet.
+    pub validation: V36ArtifactIdentity,
+    /// Sealed-holdout GT@100 Parquet.
+    pub sealed_holdout: V36ArtifactIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1322,6 +1345,17 @@ fn materialized_artifacts(
     ]
 }
 
+fn ground_truth_artifacts(
+    artifacts: &V36PrefixGroundTruthArtifacts,
+) -> [(&V36ArtifactIdentity, &'static str); 4] {
+    [
+        (&artifacts.heaps, "gt-heaps"),
+        (&artifacts.development, "development-gt100"),
+        (&artifacts.validation, "validation-gt100"),
+        (&artifacts.sealed_holdout, "sealed-holdout-gt100"),
+    ]
+}
+
 #[doc(hidden)]
 /// Return the exact dependency-first closure for one checkpoint phase.
 pub fn plan_v36_prefix_checkpoint_dependency_closure(
@@ -1357,6 +1391,23 @@ pub fn plan_v36_prefix_checkpoint_dependency_closure(
                     .map(|(artifact, _)| artifact.clone()),
             );
             dependencies.push(heaps.clone());
+        }
+        V36PrefixCheckpointPhase::Complete {
+            ground_truth,
+            materialized,
+            selection,
+        } => {
+            dependencies.push(selection.selected_ids.clone());
+            dependencies.extend(
+                materialized_artifacts(materialized)
+                    .into_iter()
+                    .map(|(artifact, _)| artifact.clone()),
+            );
+            dependencies.extend(
+                ground_truth_artifacts(ground_truth)
+                    .into_iter()
+                    .map(|(artifact, _)| artifact.clone()),
+            );
         }
     }
     let mut uris = BTreeSet::new();
@@ -1544,6 +1595,21 @@ pub fn validate_v36_prefix_checkpoint_manifest(
                 return Err(invalid("V36 prefix materialized checkpoint differs"));
             }
         }
+        V36PrefixCheckpointPhase::Complete {
+            ground_truth,
+            materialized,
+            selection,
+        } => {
+            if population.completed_objects != population.selected_object_count
+                || !valid_population_selection(selection, population)
+                || !valid_materialized_artifacts(materialized)
+                || ground_truth_artifacts(ground_truth)
+                    .into_iter()
+                    .any(|(artifact, role)| !valid_checkpoint_artifact(artifact, role))
+            {
+                return Err(invalid("V36 prefix complete checkpoint differs"));
+            }
+        }
     }
     Ok(())
 }
@@ -1596,6 +1662,17 @@ pub fn validate_v36_prefix_checkpoint_manifest_with_context(
                 && heaps.uri.starts_with(&context.object_prefix)
                 && materialized_artifacts(materialized)
                     .into_iter()
+                    .all(|(artifact, _)| artifact.uri.starts_with(&context.object_prefix))
+        }
+        V36PrefixCheckpointPhase::Complete {
+            ground_truth,
+            materialized,
+            selection,
+        } => {
+            population_selection_matches_context(context, selection)
+                && materialized_artifacts(materialized)
+                    .into_iter()
+                    .chain(ground_truth_artifacts(ground_truth))
                     .all(|(artifact, _)| artifact.uri.starts_with(&context.object_prefix))
         }
     };
@@ -1653,6 +1730,7 @@ fn checkpoint_phase_rank(phase: &V36PrefixCheckpointPhase) -> u8 {
         V36PrefixCheckpointPhase::Selected { .. } => 1,
         V36PrefixCheckpointPhase::Materialized { .. } => 2,
         V36PrefixCheckpointPhase::GroundTruth { .. } => 3,
+        V36PrefixCheckpointPhase::Complete { .. } => 4,
     }
 }
 
@@ -1733,6 +1811,24 @@ pub fn validate_v36_prefix_checkpoint_transition(
             previous_materialized == next_materialized
                 && previous_selection == next_selection
                 && next_ordinal > previous_ordinal
+        }
+        (
+            V36PrefixCheckpointPhase::GroundTruth {
+                heaps: previous_heaps,
+                materialized: previous_materialized,
+                next_source_ordinal,
+                selection: previous_selection,
+            },
+            V36PrefixCheckpointPhase::Complete {
+                ground_truth,
+                materialized: next_materialized,
+                selection: next_selection,
+            },
+        ) => {
+            *next_source_ordinal == context.corpus_rows
+                && &ground_truth.heaps == previous_heaps
+                && previous_materialized == next_materialized
+                && previous_selection == next_selection
         }
         _ => false,
     };
