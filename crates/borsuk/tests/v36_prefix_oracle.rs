@@ -13,7 +13,7 @@ use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryStop,
     V36PostingGaussianSummary, admit_v36_geometry, allocate_v36_hamilton_postings,
-    build_v36_srht192_control, decode_v36_centered_projection_arrow,
+    assign_v36_postings, build_v36_srht192_control, decode_v36_centered_projection_arrow,
     encode_v36_centered_projection_arrow, project_v35_query_scalar, project_v35_query_simd,
     project_v36_centered_row_scalar, project_v36_centered_row_simd, score_v36_posting_centroid,
     score_v36_posting_gaussian, score_v36_posting_prototype_six, select_v36_closure_owners,
@@ -233,6 +233,84 @@ fn v36_closure_owners_reject_redundant_centroids_without_losing_distinct_regions
     let owners = select_v36_closure_owners(&[0.0, 0.0], &centroids, 0.05, 8).unwrap();
 
     assert_eq!(owners, [0, 1, 3]);
+
+    let orthogonal = (0..10)
+        .map(|dimension| {
+            let mut centroid = vec![0.0_f32; 192];
+            centroid[dimension] = 1.0;
+            centroid
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        select_v36_closure_owners(&vec![0.0; 192], &orthogonal, 0.05, 8).unwrap(),
+        (0..8).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn v36_population_assignment_is_flat_bounded_and_worker_independent() {
+    // Break caught: population assignment depends on scheduling/blocking,
+    // stores nested per-row vectors, or computes occupancy from replicas as if
+    // they were primaries.
+    let vector = |ordinal: u64, x: f32, y: f32| {
+        let mut value = vec![0.0_f32; 192];
+        value[0] = x;
+        value[1] = y;
+        (ordinal, value)
+    };
+    let rows = vec![
+        vector(30, 0.0, 0.0),
+        vector(10, 1.0, 0.0),
+        vector(20, -1.0, 0.0),
+        vector(40, 0.0, 1.02),
+        vector(50, 1.0, 0.0),
+        vector(60, 0.0, 1.02),
+    ];
+    let centroids = vec![
+        vector(0, -1.0, 0.0).1,
+        vector(0, 1.0, 0.0).1,
+        vector(0, 0.0, 1.02).1,
+    ];
+    let serial = assign_v36_postings(&rows, &centroids, Some(0.05), 1, 1, 2).unwrap();
+    let parallel = assign_v36_postings(&rows, &centroids, Some(0.05), 4, 3, 2).unwrap();
+    assert_eq!(serial, parallel);
+    assert_eq!(serial.source_ordinals(), &[10, 20, 30, 40, 50, 60]);
+    assert_eq!(serial.owner_offsets(), &[0, 1, 2, 5, 6, 7, 8]);
+    assert_eq!(serial.owners(), &[1, 0, 0, 1, 2, 2, 1, 2]);
+    assert_eq!(serial.primary_occupancy(), &[2, 2, 2]);
+    assert_eq!(serial.stored_occupancy(), &[2, 3, 3]);
+    assert_eq!(serial.admission().mean_replication_ppm, 1_333_334);
+
+    let single = assign_v36_postings(&rows, &centroids, None, 2, 2, 2).unwrap();
+    assert_eq!(single.owner_offsets(), &[0, 1, 2, 3, 4, 5, 6]);
+    assert_eq!(single.owners(), &[1, 0, 0, 2, 1, 2]);
+    assert_eq!(single.primary_occupancy(), single.stored_occupancy());
+
+    let duplicate_rows = vec![vector(1, 0.0, 0.0), vector(2, 0.0, 0.0)];
+    let duplicate_centroids = train_v36_posting_centroids(&duplicate_rows, 2).unwrap();
+    let duplicate_single =
+        assign_v36_postings(&duplicate_rows, &duplicate_centroids, None, 1, 1, 1).unwrap();
+    assert_eq!(duplicate_single.primary_occupancy(), &[2, 0]);
+    assert_eq!(duplicate_single.stored_occupancy(), &[2, 0]);
+    let duplicate_closure =
+        assign_v36_postings(&duplicate_rows, &duplicate_centroids, Some(0.05), 2, 1, 1).unwrap();
+    assert_eq!(duplicate_closure.primary_occupancy(), &[2, 0]);
+    assert_eq!(duplicate_closure.stored_occupancy(), &[2, 2]);
+    assert!(assign_v36_postings(&rows, &centroids, Some(0.10), 1, 1, 2).is_err());
+    assert!(assign_v36_postings(&rows, &centroids, None, 1, 1, 4_096).is_err());
+    assert!(assign_v36_postings(&rows, &centroids, None, 0, 1, 2).is_err());
+    assert!(assign_v36_postings(&rows, &centroids, None, 1, 0, 2).is_err());
+    assert!(
+        assign_v36_postings(
+            &[vector(1, 0.0, 0.0), vector(1, 1.0, 0.0)],
+            &centroids,
+            None,
+            1,
+            1,
+            1,
+        )
+        .is_err()
+    );
 }
 
 #[test]

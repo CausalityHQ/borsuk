@@ -19,6 +19,7 @@ use borsuk_fma::{FmaBackend, FusedProjection4};
 use nalgebra::{DMatrix, SymmetricEigen};
 use rand_chacha::ChaCha8Rng;
 use rand_core::{RngCore, SeedableRng};
+use rayon::{ThreadPoolBuilder, prelude::*};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -1630,6 +1631,13 @@ pub fn train_v36_posting_centroids(
     Ok(centroids)
 }
 
+fn invalid_v36_vector(vector: &[f32]) -> bool {
+    vector.len() != 192
+        || vector
+            .iter()
+            .any(|value| !value.is_finite() || (*value == 0.0 && value.to_bits() != 0))
+}
+
 fn squared_l2(left: &[f32], right: &[f32]) -> Result<f64> {
     if left.len() != right.len() || left.is_empty() {
         return Err(invalid("V36 posting vector shape differs"));
@@ -2307,6 +2315,185 @@ pub fn select_v36_closure_owners(
         .collect()
 }
 
+/// Flat, source-ordinal-ordered ownership and occupancy evidence for one V36
+/// posting geometry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingAssignments {
+    source_ordinals: Vec<u64>,
+    owner_offsets: Vec<u64>,
+    owners: Vec<u32>,
+    primary_occupancy: Vec<u64>,
+    stored_occupancy: Vec<u64>,
+    admission: V36GeometryAdmission,
+}
+
+impl V36PostingAssignments {
+    /// Unique source ordinals in canonical row order.
+    pub fn source_ordinals(&self) -> &[u64] {
+        &self.source_ordinals
+    }
+
+    /// CSR offsets into [`Self::owners`], including one terminal offset.
+    pub fn owner_offsets(&self) -> &[u64] {
+        &self.owner_offsets
+    }
+
+    /// Primary-first posting owners, with at most eight entries per row.
+    pub fn owners(&self) -> &[u32] {
+        &self.owners
+    }
+
+    /// Unique-primary occupancy for every posting.
+    pub fn primary_occupancy(&self) -> &[u64] {
+        &self.primary_occupancy
+    }
+
+    /// Primary-plus-closure occupancy for every posting.
+    pub fn stored_occupancy(&self) -> &[u64] {
+        &self.stored_occupancy
+    }
+
+    /// Exact construction-side admission evidence.
+    pub const fn admission(&self) -> &V36GeometryAdmission {
+        &self.admission
+    }
+}
+
+#[derive(Clone, Copy)]
+struct V36RowOwners {
+    len: u8,
+    owners: [u32; 8],
+}
+
+/// Assign a projected population to exact primary and optional closure owners
+/// with byte-identical output across worker and block counts.
+pub fn assign_v36_postings(
+    rows: &[(u64, Vec<f32>)],
+    centroids: &[Vec<f32>],
+    closure_epsilon: Option<f64>,
+    worker_threads: usize,
+    block_rows: usize,
+    target_primary_rows: u64,
+) -> Result<V36PostingAssignments> {
+    if rows.is_empty()
+        || centroids.is_empty()
+        || centroids.len() > u32::MAX as usize
+        || worker_threads == 0
+        || worker_threads > 64
+        || block_rows == 0
+        || block_rows > 65_536
+        || target_primary_rows == 0
+        || closure_epsilon.is_some_and(|epsilon| !matches!(epsilon, 0.05 | 0.15 | 0.30))
+    {
+        return Err(invalid("V36 population assignment authority differs"));
+    }
+    let row_count = u64::try_from(rows.len())
+        .map_err(|_| invalid("V36 population assignment row count overflows"))?;
+    let centroid_count = u64::try_from(centroids.len())
+        .map_err(|_| invalid("V36 population assignment posting count overflows"))?;
+    if row_count.div_ceil(target_primary_rows) != centroid_count {
+        return Err(invalid("V36 population assignment geometry differs"));
+    }
+    let mut ordered = rows.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+    if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0)
+        || ordered.iter().any(|(_, vector)| invalid_v36_vector(vector))
+        || centroids
+            .iter()
+            .any(|centroid| invalid_v36_vector(centroid))
+    {
+        return Err(invalid("V36 population assignment vector differs"));
+    }
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .build()
+        .map_err(|_| invalid("V36 population assignment workers differ"))?;
+    let mut row_owners = vec![
+        V36RowOwners {
+            len: 0,
+            owners: [0; 8]
+        };
+        ordered.len()
+    ];
+    pool.install(|| {
+        ordered
+            .par_chunks(block_rows)
+            .zip(row_owners.par_chunks_mut(block_rows))
+            .try_for_each(|(input, output)| {
+                for ((_, row), output) in input.iter().zip(output) {
+                    let selected = if let Some(epsilon) = closure_epsilon {
+                        select_v36_closure_owners(row, centroids, epsilon, 8)?
+                    } else {
+                        let mut best = (squared_l2(row, &centroids[0])?, 0_usize);
+                        for (ordinal, centroid) in centroids.iter().enumerate().skip(1) {
+                            let distance = squared_l2(row, centroid)?;
+                            if distance < best.0 {
+                                best = (distance, ordinal);
+                            }
+                        }
+                        vec![
+                            u32::try_from(best.1)
+                                .map_err(|_| invalid("V36 posting ordinal overflows"))?,
+                        ]
+                    };
+                    let len = u8::try_from(selected.len())
+                        .map_err(|_| invalid("V36 owner count overflows"))?;
+                    output.len = len;
+                    output.owners[..usize::from(len)].copy_from_slice(&selected);
+                }
+                Ok::<(), BorsukError>(())
+            })
+    })?;
+
+    let source_ordinals = ordered.iter().map(|row| row.0).collect::<Vec<_>>();
+    let mut owner_offsets = Vec::with_capacity(ordered.len() + 1);
+    let owner_count = row_owners.iter().try_fold(0_usize, |sum, row| {
+        sum.checked_add(usize::from(row.len))
+            .ok_or_else(|| invalid("V36 owner count overflows"))
+    })?;
+    let mut owners = Vec::with_capacity(owner_count);
+    owner_offsets.push(0);
+    for row in row_owners {
+        owners.extend_from_slice(&row.owners[..usize::from(row.len)]);
+        owner_offsets
+            .push(u64::try_from(owners.len()).map_err(|_| invalid("V36 owner count overflows"))?);
+    }
+
+    let mut primary_occupancy = vec![0_u64; centroids.len()];
+    let mut stored_occupancy = vec![0_u64; centroids.len()];
+    for offsets in owner_offsets.windows(2) {
+        let start =
+            usize::try_from(offsets[0]).map_err(|_| invalid("V36 owner offset overflows"))?;
+        let end = usize::try_from(offsets[1]).map_err(|_| invalid("V36 owner offset overflows"))?;
+        let row_owners = owners
+            .get(start..end)
+            .filter(|row_owners| !row_owners.is_empty())
+            .ok_or_else(|| invalid("V36 owner offsets differ"))?;
+        let primary =
+            usize::try_from(row_owners[0]).map_err(|_| invalid("V36 posting ordinal overflows"))?;
+        primary_occupancy[primary] = primary_occupancy[primary]
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 primary occupancy overflows"))?;
+        for owner in row_owners {
+            let owner =
+                usize::try_from(*owner).map_err(|_| invalid("V36 posting ordinal overflows"))?;
+            stored_occupancy[owner] = stored_occupancy[owner]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 stored occupancy overflows"))?;
+        }
+    }
+    let admission = admit_v36_geometry(&primary_occupancy, &stored_occupancy, target_primary_rows)?;
+    Ok(V36PostingAssignments {
+        source_ordinals,
+        owner_offsets,
+        owners,
+        primary_occupancy,
+        stored_occupancy,
+        admission,
+    })
+}
+
 /// First registered construction-side reason a V36 geometry is rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum V36GeometryStop {
@@ -2368,7 +2555,7 @@ pub fn admit_v36_geometry(
         || primary_occupancy
             .iter()
             .zip(stored_occupancy)
-            .any(|(primary, stored)| *primary == 0 || stored < primary)
+            .any(|(primary, stored)| stored < primary)
     {
         return Err(invalid("V36 geometry occupancy authority differs"));
     }
@@ -2376,6 +2563,9 @@ pub fn admit_v36_geometry(
         sum.checked_add(*rows)
             .ok_or_else(|| invalid("V36 geometry primary rows overflow"))
     })?;
+    if primary_rows == 0 {
+        return Err(invalid("V36 geometry primary population is empty"));
+    }
     let stored_rows = stored_occupancy.iter().try_fold(0_u64, |sum, rows| {
         sum.checked_add(*rows)
             .ok_or_else(|| invalid("V36 geometry stored rows overflow"))
@@ -2437,7 +2627,12 @@ pub fn admit_v36_geometry(
 
 #[cfg(test)]
 mod tests {
-    use super::repair_v36_empty_posting_assignments;
+    use super::{V36RowOwners, repair_v36_empty_posting_assignments};
+
+    #[test]
+    fn v36_row_owner_scratch_is_one_fixed_inline_record() {
+        assert!(std::mem::size_of::<V36RowOwners>() <= 36);
+    }
 
     #[test]
     fn v36_empty_posting_repair_uses_farthest_donor_then_source_ordinal() {
