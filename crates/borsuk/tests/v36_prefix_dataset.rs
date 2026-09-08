@@ -28,7 +28,8 @@ use borsuk::{
     V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
     V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
     V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
-    bind_v36_prefix_population_authority, canonical_v36_prefix_checkpoint_manifest_bytes,
+    bind_v36_prefix_population_authority, bind_v36_prefix_role_assignment_contract,
+    bind_v36_prefix_selected_ids_contract, canonical_v36_prefix_checkpoint_manifest_bytes,
     canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
@@ -502,6 +503,80 @@ fn external_selection_authority(
         selected_object_start: contract.selected_object_start,
         selected_rows: contract.selected_rows,
     }
+}
+
+#[test]
+fn v36_prefix_dataset_checkpoint_pipeline_derives_selection_and_role_authority_exactly() {
+    let registry = source_registry();
+    let authority = freeze_authority(&registry);
+    let selected_identity = selected_ids_identity(b"selected authority fixture");
+    let selection = V36PrefixPopulationSelection {
+        cutoff_feature_row_id: 41,
+        cutoff_score_sha256: "6".repeat(64),
+        eligible_rows: authority.distinct_candidates + 7,
+        excluded_population_identity: authority.excluded_population_identity.clone(),
+        excluded_rows: 0,
+        selected_ids: selected_identity.clone(),
+        selected_rows: authority.distinct_candidates,
+    };
+    let selected_contract = bind_v36_prefix_selected_ids_contract(&authority, &selection).unwrap();
+    assert_eq!(selected_contract.cohort_ordinal, authority.cohort_ordinal);
+    assert_eq!(selected_contract.eligible_rows, selection.eligible_rows);
+    assert_eq!(selected_contract.excluded_rows, selection.excluded_rows);
+    assert_eq!(
+        selected_contract.ordered_source_manifest_sha256,
+        authority.ordered_source_manifest_sha256
+    );
+    assert_eq!(
+        selected_contract.population_seed_sha256,
+        authority.population_seed_sha256
+    );
+    assert_eq!(
+        selected_contract.selected_object_count,
+        authority.selected_object_count
+    );
+    assert_eq!(
+        selected_contract.selected_object_start,
+        authority.selected_object_start
+    );
+    assert_eq!(
+        selected_contract.selected_rows,
+        authority.distinct_candidates
+    );
+
+    let selected = V36PrefixSelectedIdsFile {
+        contract: selected_contract,
+        identity: selected_identity,
+        path: Path::new("selected.arrow").to_owned(),
+    };
+    let roles =
+        bind_v36_prefix_role_assignment_contract(&authority, &selection, &selected).unwrap();
+    assert_eq!(roles.corpus_rows, authority.corpus_rows);
+    assert_eq!(roles.corpus_seed_label, authority.corpus_seed_label);
+    assert_eq!(roles.corpus_seed_sha256, authority.corpus_seed_sha256);
+    assert_eq!(roles.roles, authority.roles);
+    assert_eq!(roles.selected_population_identity, selected.identity);
+    assert_eq!(roles.selected_rows, authority.distinct_candidates);
+
+    let mut drifted_selection = selection.clone();
+    drifted_selection.selected_rows -= 1;
+    assert!(bind_v36_prefix_selected_ids_contract(&authority, &drifted_selection).is_err());
+    let mut drifted_selected = selected;
+    drifted_selected.contract.ordered_source_manifest_sha256 = "9".repeat(64);
+    assert!(
+        bind_v36_prefix_role_assignment_contract(&authority, &selection, &drifted_selected)
+            .is_err()
+    );
+    let mut substituted_identity = drifted_selected;
+    substituted_identity.contract =
+        bind_v36_prefix_selected_ids_contract(&authority, &selection).unwrap();
+    substituted_identity.identity.sha256 = "8".repeat(64);
+    substituted_identity.identity.blake3 = "7".repeat(64);
+    substituted_identity.identity.uri = "s3://fixture/v36/substituted-selected.arrow".into();
+    assert!(
+        bind_v36_prefix_role_assignment_contract(&authority, &selection, &substituted_identity)
+            .is_err()
+    );
 }
 
 fn selected_ids_identity(bytes: &[u8]) -> V36ArtifactIdentity {

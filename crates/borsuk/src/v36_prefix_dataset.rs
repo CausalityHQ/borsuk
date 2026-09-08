@@ -1600,6 +1600,43 @@ pub struct V36PrefixRoleAssignmentContract {
     pub selected_rows: u64,
 }
 
+/// Derive the exact role-assignment contract from frozen freeze authority and
+/// one authenticated selected-ID artifact.
+pub fn bind_v36_prefix_role_assignment_contract(
+    authority: &V36PrefixFreezeAuthority,
+    selection: &V36PrefixPopulationSelection,
+    selected: &V36PrefixSelectedIdsFile,
+) -> Result<V36PrefixRoleAssignmentContract> {
+    let expected_selected_contract = bind_v36_prefix_selected_ids_contract(authority, selection)?;
+    validate_selected_ids_contract(&selected.contract)?;
+    if selected.identity != selection.selected_ids
+        || selected.contract != expected_selected_contract
+        || selected.contract.cohort_ordinal != authority.cohort_ordinal
+        || selected.contract.excluded_population_identity != authority.excluded_population_identity
+        || selected.contract.ordered_source_manifest_sha256
+            != authority.ordered_source_manifest_sha256
+        || selected.contract.population_seed_sha256 != authority.population_seed_sha256
+        || selected.contract.selected_object_count != authority.selected_object_count
+        || selected.contract.selected_object_start != authority.selected_object_start
+        || selected.contract.selected_rows != authority.distinct_candidates
+    {
+        return Err(invalid("V36 prefix checkpoint role authority differs"));
+    }
+    let contract = V36PrefixRoleAssignmentContract {
+        corpus_rows: authority.corpus_rows,
+        corpus_seed_label: authority.corpus_seed_label.clone(),
+        corpus_seed_sha256: authority.corpus_seed_sha256.clone(),
+        ordered_source_manifest_sha256: authority.ordered_source_manifest_sha256.clone(),
+        roles: authority.roles.clone(),
+        selected_object_count: authority.selected_object_count,
+        selected_object_start: authority.selected_object_start,
+        selected_population_identity: selected.identity.clone(),
+        selected_rows: selected.contract.selected_rows,
+    };
+    validate_v36_prefix_role_assignment_contract(&contract, selected)?;
+    Ok(contract)
+}
+
 /// File-backed request for bounded deterministic role assignment.
 pub struct V36PrefixRoleAssignmentRequest<'a> {
     /// Role and selected-population authority.
@@ -1671,6 +1708,38 @@ pub struct V36PrefixSelectedIdsContract {
     pub selected_object_start: u16,
     /// Exact number of selected population rows.
     pub selected_rows: u64,
+}
+
+/// Derive the exact selected-ID file contract from frozen freeze authority and
+/// a checkpointed selection receipt.
+pub fn bind_v36_prefix_selected_ids_contract(
+    authority: &V36PrefixFreezeAuthority,
+    selection: &V36PrefixPopulationSelection,
+) -> Result<V36PrefixSelectedIdsContract> {
+    if selection.selected_rows != authority.distinct_candidates
+        || selection.excluded_population_identity != authority.excluded_population_identity
+        || selection.selected_ids.role != "population-selected-identities"
+        || selection.selected_ids.encoded_bytes == 0
+        || selection.selected_ids.uri.is_empty()
+        || digest_bytes(&selection.selected_ids.sha256).is_err()
+        || digest_bytes(&selection.selected_ids.blake3).is_err()
+        || digest_bytes(&selection.cutoff_score_sha256).is_err()
+    {
+        return Err(invalid("V36 prefix checkpoint selection authority differs"));
+    }
+    let contract = V36PrefixSelectedIdsContract {
+        cohort_ordinal: authority.cohort_ordinal,
+        eligible_rows: selection.eligible_rows,
+        excluded_population_identity: selection.excluded_population_identity.clone(),
+        excluded_rows: selection.excluded_rows,
+        ordered_source_manifest_sha256: authority.ordered_source_manifest_sha256.clone(),
+        population_seed_sha256: authority.population_seed_sha256.clone(),
+        selected_object_count: authority.selected_object_count,
+        selected_object_start: authority.selected_object_start,
+        selected_rows: selection.selected_rows,
+    };
+    validate_selected_ids_contract(&contract)?;
+    Ok(contract)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

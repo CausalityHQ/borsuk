@@ -366,6 +366,7 @@ pub use v36_prefix_dataset::{
     V36PrefixRoleParquetPaths, V36PrefixRoleSplit, V36PrefixRowIdentity,
     V36PrefixSelectedFileReceipt, V36PrefixSelectedIds, V36PrefixSelectedIdsContract,
     V36PrefixSelectedIdsFile, assign_v36_prefix_roles_from_selected_file,
+    bind_v36_prefix_role_assignment_contract, bind_v36_prefix_selected_ids_contract,
     decode_v36_prefix_gt_heap_checkpoint, decode_v36_prefix_identity_run,
     decode_v36_prefix_selected_ids, deduplicate_v36_prefix_row_identities,
     encode_v36_prefix_gt_heap_checkpoint, encode_v36_prefix_identity_run,
