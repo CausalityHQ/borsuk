@@ -6,7 +6,7 @@ use borsuk::{
     V36GeometryArm, V36PrefixPopulationAuthority, V36PrefixRegisteredSourceObject,
     V36PrefixRoleAuthority, V36PrefixScreenManifest, V36PrefixSourceObject, V36PrimaryRows,
     V36ProjectionArm, V36RegisteredManifest, V36Replication, V36ResourceRequest, V36ShapeScore,
-    canonical_v36_prefix_screen_manifest_bytes, project_v36_resources,
+    canonical_v36_prefix_screen_manifest_bytes, project_v36_resources, validate_v36_manifest,
     validate_v36_prefix_screen_manifest,
 };
 use serde::Serialize;
@@ -185,25 +185,21 @@ fn population() -> V36PrefixPopulationAuthority {
 
 fn centered_projection() -> V36ProjectionArm {
     V36ProjectionArm::CenteredSubspace192 {
-        covariance_sha256: digest(24),
-        eigenpair_order: "eigenvalue-descending-then-coordinate-ordinal".to_owned(),
-        eigenvector_sign_rule: "largest-absolute-component-positive-coordinate-tie".to_owned(),
-        energy_dimensions: vec![64, 96, 128, 192],
-        mean_sha256: digest(23),
-        max_eigenpair_relative_residual_ppt: 100,
-        max_reconstruction_relative_error_ppt: 100,
-        reservoir_sha256: digest(25),
-        solver: "nalgebra-0.33-symmetric-eigen-single-thread-no-contraction".to_owned(),
+        artifact: Box::new(artifact("centered-projection-basis", 30)),
     }
 }
 
 fn screen_manifest() -> V36PrefixScreenManifest {
     let population = population();
     let projection = centered_projection();
+    let projection_artifact = match &projection {
+        V36ProjectionArm::CenteredSubspace192 { artifact, .. } => artifact.as_ref().clone(),
+        V36ProjectionArm::Srht192 { .. } => bound_artifact("projection", &projection),
+    };
     V36PrefixScreenManifest {
         artifacts: vec![
             bound_artifact("population-authority", &population),
-            bound_artifact("projection", &projection),
+            projection_artifact,
             artifact("query-excluded-corpus-parquet", 2),
             artifact("posting-summaries", 3),
         ],
@@ -211,7 +207,7 @@ fn screen_manifest() -> V36PrefixScreenManifest {
         chunk_ceiling: V36ChunkCeiling::Kib512,
         coarse_code: V36CoarseCode::ResidualPq4Code32,
         fine_codec: V36FineCodec::Sq8,
-        format: "borsuk-v36-prefix-screen-manifest-v1".to_owned(),
+        format: "borsuk-v36-prefix-screen-manifest-v2".to_owned(),
         geometry: V36GeometryArm {
             primary_rows: V36PrimaryRows::Posting4096,
             replication: V36Replication::ClosureEpsilon15,
@@ -236,12 +232,13 @@ fn rebind_population(manifest: &mut V36PrefixScreenManifest) {
 }
 
 fn rebind_projection(manifest: &mut V36PrefixScreenManifest) {
-    let identity = bound_artifact("projection", &manifest.projection);
-    *manifest
-        .artifacts
-        .iter_mut()
-        .find(|artifact| artifact.role == "projection")
-        .unwrap() = identity;
+    manifest.artifacts.retain(|artifact| {
+        artifact.role != "projection" && artifact.role != "centered-projection-basis"
+    });
+    manifest.artifacts.push(match &manifest.projection {
+        V36ProjectionArm::CenteredSubspace192 { artifact, .. } => artifact.as_ref().clone(),
+        V36ProjectionArm::Srht192 { .. } => bound_artifact("projection", &manifest.projection),
+    });
 }
 
 fn registered(bytes: &[u8]) -> V36RegisteredManifest {
@@ -285,23 +282,34 @@ fn v36_prefix_projection_identity_is_closed() {
     assert!(!validate(&wrong_seed));
 
     let baseline_bytes = canonical_v36_prefix_screen_manifest_bytes(&baseline).unwrap();
-    let baseline_registration = registered(&baseline_bytes);
-    let mut substituted = baseline.clone();
-    if let V36ProjectionArm::CenteredSubspace192 {
-        covariance_sha256, ..
-    } = &mut substituted.projection
-    {
-        *covariance_sha256 = digest(29);
+
+    for mutate in [
+        |identity: &mut V36ArtifactIdentity| identity.encoded_bytes = 0,
+        |identity: &mut V36ArtifactIdentity| identity.sha256 = "invalid".to_owned(),
+        |identity: &mut V36ArtifactIdentity| identity.blake3 = "invalid".to_owned(),
+        |identity: &mut V36ArtifactIdentity| identity.role = "projection".to_owned(),
+        |identity: &mut V36ArtifactIdentity| identity.uri.clear(),
+    ] {
+        let mut changed = baseline.clone();
+        if let V36ProjectionArm::CenteredSubspace192 { artifact, .. } = &mut changed.projection {
+            mutate(artifact);
+        }
+        rebind_projection(&mut changed);
+        assert!(!validate(&changed));
     }
-    let substituted_bytes = canonical_bytes(&substituted);
-    assert!(
-        validate_v36_prefix_screen_manifest(
-            &substituted_bytes,
-            &baseline_registration,
-            &source_registry(),
-        )
-        .is_err()
-    );
+
+    let mut outer_substitution = baseline.clone();
+    let outer = outer_substitution
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.role == "centered-projection-basis")
+        .unwrap();
+    outer.sha256 = digest(33);
+    assert!(!validate(&outer_substitution));
+
+    let mut old_format = baseline.clone();
+    old_format.format = "borsuk-v36-prefix-screen-manifest-v1".to_owned();
+    assert!(!validate(&old_format));
     for mutate_registration in [
         |value: &mut V36RegisteredManifest| value.encoded_bytes += 1,
         |value: &mut V36RegisteredManifest| value.sha256 = digest(27),
@@ -338,17 +346,19 @@ fn v36_prefix_projection_identity_is_closed() {
                 .is_err()
         );
     }
-    let mut extra_projection_field = serde_json::to_value(&baseline).unwrap();
-    extra_projection_field["projection"]["legacy_seed"] = serde_json::json!(36);
-    let extra_projection_bytes = canonical_bytes(&extra_projection_field);
-    assert!(
-        validate_v36_prefix_screen_manifest(
-            &extra_projection_bytes,
-            &registered(&extra_projection_bytes),
-            &source_registry(),
-        )
-        .is_err()
-    );
+    for legacy_field in ["legacy_seed", "solver", "covariance_sha256"] {
+        let mut extra_projection_field = serde_json::to_value(&baseline).unwrap();
+        extra_projection_field["projection"][legacy_field] = serde_json::json!("legacy");
+        let extra_projection_bytes = canonical_bytes(&extra_projection_field);
+        assert!(
+            validate_v36_prefix_screen_manifest(
+                &extra_projection_bytes,
+                &registered(&extra_projection_bytes),
+                &source_registry(),
+            )
+            .is_err()
+        );
+    }
     let mut noncanonical = baseline_bytes.clone();
     noncanonical.insert(noncanonical.len() - 1, b' ');
     assert!(
@@ -359,45 +369,56 @@ fn v36_prefix_projection_identity_is_closed() {
         )
         .is_err()
     );
+}
 
-    for mutate in [
-        |value: &mut V36PrefixScreenManifest| {
-            if let V36ProjectionArm::CenteredSubspace192 { solver, .. } = &mut value.projection {
-                *solver = "randomized-two-iteration".to_owned();
-            }
+#[test]
+fn v36_full_manifest_binds_centered_projection_object_identity() {
+    let projection = centered_projection();
+    let projection_artifact = match &projection {
+        V36ProjectionArm::CenteredSubspace192 { artifact, .. } => artifact.as_ref().clone(),
+        V36ProjectionArm::Srht192 { .. } => unreachable!(),
+    };
+    let manifest = V36FunnelManifest {
+        artifacts: vec![
+            artifact("dataset-authority", 8),
+            artifact("source-parquet", 9),
+            projection_artifact,
+            artifact("super-centroids", 11),
+            artifact("posting-summaries", 12),
+            artifact("posting-directory", 13),
+            artifact("coarse-directory", 14),
+            artifact("fine-directory", 15),
+            artifact("visibility-directory", 16),
+            artifact("coarse-codebook", 17),
+        ],
+        chunk_ceiling: V36ChunkCeiling::Kib256,
+        claim_eligible: false,
+        coarse_code: V36CoarseCode::ResidualPq4Code32,
+        fine_codec: V36FineCodec::Sq8,
+        format: "borsuk-v36-funnel-manifest-v3".to_owned(),
+        geometry: V36GeometryArm {
+            primary_rows: V36PrimaryRows::Posting4096,
+            replication: V36Replication::ClosureEpsilon15,
         },
-        |value: &mut V36PrefixScreenManifest| {
-            if let V36ProjectionArm::CenteredSubspace192 {
-                energy_dimensions, ..
-            } = &mut value.projection
-            {
-                energy_dimensions.pop();
-            }
-        },
-        |value: &mut V36PrefixScreenManifest| {
-            if let V36ProjectionArm::CenteredSubspace192 {
-                max_eigenpair_relative_residual_ppt,
-                ..
-            } = &mut value.projection
-            {
-                *max_eigenpair_relative_residual_ppt = 101;
-            }
-        },
-        |value: &mut V36PrefixScreenManifest| {
-            if let V36ProjectionArm::CenteredSubspace192 {
-                max_reconstruction_relative_error_ppt,
-                ..
-            } = &mut value.projection
-            {
-                *max_reconstruction_relative_error_ppt = 101;
-            }
-        },
-    ] {
-        let mut changed = baseline.clone();
-        mutate(&mut changed);
-        rebind_projection(&mut changed);
-        assert!(!validate(&changed));
-    }
+        metric: "squared-l2".to_owned(),
+        projection_dimensions: 192,
+        projection,
+        shape_score: V36ShapeScore::Rank4,
+        source_dimensions: 768,
+        unique_k: 1_536,
+    };
+    let bytes = canonical_bytes(&manifest);
+    assert!(validate_v36_manifest(&bytes, &registered(&bytes)).is_ok());
+
+    let mut substituted = manifest;
+    substituted
+        .artifacts
+        .iter_mut()
+        .find(|identity| identity.role == "centered-projection-basis")
+        .unwrap()
+        .sha256 = digest(34);
+    let bytes = canonical_bytes(&substituted);
+    assert!(validate_v36_manifest(&bytes, &registered(&bytes)).is_err());
 }
 
 #[test]
@@ -566,7 +587,7 @@ fn v36_prefix_population_is_distinct_from_full_source_authority() {
         claim_eligible: false,
         coarse_code: V36CoarseCode::ResidualPq4Code32,
         fine_codec: V36FineCodec::Sq8,
-        format: "borsuk-v36-funnel-manifest-v2".to_owned(),
+        format: "borsuk-v36-funnel-manifest-v3".to_owned(),
         geometry: V36GeometryArm {
             primary_rows: V36PrimaryRows::Posting4096,
             replication: V36Replication::ClosureEpsilon15,

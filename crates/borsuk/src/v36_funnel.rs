@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
 
-const FORMAT: &str = "borsuk-v36-funnel-manifest-v2";
+const FORMAT: &str = "borsuk-v36-funnel-manifest-v3";
 const PROJECTION_DIMENSIONS: u16 = 192;
 const PROJECTION_SEED: u64 = 36;
 const COARSE_FRAGMENT_LIMIT_BYTES: u64 = 512 * 1_024;
@@ -188,24 +188,8 @@ pub enum V36ProjectionArm {
     },
     /// Deterministic centered covariance eigenspace.
     CenteredSubspace192 {
-        /// Exact centered covariance digest.
-        covariance_sha256: String,
-        /// Exact eigenpair ordering.
-        eigenpair_order: String,
-        /// Exact eigenvector sign convention.
-        eigenvector_sign_rule: String,
-        /// Retained-energy dimensions, in ascending order.
-        energy_dimensions: Vec<u16>,
-        /// Exact corpus mean digest.
-        mean_sha256: String,
-        /// Maximum accepted eigenpair relative residual, in parts per trillion.
-        max_eigenpair_relative_residual_ppt: u32,
-        /// Maximum accepted covariance reconstruction error, in parts per trillion.
-        max_reconstruction_relative_error_ppt: u32,
-        /// Exact geometry-reservoir digest.
-        reservoir_sha256: String,
-        /// Pinned deterministic solver identity.
-        solver: String,
+        /// Complete authenticated Arrow IPC projection object.
+        artifact: Box<V36ArtifactIdentity>,
     },
 }
 
@@ -2167,25 +2151,12 @@ pub(crate) fn canonical_v36_prefix_checkpoint_source_registry_bytes(
 fn validate_prefix_projection(projection: &V36ProjectionArm) -> Result<()> {
     match projection {
         V36ProjectionArm::Srht192 { seed } if *seed == PROJECTION_SEED => Ok(()),
-        V36ProjectionArm::CenteredSubspace192 {
-            covariance_sha256,
-            eigenpair_order,
-            eigenvector_sign_rule,
-            energy_dimensions,
-            mean_sha256,
-            max_eigenpair_relative_residual_ppt,
-            max_reconstruction_relative_error_ppt,
-            reservoir_sha256,
-            solver,
-        } if valid_digest(covariance_sha256)
-            && valid_digest(mean_sha256)
-            && valid_digest(reservoir_sha256)
-            && eigenpair_order == "eigenvalue-descending-then-coordinate-ordinal"
-            && eigenvector_sign_rule == "largest-absolute-component-positive-coordinate-tie"
-            && energy_dimensions == &[64, 96, 128, 192]
-            && *max_eigenpair_relative_residual_ppt == 100
-            && *max_reconstruction_relative_error_ppt == 100
-            && solver == "nalgebra-0.33-symmetric-eigen-single-thread-no-contraction" =>
+        V36ProjectionArm::CenteredSubspace192 { artifact }
+            if artifact.role == "centered-projection-basis"
+                && !artifact.uri.is_empty()
+                && artifact.encoded_bytes > 0
+                && valid_digest(&artifact.sha256)
+                && valid_digest(&artifact.blake3) =>
         {
             Ok(())
         }
@@ -2215,7 +2186,7 @@ fn validate_prefix_manifest_fields(
     manifest: &V36PrefixScreenManifest,
     source_registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<()> {
-    if manifest.format != "borsuk-v36-prefix-screen-manifest-v1"
+    if manifest.format != "borsuk-v36-prefix-screen-manifest-v2"
         || manifest.claim_eligible
         || manifest.posting_summary_vector_bytes != 4_608
         || manifest.posting_summary_metadata_bytes != 128
@@ -2240,18 +2211,22 @@ fn validate_prefix_manifest_fields(
     validate_prefix_population(&manifest.population, source_registry)?;
     validate_prefix_projection(&manifest.projection)?;
 
-    let required_roles = BTreeSet::from([
+    let mut required_roles = BTreeSet::from([
         "population-authority",
         "posting-summaries",
-        "projection",
         "query-excluded-corpus-parquet",
     ]);
+    required_roles.insert(match &manifest.projection {
+        V36ProjectionArm::Srht192 { .. } => "projection",
+        V36ProjectionArm::CenteredSubspace192 { .. } => "centered-projection-basis",
+    });
     let mut roles = BTreeSet::new();
     let mut uris = BTreeSet::new();
     for artifact in &manifest.artifacts {
         if !valid_digest(&artifact.sha256)
             || !valid_digest(&artifact.blake3)
             || artifact.encoded_bytes == 0
+            || artifact.uri.is_empty()
             || !roles.insert(artifact.role.as_str())
             || !uris.insert(artifact.uri.as_str())
         {
@@ -2266,15 +2241,30 @@ fn validate_prefix_manifest_fields(
         .iter()
         .find(|artifact| artifact.role == "population-authority")
         .ok_or_else(|| invalid("V36 prefix population artifact is missing"))?;
-    let projection_artifact = manifest
-        .artifacts
-        .iter()
-        .find(|artifact| artifact.role == "projection")
-        .ok_or_else(|| invalid("V36 prefix projection artifact is missing"))?;
-    if !artifact_binds_value(population_artifact, &manifest.population)?
-        || !artifact_binds_value(projection_artifact, &manifest.projection)?
-    {
+    if !artifact_binds_value(population_artifact, &manifest.population)? {
         return Err(invalid("V36 prefix embedded authority binding differs"));
+    }
+    match &manifest.projection {
+        V36ProjectionArm::Srht192 { .. } => {
+            let projection_artifact = manifest
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.role == "projection")
+                .ok_or_else(|| invalid("V36 prefix projection artifact is missing"))?;
+            if !artifact_binds_value(projection_artifact, &manifest.projection)? {
+                return Err(invalid("V36 prefix embedded authority binding differs"));
+            }
+        }
+        V36ProjectionArm::CenteredSubspace192 { artifact, .. } => {
+            let projection_artifact = manifest
+                .artifacts
+                .iter()
+                .find(|candidate| candidate.role == "centered-projection-basis")
+                .ok_or_else(|| invalid("V36 prefix projection artifact is missing"))?;
+            if projection_artifact != artifact.as_ref() {
+                return Err(invalid("V36 prefix embedded authority binding differs"));
+            }
+        }
     }
     Ok(())
 }
@@ -2359,11 +2349,14 @@ fn validate_manifest_fields(manifest: &V36FunnelManifest) -> Result<()> {
         "fine-directory",
         "posting-directory",
         "posting-summaries",
-        "projection",
         "source-parquet",
         "super-centroids",
         "visibility-directory",
     ]);
+    required_roles.insert(match &manifest.projection {
+        V36ProjectionArm::Srht192 { .. } => "projection",
+        V36ProjectionArm::CenteredSubspace192 { .. } => "centered-projection-basis",
+    });
     if matches!(
         manifest.coarse_code,
         V36CoarseCode::ResidualPq4Code32 | V36CoarseCode::ResidualPq4Code48
@@ -2386,6 +2379,16 @@ fn validate_manifest_fields(manifest: &V36FunnelManifest) -> Result<()> {
     }
     if roles != required_roles {
         return Err(invalid("V36 artifact role set differs"));
+    }
+    if let V36ProjectionArm::CenteredSubspace192 { artifact, .. } = &manifest.projection {
+        let projection_artifact = manifest
+            .artifacts
+            .iter()
+            .find(|candidate| candidate.role == "centered-projection-basis")
+            .ok_or_else(|| invalid("V36 centered projection artifact is missing"))?;
+        if projection_artifact != artifact.as_ref() {
+            return Err(invalid("V36 centered projection artifact binding differs"));
+        }
     }
     Ok(())
 }

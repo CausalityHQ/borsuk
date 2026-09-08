@@ -45,7 +45,7 @@ fn manifest() -> V36FunnelManifest {
         claim_eligible: false,
         coarse_code: V36CoarseCode::ResidualPq4Code32,
         fine_codec: V36FineCodec::Sq8,
-        format: "borsuk-v36-funnel-manifest-v2".to_owned(),
+        format: "borsuk-v36-funnel-manifest-v3".to_owned(),
         geometry: V36GeometryArm {
             primary_rows: V36PrimaryRows::Posting4096,
             replication: V36Replication::ClosureEpsilon15,
@@ -161,6 +161,7 @@ fn v36_funnel_authority_accepts_only_the_closed_arm_matrix_and_exact_bytes() {
     assert!(validate_v36_manifest(&bytes, &registered(&bytes)).is_err());
 
     for mutate in [
+        |value: &mut V36FunnelManifest| value.format = "borsuk-v36-funnel-manifest-v2".to_owned(),
         |value: &mut V36FunnelManifest| value.claim_eligible = true,
         |value: &mut V36FunnelManifest| value.projection_dimensions = 96,
         |value: &mut V36FunnelManifest| value.projection = V36ProjectionArm::Srht192 { seed: 35 },
