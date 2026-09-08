@@ -46,19 +46,20 @@ use borsuk::{
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_checkpoint_selection,
-    materialize_v36_prefix_role_parquets, rank_v36_prefix_source_objects,
-    restore_v36_prefix_checkpoint_phase, restore_v36_prefix_file_backed_population_scan,
-    restore_v36_prefix_population, run_v36_prefix_checkpoint_ground_truth,
-    run_v36_prefix_checkpoint_gt100, run_v36_prefix_gt100_checkpointed,
-    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
-    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
-    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
-    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
-    select_v36_prefix_checkpoint_population, select_v36_prefix_population_rows,
-    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
-    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    materialize_v36_prefix_role_parquets, next_v36_prefix_checkpoint_action,
+    rank_v36_prefix_source_objects, restore_v36_prefix_checkpoint_phase,
+    restore_v36_prefix_file_backed_population_scan, restore_v36_prefix_population,
+    run_v36_prefix_checkpoint_ground_truth, run_v36_prefix_checkpoint_gt100,
+    run_v36_prefix_gt100_checkpointed, scan_v36_prefix_gt100_parquet,
+    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
+    scan_v36_prefix_object_prefix_file_backed, scan_v36_prefix_object_prefix_resumed,
+    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
+    scan_v36_prefix_source_parquet, select_v36_prefix_checkpoint_population,
+    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
+    validate_v36_prefix_freeze_receipt, validate_v36_prefix_gt_preflight_projection,
     validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
     validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
     write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
@@ -2549,7 +2550,16 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
         outputs,
         physical_rows: 1_200_000,
         population,
-        schema: "borsuk-v36-prefix-freeze-receipt-v1".into(),
+        selection: V36PrefixPopulationSelection {
+            cutoff_feature_row_id: 41,
+            cutoff_score_sha256: "6".repeat(64),
+            eligible_rows: 1_100_000,
+            excluded_population_identity: authority.excluded_population_identity.clone(),
+            excluded_rows: 0,
+            selected_ids: selected_ids_identity(b"freeze receipt selection"),
+            selected_rows: authority.distinct_candidates,
+        },
+        schema: "borsuk-v36-prefix-freeze-receipt-v2".into(),
         source_archive_sha256: execution.inputs[2].sha256.clone(),
         source_registry_sha256: format!(
             "{:x}",
@@ -2584,6 +2594,19 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
     mutations.push(changed);
     let mut changed = receipt.clone();
     changed.cutoff_object_ordinal = 2;
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.selection.selected_rows -= 1;
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.selection.cutoff_score_sha256 = "not-a-digest".into();
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.selection.selected_ids.sha256 = "f".repeat(64);
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.selection.eligible_rows = 0;
+    changed.selection.excluded_rows = changed.distinct_rows_observed;
     mutations.push(changed);
     for mutation in mutations {
         assert!(
@@ -2702,6 +2725,22 @@ fn v36_prefix_dataset_preflight_authenticates_every_local_input_before_network()
 
     fs::write(&archive_path, b"mutated archive evidence").unwrap();
     assert!(load_v36_prefix_freeze_preflight(&request).is_err());
+}
+
+#[test]
+fn v36_prefix_dataset_gt_preflight_projects_exact_work_below_half_wall() {
+    assert_eq!(
+        validate_v36_prefix_gt_preflight_projection(3, 1, 6, 1, 7, 1).unwrap(),
+        4
+    );
+    assert!(validate_v36_prefix_gt_preflight_projection(0, 2, 3, 1, 7, 1).is_err());
+    assert!(validate_v36_prefix_gt_preflight_projection(500_000_000, 1, 1, 1, 1, 1,).is_err());
+    assert!(
+        validate_v36_prefix_gt_preflight_projection(
+            1_000_000, 1_024, 3_000, 1_000_000, 3_000, 43_200,
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -3916,6 +3955,10 @@ fn v36_prefix_dataset_external_materialization_merge_joins_physical_assignments(
 
 #[test]
 fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize() {
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(None, 128, 144).unwrap(),
+        borsuk::V36PrefixCheckpointAction::Populate
+    );
     let directory = tempfile::tempdir().unwrap();
     let source_path = directory.path().join("source-input.parquet");
     let mut ranked = vec![write_registered_rows(
@@ -4003,6 +4046,23 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let staged = directory.path().join("staged-population");
     stage_checkpoint_head(&first_outbox, &population_ready.unwrap(), &staged);
     let head = load_v36_prefix_checkpoint_head(&staged, &context).unwrap();
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(Some(&head.manifest), context.corpus_rows, 144).unwrap(),
+        borsuk::V36PrefixCheckpointAction::Select
+    );
+    let mut insufficient_population = head.manifest.clone();
+    insufficient_population.population.distinct_rows = 143;
+    assert!(matches!(
+        next_v36_prefix_checkpoint_action(Some(&insufficient_population), context.corpus_rows, 144,),
+        Err(BorsukError::V36PrefixSourceInsufficient)
+    ));
+    let mut partial_population = head.manifest.clone();
+    partial_population.population.selected_object_count = 2;
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(Some(&partial_population), context.corpus_rows, 144)
+            .unwrap(),
+        borsuk::V36PrefixCheckpointAction::Populate
+    );
     let restore_scratch = directory.path().join("restore-scratch");
     fs::create_dir(&restore_scratch).unwrap();
     let restored =
@@ -4100,6 +4160,11 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     let staged_selected = directory.path().join("staged-selected");
     stage_checkpoint_head(&resumed_outbox, &selected_ready, &staged_selected);
     let selected_head = load_v36_prefix_checkpoint_head(&staged_selected, &context).unwrap();
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(Some(&selected_head.manifest), context.corpus_rows, 144)
+            .unwrap(),
+        borsuk::V36PrefixCheckpointAction::Materialize
+    );
     assert!(matches!(
         selected_head.manifest.phase,
         borsuk::V36PrefixCheckpointPhase::Selected { .. }
@@ -4289,6 +4354,15 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     stage_checkpoint_head(&resumed_outbox, &ready, &staged_materialized);
     let materialized_head =
         load_v36_prefix_checkpoint_head(&staged_materialized, &context).unwrap();
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(
+            Some(&materialized_head.manifest),
+            context.corpus_rows,
+            144,
+        )
+        .unwrap(),
+        borsuk::V36PrefixCheckpointAction::GroundTruth
+    );
     assert!(matches!(
         materialized_head.manifest.phase,
         borsuk::V36PrefixCheckpointPhase::Materialized { .. }
@@ -4542,6 +4616,29 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     stage_checkpoint_head(&resumed_outbox, &ground_truth_ready, &staged_ground_truth);
     let ground_truth_head =
         load_v36_prefix_checkpoint_head(&staged_ground_truth, &context).unwrap();
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(
+            Some(&ground_truth_head.manifest),
+            context.corpus_rows,
+            144,
+        )
+        .unwrap(),
+        borsuk::V36PrefixCheckpointAction::Complete
+    );
+    let mut partial_ground_truth = ground_truth_head.manifest.clone();
+    let borsuk::V36PrefixCheckpointPhase::GroundTruth {
+        next_source_ordinal,
+        ..
+    } = &mut partial_ground_truth.phase
+    else {
+        unreachable!()
+    };
+    *next_source_ordinal = 64;
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(Some(&partial_ground_truth), context.corpus_rows, 144)
+            .unwrap(),
+        borsuk::V36PrefixCheckpointAction::GroundTruth
+    );
     let V36PrefixCheckpointResumeState::GroundTruth {
         artifacts: restored_artifacts,
         heaps: restored_heaps,
@@ -4637,6 +4734,11 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         &completed_staged,
     );
     let completed_head = load_v36_prefix_checkpoint_head(&completed_staged, &context).unwrap();
+    assert_eq!(
+        next_v36_prefix_checkpoint_action(Some(&completed_head.manifest), context.corpus_rows, 144)
+            .unwrap(),
+        borsuk::V36PrefixCheckpointAction::Finished
+    );
     assert!(matches!(
         completed_head.manifest.phase,
         borsuk::V36PrefixCheckpointPhase::Complete { .. }

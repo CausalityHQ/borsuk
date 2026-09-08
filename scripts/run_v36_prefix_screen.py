@@ -32,6 +32,7 @@ TARGET_DISTINCT_ROWS = 1_100_000
 VECTOR_DIMENSIONS = 768
 CHECKPOINT_OBJECTS = 16
 CHECKPOINT_SECONDS = 300
+PROGRESS_STOP_SECONDS = 900
 MAX_CHECKPOINT_DEPENDENCY_BYTES = 256 * 1024**2
 MAX_CHECKPOINT_MANIFEST_BYTES = 8 * 1024**2
 MAX_CHECKPOINT_POINTER_BYTES = 1024**2
@@ -966,7 +967,21 @@ def prepare_v36_checkpoint_resume(
         if resume is None
         else materialize_v36_checkpoint_resume(resume, destination, transport)
     )
+    initial_phase = (
+        "population"
+        if resume is None
+        else json.loads((destination / "manifest.json").read_bytes())["phase"]["kind"]
+    )
+    if initial_phase not in {
+        "population",
+        "selected",
+        "materialized",
+        "ground-truth",
+        "complete",
+    }:
+        raise ValueError("V36 checkpoint resume phase differs")
     (destination / "first-generation").write_text(f"{generation}\n")
+    (destination / "initial-phase").write_text(f"{initial_phase}\n")
     return generation
 
 
@@ -1009,7 +1024,7 @@ def _authenticate_outbox_file(
 
 def publish_v36_checkpoint_outbox_generation(
     root: pathlib.Path, generation: int, transport: Any
-) -> None:
+) -> str:
     """Stream one Rust-committed generation through a conditional transport."""
 
     if (
@@ -1101,10 +1116,14 @@ def publish_v36_checkpoint_outbox_generation(
         manifest_value = json.loads(manifest_bytes)
     except json.JSONDecodeError as error:
         raise ValueError("V36 checkpoint outbox manifest differs") from error
+    phase = manifest_value.get("phase")
+    phase_kind = phase.get("kind") if type(phase) is dict else None
     if (
         canonical_json_bytes(manifest_value) != manifest_bytes
         or manifest_value.get("schema") != "borsuk-v36-prefix-freeze-checkpoint-v2"
         or manifest_value.get("generation") != generation
+        or phase_kind
+        not in {"population", "selected", "materialized", "ground-truth", "complete"}
     ):
         raise ValueError("V36 checkpoint outbox manifest differs")
     pointer_identity = {
@@ -1145,6 +1164,7 @@ def publish_v36_checkpoint_outbox_generation(
     transport.put_pointer(
         ready["pointer_uri"], pointer_path, ready["previous_pointer_sha256"]
     )
+    return phase_kind
 
 
 class _AwsCliRunner:
@@ -1366,19 +1386,32 @@ def watch_v36_checkpoint_outbox(
     transport: Any,
     *,
     first_generation: int = 0,
+    initial_phase: str = "population",
     producer_alive: Any = _pid_alive,
     pause: Any = time.sleep,
+    monotonic: Any = time.monotonic,
+    progress_stop_seconds: int = PROGRESS_STOP_SECONDS,
 ) -> int:
     """Publish every ready generation while its sole Rust producer lives."""
 
-    if type(first_generation) is not int or first_generation < 0:
+    if (
+        type(first_generation) is not int
+        or first_generation < 0
+        or type(progress_stop_seconds) is not int
+        or progress_stop_seconds <= 0
+        or initial_phase
+        not in {"population", "selected", "materialized", "ground-truth", "complete"}
+    ):
         raise ValueError("V36 checkpoint first generation differs")
     generation = first_generation
+    phase = initial_phase
+    last_progress = monotonic()
     while True:
         ready = root / "commits" / f"generation-{generation:08d}.json"
         if ready.is_file() and not ready.is_symlink():
-            publish_v36_checkpoint_outbox_generation(root, generation, transport)
+            phase = publish_v36_checkpoint_outbox_generation(root, generation, transport)
             generation += 1
+            last_progress = monotonic()
             continue
         if not producer_alive(producer_pid):
             # The producer may atomically rename its final descriptor after
@@ -1389,6 +1422,10 @@ def watch_v36_checkpoint_outbox(
                 generation += 1
                 continue
             return generation
+        if phase in {"materialized", "ground-truth"} and (
+            monotonic() - last_progress >= progress_stop_seconds
+        ):
+            raise RuntimeError("V36 checkpoint progress stalled")
         pause(1)
 
 
@@ -1448,9 +1485,10 @@ def dry_run_v36_prefix_screen(plan: V36PrefixScreenPlan) -> bytes:
             "max_source_bytes": MAX_SOURCE_BYTES,
             "max_source_objects": MAX_SOURCE_OBJECTS,
             "profile": PROFILE,
+            "progress_stop_seconds": PROGRESS_STOP_SECONDS,
             "region": REGION,
             "run_id": plan.run_id,
-            "schema": "borsuk-v36-prefix-screen-dry-run-v1",
+            "schema": "borsuk-v36-prefix-screen-dry-run-v2",
             "spot_hourly_cap_micro_usd": SPOT_HOURLY_CAP_MICRO_USD,
             "target_distinct_rows": TARGET_DISTINCT_ROWS,
             "vector_dimensions": VECTOR_DIMENSIONS,
@@ -1584,9 +1622,14 @@ python3 "$root/sidecar-source/scripts/run_v36_prefix_screen.py" \
 status=$?
 if [[ "$status" = 0 ]]; then
   first_generation=$(cat "$root/resume/first-generation")
+  initial_phase=$(cat "$root/resume/initial-phase")
   if ! [[ "$first_generation" =~ ^[0-9]+$ ]]; then
     status=70
   fi
+  case "$initial_phase" in
+    population|selected|materialized|ground-truth|complete) ;;
+    *) status=70 ;;
+  esac
 fi
 if [[ "$status" = 0 ]]; then
 timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
@@ -1599,7 +1642,8 @@ timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
 science_pid=$!
 python3 "$root/sidecar-source/scripts/run_v36_prefix_screen.py" \
   --publish-checkpoints --checkpoint-outbox "$root/checkpoint-outbox" \
-  --producer-pid "$science_pid" --first-generation "$first_generation" &
+  --producer-pid "$science_pid" --first-generation "$first_generation" \
+  --initial-phase "$initial_phase" &
 sidecar_pid=$!
 status=
 while kill -0 "$science_pid" 2>/dev/null; do
@@ -2489,6 +2533,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint-outbox")
     parser.add_argument("--producer-pid", type=int)
     parser.add_argument("--first-generation", type=int)
+    parser.add_argument("--initial-phase")
     parser.add_argument("--execution-authority")
     parser.add_argument("--resume-directory")
     parser.add_argument("--dataset-authority")
@@ -2505,6 +2550,7 @@ def main(argv: list[str] | None = None) -> int:
             or arguments.checkpoint_outbox is not None
             or arguments.producer_pid is not None
             or arguments.first_generation is not None
+            or arguments.initial_phase is not None
             or arguments.execution_authority is not None
             or arguments.resume_directory is not None
         ):
@@ -2522,6 +2568,7 @@ def main(argv: list[str] | None = None) -> int:
             or arguments.checkpoint_outbox is None
             or arguments.producer_pid is None
             or arguments.first_generation is None
+            or arguments.initial_phase is None
             or arguments.execution_authority is not None
             or arguments.resume_directory is not None
             or arguments.dataset_authority is not None
@@ -2534,6 +2581,7 @@ def main(argv: list[str] | None = None) -> int:
             arguments.producer_pid,
             V36AwsCliCheckpointTransport(),
             first_generation=arguments.first_generation,
+            initial_phase=arguments.initial_phase,
         )
         return 0
     if arguments.materialize_resume:
@@ -2543,6 +2591,7 @@ def main(argv: list[str] | None = None) -> int:
             or arguments.checkpoint_outbox is not None
             or arguments.producer_pid is not None
             or arguments.first_generation is not None
+            or arguments.initial_phase is not None
             or arguments.execution_authority is None
             or arguments.resume_directory is None
             or arguments.dataset_authority is not None
@@ -2561,6 +2610,7 @@ def main(argv: list[str] | None = None) -> int:
         or arguments.checkpoint_outbox is not None
         or arguments.producer_pid is not None
         or arguments.first_generation is not None
+        or arguments.initial_phase is not None
         or arguments.execution_authority is not None
         or arguments.resume_directory is not None
         or arguments.dataset_authority is not None

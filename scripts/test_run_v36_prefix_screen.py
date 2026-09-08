@@ -128,9 +128,10 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 "max_source_bytes": 6 * 1024**3,
                 "max_source_objects": 16,
                 "profile": "causality",
+                "progress_stop_seconds": 900,
                 "region": "eu-central-1",
                 "run_id": "v36-prefix-fixture",
-                "schema": "borsuk-v36-prefix-screen-dry-run-v1",
+                "schema": "borsuk-v36-prefix-screen-dry-run-v2",
                 "spot_hourly_cap_micro_usd": 3_000_000,
                 "target_distinct_rows": 1_100_000,
                 "vector_dimensions": 768,
@@ -782,6 +783,8 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertIn('--producer-pid "$science_pid"', script)
         self.assertIn('--first-generation "$first_generation"', script)
         self.assertIn('first_generation=$(cat "$root/resume/first-generation")', script)
+        self.assertIn('--initial-phase "$initial_phase"', script)
+        self.assertIn('initial_phase=$(cat "$root/resume/initial-phase")', script)
         self.assertIn('sidecar_pid=$!', script)
         self.assertIn('kill -TERM "$science_pid"', script)
         self.assertIn('sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py"', script)
@@ -1874,6 +1877,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 )
             transport.return_value.read_bytes.assert_not_called()
             self.assertEqual((destination / "first-generation").read_text(), "0\n")
+            self.assertEqual((destination / "initial-phase").read_text(), "population\n")
 
     def test_v36_prefix_screen_replacement_materializes_exact_bound_head(self) -> None:
         # Break caught: replacement user-data starts Rust or its publisher
@@ -1928,6 +1932,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             manifest = subject.canonical_json_bytes(
                 {
                     "generation": 0,
+                    "phase": {"kind": "population"},
                     "schema": "borsuk-v36-prefix-freeze-checkpoint-v2",
                 }
             )
@@ -2120,6 +2125,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             with mock.patch.object(
                 subject, "publish_v36_checkpoint_outbox_generation"
             ) as publish:
+                publish.return_value = "population"
                 self.assertEqual(
                     subject.watch_v36_checkpoint_outbox(
                         root,
@@ -2149,6 +2155,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             with mock.patch.object(
                 subject, "publish_v36_checkpoint_outbox_generation"
             ) as publish:
+                publish.return_value = "population"
                 self.assertEqual(
                     subject.watch_v36_checkpoint_outbox(
                         root,
@@ -2160,6 +2167,44 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                     1,
                 )
             publish.assert_called_once_with(root, 0, mock.sentinel.transport)
+
+    def test_v36_checkpoint_sidecar_stops_after_900_seconds_without_progress(self) -> None:
+        # Break caught: an alive but wedged producer holds Spot capacity until
+        # the outer 12-hour wall cap without completing any durable boundary.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "commits").mkdir()
+            with self.assertRaisesRegex(RuntimeError, "progress stalled"):
+                subject.watch_v36_checkpoint_outbox(
+                    root,
+                    41,
+                    mock.sentinel.transport,
+                    initial_phase="materialized",
+                    producer_alive=mock.Mock(return_value=True),
+                    pause=mock.Mock(),
+                    monotonic=mock.Mock(side_effect=[0.0, 900.0]),
+                    progress_stop_seconds=900,
+                )
+
+    def test_v36_checkpoint_sidecar_does_not_apply_gt_stall_to_population(self) -> None:
+        # Break caught: a productive source-object scan is killed by the GT-only
+        # row-group/checkpoint deadline before exact truth has started.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "commits").mkdir()
+            self.assertEqual(
+                subject.watch_v36_checkpoint_outbox(
+                    root,
+                    41,
+                    mock.sentinel.transport,
+                    initial_phase="population",
+                    producer_alive=mock.Mock(side_effect=[True, False]),
+                    pause=mock.Mock(),
+                    monotonic=mock.Mock(side_effect=[0.0, 900.0]),
+                    progress_stop_seconds=900,
+                ),
+                0,
+            )
 
     def test_v36_checkpoint_sidecar_treats_zombie_producer_as_exited(self) -> None:
         # Break caught: kill(0) reports a dead-but-unreaped child as live, so
@@ -2188,6 +2233,8 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                         "41",
                         "--first-generation",
                         "7",
+                        "--initial-phase",
+                        "materialized",
                     ]
                 ),
                 0,
@@ -2196,7 +2243,10 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         arguments = watch.call_args.args
         self.assertEqual(arguments[:2], (pathlib.Path("/tmp/outbox"), 41))
         self.assertIsInstance(arguments[2], subject.V36AwsCliCheckpointTransport)
-        self.assertEqual(watch.call_args.kwargs, {"first_generation": 7})
+        self.assertEqual(
+            watch.call_args.kwargs,
+            {"first_generation": 7, "initial_phase": "materialized"},
+        )
         with self.assertRaises(SystemExit):
             subject.main(["--publish-checkpoints", "--bucket", "fixture"])
 

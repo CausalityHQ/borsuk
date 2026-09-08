@@ -449,6 +449,8 @@ pub struct V36PrefixFreezeReceipt {
     pub physical_rows: u64,
     /// Complete post-freeze semantic population authority.
     pub population: V36PrefixPopulationAuthority,
+    /// Exact externally selected population consumed by materialization.
+    pub selection: V36PrefixPopulationSelection,
     /// Exact receipt schema marker.
     pub schema: String,
     /// SHA-256 of the exact source archive evidence.
@@ -466,34 +468,34 @@ pub enum V36PrefixCheckpointPhase {
     /// Complete population selection ready for vector materialization.
     Selected {
         /// Immutable population-score cutoff and selected-row identities.
-        selection: V36PrefixPopulationSelection,
+        selection: Box<V36PrefixPopulationSelection>,
     },
     /// Complete role-separated Parquet outputs ready for reuse.
     Materialized {
         /// Exact population selection consumed by materialization.
-        selection: V36PrefixPopulationSelection,
+        selection: Box<V36PrefixPopulationSelection>,
         /// Named immutable population authority, source, and query artifacts.
-        artifacts: V36PrefixMaterializedArtifacts,
+        artifacts: Box<V36PrefixMaterializedArtifacts>,
     },
     /// All quality-query heaps after one complete source-row prefix.
     GroundTruth {
         /// Exact population selection consumed by materialization.
-        selection: V36PrefixPopulationSelection,
+        selection: Box<V36PrefixPopulationSelection>,
         /// Exact materialized lineage consumed by this GT generation.
-        materialized: V36PrefixMaterializedArtifacts,
+        materialized: Box<V36PrefixMaterializedArtifacts>,
         /// Canonical Arrow IPC top-100 heap snapshot.
-        heaps: V36ArtifactIdentity,
+        heaps: Box<V36ArtifactIdentity>,
         /// First source row not incorporated into every query heap.
         next_source_ordinal: u64,
     },
     /// Exact GT@100 Parquets and their authenticated terminal heap.
     Complete {
         /// Exact population selection consumed by materialization.
-        selection: V36PrefixPopulationSelection,
+        selection: Box<V36PrefixPopulationSelection>,
         /// Exact materialized lineage consumed by exact GT.
-        materialized: V36PrefixMaterializedArtifacts,
+        materialized: Box<V36PrefixMaterializedArtifacts>,
         /// Named immutable exact-GT artifacts.
-        ground_truth: V36PrefixGroundTruthArtifacts,
+        ground_truth: Box<V36PrefixGroundTruthArtifacts>,
     },
 }
 
@@ -1390,7 +1392,7 @@ pub fn plan_v36_prefix_checkpoint_dependency_closure(
                     .into_iter()
                     .map(|(artifact, _)| artifact.clone()),
             );
-            dependencies.push(heaps.clone());
+            dependencies.push(heaps.as_ref().clone());
         }
         V36PrefixCheckpointPhase::Complete {
             ground_truth,
@@ -1826,7 +1828,7 @@ pub fn validate_v36_prefix_checkpoint_transition(
             },
         ) => {
             *next_source_ordinal == context.corpus_rows
-                && &ground_truth.heaps == previous_heaps
+                && ground_truth.heaps == **previous_heaps
                 && previous_materialized == next_materialized
                 && previous_selection == next_selection
         }
@@ -2014,9 +2016,23 @@ pub fn validate_v36_prefix_freeze_receipt(
         .find(|input| input.role == "source-archive")
         .map(|input| input.sha256.as_str())
         .ok_or_else(|| invalid("V36 prefix freeze receipt archive differs"))?;
-    if receipt.schema != "borsuk-v36-prefix-freeze-receipt-v1"
+    if receipt.schema != "borsuk-v36-prefix-freeze-receipt-v2"
         || receipt.claim_eligible
         || receipt.population != expected_population
+        || receipt.selection.selected_rows != authority.distinct_candidates
+        || receipt.selection.selected_rows > receipt.selection.eligible_rows
+        || receipt.selection.excluded_population_identity != authority.excluded_population_identity
+        || (authority.cohort_ordinal == 0 && receipt.selection.excluded_rows != 0)
+        || receipt
+            .selection
+            .eligible_rows
+            .checked_add(receipt.selection.excluded_rows)
+            != Some(receipt.distinct_rows_observed)
+        || !valid_checkpoint_artifact(
+            &receipt.selection.selected_ids,
+            "population-selected-identities",
+        )
+        || !valid_digest(&receipt.selection.cutoff_score_sha256)
         || receipt.freeze_authority_sha256 != freeze_sha256
         || receipt.execution_authority_sha256 != execution_sha256
         || receipt.source_registry_sha256 != registry_sha256

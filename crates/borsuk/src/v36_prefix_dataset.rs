@@ -5,6 +5,7 @@ use std::{
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use arrow_array::{
@@ -45,8 +46,7 @@ use crate::{
     canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
     canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
-    canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, plan_v36_prefix_checkpoint_dependency_closure,
+    canonical_v36_prefix_freeze_receipt_bytes, plan_v36_prefix_checkpoint_dependency_closure,
     plan_v36_prefix_checkpoint_publication, validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_transition, validate_v36_prefix_freeze_authority,
     validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_population_authority,
@@ -495,7 +495,7 @@ pub enum V36PrefixCheckpointResumeState {
     /// Role Parquets are complete; continue exact ground truth.
     Materialized {
         /// Authenticated materialized output files.
-        artifacts: V36PrefixMaterializedCheckpointFiles,
+        artifacts: Box<V36PrefixMaterializedCheckpointFiles>,
         /// Authenticated complete-object population prefix.
         population: V36PrefixFileBackedPopulationScan,
         /// Authenticated selected-identity Arrow file.
@@ -504,7 +504,7 @@ pub enum V36PrefixCheckpointResumeState {
     /// Ground-truth heaps are complete through one source-row boundary.
     GroundTruth {
         /// Authenticated materialized output files.
-        artifacts: V36PrefixMaterializedCheckpointFiles,
+        artifacts: Box<V36PrefixMaterializedCheckpointFiles>,
         /// Authenticated heap Arrow file.
         heaps: V36PrefixCheckpointDependencyFile,
         /// First source ordinal not represented by `heaps`.
@@ -517,14 +517,92 @@ pub enum V36PrefixCheckpointResumeState {
     /// Exact quality GT Parquets are complete and authenticated.
     Complete {
         /// Authenticated materialized output files.
-        artifacts: V36PrefixMaterializedCheckpointFiles,
+        artifacts: Box<V36PrefixMaterializedCheckpointFiles>,
         /// Authenticated heap and three exact-GT Parquet files.
-        ground_truth: [V36PrefixCheckpointDependencyFile; 4],
+        ground_truth: Box<[V36PrefixCheckpointDependencyFile; 4]>,
         /// Authenticated complete-object population prefix.
         population: V36PrefixFileBackedPopulationScan,
         /// Authenticated selected-identity Arrow file.
         selected: V36PrefixSelectedIdsFile,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Next bounded action implied by an authenticated checkpoint phase.
+pub enum V36PrefixCheckpointAction {
+    /// Build or resume the complete file-backed population prefix.
+    Populate,
+    /// Select the registered population without resident bulk state.
+    Select,
+    /// Materialize the source and disjoint query roles.
+    Materialize,
+    /// Compute or resume exact ground truth from materialized Parquet.
+    GroundTruth,
+    /// Materialize exact-GT Parquet and publish the terminal checkpoint.
+    Complete,
+    /// The terminal checkpoint is already authenticated.
+    Finished,
+}
+
+/// Resolve exactly one next action from the durable phase boundary.
+pub fn next_v36_prefix_checkpoint_action(
+    manifest: Option<&V36PrefixCheckpointManifest>,
+    corpus_rows: u64,
+    distinct_candidates: u64,
+) -> Result<V36PrefixCheckpointAction> {
+    if corpus_rows == 0 || distinct_candidates == 0 {
+        return Err(invalid("V36 prefix checkpoint corpus rows differ"));
+    }
+    Ok(match manifest {
+        None => V36PrefixCheckpointAction::Populate,
+        Some(
+            manifest @ V36PrefixCheckpointManifest {
+                phase: V36PrefixCheckpointPhase::Population,
+                ..
+            },
+        ) => {
+            if manifest.population.completed_objects < manifest.population.selected_object_count {
+                V36PrefixCheckpointAction::Populate
+            } else if manifest.population.completed_objects
+                == manifest.population.selected_object_count
+            {
+                if manifest.population.distinct_rows < distinct_candidates {
+                    return Err(BorsukError::V36PrefixSourceInsufficient);
+                }
+                V36PrefixCheckpointAction::Select
+            } else {
+                return Err(invalid("V36 prefix checkpoint population progress differs"));
+            }
+        }
+        Some(V36PrefixCheckpointManifest {
+            phase: V36PrefixCheckpointPhase::Selected { .. },
+            ..
+        }) => V36PrefixCheckpointAction::Materialize,
+        Some(V36PrefixCheckpointManifest {
+            phase: V36PrefixCheckpointPhase::Materialized { .. },
+            ..
+        }) => V36PrefixCheckpointAction::GroundTruth,
+        Some(V36PrefixCheckpointManifest {
+            phase:
+                V36PrefixCheckpointPhase::GroundTruth {
+                    next_source_ordinal,
+                    ..
+                },
+            ..
+        }) => {
+            if *next_source_ordinal < corpus_rows {
+                V36PrefixCheckpointAction::GroundTruth
+            } else if *next_source_ordinal == corpus_rows {
+                V36PrefixCheckpointAction::Complete
+            } else {
+                return Err(invalid("V36 prefix checkpoint GT progress differs"));
+            }
+        }
+        Some(V36PrefixCheckpointManifest {
+            phase: V36PrefixCheckpointPhase::Complete { .. },
+            ..
+        }) => V36PrefixCheckpointAction::Finished,
+    })
 }
 
 impl V36PrefixCheckpointHead {
@@ -1078,7 +1156,7 @@ impl V36PrefixPopulationCheckpointWriter {
     ) -> Result<PathBuf> {
         self.publish_phase(
             V36PrefixCheckpointPhase::Selected {
-                selection: selection.clone(),
+                selection: Box::new(selection.clone()),
             },
             &[V36PrefixCheckpointDependencyFile {
                 identity: selection.selected_ids.clone(),
@@ -1120,7 +1198,7 @@ impl V36PrefixPopulationCheckpointWriter {
         self.publish_phase(
             V36PrefixCheckpointPhase::Materialized {
                 selection,
-                artifacts: artifacts.clone(),
+                artifacts: Box::new(artifacts.clone()),
             },
             dependencies,
         )
@@ -1152,7 +1230,7 @@ impl V36PrefixPopulationCheckpointWriter {
             V36PrefixCheckpointPhase::GroundTruth {
                 selection,
                 materialized,
-                heaps: heaps.identity.clone(),
+                heaps: Box::new(heaps.identity.clone()),
                 next_source_ordinal,
             },
             std::slice::from_ref(heaps),
@@ -1184,7 +1262,7 @@ impl V36PrefixPopulationCheckpointWriter {
             _ => return Err(invalid("V36 complete checkpoint predecessor differs")),
         };
         if next_source_ordinal != self.context.corpus_rows
-            || &ground_truth.heaps != heaps
+            || ground_truth.heaps != **heaps
             || dependencies.len() != 3
             || dependencies
                 .iter()
@@ -1251,7 +1329,7 @@ impl V36PrefixPopulationCheckpointWriter {
             V36PrefixCheckpointPhase::Complete {
                 selection,
                 materialized,
-                ground_truth: ground_truth.clone(),
+                ground_truth: Box::new(ground_truth.clone()),
             },
             dependencies,
         )
@@ -2981,6 +3059,51 @@ const GT_HEAP_CHECKPOINT_FORMAT: &str = "borsuk-v36-prefix-gt-heaps-v1";
 const GT_HEAP_CHECKPOINT_BATCH_ROWS: usize = 65_536;
 const GT_HEAP_CHECKPOINT_MAX_QUERIES: u64 = 3_000;
 const GT_HEAP_CHECKPOINT_NEIGHBORS: usize = GT_NEIGHBORS + 1;
+const GT_PREFLIGHT_ROWS: usize = 1_024;
+
+/// Project an exact-GT measurement by the row-times-query work ratio and
+/// require it to finish strictly below half the active attempt wall cap.
+pub fn validate_v36_prefix_gt_preflight_projection(
+    elapsed_ns: u128,
+    sampled_rows: u64,
+    sampled_queries: u64,
+    corpus_rows: u64,
+    quality_queries: u64,
+    active_wall_seconds: u64,
+) -> Result<u128> {
+    if elapsed_ns == 0
+        || sampled_rows == 0
+        || sampled_queries == 0
+        || corpus_rows < sampled_rows
+        || quality_queries < sampled_queries
+        || active_wall_seconds == 0
+    {
+        return Err(invalid("V36 prefix GT preflight observation differs"));
+    }
+    let sampled_work = u128::from(sampled_rows)
+        .checked_mul(u128::from(sampled_queries))
+        .ok_or_else(|| invalid("V36 prefix GT preflight work overflows"))?;
+    let complete_work = u128::from(corpus_rows)
+        .checked_mul(u128::from(quality_queries))
+        .ok_or_else(|| invalid("V36 prefix GT preflight work overflows"))?;
+    let numerator = elapsed_ns
+        .checked_mul(complete_work)
+        .ok_or_else(|| invalid("V36 prefix GT preflight projection overflows"))?;
+    let projected_ns = numerator
+        .checked_add(sampled_work - 1)
+        .ok_or_else(|| invalid("V36 prefix GT preflight projection overflows"))?
+        / sampled_work;
+    let wall_ns = u128::from(active_wall_seconds)
+        .checked_mul(1_000_000_000)
+        .ok_or_else(|| invalid("V36 prefix GT preflight wall overflows"))?;
+    if projected_ns
+        .checked_mul(2)
+        .is_none_or(|projection| projection >= wall_ns)
+    {
+        return Err(resource_limit("exact-GT projected wall"));
+    }
+    Ok(projected_ns)
+}
 
 fn v36_prefix_gt_role_ordinal(role: V36PrefixQualityRole) -> u8 {
     match role {
@@ -7150,48 +7273,140 @@ fn output_identity(
     })
 }
 
+fn v36_prefix_production_external_limits(
+    authority: &V36PrefixFreezeAuthority,
+) -> Result<V36PrefixExternalSelectionLimits> {
+    let raw_population_bytes = authority
+        .distinct_candidates
+        .checked_mul(DIMENSIONS as u64)
+        .and_then(|bytes| bytes.checked_mul(4))
+        .ok_or_else(|| resource_limit("production scratch bytes"))?;
+    let materialization_bytes = raw_population_bytes
+        .checked_mul(9)
+        .map(|bytes| bytes / 4)
+        .ok_or_else(|| resource_limit("production scratch bytes"))?;
+    let max_scratch_bytes = authority
+        .source_byte_cap
+        .checked_add(materialization_bytes)
+        .ok_or_else(|| resource_limit("production scratch bytes"))?;
+    Ok(V36PrefixExternalSelectionLimits {
+        io_buffer_bytes: EXTERNAL_MAX_IO_BUFFER_BYTES,
+        max_input_bytes: authority.source_byte_cap,
+        max_scratch_bytes,
+        max_spills: EXTERNAL_MAX_SPILLS,
+        merge_fan_in: EXTERNAL_MAX_FAN_IN,
+        sort_buffer_records: EXTERNAL_MAX_SORT_BUFFER_RECORDS,
+    })
+}
+
+fn v36_prefix_phase_selection(
+    phase: &V36PrefixCheckpointPhase,
+) -> Option<&V36PrefixPopulationSelection> {
+    match phase {
+        V36PrefixCheckpointPhase::Population => None,
+        V36PrefixCheckpointPhase::Selected { selection }
+        | V36PrefixCheckpointPhase::Materialized { selection, .. }
+        | V36PrefixCheckpointPhase::GroundTruth { selection, .. }
+        | V36PrefixCheckpointPhase::Complete { selection, .. } => Some(selection),
+    }
+}
+
+fn acquire_v36_prefix_object_cached(
+    runtime: &tokio::runtime::Runtime,
+    object: &V36PrefixRankedSourceObject,
+    scratch: &Path,
+    ordinal: u16,
+    acquired: &mut V36PrefixAcquiredObjects,
+    acquired_by_ordinal: &mut BTreeMap<u16, PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(path) = acquired_by_ordinal.get(&ordinal) {
+        return Ok(path.clone());
+    }
+    let path = acquire_v36_prefix_object(runtime, object, scratch, ordinal)?;
+    acquired.paths.push(path.clone());
+    acquired_by_ordinal.insert(ordinal, path.clone());
+    Ok(path)
+}
+
+fn v36_prefix_selected_cutoff(
+    selected: &V36PrefixSelectedIdsFile,
+    limits: &V36PrefixExternalSelectionLimits,
+    scratch: &Path,
+) -> Result<V36PrefixSelectedStreamRecord> {
+    let attempt = tempfile::tempdir_in(scratch).map_err(|source| BorsukError::Io {
+        path: scratch.to_owned(),
+        source,
+    })?;
+    let mut stream = open_v36_prefix_selected_stream(
+        selected,
+        limits,
+        attempt.path(),
+        "selected-population.arrow",
+    )?;
+    let mut cutoff = None;
+    while let Some(row) = stream.next_record()? {
+        cutoff = Some(row);
+    }
+    cutoff.ok_or_else(|| invalid("V36 prefix selected-ID cutoff is missing"))
+}
+
+fn ensure_v36_prefix_final_artifact(
+    destination: &Path,
+    source: &V36PrefixCheckpointDependencyFile,
+) -> Result<()> {
+    install_content_addressed_file(destination, &source.path, &source.identity)
+}
+
 /// Execute one complete bounded V36 diagnostic population freeze locally.
 pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
+    run_v36_prefix_freeze_file_backed(request)
+}
+
+fn run_v36_prefix_freeze_file_backed(request: V36PrefixFreezeRequest) -> Result<()> {
     let mut preflight = load_v36_prefix_freeze_preflight(&request)?;
     crate::validate_v36_prefix_registered_screen_authority(
         &preflight.authority,
         &preflight.registry,
     )?;
-    ensure_v36_prefix_complete_window_execution_available(&preflight.authority)?;
-    let execution_authority_sha256 = format!(
-        "{:x}",
-        Sha256::digest(canonical_v36_prefix_freeze_execution_authority_bytes(
-            &preflight.execution_authority,
-        )?)
-    );
-    let resume_head = preflight.resume_head.take();
-    let prior_runs = resume_head
+    let limits = v36_prefix_production_external_limits(&preflight.authority)?;
+    let execution_authority_bytes =
+        canonical_v36_prefix_freeze_execution_authority_bytes(&preflight.execution_authority)?;
+    let execution_authority_sha256 = format!("{:x}", Sha256::digest(&execution_authority_bytes));
+    let selected_contract = preflight
+        .resume_head
         .as_ref()
-        .map(V36PrefixCheckpointHead::identity_runs)
+        .and_then(|head| v36_prefix_phase_selection(&head.manifest.phase))
+        .map(|selection| bind_v36_prefix_selected_ids_contract(&preflight.authority, selection))
         .transpose()?;
-    let mut checkpoint_writer = match resume_head {
-        Some(head) => V36PrefixPopulationCheckpointWriter::resume(
-            &request.checkpoint_outbox,
-            preflight.checkpoint_context.clone(),
-            execution_authority_sha256,
-            preflight.execution_authority.attempt_id.clone(),
-            preflight.producer_attempt_ordinal,
-            request.producer_instance_id.clone(),
-            head,
-        )?,
-        None => V36PrefixPopulationCheckpointWriter::create(
-            &request.checkpoint_outbox,
-            preflight.checkpoint_context.clone(),
-            execution_authority_sha256,
-            preflight.execution_authority.attempt_id.clone(),
-            preflight.producer_attempt_ordinal,
-            request.producer_instance_id.clone(),
-        )?,
+    let (mut checkpoint_writer, mut state) = match preflight.resume_head.take() {
+        Some(head) => {
+            let (writer, state) =
+                V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
+                    execution_authority_sha256: execution_authority_sha256.clone(),
+                    head,
+                    context: preflight.checkpoint_context.clone(),
+                    limits: &limits,
+                    producer_attempt_id: preflight.execution_authority.attempt_id.clone(),
+                    producer_attempt_ordinal: preflight.producer_attempt_ordinal,
+                    producer_instance_id: request.producer_instance_id.clone(),
+                    root: &request.checkpoint_outbox,
+                    scratch_root: &request.scratch,
+                    selected_contract: selected_contract.as_ref(),
+                })?;
+            (writer, Some(state))
+        }
+        None => (
+            V36PrefixPopulationCheckpointWriter::create(
+                &request.checkpoint_outbox,
+                preflight.checkpoint_context.clone(),
+                execution_authority_sha256.clone(),
+                preflight.execution_authority.attempt_id.clone(),
+                preflight.producer_attempt_ordinal,
+                request.producer_instance_id.clone(),
+            )?,
+            None,
+        ),
     };
-    let runtime =
-        tokio::runtime::Runtime::new().map_err(|_| invalid("V36 prefix object runtime differs"))?;
-    let mut acquired = V36PrefixAcquiredObjects { paths: Vec::new() };
-    let mut acquired_by_ordinal = BTreeMap::new();
     let selected_object_start = preflight.authority.selected_object_start;
     let selected_object_count = usize::from(preflight.authority.selected_object_count);
     let selected_object_end = usize::from(selected_object_start)
@@ -7201,218 +7416,373 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
         .ranked_objects
         .get(usize::from(selected_object_start)..selected_object_end)
         .ok_or_else(|| invalid("V36 prefix selected object window differs"))?;
-    let distinct_candidates = usize::try_from(preflight.authority.distinct_candidates)
-        .map_err(|_| invalid("V36 prefix distinct row count overflows"))?;
-    let scan = {
-        let mut acquire = |ordinal, object: &V36PrefixRankedSourceObject| {
-            let path = acquire_v36_prefix_object(&runtime, object, &request.scratch, ordinal)?;
-            if acquired_by_ordinal.insert(ordinal, path.clone()).is_some() {
-                return Err(invalid("V36 prefix acquired object ordinal differs"));
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|_| invalid("V36 prefix object runtime differs"))?;
+    let mut acquired = V36PrefixAcquiredObjects { paths: Vec::new() };
+    let mut acquired_by_ordinal = BTreeMap::new();
+
+    loop {
+        match next_v36_prefix_checkpoint_action(
+            checkpoint_writer.previous_manifest.as_ref(),
+            preflight.checkpoint_context.corpus_rows,
+            preflight.authority.distinct_candidates,
+        )? {
+            V36PrefixCheckpointAction::Populate => {
+                let runs =
+                    tempfile::tempdir_in(&request.scratch).map_err(|source| BorsukError::Io {
+                        path: request.scratch.clone(),
+                        source,
+                    })?;
+                let prior = match state.as_ref() {
+                    Some(V36PrefixCheckpointResumeState::Population { population }) => {
+                        Some(population)
+                    }
+                    None => None,
+                    _ => return Err(invalid("V36 prefix population phase differs")),
+                };
+                let mut population = scan_v36_prefix_object_prefix_file_backed(
+                    V36PrefixFileBackedScanRequest {
+                        byte_cap: preflight.authority.source_byte_cap,
+                        distinct_candidates: preflight.authority.distinct_candidates,
+                        limits: &limits,
+                        output_uri_prefix: &preflight.checkpoint_context.object_prefix,
+                        prior,
+                        ranked_objects: ranked_window,
+                        run_output_root: runs.path(),
+                        scratch_root: &request.scratch,
+                        selected_object_start,
+                    },
+                    |ordinal, object| {
+                        acquire_v36_prefix_object_cached(
+                            &runtime,
+                            object,
+                            &request.scratch,
+                            ordinal,
+                            &mut acquired,
+                            &mut acquired_by_ordinal,
+                        )
+                    },
+                    |boundary| {
+                        checkpoint_writer.commit_file(boundary)?;
+                        Ok(())
+                    },
+                )?;
+                population.runs = checkpoint_writer.identity_run_files()?;
+                state = Some(V36PrefixCheckpointResumeState::Population { population });
             }
-            acquired.paths.push(path.clone());
-            Ok(path)
-        };
-        let mut commit = |boundary: &V36PrefixPopulationCommit| {
-            checkpoint_writer.commit(boundary)?;
-            Ok(())
-        };
-        match prior_runs.as_deref() {
-            Some(runs) => scan_v36_prefix_object_prefix_resumed(
-                ranked_window,
-                selected_object_start,
-                preflight.authority.source_byte_cap,
-                distinct_candidates,
-                runs,
-                &mut acquire,
-                &mut commit,
-            )?,
-            None => scan_v36_prefix_object_prefix_checkpointed(
-                ranked_window,
-                selected_object_start,
-                preflight.authority.source_byte_cap,
-                distinct_candidates,
-                &mut acquire,
-                &mut commit,
-            )?,
+            V36PrefixCheckpointAction::Select => {
+                let Some(V36PrefixCheckpointResumeState::Population { population }) = state.take()
+                else {
+                    return Err(invalid("V36 prefix selection phase differs"));
+                };
+                if preflight.authority.cohort_ordinal != 0 {
+                    return Err(invalid(
+                        "V36 prefix prior-cohort selected input is unavailable",
+                    ));
+                }
+                let selection_authority = bind_v36_prefix_external_selection_authority(
+                    &preflight.authority,
+                    population.distinct_rows,
+                )?;
+                let selected_attempt =
+                    tempfile::tempdir_in(&request.scratch).map_err(|source| BorsukError::Io {
+                        path: request.scratch.clone(),
+                        source,
+                    })?;
+                let selected_path = selected_attempt.path().join("population-selected.arrow");
+                let mut selected =
+                    select_v36_prefix_checkpoint_population(V36PrefixCheckpointSelectionRequest {
+                        authority: &selection_authority,
+                        exclusion: None,
+                        limits: &limits,
+                        output: &selected_path,
+                        output_uri_prefix: &preflight.checkpoint_context.object_prefix,
+                        population: &population,
+                        scratch_root: &request.scratch,
+                        writer: &mut checkpoint_writer,
+                    })?
+                    .selected;
+                selected.path = request
+                    .checkpoint_outbox
+                    .join("objects")
+                    .join(format!("{}.blob", selected.identity.sha256));
+                authenticate_file(&selected.path, &selected.identity)?;
+                state = Some(V36PrefixCheckpointResumeState::Selected {
+                    population,
+                    selected,
+                });
+            }
+            V36PrefixCheckpointAction::Materialize => {
+                let Some(V36PrefixCheckpointResumeState::Selected {
+                    population,
+                    selected,
+                }) = state.take()
+                else {
+                    return Err(invalid("V36 prefix materialization phase differs"));
+                };
+                let mut source_paths = Vec::with_capacity(ranked_window.len());
+                for (local_ordinal, object) in ranked_window.iter().enumerate() {
+                    let ordinal = selected_object_start
+                        .checked_add(
+                            u16::try_from(local_ordinal).map_err(|_| {
+                                invalid("V36 prefix acquired object ordinal overflows")
+                            })?,
+                        )
+                        .ok_or_else(|| invalid("V36 prefix acquired object ordinal overflows"))?;
+                    source_paths.push(acquire_v36_prefix_object_cached(
+                        &runtime,
+                        object,
+                        &request.scratch,
+                        ordinal,
+                        &mut acquired,
+                        &mut acquired_by_ordinal,
+                    )?);
+                }
+                let population_authority = bind_v36_prefix_population_authority(
+                    &preflight.authority,
+                    population.consumed_objects.clone(),
+                    &preflight.registry,
+                )?;
+                let selection = checkpoint_writer
+                    .previous_manifest
+                    .as_ref()
+                    .and_then(|manifest| v36_prefix_phase_selection(&manifest.phase))
+                    .ok_or_else(|| invalid("V36 prefix selected checkpoint differs"))?;
+                let contract = bind_v36_prefix_role_assignment_contract(
+                    &preflight.authority,
+                    selection,
+                    &selected,
+                )?;
+                let stage = materialize_v36_prefix_checkpoint_selection(
+                    V36PrefixCheckpointMaterializationRequest {
+                        contract: &contract,
+                        limits: &limits,
+                        output: &request.output,
+                        output_uri_prefix: &preflight.checkpoint_context.object_prefix,
+                        population: &population_authority,
+                        ranked_objects: &preflight.ranked_objects,
+                        scratch_root: &request.scratch,
+                        selected: &selected,
+                        source_paths: &source_paths,
+                        source_registry: &preflight.registry,
+                        writer: &mut checkpoint_writer,
+                    },
+                )?;
+                let dependencies = [
+                    (
+                        stage.artifacts.population_authority.clone(),
+                        request.output.join("population-authority.json"),
+                    ),
+                    (stage.artifacts.source.clone(), stage.paths.source),
+                    (
+                        stage.artifacts.development_query.clone(),
+                        stage.paths.development,
+                    ),
+                    (
+                        stage.artifacts.validation_query.clone(),
+                        stage.paths.validation,
+                    ),
+                    (
+                        stage.artifacts.sealed_holdout_query.clone(),
+                        stage.paths.sealed_holdout,
+                    ),
+                    (
+                        stage.artifacts.performance_query.clone(),
+                        stage.paths.performance,
+                    ),
+                ]
+                .map(|(identity, path)| V36PrefixCheckpointDependencyFile { identity, path });
+                state = Some(V36PrefixCheckpointResumeState::Materialized {
+                    artifacts: Box::new(V36PrefixMaterializedCheckpointFiles {
+                        authenticated_dependencies: dependencies.to_vec(),
+                        authenticated_ground_truth: None,
+                        expected_source_rows: population_authority.corpus_rows,
+                        population_authority: dependencies[0].clone(),
+                        source: dependencies[1].clone(),
+                        development_query: dependencies[2].clone(),
+                        validation_query: dependencies[3].clone(),
+                        sealed_holdout_query: dependencies[4].clone(),
+                        performance_query: dependencies[5].clone(),
+                    }),
+                    population,
+                    selected,
+                });
+            }
+            V36PrefixCheckpointAction::GroundTruth => {
+                preflight_v36_prefix_checkpoint_gt100(
+                    state
+                        .as_ref()
+                        .ok_or_else(|| invalid("V36 ground-truth state is missing"))?,
+                    usize::from(preflight.authority.workspace_count),
+                    preflight.execution_authority.active_wall_seconds,
+                )?;
+                let ground_truth = run_v36_prefix_checkpoint_ground_truth(
+                    V36PrefixCheckpointGroundTruthRequest {
+                        block_rows: usize::try_from(preflight.checkpoint_context.gt_block_rows)
+                            .map_err(|_| invalid("V36 prefix GT block rows overflow"))?,
+                        output_root: &request.output,
+                        output_uri_prefix: &preflight.checkpoint_context.object_prefix,
+                        state: state
+                            .as_ref()
+                            .ok_or_else(|| invalid("V36 ground-truth state is missing"))?,
+                        worker_threads: usize::from(preflight.authority.workspace_count),
+                        writer: &mut checkpoint_writer,
+                    },
+                )?;
+                let (mut artifacts, population, selected) = match state.take() {
+                    Some(V36PrefixCheckpointResumeState::Materialized {
+                        artifacts,
+                        population,
+                        selected,
+                    })
+                    | Some(V36PrefixCheckpointResumeState::GroundTruth {
+                        artifacts,
+                        population,
+                        selected,
+                        ..
+                    }) => (artifacts, population, selected),
+                    _ => return Err(invalid("V36 ground-truth phase differs")),
+                };
+                artifacts.authenticated_ground_truth = Some((
+                    ground_truth.heaps.clone(),
+                    preflight.checkpoint_context.corpus_rows,
+                ));
+                state = Some(V36PrefixCheckpointResumeState::GroundTruth {
+                    artifacts,
+                    heaps: ground_truth.heaps,
+                    next_source_ordinal: preflight.checkpoint_context.corpus_rows,
+                    population,
+                    selected,
+                });
+            }
+            V36PrefixCheckpointAction::Complete => {
+                let completion = complete_v36_prefix_checkpoint_ground_truth(
+                    V36PrefixCheckpointCompletionRequest {
+                        output_root: &request.output,
+                        output_uri_prefix: &preflight.checkpoint_context.object_prefix,
+                        state: state
+                            .as_ref()
+                            .ok_or_else(|| invalid("V36 completion state is missing"))?,
+                        writer: &mut checkpoint_writer,
+                    },
+                )?;
+                let Some(V36PrefixCheckpointResumeState::GroundTruth {
+                    artifacts,
+                    heaps,
+                    population,
+                    selected,
+                    ..
+                }) = state.take()
+                else {
+                    return Err(invalid("V36 completion phase differs"));
+                };
+                let ground_truth = [
+                    heaps,
+                    V36PrefixCheckpointDependencyFile {
+                        identity: completion.ground_truth.development.clone(),
+                        path: request.output.join("development-gt100.parquet"),
+                    },
+                    V36PrefixCheckpointDependencyFile {
+                        identity: completion.ground_truth.validation.clone(),
+                        path: request.output.join("validation-gt100.parquet"),
+                    },
+                    V36PrefixCheckpointDependencyFile {
+                        identity: completion.ground_truth.sealed_holdout.clone(),
+                        path: request.output.join("sealed-holdout-gt100.parquet"),
+                    },
+                ];
+                state = Some(V36PrefixCheckpointResumeState::Complete {
+                    artifacts,
+                    ground_truth: Box::new(ground_truth),
+                    population,
+                    selected,
+                });
+            }
+            V36PrefixCheckpointAction::Finished => break,
         }
-    };
-    for (local_ordinal, object) in ranked_window
-        .iter()
-        .enumerate()
-        .take(scan.consumed_objects.len())
-    {
-        let ordinal = selected_object_start
-            .checked_add(
-                u16::try_from(local_ordinal)
-                    .map_err(|_| invalid("V36 prefix acquired object ordinal overflows"))?,
-            )
-            .ok_or_else(|| invalid("V36 prefix acquired object ordinal overflows"))?;
-        if let std::collections::btree_map::Entry::Vacant(entry) =
-            acquired_by_ordinal.entry(ordinal)
-        {
-            let path = acquire_v36_prefix_object(&runtime, object, &request.scratch, ordinal)?;
-            acquired.paths.push(path.clone());
-            entry.insert(path);
-        }
-    }
-    let ordered_paths = acquired_by_ordinal.into_values().collect::<Vec<_>>();
-    let population = bind_v36_prefix_population_authority(
-        &preflight.authority,
-        scan.consumed_objects.clone(),
-        &preflight.registry,
-    )?;
-    let split = select_v36_prefix_roles(scan.unique_rows, &population, &preflight.registry)?;
-    let paths = materialize_v36_prefix_role_parquets(
-        &ordered_paths,
-        ranked_window,
-        selected_object_start,
-        &split,
-        &request.scratch,
-        &request.output,
-    )?;
-    let gt_paths = [
-        request.output.join("development-gt100.parquet"),
-        request.output.join("validation-gt100.parquet"),
-        request.output.join("sealed-holdout-gt100.parquet"),
-    ];
-    let gt_jobs = [
-        V36PrefixGtParquetJob {
-            expected_queries: u32::try_from(split.development.len())
-                .map_err(|_| invalid("V36 prefix development count overflows"))?,
-            output: gt_paths[0].clone(),
-            query: paths.development.clone(),
-            role: V36PrefixQualityRole::Development,
-        },
-        V36PrefixGtParquetJob {
-            expected_queries: u32::try_from(split.validation.len())
-                .map_err(|_| invalid("V36 prefix validation count overflows"))?,
-            output: gt_paths[1].clone(),
-            query: paths.validation.clone(),
-            role: V36PrefixQualityRole::Validation,
-        },
-        V36PrefixGtParquetJob {
-            expected_queries: u32::try_from(split.sealed_holdout.len())
-                .map_err(|_| invalid("V36 prefix holdout count overflows"))?,
-            output: gt_paths[2].clone(),
-            query: paths.sealed_holdout.clone(),
-            role: V36PrefixQualityRole::SealedHoldout,
-        },
-    ];
-    let source_feature_ids = split
-        .corpus
-        .iter()
-        .map(|row| row.feature_row_id)
-        .collect::<Vec<_>>();
-    let gt_stats = write_v36_prefix_gt100_roles_from_parquets(
-        &paths.source,
-        &source_feature_ids,
-        &gt_jobs,
-        usize::from(population.workspace_count),
-    )?;
-    if gt_stats.source_scans != 1
-        || gt_stats.source_rows != population.corpus_rows
-        || gt_stats.quality_queries
-            != u32::try_from(
-                split.development.len() + split.validation.len() + split.sealed_holdout.len(),
-            )
-            .map_err(|_| invalid("V36 prefix quality query count overflows"))?
-    {
-        return Err(invalid("V36 prefix exact truth execution differs"));
     }
 
-    let population_path = request.output.join("population-authority.json");
-    write_atomic_bytes(
-        &population_path,
-        &canonical_v36_prefix_population_authority_bytes(&population, &preflight.registry)?,
-    )?;
-    let artifact_paths = [
+    acquired.cleanup()?;
+    let Some(V36PrefixCheckpointResumeState::Complete {
+        artifacts,
+        ground_truth,
+        population: scanned_population,
+        selected,
+    }) = state
+    else {
+        return Err(invalid("V36 prefix terminal checkpoint differs"));
+    };
+    let final_artifacts = [
+        (&artifacts.population_authority, "population-authority.json"),
+        (&artifacts.source, "source.parquet"),
+        (&artifacts.development_query, "development-query.parquet"),
+        (&ground_truth[1], "development-gt100.parquet"),
+        (&artifacts.validation_query, "validation-query.parquet"),
+        (&ground_truth[2], "validation-gt100.parquet"),
         (
-            "population-authority",
-            "population-authority.json",
-            &population_path,
-        ),
-        ("source", "source.parquet", &paths.source),
-        (
-            "development-query",
-            "development-query.parquet",
-            &paths.development,
-        ),
-        (
-            "development-gt100",
-            "development-gt100.parquet",
-            &gt_paths[0],
-        ),
-        (
-            "validation-query",
-            "validation-query.parquet",
-            &paths.validation,
-        ),
-        ("validation-gt100", "validation-gt100.parquet", &gt_paths[1]),
-        (
-            "sealed-holdout-query",
+            &artifacts.sealed_holdout_query,
             "sealed-holdout-query.parquet",
-            &paths.sealed_holdout,
         ),
-        (
-            "sealed-holdout-gt100",
-            "sealed-holdout-gt100.parquet",
-            &gt_paths[2],
-        ),
-        (
-            "performance-query",
-            "performance-query.parquet",
-            &paths.performance,
-        ),
+        (&ground_truth[3], "sealed-holdout-gt100.parquet"),
+        (&artifacts.performance_query, "performance-query.parquet"),
+    ];
+    for (artifact, filename) in final_artifacts {
+        ensure_v36_prefix_final_artifact(&request.output.join(filename), artifact)?;
+    }
+    let population = bind_v36_prefix_population_authority(
+        &preflight.authority,
+        scanned_population.consumed_objects,
+        &preflight.registry,
+    )?;
+    let cutoff = v36_prefix_selected_cutoff(&selected, &limits, &request.scratch)?;
+    let terminal_selection = checkpoint_writer
+        .previous_manifest
+        .as_ref()
+        .and_then(|manifest| v36_prefix_phase_selection(&manifest.phase))
+        .ok_or_else(|| invalid("V36 prefix terminal selection differs"))?;
+    if cutoff.feature_row_id != terminal_selection.cutoff_feature_row_id
+        || digest_hex(&cutoff.score) != terminal_selection.cutoff_score_sha256
+        || selected.identity != terminal_selection.selected_ids
+    {
+        return Err(invalid("V36 prefix terminal selection differs"));
+    }
+    let artifact_paths = [
+        ("population-authority", "population-authority.json"),
+        ("source", "source.parquet"),
+        ("development-query", "development-query.parquet"),
+        ("development-gt100", "development-gt100.parquet"),
+        ("validation-query", "validation-query.parquet"),
+        ("validation-gt100", "validation-gt100.parquet"),
+        ("sealed-holdout-query", "sealed-holdout-query.parquet"),
+        ("sealed-holdout-gt100", "sealed-holdout-gt100.parquet"),
+        ("performance-query", "performance-query.parquet"),
     ];
     let outputs = artifact_paths
         .into_iter()
-        .map(|(role, filename, path)| {
+        .map(|(role, filename)| {
             output_identity(
                 role,
                 filename,
                 &preflight.execution_authority.output_prefix,
-                path,
+                &request.output.join(filename),
             )
         })
         .collect::<Result<Vec<_>>>()?;
     let receipt = V36PrefixFreezeReceipt {
         claim_eligible: false,
-        cutoff_object_ordinal: scan.cutoff_object_ordinal,
-        cutoff_row_offset: scan.cutoff_row_offset,
-        distinct_rows_observed: scan.distinct_rows_observed,
-        duplicate_rows: scan.duplicate_rows,
-        execution_authority_sha256: format!(
-            "{:x}",
-            Sha256::digest(canonical_v36_prefix_freeze_execution_authority_bytes(
-                &preflight.execution_authority,
-            )?)
-        ),
-        freeze_authority_sha256: format!(
-            "{:x}",
-            Sha256::digest(canonical_v36_prefix_freeze_authority_bytes(
-                &preflight.authority,
-                &preflight.registry,
-            )?)
-        ),
+        cutoff_object_ordinal: cutoff.selected_object_ordinal,
+        cutoff_row_offset: cutoff.row_offset,
+        distinct_rows_observed: scanned_population.distinct_rows,
+        duplicate_rows: scanned_population.duplicate_rows,
+        execution_authority_sha256,
+        freeze_authority_sha256: preflight.checkpoint_context.freeze_authority_sha256.clone(),
         outputs,
-        physical_rows: scan.physical_rows,
+        physical_rows: scanned_population.physical_rows,
         population,
-        schema: "borsuk-v36-prefix-freeze-receipt-v1".to_owned(),
-        source_archive_sha256: preflight
-            .execution_authority
-            .inputs
-            .iter()
-            .find(|input| input.role == "source-archive")
-            .ok_or_else(|| invalid("V36 prefix source archive authority differs"))?
-            .sha256
-            .clone(),
-        source_registry_sha256: format!(
-            "{:x}",
-            Sha256::digest(canonical_v36_prefix_source_registry_bytes(
-                &preflight.authority,
-                &preflight.registry,
-            )?)
-        ),
+        selection: terminal_selection.clone(),
+        schema: "borsuk-v36-prefix-freeze-receipt-v2".to_owned(),
+        source_archive_sha256: preflight.checkpoint_context.source_archive_sha256.clone(),
+        source_registry_sha256: preflight.checkpoint_context.source_registry_sha256.clone(),
     };
     write_atomic_bytes(
         &request.output.join("freeze-receipt.json"),
@@ -7423,16 +7793,7 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
             &preflight.registry,
         )?,
     )?;
-    acquired.cleanup()?;
     Ok(())
-}
-
-fn ensure_v36_prefix_complete_window_execution_available(
-    _authority: &V36PrefixFreezeAuthority,
-) -> Result<()> {
-    Err(invalid(
-        "V36 prefix complete-window population execution is unavailable",
-    ))
 }
 
 /// Authenticate every local attempt input before any source-object network access.
@@ -8076,7 +8437,7 @@ pub fn restore_v36_prefix_checkpoint_phase(
     match &head.manifest.phase {
         V36PrefixCheckpointPhase::Materialized { .. } => {
             Ok(V36PrefixCheckpointResumeState::Materialized {
-                artifacts,
+                artifacts: Box::new(artifacts),
                 population,
                 selected,
             })
@@ -8108,7 +8469,7 @@ pub fn restore_v36_prefix_checkpoint_phase(
                 query_counts,
             )?;
             Ok(V36PrefixCheckpointResumeState::GroundTruth {
-                artifacts,
+                artifacts: Box::new(artifacts),
                 heaps,
                 next_source_ordinal: *next_source_ordinal,
                 population,
@@ -8166,8 +8527,8 @@ pub fn restore_v36_prefix_checkpoint_phase(
                 validate_v36_prefix_gt100_matches_heap(&artifact.path, expected, expected_queries)?;
             }
             Ok(V36PrefixCheckpointResumeState::Complete {
-                artifacts,
-                ground_truth,
+                artifacts: Box::new(artifacts),
+                ground_truth: Box::new(ground_truth),
                 population,
                 selected,
             })
@@ -9249,11 +9610,19 @@ pub fn materialize_v36_prefix_checkpoint_selection(
     };
     validate_v36_prefix_checkpoint_selected_file(selected, selection)?;
     validate_v36_prefix_role_assignment_contract(contract, selected)?;
-    let consumed_matches_ranked = population.consumed_objects.len() == ranked_objects.len()
+    let object_start = usize::from(population.selected_object_start);
+    let object_end = object_start
+        .checked_add(usize::from(population.selected_object_count))
+        .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?;
+    let selected_ranked_objects = ranked_objects
+        .get(object_start..object_end)
+        .ok_or_else(|| invalid("V36 materialization source window differs"))?;
+    let consumed_matches_ranked = population.consumed_objects.len()
+        == selected_ranked_objects.len()
         && population
             .consumed_objects
             .iter()
-            .zip(ranked_objects)
+            .zip(selected_ranked_objects)
             .all(|(consumed, ranked)| {
                 consumed.encoded_bytes == ranked.encoded_bytes
                     && consumed.path == ranked.path
@@ -10620,6 +10989,77 @@ fn load_v36_prefix_checkpoint_queries(
     Ok(output)
 }
 
+fn preflight_v36_prefix_checkpoint_gt100(
+    state: &V36PrefixCheckpointResumeState,
+    worker_threads: usize,
+    active_wall_seconds: u64,
+) -> Result<u128> {
+    let artifacts = match state {
+        V36PrefixCheckpointResumeState::Materialized { artifacts, .. }
+        | V36PrefixCheckpointResumeState::GroundTruth { artifacts, .. } => artifacts,
+        V36PrefixCheckpointResumeState::Population { .. }
+        | V36PrefixCheckpointResumeState::Selected { .. }
+        | V36PrefixCheckpointResumeState::Complete { .. } => {
+            return Err(invalid("V36 prefix GT preflight phase differs"));
+        }
+    };
+    artifacts.validate_authenticated_seal()?;
+    if !(1..=16).contains(&worker_threads) {
+        return Err(invalid("V36 prefix exact truth worker pool differs"));
+    }
+    let queries = load_v36_prefix_checkpoint_queries(artifacts)?;
+    let quality_queries = queries.iter().try_fold(0_u64, |total, role| {
+        total
+            .checked_add(
+                u64::try_from(role.len())
+                    .map_err(|_| invalid("V36 prefix exact truth query count overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 prefix exact truth query count overflows"))
+    })?;
+    let query_ids = queries
+        .iter()
+        .flatten()
+        .map(|query| query.feature_row_id)
+        .collect::<BTreeSet<_>>();
+    let templates = queries.iter().flatten().collect::<Vec<_>>();
+    let mut candidate_id = u64::MAX;
+    let mut rows = Vec::with_capacity(GT_PREFLIGHT_ROWS);
+    for ordinal in 0..GT_PREFLIGHT_ROWS {
+        while query_ids.contains(&candidate_id) {
+            candidate_id = candidate_id
+                .checked_sub(1)
+                .ok_or_else(|| invalid("V36 prefix GT preflight IDs overflow"))?;
+        }
+        rows.push(V36PrefixMaterializedRow {
+            feature_row_id: candidate_id,
+            source_ordinal: Some(
+                u64::try_from(ordinal)
+                    .map_err(|_| invalid("V36 prefix GT preflight ordinal overflows"))?,
+            ),
+            embedding: templates[ordinal % templates.len()].embedding.clone(),
+        });
+        candidate_id = candidate_id
+            .checked_sub(1)
+            .ok_or_else(|| invalid("V36 prefix GT preflight IDs overflow"))?;
+    }
+    let mut accumulator = V36PrefixAllQueryGtAccumulator::new(queries)?;
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .build()
+        .map_err(|_| invalid("V36 prefix exact truth worker pool differs"))?;
+    let started = Instant::now();
+    accumulator.absorb_with_pool(&rows, &pool)?;
+    validate_v36_prefix_gt_preflight_projection(
+        started.elapsed().as_nanos(),
+        u64::try_from(rows.len())
+            .map_err(|_| invalid("V36 prefix GT preflight row count overflows"))?,
+        quality_queries,
+        artifacts.expected_source_rows,
+        quality_queries,
+        active_wall_seconds,
+    )
+}
+
 /// Continue exact GT from authenticated Materialized or GroundTruth checkpoint files.
 pub fn run_v36_prefix_checkpoint_gt100<C>(
     state: &V36PrefixCheckpointResumeState,
@@ -10780,7 +11220,7 @@ pub fn run_v36_prefix_checkpoint_ground_truth(
         || state_population.physical_rows != writer_population.physical_rows
         || state_run_identities != writer_population.identity_runs.iter().collect::<Vec<_>>()
         || state_ground_truth.map(|(heaps, ordinal)| (&heaps.identity, ordinal))
-            != writer_ground_truth
+            != writer_ground_truth.map(|(heaps, ordinal)| (heaps.as_ref(), ordinal))
         || artifact_files
             .iter()
             .zip(artifact_identities)
@@ -10893,7 +11333,7 @@ pub fn complete_v36_prefix_checkpoint_ground_truth(
         .iter()
         .map(|run| &run.identity)
         .collect::<Vec<_>>();
-    if writer_heaps != &heaps.identity
+    if writer_heaps.as_ref() != &heaps.identity
         || writer_ordinal != next_source_ordinal
         || state_selected.identity != writer_selection.selected_ids
         || state_population.consumed_objects != writer_population.consumed_objects
