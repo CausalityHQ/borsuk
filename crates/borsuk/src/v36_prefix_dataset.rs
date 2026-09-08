@@ -39,8 +39,8 @@ use crate::{
     canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, plan_v36_prefix_checkpoint_publication,
-    validate_v36_prefix_checkpoint_manifest_with_context,
+    canonical_v36_prefix_source_registry_bytes, plan_v36_prefix_checkpoint_dependency_closure,
+    plan_v36_prefix_checkpoint_publication, validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_transition, validate_v36_prefix_freeze_authority,
     validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_population_authority,
 };
@@ -400,7 +400,7 @@ pub struct V36PrefixPopulationCheckpointWriter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Fully authenticated local material needed to continue one published head.
-pub struct V36PrefixPopulationCheckpointHead {
+pub struct V36PrefixCheckpointHead {
     /// Cumulative identity-run artifacts and their authenticated local files.
     pub dependencies: Vec<V36PrefixCheckpointDependencyFile>,
     /// Newest immutable population manifest.
@@ -409,11 +409,12 @@ pub struct V36PrefixPopulationCheckpointHead {
     pub pointer_bytes: Vec<u8>,
 }
 
-impl V36PrefixPopulationCheckpointHead {
+impl V36PrefixCheckpointHead {
     fn identity_runs(&self) -> Result<Vec<V36PrefixIdentityRun>> {
         let selected_object_start = self.manifest.population.selected_object_start;
         self.dependencies
             .iter()
+            .take(self.manifest.population.identity_runs.len())
             .enumerate()
             .map(|(ordinal, dependency)| {
                 let selected_object_ordinal = selected_object_start
@@ -440,11 +441,11 @@ impl V36PrefixPopulationCheckpointHead {
     }
 }
 
-/// Load one exact locally staged newest population head without history fallback.
-pub fn load_v36_prefix_population_checkpoint_head(
+/// Load one exact locally staged newest checkpoint head without history fallback.
+pub fn load_v36_prefix_checkpoint_head(
     root: &Path,
     context: &V36PrefixCheckpointContext,
-) -> Result<V36PrefixPopulationCheckpointHead> {
+) -> Result<V36PrefixCheckpointHead> {
     let regular_bytes = |path: &Path| -> Result<Vec<u8>> {
         let metadata = fs::symlink_metadata(path).map_err(|source| BorsukError::Io {
             path: path.to_owned(),
@@ -477,14 +478,19 @@ pub fn load_v36_prefix_population_checkpoint_head(
         .map_err(|_| invalid("V36 population checkpoint manifest JSON differs"))?;
     if canonical_v36_prefix_checkpoint_manifest_bytes(&manifest)? != manifest_bytes
         || manifest.generation != pointer.generation
-        || !matches!(&manifest.phase, V36PrefixCheckpointPhase::Population)
     {
         return Err(invalid("V36 population checkpoint manifest bytes differ"));
     }
     validate_v36_prefix_checkpoint_manifest_with_context(context, &manifest)?;
-    let mut dependencies = Vec::with_capacity(manifest.population.identity_runs.len());
-    for identity in &manifest.population.identity_runs {
-        if identity.encoded_bytes > 256 * 1024 * 1024 {
+    let identities = plan_v36_prefix_checkpoint_dependency_closure(&manifest)?;
+    let mut dependencies = Vec::with_capacity(identities.len());
+    for identity in &identities {
+        let maximum_bytes = if identity.role == "source" {
+            context.source_byte_cap
+        } else {
+            256 * 1024 * 1024
+        };
+        if identity.encoded_bytes > maximum_bytes {
             return Err(invalid(
                 "V36 population checkpoint dependency limit differs",
             ));
@@ -498,7 +504,7 @@ pub fn load_v36_prefix_population_checkpoint_head(
             path,
         });
     }
-    Ok(V36PrefixPopulationCheckpointHead {
+    Ok(V36PrefixCheckpointHead {
         dependencies,
         manifest,
         pointer_bytes,
@@ -545,10 +551,10 @@ impl V36PrefixPopulationCheckpointWriter {
         producer_attempt_id: String,
         producer_attempt_ordinal: u8,
         producer_instance_id: String,
-        head: V36PrefixPopulationCheckpointHead,
+        head: V36PrefixCheckpointHead,
     ) -> Result<Self> {
         let runs = head.identity_runs()?;
-        let V36PrefixPopulationCheckpointHead {
+        let V36PrefixCheckpointHead {
             dependencies,
             manifest: previous_manifest,
             pointer_bytes: previous_pointer_bytes,
@@ -655,9 +661,12 @@ impl V36PrefixPopulationCheckpointWriter {
             root,
             scratch_root,
         } = request;
+        if !matches!(&head.manifest.phase, V36PrefixCheckpointPhase::Population) {
+            return Err(invalid("V36 population checkpoint resume phase differs"));
+        }
         let mut restored =
             restore_v36_prefix_file_backed_population_scan(&head, limits, scratch_root)?;
-        let V36PrefixPopulationCheckpointHead {
+        let V36PrefixCheckpointHead {
             dependencies,
             manifest: previous_manifest,
             pointer_bytes: previous_pointer_bytes,
@@ -2177,7 +2186,7 @@ pub struct V36PrefixFreezePreflight {
     /// Query-independently ranked complete objects.
     pub ranked_objects: Vec<V36PrefixRankedSourceObject>,
     /// Fully authenticated prior population head, absent for a fresh attempt.
-    pub resume_head: Option<V36PrefixPopulationCheckpointHead>,
+    pub resume_head: Option<V36PrefixCheckpointHead>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2219,7 +2228,7 @@ pub struct V36PrefixFileBackedResumeRequest<'a> {
     /// Exact execution-authority digest for the replacement attempt.
     pub execution_authority_sha256: String,
     /// Fully staged checkpoint head to authenticate and install.
-    pub head: V36PrefixPopulationCheckpointHead,
+    pub head: V36PrefixCheckpointHead,
     /// Frozen campaign and source-window authority.
     pub context: V36PrefixCheckpointContext,
     /// Hard external-memory and scratch limits.
@@ -6112,7 +6121,7 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
     let resume_head = preflight.resume_head.take();
     let prior_runs = resume_head
         .as_ref()
-        .map(V36PrefixPopulationCheckpointHead::identity_runs)
+        .map(V36PrefixCheckpointHead::identity_runs)
         .transpose()?;
     let mut checkpoint_writer = match resume_head {
         Some(head) => V36PrefixPopulationCheckpointWriter::resume(
@@ -6519,7 +6528,7 @@ pub fn load_v36_prefix_freeze_preflight(
     let resume_head = match (&request.resume_checkpoint, &execution_authority.resume) {
         (None, None) => None,
         (Some(root), Some(binding)) => {
-            let head = load_v36_prefix_population_checkpoint_head(root, &checkpoint_context)?;
+            let head = load_v36_prefix_checkpoint_head(root, &checkpoint_context)?;
             let pointer: V36PrefixCheckpointPointer =
                 serde_json::from_slice(&head.pointer_bytes)
                     .map_err(|_| invalid("V36 prefix resume pointer JSON differs"))?;
@@ -6742,15 +6751,14 @@ fn authenticate_v36_prefix_file_backed_population_scan(
 
 /// Reconstruct bounded file-backed population state from one authenticated checkpoint head.
 pub fn restore_v36_prefix_file_backed_population_scan(
-    head: &V36PrefixPopulationCheckpointHead,
+    head: &V36PrefixCheckpointHead,
     limits: &V36PrefixExternalSelectionLimits,
     scratch_root: &Path,
 ) -> Result<V36PrefixFileBackedPopulationScan> {
-    if !matches!(&head.manifest.phase, V36PrefixCheckpointPhase::Population)
-        || usize::from(head.manifest.population.completed_objects)
-            != head.manifest.population.identity_runs.len()
-        || head.dependencies.len() != head.manifest.population.identity_runs.len()
-        || head.dependencies.len() != head.manifest.population.consumed_objects.len()
+    let population_dependencies = head.manifest.population.identity_runs.len();
+    if usize::from(head.manifest.population.completed_objects) != population_dependencies
+        || head.dependencies.len() < population_dependencies
+        || population_dependencies != head.manifest.population.consumed_objects.len()
     {
         return Err(invalid("V36 file-backed checkpoint population differs"));
     }
@@ -6770,6 +6778,7 @@ pub fn restore_v36_prefix_file_backed_population_scan(
     let runs = head
         .dependencies
         .iter()
+        .take(population_dependencies)
         .zip(&head.manifest.population.identity_runs)
         .zip(&head.manifest.population.consumed_objects)
         .enumerate()

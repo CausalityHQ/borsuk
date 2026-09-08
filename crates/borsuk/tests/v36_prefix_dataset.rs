@@ -33,7 +33,7 @@ use borsuk::{
     decode_v36_prefix_selected_ids, deduplicate_v36_prefix_row_identities,
     encode_v36_prefix_identity_run, encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
-    load_v36_prefix_freeze_preflight, load_v36_prefix_population_checkpoint_head,
+    load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, restore_v36_prefix_file_backed_population_scan,
     restore_v36_prefix_population, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
@@ -3364,7 +3364,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
 
     let staged = directory.path().join("staged-population");
     stage_checkpoint_head(&first_outbox, &population_ready.unwrap(), &staged);
-    let head = load_v36_prefix_population_checkpoint_head(&staged, &context).unwrap();
+    let head = load_v36_prefix_checkpoint_head(&staged, &context).unwrap();
     let restore_scratch = directory.path().join("restore-scratch");
     fs::create_dir(&restore_scratch).unwrap();
     let restored =
@@ -3387,7 +3387,7 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         V36PrefixPopulationCheckpointWriter::resume_file_backed(V36PrefixFileBackedResumeRequest {
             execution_authority_sha256: "6".repeat(64),
             head,
-            context,
+            context: context.clone(),
             limits: &limits,
             producer_attempt_id: "v36-prefix-screen-reduced-attempt-0001".into(),
             producer_attempt_ordinal: 1,
@@ -3457,7 +3457,15 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         selected_ids: selected_receipt.identity.clone(),
         selected_rows: selected_contract.selected_rows,
     };
-    writer.commit_selected(&selection, &selected_path).unwrap();
+    let selected_ready = writer.commit_selected(&selection, &selected_path).unwrap();
+    let staged_selected = directory.path().join("staged-selected");
+    stage_checkpoint_head(&resumed_outbox, &selected_ready, &staged_selected);
+    let selected_head = load_v36_prefix_checkpoint_head(&staged_selected, &context).unwrap();
+    assert!(matches!(
+        selected_head.manifest.phase,
+        borsuk::V36PrefixCheckpointPhase::Selected { .. }
+    ));
+    assert_eq!(selected_head.dependencies.len(), 2);
 
     let selected_file = V36PrefixSelectedIdsFile {
         contract: selected_contract,
@@ -3651,6 +3659,25 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
     assert_eq!(
         resumed_outbox.join("commits").read_dir().unwrap().count(),
         2
+    );
+    let staged_materialized = directory.path().join("staged-materialized");
+    stage_checkpoint_head(&resumed_outbox, &ready, &staged_materialized);
+    let materialized_head =
+        load_v36_prefix_checkpoint_head(&staged_materialized, &context).unwrap();
+    assert!(matches!(
+        materialized_head.manifest.phase,
+        borsuk::V36PrefixCheckpointPhase::Materialized { .. }
+    ));
+    assert_eq!(materialized_head.dependencies.len(), 8);
+    assert_eq!(
+        restore_v36_prefix_file_backed_population_scan(
+            &materialized_head,
+            &limits,
+            &restore_scratch,
+        )
+        .unwrap()
+        .distinct_rows,
+        24
     );
     assert!(selection_scratch.read_dir().unwrap().next().is_none());
     assert!(materialization_scratch.read_dir().unwrap().next().is_none());

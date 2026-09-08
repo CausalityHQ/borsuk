@@ -14,9 +14,10 @@ use borsuk::{
     V36PrefixPopulationSelection, V36PrefixRegisteredSourceObject, V36PrefixRowIdentity,
     V36PrefixSourceObject, canonical_v36_prefix_checkpoint_manifest_bytes,
     canonical_v36_prefix_checkpoint_pointer_bytes, decode_v36_prefix_identity_run,
-    encode_v36_prefix_identity_run, load_v36_prefix_population_checkpoint_head,
-    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
-    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
+    encode_v36_prefix_identity_run, load_v36_prefix_checkpoint_head,
+    plan_v36_prefix_checkpoint_dependency_closure, plan_v36_prefix_checkpoint_publication,
+    restore_v36_prefix_population, restore_v36_prefix_population_state,
+    validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -369,6 +370,69 @@ fn v36_prefix_checkpoint_gt_binds_complete_all_query_source_prefix() {
     };
     *next_source_ordinal = 0;
     assert!(validate_v36_prefix_checkpoint_manifest_with_context(&context, &manifest).is_err());
+}
+
+#[test]
+fn v36_prefix_checkpoint_generic_dependency_closure_is_exact_and_ordered() {
+    let population = population_manifest();
+    let population_run = population.population.identity_runs[0].clone();
+    assert_eq!(
+        plan_v36_prefix_checkpoint_dependency_closure(&population).unwrap(),
+        vec![population_run.clone()]
+    );
+
+    let selection = population_selection();
+    let mut selected = population.clone();
+    selected.phase = V36PrefixCheckpointPhase::Selected {
+        selection: selection.clone(),
+    };
+    assert_eq!(
+        plan_v36_prefix_checkpoint_dependency_closure(&selected).unwrap(),
+        vec![population_run.clone(), selection.selected_ids.clone()]
+    );
+
+    let materialized = materialized_artifacts();
+    let materialized_dependencies = [
+        materialized.population_authority.clone(),
+        materialized.source.clone(),
+        materialized.development_query.clone(),
+        materialized.validation_query.clone(),
+        materialized.sealed_holdout_query.clone(),
+        materialized.performance_query.clone(),
+    ];
+    let mut materialized_manifest = population.clone();
+    materialized_manifest.phase = V36PrefixCheckpointPhase::Materialized {
+        artifacts: materialized.clone(),
+        selection: selection.clone(),
+    };
+    let mut expected = vec![population_run.clone(), selection.selected_ids.clone()];
+    expected.extend(materialized_dependencies.clone());
+    assert_eq!(
+        plan_v36_prefix_checkpoint_dependency_closure(&materialized_manifest).unwrap(),
+        expected
+    );
+
+    let heaps = artifact("gt-heaps", "gt-heaps-00000048.arrow", 'b');
+    let mut ground_truth = population;
+    ground_truth.phase = V36PrefixCheckpointPhase::GroundTruth {
+        heaps: heaps.clone(),
+        materialized,
+        next_source_ordinal: 48,
+        selection: selection.clone(),
+    };
+    let mut expected = vec![population_run, selection.selected_ids];
+    expected.extend(materialized_dependencies);
+    expected.push(heaps);
+    assert_eq!(
+        plan_v36_prefix_checkpoint_dependency_closure(&ground_truth).unwrap(),
+        expected
+    );
+
+    let V36PrefixCheckpointPhase::GroundTruth { heaps, .. } = &mut ground_truth.phase else {
+        unreachable!()
+    };
+    heaps.uri = ground_truth.population.identity_runs[0].uri.clone();
+    assert!(plan_v36_prefix_checkpoint_dependency_closure(&ground_truth).is_err());
 }
 
 #[test]
@@ -776,8 +840,7 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
     )
     .unwrap();
     let loaded =
-        load_v36_prefix_population_checkpoint_head(&staged, &two_object_checkpoint_context(3))
-            .unwrap();
+        load_v36_prefix_checkpoint_head(&staged, &two_object_checkpoint_context(3)).unwrap();
     assert_eq!(loaded.manifest, previous_manifest);
     assert_eq!(loaded.pointer_bytes, previous_pointer_bytes);
     let staged_dependency = staged
@@ -1287,7 +1350,7 @@ fn v36_prefix_checkpoint_writer_round_trips_cohort_b_global_ordinal() {
         run_bytes,
     )
     .unwrap();
-    let loaded = load_v36_prefix_population_checkpoint_head(&staged, &context).unwrap();
+    let loaded = load_v36_prefix_checkpoint_head(&staged, &context).unwrap();
     assert_eq!(loaded.manifest, manifest);
 }
 

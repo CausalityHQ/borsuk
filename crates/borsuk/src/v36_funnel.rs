@@ -1301,6 +1301,53 @@ fn materialized_artifacts(
     ]
 }
 
+#[doc(hidden)]
+/// Return the exact dependency-first closure for one checkpoint phase.
+pub fn plan_v36_prefix_checkpoint_dependency_closure(
+    manifest: &V36PrefixCheckpointManifest,
+) -> Result<Vec<V36ArtifactIdentity>> {
+    let mut dependencies = manifest.population.identity_runs.clone();
+    match &manifest.phase {
+        V36PrefixCheckpointPhase::Population => {}
+        V36PrefixCheckpointPhase::Selected { selection } => {
+            dependencies.push(selection.selected_ids.clone());
+        }
+        V36PrefixCheckpointPhase::Materialized {
+            artifacts,
+            selection,
+        } => {
+            dependencies.push(selection.selected_ids.clone());
+            dependencies.extend(
+                materialized_artifacts(artifacts)
+                    .into_iter()
+                    .map(|(artifact, _)| artifact.clone()),
+            );
+        }
+        V36PrefixCheckpointPhase::GroundTruth {
+            heaps,
+            materialized,
+            selection,
+            ..
+        } => {
+            dependencies.push(selection.selected_ids.clone());
+            dependencies.extend(
+                materialized_artifacts(materialized)
+                    .into_iter()
+                    .map(|(artifact, _)| artifact.clone()),
+            );
+            dependencies.push(heaps.clone());
+        }
+    }
+    let mut uris = BTreeSet::new();
+    if dependencies
+        .iter()
+        .any(|artifact| !uris.insert(artifact.uri.as_str()))
+    {
+        return Err(invalid("V36 prefix checkpoint dependencies overlap"));
+    }
+    Ok(dependencies)
+}
+
 fn valid_materialized_artifacts(artifacts: &V36PrefixMaterializedArtifacts) -> bool {
     let mut uris = BTreeSet::new();
     materialized_artifacts(artifacts)
@@ -1786,45 +1833,7 @@ pub fn plan_v36_prefix_checkpoint_publication(
         schema: "borsuk-v36-prefix-checkpoint-pointer-v2".to_owned(),
     };
     let pointer_bytes = canonical_v36_prefix_checkpoint_pointer_bytes(context, &pointer)?;
-    let mut dependencies = manifest.population.identity_runs.clone();
-    match &manifest.phase {
-        V36PrefixCheckpointPhase::Population => {}
-        V36PrefixCheckpointPhase::Selected { selection } => {
-            dependencies.push(selection.selected_ids.clone());
-        }
-        V36PrefixCheckpointPhase::Materialized {
-            artifacts,
-            selection,
-        } => {
-            dependencies.push(selection.selected_ids.clone());
-            dependencies.extend(
-                materialized_artifacts(artifacts)
-                    .into_iter()
-                    .map(|(artifact, _)| artifact.clone()),
-            );
-        }
-        V36PrefixCheckpointPhase::GroundTruth {
-            heaps,
-            materialized,
-            selection,
-            ..
-        } => {
-            dependencies.push(selection.selected_ids.clone());
-            dependencies.extend(
-                materialized_artifacts(materialized)
-                    .into_iter()
-                    .map(|(artifact, _)| artifact.clone()),
-            );
-            dependencies.push(heaps.clone());
-        }
-    }
-    let mut uris = BTreeSet::new();
-    if dependencies
-        .iter()
-        .any(|artifact| !uris.insert(artifact.uri.as_str()))
-    {
-        return Err(invalid("V36 prefix checkpoint dependencies overlap"));
-    }
+    let dependencies = plan_v36_prefix_checkpoint_dependency_closure(manifest)?;
     Ok(V36PrefixCheckpointPublication {
         dependencies,
         condition,
