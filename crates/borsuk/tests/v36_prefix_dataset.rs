@@ -2685,7 +2685,7 @@ fn v36_prefix_dataset_gt_heap_checkpoint_arrow_is_exact_and_resumable() {
         .into_iter()
         .enumerate()
         .flat_map(|(role_ordinal, role)| {
-            (0_u16..100).map(move |rank| V36PrefixGtHeapEntry {
+            (0_u16..101).map(move |rank| V36PrefixGtHeapEntry {
                 feature_row_id: 10_000 + role_ordinal as u64 * 1_000 + u64::from(rank),
                 query_ordinal: 0,
                 rank,

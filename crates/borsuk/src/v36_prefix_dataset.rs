@@ -2494,6 +2494,7 @@ pub struct V36PrefixGtHeapCheckpoint {
 const GT_HEAP_CHECKPOINT_FORMAT: &str = "borsuk-v36-prefix-gt-heaps-v1";
 const GT_HEAP_CHECKPOINT_BATCH_ROWS: usize = 65_536;
 const GT_HEAP_CHECKPOINT_MAX_QUERIES: u64 = 3_000;
+const GT_HEAP_CHECKPOINT_NEIGHBORS: usize = GT_NEIGHBORS + 1;
 
 fn v36_prefix_gt_role_ordinal(role: V36PrefixQualityRole) -> u8 {
     match role {
@@ -2545,7 +2546,7 @@ fn v36_prefix_gt_heap_checkpoint_schema(
 
 fn validate_v36_prefix_gt_heap_checkpoint(checkpoint: &V36PrefixGtHeapCheckpoint) -> Result<()> {
     let expected_entries = v36_prefix_gt_heap_expected_rows(checkpoint.query_counts)?;
-    if checkpoint.next_source_ordinal < GT_NEIGHBORS as u64
+    if checkpoint.next_source_ordinal < GT_HEAP_CHECKPOINT_NEIGHBORS as u64
         || checkpoint.entries.len() != expected_entries
     {
         return Err(invalid("V36 prefix GT heap checkpoint differs"));
@@ -2556,7 +2557,7 @@ fn validate_v36_prefix_gt_heap_checkpoint(checkpoint: &V36PrefixGtHeapCheckpoint
         for query_ordinal in 0..query_count {
             let mut feature_ids = BTreeSet::new();
             let mut previous: Option<(f64, u64)> = None;
-            for rank in 0..GT_NEIGHBORS {
+            for rank in 0..GT_HEAP_CHECKPOINT_NEIGHBORS {
                 let entry = &checkpoint.entries[entry_index];
                 let ordered = previous.is_none_or(|(distance, feature_row_id)| {
                     distance
@@ -2591,7 +2592,7 @@ fn v36_prefix_gt_heap_expected_rows(query_counts: [u32; 3]) -> Result<usize> {
         return Err(invalid("V36 prefix GT heap query count differs"));
     }
     query_total
-        .checked_mul(GT_NEIGHBORS as u64)
+        .checked_mul(GT_HEAP_CHECKPOINT_NEIGHBORS as u64)
         .and_then(|count| usize::try_from(count).ok())
         .ok_or_else(|| invalid("V36 prefix GT heap row count overflows"))
 }
