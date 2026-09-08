@@ -28,9 +28,10 @@ use borsuk::{
     V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
     V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
     V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
-    bind_v36_prefix_population_authority, bind_v36_prefix_role_assignment_contract,
-    bind_v36_prefix_selected_ids_contract, canonical_v36_prefix_checkpoint_manifest_bytes,
-    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
+    bind_v36_prefix_external_selection_authority, bind_v36_prefix_population_authority,
+    bind_v36_prefix_role_assignment_contract, bind_v36_prefix_selected_ids_contract,
+    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
+    canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_gt_heap_checkpoint,
@@ -509,6 +510,24 @@ fn external_selection_authority(
 fn v36_prefix_dataset_checkpoint_pipeline_derives_selection_and_role_authority_exactly() {
     let registry = source_registry();
     let authority = freeze_authority(&registry);
+    let external_selection =
+        bind_v36_prefix_external_selection_authority(&authority, authority.distinct_candidates + 7)
+            .unwrap();
+    assert_eq!(
+        external_selection.distinct_rows,
+        authority.distinct_candidates + 7
+    );
+    assert_eq!(
+        external_selection.selected_rows,
+        authority.distinct_candidates
+    );
+    assert!(
+        bind_v36_prefix_external_selection_authority(
+            &authority,
+            authority.distinct_candidates - 1,
+        )
+        .is_err()
+    );
     let selected_identity = selected_ids_identity(b"selected authority fixture");
     let selection = V36PrefixPopulationSelection {
         cutoff_feature_row_id: 41,

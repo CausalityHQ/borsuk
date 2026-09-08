@@ -1548,6 +1548,26 @@ pub struct V36PrefixExternalSelectionAuthority {
     pub selected_rows: u64,
 }
 
+/// Bind a complete file-backed population count to the frozen external
+/// selection authority used by the checkpoint pipeline.
+pub fn bind_v36_prefix_external_selection_authority(
+    authority: &V36PrefixFreezeAuthority,
+    complete_distinct_rows: u64,
+) -> Result<V36PrefixExternalSelectionAuthority> {
+    let bound = V36PrefixExternalSelectionAuthority {
+        cohort_ordinal: authority.cohort_ordinal,
+        distinct_rows: complete_distinct_rows,
+        excluded_population_identity: authority.excluded_population_identity.clone(),
+        ordered_source_manifest_sha256: authority.ordered_source_manifest_sha256.clone(),
+        population_seed_sha256: authority.population_seed_sha256.clone(),
+        selected_object_count: authority.selected_object_count,
+        selected_object_start: authority.selected_object_start,
+        selected_rows: authority.distinct_candidates,
+    };
+    validate_external_selection_authority(&bound)?;
+    Ok(bound)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// One authenticated predecessor selected-ID file used for cohort exclusion.
 pub struct V36PrefixSelectedIdsFile {
