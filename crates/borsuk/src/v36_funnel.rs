@@ -2580,7 +2580,7 @@ pub fn plan_v36_transport(
         normal_encoded_bytes: 0,
         normal_gets: 0,
     };
-    for posting_ordinal in ranked_postings {
+    for (rank_index, posting_ordinal) in ranked_postings.iter().enumerate() {
         let posting = postings
             .get(posting_ordinal)
             .ok_or_else(|| invalid("V36 ranked posting authority differs"))?;
@@ -2599,8 +2599,9 @@ pub fn plan_v36_transport(
             .checked_add(posting_bytes)
             .ok_or_else(|| invalid("V36 normal bytes overflow"))?;
         if next_gets > limits.normal_gets || next_bytes > limits.normal_bytes {
-            plan.excluded_postings.push(*posting_ordinal);
-            continue;
+            plan.excluded_postings
+                .extend_from_slice(&ranked_postings[rank_index..]);
+            break;
         }
 
         let mut hard_gets = plan.hard_gets_with_retries;

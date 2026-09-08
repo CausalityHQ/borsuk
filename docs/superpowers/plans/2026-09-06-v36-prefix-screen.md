@@ -426,14 +426,31 @@ conversion remains because BORSUK is prerelease.
 
 - [ ] **Step 2: Write coarse-code and identity REDs**
 
+  Accept an explicit finalized
+  `(source_ordinal,dense_ordinal,feature_row_id,owner_posting_ordinal)` stream;
+  fixtures provide it here and Step 3's frozen fine-plane order produces it in
+  the integrated builder. Never reuse source ordinal as dense ordinal and
+  never retain a resident population-wide identity map. Build PQ training and
+  encoding as replayable bounded scans over owner-relative residual scratch.
   Test projected-f32, sign24, PQ4-32, and PQ4-48 over identical routed rows.
   Retain explicit u64 dense ordinal and u64 source feature ID in every coarse
   replica. Require owner-relative codes, unique-live admission, K in
   512/1024/1536/2048, deterministic ties, scalar/SIMD parity, and exact
-  candidate containment. Treat any residual-energy byte as a separately named
-  heuristic arm and compare it with uncorrected PQ; never label it exact.
-  Require strict-prefix atomic coarse admission: the first non-fitting posting
-  stops the suffix, so cumulative byte frontiers remain monotone.
+  candidate containment. Freeze liveness per query; reduce replicas by their
+  minimum finite owner-relative score; bound heap and membership state by K;
+  require better evicted replicas to re-enter. Fix sign/PQ arithmetic,
+  bit/nibble order, signed-zero handling, and binary64 subquantizer reduction
+  exactly as the spec. Mutation-test fewer than 16 training assignments,
+  duplicates, exact 20-pass model bytes, and worker/block replay parity. Treat
+  an injected frozen tombstone set as the liveness oracle and report dead and
+  duplicate scans so the all-live prefix population cannot bypass this branch.
+  Treat
+  any residual-energy byte as a separately named heuristic arm and compare it
+  with uncorrected PQ; never label it exact. Require strict-prefix atomic
+  coarse admission: the first non-fitting posting stops the suffix, so
+  cumulative byte frontiers remain monotone. Preflight complete authenticated
+  fragment GETs/bytes with checked arithmetic; any fragment failure rejects
+  the query without partial-posting candidates.
 
 - [ ] **Step 3: Write complete fine-object REDs**
 

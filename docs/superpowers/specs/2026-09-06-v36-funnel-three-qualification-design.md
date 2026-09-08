@@ -492,6 +492,46 @@ centroids once to binary32, and uses codeword-ordinal ties. Coarse K is
 separates projection/routing loss from coarse-code loss; source-f32 on the
 identical final row set separates fine-codec loss.
 
+Construction never aliases the three identities. Coarse encoding consumes a
+finalized identity stream containing `(source_ordinal,dense_ordinal,
+feature_row_id,owner_posting_ordinal)`. The dense ordinal is assigned by the
+fine-plane ordering below before coarse objects are emitted; tests may supply
+an independently validated synthetic identity stream, but geometry's source
+ordinal is never substituted for it. The join is an externally sorted,
+bounded construction pass rather than a resident population-wide map.
+
+When multiple scanned owner-relative replicas name the same live feature ID,
+unique admission retains that row's minimum finite score and uses dense
+ordinal for the coarse tie. A later better replica may update or re-enter the
+bounded heap. Liveness is frozen for the complete query and dead rows never
+consume K. Heap and membership state are both bounded by K; there is no global
+seen set and no unbounded stale-entry heap.
+The dense-ordinal tie is deliberately a coarse-stage physical-order tie; the
+final rerank independently uses feature row ID as stated above.
+
+Residual subtraction, sign norm, sign reconstruction, and PQ lookup-table
+construction use fixed coordinate order and unfused binary64 arithmetic;
+persisted residuals and codebooks are rounded to binary32 only at their stated
+format boundary. PQ asymmetric-distance lookup entries are binary64 and are
+summed in increasing subquantizer ordinal. A SIMD backend vectorizes across
+candidates without reassociating one candidate's subquantizer sum and must
+produce bit-identical scores and candidate order. Byte-quantized lookup tables
+are a separately named heuristic. Sign bits use increasing dimension within
+each byte, least-significant bit first; `-0.0` is rejected at construction
+boundaries.
+PQ bytes are row-major; the even subquantizer occupies the low nibble and the
+odd subquantizer the high nibble. Any SIMD transposition is query workspace,
+never a persisted alternate layout, and is charged to the workspace ledger.
+
+PQ training replays assignments in exact
+`(source_ordinal,owner_posting_ordinal)` order and derives each owner-relative
+residual into bounded scratch. It never materializes all replicated residuals.
+Each subquantizer must have at least 16 retained assignments; duplicate values
+remain valid and deterministic empty-centroid repair uses the construction
+farthest-donor rule. The 20 Lloyd updates accumulate binary64 in the registered
+order and round each updated centroid to binary32 before the next assignment
+pass.
+
 ### Physical S3 layout and fine rerank
 
 The falsifier uses one shared, unreplicated fine plane. Primary dense ordinals
@@ -581,6 +621,13 @@ and stops; it never skips a dense posting to admit lower-ranked work. Partial
 postings are never scored. The
 projected-f32 diagnostic scores the exact rows admitted by a candidate code
 layout using offline projected rows; it does not introduce f32 serving objects.
+All fragment costs are authenticated and checked before any fragment of a
+posting is scored. Authentication, decode, width, owner, or allocation failure
+fails the query and rolls back that posting; it cannot return candidates from
+successful sibling fragments. The prefix receipt stores the first excluded
+posting and reason, not an allocated excluded suffix. Increasing a byte/GET
+budget makes the admitted posting prefix monotone, but no monotonicity claim is
+made about top-K truth containment.
 
 ## Causal gates and selection
 

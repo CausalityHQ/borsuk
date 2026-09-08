@@ -254,13 +254,13 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     ];
     let plan =
         plan_v36_transport(&[0, 1, 2], &postings, V36TransportLimits::qualification()).unwrap();
-    assert_eq!(plan.admitted_postings, vec![0, 2]);
-    assert_eq!(plan.excluded_postings, vec![1]);
-    assert_eq!(plan.normal_gets, 3);
-    assert_eq!(plan.normal_encoded_bytes, 1_572_864);
-    assert_eq!(plan.hard_gets_with_retries, 4);
-    assert_eq!(plan.hard_returned_bytes_with_retries, 2_098_176);
-    assert_eq!(plan.decoded_capacity_bytes, 1_585_152);
+    assert_eq!(plan.admitted_postings, vec![0]);
+    assert_eq!(plan.excluded_postings, vec![1, 2]);
+    assert_eq!(plan.normal_gets, 2);
+    assert_eq!(plan.normal_encoded_bytes, 1_048_576);
+    assert_eq!(plan.hard_gets_with_retries, 3);
+    assert_eq!(plan.hard_returned_bytes_with_retries, 1_573_632);
+    assert_eq!(plan.decoded_capacity_bytes, 1_056_768);
     assert_eq!(plan.disposition, V36TransportDisposition::Determinate);
 
     let exact_normal = vec![V36TransportPosting {
