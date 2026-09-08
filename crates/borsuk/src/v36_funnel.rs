@@ -848,7 +848,7 @@ fn validate_prefix_source_registry_identity(
     Ok(())
 }
 
-fn validate_prefix_population(
+fn validate_prefix_population_shape(
     population: &V36PrefixPopulationAuthority,
     source_registry: &[V36PrefixRegisteredSourceObject],
 ) -> Result<()> {
@@ -874,8 +874,8 @@ fn validate_prefix_population(
         || population.dataset_authority_sha256
             != "0d2e8cef3cf27860131a6a8c33d08b858f8837263212cb03515ae53c76acd5c1"
         || population.duplicate_rule != "first-selected-object-ordinal-then-row-offset"
-        || population.distinct_candidates != 1_100_000
-        || population.corpus_rows != 1_000_000
+        || population.distinct_candidates == 0
+        || population.corpus_rows == 0
         || population.object_cap != 16
         || population.cohort_ordinal > 1
         || population.selected_object_count == 0
@@ -884,7 +884,7 @@ fn validate_prefix_population(
             != u16::from(population.cohort_ordinal)
                 .checked_mul(population.selected_object_count)
                 .ok_or_else(|| invalid("V36 prefix selected object window overflows"))?
-        || population.source_byte_cap != 6 * 1_024 * MIB
+        || population.source_byte_cap == 0
         || population.workspace_count != 16
         || population.workspace_bytes != 32 * MIB
         || population.construction_capability != "named-query-excluded-corpus-only-no-query-truth"
@@ -913,38 +913,29 @@ fn validate_prefix_population(
     let expected_roles = [
         (
             "development",
-            1_000_u64,
             "borsuk-v36-prefix-screen-development-query-v2",
-            "da46dc39758d8dd6b71942fb9eadd666b3fce0b2e0114a62359335f645525981",
         ),
-        (
-            "validation",
-            1_000,
-            "borsuk-v36-prefix-screen-validation-query-v2",
-            "bcd253d65fc3786900a9e17aa9e4e65ef592d7ac11ca37abdcdfcf6b74aa9a59",
-        ),
+        ("validation", "borsuk-v36-prefix-screen-validation-query-v2"),
         (
             "sealed-holdout",
-            1_000,
             "borsuk-v36-prefix-screen-sealed-holdout-query-v2",
-            "8e9f673c7451c72bd19e255b248f4212298d1c958d35a831ecaefac8a60b4d84",
         ),
         (
             "performance",
-            10_000,
             "borsuk-v36-prefix-screen-performance-query-v2",
-            "a84a6410a7bcad8ca1cc6520dbfd69c1f88ebff08d48610f5a9098d035e52901",
         ),
     ];
     if population.roles.len() != expected_roles.len()
-        || population.roles.iter().zip(expected_roles).any(
-            |(role, (name, rows, seed_label, seed_sha256))| {
+        || population
+            .roles
+            .iter()
+            .zip(expected_roles)
+            .any(|(role, (name, seed_label))| {
                 role.role != name
-                    || role.rows != rows
+                    || role.rows == 0
                     || role.seed_label != seed_label
-                    || role.seed_sha256 != seed_sha256
-            },
-        )
+                    || role.seed_sha256 != format!("{:x}", Sha256::digest(seed_label.as_bytes()))
+            })
     {
         return Err(invalid("V36 prefix role authority differs"));
     }
@@ -955,6 +946,16 @@ fn validate_prefix_population(
         .collect::<BTreeSet<_>>();
     if role_seeds.len() != expected_roles.len() {
         return Err(invalid("V36 prefix role seeds overlap"));
+    }
+    let query_rows = population.roles.iter().try_fold(0_u64, |sum, role| {
+        sum.checked_add(role.rows)
+            .ok_or_else(|| invalid("V36 prefix role row count overflows"))
+    })?;
+    if query_rows
+        .checked_add(population.corpus_rows)
+        .is_none_or(|assigned| assigned > population.distinct_candidates)
+    {
+        return Err(invalid("V36 prefix population row count differs"));
     }
 
     if population.consumed_objects.len() != usize::from(population.selected_object_count) {
@@ -993,6 +994,26 @@ fn validate_prefix_population(
         return Err(invalid("V36 prefix source bytes differ"));
     }
     validate_prefix_source_registry(population, source_registry)?;
+    Ok(())
+}
+
+fn validate_prefix_population(
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    validate_prefix_population_shape(population, source_registry)?;
+    let expected_role_rows = [1_000_u64, 1_000, 1_000, 10_000];
+    if population.distinct_candidates != 1_100_000
+        || population.corpus_rows != 1_000_000
+        || population.source_byte_cap != 6 * 1_024 * MIB
+        || population
+            .roles
+            .iter()
+            .zip(expected_role_rows)
+            .any(|(role, expected_rows)| role.rows != expected_rows)
+    {
+        return Err(invalid("V36 prefix population authority differs"));
+    }
     Ok(())
 }
 
@@ -2013,6 +2034,22 @@ pub fn canonical_v36_prefix_population_authority_bytes(
 ) -> Result<Vec<u8>> {
     validate_prefix_population(population, source_registry)?;
     canonical_value_bytes(population)
+}
+
+pub(crate) fn canonical_v36_prefix_checkpoint_population_authority_bytes(
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<Vec<u8>> {
+    validate_prefix_population_shape(population, source_registry)?;
+    canonical_value_bytes(population)
+}
+
+pub(crate) fn canonical_v36_prefix_checkpoint_source_registry_bytes(
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<Vec<u8>> {
+    validate_prefix_population_shape(population, source_registry)?;
+    canonical_value_bytes(&source_registry)
 }
 
 fn validate_prefix_projection(projection: &V36ProjectionArm) -> Result<()> {

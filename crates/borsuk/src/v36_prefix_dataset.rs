@@ -31,6 +31,10 @@ use parquet::{
 use rayon::{ThreadPoolBuilder, prelude::*};
 use sha2::{Digest, Sha256};
 
+use crate::v36_funnel::{
+    canonical_v36_prefix_checkpoint_population_authority_bytes,
+    canonical_v36_prefix_checkpoint_source_registry_bytes,
+};
 use crate::{
     BorsukError, Result, V36ArtifactIdentity, V36PrefixCheckpointContext,
     V36PrefixCheckpointManifest, V36PrefixCheckpointPhase, V36PrefixCheckpointPointer,
@@ -1738,6 +1742,43 @@ pub struct V36PrefixExternalMaterializationRequest<'a> {
     pub scratch_root: &'a Path,
     /// Authenticated local source objects corresponding one-to-one with the window.
     pub source_paths: &'a [PathBuf],
+}
+
+/// Inputs for the atomic file-backed Selected-to-Materialized checkpoint transition.
+pub struct V36PrefixCheckpointMaterializationRequest<'a> {
+    /// Exact role-assignment authority for the selected population.
+    pub contract: &'a V36PrefixRoleAssignmentContract,
+    /// Hard external-memory and scratch limits.
+    pub limits: &'a V36PrefixExternalSelectionLimits,
+    /// Existing empty output directory receiving the materialized artifacts.
+    pub output: &'a Path,
+    /// Content-addressed checkpoint object prefix.
+    pub output_uri_prefix: &'a str,
+    /// Complete typed population authority written alongside role Parquets.
+    pub population: &'a V36PrefixPopulationAuthority,
+    /// Complete registered source window in frozen rank order.
+    pub ranked_objects: &'a [V36PrefixRankedSourceObject],
+    /// Complete registered source-object list bound by `population`.
+    pub source_registry: &'a [V36PrefixRegisteredSourceObject],
+    /// Existing directory for bounded attempt-owned private scratch.
+    pub scratch_root: &'a Path,
+    /// Exact selected-ID file bound by the preceding checkpoint.
+    pub selected: &'a V36PrefixSelectedIdsFile,
+    /// Authenticated local source objects corresponding to the registered window.
+    pub source_paths: &'a [PathBuf],
+    /// Checkpoint writer whose preceding phase must bind `selected`.
+    pub writer: &'a mut V36PrefixPopulationCheckpointWriter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated materialization and checkpoint publication produced by one transition.
+pub struct V36PrefixCheckpointMaterialization {
+    /// Exact immutable identities embedded in the Materialized checkpoint.
+    pub artifacts: V36PrefixMaterializedArtifacts,
+    /// Ready-file path for the atomic checkpoint publication.
+    pub checkpoint_ready: PathBuf,
+    /// Final role-separated Parquet paths.
+    pub paths: V36PrefixRoleParquetPaths,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8938,6 +8979,185 @@ pub fn materialize_v36_prefix_assigned_roles(
         sealed_holdout,
         source,
         validation,
+    })
+}
+
+fn v36_prefix_checkpoint_output_identity(
+    role: &str,
+    filename: &str,
+    output_uri_prefix: &str,
+    path: &Path,
+) -> Result<V36ArtifactIdentity> {
+    let (encoded_bytes, sha256) = sha256_file(path)?;
+    let prefix = output_uri_prefix.trim_end_matches('/');
+    Ok(V36ArtifactIdentity {
+        blake3: blake3_file(path)?,
+        encoded_bytes,
+        role: role.to_owned(),
+        sha256: sha256.clone(),
+        uri: format!("{prefix}/{sha256}-{filename}"),
+    })
+}
+
+/// Materialize one authenticated selection and publish its exact Materialized checkpoint.
+pub fn materialize_v36_prefix_checkpoint_selection(
+    request: V36PrefixCheckpointMaterializationRequest<'_>,
+) -> Result<V36PrefixCheckpointMaterialization> {
+    let V36PrefixCheckpointMaterializationRequest {
+        contract,
+        limits,
+        output,
+        output_uri_prefix,
+        population,
+        ranked_objects,
+        scratch_root,
+        selected,
+        source_registry,
+        source_paths,
+        writer,
+    } = request;
+    let (selection, checkpoint_population) = match writer
+        .previous_manifest
+        .as_ref()
+        .map(|manifest| (&manifest.phase, &manifest.population))
+    {
+        Some((V36PrefixCheckpointPhase::Selected { selection }, population)) => {
+            (selection, population)
+        }
+        _ => {
+            return Err(invalid(
+                "V36 materialization checkpoint predecessor differs",
+            ));
+        }
+    };
+    validate_v36_prefix_checkpoint_selected_file(selected, selection)?;
+    validate_v36_prefix_role_assignment_contract(contract, selected)?;
+    let consumed_matches_ranked = population.consumed_objects.len() == ranked_objects.len()
+        && population
+            .consumed_objects
+            .iter()
+            .zip(ranked_objects)
+            .all(|(consumed, ranked)| {
+                consumed.encoded_bytes == ranked.encoded_bytes
+                    && consumed.path == ranked.path
+                    && consumed.sample_sha256 == ranked.sample_sha256
+                    && consumed.sha256 == ranked.sha256
+                    && consumed.uri == ranked.uri
+            });
+    if population.cohort_ordinal != selected.contract.cohort_ordinal
+        || population.corpus_rows != contract.corpus_rows
+        || population.corpus_rows != writer.context.corpus_rows
+        || population.distinct_candidates != selected.contract.selected_rows
+        || population.excluded_population_identity != selected.contract.excluded_population_identity
+        || population.ordered_source_manifest_sha256
+            != selected.contract.ordered_source_manifest_sha256
+        || population.population_seed_sha256 != selected.contract.population_seed_sha256
+        || population.selected_object_count != selected.contract.selected_object_count
+        || population.selected_object_start != selected.contract.selected_object_start
+        || population.source_byte_cap != writer.context.source_byte_cap
+        || population.corpus_seed_label != contract.corpus_seed_label
+        || population.corpus_seed_sha256 != contract.corpus_seed_sha256
+        || population.roles != contract.roles
+        || population.consumed_objects != checkpoint_population.consumed_objects
+        || !consumed_matches_ranked
+    {
+        return Err(invalid("V36 materialization population authority differs"));
+    }
+    let source_registry_bytes =
+        canonical_v36_prefix_checkpoint_source_registry_bytes(population, source_registry)?;
+    if format!("{:x}", Sha256::digest(&source_registry_bytes))
+        != writer.context.source_registry_sha256
+    {
+        return Err(invalid("V36 materialization source registry differs"));
+    }
+    let population_authority_bytes =
+        canonical_v36_prefix_checkpoint_population_authority_bytes(population, source_registry)?;
+
+    let assignment_attempt =
+        tempfile::tempdir_in(scratch_root).map_err(|source| BorsukError::Io {
+            path: scratch_root.to_owned(),
+            source,
+        })?;
+    let assignment_path = assignment_attempt.path().join("role-assignments.arrow");
+    let assignment_receipt =
+        assign_v36_prefix_roles_from_selected_file(V36PrefixRoleAssignmentRequest {
+            contract,
+            limits,
+            output: &assignment_path,
+            output_uri_prefix,
+            scratch_root: assignment_attempt.path(),
+            selected,
+        })?;
+    let assignment = V36PrefixRoleAssignmentFile {
+        contract: contract.clone(),
+        identity: assignment_receipt.identity,
+        path: assignment_path,
+    };
+    let paths = materialize_v36_prefix_assigned_roles(V36PrefixExternalMaterializationRequest {
+        assignment: &assignment,
+        limits,
+        output,
+        ranked_objects,
+        scratch_root,
+        source_paths,
+    })?;
+    let population_authority_path = output.join("population-authority.json");
+    write_atomic_bytes(&population_authority_path, &population_authority_bytes)?;
+    let specifications = [
+        (
+            "population-authority",
+            "population-authority.json",
+            population_authority_path,
+        ),
+        ("source", "source.parquet", paths.source.clone()),
+        (
+            "development-query",
+            "development-query.parquet",
+            paths.development.clone(),
+        ),
+        (
+            "validation-query",
+            "validation-query.parquet",
+            paths.validation.clone(),
+        ),
+        (
+            "sealed-holdout-query",
+            "sealed-holdout-query.parquet",
+            paths.sealed_holdout.clone(),
+        ),
+        (
+            "performance-query",
+            "performance-query.parquet",
+            paths.performance.clone(),
+        ),
+    ];
+    let dependencies = specifications
+        .iter()
+        .map(|(role, filename, path)| {
+            Ok(V36PrefixCheckpointDependencyFile {
+                identity: v36_prefix_checkpoint_output_identity(
+                    role,
+                    filename,
+                    output_uri_prefix,
+                    path,
+                )?,
+                path: path.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let artifacts = V36PrefixMaterializedArtifacts {
+        population_authority: dependencies[0].identity.clone(),
+        source: dependencies[1].identity.clone(),
+        development_query: dependencies[2].identity.clone(),
+        validation_query: dependencies[3].identity.clone(),
+        sealed_holdout_query: dependencies[4].identity.clone(),
+        performance_query: dependencies[5].identity.clone(),
+    };
+    let checkpoint_ready = writer.commit_materialized(&artifacts, &dependencies)?;
+    Ok(V36PrefixCheckpointMaterialization {
+        artifacts,
+        checkpoint_ready,
+        paths,
     })
 }
 
