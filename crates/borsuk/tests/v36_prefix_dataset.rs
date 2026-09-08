@@ -22,14 +22,14 @@ use borsuk::{
     V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator,
     V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob, V36PrefixIdentityRun,
     V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixMaterializedArtifacts,
-    V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit,
-    V36PrefixPopulationSelection, V36PrefixQualityRole, V36PrefixRankedSourceObject,
-    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAssignmentContract,
-    V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority,
-    V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile, V36PrefixSourceObject,
-    assign_v36_prefix_roles_from_selected_file, bind_v36_prefix_population_authority,
-    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
-    canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixPhaseResumeRequest, V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter,
+    V36PrefixPopulationCommit, V36PrefixPopulationSelection, V36PrefixQualityRole,
+    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
+    V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
+    V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
+    V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_gt_heap_checkpoint,
@@ -4177,6 +4177,61 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         ),
         path: heaps_path,
     };
+    let same_attempt_outbox = directory.path().join("same-attempt-resume-outbox");
+    fs::create_dir(&same_attempt_outbox).unwrap();
+    assert!(
+        V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
+            execution_authority_sha256: "7".repeat(64),
+            head: materialized_head.clone(),
+            context: context.clone(),
+            limits: &limits,
+            producer_attempt_id: "v36-prefix-screen-reduced-attempt-0001".into(),
+            producer_attempt_ordinal: 1,
+            producer_instance_id: "i-reduced-c".into(),
+            root: &same_attempt_outbox,
+            scratch_root: &restore_scratch,
+            selected_contract: Some(&selected_file.contract),
+        })
+        .is_err()
+    );
+    let phase_resumed_outbox = directory.path().join("phase-resumed-outbox");
+    fs::create_dir(&phase_resumed_outbox).unwrap();
+    let (mut phase_resumed_writer, phase_resumed_state) =
+        V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
+            execution_authority_sha256: "7".repeat(64),
+            head: materialized_head.clone(),
+            context: context.clone(),
+            limits: &limits,
+            producer_attempt_id: "v36-prefix-screen-reduced-attempt-0002".into(),
+            producer_attempt_ordinal: 2,
+            producer_instance_id: "i-reduced-c".into(),
+            root: &phase_resumed_outbox,
+            scratch_root: &restore_scratch,
+            selected_contract: Some(&selected_file.contract),
+        })
+        .unwrap();
+    assert!(matches!(
+        phase_resumed_state,
+        V36PrefixCheckpointResumeState::Materialized { .. }
+    ));
+    let phase_resumed_ready = phase_resumed_writer
+        .commit_ground_truth(&heaps, context.corpus_rows)
+        .unwrap();
+    let phase_resumed_staged = directory.path().join("phase-resumed-staged");
+    stage_checkpoint_head(
+        &phase_resumed_outbox,
+        &phase_resumed_ready,
+        &phase_resumed_staged,
+    );
+    let phase_resumed_head =
+        load_v36_prefix_checkpoint_head(&phase_resumed_staged, &context).unwrap();
+    assert_eq!(phase_resumed_head.manifest.generation, 3);
+    assert_eq!(
+        phase_resumed_head.manifest.producer_attempt_id,
+        "v36-prefix-screen-reduced-attempt-0002"
+    );
+    assert_eq!(phase_resumed_head.dependencies.len(), 9);
+
     let ground_truth_ready = writer.commit_ground_truth(&heaps, 8).unwrap();
     let staged_ground_truth = directory.path().join("staged-ground-truth");
     stage_checkpoint_head(&resumed_outbox, &ground_truth_ready, &staged_ground_truth);
@@ -4209,6 +4264,26 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
             .join("objects")
             .join(format!("{}.blob", heaps.identity.sha256))
     );
+    let ground_truth_resume_outbox = directory.path().join("ground-truth-resume-outbox");
+    fs::create_dir(&ground_truth_resume_outbox).unwrap();
+    let (_, ground_truth_resume_state) =
+        V36PrefixPopulationCheckpointWriter::resume_phase(V36PrefixPhaseResumeRequest {
+            execution_authority_sha256: "8".repeat(64),
+            head: ground_truth_head.clone(),
+            context: context.clone(),
+            limits: &limits,
+            producer_attempt_id: "v36-prefix-screen-reduced-attempt-0002".into(),
+            producer_attempt_ordinal: 2,
+            producer_instance_id: "i-reduced-d".into(),
+            root: &ground_truth_resume_outbox,
+            scratch_root: &restore_scratch,
+            selected_contract: Some(&selected_file.contract),
+        })
+        .unwrap();
+    assert!(matches!(
+        ground_truth_resume_state,
+        V36PrefixCheckpointResumeState::GroundTruth { .. }
+    ));
 
     let mut rewritten_ground_truth = ground_truth_head.clone();
     let borsuk::V36PrefixCheckpointPhase::GroundTruth {
