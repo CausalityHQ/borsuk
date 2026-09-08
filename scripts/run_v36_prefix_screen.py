@@ -40,6 +40,7 @@ MAX_CHECKPOINT_READY_BYTES = 1024**2
 MAX_TERMINAL_BYTES = 1024**2
 MAX_CONTROLLER_LAUNCH_BYTES = 1024**2
 AWS_CLI_TIMEOUT_SECONDS = 120
+PINNED_AWS_CLI_VERSION = "2.36.11"
 MAX_ATTEMPTS = 3
 SPOT_HOURLY_CAP_MICRO_USD = 3_000_000
 CAMPAIGN_CAP_MICRO_USD = 90_000_000
@@ -176,6 +177,10 @@ class V36PrefixScreenPlan:
     source_registry_sha256: str
     source_registry_blake3: str
     source_registry_bytes: int
+    aws_cli_uri: str
+    aws_cli_sha256: str
+    aws_cli_blake3: str
+    aws_cli_bytes: int
     output_prefix: str
 
 
@@ -1511,12 +1516,15 @@ def build_v36_prefix_screen_plan(**values: Any) -> V36PrefixScreenPlan:
         plan.authority_blake3,
         plan.source_registry_sha256,
         plan.source_registry_blake3,
+        plan.aws_cli_sha256,
+        plan.aws_cli_blake3,
     )
     byte_values = (
         plan.source_archive_bytes,
         plan.binary_bytes,
         plan.authority_bytes,
         plan.source_registry_bytes,
+        plan.aws_cli_bytes,
     )
     if (
         _RUN_ID.fullmatch(plan.run_id) is None
@@ -1530,6 +1538,7 @@ def build_v36_prefix_screen_plan(**values: Any) -> V36PrefixScreenPlan:
         plan.binary_uri,
         plan.authority_uri,
         plan.source_registry_uri,
+        plan.aws_cli_uri,
     ):
         _s3(uri)
     _s3(plan.output_prefix, prefix=True)
@@ -1625,6 +1634,7 @@ def _execution_authority(
             {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
             {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
             {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
+            {"blake3": plan.aws_cli_blake3, "encoded_bytes": plan.aws_cli_bytes, "role": "aws-cli", "sha256": plan.aws_cli_sha256, "uri": plan.aws_cli_uri},
         ],
         "output_prefix": f"s3://{output_bucket}/{attempt_prefix}",
         "resume": resume,
@@ -1657,6 +1667,7 @@ def _user_data(
     )
     return f"""#!/bin/bash
 set -euo pipefail
+exec >/dev/console 2>&1
 trap 'shutdown -h now' EXIT
 root_source=$(findmnt -n -o SOURCE /)
 root_parent=$(lsblk -no PKNAME "$root_source")
@@ -1672,27 +1683,35 @@ swapoff -a
 root=$(mktemp -d /mnt/v36-prefix.XXXXXX)
 available=$(df --output=avail -B1 /mnt | tail -1)
 test "$available" -ge {DISK_PREFLIGHT_BYTES}
-aws s3 cp {quoted['source_archive_uri']} "$root/source.tar.zst" --only-show-errors
+aws s3 cp {quoted['source_archive_uri']} "$root/source.tar" --only-show-errors
 aws s3 cp {quoted['binary_uri']} "$root/v36_prefix_freeze" --only-show-errors
 aws s3 cp {quoted['authority_uri']} "$root/authority.json" --only-show-errors
 aws s3 cp {quoted['source_registry_uri']} "$root/source-registry.json" --only-show-errors
+aws s3 cp {quoted['aws_cli_uri']} "$root/aws-cli.tar" --only-show-errors
 printf '%s' {shlex.quote(execution_authority_b64)} | base64 -d > "$root/execution-authority.json"
 printf '%s' {shlex.quote(terminal_program_b64)} | base64 -d > "$root/write-terminal.py"
-test "$(stat -c %s "$root/source.tar.zst")" = {plan.source_archive_bytes}
-test "$(sha256sum "$root/source.tar.zst" | cut -d' ' -f1)" = {plan.source_archive_sha256}
+test "$(stat -c %s "$root/source.tar")" = {plan.source_archive_bytes}
+test "$(sha256sum "$root/source.tar" | cut -d' ' -f1)" = {plan.source_archive_sha256}
 test "$(stat -c %s "$root/v36_prefix_freeze")" = {plan.binary_bytes}
 test "$(sha256sum "$root/v36_prefix_freeze" | cut -d' ' -f1)" = {plan.binary_sha256}
 test "$(stat -c %s "$root/authority.json")" = {plan.authority_bytes}
 test "$(sha256sum "$root/authority.json" | cut -d' ' -f1)" = {plan.authority_sha256}
 test "$(stat -c %s "$root/source-registry.json")" = {plan.source_registry_bytes}
 test "$(sha256sum "$root/source-registry.json" | cut -d' ' -f1)" = {plan.source_registry_sha256}
+test "$(stat -c %s "$root/aws-cli.tar")" = {plan.aws_cli_bytes}
+test "$(sha256sum "$root/aws-cli.tar" | cut -d' ' -f1)" = {plan.aws_cli_sha256}
+mkdir "$root/aws-cli"
+tar -xf "$root/aws-cli.tar" -C "$root/aws-cli"
+export PATH="$root/aws-cli/bin:$PATH"
+aws --version 2>&1 | grep -q '^aws-cli/{PINNED_AWS_CLI_VERSION} '
 chmod 500 "$root/v36_prefix_freeze"
 mkdir "$root/output" "$root/scratch" "$root/checkpoint-outbox" "$root/sidecar-source" "$root/resume"
 chmod 700 "$root/checkpoint-outbox"
-tar --zstd -xf "$root/source.tar.zst" -C "$root/sidecar-source" scripts/run_v36_prefix_screen.py
+tar -xf "$root/source.tar" -C "$root/sidecar-source" scripts/run_v36_prefix_screen.py
 test "$(sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py" | cut -d' ' -f1)" = {sidecar_sha256}
 python3 -m py_compile "$root/sidecar-source/scripts/run_v36_prefix_screen.py"
-aws s3api put-object --generate-cli-skeleton input | grep -q '"IfMatch"'
+aws s3api put-object --generate-cli-skeleton input > "$root/put-object-skeleton.json"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert set(value) >= {{"IfMatch", "IfNoneMatch"}}' "$root/put-object-skeleton.json"
 token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
 instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 set +e
@@ -1716,7 +1735,7 @@ timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
   --execute-prefix-freeze \
   --execution-authority "$root/execution-authority.json" \
   --authority "$root/authority.json" --source-registry "$root/source-registry.json" \
-  --source-archive "$root/source.tar.zst" --output "$root/output" \
+  --source-archive "$root/source.tar" --output "$root/output" \
   --scratch "$root/scratch" --checkpoint-outbox "$root/checkpoint-outbox" \
   {resume_argument} --producer-instance-id "$instance_id" &
 science_pid=$!
@@ -2477,6 +2496,7 @@ def run_v36_prefix_screen(
         instance_id: str | None = None
         status: str | None = None
         controller_timed_out = False
+        controller_synthesized_terminal = False
         try:
             if resume is _UNBOUND:
                 raise ValueError("V36 prefix-screen controller resume is unresolved")
@@ -2565,6 +2585,7 @@ def run_v36_prefix_screen(
                 expected_instance_id=instance_id,
                 expected_resume=resume,
             )
+            controller_synthesized_terminal = True
         if status == "complete":
             bucket, key = _marker_key(plan, attempt_ordinal, "ATTEMPT_COMPLETE.json")
             return f"s3://{bucket}/{key}"
@@ -2572,6 +2593,8 @@ def run_v36_prefix_screen(
             raise RuntimeError("V36 prefix-screen source is insufficient")
         if status is None:
             raise RuntimeError(f"V36 prefix-screen attempt {attempt_ordinal} terminal missing")
+        if controller_synthesized_terminal and not controller_timed_out:
+            raise RuntimeError("V36 prefix-screen bootstrap failed before guest terminal")
         if controller_timed_out:
             if status not in {"infrastructure", "interrupted"}:
                 raise ValueError("V36 prefix-screen controller timeout terminal differs")

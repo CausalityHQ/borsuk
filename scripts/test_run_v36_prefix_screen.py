@@ -67,7 +67,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         return subject.build_v36_prefix_screen_plan(
             run_id="v36-prefix-fixture",
             source_commit="1" * 40,
-            source_archive_uri="s3://fixture/v36/source.tar.zst",
+            source_archive_uri="s3://fixture/v36/source.tar",
             source_archive_sha256="2" * 64,
             source_archive_blake3="7" * 64,
             source_archive_bytes=8_192,
@@ -83,6 +83,10 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             source_registry_sha256="5" * 64,
             source_registry_blake3="a" * 64,
             source_registry_bytes=1_024,
+            aws_cli_uri="s3://fixture/v36/aws-cli-2.36.11-aarch64.tar",
+            aws_cli_sha256="6" * 64,
+            aws_cli_blake3="b" * 64,
+            aws_cli_bytes=16_384,
             output_prefix="s3://fixture/v36/prefix-results/",
         )
 
@@ -697,7 +701,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         ec2.describe_instances.side_effect = _AwsError("InvalidInstanceID.NotFound")
         ec2.terminate_instances.side_effect = _AwsError("InvalidInstanceID.NotFound")
         ec2.run_instances.side_effect = _AwsError("InsufficientInstanceCapacity")
-        with self.assertRaisesRegex(RuntimeError, "three attempts exhausted"):
+        with self.assertRaisesRegex(
+            RuntimeError, "bootstrap failed before guest terminal"
+        ):
             subject.run_v36_prefix_screen(
                 plan,
                 ec2_client=ec2,
@@ -783,7 +789,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             self.plan(), launch_nonce="7" * 32, attempt_ordinal=0
         )[0]["UserData"]
         self.assertIn(
-            'tar --zstd -xf "$root/source.tar.zst" -C "$root/sidecar-source" '
+            'tar -xf "$root/source.tar" -C "$root/sidecar-source" '
             "scripts/run_v36_prefix_screen.py",
             script,
         )
@@ -800,6 +806,62 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertIn('put-object --generate-cli-skeleton input', script)
         self.assertIn('if [[ "$sidecar_status" != 0 ]]; then', script)
         self.assertNotIn("CHECKPOINT.json", script)
+
+    def test_v36_prefix_screen_uses_authenticated_cli_before_conditional_storage(
+        self,
+    ) -> None:
+        # Break caught: the AMI's unpinned AWS CLI service model rejects the
+        # conditional S3 headers and all Spot attempts die before science.
+        values = dataclasses.asdict(self.plan())
+        values.update(
+            aws_cli_uri="s3://fixture/v36/aws-cli-2.36.11-aarch64.tar",
+            aws_cli_sha256="6" * 64,
+            aws_cli_blake3="b" * 64,
+            aws_cli_bytes=16_384,
+        )
+        plan = subject.build_v36_prefix_screen_plan(**values)
+        script = subject.build_v36_prefix_launch_specs(
+            plan, launch_nonce="7" * 32, attempt_ordinal=0
+        )[0]["UserData"]
+
+        download = (
+            "aws s3 cp s3://fixture/v36/aws-cli-2.36.11-aarch64.tar "
+            '"$root/aws-cli.tar" --only-show-errors'
+        )
+        activate = 'export PATH="$root/aws-cli/bin:$PATH"'
+        capability = (
+            'aws s3api put-object --generate-cli-skeleton input > '
+            '"$root/put-object-skeleton.json"'
+        )
+        self.assertIn("exec >/dev/console 2>&1", script)
+        self.assertIn(download, script)
+        self.assertIn(
+            'test "$(stat -c %s "$root/aws-cli.tar")" = 16384', script
+        )
+        self.assertIn(
+            'test "$(sha256sum "$root/aws-cli.tar" | cut -d\' \' -f1)" = '
+            + "6" * 64,
+            script,
+        )
+        self.assertIn(
+            'tar -xf "$root/aws-cli.tar" -C "$root/aws-cli"', script
+        )
+        self.assertIn('tar -xf "$root/source.tar" -C "$root/sidecar-source"', script)
+        self.assertNotIn("--zstd", script)
+        self.assertIn(activate, script)
+        self.assertIn('aws --version 2>&1 | grep -q \'^aws-cli/2.36.11 \'', script)
+        self.assertIn(capability, script)
+        self.assertIn(
+            'set(value) >= {"IfMatch", "IfNoneMatch"}', script
+        )
+        self.assertNotIn("put-object --generate-cli-skeleton input | grep", script)
+        self.assertLess(script.index(download), script.index(activate))
+        self.assertLess(script.index(activate), script.index(capability))
+        self.assertLess(script.index(capability), script.index("--publish-checkpoints"))
+        self.assertEqual(
+            plan.aws_cli_uri,
+            "s3://fixture/v36/aws-cli-2.36.11-aarch64.tar",
+        )
 
     def test_v36_prefix_screen_publishes_artifacts_receipt_then_terminal(self) -> None:
         # Break caught: successful science is shut down before its artifacts
@@ -929,7 +991,9 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 subject, "read_v36_checkpoint_head_if_present", return_value=None
             ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "three attempts exhausted"):
+            with self.assertRaisesRegex(
+                RuntimeError, "bootstrap failed before guest terminal"
+            ):
                 subject.run_v36_prefix_screen(
                     plan,
                     ec2_client=ec2,
@@ -940,6 +1004,36 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertEqual(ec2.terminate_instances.call_count, 3)
         launched = [call.kwargs for call in ec2.run_instances.call_args_list]
         self.assertEqual(len({spec["ClientToken"] for spec in launched}), 3)
+
+    def test_v36_prefix_screen_stops_after_first_silent_boot_failure(self) -> None:
+        # Break caught: identical user-data bootstrap failures consume all
+        # three Spot attempts even though no guest terminal or checkpoint was
+        # produced and changing availability zones cannot change the result.
+        plan = self.plan()
+        ec2 = mock.Mock()
+        ec2.run_instances.return_value = _launch_response("i-silent-bootstrap")
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
+        }
+        s3 = _MemoryS3()
+        with self.assertRaisesRegex(RuntimeError, "bootstrap failed before guest terminal"):
+            subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=s3,
+                launch_nonce="d" * 32,
+            )
+        self.assertEqual(ec2.run_instances.call_count, 1)
+        self.assertEqual(ec2.terminate_instances.call_count, 1)
+        terminal = subject._read_attempt_status(
+            s3,
+            plan,
+            0,
+            expected_instance_id="i-silent-bootstrap",
+            expected_resume=None,
+            return_terminal=True,
+        )
+        self.assertEqual(terminal["status"], "infrastructure")
 
     def test_v36_prefix_screen_replacement_binds_newest_head_after_termination(self) -> None:
         # Break caught: a replacement launches fresh or observes a checkpoint
@@ -1215,6 +1309,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
                 {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
                 {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
+                {"blake3": plan.aws_cli_blake3, "encoded_bytes": plan.aws_cli_bytes, "role": "aws-cli", "sha256": plan.aws_cli_sha256, "uri": plan.aws_cli_uri},
             ],
             "output_prefix": "s3://fixture/v36/prefix-results/attempt-0000/",
             "resume": None,
