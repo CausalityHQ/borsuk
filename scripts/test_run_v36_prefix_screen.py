@@ -862,6 +862,10 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             plan.aws_cli_uri,
             "s3://fixture/v36/aws-cli-2.36.11-aarch64.tar",
         )
+        self.assertEqual(
+            [item["role"] for item in subject._execution_authority(plan, 0)["inputs"]],
+            ["binary", "freeze-authority", "source-archive", "source-registry"],
+        )
 
     def test_v36_prefix_screen_publishes_artifacts_receipt_then_terminal(self) -> None:
         # Break caught: successful science is shut down before its artifacts
@@ -1309,7 +1313,6 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
                 {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
                 {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
-                {"blake3": plan.aws_cli_blake3, "encoded_bytes": plan.aws_cli_bytes, "role": "aws-cli", "sha256": plan.aws_cli_sha256, "uri": plan.aws_cli_uri},
             ],
             "output_prefix": "s3://fixture/v36/prefix-results/attempt-0000/",
             "resume": None,

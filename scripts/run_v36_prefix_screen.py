@@ -1634,7 +1634,6 @@ def _execution_authority(
             {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
             {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
             {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
-            {"blake3": plan.aws_cli_blake3, "encoded_bytes": plan.aws_cli_bytes, "role": "aws-cli", "sha256": plan.aws_cli_sha256, "uri": plan.aws_cli_uri},
         ],
         "output_prefix": f"s3://{output_bucket}/{attempt_prefix}",
         "resume": resume,
