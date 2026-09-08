@@ -2465,6 +2465,391 @@ pub enum V36PrefixQualityRole {
     SealedHoldout,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+/// One canonically ranked candidate in a durable all-query GT heap checkpoint.
+pub struct V36PrefixGtHeapEntry {
+    /// Unsigned logical feature ID.
+    pub feature_row_id: u64,
+    /// Query ordinal within `role`.
+    pub query_ordinal: u32,
+    /// Zero-based best-first candidate rank.
+    pub rank: u16,
+    /// Closed quality-query role.
+    pub role: V36PrefixQualityRole,
+    /// Exact binary64 squared-L2 distance.
+    pub squared_distance: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Durable all-query exact-GT state after one complete source-row prefix.
+pub struct V36PrefixGtHeapCheckpoint {
+    /// Entries ordered by `(role, query_ordinal, rank)`.
+    pub entries: Vec<V36PrefixGtHeapEntry>,
+    /// First source ordinal not incorporated into every query heap.
+    pub next_source_ordinal: u64,
+    /// Development, validation, and sealed-holdout query counts.
+    pub query_counts: [u32; 3],
+}
+
+const GT_HEAP_CHECKPOINT_FORMAT: &str = "borsuk-v36-prefix-gt-heaps-v1";
+const GT_HEAP_CHECKPOINT_BATCH_ROWS: usize = 65_536;
+const GT_HEAP_CHECKPOINT_MAX_QUERIES: u64 = 3_000;
+
+fn v36_prefix_gt_role_ordinal(role: V36PrefixQualityRole) -> u8 {
+    match role {
+        V36PrefixQualityRole::Development => 0,
+        V36PrefixQualityRole::Validation => 1,
+        V36PrefixQualityRole::SealedHoldout => 2,
+    }
+}
+
+fn v36_prefix_gt_role_from_ordinal(ordinal: u8) -> Result<V36PrefixQualityRole> {
+    match ordinal {
+        0 => Ok(V36PrefixQualityRole::Development),
+        1 => Ok(V36PrefixQualityRole::Validation),
+        2 => Ok(V36PrefixQualityRole::SealedHoldout),
+        _ => Err(invalid("V36 prefix GT heap role differs")),
+    }
+}
+
+fn v36_prefix_gt_heap_checkpoint_schema(
+    next_source_ordinal: u64,
+    query_counts: [u32; 3],
+) -> Schema {
+    Schema::new_with_metadata(
+        vec![
+            Field::new("role", DataType::UInt8, false),
+            Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new("rank", DataType::UInt16, false),
+            Field::new("feature_row_id", DataType::UInt64, false),
+            Field::new("squared_distance", DataType::Float64, false),
+        ],
+        HashMap::from([
+            ("format".to_owned(), GT_HEAP_CHECKPOINT_FORMAT.to_owned()),
+            (
+                "next_source_ordinal".to_owned(),
+                next_source_ordinal.to_string(),
+            ),
+            (
+                "development_queries".to_owned(),
+                query_counts[0].to_string(),
+            ),
+            ("validation_queries".to_owned(), query_counts[1].to_string()),
+            (
+                "sealed_holdout_queries".to_owned(),
+                query_counts[2].to_string(),
+            ),
+        ]),
+    )
+}
+
+fn validate_v36_prefix_gt_heap_checkpoint(checkpoint: &V36PrefixGtHeapCheckpoint) -> Result<()> {
+    let expected_entries = v36_prefix_gt_heap_expected_rows(checkpoint.query_counts)?;
+    if checkpoint.next_source_ordinal < GT_NEIGHBORS as u64
+        || checkpoint.entries.len() != expected_entries
+    {
+        return Err(invalid("V36 prefix GT heap checkpoint differs"));
+    }
+    let mut entry_index = 0_usize;
+    for (role_ordinal, query_count) in checkpoint.query_counts.into_iter().enumerate() {
+        let role = v36_prefix_gt_role_from_ordinal(u8::try_from(role_ordinal).unwrap())?;
+        for query_ordinal in 0..query_count {
+            let mut feature_ids = BTreeSet::new();
+            let mut previous: Option<(f64, u64)> = None;
+            for rank in 0..GT_NEIGHBORS {
+                let entry = &checkpoint.entries[entry_index];
+                let ordered = previous.is_none_or(|(distance, feature_row_id)| {
+                    distance
+                        .total_cmp(&entry.squared_distance)
+                        .then(feature_row_id.cmp(&entry.feature_row_id))
+                        .is_le()
+                });
+                if entry.role != role
+                    || entry.query_ordinal != query_ordinal
+                    || usize::from(entry.rank) != rank
+                    || !entry.squared_distance.is_finite()
+                    || entry.squared_distance.is_sign_negative()
+                    || !feature_ids.insert(entry.feature_row_id)
+                    || !ordered
+                {
+                    return Err(invalid("V36 prefix GT heap entry differs"));
+                }
+                previous = Some((entry.squared_distance, entry.feature_row_id));
+                entry_index += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn v36_prefix_gt_heap_expected_rows(query_counts: [u32; 3]) -> Result<usize> {
+    let query_total = query_counts.into_iter().try_fold(0_u64, |sum, count| {
+        sum.checked_add(u64::from(count))
+            .ok_or_else(|| invalid("V36 prefix GT heap query count overflows"))
+    })?;
+    if query_counts.contains(&0) || query_total > GT_HEAP_CHECKPOINT_MAX_QUERIES {
+        return Err(invalid("V36 prefix GT heap query count differs"));
+    }
+    query_total
+        .checked_mul(GT_NEIGHBORS as u64)
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| invalid("V36 prefix GT heap row count overflows"))
+}
+
+fn validate_v36_prefix_gt_heap_batch_body(rows: u64, body_bytes: u64) -> Result<()> {
+    let validity = rows
+        .checked_add(7)
+        .map(|bits| bits / 8)
+        .ok_or_else(|| resource_limit("GT heap Arrow batch body bytes"))
+        .and_then(align_v36_prefix_arrow_buffer)?;
+    let values = [1_u64, 4, 2, 8, 8]
+        .into_iter()
+        .try_fold(0_u64, |total, width| {
+            rows.checked_mul(width)
+                .ok_or_else(|| resource_limit("GT heap Arrow batch body bytes"))
+                .and_then(align_v36_prefix_arrow_buffer)
+                .and_then(|bytes| {
+                    total
+                        .checked_add(bytes)
+                        .ok_or_else(|| resource_limit("GT heap Arrow batch body bytes"))
+                })
+        })?;
+    let expected = validity
+        .checked_mul(5)
+        .and_then(|bytes| bytes.checked_add(values))
+        .ok_or_else(|| resource_limit("GT heap Arrow batch body bytes"))?;
+    if body_bytes != expected {
+        return Err(invalid("V36 prefix GT heap batch body differs"));
+    }
+    Ok(())
+}
+
+/// Encode one strict all-query GT heap checkpoint as Arrow IPC v5.
+pub fn encode_v36_prefix_gt_heap_checkpoint(
+    checkpoint: &V36PrefixGtHeapCheckpoint,
+) -> Result<Vec<u8>> {
+    validate_v36_prefix_gt_heap_checkpoint(checkpoint)?;
+    let schema = Arc::new(v36_prefix_gt_heap_checkpoint_schema(
+        checkpoint.next_source_ordinal,
+        checkpoint.query_counts,
+    ));
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = ArrowFileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    for entries in checkpoint.entries.chunks(GT_HEAP_CHECKPOINT_BATCH_ROWS) {
+        writer.write(&RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt8Array::from(
+                    entries
+                        .iter()
+                        .map(|entry| v36_prefix_gt_role_ordinal(entry.role))
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt32Array::from(
+                    entries
+                        .iter()
+                        .map(|entry| entry.query_ordinal)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt16Array::from(
+                    entries.iter().map(|entry| entry.rank).collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt64Array::from(
+                    entries
+                        .iter()
+                        .map(|entry| entry.feature_row_id)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(Float64Array::from(
+                    entries
+                        .iter()
+                        .map(|entry| entry.squared_distance)
+                        .collect::<Vec<_>>(),
+                )),
+            ],
+        )?)?;
+    }
+    writer.finish()?;
+    drop(writer);
+    Ok(bytes)
+}
+
+/// Authenticate and decode one strict all-query GT heap checkpoint.
+pub fn decode_v36_prefix_gt_heap_checkpoint(
+    bytes: &[u8],
+    registered: &V36ArtifactIdentity,
+    expected_next_source_ordinal: u64,
+    expected_query_counts: [u32; 3],
+) -> Result<V36PrefixGtHeapCheckpoint> {
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    let blake3 = blake3::hash(bytes).to_hex().to_string();
+    let content_addressed = url::Url::parse(&registered.uri)
+        .ok()
+        .filter(|uri| uri.scheme() == "s3" && uri.host_str().is_some())
+        .and_then(|uri| uri.path().rsplit('/').next().map(str::to_owned))
+        .is_some_and(|name| name.starts_with(&format!("{sha256}-")));
+    if registered.role != "gt-heaps"
+        || registered.encoded_bytes != bytes.len() as u64
+        || registered.sha256 != sha256
+        || registered.blake3 != blake3
+        || !content_addressed
+    {
+        return Err(invalid("V36 prefix GT heap artifact differs"));
+    }
+    let expected_entries = v36_prefix_gt_heap_expected_rows(expected_query_counts)?;
+    let trailer: [u8; 10] = bytes
+        .get(bytes.len().saturating_sub(10)..)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| invalid("V36 prefix GT heap footer differs"))?;
+    let footer_len =
+        read_footer_length(trailer).map_err(|_| invalid("V36 prefix GT heap footer differs"))?;
+    if footer_len == 0 || footer_len > EXTERNAL_MAX_ARROW_FOOTER_BYTES {
+        return Err(resource_limit("GT heap Arrow footer bytes"));
+    }
+    let footer_start = bytes
+        .len()
+        .checked_sub(10)
+        .and_then(|end| end.checked_sub(footer_len))
+        .ok_or_else(|| invalid("V36 prefix GT heap footer differs"))?;
+    let footer = root_as_footer(&bytes[footer_start..bytes.len() - 10])
+        .map_err(|_| invalid("V36 prefix GT heap footer differs"))?;
+    if footer.version() != MetadataVersion::V5
+        || footer
+            .dictionaries()
+            .is_some_and(|dictionaries| !dictionaries.is_empty())
+    {
+        return Err(invalid("V36 prefix GT heap footer differs"));
+    }
+    let batches = footer
+        .recordBatches()
+        .ok_or_else(|| invalid("V36 prefix GT heap batches differ"))?;
+    let expected_batches = expected_entries.div_ceil(GT_HEAP_CHECKPOINT_BATCH_ROWS);
+    if batches.len() != expected_batches {
+        return Err(invalid("V36 prefix GT heap batches differ"));
+    }
+    let mut previous_end = 0_usize;
+    for (batch_index, block) in batches.iter().enumerate() {
+        let offset = usize::try_from(block.offset())
+            .map_err(|_| invalid("V36 prefix GT heap block differs"))?;
+        let metadata = usize::try_from(block.metaDataLength())
+            .map_err(|_| invalid("V36 prefix GT heap block differs"))?;
+        let body = usize::try_from(block.bodyLength())
+            .map_err(|_| invalid("V36 prefix GT heap block differs"))?;
+        let end = offset
+            .checked_add(metadata)
+            .and_then(|value| value.checked_add(body))
+            .ok_or_else(|| invalid("V36 prefix GT heap block differs"))?;
+        if !(4..=EXTERNAL_MAX_ARROW_FOOTER_BYTES).contains(&metadata)
+            || offset < previous_end
+            || end > footer_start
+        {
+            return Err(invalid("V36 prefix GT heap block differs"));
+        }
+        let message_bytes = &bytes[offset..offset + metadata];
+        let (declared, message_start) = if message_bytes[..4] == [0xff; 4] {
+            if message_bytes.len() < 8 {
+                return Err(invalid("V36 prefix GT heap message differs"));
+            }
+            (
+                u32::from_le_bytes(message_bytes[4..8].try_into().unwrap()) as usize,
+                8_usize,
+            )
+        } else {
+            (
+                u32::from_le_bytes(message_bytes[..4].try_into().unwrap()) as usize,
+                4_usize,
+            )
+        };
+        let message_end = message_start
+            .checked_add(declared)
+            .filter(|end| *end <= message_bytes.len())
+            .ok_or_else(|| invalid("V36 prefix GT heap message differs"))?;
+        let message = root_as_message(&message_bytes[message_start..message_end])
+            .map_err(|_| invalid("V36 prefix GT heap message differs"))?;
+        let batch = message
+            .header_as_record_batch()
+            .ok_or_else(|| invalid("V36 prefix GT heap message differs"))?;
+        let expected_rows = (expected_entries - batch_index * GT_HEAP_CHECKPOINT_BATCH_ROWS)
+            .min(GT_HEAP_CHECKPOINT_BATCH_ROWS);
+        if batch.compression().is_some()
+            || usize::try_from(batch.length()).ok() != Some(expected_rows)
+            || usize::try_from(message.bodyLength()).ok() != Some(body)
+        {
+            return Err(invalid("V36 prefix GT heap message differs"));
+        }
+        validate_v36_prefix_gt_heap_batch_body(expected_rows as u64, body as u64)?;
+        previous_end = end;
+    }
+    let expected_schema =
+        v36_prefix_gt_heap_checkpoint_schema(expected_next_source_ordinal, expected_query_counts);
+    let mut reader = ArrowFileReader::try_new(std::io::Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &expected_schema {
+        return Err(invalid("V36 prefix GT heap schema differs"));
+    }
+    let mut entries = Vec::with_capacity(expected_entries);
+    for batch in &mut reader {
+        let batch = batch?;
+        let expected_batch_rows = expected_entries
+            .checked_sub(entries.len())
+            .map(|remaining| remaining.min(GT_HEAP_CHECKPOINT_BATCH_ROWS))
+            .ok_or_else(|| invalid("V36 prefix GT heap row count differs"))?;
+        if batch.num_rows() != expected_batch_rows
+            || batch.num_columns() != 5
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V36 prefix GT heap batch differs"));
+        }
+        let roles = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(|| invalid("V36 prefix GT heap role column differs"))?;
+        let query_ordinals = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V36 prefix GT heap query column differs"))?;
+        let ranks = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .ok_or_else(|| invalid("V36 prefix GT heap rank column differs"))?;
+        let feature_ids = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix GT heap feature column differs"))?;
+        let distances = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| invalid("V36 prefix GT heap distance column differs"))?;
+        for row in 0..batch.num_rows() {
+            entries.push(V36PrefixGtHeapEntry {
+                feature_row_id: feature_ids.value(row),
+                query_ordinal: query_ordinals.value(row),
+                rank: ranks.value(row),
+                role: v36_prefix_gt_role_from_ordinal(roles.value(row))?,
+                squared_distance: distances.value(row),
+            });
+        }
+    }
+    if entries.len() != expected_entries {
+        return Err(invalid("V36 prefix GT heap row count differs"));
+    }
+    let checkpoint = V36PrefixGtHeapCheckpoint {
+        entries,
+        next_source_ordinal: expected_next_source_ordinal,
+        query_counts: expected_query_counts,
+    };
+    validate_v36_prefix_gt_heap_checkpoint(&checkpoint)?;
+    Ok(checkpoint)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// One quality-query Parquet input and exact-GT output role.
 pub struct V36PrefixGtParquetJob {

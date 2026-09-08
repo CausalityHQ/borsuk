@@ -19,20 +19,22 @@ use borsuk::{
     V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
     V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
     V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
-    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
-    V36PrefixMaterializedArtifacts, V36PrefixPopulationAuthority,
-    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
-    V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
-    V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
-    V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
-    V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
-    bind_v36_prefix_population_authority, canonical_v36_prefix_checkpoint_manifest_bytes,
-    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator,
+    V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob, V36PrefixIdentityRun,
+    V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixMaterializedArtifacts,
+    V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit,
+    V36PrefixPopulationSelection, V36PrefixQualityRole, V36PrefixRankedSourceObject,
+    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAssignmentContract,
+    V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority,
+    V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile, V36PrefixSourceObject,
+    assign_v36_prefix_roles_from_selected_file, bind_v36_prefix_population_authority,
+    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
+    canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_identity_run,
-    decode_v36_prefix_selected_ids, deduplicate_v36_prefix_row_identities,
+    canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_gt_heap_checkpoint,
+    decode_v36_prefix_identity_run, decode_v36_prefix_selected_ids,
+    deduplicate_v36_prefix_row_identities, encode_v36_prefix_gt_heap_checkpoint,
     encode_v36_prefix_identity_run, encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
@@ -2670,6 +2672,138 @@ fn v36_prefix_dataset_parquet_and_exact_truth_are_closed() {
             .then(pair[0].feature_row_id.cmp(&pair[1].feature_row_id))
             .is_le()
     }));
+}
+
+#[test]
+fn v36_prefix_dataset_gt_heap_checkpoint_arrow_is_exact_and_resumable() {
+    let roles = [
+        V36PrefixQualityRole::Development,
+        V36PrefixQualityRole::Validation,
+        V36PrefixQualityRole::SealedHoldout,
+    ];
+    let entries = roles
+        .into_iter()
+        .enumerate()
+        .flat_map(|(role_ordinal, role)| {
+            (0_u16..100).map(move |rank| V36PrefixGtHeapEntry {
+                feature_row_id: 10_000 + role_ordinal as u64 * 1_000 + u64::from(rank),
+                query_ordinal: 0,
+                rank,
+                role,
+                squared_distance: f64::from(rank) / 10.0,
+            })
+        })
+        .collect::<Vec<_>>();
+    let checkpoint = V36PrefixGtHeapCheckpoint {
+        entries,
+        next_source_ordinal: 128,
+        query_counts: [1, 1, 1],
+    };
+    let bytes = encode_v36_prefix_gt_heap_checkpoint(&checkpoint).unwrap();
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let identity = V36ArtifactIdentity {
+        role: "gt-heaps".into(),
+        uri: format!("s3://fixture/v36/checkpoints/objects/{sha256}-gt-heaps.arrow"),
+        encoded_bytes: bytes.len() as u64,
+        sha256,
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+    };
+    assert_eq!(
+        decode_v36_prefix_gt_heap_checkpoint(&bytes, &identity, 128, [1, 1, 1]).unwrap(),
+        checkpoint
+    );
+
+    let rewrite = |version, batch_rows: usize| {
+        let schema = ArrowFileReader::try_new(std::io::Cursor::new(&bytes), None)
+            .unwrap()
+            .schema();
+        let options = IpcWriteOptions::try_new(8, false, version).unwrap();
+        let mut rewritten = Vec::new();
+        let mut writer =
+            ArrowFileWriter::try_new_with_options(&mut rewritten, schema.as_ref(), options)
+                .unwrap();
+        for entries in checkpoint.entries.chunks(batch_rows) {
+            writer
+                .write(
+                    &RecordBatch::try_new(
+                        schema.clone(),
+                        vec![
+                            Arc::new(UInt8Array::from(
+                                entries
+                                    .iter()
+                                    .map(|entry| match entry.role {
+                                        V36PrefixQualityRole::Development => 0,
+                                        V36PrefixQualityRole::Validation => 1,
+                                        V36PrefixQualityRole::SealedHoldout => 2,
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )),
+                            Arc::new(UInt32Array::from(
+                                entries
+                                    .iter()
+                                    .map(|entry| entry.query_ordinal)
+                                    .collect::<Vec<_>>(),
+                            )),
+                            Arc::new(UInt16Array::from(
+                                entries.iter().map(|entry| entry.rank).collect::<Vec<_>>(),
+                            )),
+                            Arc::new(UInt64Array::from(
+                                entries
+                                    .iter()
+                                    .map(|entry| entry.feature_row_id)
+                                    .collect::<Vec<_>>(),
+                            )),
+                            Arc::new(Float64Array::from(
+                                entries
+                                    .iter()
+                                    .map(|entry| entry.squared_distance)
+                                    .collect::<Vec<_>>(),
+                            )),
+                        ],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        writer.finish().unwrap();
+        drop(writer);
+        rewritten
+    };
+    let identity_for = |rewritten: &[u8]| {
+        let sha256 = format!("{:x}", Sha256::digest(rewritten));
+        V36ArtifactIdentity {
+            role: "gt-heaps".into(),
+            uri: format!("s3://fixture/v36/checkpoints/objects/{sha256}-gt-heaps.arrow"),
+            encoded_bytes: rewritten.len() as u64,
+            sha256,
+            blake3: blake3::hash(rewritten).to_hex().to_string(),
+        }
+    };
+    let v4 = rewrite(MetadataVersion::V4, usize::MAX);
+    assert!(decode_v36_prefix_gt_heap_checkpoint(&v4, &identity_for(&v4), 128, [1, 1, 1]).is_err());
+    let repartitioned = rewrite(MetadataVersion::V5, 100);
+    assert!(
+        decode_v36_prefix_gt_heap_checkpoint(
+            &repartitioned,
+            &identity_for(&repartitioned),
+            128,
+            [1, 1, 1],
+        )
+        .is_err()
+    );
+
+    let mut reordered = checkpoint.clone();
+    reordered.entries.swap(0, 1);
+    assert!(encode_v36_prefix_gt_heap_checkpoint(&reordered).is_err());
+    let mut nonfinite = checkpoint.clone();
+    nonfinite.entries[0].squared_distance = f64::NAN;
+    assert!(encode_v36_prefix_gt_heap_checkpoint(&nonfinite).is_err());
+    let mut drifted_identity = identity.clone();
+    drifted_identity.encoded_bytes += 1;
+    assert!(
+        decode_v36_prefix_gt_heap_checkpoint(&bytes, &drifted_identity, 128, [1, 1, 1],).is_err()
+    );
+    assert!(decode_v36_prefix_gt_heap_checkpoint(&bytes, &identity, 256, [1, 1, 1]).is_err());
 }
 
 #[test]
