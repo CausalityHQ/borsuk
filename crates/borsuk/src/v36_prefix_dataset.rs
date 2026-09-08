@@ -1597,6 +1597,39 @@ pub struct V36PrefixExternalSelectionRequest<'a> {
     pub scratch_root: &'a Path,
 }
 
+/// Inputs for the atomic file-backed Population-to-Selected checkpoint transition.
+pub struct V36PrefixCheckpointSelectionRequest<'a> {
+    /// Frozen authority for the complete external selection.
+    pub authority: &'a V36PrefixExternalSelectionAuthority,
+    /// Optional authenticated predecessor selection used for cohort exclusion.
+    pub exclusion: Option<&'a V36PrefixSelectedIdsFile>,
+    /// Hard external-memory and scratch limits.
+    pub limits: &'a V36PrefixExternalSelectionLimits,
+    /// Final canonical selected-ID Arrow destination.
+    pub output: &'a Path,
+    /// S3 URI prefix used to form the content-addressed receipt.
+    pub output_uri_prefix: &'a str,
+    /// Complete authenticated population state being selected.
+    pub population: &'a V36PrefixFileBackedPopulationScan,
+    /// Existing directory beneath which attempt-owned scratch is created.
+    pub scratch_root: &'a Path,
+    /// Checkpoint writer whose installed population dependencies must match `population`.
+    pub writer: &'a mut V36PrefixPopulationCheckpointWriter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated selected file and checkpoint publication produced by one transition.
+pub struct V36PrefixCheckpointSelection {
+    /// Content-addressed selected-ID file ready for later role assignment.
+    pub selected: V36PrefixSelectedIdsFile,
+    /// Selection receipt produced by the bounded external merge.
+    pub receipt: V36PrefixSelectedFileReceipt,
+    /// Exact selection embedded in the checkpoint manifest.
+    pub selection: V36PrefixPopulationSelection,
+    /// Ready-file path for the atomic checkpoint publication.
+    pub checkpoint_ready: PathBuf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Exact authority for assigning one selected population to disjoint roles.
 pub struct V36PrefixRoleAssignmentContract {
@@ -5505,6 +5538,63 @@ pub fn externally_select_v36_prefix_population_rows(
             sha256: sha256.clone(),
             uri: format!("{prefix}/{sha256}-population-selected-identities.arrow"),
         },
+    })
+}
+
+/// Select one complete file-backed population and publish its exact Selected checkpoint.
+pub fn select_v36_prefix_checkpoint_population(
+    request: V36PrefixCheckpointSelectionRequest<'_>,
+) -> Result<V36PrefixCheckpointSelection> {
+    let V36PrefixCheckpointSelectionRequest {
+        authority,
+        exclusion,
+        limits,
+        output,
+        output_uri_prefix,
+        population,
+        scratch_root,
+        writer,
+    } = request;
+    let installed_runs = writer.identity_run_files()?;
+    if population.runs != installed_runs
+        || population.distinct_rows != authority.distinct_rows
+        || population
+            .physical_rows
+            .checked_sub(population.distinct_rows)
+            != Some(population.duplicate_rows)
+    {
+        return Err(invalid("V36 checkpoint population selection state differs"));
+    }
+    let receipt =
+        externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+            authority,
+            exclusion,
+            limits,
+            output,
+            output_uri_prefix,
+            runs: &installed_runs,
+            scratch_root,
+        })?;
+    let selection = V36PrefixPopulationSelection {
+        cutoff_feature_row_id: receipt.cutoff_feature_row_id,
+        cutoff_score_sha256: receipt.cutoff_score_sha256.clone(),
+        eligible_rows: receipt.contract.eligible_rows,
+        excluded_population_identity: receipt.contract.excluded_population_identity.clone(),
+        excluded_rows: receipt.contract.excluded_rows,
+        selected_ids: receipt.identity.clone(),
+        selected_rows: receipt.contract.selected_rows,
+    };
+    let checkpoint_ready = writer.commit_selected(&selection, output)?;
+    let selected = V36PrefixSelectedIdsFile {
+        contract: receipt.contract.clone(),
+        identity: receipt.identity.clone(),
+        path: output.to_owned(),
+    };
+    Ok(V36PrefixCheckpointSelection {
+        selected,
+        receipt,
+        selection,
+        checkpoint_ready,
     })
 }
 

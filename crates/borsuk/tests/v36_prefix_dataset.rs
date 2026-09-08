@@ -15,23 +15,23 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V36ArtifactIdentity, V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointContext,
     V36PrefixCheckpointDependencyFile, V36PrefixCheckpointPointer, V36PrefixCheckpointResumeState,
-    V36PrefixExternalIdentityRunRequest, V36PrefixExternalMaterializationRequest,
-    V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
-    V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
-    V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator,
-    V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob, V36PrefixIdentityRun,
-    V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixMaterializedArtifacts,
-    V36PrefixPhaseResumeRequest, V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter,
-    V36PrefixPopulationCommit, V36PrefixPopulationSelection, V36PrefixQualityRole,
-    V36PrefixQueryRow, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
-    V36PrefixResumeBinding, V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile,
-    V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority, V36PrefixSelectedIdsContract,
-    V36PrefixSelectedIdsFile, V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
-    bind_v36_prefix_external_selection_authority, bind_v36_prefix_population_authority,
-    bind_v36_prefix_role_assignment_contract, bind_v36_prefix_selected_ids_contract,
-    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
-    canonical_v36_prefix_freeze_authority_bytes,
+    V36PrefixCheckpointSelectionRequest, V36PrefixExternalIdentityRunRequest,
+    V36PrefixExternalMaterializationRequest, V36PrefixExternalSelectionAuthority,
+    V36PrefixExternalSelectionLimits, V36PrefixExternalSelectionRequest,
+    V36PrefixFileBackedResumeRequest, V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority,
+    V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixFreezeRequest,
+    V36PrefixGtAccumulator, V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob,
+    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow,
+    V36PrefixMaterializedArtifacts, V36PrefixPhaseResumeRequest, V36PrefixPopulationAuthority,
+    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
+    V36PrefixQualityRole, V36PrefixQueryRow, V36PrefixRankedSourceObject,
+    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAssignmentContract,
+    V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority,
+    V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile, V36PrefixSourceObject,
+    assign_v36_prefix_roles_from_selected_file, bind_v36_prefix_external_selection_authority,
+    bind_v36_prefix_population_authority, bind_v36_prefix_role_assignment_contract,
+    bind_v36_prefix_selected_ids_contract, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, decode_v36_prefix_gt_heap_checkpoint,
@@ -48,14 +48,15 @@ use borsuk::{
     scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
     scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
-    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
-    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    select_v36_prefix_checkpoint_population, select_v36_prefix_population_rows,
+    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
+    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
+    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -4020,17 +4021,19 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         selected_object_start: 0,
         selected_rows: 144,
     };
-    let selected_receipt =
-        externally_select_v36_prefix_population_rows(V36PrefixExternalSelectionRequest {
+    let selected_stage =
+        select_v36_prefix_checkpoint_population(V36PrefixCheckpointSelectionRequest {
             authority: &external_selection_authority(&selected_contract),
             exclusion: None,
             limits: &limits,
             output: &selected_path,
             output_uri_prefix: object_prefix,
-            runs: &writer.identity_run_files().unwrap(),
+            population: &restored,
             scratch_root: &selection_scratch,
+            writer: &mut writer,
         })
         .unwrap();
+    let selected_receipt = selected_stage.receipt;
     let selected = decode_v36_prefix_selected_ids(
         &fs::read(&selected_path).unwrap(),
         &selected_receipt.identity,
@@ -4053,16 +4056,8 @@ fn v36_prefix_dataset_reduced_file_backed_checkpoint_restore_select_materialize(
         selected_receipt.contract.excluded_rows,
         selected_contract.excluded_rows
     );
-    let selection = V36PrefixPopulationSelection {
-        cutoff_feature_row_id: selected_receipt.cutoff_feature_row_id,
-        cutoff_score_sha256: selected_receipt.cutoff_score_sha256.clone(),
-        eligible_rows: selected_receipt.contract.eligible_rows,
-        excluded_rows: selected_receipt.contract.excluded_rows,
-        excluded_population_identity: None,
-        selected_ids: selected_receipt.identity.clone(),
-        selected_rows: selected_contract.selected_rows,
-    };
-    let selected_ready = writer.commit_selected(&selection, &selected_path).unwrap();
+    let selection = selected_stage.selection;
+    let selected_ready = selected_stage.checkpoint_ready;
     let staged_selected = directory.path().join("staged-selected");
     stage_checkpoint_head(&resumed_outbox, &selected_ready, &staged_selected);
     let selected_head = load_v36_prefix_checkpoint_head(&staged_selected, &context).unwrap();
