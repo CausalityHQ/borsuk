@@ -212,6 +212,7 @@ mod v35_projection;
 mod v35_remote;
 mod v35_route;
 mod v36_funnel;
+mod v36_funnel_geometry;
 mod v36_prefix_dataset;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
@@ -348,6 +349,8 @@ pub use v36_funnel::{
     validate_v36_prefix_freeze_receipt, validate_v36_prefix_population_authority,
     validate_v36_prefix_registered_screen_authority, validate_v36_prefix_screen_manifest,
 };
+#[doc(hidden)]
+pub use v36_funnel_geometry::allocate_v36_hamilton_postings;
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
     V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointAction, V36PrefixCheckpointCompletion,
