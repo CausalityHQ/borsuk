@@ -9437,7 +9437,7 @@ where
         .ok()
         .filter(|rows| *rows <= expected_source_feature_ids.len())
         .ok_or_else(|| invalid("V36 prefix exact truth checkpoint boundary differs"))?;
-    if prior_rows % block_rows != 0 {
+    if prior_rows % block_rows != 0 && prior_rows != expected_source_feature_ids.len() {
         return Err(invalid(
             "V36 prefix exact truth checkpoint boundary differs",
         ));
@@ -9472,6 +9472,7 @@ where
     })?;
     if !pending.is_empty() {
         accumulator.absorb_with_pool(&pending, &pool)?;
+        consume_checkpoint(&accumulator.checkpoint()?)?;
     }
     let truth = accumulator.finish()?;
     let source_rows = u64::try_from(expected_source_feature_ids.len())

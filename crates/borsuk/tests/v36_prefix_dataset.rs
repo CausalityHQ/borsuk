@@ -2957,21 +2957,27 @@ fn v36_prefix_dataset_file_gt_runner_resumes_only_after_complete_all_query_block
         }]
     });
 
-    let mut full_boundaries = Vec::new();
+    let mut full_checkpoints = Vec::new();
     let (full_truth, full_stats) = run_v36_prefix_gt100_checkpointed(
         &source_path,
         &source_ids,
         queries.clone(),
         None,
-        101,
+        128,
         2,
         |checkpoint| {
-            full_boundaries.push(checkpoint.next_source_ordinal);
+            full_checkpoints.push(checkpoint.clone());
             Ok(())
         },
     )
     .unwrap();
-    assert_eq!(full_boundaries, [101, 202]);
+    assert_eq!(
+        full_checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.next_source_ordinal)
+            .collect::<Vec<_>>(),
+        [128, 202]
+    );
     assert_eq!(full_stats.source_scans, 1);
     assert_eq!(full_stats.source_rows, 202);
     assert_eq!(full_stats.quality_queries, 3);
@@ -2982,7 +2988,7 @@ fn v36_prefix_dataset_file_gt_runner_resumes_only_after_complete_all_query_block
         &source_ids,
         queries.clone(),
         None,
-        101,
+        128,
         2,
         |checkpoint| {
             interrupted_checkpoint = Some(checkpoint.clone());
@@ -2992,7 +2998,7 @@ fn v36_prefix_dataset_file_gt_runner_resumes_only_after_complete_all_query_block
     .unwrap_err();
     assert_eq!(error.code(), "invalid_storage");
     let checkpoint = interrupted_checkpoint.unwrap();
-    assert_eq!(checkpoint.next_source_ordinal, 101);
+    assert_eq!(checkpoint.next_source_ordinal, 128);
 
     let mut resumed_boundaries = Vec::new();
     let (resumed_truth, resumed_stats) = run_v36_prefix_gt100_checkpointed(
@@ -3000,7 +3006,7 @@ fn v36_prefix_dataset_file_gt_runner_resumes_only_after_complete_all_query_block
         &source_ids,
         queries,
         Some(checkpoint),
-        101,
+        128,
         2,
         |checkpoint| {
             resumed_boundaries.push(checkpoint.next_source_ordinal);
@@ -3011,6 +3017,30 @@ fn v36_prefix_dataset_file_gt_runner_resumes_only_after_complete_all_query_block
     assert_eq!(resumed_boundaries, [202]);
     assert_eq!(resumed_stats, full_stats);
     assert_eq!(resumed_truth, full_truth);
+
+    let mut eof_boundaries = Vec::new();
+    let (eof_truth, eof_stats) = run_v36_prefix_gt100_checkpointed(
+        &source_path,
+        &source_ids,
+        [0_u64, 1, 2].map(|ordinal| {
+            vec![borsuk::V36PrefixQueryRow {
+                query_ordinal: 0,
+                feature_row_id: 90_000 + ordinal,
+                embedding: vector(1, ordinal as f32 / 10.0),
+            }]
+        }),
+        full_checkpoints.last().cloned(),
+        128,
+        2,
+        |checkpoint| {
+            eof_boundaries.push(checkpoint.next_source_ordinal);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(eof_boundaries.is_empty());
+    assert_eq!(eof_stats, full_stats);
+    assert_eq!(eof_truth, full_truth);
 }
 
 #[test]
