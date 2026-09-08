@@ -4,8 +4,10 @@ use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryStop, admit_v36_geometry,
     allocate_v36_hamilton_postings, build_v36_srht192_control, project_v35_query_scalar,
-    project_v35_query_simd, select_v36_closure_owners, train_v36_centered_subspace,
+    project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
+    select_v36_closure_owners, train_v36_centered_subspace,
 };
+use sha2::{Digest, Sha256};
 
 struct TestProjectionSource {
     corpus_rows: Vec<Vec<f32>>,
@@ -59,6 +61,18 @@ fn centered_training_spec(
         maximum_block_rows: 3,
         energy_dimensions,
     }
+}
+
+fn centered_source_digest(domain: &[u8], rows: &[Vec<f32>]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    for (ordinal, row) in rows.iter().enumerate() {
+        digest.update(u64::try_from(ordinal).unwrap().to_le_bytes());
+        for value in row {
+            digest.update(value.to_bits().to_le_bytes());
+        }
+    }
+    format!("{:x}", digest.finalize())
 }
 
 #[test]
@@ -398,4 +412,197 @@ fn v36_centered_covariance_rejects_unbounded_workspace_before_scanning() {
     };
 
     assert!(train_v36_centered_subspace(&spec, &mut PanicSource).is_err());
+}
+
+#[test]
+fn v36_centered_projection_serving_is_fused_and_translation_invariant() {
+    // Break caught: the learned basis is served through an uncentered or
+    // separately ordered arithmetic path, changing routing under translation.
+    let rows = vec![
+        vec![2.0, 0.0, 0.0, 0.0],
+        vec![-2.0, 0.0, 0.0, 0.0],
+        vec![0.0, 1.0, 0.0, 0.0],
+        vec![0.0, -1.0, 0.0, 0.0],
+        vec![0.0, 0.0, 0.5, 0.0],
+        vec![0.0, 0.0, -0.5, 0.0],
+        vec![0.0, 0.0, 0.0, 0.25],
+        vec![0.0, 0.0, 0.0, -0.25],
+    ];
+    let translation = [100.0_f32, -50.0, 25.0, 7.0];
+    let shifted = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(translation)
+                .map(|(value, offset)| value + offset)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let train = |training_rows: Vec<Vec<f32>>| {
+        let digest = centered_source_digest(b"borsuk-v36-centered-corpus-v1\n", &training_rows);
+        let reservoir_digest =
+            centered_source_digest(b"borsuk-v36-centered-reservoir-v1\n", &training_rows);
+        train_v36_centered_subspace(
+            &V36CenteredProjectionTrainingSpec {
+                source_dimensions: 4,
+                retained_dimensions: 4,
+                corpus_rows: 8,
+                corpus_sha256: digest,
+                reservoir_rows: 8,
+                reservoir_sha256: reservoir_digest,
+                maximum_block_rows: 3,
+                energy_dimensions: vec![1, 2, 4],
+            },
+            &mut TestProjectionSource {
+                corpus_rows: training_rows.clone(),
+                reservoir_rows: training_rows,
+                block_rows: 3,
+                mutate_reservoir: false,
+            },
+        )
+        .unwrap()
+    };
+    let projection = train(rows);
+    let shifted_projection = train(shifted);
+    let row = [1.5_f32, -0.75, 0.375, -0.125];
+    let shifted_row: [f32; 4] = std::array::from_fn(|index| row[index] + translation[index]);
+
+    let scalar = project_v36_centered_row_scalar(&projection, &row).unwrap();
+    let simd = project_v36_centered_row_simd(&projection, &row).unwrap();
+    let shifted_simd = project_v36_centered_row_simd(&shifted_projection, &shifted_row).unwrap();
+
+    assert_eq!(scalar.coordinates(), simd.coordinates());
+    assert_eq!(simd.coordinates(), shifted_simd.coordinates());
+    assert!(
+        project_v36_centered_row_simd(&projection, &[0.0; 4])
+            .unwrap()
+            .coordinates()
+            .iter()
+            .all(|value| value.to_bits() == 0)
+    );
+    assert_ne!(simd.backend(), V35ProjectionBackend::ScalarControl);
+    assert_ne!(shifted_simd.backend(), V35ProjectionBackend::ScalarControl);
+    assert!(project_v36_centered_row_simd(&projection, &row[..3]).is_err());
+    assert!(project_v36_centered_row_scalar(&projection, &row[..3]).is_err());
+    let mut nonfinite = row;
+    nonfinite[2] = f32::NAN;
+    assert!(project_v36_centered_row_simd(&projection, &nonfinite).is_err());
+    assert!(project_v36_centered_row_scalar(&projection, &nonfinite).is_err());
+}
+
+#[test]
+fn v36_centered_projection_matches_dense_ordered_f64_reference() {
+    // Break caught: an identity-like four-output fixture cannot detect a
+    // transposed basis, a broken second SIMD block, or premature mean rounding.
+    let rows = (0..20)
+        .map(|row| {
+            (0..9)
+                .map(|dimension| {
+                    let mixed = (row * 13 + dimension * 7 + row * dimension * 3) % 37;
+                    (mixed as f32 - 18.0) / 7.0 + 0.1 * (dimension + 1) as f32
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let corpus_sha256 = centered_source_digest(b"borsuk-v36-centered-corpus-v1\n", &rows);
+    let reservoir_sha256 = centered_source_digest(b"borsuk-v36-centered-reservoir-v1\n", &rows);
+    let projection = train_v36_centered_subspace(
+        &V36CenteredProjectionTrainingSpec {
+            source_dimensions: 9,
+            retained_dimensions: 8,
+            corpus_rows: 20,
+            corpus_sha256,
+            reservoir_rows: 20,
+            reservoir_sha256,
+            maximum_block_rows: 6,
+            energy_dimensions: vec![1, 8, 9],
+        },
+        &mut TestProjectionSource {
+            corpus_rows: rows.clone(),
+            reservoir_rows: rows.clone(),
+            block_rows: 6,
+            mutate_reservoir: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(projection.retained_dimensions(), 8);
+    assert!(
+        projection
+            .mean()
+            .iter()
+            .any(|mean| f64::from(*mean as f32).to_bits() != mean.to_bits())
+    );
+
+    let source = [
+        2.125_f32,
+        -1.75,
+        0.0625,
+        8.5,
+        -3.25,
+        0.333_333_34,
+        4.0,
+        -0.875,
+        1.5,
+    ];
+    let mut expected = [0.0_f64; 8];
+    for (dimension, (value, mean)) in source.iter().zip(projection.mean()).enumerate() {
+        let centered = (f64::from(*value) - mean) as f32;
+        for (output, coordinate) in expected.iter_mut().enumerate() {
+            let coefficient = projection.basis_source_major()[dimension * 8 + output];
+            *coordinate = f64::from(coefficient).mul_add(f64::from(centered), *coordinate);
+        }
+    }
+    expected.iter_mut().for_each(|value| {
+        if *value == 0.0 {
+            *value = 0.0;
+        }
+    });
+
+    let scalar = project_v36_centered_row_scalar(&projection, &source).unwrap();
+    let simd = project_v36_centered_row_simd(&projection, &source).unwrap();
+    assert_eq!(
+        scalar
+            .coordinates()
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        simd.coordinates()
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(simd.backend(), V35ProjectionBackend::ScalarControl);
+
+    let odd_projection = train_v36_centered_subspace(
+        &V36CenteredProjectionTrainingSpec {
+            source_dimensions: 9,
+            retained_dimensions: 3,
+            corpus_rows: 20,
+            corpus_sha256: centered_source_digest(b"borsuk-v36-centered-corpus-v1\n", &rows),
+            reservoir_rows: 20,
+            reservoir_sha256: centered_source_digest(b"borsuk-v36-centered-reservoir-v1\n", &rows),
+            maximum_block_rows: 6,
+            energy_dimensions: vec![1, 3, 9],
+        },
+        &mut TestProjectionSource {
+            corpus_rows: rows.clone(),
+            reservoir_rows: rows,
+            block_rows: 6,
+            mutate_reservoir: false,
+        },
+    )
+    .unwrap();
+    assert!(project_v36_centered_row_scalar(&odd_projection, &source).is_ok());
+    assert!(project_v36_centered_row_simd(&odd_projection, &source).is_err());
 }

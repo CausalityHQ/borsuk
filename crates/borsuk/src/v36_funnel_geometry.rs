@@ -2,8 +2,9 @@
 
 use crate::{
     BorsukError, Result, V35Dimensions,
-    v35_projection::{V35Projection, build_v35_srht},
+    v35_projection::{V35Projection, V35ProjectionBackend, build_v35_srht},
 };
+use borsuk_fma::{FmaBackend, FusedProjection4};
 use nalgebra::{DMatrix, SymmetricEigen};
 use sha2::{Digest, Sha256};
 
@@ -70,6 +71,7 @@ pub struct V36CenteredProjectionTrainingSpec {
 /// Deterministic centered principal-subspace training result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct V36CenteredProjection {
+    retained_dimensions: usize,
     mean: Vec<f64>,
     mean_sha256: String,
     covariance_sha256: String,
@@ -81,6 +83,11 @@ pub struct V36CenteredProjection {
 }
 
 impl V36CenteredProjection {
+    /// Explicit retained routing width bound by the trained basis.
+    pub fn retained_dimensions(&self) -> usize {
+        self.retained_dimensions
+    }
+
     /// Corpus-only binary64 mean used to form centered covariance.
     pub fn mean(&self) -> &[f64] {
         &self.mean
@@ -120,6 +127,122 @@ impl V36CenteredProjection {
     pub fn reconstruction_relative_error(&self) -> f64 {
         self.reconstruction_relative_error
     }
+}
+
+/// One centered projection result with explicit arithmetic-backend evidence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V36CenteredProjectedRow {
+    coordinates: Vec<f64>,
+    backend: V35ProjectionBackend,
+}
+
+impl V36CenteredProjectedRow {
+    /// Centered routing coordinates in retained-eigenvector order.
+    pub fn coordinates(&self) -> &[f64] {
+        &self.coordinates
+    }
+
+    /// Arithmetic backend used for this projection.
+    pub fn backend(&self) -> V35ProjectionBackend {
+        self.backend
+    }
+}
+
+fn validate_v36_centered_source(
+    projection: &V36CenteredProjection,
+    source: &[f32],
+) -> Result<(Vec<f32>, usize)> {
+    let dimensions = projection.mean.len();
+    let routing = projection.retained_dimensions;
+    if dimensions == 0
+        || routing == 0
+        || routing > dimensions
+        || projection.eigenvalues.len() != dimensions
+        || source.len() != dimensions
+        || dimensions
+            .checked_mul(routing)
+            .is_none_or(|coefficients| projection.basis_source_major.len() != coefficients)
+        || source.iter().any(|value| !value.is_finite())
+        || projection.mean.iter().any(|value| !value.is_finite())
+        || projection
+            .basis_source_major
+            .iter()
+            .any(|value| !value.is_finite())
+    {
+        return Err(invalid("V36 centered projection source differs"));
+    }
+    let centered = source
+        .iter()
+        .zip(&projection.mean)
+        .map(|(value, mean)| {
+            let centered = (f64::from(*value) - mean) as f32;
+            centered
+                .is_finite()
+                .then_some(if centered == 0.0 { 0.0 } else { centered })
+                .ok_or_else(|| invalid("V36 centered projection source is nonfinite"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((centered, routing))
+}
+
+/// Project one row with the ordered scalar-fused authority.
+pub fn project_v36_centered_row_scalar(
+    projection: &V36CenteredProjection,
+    source: &[f32],
+) -> Result<V36CenteredProjectedRow> {
+    let (centered, routing) = validate_v36_centered_source(projection, source)?;
+    let mut coordinates = vec![0.0_f64; routing];
+    for (dimension, value) in centered.iter().enumerate() {
+        let start = dimension * routing;
+        for (coordinate, coefficient) in coordinates
+            .iter_mut()
+            .zip(&projection.basis_source_major[start..start + routing])
+        {
+            *coordinate = f64::from(*coefficient).mul_add(f64::from(*value), *coordinate);
+        }
+    }
+    coordinates.iter_mut().for_each(|value| {
+        if *value == 0.0 {
+            *value = 0.0;
+        }
+    });
+    Ok(V36CenteredProjectedRow {
+        coordinates,
+        backend: V35ProjectionBackend::ScalarControl,
+    })
+}
+
+/// Project one row with the registered four-lane fused serving kernel.
+pub fn project_v36_centered_row_simd(
+    projection: &V36CenteredProjection,
+    source: &[f32],
+) -> Result<V36CenteredProjectedRow> {
+    let (centered, routing) = validate_v36_centered_source(projection, source)?;
+    if !routing.is_multiple_of(4) {
+        return Err(invalid("V36 centered projection SIMD width differs"));
+    }
+    let kernel =
+        FusedProjection4::detect().map_err(|_| invalid("V36 fused SIMD backend is unavailable"))?;
+    let mut coordinates = vec![0.0_f64; routing];
+    for output in (0..routing).step_by(4) {
+        let block = kernel
+            .project_source_major(&projection.basis_source_major, &centered, routing, output)
+            .ok_or_else(|| invalid("V36 fused SIMD projection layout differs"))?;
+        coordinates[output..output + 4].copy_from_slice(&block);
+    }
+    coordinates.iter_mut().for_each(|value| {
+        if *value == 0.0 {
+            *value = 0.0;
+        }
+    });
+    let backend = match kernel.backend() {
+        FmaBackend::Aarch64NeonFma => V35ProjectionBackend::Aarch64NeonFma,
+        FmaBackend::X86AvxFma => V35ProjectionBackend::X86AvxFma,
+    };
+    Ok(V36CenteredProjectedRow {
+        coordinates,
+        backend,
+    })
 }
 
 fn invalid(message: &str) -> BorsukError {
@@ -560,6 +683,7 @@ pub fn train_v36_centered_subspace(
         })
         .collect::<Vec<_>>();
     Ok(V36CenteredProjection {
+        retained_dimensions: spec.retained_dimensions,
         mean: analysis.mean,
         mean_sha256,
         covariance_sha256,
