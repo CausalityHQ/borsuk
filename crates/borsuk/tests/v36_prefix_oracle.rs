@@ -1,7 +1,9 @@
 //! Fast-fail scalar contracts for the V36 sequential prefix oracle.
 
 use borsuk::{
-    V36GeometryStop, admit_v36_geometry, allocate_v36_hamilton_postings, select_v36_closure_owners,
+    V35ProjectionBackend, V36GeometryStop, admit_v36_geometry, allocate_v36_hamilton_postings,
+    build_v36_srht192_control, project_v35_query_scalar, project_v35_query_simd,
+    select_v36_closure_owners,
 };
 
 #[test]
@@ -80,4 +82,24 @@ fn v36_geometry_admission_rejects_threshold_overflow() {
     // Break caught: saturating threshold arithmetic silently turns malformed
     // oversized authority into an effectively unbounded admission gate.
     assert!(admit_v36_geometry(&[1], &[1], u64::MAX).is_err());
+}
+
+#[test]
+fn v36_srht192_control_reuses_the_fused_generic_projection() {
+    // Break caught: V36 silently changes dimensions/seed or grows a separate
+    // scalar projection whose coordinates drift from the fused query path.
+    let projection = build_v36_srht192_control().unwrap();
+    assert_eq!(projection.dimensions().source, 768);
+    assert_eq!(projection.dimensions().routing, 192);
+    assert_eq!(projection.seed(), 36);
+    assert_eq!(projection.algorithm(), "srht-prefix-orthonormalized-v1");
+
+    let query = (0..768)
+        .map(|dimension| ((dimension % 31) as f32 - 15.0) / 32.0)
+        .collect::<Vec<_>>();
+    let scalar = project_v35_query_scalar(&projection, &query).unwrap();
+    let simd = project_v35_query_simd(&projection, &query).unwrap();
+    assert_eq!(scalar.coordinates(), simd.coordinates());
+    assert_eq!(scalar.complement_energy(), simd.complement_energy());
+    assert_ne!(simd.backend(), V35ProjectionBackend::ScalarControl);
 }

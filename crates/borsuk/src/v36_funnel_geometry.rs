@@ -1,9 +1,24 @@
 //! Deterministic posting geometry for the V36 qualification funnel.
 
-use crate::{BorsukError, Result};
+use crate::{
+    BorsukError, Result, V35Dimensions,
+    v35_projection::{V35Projection, build_v35_srht},
+};
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
+}
+
+/// Build the registered 768-to-192 SRHT control with seed 36 by reusing the
+/// generic authenticated projection implementation.
+pub fn build_v36_srht192_control() -> Result<V35Projection> {
+    build_v35_srht(
+        V35Dimensions {
+            source: 768,
+            routing: 192,
+        },
+        36,
+    )
 }
 
 /// Allocate a fixed posting budget across non-empty runs with a one-posting

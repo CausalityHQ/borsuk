@@ -352,7 +352,7 @@ pub use v36_funnel::{
 #[doc(hidden)]
 pub use v36_funnel_geometry::{
     V36GeometryAdmission, V36GeometryStop, admit_v36_geometry, allocate_v36_hamilton_postings,
-    select_v36_closure_owners,
+    build_v36_srht192_control, select_v36_closure_owners,
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
