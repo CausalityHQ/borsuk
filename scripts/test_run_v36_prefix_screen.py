@@ -805,6 +805,17 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertIn('sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py"', script)
         self.assertIn('put-object --generate-cli-skeleton input', script)
         self.assertIn('if [[ "$sidecar_status" != 0 ]]; then', script)
+        self.assertIn('> "$root/attempt.log" 2>&1', script)
+        self.assertIn('>> "$root/attempt.log" 2>&1 &', script)
+        diagnostic = (
+            "put-object --bucket fixture --key "
+            "v36/prefix-results/attempt-0000/FAILURE_DIAGNOSTIC.log "
+            '--body "$root/failure.log" --if-none-match \'*\''
+        )
+        self.assertIn(diagnostic, script)
+        self.assertLess(
+            script.index(diagnostic), script.index('python3 "$root/write-terminal.py"')
+        )
         self.assertNotIn("CHECKPOINT.json", script)
 
     def test_v36_prefix_screen_uses_authenticated_cli_before_conditional_storage(

@@ -1716,7 +1716,7 @@ instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169
 set +e
 python3 "$root/sidecar-source/scripts/run_v36_prefix_screen.py" \
   --materialize-resume --execution-authority "$root/execution-authority.json" \
-  --resume-directory "$root/resume"
+  --resume-directory "$root/resume" > "$root/attempt.log" 2>&1
 status=$?
 if [[ "$status" = 0 ]]; then
   first_generation=$(cat "$root/resume/first-generation")
@@ -1736,12 +1736,12 @@ timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
   --authority "$root/authority.json" --source-registry "$root/source-registry.json" \
   --source-archive "$root/source.tar" --output "$root/output" \
   --scratch "$root/scratch" --checkpoint-outbox "$root/checkpoint-outbox" \
-  {resume_argument} --producer-instance-id "$instance_id" &
+  {resume_argument} --producer-instance-id "$instance_id" >> "$root/attempt.log" 2>&1 &
 science_pid=$!
 python3 "$root/sidecar-source/scripts/run_v36_prefix_screen.py" \
   --publish-checkpoints --checkpoint-outbox "$root/checkpoint-outbox" \
   --producer-pid "$science_pid" --first-generation "$first_generation" \
-  --initial-phase "$initial_phase" &
+  --initial-phase "$initial_phase" >> "$root/attempt.log" 2>&1 &
 sidecar_pid=$!
 status=
 while kill -0 "$science_pid" 2>/dev/null; do
@@ -1778,6 +1778,13 @@ elif [[ "$status" = 124 || "$status" = 137 || "$status" = 143 ]]; then
 else
   terminal_status=infrastructure
   terminal_marker=ATTEMPT_FAILED.json
+fi
+if [[ "$status" != 0 ]]; then
+  printf 'exit_status=%s\n' "$status" > "$root/failure.log"
+  if [[ -f "$root/attempt.log" ]]; then
+    tail -c 65000 "$root/attempt.log" >> "$root/failure.log"
+  fi
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}FAILURE_DIAGNOSTIC.log --body "$root/failure.log" --if-none-match '*' || true
 fi
 python3 "$root/write-terminal.py" \
   "$root/execution-authority.json" "$root/output/freeze-receipt.json" \
