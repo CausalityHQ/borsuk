@@ -12,16 +12,19 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
-    V36GeometryStop, V36PostingGaussianSummary, V36ResidualAssignmentBlockVisitor,
-    V36ResidualAssignmentSource, V36ResidualPq4Codebook, V36ResidualPq4Width, V36UniqueLiveTopK,
-    admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
-    build_v36_srht192_control, decode_v36_centered_projection_arrow,
-    encode_v36_centered_projection_arrow, encode_v36_residual_pq4_record, encode_v36_sign24_record,
-    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
-    project_v36_centered_row_simd, score_v36_posting_centroid, score_v36_posting_gaussian,
-    score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
-    select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
-    train_v36_posting_gaussian, train_v36_posting_prototype_six, train_v36_residual_pq4,
+    V36CoarseFragmentArm, V36CoarseFragmentArtifact, V36CoarseFragmentContext,
+    V36CoarseFragmentRows, V36GeometryStop, V36PostingGaussianSummary,
+    V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource, V36ResidualPq4Codebook,
+    V36ResidualPq4Width, V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings,
+    assign_v36_postings, audit_v36_coarse_fragment_sha256, build_v36_srht192_control,
+    decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
+    encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
+    encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
+    project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
+    score_v36_posting_centroid, score_v36_posting_gaussian, score_v36_posting_prototype_six,
+    score_v36_residual_pq4_record, score_v36_sign24_record, select_v36_closure_owners,
+    train_v36_centered_subspace, train_v36_posting_centroids, train_v36_posting_gaussian,
+    train_v36_posting_prototype_six, train_v36_residual_pq4,
 };
 use sha2::{Digest, Sha256};
 
@@ -533,6 +536,276 @@ fn v36_residual_pq4_records_are_owner_relative_row_major_and_exact() {
     let mut invalid = vec![0.0_f32; 3_072];
     invalid[3] = -0.0;
     assert!(V36ResidualPq4Codebook::try_new(V36ResidualPq4Width::Code48, invalid).is_err());
+}
+
+fn v36_coarse_context(
+    arm: V36CoarseFragmentArm,
+    posting_ordinal: u32,
+    codebook_sha256: Option<String>,
+) -> V36CoarseFragmentContext {
+    V36CoarseFragmentContext {
+        arm,
+        codebook_sha256,
+        fragment_ordinal: 0,
+        generation_manifest_sha256: "11".repeat(32),
+        owner_centroids_sha256: "22".repeat(32),
+        posting_ordinal,
+        projection_sha256: "33".repeat(32),
+        uri: format!("s3://frozen-v36/coarse/{posting_ordinal}/0.arrow"),
+    }
+}
+
+#[test]
+fn v36_coarse_fragment_arrow_roundtrips_strict_serving_arms_and_authority() {
+    // Break caught: an Arrow fragment loses sign norm/unsigned identities,
+    // accepts another generation, or admits projected-f32 as a serving arm.
+    let owner = vec![0.0_f32; 192];
+    let mut first_row = vec![1.0_f32; 192];
+    first_row[1] = -1.0;
+    let second_row = vec![2.0_f32; 192];
+    let first_identity =
+        V36CoarseAssignmentIdentity::new(0, 10, u64::try_from(i64::MAX).unwrap() + 7, 4);
+    let second_identity =
+        V36CoarseAssignmentIdentity::new(1, 90, u64::try_from(i64::MAX).unwrap() + 9, 4);
+    let first_record = encode_v36_sign24_record(&first_identity, &first_row, &owner).unwrap();
+    let second_record = encode_v36_sign24_record(&second_identity, &second_row, &owner).unwrap();
+    let second_norm = second_record.residual_norm();
+    let sign_rows = V36CoarseFragmentRows::Sign24(vec![first_record, second_record]);
+    let context = v36_coarse_context(V36CoarseFragmentArm::Sign24, 4, None);
+    let (bytes, artifact) = encode_v36_coarse_fragment_arrow(&context, &sign_rows).unwrap();
+    assert!(bytes.len() <= 1_048_576);
+    assert_eq!(artifact.first_dense_ordinal, 10);
+    assert_eq!(artifact.last_dense_ordinal, 90);
+    assert_eq!(artifact.row_count, 2);
+    assert_eq!(artifact.encoded_bytes, bytes.len() as u64);
+    audit_v36_coarse_fragment_sha256(&bytes, &artifact).unwrap();
+    assert_eq!(
+        decode_v36_coarse_fragment_arrow(&bytes, &artifact).unwrap(),
+        sign_rows
+    );
+
+    let mut corrupted = bytes.clone();
+    let corrupted_index = corrupted.len() / 2;
+    corrupted[corrupted_index] ^= 1;
+    assert!(audit_v36_coarse_fragment_sha256(&corrupted, &artifact).is_err());
+    assert!(decode_v36_coarse_fragment_arrow(&corrupted, &artifact).is_err());
+    let mut changed_artifact = artifact.clone();
+    changed_artifact.context.generation_manifest_sha256 = "44".repeat(32);
+    assert!(decode_v36_coarse_fragment_arrow(&bytes, &changed_artifact).is_err());
+
+    let foreign_context = V36CoarseFragmentContext {
+        generation_manifest_sha256: "55".repeat(32),
+        ..context
+    };
+    let (foreign_bytes, _) =
+        encode_v36_coarse_fragment_arrow(&foreign_context, &sign_rows).unwrap();
+    assert!(decode_v36_coarse_fragment_arrow(&foreign_bytes, &artifact).is_err());
+
+    let mut reader = FileReader::try_new(Cursor::new(bytes.as_slice()), None).unwrap();
+    let schema = reader.schema();
+    let batch = reader.next().unwrap().unwrap();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)
+        .unwrap()
+        .try_with_compression(Some(arrow_ipc::CompressionType::ZSTD))
+        .unwrap();
+    let mut compressed = Vec::new();
+    let mut writer =
+        FileWriter::try_new_with_options(&mut compressed, schema.as_ref(), options).unwrap();
+    writer.write(&batch).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    let mut compressed_artifact = artifact.clone();
+    compressed_artifact.encoded_bytes = compressed.len() as u64;
+    compressed_artifact.sha256 = format!("{:x}", Sha256::digest(&compressed));
+    compressed_artifact.blake3 = blake3::hash(&compressed).to_hex().to_string();
+    compressed_artifact.decoded_capacity_bytes = artifact
+        .decoded_capacity_bytes
+        .checked_add(compressed.len() as u64)
+        .unwrap()
+        .checked_sub(bytes.len() as u64)
+        .unwrap();
+    assert!(decode_v36_coarse_fragment_arrow(&compressed, &compressed_artifact).is_err());
+
+    let foreign_schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("wrong_dense_ordinal", DataType::UInt64, false),
+            Field::new("source_feature_id", DataType::UInt64, false),
+            Field::new("code", DataType::FixedSizeBinary(24), false),
+            Field::new("residual_norm", DataType::Float32, false),
+        ],
+        schema.metadata().clone(),
+    ));
+    let foreign_batch =
+        RecordBatch::try_new(foreign_schema.clone(), batch.columns().to_vec()).unwrap();
+    let mut foreign_schema_bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(
+        &mut foreign_schema_bytes,
+        foreign_schema.as_ref(),
+        IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
+    )
+    .unwrap();
+    writer.write(&foreign_batch).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    let mut foreign_schema_artifact = artifact.clone();
+    foreign_schema_artifact.encoded_bytes = foreign_schema_bytes.len() as u64;
+    foreign_schema_artifact.sha256 = format!("{:x}", Sha256::digest(&foreign_schema_bytes));
+    foreign_schema_artifact.blake3 = blake3::hash(&foreign_schema_bytes).to_hex().to_string();
+    foreign_schema_artifact.decoded_capacity_bytes = artifact
+        .decoded_capacity_bytes
+        .checked_add(foreign_schema_bytes.len() as u64)
+        .unwrap()
+        .checked_sub(bytes.len() as u64)
+        .unwrap();
+    assert!(
+        decode_v36_coarse_fragment_arrow(&foreign_schema_bytes, &foreign_schema_artifact).is_err()
+    );
+
+    for invalid_norm in [-0.0_f32, f32::NAN, 0.0] {
+        let invalid_norms = Arc::new(Float32Array::from_iter_values([invalid_norm, second_norm]));
+        let invalid_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                batch.column(0).clone(),
+                batch.column(1).clone(),
+                batch.column(2).clone(),
+                invalid_norms,
+            ],
+        )
+        .unwrap();
+        let mut invalid_bytes = Vec::new();
+        let mut writer = FileWriter::try_new_with_options(
+            &mut invalid_bytes,
+            schema.as_ref(),
+            IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
+        )
+        .unwrap();
+        writer.write(&invalid_batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        let mut invalid_artifact = artifact.clone();
+        invalid_artifact.encoded_bytes = invalid_bytes.len() as u64;
+        invalid_artifact.sha256 = format!("{:x}", Sha256::digest(&invalid_bytes));
+        invalid_artifact.blake3 = blake3::hash(&invalid_bytes).to_hex().to_string();
+        invalid_artifact.decoded_capacity_bytes = artifact
+            .decoded_capacity_bytes
+            .checked_add(invalid_bytes.len() as u64)
+            .unwrap()
+            .checked_sub(bytes.len() as u64)
+            .unwrap();
+        assert!(decode_v36_coarse_fragment_arrow(&invalid_bytes, &invalid_artifact).is_err());
+    }
+}
+
+#[test]
+fn v36_coarse_fragment_arrow_rejects_order_duplicates_and_width_drift() {
+    // Break caught: owner-local rows are unordered/duplicated, PQ widths are
+    // mislabeled, or artifact identity fields are accepted without binding.
+    let owner = vec![0.0_f32; 192];
+    for width in [V36ResidualPq4Width::Code32, V36ResidualPq4Width::Code48] {
+        let arm = match width {
+            V36ResidualPq4Width::Code32 => V36CoarseFragmentArm::ResidualPq4Code32,
+            V36ResidualPq4Width::Code48 => V36CoarseFragmentArm::ResidualPq4Code48,
+        };
+        let codebook = V36ResidualPq4Codebook::try_new(width, vec![0.0; 3_072]).unwrap();
+        let identities = [
+            V36CoarseAssignmentIdentity::new(0, 7, 70, 3),
+            V36CoarseAssignmentIdentity::new(1, 11, 110, 3),
+        ];
+        let rows = V36CoarseFragmentRows::ResidualPq4(vec![
+            encode_v36_residual_pq4_record(&identities[0], &vec![1.0; 192], &owner, &codebook)
+                .unwrap(),
+            encode_v36_residual_pq4_record(&identities[1], &vec![2.0; 192], &owner, &codebook)
+                .unwrap(),
+        ]);
+        let context = v36_coarse_context(arm, 3, Some("66".repeat(32)));
+        let (bytes, artifact) = encode_v36_coarse_fragment_arrow(&context, &rows).unwrap();
+        assert_eq!(
+            decode_v36_coarse_fragment_arrow(&bytes, &artifact).unwrap(),
+            rows
+        );
+    }
+
+    let identity = V36CoarseAssignmentIdentity::new(0, 5, 50, 2);
+    let record = encode_v36_sign24_record(&identity, &vec![1.0; 192], &owner).unwrap();
+    let context = v36_coarse_context(V36CoarseFragmentArm::Sign24, 2, None);
+    let duplicates = V36CoarseFragmentRows::Sign24(vec![record.clone(), record.clone()]);
+    assert!(encode_v36_coarse_fragment_arrow(&context, &duplicates).is_err());
+
+    let reversed = V36CoarseFragmentRows::Sign24(vec![
+        encode_v36_sign24_record(
+            &V36CoarseAssignmentIdentity::new(0, 90, 900, 2),
+            &vec![1.0; 192],
+            &owner,
+        )
+        .unwrap(),
+        encode_v36_sign24_record(
+            &V36CoarseAssignmentIdentity::new(1, 10, 100, 2),
+            &vec![2.0; 192],
+            &owner,
+        )
+        .unwrap(),
+    ]);
+    assert!(encode_v36_coarse_fragment_arrow(&context, &reversed).is_err());
+
+    let code32 =
+        V36ResidualPq4Codebook::try_new(V36ResidualPq4Width::Code32, vec![0.0; 3_072]).unwrap();
+    let width_drift = V36CoarseFragmentRows::ResidualPq4(vec![
+        encode_v36_residual_pq4_record(
+            &V36CoarseAssignmentIdentity::new(0, 5, 50, 2),
+            &vec![1.0; 192],
+            &owner,
+            &code32,
+        )
+        .unwrap(),
+    ]);
+    let invalid_context = v36_coarse_context(
+        V36CoarseFragmentArm::ResidualPq4Code48,
+        2,
+        Some("77".repeat(32)),
+    );
+    assert!(encode_v36_coarse_fragment_arrow(&invalid_context, &width_drift).is_err());
+    let _type_lock: Option<V36CoarseFragmentArtifact> = None;
+}
+
+#[test]
+fn v36_coarse_fragment_arrow_accounts_near_ceiling_decode_workspace() {
+    // Break caught: admission counts only compact wire rows while the decoder
+    // simultaneously retains Arrow buffers, expanded Rust records, identity
+    // scratch, and uniqueness state.
+    const ROWS: usize = 18_000;
+    let owner = vec![0.0_f32; 192];
+    let projected = vec![1.0_f32; 192];
+    let codebook =
+        V36ResidualPq4Codebook::try_new(V36ResidualPq4Width::Code32, vec![0.0; 3_072]).unwrap();
+    let records = (0..ROWS)
+        .map(|ordinal| {
+            let ordinal = u64::try_from(ordinal).unwrap();
+            encode_v36_residual_pq4_record(
+                &V36CoarseAssignmentIdentity::new(ordinal, ordinal + 1, u64::MAX - ordinal, 8),
+                &projected,
+                &owner,
+                &codebook,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let rows = V36CoarseFragmentRows::ResidualPq4(records);
+    let context = v36_coarse_context(
+        V36CoarseFragmentArm::ResidualPq4Code32,
+        8,
+        Some("88".repeat(32)),
+    );
+    let (bytes, artifact) = encode_v36_coarse_fragment_arrow(&context, &rows).unwrap();
+    let per_row = 48 + std::mem::size_of::<borsuk::V36ResidualPq4Record>() + 16 + 96;
+    let minimum = bytes.len() + ROWS * per_row + 64 * 1_024;
+    assert_eq!(artifact.row_count, ROWS as u32);
+    assert_eq!(artifact.decoded_capacity_bytes, minimum as u64);
+    assert!(artifact.decoded_capacity_bytes > artifact.encoded_bytes * 4);
+    assert_eq!(
+        decode_v36_coarse_fragment_arrow(&bytes, &artifact).unwrap(),
+        rows
+    );
 }
 
 #[test]

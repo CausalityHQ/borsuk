@@ -3,12 +3,28 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeSet, HashMap},
+    io::Cursor,
+    sync::Arc,
 };
+
+use arrow_array::{Array, FixedSizeBinaryArray, Float32Array, RecordBatch, UInt64Array};
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
 
 const PROJECTED_DIMENSIONS: usize = 192;
 const PQ4_CODEWORDS: usize = 16;
+const COARSE_FRAGMENT_LIMIT_BYTES: usize = 1_024 * 1_024;
+const COARSE_FRAGMENT_DECODE_LIMIT_BYTES: u64 = 8 * 1_024 * 1_024;
+const COARSE_FRAGMENT_MANIFEST_KEY: &str = "borsuk.v36.coarse_fragment_manifest";
+const COARSE_FRAGMENT_FORMAT: &str = "borsuk-v36-coarse-fragment-v1";
 
 fn invalid(message: &'static str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -280,6 +296,11 @@ impl V36ResidualPq4Record {
         &self.code[..self.width.code_bytes()]
     }
 
+    /// Frozen residual-code width.
+    pub const fn width(&self) -> V36ResidualPq4Width {
+        self.width
+    }
+
     /// Final primary-plane physical identity.
     pub const fn dense_ordinal(&self) -> u64 {
         self.dense_ordinal
@@ -389,6 +410,724 @@ pub fn score_v36_residual_pq4_record(
         );
     }
     Ok(distance)
+}
+
+/// Serving coarse fragment arm. Projected-f32 is deliberately absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum V36CoarseFragmentArm {
+    /// Sign control with an explicit residual norm.
+    Sign24,
+    /// Residual PQ with 32 persisted code bytes.
+    ResidualPq4Code32,
+    /// Residual PQ with 48 persisted code bytes.
+    ResidualPq4Code48,
+}
+
+impl V36CoarseFragmentArm {
+    fn code_width(self) -> i32 {
+        match self {
+            Self::Sign24 => 24,
+            Self::ResidualPq4Code32 => 32,
+            Self::ResidualPq4Code48 => 48,
+        }
+    }
+
+    fn pq_width(self) -> Option<V36ResidualPq4Width> {
+        match self {
+            Self::Sign24 => None,
+            Self::ResidualPq4Code32 => Some(V36ResidualPq4Width::Code32),
+            Self::ResidualPq4Code48 => Some(V36ResidualPq4Width::Code48),
+        }
+    }
+}
+
+/// Immutable generation and model bindings for one coarse fragment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36CoarseFragmentContext {
+    /// Serving arm.
+    pub arm: V36CoarseFragmentArm,
+    /// PQ codebook identity; absent only for sign24.
+    pub codebook_sha256: Option<String>,
+    /// Consecutive fragment ordinal inside the owner posting.
+    pub fragment_ordinal: u32,
+    /// Active generation manifest identity.
+    pub generation_manifest_sha256: String,
+    /// Owner centroid set identity.
+    pub owner_centroids_sha256: String,
+    /// Owner posting ordinal.
+    pub posting_ordinal: u32,
+    /// Centered projection identity.
+    pub projection_sha256: String,
+    /// Immutable object URI.
+    pub uri: String,
+}
+
+/// Typed rows held by one serving coarse fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub enum V36CoarseFragmentRows {
+    /// Sign records with explicit norm values.
+    Sign24(Vec<V36Sign24Record>),
+    /// Residual PQ records whose widths must match the fragment arm.
+    ResidualPq4(Vec<V36ResidualPq4Record>),
+}
+
+/// Registered complete-object identity and decoded bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36CoarseFragmentArtifact {
+    /// Complete-object BLAKE3.
+    pub blake3: String,
+    /// Generation/model/owner bindings embedded in the Arrow schema.
+    pub context: V36CoarseFragmentContext,
+    /// Conservative peak decode workspace derived from object length, row
+    /// count, arm, retained records, and validation scratch.
+    pub decoded_capacity_bytes: u64,
+    /// Complete encoded object length.
+    pub encoded_bytes: u64,
+    /// First sparse primary-plane dense ordinal.
+    pub first_dense_ordinal: u64,
+    /// Last sparse primary-plane dense ordinal.
+    pub last_dense_ordinal: u64,
+    /// Complete fragment row count.
+    pub row_count: u32,
+    /// Complete-object SHA-256.
+    pub sha256: String,
+}
+
+fn validate_v36_coarse_artifact(artifact: &V36CoarseFragmentArtifact) -> Result<()> {
+    validate_v36_coarse_context(&artifact.context)?;
+    if artifact.row_count == 0
+        || artifact.first_dense_ordinal > artifact.last_dense_ordinal
+        || artifact.encoded_bytes == 0
+        || artifact.encoded_bytes > COARSE_FRAGMENT_LIMIT_BYTES as u64
+        || !valid_sha256(&artifact.sha256)
+        || !valid_sha256(&artifact.blake3)
+    {
+        return Err(invalid("V36 coarse fragment artifact differs"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36CoarseFragmentManifest {
+    arm: V36CoarseFragmentArm,
+    codebook_sha256: Option<String>,
+    first_dense_ordinal: u64,
+    format: String,
+    fragment_ordinal: u32,
+    generation_manifest_sha256: String,
+    last_dense_ordinal: u64,
+    owner_centroids_sha256: String,
+    posting_ordinal: u32,
+    projection_sha256: String,
+    row_count: u32,
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_v36_coarse_context(context: &V36CoarseFragmentContext) -> Result<()> {
+    if context.uri.is_empty()
+        || !valid_sha256(&context.generation_manifest_sha256)
+        || !valid_sha256(&context.owner_centroids_sha256)
+        || !valid_sha256(&context.projection_sha256)
+        || context.arm.pq_width().is_some() != context.codebook_sha256.is_some()
+        || context
+            .codebook_sha256
+            .as_deref()
+            .is_some_and(|digest| !valid_sha256(digest))
+    {
+        return Err(invalid("V36 coarse fragment context differs"));
+    }
+    Ok(())
+}
+
+fn coarse_row_identities(rows: &V36CoarseFragmentRows) -> Result<Vec<(u64, u64)>> {
+    let identities = match rows {
+        V36CoarseFragmentRows::Sign24(rows) => rows
+            .iter()
+            .map(|row| (row.dense_ordinal(), row.source_feature_id()))
+            .collect::<Vec<_>>(),
+        V36CoarseFragmentRows::ResidualPq4(rows) => rows
+            .iter()
+            .map(|row| (row.dense_ordinal(), row.source_feature_id()))
+            .collect::<Vec<_>>(),
+    };
+    let mut source_ids = BTreeSet::new();
+    if identities.is_empty()
+        || identities.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        || identities
+            .iter()
+            .any(|(_, source_id)| !source_ids.insert(*source_id))
+    {
+        return Err(invalid("V36 coarse fragment row identity differs"));
+    }
+    Ok(identities)
+}
+
+fn validate_v36_coarse_rows(
+    context: &V36CoarseFragmentContext,
+    rows: &V36CoarseFragmentRows,
+) -> Result<Vec<(u64, u64)>> {
+    match rows {
+        V36CoarseFragmentRows::Sign24(rows) => {
+            if context.arm != V36CoarseFragmentArm::Sign24
+                || rows.iter().any(|row| {
+                    !row.residual_norm().is_finite()
+                        || row.residual_norm() < 0.0
+                        || row.residual_norm().to_bits() == (-0.0_f32).to_bits()
+                        || (row.residual_norm() == 0.0 && row.code().iter().any(|byte| *byte != 0))
+                })
+            {
+                return Err(invalid("V36 sign24 fragment rows differ"));
+            }
+        }
+        V36CoarseFragmentRows::ResidualPq4(rows) => {
+            let expected = context
+                .arm
+                .pq_width()
+                .ok_or_else(|| invalid("V36 PQ fragment arm differs"))?;
+            if rows.iter().any(|row| row.width() != expected) {
+                return Err(invalid("V36 PQ fragment width differs"));
+            }
+        }
+    }
+    coarse_row_identities(rows)
+}
+
+fn v36_coarse_manifest(
+    context: &V36CoarseFragmentContext,
+    identities: &[(u64, u64)],
+) -> Result<V36CoarseFragmentManifest> {
+    let row_count = u32::try_from(identities.len())
+        .map_err(|_| invalid("V36 coarse fragment row count overflows"))?;
+    Ok(V36CoarseFragmentManifest {
+        arm: context.arm,
+        codebook_sha256: context.codebook_sha256.clone(),
+        first_dense_ordinal: identities[0].0,
+        format: COARSE_FRAGMENT_FORMAT.to_owned(),
+        fragment_ordinal: context.fragment_ordinal,
+        generation_manifest_sha256: context.generation_manifest_sha256.clone(),
+        last_dense_ordinal: identities[identities.len() - 1].0,
+        owner_centroids_sha256: context.owner_centroids_sha256.clone(),
+        posting_ordinal: context.posting_ordinal,
+        projection_sha256: context.projection_sha256.clone(),
+        row_count,
+    })
+}
+
+fn v36_coarse_schema(manifest: &V36CoarseFragmentManifest) -> Result<Arc<Schema>> {
+    let mut fields = vec![
+        Field::new("dense_ordinal", DataType::UInt64, false),
+        Field::new("source_feature_id", DataType::UInt64, false),
+        Field::new(
+            "code",
+            DataType::FixedSizeBinary(manifest.arm.code_width()),
+            false,
+        ),
+    ];
+    if manifest.arm == V36CoarseFragmentArm::Sign24 {
+        fields.push(Field::new("residual_norm", DataType::Float32, false));
+    }
+    let manifest_json = serde_json::to_string(manifest)
+        .map_err(|_| invalid("V36 coarse fragment manifest cannot be serialized"))?;
+    Ok(Arc::new(Schema::new_with_metadata(
+        fields,
+        HashMap::from([(COARSE_FRAGMENT_MANIFEST_KEY.to_owned(), manifest_json)]),
+    )))
+}
+
+fn coarse_decoded_capacity(
+    arm: V36CoarseFragmentArm,
+    rows: usize,
+    encoded_bytes: usize,
+) -> Result<u64> {
+    let row_bytes = usize::try_from(arm.code_width())
+        .map_err(|_| invalid("V36 coarse fragment code width overflows"))?
+        .checked_add(16)
+        .and_then(|bytes| {
+            bytes.checked_add(if arm == V36CoarseFragmentArm::Sign24 {
+                4
+            } else {
+                0
+            })
+        })
+        .ok_or_else(|| invalid("V36 coarse fragment row width overflows"))?;
+    let retained_row_bytes = match arm {
+        V36CoarseFragmentArm::Sign24 => size_of::<V36Sign24Record>(),
+        V36CoarseFragmentArm::ResidualPq4Code32 | V36CoarseFragmentArm::ResidualPq4Code48 => {
+            size_of::<V36ResidualPq4Record>()
+        }
+    };
+    let bytes = encoded_bytes
+        .checked_add(
+            rows.checked_mul(row_bytes)
+                .ok_or_else(|| invalid("V36 coarse fragment logical bytes overflow"))?,
+        )
+        .and_then(|bytes| bytes.checked_add(rows.checked_mul(retained_row_bytes)?))
+        .and_then(|bytes| bytes.checked_add(rows.checked_mul(size_of::<(u64, u64)>())?))
+        // Conservative BTreeSet node/allocation charge for uniqueness validation.
+        .and_then(|bytes| bytes.checked_add(rows.checked_mul(96)?))
+        .and_then(|bytes| bytes.checked_add(64 * 1_024))
+        .ok_or_else(|| invalid("V36 coarse fragment decoded bytes overflow"))?;
+    let bytes =
+        u64::try_from(bytes).map_err(|_| invalid("V36 coarse fragment decoded bytes overflow"))?;
+    if bytes > COARSE_FRAGMENT_DECODE_LIMIT_BYTES {
+        return Err(invalid("V36 coarse fragment decoded admission differs"));
+    }
+    Ok(bytes)
+}
+
+fn validate_v36_coarse_ipc_field(field: arrow_ipc::Field<'_>, expected: &Field) -> Result<()> {
+    if field.name() != Some(expected.name().as_str())
+        || field.nullable()
+        || field.dictionary().is_some()
+        || field
+            .custom_metadata()
+            .is_some_and(|metadata| !metadata.is_empty())
+        || field
+            .children()
+            .is_some_and(|children| !children.is_empty())
+    {
+        return Err(invalid("V36 coarse fragment IPC field differs"));
+    }
+    match expected.data_type() {
+        DataType::UInt64 => {
+            let integer = field
+                .type_as_int()
+                .ok_or_else(|| invalid("V36 coarse fragment IPC integer differs"))?;
+            if integer.bitWidth() != 64 || integer.is_signed() {
+                return Err(invalid("V36 coarse fragment IPC integer differs"));
+            }
+        }
+        DataType::FixedSizeBinary(width) => {
+            if field
+                .type_as_fixed_size_binary()
+                .is_none_or(|binary| binary.byteWidth() != *width)
+            {
+                return Err(invalid("V36 coarse fragment IPC binary differs"));
+            }
+        }
+        DataType::Float32 => {
+            if field
+                .type_as_floating_point()
+                .is_none_or(|float| float.precision() != arrow_ipc::Precision::SINGLE)
+            {
+                return Err(invalid("V36 coarse fragment IPC float differs"));
+            }
+        }
+        _ => return Err(invalid("V36 coarse fragment IPC type differs")),
+    }
+    Ok(())
+}
+
+fn validate_v36_coarse_ipc_schema(schema: arrow_ipc::Schema<'_>, expected: &Schema) -> Result<()> {
+    if schema.endianness() != arrow_ipc::Endianness::Little
+        || schema
+            .features()
+            .is_some_and(|features| !features.is_empty())
+    {
+        return Err(invalid("V36 coarse fragment IPC schema differs"));
+    }
+    let metadata = schema
+        .custom_metadata()
+        .ok_or_else(|| invalid("V36 coarse fragment IPC manifest is missing"))?;
+    let expected_manifest = expected
+        .metadata()
+        .get(COARSE_FRAGMENT_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V36 coarse fragment IPC manifest differs"))?;
+    if metadata.len() != 1
+        || metadata.get(0).key() != Some(COARSE_FRAGMENT_MANIFEST_KEY)
+        || metadata.get(0).value() != Some(expected_manifest.as_str())
+    {
+        return Err(invalid("V36 coarse fragment IPC manifest differs"));
+    }
+    let fields = schema
+        .fields()
+        .ok_or_else(|| invalid("V36 coarse fragment IPC fields are missing"))?;
+    if fields.len() != expected.fields().len() {
+        return Err(invalid("V36 coarse fragment IPC field count differs"));
+    }
+    for (index, expected_field) in expected.fields().iter().enumerate() {
+        validate_v36_coarse_ipc_field(fields.get(index), expected_field)?;
+    }
+    Ok(())
+}
+
+fn preflight_v36_coarse_ipc(
+    bytes: &[u8],
+    expected_schema: &Schema,
+    arm: V36CoarseFragmentArm,
+    row_count: u32,
+) -> Result<()> {
+    if bytes.len() < 18 || !bytes.starts_with(b"ARROW1") || !bytes.ends_with(b"ARROW1") {
+        return Err(invalid("V36 coarse fragment IPC envelope differs"));
+    }
+    let trailer = bytes.len() - 10;
+    let footer_len = u32::from_le_bytes(
+        bytes
+            .get(trailer..trailer + 4)
+            .and_then(|value| value.try_into().ok())
+            .ok_or_else(|| invalid("V36 coarse fragment footer length differs"))?,
+    ) as usize;
+    let footer_start = trailer
+        .checked_sub(footer_len)
+        .filter(|offset| *offset >= 8)
+        .ok_or_else(|| invalid("V36 coarse fragment footer extent differs"))?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer])
+        .map_err(|_| invalid("V36 coarse fragment footer differs"))?;
+    if footer.version() != MetadataVersion::V5
+        || footer
+            .custom_metadata()
+            .is_some_and(|metadata| !metadata.is_empty())
+        || footer
+            .dictionaries()
+            .is_some_and(|dictionaries| !dictionaries.is_empty())
+    {
+        return Err(invalid("V36 coarse fragment footer authority differs"));
+    }
+    validate_v36_coarse_ipc_schema(
+        footer
+            .schema()
+            .ok_or_else(|| invalid("V36 coarse fragment footer schema is missing"))?,
+        expected_schema,
+    )?;
+    let batches = footer
+        .recordBatches()
+        .ok_or_else(|| invalid("V36 coarse fragment batch is missing"))?;
+    if batches.len() != 1 {
+        return Err(invalid("V36 coarse fragment batch count differs"));
+    }
+    let block = batches.get(0);
+    let block_offset = usize::try_from(block.offset())
+        .map_err(|_| invalid("V36 coarse fragment batch offset differs"))?;
+    let metadata_len = usize::try_from(block.metaDataLength())
+        .map_err(|_| invalid("V36 coarse fragment batch metadata differs"))?;
+    let body_len = usize::try_from(block.bodyLength())
+        .map_err(|_| invalid("V36 coarse fragment batch body differs"))?;
+    let body_start = block_offset
+        .checked_add(metadata_len)
+        .ok_or_else(|| invalid("V36 coarse fragment batch extent overflows"))?;
+    let body_end = body_start
+        .checked_add(body_len)
+        .ok_or_else(|| invalid("V36 coarse fragment batch extent overflows"))?;
+    if block_offset < 8 || metadata_len < 8 || body_end > footer_start {
+        return Err(invalid("V36 coarse fragment batch extent differs"));
+    }
+    let parse_message = |start: usize, end: usize| {
+        let metadata = bytes
+            .get(start..end)
+            .ok_or_else(|| invalid("V36 coarse fragment message extent differs"))?;
+        let prefix = if metadata.starts_with(&[255; 4]) {
+            8
+        } else {
+            4
+        };
+        let message_len = u32::from_le_bytes(
+            metadata
+                .get(prefix - 4..prefix)
+                .and_then(|value| value.try_into().ok())
+                .ok_or_else(|| invalid("V36 coarse fragment message length differs"))?,
+        ) as usize;
+        let message_end = prefix
+            .checked_add(message_len)
+            .filter(|end| *end <= metadata.len())
+            .ok_or_else(|| invalid("V36 coarse fragment message extent differs"))?;
+        arrow_ipc::root_as_message(&metadata[prefix..message_end])
+            .map_err(|_| invalid("V36 coarse fragment message differs"))
+    };
+    let leading = parse_message(8, block_offset)?;
+    if leading.version() != MetadataVersion::V5 || leading.bodyLength() != 0 {
+        return Err(invalid("V36 coarse fragment leading schema differs"));
+    }
+    validate_v36_coarse_ipc_schema(
+        leading
+            .header_as_schema()
+            .ok_or_else(|| invalid("V36 coarse fragment leading schema is missing"))?,
+        expected_schema,
+    )?;
+    let message = parse_message(block_offset, body_start)?;
+    let record = message
+        .header_as_record_batch()
+        .ok_or_else(|| invalid("V36 coarse fragment record differs"))?;
+    if message.version() != MetadataVersion::V5
+        || record.compression().is_some()
+        || record
+            .variadicBufferCounts()
+            .is_some_and(|counts| !counts.is_empty())
+        || u32::try_from(record.length()).ok() != Some(row_count)
+        || usize::try_from(message.bodyLength()).ok() != Some(body_len)
+    {
+        return Err(invalid("V36 coarse fragment record authority differs"));
+    }
+    let nodes = record
+        .nodes()
+        .ok_or_else(|| invalid("V36 coarse fragment nodes are missing"))?;
+    let data_widths = if arm == V36CoarseFragmentArm::Sign24 {
+        vec![8_usize, 8, 24, 4]
+    } else {
+        vec![
+            8_usize,
+            8,
+            usize::try_from(arm.code_width())
+                .map_err(|_| invalid("V36 coarse fragment code width overflows"))?,
+        ]
+    };
+    if nodes.len() != data_widths.len()
+        || nodes.iter().any(|node| {
+            u32::try_from(node.length()).ok() != Some(row_count) || node.null_count() != 0
+        })
+    {
+        return Err(invalid("V36 coarse fragment node shape differs"));
+    }
+    let buffers = record
+        .buffers()
+        .ok_or_else(|| invalid("V36 coarse fragment buffers are missing"))?;
+    if buffers.len() != data_widths.len() * 2 {
+        return Err(invalid("V36 coarse fragment buffer count differs"));
+    }
+    let validity_bytes = usize::try_from(row_count)
+        .ok()
+        .and_then(|rows| rows.checked_add(7))
+        .map(|bits| bits / 8)
+        .ok_or_else(|| invalid("V36 coarse fragment validity length overflows"))?;
+    let mut previous_end = 0_usize;
+    for (column, width) in data_widths.into_iter().enumerate() {
+        for (part, expected) in [
+            validity_bytes,
+            usize::try_from(row_count)
+                .ok()
+                .and_then(|rows| rows.checked_mul(width))
+                .ok_or_else(|| invalid("V36 coarse fragment buffer length overflows"))?,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let buffer = buffers.get(column * 2 + part);
+            let offset = usize::try_from(buffer.offset())
+                .map_err(|_| invalid("V36 coarse fragment buffer offset differs"))?;
+            let length = usize::try_from(buffer.length())
+                .map_err(|_| invalid("V36 coarse fragment buffer length differs"))?;
+            let end = offset
+                .checked_add(length)
+                .ok_or_else(|| invalid("V36 coarse fragment buffer extent overflows"))?;
+            if offset < previous_end
+                || (part == 0 && length != 0 && length != expected)
+                || (part == 1 && length != expected)
+                || end > body_len
+            {
+                return Err(invalid("V36 coarse fragment buffer extent differs"));
+            }
+            previous_end = end;
+        }
+    }
+    Ok(())
+}
+
+/// Encode one canonical, uncompressed, complete V36 serving fragment.
+pub fn encode_v36_coarse_fragment_arrow(
+    context: &V36CoarseFragmentContext,
+    rows: &V36CoarseFragmentRows,
+) -> Result<(Vec<u8>, V36CoarseFragmentArtifact)> {
+    validate_v36_coarse_context(context)?;
+    let identities = validate_v36_coarse_rows(context, rows)?;
+    let manifest = v36_coarse_manifest(context, &identities)?;
+    let schema = v36_coarse_schema(&manifest)?;
+    let codes = match rows {
+        V36CoarseFragmentRows::Sign24(rows) => {
+            FixedSizeBinaryArray::try_from_iter(rows.iter().map(|row| row.code().as_slice()))?
+        }
+        V36CoarseFragmentRows::ResidualPq4(rows) => {
+            FixedSizeBinaryArray::try_from_iter(rows.iter().map(V36ResidualPq4Record::code))?
+        }
+    };
+    let mut columns: Vec<Arc<dyn Array>> = vec![
+        Arc::new(UInt64Array::from_iter_values(
+            identities.iter().map(|(dense, _)| *dense),
+        )),
+        Arc::new(UInt64Array::from_iter_values(
+            identities.iter().map(|(_, source)| *source),
+        )),
+        Arc::new(codes),
+    ];
+    if let V36CoarseFragmentRows::Sign24(rows) = rows {
+        columns.push(Arc::new(Float32Array::from_iter_values(
+            rows.iter().map(V36Sign24Record::residual_norm),
+        )));
+    }
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    if bytes.len() > COARSE_FRAGMENT_LIMIT_BYTES {
+        return Err(invalid("V36 coarse fragment exceeds encoded admission"));
+    }
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let blake3 = blake3::hash(&bytes).to_hex().to_string();
+    let artifact = V36CoarseFragmentArtifact {
+        blake3,
+        context: context.clone(),
+        decoded_capacity_bytes: coarse_decoded_capacity(
+            context.arm,
+            identities.len(),
+            bytes.len(),
+        )?,
+        encoded_bytes: u64::try_from(bytes.len())
+            .map_err(|_| invalid("V36 coarse fragment encoded bytes overflow"))?,
+        first_dense_ordinal: manifest.first_dense_ordinal,
+        last_dense_ordinal: manifest.last_dense_ordinal,
+        row_count: manifest.row_count,
+        sha256,
+    };
+    Ok((bytes, artifact))
+}
+
+/// Audit a complete fragment's publication SHA-256 at generation admission.
+///
+/// Query cache admission uses the fragment's BLAKE3 instead, so the fetched
+/// body is not dual-hashed again on every query.
+pub fn audit_v36_coarse_fragment_sha256(
+    bytes: &[u8],
+    artifact: &V36CoarseFragmentArtifact,
+) -> Result<()> {
+    validate_v36_coarse_artifact(artifact)?;
+    if u64::try_from(bytes.len()).ok() != Some(artifact.encoded_bytes)
+        || format!("{:x}", Sha256::digest(bytes)) != artifact.sha256
+    {
+        return Err(invalid("V36 coarse fragment publication identity differs"));
+    }
+    Ok(())
+}
+
+/// BLAKE3-authenticate and decode one complete V36 serving fragment at bounded
+/// query-cache admission.
+pub fn decode_v36_coarse_fragment_arrow(
+    bytes: &[u8],
+    artifact: &V36CoarseFragmentArtifact,
+) -> Result<V36CoarseFragmentRows> {
+    validate_v36_coarse_artifact(artifact)?;
+    if bytes.is_empty()
+        || bytes.len() > COARSE_FRAGMENT_LIMIT_BYTES
+        || u64::try_from(bytes.len()).ok() != Some(artifact.encoded_bytes)
+        || blake3::hash(bytes).to_hex().as_str() != artifact.blake3
+    {
+        return Err(invalid("V36 coarse fragment object identity differs"));
+    }
+    let row_count = usize::try_from(artifact.row_count)
+        .map_err(|_| invalid("V36 coarse fragment row count overflows"))?;
+    if coarse_decoded_capacity(artifact.context.arm, row_count, bytes.len())?
+        != artifact.decoded_capacity_bytes
+    {
+        return Err(invalid("V36 coarse fragment decoded authority differs"));
+    }
+    let expected_manifest = V36CoarseFragmentManifest {
+        arm: artifact.context.arm,
+        codebook_sha256: artifact.context.codebook_sha256.clone(),
+        first_dense_ordinal: artifact.first_dense_ordinal,
+        format: COARSE_FRAGMENT_FORMAT.to_owned(),
+        fragment_ordinal: artifact.context.fragment_ordinal,
+        generation_manifest_sha256: artifact.context.generation_manifest_sha256.clone(),
+        last_dense_ordinal: artifact.last_dense_ordinal,
+        owner_centroids_sha256: artifact.context.owner_centroids_sha256.clone(),
+        posting_ordinal: artifact.context.posting_ordinal,
+        projection_sha256: artifact.context.projection_sha256.clone(),
+        row_count: artifact.row_count,
+    };
+    let expected_schema = v36_coarse_schema(&expected_manifest)?;
+    preflight_v36_coarse_ipc(
+        bytes,
+        expected_schema.as_ref(),
+        artifact.context.arm,
+        artifact.row_count,
+    )?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 || reader.schema() != expected_schema {
+        return Err(invalid("V36 coarse fragment Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V36 coarse fragment batch is missing"))?;
+    if reader.next().is_some()
+        || batch.num_rows() != usize::try_from(artifact.row_count).unwrap_or(usize::MAX)
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V36 coarse fragment batch differs"));
+    }
+    let dense = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 coarse fragment dense ordinals differ"))?;
+    let source = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V36 coarse fragment source IDs differ"))?;
+    let codes = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| invalid("V36 coarse fragment codes differ"))?;
+    let rows = match artifact.context.arm {
+        V36CoarseFragmentArm::Sign24 => {
+            let norms = batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| invalid("V36 coarse fragment norms differ"))?;
+            let mut rows = Vec::with_capacity(batch.num_rows());
+            for row in 0..batch.num_rows() {
+                let code: [u8; 24] = codes
+                    .value(row)
+                    .try_into()
+                    .map_err(|_| invalid("V36 sign24 fragment code differs"))?;
+                rows.push(V36Sign24Record {
+                    code,
+                    residual_norm: norms.value(row),
+                    dense_ordinal: dense.value(row),
+                    source_feature_id: source.value(row),
+                });
+            }
+            V36CoarseFragmentRows::Sign24(rows)
+        }
+        arm => {
+            let width = arm
+                .pq_width()
+                .ok_or_else(|| invalid("V36 PQ fragment arm differs"))?;
+            let mut rows = Vec::with_capacity(batch.num_rows());
+            for row in 0..batch.num_rows() {
+                let mut code = [0_u8; 48];
+                code[..width.code_bytes()].copy_from_slice(codes.value(row));
+                rows.push(V36ResidualPq4Record {
+                    width,
+                    code,
+                    dense_ordinal: dense.value(row),
+                    source_feature_id: source.value(row),
+                });
+            }
+            V36CoarseFragmentRows::ResidualPq4(rows)
+        }
+    };
+    let identities = validate_v36_coarse_rows(&artifact.context, &rows)?;
+    if identities[0].0 != artifact.first_dense_ordinal
+        || identities[identities.len() - 1].0 != artifact.last_dense_ordinal
+        || identities.len() != artifact.row_count as usize
+    {
+        return Err(invalid("V36 coarse fragment authority differs"));
+    }
+    Ok(rows)
 }
 
 fn canonical_f32(value: f64) -> Result<f32> {
