@@ -285,6 +285,25 @@ impl V36PostingExhaustiveQueryEvaluation {
     }
 }
 
+/// Centroid-distance ranks of an exhaustive selected-score prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingCentroidRankDiagnostic {
+    /// Registered query ordinal.
+    pub query_ordinal: u32,
+    /// Selected-score prefix length being diagnosed.
+    pub requested_prefix_length: u32,
+    /// One-based centroid ranks in selected-score prefix order.
+    pub centroid_ranks: Vec<u32>,
+    /// Nearest-rank p50 of the selected prefix's centroid ranks.
+    pub p50: u32,
+    /// Nearest-rank p95 of the selected prefix's centroid ranks.
+    pub p95: u32,
+    /// Nearest-rank p99 of the selected prefix's centroid ranks.
+    pub p99: u32,
+    /// Worst centroid rank in the selected prefix.
+    pub maximum: u32,
+}
+
 /// Borrowed authority and reusable state for one accelerator query comparison.
 pub struct V36PostingAcceleratorQueryRequest<'a> {
     /// Candidate-generation strategy under qualification.
@@ -542,6 +561,73 @@ where
         prefix,
         score_evaluations: u64::from(posting_count),
         allocated_bytes,
+    })
+}
+
+/// Diagnose how deep selected-score authority items fall in centroid-L2 order.
+pub fn diagnose_v36_exhaustive_prefix_centroid_ranks(
+    centroids: &V36AuthenticatedPostingCentroids,
+    query: &[f32],
+    exhaustive: &V36PostingExhaustiveQueryEvaluation,
+) -> Result<V36PostingCentroidRankDiagnostic> {
+    if query.len() != 192
+        || query
+            .iter()
+            .any(|value| !value.is_finite() || (*value == 0.0 && value.is_sign_negative()))
+    {
+        return Err(invalid("V36 posting centroid-rank query authority differs"));
+    }
+    let posting_count = centroids.posting_count();
+    let expected_prefix = usize::try_from(exhaustive.requested_prefix_length)
+        .map_err(|_| invalid("V36 posting centroid rank prefix overflows"))?;
+    let expected_allocated = u64::from(exhaustive.requested_prefix_length)
+        .checked_mul((size_of::<Candidate>() + size_of::<u32>()) as u64)
+        .ok_or_else(|| invalid("V36 exhaustive posting capacity overflows"))?;
+    if exhaustive.score_evaluations != u64::from(posting_count)
+        || exhaustive.prefix.len() != expected_prefix
+        || exhaustive.allocated_bytes != expected_allocated
+        || exhaustive
+            .prefix
+            .iter()
+            .any(|posting_ordinal| *posting_ordinal >= posting_count)
+    {
+        return Err(invalid("V36 posting centroid rank authority differs"));
+    }
+    let centroid_order = select_v36_exhaustive_selected_prefix(
+        exhaustive.query_ordinal,
+        posting_count,
+        posting_count,
+        |ordinal| score_v36_posting_centroid(&centroids.centroids()[ordinal as usize], query),
+    )?;
+    let mut inverse = vec![0_u32; posting_count as usize];
+    for (zero_based_rank, posting_ordinal) in centroid_order.prefix.iter().enumerate() {
+        inverse[*posting_ordinal as usize] = u32::try_from(zero_based_rank + 1)
+            .map_err(|_| invalid("V36 posting centroid rank overflows"))?;
+    }
+    let centroid_ranks = exhaustive
+        .prefix
+        .iter()
+        .map(|posting_ordinal| inverse[*posting_ordinal as usize])
+        .collect::<Vec<_>>();
+    if centroid_ranks.is_empty() {
+        return Err(invalid("V36 posting centroid rank authority differs"));
+    }
+    let mut sorted = centroid_ranks.clone();
+    sorted.sort_unstable();
+    let percentile = |percent: usize| {
+        let index = sorted.len().saturating_mul(percent).div_ceil(100) - 1;
+        sorted[index]
+    };
+    Ok(V36PostingCentroidRankDiagnostic {
+        query_ordinal: exhaustive.query_ordinal,
+        requested_prefix_length: exhaustive.requested_prefix_length,
+        centroid_ranks,
+        p50: percentile(50),
+        p95: percentile(95),
+        p99: percentile(99),
+        maximum: *sorted
+            .last()
+            .ok_or_else(|| invalid("V36 posting centroid rank authority differs"))?,
     })
 }
 
@@ -1072,6 +1158,21 @@ mod tests {
         assert_eq!(exhaustive.prefix, vec![2, 3]);
         assert_eq!(exhaustive.score_evaluations, 4);
         assert_eq!(exhaustive.allocated_bytes, 40);
+        let rank_diagnostic =
+            diagnose_v36_exhaustive_prefix_centroid_ranks(&centroids, &query, &exhaustive).unwrap();
+        assert_eq!(rank_diagnostic.query_ordinal, 7);
+        assert_eq!(rank_diagnostic.requested_prefix_length, 2);
+        assert_eq!(rank_diagnostic.centroid_ranks, vec![4, 3]);
+        assert_eq!(rank_diagnostic.p50, 3);
+        assert_eq!(rank_diagnostic.p95, 4);
+        assert_eq!(rank_diagnostic.p99, 4);
+        assert_eq!(rank_diagnostic.maximum, 4);
+        let foreign =
+            select_v36_exhaustive_selected_prefix(7, 5, 1, |ordinal| Ok(f64::from(4 - ordinal)))
+                .unwrap();
+        assert!(
+            diagnose_v36_exhaustive_prefix_centroid_ranks(&centroids, &query, &foreign).is_err()
+        );
 
         let mut centroid_scratch = V36PostingHnswScratch::new(&topology, 2).unwrap();
         let centroid = evaluate_v36_posting_accelerator_query(

@@ -386,10 +386,10 @@ pub use v36_funnel_geometry::{
 #[doc(hidden)]
 pub use v36_posting_hnsw::{
     V36PostingAcceleratorQueryEvaluation, V36PostingAcceleratorQueryRequest,
-    V36PostingExhaustiveQueryEvaluation, V36PostingHnswScratch, V36PostingHnswSearch,
-    V36PostingHnswTopology, build_v36_posting_hnsw_topology,
-    evaluate_v36_posting_accelerator_query, search_v36_posting_hnsw_candidates,
-    select_v36_exhaustive_selected_prefix,
+    V36PostingCentroidRankDiagnostic, V36PostingExhaustiveQueryEvaluation, V36PostingHnswScratch,
+    V36PostingHnswSearch, V36PostingHnswTopology, build_v36_posting_hnsw_topology,
+    diagnose_v36_exhaustive_prefix_centroid_ranks, evaluate_v36_posting_accelerator_query,
+    search_v36_posting_hnsw_candidates, select_v36_exhaustive_selected_prefix,
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
