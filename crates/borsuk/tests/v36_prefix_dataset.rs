@@ -32,10 +32,10 @@ use borsuk::{
     V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
     V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
     V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
-    bind_v36_prefix_external_selection_authority, bind_v36_prefix_population_authority,
-    bind_v36_prefix_role_assignment_contract, bind_v36_prefix_selected_ids_contract,
-    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
-    canonical_v36_prefix_freeze_authority_bytes,
+    bind_v36_prefix_external_selection_authority, bind_v36_prefix_geometry_inputs,
+    bind_v36_prefix_population_authority, bind_v36_prefix_role_assignment_contract,
+    bind_v36_prefix_selected_ids_contract, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, complete_v36_prefix_checkpoint_ground_truth,
@@ -2569,6 +2569,18 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
         ),
     };
     validate_v36_prefix_freeze_receipt(&receipt, &authority, &execution, &registry).unwrap();
+    let geometry =
+        bind_v36_prefix_geometry_inputs(&receipt, &authority, &execution, &registry).unwrap();
+    assert_eq!(geometry.construction().source().role, "source");
+    assert_eq!(geometry.construction().corpus_rows(), 1_000_000);
+    assert_eq!(geometry.construction().cohort_ordinal(), 0);
+    assert_eq!(geometry.development().query().role, "development-query");
+    assert_eq!(
+        geometry.development().ground_truth().role,
+        "development-gt100"
+    );
+    assert_eq!(geometry.development().query_rows(), 1_000);
+    assert_eq!(geometry.development().ground_truth_rows(), 100_000);
     let bytes =
         canonical_v36_prefix_freeze_receipt_bytes(&receipt, &authority, &execution, &registry)
             .unwrap();

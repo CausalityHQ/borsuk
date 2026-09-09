@@ -49,11 +49,13 @@ use crate::{
     canonical_v36_prefix_freeze_receipt_bytes, plan_v36_prefix_checkpoint_dependency_closure,
     plan_v36_prefix_checkpoint_publication, validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_transition, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_population_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_population_authority,
 };
 
 const DIMENSIONS: usize = 768;
 const GT_NEIGHBORS: usize = 100;
+const GT_NEIGHBORS_U64: u64 = 100;
 const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 65_536;
@@ -3003,6 +3005,124 @@ pub struct V36PrefixRoleParquetPaths {
     pub source: PathBuf,
     /// Validation queries.
     pub validation: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Query-blind inputs available while constructing V36 geometry.
+pub struct V36PrefixGeometryConstructionInput {
+    cohort_ordinal: u8,
+    corpus_rows: u64,
+    source: V36ArtifactIdentity,
+}
+
+impl V36PrefixGeometryConstructionInput {
+    /// Return the independently registered screen cohort.
+    pub const fn cohort_ordinal(&self) -> u8 {
+        self.cohort_ordinal
+    }
+
+    /// Return the exact query-excluded corpus population.
+    pub const fn corpus_rows(&self) -> u64 {
+        self.corpus_rows
+    }
+
+    /// Return the complete authenticated source Parquet identity.
+    pub const fn source(&self) -> &V36ArtifactIdentity {
+        &self.source
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Development-only inputs available while evaluating V36 geometry.
+pub struct V36PrefixGeometryDevelopmentInput {
+    ground_truth: V36ArtifactIdentity,
+    ground_truth_rows: u64,
+    query: V36ArtifactIdentity,
+    query_rows: u64,
+}
+
+impl V36PrefixGeometryDevelopmentInput {
+    /// Return the complete authenticated development GT@100 Parquet identity.
+    pub const fn ground_truth(&self) -> &V36ArtifactIdentity {
+        &self.ground_truth
+    }
+
+    /// Return the exact development GT@100 row count.
+    pub const fn ground_truth_rows(&self) -> u64 {
+        self.ground_truth_rows
+    }
+
+    /// Return the complete authenticated development query Parquet identity.
+    pub const fn query(&self) -> &V36ArtifactIdentity {
+        &self.query
+    }
+
+    /// Return the exact development query count.
+    pub const fn query_rows(&self) -> u64 {
+        self.query_rows
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Capability-separated authenticated inputs for V36 geometry work.
+pub struct V36PrefixGeometryInputs {
+    construction: V36PrefixGeometryConstructionInput,
+    development: V36PrefixGeometryDevelopmentInput,
+}
+
+impl V36PrefixGeometryInputs {
+    /// Return the query-blind construction capability.
+    pub const fn construction(&self) -> &V36PrefixGeometryConstructionInput {
+        &self.construction
+    }
+
+    /// Return the burnable development evaluation capability.
+    pub const fn development(&self) -> &V36PrefixGeometryDevelopmentInput {
+        &self.development
+    }
+}
+
+/// Project a validated prefix-freeze receipt into capability-separated geometry inputs.
+pub fn bind_v36_prefix_geometry_inputs(
+    receipt: &V36PrefixFreezeReceipt,
+    authority: &V36PrefixFreezeAuthority,
+    execution: &V36PrefixFreezeExecutionAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<V36PrefixGeometryInputs> {
+    validate_v36_prefix_freeze_receipt(receipt, authority, execution, source_registry)?;
+
+    let output = |index: usize, role: &str| {
+        receipt
+            .outputs
+            .get(index)
+            .filter(|artifact| artifact.role == role)
+            .cloned()
+            .ok_or_else(|| invalid("V36 prefix geometry input role differs"))
+    };
+    let development = receipt
+        .population
+        .roles
+        .iter()
+        .find(|role| role.role == "development")
+        .ok_or_else(|| invalid("V36 prefix geometry development role differs"))?;
+    let ground_truth_rows = development
+        .rows
+        .checked_mul(GT_NEIGHBORS_U64)
+        .ok_or_else(|| invalid("V36 prefix geometry GT row count overflows"))?;
+
+    Ok(V36PrefixGeometryInputs {
+        construction: V36PrefixGeometryConstructionInput {
+            cohort_ordinal: receipt.population.cohort_ordinal,
+            corpus_rows: receipt.population.corpus_rows,
+            source: output(1, "source")?,
+        },
+        development: V36PrefixGeometryDevelopmentInput {
+            ground_truth: output(3, "development-gt100")?,
+            ground_truth_rows,
+            query: output(2, "development-query")?,
+            query_rows: development.rows,
+        },
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
