@@ -1607,6 +1607,9 @@ const V36_EXTERNAL_ASSIGNMENT_FORMAT: &str = "borsuk-v36-supercell-assignment-ar
 const V36_EXTERNAL_ASSIGNMENT_ROLE: &str = "supercell-assignment-shard";
 const V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY: &str = "borsuk.v36.supercell_assignment.manifest";
 const V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES: u64 = 64 * 1_048_576;
+const V36_SUPERCELL_RUN_CHUNK_FORMAT: &str = "borsuk-v36-supercell-run-chunk-arrow-v1";
+const V36_SUPERCELL_RUN_CHUNK_ROLE: &str = "supercell-run-chunk";
+const V36_SUPERCELL_RUN_CHUNK_MANIFEST_KEY: &str = "borsuk.v36.supercell_run_chunk.manifest";
 
 #[derive(Debug, Clone, PartialEq)]
 /// One provisional external-assignment row sorted by super-cell then source.
@@ -1779,9 +1782,9 @@ fn validate_v36_assignment_rows(
     Ok(())
 }
 
-fn v36_assignment_schema(manifest: String) -> Schema {
+fn v36_assignment_schema(manifest_key: &str, manifest: String) -> Schema {
     let mut metadata = HashMap::new();
-    metadata.insert(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY.to_owned(), manifest);
+    metadata.insert(manifest_key.to_owned(), manifest);
     Schema::new_with_metadata(
         vec![
             Field::new("supercell_ordinal", DataType::UInt32, false),
@@ -1866,6 +1869,7 @@ fn validate_v36_assignment_ipc_field(field: arrow_ipc::Field<'_>, expected: &Fie
 fn validate_v36_assignment_ipc_schema(
     schema: arrow_ipc::Schema<'_>,
     expected: &Schema,
+    manifest_key: &str,
 ) -> Result<()> {
     if schema.endianness() != arrow_ipc::Endianness::Little
         || schema.features().is_some_and(|values| !values.is_empty())
@@ -1877,10 +1881,10 @@ fn validate_v36_assignment_ipc_schema(
         .ok_or_else(|| invalid("V36 assignment shard manifest is missing"))?;
     let expected_manifest = expected
         .metadata()
-        .get(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY)
+        .get(manifest_key)
         .ok_or_else(|| invalid("V36 assignment shard manifest differs"))?;
     if metadata.len() != 1
-        || metadata.get(0).key() != Some(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY)
+        || metadata.get(0).key() != Some(manifest_key)
         || metadata.get(0).value() != Some(expected_manifest.as_str())
     {
         return Err(invalid("V36 assignment shard manifest differs"));
@@ -1901,6 +1905,7 @@ fn validate_v36_assignment_ipc_envelope(
     bytes: &[u8],
     expected: &Schema,
     row_count: usize,
+    manifest_key: &str,
 ) -> Result<()> {
     if bytes.len() < 18
         || bytes.len() > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES as usize
@@ -1936,6 +1941,7 @@ fn validate_v36_assignment_ipc_envelope(
             .schema()
             .ok_or_else(|| invalid("V36 assignment shard footer schema is missing"))?,
         expected,
+        manifest_key,
     )?;
     let blocks = footer
         .recordBatches()
@@ -1993,6 +1999,7 @@ fn validate_v36_assignment_ipc_envelope(
             .header_as_schema()
             .ok_or_else(|| invalid("V36 assignment shard leading schema is missing"))?,
         expected,
+        manifest_key,
     )?;
     let record_message = parse_message(block_offset, body_start)?;
     let record = record_message
@@ -2082,26 +2089,10 @@ fn validate_v36_assignment_ipc_envelope(
     Ok(())
 }
 
-/// Encode one canonical, uncompressed, complete assignment shard.
-pub fn encode_v36_supercell_assignment_shard_arrow(
-    context: &V36SupercellAssignmentShardContext,
+fn encode_v36_assignment_rows_arrow(
+    schema: Arc<Schema>,
     rows: &[V36SupercellAssignmentRow],
-) -> Result<(Vec<u8>, V36SupercellAssignmentShardArtifact)> {
-    validate_v36_assignment_rows(context, rows)?;
-    let row_count = u32::try_from(rows.len())
-        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
-    let manifest = V36SupercellAssignmentShardManifest {
-        context: context.into(),
-        format: V36_EXTERNAL_ASSIGNMENT_FORMAT.to_owned(),
-        role: V36_EXTERNAL_ASSIGNMENT_ROLE.to_owned(),
-        row_count,
-    };
-    let manifest = serde_json::to_string(&v36_canonical_json_value(
-        serde_json::to_value(&manifest)
-            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
-    ))
-    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
-    let schema = Arc::new(v36_assignment_schema(manifest));
+) -> Result<Vec<u8>> {
     let projected_values = rows
         .len()
         .checked_mul(192)
@@ -2161,6 +2152,33 @@ pub fn encode_v36_supercell_assignment_shard_arrow(
             .map_err(|_| invalid("V36 assignment encoded bytes overflow"))?
     };
     bytes.truncate(encoded_bytes);
+    Ok(bytes)
+}
+
+/// Encode one canonical, uncompressed, complete assignment shard.
+pub fn encode_v36_supercell_assignment_shard_arrow(
+    context: &V36SupercellAssignmentShardContext,
+    rows: &[V36SupercellAssignmentRow],
+) -> Result<(Vec<u8>, V36SupercellAssignmentShardArtifact)> {
+    validate_v36_assignment_rows(context, rows)?;
+    let row_count = u32::try_from(rows.len())
+        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
+    let manifest = V36SupercellAssignmentShardManifest {
+        context: context.into(),
+        format: V36_EXTERNAL_ASSIGNMENT_FORMAT.to_owned(),
+        role: V36_EXTERNAL_ASSIGNMENT_ROLE.to_owned(),
+        row_count,
+    };
+    let manifest = serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    let schema = Arc::new(v36_assignment_schema(
+        V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY,
+        manifest,
+    ));
+    let bytes = encode_v36_assignment_rows_arrow(schema, rows)?;
     let encoded_bytes = u64::try_from(bytes.len())
         .map_err(|_| invalid("V36 assignment shard encoded bytes overflow"))?;
     if encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES {
@@ -2176,73 +2194,14 @@ pub fn encode_v36_supercell_assignment_shard_arrow(
     Ok((bytes, artifact))
 }
 
-/// Authenticate and decode one complete assignment shard.
-pub fn decode_v36_supercell_assignment_shard_arrow(
-    bytes: &[u8],
-    artifact: &V36SupercellAssignmentShardArtifact,
+fn decode_v36_assignment_rows_batch(
+    reader: &mut FileReader<Cursor<&[u8]>>,
+    row_count: usize,
 ) -> Result<Vec<V36SupercellAssignmentRow>> {
-    validate_v36_assignment_context(&artifact.context)?;
-    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    if artifact.row_count == 0
-        || artifact.row_count > 65_536
-        || artifact.encoded_bytes != encoded_bytes
-        || encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES
-        || !valid_sha256(&artifact.sha256)
-        || !valid_sha256(&artifact.blake3)
-        || artifact.sha256 != format!("{:x}", Sha256::digest(bytes))
-        || artifact.blake3 != blake3::hash(bytes).to_hex().as_str()
-    {
-        return Err(invalid("V36 assignment shard artifact identity differs"));
-    }
-    let row_count = usize::try_from(artifact.row_count)
-        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
-    let manifest = V36SupercellAssignmentShardManifest {
-        context: (&artifact.context).into(),
-        format: V36_EXTERNAL_ASSIGNMENT_FORMAT.to_owned(),
-        role: V36_EXTERNAL_ASSIGNMENT_ROLE.to_owned(),
-        row_count: artifact.row_count,
-    };
-    let manifest = serde_json::to_string(&v36_canonical_json_value(
-        serde_json::to_value(&manifest)
-            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
-    ))
-    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
-    validate_v36_assignment_ipc_envelope(bytes, &v36_assignment_schema(manifest), row_count)?;
-    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
-    if reader.num_batches() != 1 {
-        return Err(invalid("V36 assignment shard batch count differs"));
-    }
-    let manifest_text = reader
-        .schema()
-        .metadata()
-        .get(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY)
-        .cloned()
-        .ok_or_else(|| invalid("V36 assignment shard manifest is missing"))?;
-    let manifest: V36SupercellAssignmentShardManifest = serde_json::from_str(&manifest_text)
-        .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
-    let canonical = serde_json::to_string(&v36_canonical_json_value(
-        serde_json::to_value(&manifest)
-            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
-    ))
-    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
-    if canonical != manifest_text
-        || manifest.context != V36SupercellAssignmentShardContextWire::from(&artifact.context)
-        || manifest.format != V36_EXTERNAL_ASSIGNMENT_FORMAT
-        || manifest.role != V36_EXTERNAL_ASSIGNMENT_ROLE
-        || manifest.row_count != artifact.row_count
-        || reader.schema().as_ref() != &v36_assignment_schema(manifest_text)
-    {
-        return Err(invalid("V36 assignment shard manifest differs"));
-    }
     let batch = reader
         .next()
         .ok_or_else(|| invalid("V36 assignment shard batch is missing"))??;
-    if batch.num_rows()
-        != usize::try_from(artifact.row_count)
-            .map_err(|_| invalid("V36 assignment shard row count overflows"))?
-        || batch.num_columns() != 3
-        || reader.next().is_some()
-    {
+    if batch.num_rows() != row_count || batch.num_columns() != 3 || reader.next().is_some() {
         return Err(invalid("V36 assignment shard batch differs"));
     }
     let supercells = batch
@@ -2276,7 +2235,7 @@ pub fn decode_v36_supercell_assignment_shard_arrow(
     {
         return Err(invalid("V36 assignment shard projected rows differ"));
     }
-    let rows = supercells
+    Ok(supercells
         .values()
         .iter()
         .zip(sources.values())
@@ -2288,8 +2247,301 @@ pub fn decode_v36_supercell_assignment_shard_arrow(
                 projected: *projected,
             },
         )
-        .collect::<Vec<_>>();
+        .collect())
+}
+
+/// Authenticate and decode one complete assignment shard.
+pub fn decode_v36_supercell_assignment_shard_arrow(
+    bytes: &[u8],
+    artifact: &V36SupercellAssignmentShardArtifact,
+) -> Result<Vec<V36SupercellAssignmentRow>> {
+    validate_v36_assignment_context(&artifact.context)?;
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if artifact.row_count == 0
+        || artifact.row_count > 65_536
+        || artifact.encoded_bytes != encoded_bytes
+        || encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES
+        || !valid_sha256(&artifact.sha256)
+        || !valid_sha256(&artifact.blake3)
+        || artifact.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || artifact.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 assignment shard artifact identity differs"));
+    }
+    let row_count = usize::try_from(artifact.row_count)
+        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
+    let manifest = V36SupercellAssignmentShardManifest {
+        context: (&artifact.context).into(),
+        format: V36_EXTERNAL_ASSIGNMENT_FORMAT.to_owned(),
+        role: V36_EXTERNAL_ASSIGNMENT_ROLE.to_owned(),
+        row_count: artifact.row_count,
+    };
+    let manifest = serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    validate_v36_assignment_ipc_envelope(
+        bytes,
+        &v36_assignment_schema(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY, manifest),
+        row_count,
+        V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY,
+    )?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 {
+        return Err(invalid("V36 assignment shard batch count differs"));
+    }
+    let manifest_text = reader
+        .schema()
+        .metadata()
+        .get(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY)
+        .cloned()
+        .ok_or_else(|| invalid("V36 assignment shard manifest is missing"))?;
+    let manifest: V36SupercellAssignmentShardManifest = serde_json::from_str(&manifest_text)
+        .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    let canonical = serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    if canonical != manifest_text
+        || manifest.context != V36SupercellAssignmentShardContextWire::from(&artifact.context)
+        || manifest.format != V36_EXTERNAL_ASSIGNMENT_FORMAT
+        || manifest.role != V36_EXTERNAL_ASSIGNMENT_ROLE
+        || manifest.row_count != artifact.row_count
+        || reader.schema().as_ref()
+            != &v36_assignment_schema(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY, manifest_text)
+    {
+        return Err(invalid("V36 assignment shard manifest differs"));
+    }
+    let rows = decode_v36_assignment_rows_batch(&mut reader, row_count)?;
     validate_v36_assignment_rows(&artifact.context, &rows)?;
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete authority embedded in one per-supercell merge-run chunk.
+pub struct V36SupercellRunChunkContext {
+    model_identity: V36ArtifactIdentity,
+    projected_corpus_sha256: String,
+    supercell_ordinal: u32,
+    chunk_ordinal: u64,
+    training_spec: V36SupercellTrainingSpec,
+    uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36SupercellRunChunkContextWire {
+    model_identity: V36ArtifactIdentity,
+    projected_corpus_sha256: String,
+    supercell_ordinal: u32,
+    chunk_ordinal: u64,
+    training_spec: V36SupercellTrainingSpec,
+    uri: String,
+}
+
+impl From<&V36SupercellRunChunkContext> for V36SupercellRunChunkContextWire {
+    fn from(context: &V36SupercellRunChunkContext) -> Self {
+        Self {
+            model_identity: context.model_identity.clone(),
+            projected_corpus_sha256: context.projected_corpus_sha256.clone(),
+            supercell_ordinal: context.supercell_ordinal,
+            chunk_ordinal: context.chunk_ordinal,
+            training_spec: context.training_spec.clone(),
+            uri: context.uri.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete identity and authority for one per-supercell merge-run chunk.
+pub struct V36SupercellRunChunkArtifact {
+    /// Complete-object BLAKE3.
+    pub blake3: String,
+    /// Embedded corpus/model/cell/chunk authority.
+    pub context: V36SupercellRunChunkContext,
+    /// Complete encoded length.
+    pub encoded_bytes: u64,
+    /// Complete logical row count.
+    pub row_count: u32,
+    /// Complete-object SHA-256.
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36SupercellRunChunkManifest {
+    context: V36SupercellRunChunkContextWire,
+    format: String,
+    role: String,
+    row_count: u32,
+}
+
+/// Bind one merge-run chunk to an authenticated model, corpus, and supercell.
+pub fn bind_v36_supercell_run_chunk_context(
+    model: &V36AuthenticatedSupercellModel,
+    supercell_ordinal: u32,
+    chunk_ordinal: u64,
+    uri: &str,
+) -> Result<V36SupercellRunChunkContext> {
+    let context = V36SupercellRunChunkContext {
+        model_identity: model.identity().clone(),
+        projected_corpus_sha256: model.training_spec().projected_corpus_sha256.clone(),
+        supercell_ordinal,
+        chunk_ordinal,
+        training_spec: model.training_spec().clone(),
+        uri: uri.to_owned(),
+    };
+    validate_v36_supercell_run_chunk_context(&context)?;
+    Ok(context)
+}
+
+fn validate_v36_supercell_run_chunk_context(context: &V36SupercellRunChunkContext) -> Result<()> {
+    let identity = &context.model_identity;
+    if context.projected_corpus_sha256 != context.training_spec.projected_corpus_sha256
+        || !valid_sha256(&context.projected_corpus_sha256)
+        || context.supercell_ordinal >= context.training_spec.super_cell_count
+        || identity.role != SUPERCELL_MODEL_ROLE
+        || identity.encoded_bytes == 0
+        || identity.encoded_bytes > SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
+        || !valid_sha256(&identity.sha256)
+        || !valid_sha256(&identity.blake3)
+        || !valid_v36_supercell_model_uri(&identity.uri)
+        || !valid_v36_supercell_model_uri(&context.uri)
+    {
+        return Err(invalid("V36 supercell run chunk context differs"));
+    }
+    Ok(())
+}
+
+fn validate_v36_supercell_run_chunk_rows(
+    context: &V36SupercellRunChunkContext,
+    rows: &[V36SupercellAssignmentRow],
+) -> Result<()> {
+    validate_v36_supercell_run_chunk_context(context)?;
+    if rows.is_empty() || rows.len() > 65_536 {
+        return Err(invalid("V36 supercell run chunk row count differs"));
+    }
+    let mut previous = None;
+    for row in rows {
+        if row.supercell_ordinal != context.supercell_ordinal
+            || row.source_ordinal >= context.training_spec.corpus_rows
+            || previous.is_some_and(|source_ordinal| source_ordinal >= row.source_ordinal)
+            || row
+                .projected
+                .iter()
+                .any(|value| !value.is_finite() || (*value == 0.0 && value.is_sign_negative()))
+        {
+            return Err(invalid("V36 supercell run chunk rows differ"));
+        }
+        previous = Some(row.source_ordinal);
+    }
+    Ok(())
+}
+
+fn v36_supercell_run_chunk_manifest(
+    context: &V36SupercellRunChunkContext,
+    row_count: u32,
+) -> Result<String> {
+    let manifest = V36SupercellRunChunkManifest {
+        context: context.into(),
+        format: V36_SUPERCELL_RUN_CHUNK_FORMAT.to_owned(),
+        role: V36_SUPERCELL_RUN_CHUNK_ROLE.to_owned(),
+        row_count,
+    };
+    serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 supercell run chunk manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 supercell run chunk manifest differs"))
+}
+
+/// Encode one canonical, uncompressed, per-supercell merge-run chunk.
+pub fn encode_v36_supercell_run_chunk_arrow(
+    context: &V36SupercellRunChunkContext,
+    rows: &[V36SupercellAssignmentRow],
+) -> Result<(Vec<u8>, V36SupercellRunChunkArtifact)> {
+    validate_v36_supercell_run_chunk_rows(context, rows)?;
+    let row_count = u32::try_from(rows.len())
+        .map_err(|_| invalid("V36 supercell run chunk row count overflows"))?;
+    let manifest = v36_supercell_run_chunk_manifest(context, row_count)?;
+    let schema = Arc::new(v36_assignment_schema(
+        V36_SUPERCELL_RUN_CHUNK_MANIFEST_KEY,
+        manifest,
+    ));
+    let bytes = encode_v36_assignment_rows_arrow(schema, rows)?;
+    let encoded_bytes = u64::try_from(bytes.len())
+        .map_err(|_| invalid("V36 supercell run chunk encoded bytes overflow"))?;
+    if encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES {
+        return Err(invalid("V36 supercell run chunk exceeds encoded admission"));
+    }
+    let artifact = V36SupercellRunChunkArtifact {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        context: context.clone(),
+        encoded_bytes,
+        row_count,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+    };
+    Ok((bytes, artifact))
+}
+
+/// Authenticate and decode one complete per-supercell merge-run chunk.
+pub fn decode_v36_supercell_run_chunk_arrow(
+    bytes: &[u8],
+    artifact: &V36SupercellRunChunkArtifact,
+) -> Result<Vec<V36SupercellAssignmentRow>> {
+    validate_v36_supercell_run_chunk_context(&artifact.context)?;
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if artifact.row_count == 0
+        || artifact.row_count > 65_536
+        || artifact.encoded_bytes != encoded_bytes
+        || encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES
+        || !valid_sha256(&artifact.sha256)
+        || !valid_sha256(&artifact.blake3)
+        || artifact.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || artifact.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 supercell run chunk artifact identity differs"));
+    }
+    let row_count = usize::try_from(artifact.row_count)
+        .map_err(|_| invalid("V36 supercell run chunk row count overflows"))?;
+    let manifest = v36_supercell_run_chunk_manifest(&artifact.context, artifact.row_count)?;
+    validate_v36_assignment_ipc_envelope(
+        bytes,
+        &v36_assignment_schema(V36_SUPERCELL_RUN_CHUNK_MANIFEST_KEY, manifest),
+        row_count,
+        V36_SUPERCELL_RUN_CHUNK_MANIFEST_KEY,
+    )?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 {
+        return Err(invalid("V36 supercell run chunk batch count differs"));
+    }
+    let manifest_text = reader
+        .schema()
+        .metadata()
+        .get(V36_SUPERCELL_RUN_CHUNK_MANIFEST_KEY)
+        .cloned()
+        .ok_or_else(|| invalid("V36 supercell run chunk manifest is missing"))?;
+    let manifest: V36SupercellRunChunkManifest = serde_json::from_str(&manifest_text)
+        .map_err(|_| invalid("V36 supercell run chunk manifest differs"))?;
+    let canonical = serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 supercell run chunk manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 supercell run chunk manifest differs"))?;
+    if canonical != manifest_text
+        || manifest.context != V36SupercellRunChunkContextWire::from(&artifact.context)
+        || manifest.format != V36_SUPERCELL_RUN_CHUNK_FORMAT
+        || manifest.role != V36_SUPERCELL_RUN_CHUNK_ROLE
+        || manifest.row_count != artifact.row_count
+        || reader.schema().as_ref()
+            != &v36_assignment_schema(V36_SUPERCELL_RUN_CHUNK_MANIFEST_KEY, manifest_text)
+    {
+        return Err(invalid("V36 supercell run chunk manifest differs"));
+    }
+    let rows = decode_v36_assignment_rows_batch(&mut reader, row_count)?;
+    validate_v36_supercell_run_chunk_rows(&artifact.context, &rows)?;
     Ok(rows)
 }
 

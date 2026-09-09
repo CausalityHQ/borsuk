@@ -13,15 +13,17 @@ use borsuk::{
     V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
     V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentRow,
     V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardSink,
-    V36SupercellPostCountAdmissionRequest, V36SupercellTrainingSpec,
+    V36SupercellPostCountAdmissionRequest, V36SupercellRunChunkArtifact, V36SupercellTrainingSpec,
     admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
     bind_v36_registered_supercell_training_spec, bind_v36_supercell_assignment_shard_context,
-    decode_v36_supercell_assignment_shard_arrow, decode_v36_supercell_model_arrow,
+    bind_v36_supercell_run_chunk_context, decode_v36_supercell_assignment_shard_arrow,
+    decode_v36_supercell_model_arrow, decode_v36_supercell_run_chunk_arrow,
     encode_v36_supercell_assignment_shard_arrow, encode_v36_supercell_model_arrow,
-    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
-    project_v36_supercell_assignment_admission, project_v36_supercell_post_count_admission,
-    project_v36_supercell_training_preflight, train_v36_supercells, v36_prefix_source_schema,
-    write_v36_prefix_source_parquet, write_v36_supercell_assignment_shards,
+    encode_v36_supercell_run_chunk_arrow, load_v36_prefix_source_feature_ids,
+    project_v36_exact_assignment_preflight, project_v36_supercell_assignment_admission,
+    project_v36_supercell_post_count_admission, project_v36_supercell_training_preflight,
+    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
+    write_v36_supercell_assignment_shards,
 };
 use sha2::{Digest, Sha256};
 
@@ -847,6 +849,101 @@ fn v36_geometry_external_assignment_writer_is_schedule_invariant_and_transaction
     assert!(sink.aborted);
     assert!(!sink.committed);
     assert!(sink.provisional.is_empty());
+}
+
+#[test]
+fn v36_geometry_external_merge_chunk_is_canonical_and_cell_bound() {
+    // Break caught: the fixed-fan-in merge publishes a chunk detached from the
+    // authenticated model/corpus/cell, with reordered rows or noncanonical IPC.
+    let rows = projected_rows(4);
+    let spec = V36SupercellTrainingSpec {
+        corpus_rows: 4,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 4,
+        projected_corpus_sha256: projected_rows_sha256(&rows),
+        reservoir_rows: 4,
+        super_cell_count: 4,
+    };
+    let mut source = ProjectedSource {
+        block_rows: 2,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let model = train_v36_supercells(&spec, &mut source).unwrap();
+    let (model_bytes, model_identity) = encode_v36_supercell_model_arrow(
+        &model,
+        &spec,
+        "supercell-model",
+        "s3://borsuk-v36-test/geometry/supercells.arrow",
+    )
+    .unwrap();
+    let authenticated =
+        decode_v36_supercell_model_arrow(&model_bytes, &model_identity, &spec).unwrap();
+    let context = bind_v36_supercell_run_chunk_context(
+        &authenticated,
+        0,
+        0,
+        "s3://borsuk-v36-test/geometry/runs/cell-0000/chunk-000000.arrow",
+    )
+    .unwrap();
+    let mut first = [0.0_f32; ROUTING_DIMENSIONS];
+    first[0] = 1.0;
+    let mut second = [0.0_f32; ROUTING_DIMENSIONS];
+    second[1] = 1.0;
+    let chunk_rows = vec![
+        V36SupercellAssignmentRow::new(0, 0, first).unwrap(),
+        V36SupercellAssignmentRow::new(0, 2, second).unwrap(),
+    ];
+    let (bytes, artifact) = encode_v36_supercell_run_chunk_arrow(&context, &chunk_rows).unwrap();
+    assert_eq!(artifact.context, context);
+    assert_eq!(artifact.row_count, 2);
+    assert_eq!(artifact.encoded_bytes, bytes.len() as u64);
+    assert_eq!(
+        decode_v36_supercell_run_chunk_arrow(&bytes, &artifact).unwrap(),
+        chunk_rows
+    );
+    assert_eq!(
+        encode_v36_supercell_run_chunk_arrow(&context, &chunk_rows)
+            .unwrap()
+            .0,
+        bytes
+    );
+
+    let mut wrong_cell = chunk_rows.clone();
+    wrong_cell[1] = V36SupercellAssignmentRow::new(1, 2, second).unwrap();
+    assert!(encode_v36_supercell_run_chunk_arrow(&context, &wrong_cell).is_err());
+    let mut reversed = chunk_rows.clone();
+    reversed.reverse();
+    assert!(encode_v36_supercell_run_chunk_arrow(&context, &reversed).is_err());
+    assert!(
+        bind_v36_supercell_run_chunk_context(
+            &authenticated,
+            4,
+            0,
+            "s3://borsuk-v36-test/geometry/runs/cell-0004/chunk-000000.arrow",
+        )
+        .is_err()
+    );
+
+    let mut reader = FileReader::try_new(Cursor::new(&bytes), None).unwrap();
+    let schema = reader.schema();
+    let batch = reader.next().unwrap().unwrap();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)
+        .unwrap()
+        .try_with_compression(Some(CompressionType::ZSTD))
+        .unwrap();
+    let mut compressed = Vec::new();
+    let mut writer =
+        FileWriter::try_new_with_options(&mut compressed, schema.as_ref(), options).unwrap();
+    writer.write(&batch).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    let mut compressed_artifact: V36SupercellRunChunkArtifact = artifact;
+    compressed_artifact.encoded_bytes = compressed.len() as u64;
+    compressed_artifact.sha256 = format!("{:x}", Sha256::digest(&compressed));
+    compressed_artifact.blake3 = blake3::hash(&compressed).to_hex().to_string();
+    assert!(decode_v36_supercell_run_chunk_arrow(&compressed, &compressed_artifact).is_err());
 }
 
 #[test]
