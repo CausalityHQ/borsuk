@@ -13,7 +13,8 @@ use crate::{
     v36_funnel::POSTING_SUMMARY_SLOT_BYTES,
 };
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, Float64Array, ListArray, RecordBatch, UInt64Array,
+    Array, FixedSizeListArray, Float32Array, Float64Array, ListArray, RecordBatch, UInt32Array,
+    UInt64Array,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_ipc::{
@@ -1602,6 +1603,656 @@ pub fn project_v36_supercell_training_preflight(
 const V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS: u64 = 65_536;
 const V36_EXTERNAL_ASSIGNMENT_ROW_BYTES: u64 = 4 + 8 + 192 * 4;
 const V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES: u64 = 65_536;
+const V36_EXTERNAL_ASSIGNMENT_FORMAT: &str = "borsuk-v36-supercell-assignment-arrow-v1";
+const V36_EXTERNAL_ASSIGNMENT_ROLE: &str = "supercell-assignment-shard";
+const V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY: &str = "borsuk.v36.supercell_assignment.manifest";
+const V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES: u64 = 64 * 1_048_576;
+
+#[derive(Debug, Clone, PartialEq)]
+/// One provisional external-assignment row sorted by super-cell then source.
+pub struct V36SupercellAssignmentRow {
+    supercell_ordinal: u32,
+    source_ordinal: u64,
+    projected: [f32; 192],
+}
+
+impl V36SupercellAssignmentRow {
+    /// Construct one finite projected assignment row.
+    pub fn new(supercell_ordinal: u32, source_ordinal: u64, projected: [f32; 192]) -> Result<Self> {
+        if !projected.iter().all(|value| value.is_finite()) {
+            return Err(invalid("V36 assignment row is nonfinite"));
+        }
+        Ok(Self {
+            supercell_ordinal,
+            source_ordinal,
+            projected,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete authority embedded in one provisional assignment shard.
+pub struct V36SupercellAssignmentShardContext {
+    /// Exact authenticated super-cell model object.
+    model_identity: V36ArtifactIdentity,
+    /// Exact projected corpus replay digest.
+    projected_corpus_sha256: String,
+    /// Consecutive logical source shard ordinal.
+    shard_ordinal: u64,
+    /// Exact model training and corpus authority.
+    training_spec: V36SupercellTrainingSpec,
+    /// Immutable assignment shard URI.
+    uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36SupercellAssignmentShardContextWire {
+    model_identity: V36ArtifactIdentity,
+    projected_corpus_sha256: String,
+    shard_ordinal: u64,
+    training_spec: V36SupercellTrainingSpec,
+    uri: String,
+}
+
+impl From<&V36SupercellAssignmentShardContext> for V36SupercellAssignmentShardContextWire {
+    fn from(context: &V36SupercellAssignmentShardContext) -> Self {
+        Self {
+            model_identity: context.model_identity.clone(),
+            projected_corpus_sha256: context.projected_corpus_sha256.clone(),
+            shard_ordinal: context.shard_ordinal,
+            training_spec: context.training_spec.clone(),
+            uri: context.uri.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete identity and authority for one assignment shard.
+pub struct V36SupercellAssignmentShardArtifact {
+    /// Complete-object BLAKE3.
+    pub blake3: String,
+    /// Embedded corpus/model/shard authority.
+    pub context: V36SupercellAssignmentShardContext,
+    /// Complete encoded length.
+    pub encoded_bytes: u64,
+    /// Complete logical row count.
+    pub row_count: u32,
+    /// Complete-object SHA-256.
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36SupercellAssignmentShardManifest {
+    context: V36SupercellAssignmentShardContextWire,
+    format: String,
+    role: String,
+    row_count: u32,
+}
+
+/// Bind one assignment shard to a previously authenticated model handle.
+pub fn bind_v36_supercell_assignment_shard_context(
+    model: &V36AuthenticatedSupercellModel,
+    shard_ordinal: u64,
+    uri: &str,
+) -> Result<V36SupercellAssignmentShardContext> {
+    let context = V36SupercellAssignmentShardContext {
+        model_identity: model.identity().clone(),
+        projected_corpus_sha256: model.training_spec().projected_corpus_sha256.clone(),
+        shard_ordinal,
+        training_spec: model.training_spec().clone(),
+        uri: uri.to_owned(),
+    };
+    validate_v36_assignment_context(&context)?;
+    Ok(context)
+}
+
+fn validate_v36_assignment_context(context: &V36SupercellAssignmentShardContext) -> Result<()> {
+    let identity = &context.model_identity;
+    let shard_count = context
+        .training_spec
+        .corpus_rows
+        .div_ceil(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS);
+    if context.projected_corpus_sha256 != context.training_spec.projected_corpus_sha256
+        || !valid_sha256(&context.projected_corpus_sha256)
+        || context.shard_ordinal >= shard_count
+        || identity.role != SUPERCELL_MODEL_ROLE
+        || identity.encoded_bytes == 0
+        || identity.encoded_bytes > SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
+        || !valid_sha256(&identity.sha256)
+        || !valid_sha256(&identity.blake3)
+        || !valid_v36_supercell_model_uri(&identity.uri)
+        || !valid_v36_supercell_model_uri(&context.uri)
+    {
+        return Err(invalid("V36 assignment shard context differs"));
+    }
+    Ok(())
+}
+
+fn validate_v36_assignment_rows(
+    context: &V36SupercellAssignmentShardContext,
+    rows: &[V36SupercellAssignmentRow],
+) -> Result<()> {
+    validate_v36_assignment_context(context)?;
+    let start = context
+        .shard_ordinal
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+        .ok_or_else(|| invalid("V36 assignment shard range overflows"))?;
+    let end = start
+        .checked_add(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+        .map(|end| end.min(context.training_spec.corpus_rows))
+        .ok_or_else(|| invalid("V36 assignment shard range overflows"))?;
+    let expected_rows = usize::try_from(end - start)
+        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
+    if rows.len() != expected_rows {
+        return Err(invalid("V36 assignment shard row count differs"));
+    }
+    let mut seen = vec![false; expected_rows];
+    let mut previous = None;
+    for row in rows {
+        let key = (row.supercell_ordinal, row.source_ordinal);
+        if previous.is_some_and(|prior| prior >= key)
+            || row.supercell_ordinal >= context.training_spec.super_cell_count
+            || row.source_ordinal < start
+            || row.source_ordinal >= end
+            || !row.projected.iter().all(|value| value.is_finite())
+        {
+            return Err(invalid("V36 assignment shard rows differ"));
+        }
+        let offset = usize::try_from(row.source_ordinal - start)
+            .map_err(|_| invalid("V36 assignment shard source offset overflows"))?;
+        if std::mem::replace(&mut seen[offset], true) {
+            return Err(invalid("V36 assignment shard source coverage differs"));
+        }
+        previous = Some(key);
+    }
+    if seen.iter().any(|seen| !seen) {
+        return Err(invalid("V36 assignment shard source coverage differs"));
+    }
+    Ok(())
+}
+
+fn v36_assignment_schema(manifest: String) -> Schema {
+    let mut metadata = HashMap::new();
+    metadata.insert(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY.to_owned(), manifest);
+    Schema::new_with_metadata(
+        vec![
+            Field::new("supercell_ordinal", DataType::UInt32, false),
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new(
+                "projected",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    192,
+                ),
+                false,
+            ),
+        ],
+        metadata,
+    )
+}
+
+fn validate_v36_assignment_ipc_field(field: arrow_ipc::Field<'_>, expected: &Field) -> Result<()> {
+    if field.name() != Some(expected.name().as_str())
+        || field.nullable()
+        || field.dictionary().is_some()
+        || field
+            .custom_metadata()
+            .is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 assignment shard IPC field differs"));
+    }
+    let expected_children = match expected.data_type() {
+        DataType::UInt32 => {
+            if field
+                .type_as_int()
+                .is_none_or(|value| value.bitWidth() != 32 || value.is_signed())
+            {
+                return Err(invalid("V36 assignment shard IPC integer differs"));
+            }
+            Vec::new()
+        }
+        DataType::UInt64 => {
+            if field
+                .type_as_int()
+                .is_none_or(|value| value.bitWidth() != 64 || value.is_signed())
+            {
+                return Err(invalid("V36 assignment shard IPC integer differs"));
+            }
+            Vec::new()
+        }
+        DataType::Float32 => {
+            if field
+                .type_as_floating_point()
+                .is_none_or(|value| value.precision() != arrow_ipc::Precision::SINGLE)
+            {
+                return Err(invalid("V36 assignment shard IPC float differs"));
+            }
+            Vec::new()
+        }
+        DataType::FixedSizeList(child, width) => {
+            if field
+                .type_as_fixed_size_list()
+                .is_none_or(|value| value.listSize() != *width)
+            {
+                return Err(invalid("V36 assignment shard IPC fixed list differs"));
+            }
+            vec![child.as_ref()]
+        }
+        _ => return Err(invalid("V36 assignment shard IPC type differs")),
+    };
+    let actual_children = field.children();
+    if actual_children.map_or(0, |values| values.len()) != expected_children.len() {
+        return Err(invalid("V36 assignment shard IPC children differ"));
+    }
+    for (index, child) in expected_children.iter().enumerate() {
+        validate_v36_assignment_ipc_field(
+            actual_children
+                .ok_or_else(|| invalid("V36 assignment shard IPC child is missing"))?
+                .get(index),
+            child,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_v36_assignment_ipc_schema(
+    schema: arrow_ipc::Schema<'_>,
+    expected: &Schema,
+) -> Result<()> {
+    if schema.endianness() != arrow_ipc::Endianness::Little
+        || schema.features().is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 assignment shard IPC schema differs"));
+    }
+    let metadata = schema
+        .custom_metadata()
+        .ok_or_else(|| invalid("V36 assignment shard manifest is missing"))?;
+    let expected_manifest = expected
+        .metadata()
+        .get(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V36 assignment shard manifest differs"))?;
+    if metadata.len() != 1
+        || metadata.get(0).key() != Some(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY)
+        || metadata.get(0).value() != Some(expected_manifest.as_str())
+    {
+        return Err(invalid("V36 assignment shard manifest differs"));
+    }
+    let fields = schema
+        .fields()
+        .ok_or_else(|| invalid("V36 assignment shard IPC fields are missing"))?;
+    if fields.len() != expected.fields().len() {
+        return Err(invalid("V36 assignment shard IPC field count differs"));
+    }
+    for (index, expected_field) in expected.fields().iter().enumerate() {
+        validate_v36_assignment_ipc_field(fields.get(index), expected_field)?;
+    }
+    Ok(())
+}
+
+fn validate_v36_assignment_ipc_envelope(
+    bytes: &[u8],
+    expected: &Schema,
+    row_count: usize,
+) -> Result<()> {
+    if bytes.len() < 18
+        || bytes.len() > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES as usize
+        || !bytes.starts_with(b"ARROW1")
+        || !bytes.ends_with(b"ARROW1")
+    {
+        return Err(invalid("V36 assignment shard IPC envelope differs"));
+    }
+    let trailer = bytes.len() - 10;
+    let footer_len = u32::from_le_bytes(
+        bytes[trailer..trailer + 4]
+            .try_into()
+            .map_err(|_| invalid("V36 assignment shard footer length differs"))?,
+    ) as usize;
+    let footer_start = trailer
+        .checked_sub(footer_len)
+        .filter(|offset| *offset >= 8)
+        .ok_or_else(|| invalid("V36 assignment shard footer extent differs"))?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer])
+        .map_err(|_| invalid("V36 assignment shard footer differs"))?;
+    if footer.version() != MetadataVersion::V5
+        || footer
+            .custom_metadata()
+            .is_some_and(|values| !values.is_empty())
+        || footer
+            .dictionaries()
+            .is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 assignment shard footer authority differs"));
+    }
+    validate_v36_assignment_ipc_schema(
+        footer
+            .schema()
+            .ok_or_else(|| invalid("V36 assignment shard footer schema is missing"))?,
+        expected,
+    )?;
+    let blocks = footer
+        .recordBatches()
+        .ok_or_else(|| invalid("V36 assignment shard batch is missing"))?;
+    if blocks.len() != 1 {
+        return Err(invalid("V36 assignment shard batch count differs"));
+    }
+    let block = blocks.get(0);
+    let block_offset = usize::try_from(block.offset())
+        .map_err(|_| invalid("V36 assignment shard batch offset differs"))?;
+    let metadata_len = usize::try_from(block.metaDataLength())
+        .map_err(|_| invalid("V36 assignment shard batch metadata differs"))?;
+    let body_len = usize::try_from(block.bodyLength())
+        .map_err(|_| invalid("V36 assignment shard batch body differs"))?;
+    let body_start = block_offset
+        .checked_add(metadata_len)
+        .ok_or_else(|| invalid("V36 assignment shard batch extent overflows"))?;
+    let body_end = body_start
+        .checked_add(body_len)
+        .ok_or_else(|| invalid("V36 assignment shard batch extent overflows"))?;
+    if block_offset < 8 || metadata_len < 8 || body_end > footer_start {
+        return Err(invalid("V36 assignment shard batch extent differs"));
+    }
+    let parse_message = |start: usize, end: usize| {
+        let metadata = bytes
+            .get(start..end)
+            .ok_or_else(|| invalid("V36 assignment shard message extent differs"))?;
+        if metadata.len() < 4 {
+            return Err(invalid("V36 assignment shard message is truncated"));
+        }
+        let prefix = if metadata.starts_with(&[255; 4]) {
+            8
+        } else {
+            4
+        };
+        let length = u32::from_le_bytes(
+            metadata
+                .get(prefix - 4..prefix)
+                .and_then(|value| value.try_into().ok())
+                .ok_or_else(|| invalid("V36 assignment shard message length differs"))?,
+        ) as usize;
+        let message_end = prefix
+            .checked_add(length)
+            .filter(|value| *value <= metadata.len())
+            .ok_or_else(|| invalid("V36 assignment shard message extent differs"))?;
+        arrow_ipc::root_as_message(&metadata[prefix..message_end])
+            .map_err(|_| invalid("V36 assignment shard message differs"))
+    };
+    let leading = parse_message(8, block_offset)?;
+    if leading.version() != MetadataVersion::V5 || leading.bodyLength() != 0 {
+        return Err(invalid("V36 assignment shard leading schema differs"));
+    }
+    validate_v36_assignment_ipc_schema(
+        leading
+            .header_as_schema()
+            .ok_or_else(|| invalid("V36 assignment shard leading schema is missing"))?,
+        expected,
+    )?;
+    let record_message = parse_message(block_offset, body_start)?;
+    let record = record_message
+        .header_as_record_batch()
+        .ok_or_else(|| invalid("V36 assignment shard record differs"))?;
+    if record_message.version() != MetadataVersion::V5
+        || record.compression().is_some()
+        || record
+            .variadicBufferCounts()
+            .is_some_and(|values| !values.is_empty())
+        || usize::try_from(record.length()).ok() != Some(row_count)
+        || usize::try_from(record_message.bodyLength()).ok() != Some(body_len)
+    {
+        return Err(invalid("V36 assignment shard record authority differs"));
+    }
+    let nodes = record
+        .nodes()
+        .ok_or_else(|| invalid("V36 assignment shard nodes are missing"))?;
+    let projected_values = row_count
+        .checked_mul(192)
+        .ok_or_else(|| invalid("V36 assignment shard node length overflows"))?;
+    let expected_nodes = [row_count, row_count, row_count, projected_values];
+    if nodes.len() != expected_nodes.len()
+        || nodes.iter().zip(expected_nodes).any(|(node, length)| {
+            usize::try_from(node.length()).ok() != Some(length) || node.null_count() != 0
+        })
+    {
+        return Err(invalid("V36 assignment shard node shape differs"));
+    }
+    let buffers = record
+        .buffers()
+        .ok_or_else(|| invalid("V36 assignment shard buffers are missing"))?;
+    if buffers.len() != 7 {
+        return Err(invalid("V36 assignment shard buffer count differs"));
+    }
+    let body = &bytes[body_start..body_end];
+    let mut slices = Vec::new();
+    slices
+        .try_reserve_exact(7)
+        .map_err(|_| invalid("V36 assignment shard buffer allocation exceeds capacity"))?;
+    let mut previous_end = 0_usize;
+    for buffer in buffers {
+        let start = usize::try_from(buffer.offset())
+            .map_err(|_| invalid("V36 assignment shard buffer offset differs"))?;
+        let length = usize::try_from(buffer.length())
+            .map_err(|_| invalid("V36 assignment shard buffer length differs"))?;
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| invalid("V36 assignment shard buffer extent overflows"))?;
+        if start < previous_end {
+            return Err(invalid("V36 assignment shard buffers overlap"));
+        }
+        slices.push(
+            body.get(start..end)
+                .ok_or_else(|| invalid("V36 assignment shard buffer extent differs"))?,
+        );
+        previous_end = end;
+    }
+    for (index, count) in [
+        (0, row_count),
+        (2, row_count),
+        (4, row_count),
+        (5, projected_values),
+    ] {
+        if !slices[index].is_empty() && slices[index].len() != count.div_ceil(8) {
+            return Err(invalid("V36 assignment shard validity length differs"));
+        }
+    }
+    let supercell_bytes = row_count
+        .checked_mul(4)
+        .ok_or_else(|| invalid("V36 assignment shard supercell bytes overflow"))?;
+    let source_bytes = row_count
+        .checked_mul(8)
+        .ok_or_else(|| invalid("V36 assignment shard source bytes overflow"))?;
+    let projected_bytes = projected_values
+        .checked_mul(4)
+        .ok_or_else(|| invalid("V36 assignment shard projected bytes overflow"))?;
+    for (index, length) in [
+        (1, supercell_bytes),
+        (3, source_bytes),
+        (6, projected_bytes),
+    ] {
+        if slices[index].len() != length {
+            return Err(invalid("V36 assignment shard value length differs"));
+        }
+    }
+    Ok(())
+}
+
+/// Encode one canonical, uncompressed, complete assignment shard.
+pub fn encode_v36_supercell_assignment_shard_arrow(
+    context: &V36SupercellAssignmentShardContext,
+    rows: &[V36SupercellAssignmentRow],
+) -> Result<(Vec<u8>, V36SupercellAssignmentShardArtifact)> {
+    validate_v36_assignment_rows(context, rows)?;
+    let row_count = u32::try_from(rows.len())
+        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
+    let manifest = V36SupercellAssignmentShardManifest {
+        context: context.into(),
+        format: V36_EXTERNAL_ASSIGNMENT_FORMAT.to_owned(),
+        role: V36_EXTERNAL_ASSIGNMENT_ROLE.to_owned(),
+        row_count,
+    };
+    let manifest = serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    let schema = Arc::new(v36_assignment_schema(manifest));
+    let projected = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        192,
+        Arc::new(Float32Array::from_iter_values(
+            rows.iter().flat_map(|row| row.projected),
+        )),
+        None,
+    )?;
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                rows.iter().map(|row| row.supercell_ordinal),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.source_ordinal),
+            )),
+            Arc::new(projected),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    let encoded_bytes = u64::try_from(bytes.len())
+        .map_err(|_| invalid("V36 assignment shard encoded bytes overflow"))?;
+    if encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES {
+        return Err(invalid("V36 assignment shard exceeds encoded admission"));
+    }
+    let artifact = V36SupercellAssignmentShardArtifact {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        context: context.clone(),
+        encoded_bytes,
+        row_count,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+    };
+    Ok((bytes, artifact))
+}
+
+/// Authenticate and decode one complete assignment shard.
+pub fn decode_v36_supercell_assignment_shard_arrow(
+    bytes: &[u8],
+    artifact: &V36SupercellAssignmentShardArtifact,
+) -> Result<Vec<V36SupercellAssignmentRow>> {
+    validate_v36_assignment_context(&artifact.context)?;
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if artifact.row_count == 0
+        || artifact.row_count > 65_536
+        || artifact.encoded_bytes != encoded_bytes
+        || encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES
+        || !valid_sha256(&artifact.sha256)
+        || !valid_sha256(&artifact.blake3)
+        || artifact.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || artifact.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 assignment shard artifact identity differs"));
+    }
+    let row_count = usize::try_from(artifact.row_count)
+        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
+    let manifest = V36SupercellAssignmentShardManifest {
+        context: (&artifact.context).into(),
+        format: V36_EXTERNAL_ASSIGNMENT_FORMAT.to_owned(),
+        role: V36_EXTERNAL_ASSIGNMENT_ROLE.to_owned(),
+        row_count: artifact.row_count,
+    };
+    let manifest = serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    validate_v36_assignment_ipc_envelope(bytes, &v36_assignment_schema(manifest), row_count)?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 {
+        return Err(invalid("V36 assignment shard batch count differs"));
+    }
+    let manifest_text = reader
+        .schema()
+        .metadata()
+        .get(V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY)
+        .cloned()
+        .ok_or_else(|| invalid("V36 assignment shard manifest is missing"))?;
+    let manifest: V36SupercellAssignmentShardManifest = serde_json::from_str(&manifest_text)
+        .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    let canonical = serde_json::to_string(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 assignment shard manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
+    if canonical != manifest_text
+        || manifest.context != V36SupercellAssignmentShardContextWire::from(&artifact.context)
+        || manifest.format != V36_EXTERNAL_ASSIGNMENT_FORMAT
+        || manifest.role != V36_EXTERNAL_ASSIGNMENT_ROLE
+        || manifest.row_count != artifact.row_count
+        || reader.schema().as_ref() != &v36_assignment_schema(manifest_text)
+    {
+        return Err(invalid("V36 assignment shard manifest differs"));
+    }
+    let batch = reader
+        .next()
+        .ok_or_else(|| invalid("V36 assignment shard batch is missing"))??;
+    if batch.num_rows()
+        != usize::try_from(artifact.row_count)
+            .map_err(|_| invalid("V36 assignment shard row count overflows"))?
+        || batch.num_columns() != 3
+        || reader.next().is_some()
+    {
+        return Err(invalid("V36 assignment shard batch differs"));
+    }
+    let supercells = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .filter(|array| array.null_count() == 0)
+        .ok_or_else(|| invalid("V36 assignment shard supercells differ"))?;
+    let sources = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .filter(|array| array.null_count() == 0)
+        .ok_or_else(|| invalid("V36 assignment shard sources differ"))?;
+    let projected = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .filter(|array| array.null_count() == 0 && array.value_length() == 192)
+        .ok_or_else(|| invalid("V36 assignment shard projected rows differ"))?;
+    let projected = projected
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .filter(|array| array.null_count() == 0)
+        .ok_or_else(|| invalid("V36 assignment shard projected rows differ"))?;
+    let (projected, remainder) = projected.values().as_chunks::<192>();
+    if !remainder.is_empty()
+        || projected.len() != supercells.len()
+        || sources.len() != supercells.len()
+    {
+        return Err(invalid("V36 assignment shard projected rows differ"));
+    }
+    let rows = supercells
+        .values()
+        .iter()
+        .zip(sources.values())
+        .zip(projected)
+        .map(
+            |((&supercell_ordinal, &source_ordinal), projected)| V36SupercellAssignmentRow {
+                supercell_ordinal,
+                source_ordinal,
+                projected: *projected,
+            },
+        )
+        .collect::<Vec<_>>();
+    validate_v36_assignment_rows(&artifact.context, &rows)?;
+    Ok(rows)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Outcome-blind limits and calibration for external super-cell assignment.
