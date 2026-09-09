@@ -2450,6 +2450,25 @@ pub struct V36PostingParityEvidence {
     pub first_missing_candidate: Option<V36PostingMissingCandidate>,
 }
 
+/// Scalar-control versus SIMD evidence for one bounded flat-centroid query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingCentroidDifferentialEvidence {
+    /// Registered query ordinal.
+    pub query_ordinal: u32,
+    /// Authenticated posting-centroid population.
+    pub posting_count: u32,
+    /// Candidate prefix length compared by both kernels.
+    pub candidate_count: u32,
+    /// Scalar-control candidate order.
+    pub scalar_candidates: Vec<u32>,
+    /// Serving SIMD candidate order.
+    pub simd_candidates: Vec<u32>,
+    /// Whether both kernels produced the same ordered candidate prefix.
+    pub ordered_candidates_equal: bool,
+    /// Maximum ceil-rounded relative distance error in parts per million.
+    pub maximum_relative_error_ppm: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct V36FlatCentroidCandidate {
     distance: f32,
@@ -2561,6 +2580,73 @@ pub fn select_v36_flat_centroid_candidates(
         .into_iter()
         .map(|candidate| candidate.posting_ordinal)
         .collect())
+}
+
+/// Compare the SIMD flat-centroid kernel with its scalar control in one bounded scan.
+pub fn diagnose_v36_flat_centroid_scalar_simd(
+    query_ordinal: u32,
+    centroids: &V36AuthenticatedPostingCentroids,
+    query: &[f32],
+    candidate_count: u32,
+) -> Result<V36PostingCentroidDifferentialEvidence> {
+    let candidate_capacity = usize::try_from(candidate_count)
+        .map_err(|_| invalid("V36 flat centroid candidate count overflows"))?;
+    if candidate_capacity == 0
+        || candidate_capacity > centroids.centroids.len()
+        || invalid_v36_vector(query)
+    {
+        return Err(invalid("V36 flat centroid differential authority differs"));
+    }
+    let mut scalar_best = BinaryHeap::with_capacity(candidate_capacity);
+    let mut simd_best = BinaryHeap::with_capacity(candidate_capacity);
+    let mut maximum_relative_error_ppm = 0_u64;
+    for (posting_ordinal, centroid) in centroids.centroids.iter().enumerate() {
+        let scalar = crate::metric::squared_euclidean_scalar(centroid, query);
+        let simd = crate::metric::squared_euclidean_simd(centroid, query);
+        if !scalar.is_finite() || !simd.is_finite() || scalar < 0.0 || simd < 0.0 {
+            return Err(invalid("V36 flat centroid differential is nonfinite"));
+        }
+        let relative_error =
+            f64::from((scalar - simd).abs()) / f64::from(scalar.abs().max(f32::MIN_POSITIVE));
+        let error_ppm = (relative_error * 1_000_000.0).ceil();
+        if !error_ppm.is_finite() || error_ppm > u64::MAX as f64 {
+            return Err(invalid("V36 flat centroid differential error overflows"));
+        }
+        maximum_relative_error_ppm = maximum_relative_error_ppm.max(error_ppm as u64);
+        let posting_ordinal = u32::try_from(posting_ordinal)
+            .map_err(|_| invalid("V36 flat centroid ordinal overflows"))?;
+        for (best, distance) in [(&mut scalar_best, scalar), (&mut simd_best, simd)] {
+            let candidate = V36FlatCentroidCandidate {
+                distance: if distance == 0.0 { 0.0 } else { distance },
+                posting_ordinal,
+            };
+            if best.len() < candidate_capacity {
+                best.push(candidate);
+            } else if best.peek().is_some_and(|farthest| candidate < *farthest) {
+                best.pop();
+                best.push(candidate);
+            }
+        }
+    }
+    let ordered = |heap: BinaryHeap<V36FlatCentroidCandidate>| {
+        let mut candidates = heap.into_vec();
+        candidates.sort_unstable();
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.posting_ordinal)
+            .collect::<Vec<_>>()
+    };
+    let scalar_candidates = ordered(scalar_best);
+    let simd_candidates = ordered(simd_best);
+    Ok(V36PostingCentroidDifferentialEvidence {
+        query_ordinal,
+        posting_count: centroids.posting_count(),
+        candidate_count,
+        ordered_candidates_equal: scalar_candidates == simd_candidates,
+        scalar_candidates,
+        simd_candidates,
+        maximum_relative_error_ppm,
+    })
 }
 
 /// Rescore and order a bounded candidate set with the exact selected scorer.

@@ -29,16 +29,16 @@ use borsuk::{
     build_v36_posting_hnsw_topology, build_v36_srht192_control, compare_v36_posting_prefixes,
     decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
     decode_v36_transport_prefix, derive_v36_posting_hnsw_levels,
-    encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
-    encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
-    project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
-    rank_v36_selected_posting_candidates, score_v36_posting_centroid, score_v36_posting_gaussian,
-    score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
-    select_v36_closure_owners, select_v36_flat_centroid_candidates,
-    summarize_v36_posting_accelerator_observation, train_v36_centered_subspace,
-    train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
-    train_v36_residual_pq4, v36_effective_ef_search, v36_posting_acceleration_required,
-    validate_v36_posting_accelerator_observation,
+    diagnose_v36_flat_centroid_scalar_simd, encode_v36_centered_projection_arrow,
+    encode_v36_coarse_fragment_arrow, encode_v36_residual_pq4_record, encode_v36_sign24_record,
+    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
+    project_v36_centered_row_simd, rank_v36_selected_posting_candidates,
+    score_v36_posting_centroid, score_v36_posting_gaussian, score_v36_posting_prototype_six,
+    score_v36_residual_pq4_record, score_v36_sign24_record, select_v36_closure_owners,
+    select_v36_flat_centroid_candidates, summarize_v36_posting_accelerator_observation,
+    train_v36_centered_subspace, train_v36_posting_centroids, train_v36_posting_gaussian,
+    train_v36_posting_prototype_six, train_v36_residual_pq4, v36_effective_ef_search,
+    v36_posting_acceleration_required, validate_v36_posting_accelerator_observation,
 };
 use rand_chacha::ChaCha8Rng;
 use rand_core::{RngCore, SeedableRng};
@@ -277,6 +277,33 @@ fn v36_posting_accelerator_flat_centroid_scan_is_bounded_and_deterministic() {
     negative_zero[0][17] = -0.0;
     assert!(authenticate_v36_posting_centroids(negative_zero).is_err());
     assert!(authenticate_v36_posting_centroids(Vec::new()).is_err());
+}
+
+#[test]
+fn v36_posting_accelerator_flat_centroid_records_scalar_simd_differential() {
+    let centroids = (0..7)
+        .map(|posting| {
+            std::array::from_fn(|dimension| {
+                (((posting * 193 + dimension * 17) % 257) as f32 - 128.0) * 0.03125
+            })
+        })
+        .collect();
+    let directory = authenticate_v36_posting_centroids(centroids).unwrap();
+    let query = (0..192)
+        .map(|dimension| (((dimension * 29) % 131) as f32 - 65.0) * 0.0625)
+        .collect::<Vec<_>>();
+    let evidence = diagnose_v36_flat_centroid_scalar_simd(11, &directory, &query, 4).unwrap();
+    assert_eq!(evidence.query_ordinal, 11);
+    assert_eq!(evidence.posting_count, 7);
+    assert_eq!(evidence.candidate_count, 4);
+    assert_eq!(evidence.scalar_candidates.len(), 4);
+    assert_eq!(evidence.simd_candidates.len(), 4);
+    assert!(evidence.ordered_candidates_equal);
+    assert!(evidence.maximum_relative_error_ppm <= 10);
+
+    let mut nonfinite = query;
+    nonfinite[191] = f32::NAN;
+    assert!(diagnose_v36_flat_centroid_scalar_simd(11, &directory, &nonfinite, 4).is_err());
 }
 
 fn prefix_comparison(
