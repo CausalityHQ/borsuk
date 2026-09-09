@@ -2366,6 +2366,37 @@ pub fn decode_v36_supercell_assignment_shard_arrow(
     Ok(rows)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+/// One assignment shard authenticated against its exact Arrow bytes and identity.
+pub struct V36AuthenticatedSupercellAssignmentShard {
+    artifact: V36SupercellAssignmentShardArtifact,
+    rows: Vec<V36SupercellAssignmentRow>,
+}
+
+impl V36AuthenticatedSupercellAssignmentShard {
+    /// Return the exact authenticated assignment-shard identity.
+    pub fn artifact(&self) -> &V36SupercellAssignmentShardArtifact {
+        &self.artifact
+    }
+
+    /// Return the authenticated assignment rows.
+    pub fn rows(&self) -> &[V36SupercellAssignmentRow] {
+        &self.rows
+    }
+}
+
+/// Authenticate one complete assignment shard into an opaque merge input.
+pub fn authenticate_v36_supercell_assignment_shard_arrow(
+    bytes: &[u8],
+    artifact: &V36SupercellAssignmentShardArtifact,
+) -> Result<V36AuthenticatedSupercellAssignmentShard> {
+    let rows = decode_v36_supercell_assignment_shard_arrow(bytes, artifact)?;
+    Ok(V36AuthenticatedSupercellAssignmentShard {
+        artifact: artifact.clone(),
+        rows,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Complete authority embedded in one per-supercell merge-run chunk.
 pub struct V36SupercellRunChunkContext {
@@ -7176,14 +7207,16 @@ mod tests {
     use super::{
         Result, V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE, V36AdmittedSupercellAssignmentPreflight,
         V36ArtifactIdentity, V36AuthenticatedInitialAssignmentMergeGroup,
-        V36CommittedSupercellAssignments, V36ExternalMergeGenerationProjection,
-        V36InitialAssignmentMergeChunkArtifact, V36InitialAssignmentMergeGeneration,
-        V36InitialAssignmentMergeGroup, V36InitialAssignmentMergeRunSink, V36RowOwners,
-        V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentProjection,
-        V36SupercellAssignmentRow, V36SupercellAssignmentShardArtifact,
-        V36SupercellAssignmentShardContext, V36SupercellTrainingSpec,
+        V36AuthenticatedSupercellAssignmentShard, V36CommittedSupercellAssignments,
+        V36ExternalMergeGenerationProjection, V36InitialAssignmentMergeChunkArtifact,
+        V36InitialAssignmentMergeGeneration, V36InitialAssignmentMergeGroup,
+        V36InitialAssignmentMergeRunSink, V36RowOwners, V36SupercellAssignmentAdmissionRequest,
+        V36SupercellAssignmentProjection, V36SupercellAssignmentRow,
+        V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardContext,
+        V36SupercellTrainingSpec, authenticate_v36_supercell_assignment_shard_arrow,
         decode_v36_initial_assignment_merge_chunk_arrow,
-        encode_v36_initial_assignment_merge_chunk_arrow, invalid,
+        encode_v36_initial_assignment_merge_chunk_arrow,
+        encode_v36_supercell_assignment_shard_arrow, invalid,
         plan_v36_initial_assignment_merge_generation, repair_v36_empty_posting_assignments,
         v36_committed_assignment_root, write_v36_initial_assignment_merge_group,
     };
@@ -7632,5 +7665,53 @@ mod tests {
         assert!(failing_sink.aborted);
         assert_eq!(failing_sink.events, ["chunk", "abort"]);
         assert!(failing_sink.chunks.is_empty());
+    }
+
+    #[test]
+    fn v36_authenticated_assignment_shard_handle_is_byte_bound_and_opaque() {
+        // Break caught: the merge loader accepts decoded rows independently
+        // from the exact assignment shard bytes and registered identity.
+        let training_spec = V36SupercellTrainingSpec {
+            corpus_rows: 4,
+            dimensions: 192,
+            maximum_block_rows: 4,
+            projected_corpus_sha256: "1".repeat(64),
+            reservoir_rows: 4,
+            super_cell_count: 2,
+        };
+        let model_identity = V36ArtifactIdentity {
+            blake3: "2".repeat(64),
+            encoded_bytes: 1,
+            role: "supercell-model".to_owned(),
+            sha256: "3".repeat(64),
+            uri: "s3://borsuk-v36-test/geometry/supercells.arrow".to_owned(),
+        };
+        let context = V36SupercellAssignmentShardContext {
+            model_identity,
+            projected_corpus_sha256: training_spec.projected_corpus_sha256.clone(),
+            shard_ordinal: 0,
+            training_spec,
+            uri: "s3://borsuk-v36-test/geometry/assignments/shard-000000.arrow".to_owned(),
+        };
+        let mut vector = [0.0_f32; 192];
+        vector[0] = 1.0;
+        let rows = vec![
+            V36SupercellAssignmentRow::new(0, 0, vector).unwrap(),
+            V36SupercellAssignmentRow::new(0, 2, vector).unwrap(),
+            V36SupercellAssignmentRow::new(1, 1, vector).unwrap(),
+            V36SupercellAssignmentRow::new(1, 3, vector).unwrap(),
+        ];
+        let (bytes, artifact) =
+            encode_v36_supercell_assignment_shard_arrow(&context, &rows).unwrap();
+        let authenticated =
+            authenticate_v36_supercell_assignment_shard_arrow(&bytes, &artifact).unwrap();
+        assert_eq!(authenticated.artifact(), &artifact);
+        assert_eq!(authenticated.rows(), rows);
+
+        let mut corrupted = bytes;
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 1;
+        assert!(authenticate_v36_supercell_assignment_shard_arrow(&corrupted, &artifact).is_err());
+        let _: &V36AuthenticatedSupercellAssignmentShard = &authenticated;
     }
 }
