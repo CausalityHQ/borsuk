@@ -6,12 +6,14 @@ use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt6
 use arrow_schema::{DataType, Field};
 use borsuk::{
     V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
-    V36SupercellAssignmentAdmissionRequest, V36SupercellTrainingSpec,
-    admit_v36_supercell_assignment_preflight, bind_v36_registered_supercell_training_spec,
+    V36SupercellAssignmentAdmissionRequest, V36SupercellPostCountAdmissionRequest,
+    V36SupercellTrainingSpec, admit_v36_supercell_assignment_preflight,
+    admit_v36_supercell_post_count, bind_v36_registered_supercell_training_spec,
     decode_v36_supercell_model_arrow, encode_v36_supercell_model_arrow,
     load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
-    project_v36_supercell_assignment_admission, project_v36_supercell_training_preflight,
-    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
+    project_v36_supercell_assignment_admission, project_v36_supercell_post_count_admission,
+    project_v36_supercell_training_preflight, train_v36_supercells, v36_prefix_source_schema,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -430,6 +432,155 @@ fn v36_geometry_external_assignment_plan_is_authenticated_and_fail_closed() {
         admit_v36_supercell_assignment_preflight(&authenticated, &unbounded_external_calibration)
             .is_err()
     );
+}
+
+fn post_count_request() -> V36SupercellPostCountAdmissionRequest {
+    V36SupercellPostCountAdmissionRequest {
+        measured_component_terms: 1_000_000,
+        measured_elapsed_ns: 1_000_000,
+        measured_cost_microusd: 1,
+        maximum_active_wall_seconds: u64::MAX,
+        maximum_cost_microusd: u64::MAX,
+        maximum_peak_live_bytes: u64::MAX,
+        maximum_scratch_bytes: u64::MAX,
+    }
+}
+
+#[test]
+fn v36_geometry_post_count_admission_projects_skew_and_hamilton_without_population() {
+    // Break caught: local training treats one super-cell as a RAM bound or
+    // omits farthest-first, ten Lloyd passes, worst repair, or replay reduction.
+    let spec = bind_v36_registered_supercell_training_spec(
+        1_000_000,
+        65_536,
+        &format!("{:064x}", 1_000_000),
+    )
+    .unwrap();
+    let assignment = project_v36_supercell_assignment_admission(
+        &spec,
+        16 * 1_048_576,
+        &external_assignment_request(),
+    )
+    .unwrap();
+    let projected = project_v36_supercell_post_count_admission(
+        &spec,
+        &assignment,
+        &[999_997, 1, 1, 1],
+        4_096,
+        4,
+        &post_count_request(),
+    )
+    .unwrap();
+    assert_eq!(projected.posting_count, 245);
+    assert_eq!(projected.postings_per_supercell, [242, 1, 1, 1]);
+    assert_eq!(projected.initialization_distance_evaluations, 240_970_116);
+    assert_eq!(projected.lloyd_distance_evaluations, 2_419_992_770);
+    assert_eq!(projected.repair_distance_evaluations, 2_419_992_770);
+    assert_eq!(projected.source_reduction_terms, 1_920_000_000);
+    assert_eq!(projected.local_component_terms, 977_463_485_952);
+    assert_eq!(projected.required_scratch_bytes, 2_011_041_792);
+    assert_eq!(projected.required_peak_live_bytes, 425_721_856);
+    assert_eq!(projected.projected_active_ns, 978_252_485_952);
+    assert_eq!(projected.projected_cost_microusd, 978_253);
+
+    assert!(
+        project_v36_supercell_post_count_admission(
+            &spec,
+            &assignment,
+            &[999_998, 1, 0, 0],
+            4_096,
+            4,
+            &post_count_request(),
+        )
+        .is_err()
+    );
+    assert!(
+        project_v36_supercell_post_count_admission(
+            &spec,
+            &assignment,
+            &[999_997, 1, 1, 1],
+            1_000_001,
+            4,
+            &post_count_request(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn v36_geometry_post_count_plan_consumes_authenticated_preflight_and_limits() {
+    let rows = projected_rows(24);
+    let spec = V36SupercellTrainingSpec {
+        corpus_rows: 24,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 8,
+        projected_corpus_sha256: projected_rows_sha256(&rows),
+        reservoir_rows: 24,
+        super_cell_count: 4,
+    };
+    let mut source = ProjectedSource {
+        block_rows: 8,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let model = train_v36_supercells(&spec, &mut source).unwrap();
+    let (bytes, identity) = encode_v36_supercell_model_arrow(
+        &model,
+        &spec,
+        "supercell-model",
+        "s3://borsuk-v36-test/geometry/supercells.arrow",
+    )
+    .unwrap();
+    let authenticated = decode_v36_supercell_model_arrow(&bytes, &identity, &spec).unwrap();
+    let mut assignment_request = external_assignment_request();
+    assignment_request.measured_component_terms = 1;
+    assignment_request.measured_elapsed_ns = 1;
+    assignment_request.measured_cost_microusd = 1;
+    assignment_request.measured_external_work_units = 1;
+    assignment_request.measured_external_elapsed_ns = 1;
+    assignment_request.measured_external_cost_microusd = 1;
+    assignment_request.queue_rows_per_worker = 1;
+    assignment_request.sort_rows_per_worker = 1;
+    let assignment =
+        admit_v36_supercell_assignment_preflight(&authenticated, &assignment_request).unwrap();
+    let mut request = post_count_request();
+    request.measured_component_terms = 1;
+    request.measured_elapsed_ns = 1;
+    let projection = project_v36_supercell_post_count_admission(
+        &spec,
+        assignment.projection(),
+        &[21, 1, 1, 1],
+        6,
+        4,
+        &request,
+    )
+    .unwrap();
+    assert_eq!(projection.required_peak_live_bytes, 209_724_448);
+    request.maximum_active_wall_seconds =
+        u64::try_from(projection.projected_active_ns.div_ceil(1_000_000_000)).unwrap();
+    request.maximum_cost_microusd = projection.projected_cost_microusd;
+    request.maximum_peak_live_bytes = projection.required_peak_live_bytes;
+    request.maximum_scratch_bytes = projection.required_scratch_bytes;
+    let admitted =
+        admit_v36_supercell_post_count(&assignment, &[21, 1, 1, 1], 6, &request).unwrap();
+    assert_eq!(admitted.assignment_preflight(), &assignment);
+    assert_eq!(admitted.request(), &request);
+    assert_eq!(admitted.projection(), &projection);
+    assert_eq!(admitted.run_rows(), &[21, 1, 1, 1]);
+    assert_eq!(admitted.target_primary_rows(), 6);
+
+    for mutation in 0..4 {
+        let mut rejected = request.clone();
+        match mutation {
+            0 => rejected.maximum_active_wall_seconds -= 1,
+            1 => rejected.maximum_cost_microusd -= 1,
+            2 => rejected.maximum_peak_live_bytes -= 1,
+            3 => rejected.maximum_scratch_bytes -= 1,
+            _ => unreachable!(),
+        }
+        assert!(admit_v36_supercell_post_count(&assignment, &[21, 1, 1, 1], 6, &rejected).is_err());
+    }
 }
 
 #[test]

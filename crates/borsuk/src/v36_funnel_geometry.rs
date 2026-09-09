@@ -1850,6 +1850,262 @@ pub fn admit_v36_supercell_assignment_preflight(
     })
 }
 
+const V36_LOCAL_POSTING_SIDECAR_ROW_BYTES: u64 = 8 + 8 + 4;
+const V36_LOCAL_POSTING_WORKER_ROW_BYTES: u64 =
+    V36_EXTERNAL_ASSIGNMENT_ROW_BYTES + V36_LOCAL_POSTING_SIDECAR_ROW_BYTES;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Calibration and hard limits for exact post-count local training admission.
+pub struct V36SupercellPostCountAdmissionRequest {
+    /// Local-training component terms in the bounded calibration.
+    pub measured_component_terms: u128,
+    /// Active nanoseconds in the bounded local-training calibration.
+    pub measured_elapsed_ns: u64,
+    /// Cost of the bounded local-training calibration in micro-US-dollars.
+    pub measured_cost_microusd: u64,
+    /// Hard total active wall limit including assignment.
+    pub maximum_active_wall_seconds: u64,
+    /// Hard total construction cost limit in micro-US-dollars.
+    pub maximum_cost_microusd: u64,
+    /// Hard aggregate process live-byte limit.
+    pub maximum_peak_live_bytes: u64,
+    /// Hard attempt-owned scratch-byte limit.
+    pub maximum_scratch_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact post-count projection including Hamilton allocation and local work.
+pub struct V36SupercellPostCountProjection {
+    /// Exact global posting count derived from target primary rows.
+    pub posting_count: u64,
+    /// Hamilton allocation in super-cell ordinal order.
+    pub postings_per_supercell: Vec<u32>,
+    /// Exact farthest-first distance evaluations across all super cells.
+    pub initialization_distance_evaluations: u128,
+    /// Exact distance evaluations across ten local Lloyd passes.
+    pub lloyd_distance_evaluations: u128,
+    /// Conservative worst-case empty-repair distance evaluations.
+    pub repair_distance_evaluations: u128,
+    /// Exact source-ordered binary64 centroid reduction component terms.
+    pub source_reduction_terms: u128,
+    /// Farthest-first, ten Lloyd, repair, and replay component terms.
+    pub local_component_terms: u128,
+    /// Total scratch including assignment overlap and two sidecar generations.
+    pub required_scratch_bytes: u64,
+    /// Maximum of assignment and bounded local-worker live memory.
+    pub required_peak_live_bytes: u64,
+    /// Total ceiling-scaled active time including assignment.
+    pub projected_active_ns: u128,
+    /// Total ceiling-scaled cost including assignment.
+    pub projected_cost_microusd: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Final construction admission consuming one authenticated assignment preflight.
+pub struct V36AdmittedSupercellPostCountPlan {
+    assignment_preflight: V36AdmittedSupercellAssignmentPreflight,
+    run_rows: Vec<u64>,
+    target_primary_rows: u64,
+    request: V36SupercellPostCountAdmissionRequest,
+    projection: V36SupercellPostCountProjection,
+}
+
+impl V36AdmittedSupercellPostCountPlan {
+    /// Authenticated assignment preflight consumed by this final admission.
+    pub fn assignment_preflight(&self) -> &V36AdmittedSupercellAssignmentPreflight {
+        &self.assignment_preflight
+    }
+
+    /// Committed super-cell populations in exact ordinal order.
+    pub fn run_rows(&self) -> &[u64] {
+        &self.run_rows
+    }
+
+    /// Exact target primary rows from which the posting count was derived.
+    pub const fn target_primary_rows(&self) -> u64 {
+        self.target_primary_rows
+    }
+
+    /// Exact local calibration and total construction limits.
+    pub fn request(&self) -> &V36SupercellPostCountAdmissionRequest {
+        &self.request
+    }
+
+    /// Exact checked Hamilton, work, scratch, live-memory, time, and cost projection.
+    pub fn projection(&self) -> &V36SupercellPostCountProjection {
+        &self.projection
+    }
+}
+
+/// Project exact post-count local training without allocating the population.
+pub fn project_v36_supercell_post_count_admission(
+    spec: &V36SupercellTrainingSpec,
+    assignment: &V36SupercellAssignmentProjection,
+    run_rows: &[u64],
+    target_primary_rows: u64,
+    worker_count: u8,
+    request: &V36SupercellPostCountAdmissionRequest,
+) -> Result<V36SupercellPostCountProjection> {
+    if run_rows.len()
+        != usize::try_from(spec.super_cell_count)
+            .map_err(|_| invalid("V36 post-count super-cell count overflows"))?
+        || target_primary_rows == 0
+        || !matches!(worker_count, 1 | 2 | 4)
+        || request.measured_component_terms == 0
+        || request.measured_elapsed_ns == 0
+        || request.measured_cost_microusd == 0
+        || request.maximum_active_wall_seconds == 0
+        || request.maximum_cost_microusd == 0
+        || request.maximum_peak_live_bytes == 0
+        || request.maximum_scratch_bytes == 0
+    {
+        return Err(invalid("V36 post-count admission differs"));
+    }
+    let population = run_rows.iter().try_fold(0_u64, |sum, rows| {
+        sum.checked_add(*rows)
+            .ok_or_else(|| invalid("V36 post-count population overflows"))
+    })?;
+    if population != spec.corpus_rows {
+        return Err(invalid("V36 post-count population differs"));
+    }
+    let posting_count = population.div_ceil(target_primary_rows);
+    let posting_count_u32 = u32::try_from(posting_count)
+        .map_err(|_| invalid("V36 post-count posting count overflows"))?;
+    let postings_per_supercell = allocate_v36_hamilton_postings(run_rows, posting_count_u32)?;
+
+    let mut initialization_distance_evaluations = 0_u128;
+    let mut lloyd_distance_evaluations = 0_u128;
+    let mut repair_distance_evaluations = 0_u128;
+    let mut source_reduction_terms = 0_u128;
+    for (&rows, &postings) in run_rows.iter().zip(&postings_per_supercell) {
+        if u64::from(postings) > rows {
+            return Err(invalid("V36 post-count postings exceed run population"));
+        }
+        let rows = u128::from(rows);
+        let postings = u128::from(postings);
+        let initialization_distances = if postings == 0 {
+            0
+        } else {
+            (postings - 1)
+                .checked_mul(rows)
+                .and_then(|value| value.checked_sub(postings * (postings - 1) / 2))
+                .ok_or_else(|| invalid("V36 post-count initialization work overflows"))?
+        };
+        let lloyd_distances = 10_u128
+            .checked_mul(rows)
+            .and_then(|value| value.checked_mul(postings))
+            .ok_or_else(|| invalid("V36 post-count Lloyd work overflows"))?;
+        let repair_distances = 10_u128
+            .checked_mul(rows)
+            .and_then(|value| value.checked_mul(postings))
+            .ok_or_else(|| invalid("V36 post-count repair work overflows"))?;
+        let reduction_terms = 10_u128
+            .checked_mul(rows)
+            .and_then(|value| value.checked_mul(192))
+            .ok_or_else(|| invalid("V36 post-count reduction work overflows"))?;
+        initialization_distance_evaluations = initialization_distance_evaluations
+            .checked_add(initialization_distances)
+            .ok_or_else(|| invalid("V36 post-count initialization work overflows"))?;
+        lloyd_distance_evaluations = lloyd_distance_evaluations
+            .checked_add(lloyd_distances)
+            .ok_or_else(|| invalid("V36 post-count Lloyd work overflows"))?;
+        repair_distance_evaluations = repair_distance_evaluations
+            .checked_add(repair_distances)
+            .ok_or_else(|| invalid("V36 post-count repair work overflows"))?;
+        source_reduction_terms = source_reduction_terms
+            .checked_add(reduction_terms)
+            .ok_or_else(|| invalid("V36 post-count reduction work overflows"))?;
+    }
+    let local_component_terms = initialization_distance_evaluations
+        .checked_add(lloyd_distance_evaluations)
+        .and_then(|value| value.checked_add(repair_distance_evaluations))
+        .and_then(|value| value.checked_mul(192))
+        .and_then(|value| value.checked_add(source_reduction_terms))
+        .ok_or_else(|| invalid("V36 post-count work overflows"))?;
+    if request.measured_component_terms > local_component_terms {
+        return Err(invalid("V36 post-count calibration exceeds projected work"));
+    }
+    let sidecar_overlap_bytes = population
+        .checked_mul(V36_LOCAL_POSTING_SIDECAR_ROW_BYTES)
+        .and_then(|value| value.checked_mul(2))
+        .ok_or_else(|| invalid("V36 post-count sidecar bytes overflow"))?;
+    let required_scratch_bytes = assignment
+        .required_scratch_bytes
+        .checked_add(sidecar_overlap_bytes)
+        .ok_or_else(|| invalid("V36 post-count scratch bytes overflow"))?;
+    let local_worker_bytes = V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS
+        .checked_mul(V36_LOCAL_POSTING_WORKER_ROW_BYTES)
+        .and_then(|value| value.checked_mul(u64::from(worker_count)))
+        .and_then(|value| value.checked_add(posting_count.checked_mul(192 * 4 + 192 * 8 + 8)?))
+        .ok_or_else(|| invalid("V36 post-count live bytes overflow"))?;
+    let required_peak_live_bytes = assignment.required_peak_live_bytes.max(local_worker_bytes);
+    let local_active_ns = local_component_terms
+        .checked_mul(u128::from(request.measured_elapsed_ns))
+        .ok_or_else(|| invalid("V36 post-count time overflows"))?
+        .div_ceil(request.measured_component_terms);
+    let projected_active_ns = assignment
+        .projected_active_ns
+        .checked_add(local_active_ns)
+        .ok_or_else(|| invalid("V36 post-count time overflows"))?;
+    let local_cost = local_component_terms
+        .checked_mul(u128::from(request.measured_cost_microusd))
+        .ok_or_else(|| invalid("V36 post-count cost overflows"))?
+        .div_ceil(request.measured_component_terms);
+    let local_cost =
+        u64::try_from(local_cost).map_err(|_| invalid("V36 post-count cost overflows"))?;
+    let projected_cost_microusd = assignment
+        .projected_cost_microusd
+        .checked_add(local_cost)
+        .ok_or_else(|| invalid("V36 post-count cost overflows"))?;
+    Ok(V36SupercellPostCountProjection {
+        posting_count,
+        postings_per_supercell,
+        initialization_distance_evaluations,
+        lloyd_distance_evaluations,
+        repair_distance_evaluations,
+        source_reduction_terms,
+        local_component_terms,
+        required_scratch_bytes,
+        required_peak_live_bytes,
+        projected_active_ns,
+        projected_cost_microusd,
+    })
+}
+
+/// Admit final local training against one authenticated assignment preflight.
+pub fn admit_v36_supercell_post_count(
+    assignment: &V36AdmittedSupercellAssignmentPreflight,
+    run_rows: &[u64],
+    target_primary_rows: u64,
+    request: &V36SupercellPostCountAdmissionRequest,
+) -> Result<V36AdmittedSupercellPostCountPlan> {
+    let projection = project_v36_supercell_post_count_admission(
+        assignment.training_spec(),
+        assignment.projection(),
+        run_rows,
+        target_primary_rows,
+        assignment.request().worker_count,
+        request,
+    )?;
+    let maximum_active_ns = u128::from(request.maximum_active_wall_seconds)
+        .checked_mul(1_000_000_000)
+        .ok_or_else(|| invalid("V36 post-count wall cap overflows"))?;
+    if projection.projected_active_ns > maximum_active_ns
+        || projection.projected_cost_microusd > request.maximum_cost_microusd
+        || projection.required_peak_live_bytes > request.maximum_peak_live_bytes
+        || projection.required_scratch_bytes > request.maximum_scratch_bytes
+    {
+        return Err(invalid("V36 post-count admission exceeds limits"));
+    }
+    Ok(V36AdmittedSupercellPostCountPlan {
+        assignment_preflight: assignment.clone(),
+        run_rows: run_rows.to_vec(),
+        target_primary_rows,
+        request: request.clone(),
+        projection,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Deterministic V36 super-cell centroids and reservoir evidence.
 pub struct V36SupercellModel {
