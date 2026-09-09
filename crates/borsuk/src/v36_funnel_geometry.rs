@@ -2366,7 +2366,7 @@ pub fn decode_v36_supercell_assignment_shard_arrow(
     Ok(rows)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 /// One assignment shard authenticated against its exact Arrow bytes and identity.
 pub struct V36AuthenticatedSupercellAssignmentShard {
     artifact: V36SupercellAssignmentShardArtifact,
@@ -3185,7 +3185,7 @@ struct V36InitialAssignmentMergeRootManifest {
     uri: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Authenticated decoded inputs for one initial merge group.
 ///
 /// Fields remain private so only the authority loader can mint this handle.
@@ -3194,6 +3194,44 @@ pub struct V36AuthenticatedInitialAssignmentMergeGroup {
     input_artifacts: Vec<V36SupercellAssignmentShardArtifact>,
     inputs: Vec<Vec<V36SupercellAssignmentRow>>,
     plan: V36InitialAssignmentMergeGeneration,
+}
+
+/// Bind one planned merge group to its exact authenticated assignment shards.
+pub fn load_v36_initial_assignment_merge_group(
+    committed: &V36CommittedSupercellAssignments,
+    group_ordinal: u64,
+    authenticated_shards: Vec<V36AuthenticatedSupercellAssignmentShard>,
+) -> Result<V36AuthenticatedInitialAssignmentMergeGroup> {
+    let plan = plan_v36_initial_assignment_merge_generation(committed)?
+        .ok_or_else(|| invalid("V36 initial merge generation is absent"))?;
+    let group = v36_initial_assignment_merge_group(&plan, group_ordinal)?;
+    let expected_artifacts = &committed.artifacts[group.input_range.clone()];
+    if authenticated_shards.len() != expected_artifacts.len() {
+        return Err(invalid("V36 initial merge input inventory differs"));
+    }
+    let mut input_artifacts = Vec::new();
+    input_artifacts
+        .try_reserve_exact(expected_artifacts.len())
+        .map_err(|_| invalid("V36 initial merge artifact inventory exceeds capacity"))?;
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(expected_artifacts.len())
+        .map_err(|_| invalid("V36 initial merge input inventory exceeds capacity"))?;
+    for (expected, authenticated) in expected_artifacts.iter().zip(authenticated_shards) {
+        if &authenticated.artifact != expected {
+            return Err(invalid("V36 initial merge input artifact differs"));
+        }
+        input_artifacts.push(authenticated.artifact);
+        inputs.push(authenticated.rows);
+    }
+    let authenticated = V36AuthenticatedInitialAssignmentMergeGroup {
+        group_ordinal,
+        input_artifacts,
+        inputs,
+        plan,
+    };
+    validate_v36_initial_assignment_merge_inputs(&authenticated)?;
+    Ok(authenticated)
 }
 
 /// Transactional destination for one initial globally sorted merge run.
@@ -7217,8 +7255,9 @@ mod tests {
         decode_v36_initial_assignment_merge_chunk_arrow,
         encode_v36_initial_assignment_merge_chunk_arrow,
         encode_v36_supercell_assignment_shard_arrow, invalid,
-        plan_v36_initial_assignment_merge_generation, repair_v36_empty_posting_assignments,
-        v36_committed_assignment_root, write_v36_initial_assignment_merge_group,
+        load_v36_initial_assignment_merge_group, plan_v36_initial_assignment_merge_generation,
+        repair_v36_empty_posting_assignments, v36_committed_assignment_root,
+        write_v36_initial_assignment_merge_group,
     };
     use sha2::{Digest, Sha256};
 
@@ -7713,5 +7752,127 @@ mod tests {
         corrupted[last] ^= 1;
         assert!(authenticate_v36_supercell_assignment_shard_arrow(&corrupted, &artifact).is_err());
         let _: &V36AuthenticatedSupercellAssignmentShard = &authenticated;
+    }
+
+    #[test]
+    fn v36_initial_merge_loader_binds_committed_inventory_to_authenticated_shards() {
+        // Break caught: a merge group can be assembled from a detached plan or
+        // from a valid shard whose exact artifact is absent from the committed inventory.
+        let training_spec = V36SupercellTrainingSpec {
+            corpus_rows: 16 * 65_536 + 1,
+            dimensions: 192,
+            maximum_block_rows: 65_536,
+            projected_corpus_sha256: "1".repeat(64),
+            reservoir_rows: 65_536,
+            super_cell_count: 4,
+        };
+        let model_identity = V36ArtifactIdentity {
+            blake3: "2".repeat(64),
+            encoded_bytes: 1,
+            role: "supercell-model".to_owned(),
+            sha256: "3".repeat(64),
+            uri: "s3://borsuk-v36-test/geometry/supercells.arrow".to_owned(),
+        };
+        let context = V36SupercellAssignmentShardContext {
+            model_identity: model_identity.clone(),
+            projected_corpus_sha256: training_spec.projected_corpus_sha256.clone(),
+            shard_ordinal: 16,
+            training_spec: training_spec.clone(),
+            uri: "s3://borsuk-v36-test/geometry/assignments/shard-000016.arrow".to_owned(),
+        };
+        let mut vector = [0.0_f32; 192];
+        vector[0] = 1.0;
+        let tail_rows = vec![V36SupercellAssignmentRow::new(3, 16 * 65_536, vector).unwrap()];
+        let (tail_bytes, tail_artifact) =
+            encode_v36_supercell_assignment_shard_arrow(&context, &tail_rows).unwrap();
+        let tail =
+            authenticate_v36_supercell_assignment_shard_arrow(&tail_bytes, &tail_artifact).unwrap();
+        let mut artifacts = (0..16)
+            .map(|shard_ordinal| V36SupercellAssignmentShardArtifact {
+                blake3: format!("{shard_ordinal:064x}"),
+                context: V36SupercellAssignmentShardContext {
+                    model_identity: model_identity.clone(),
+                    projected_corpus_sha256: training_spec.projected_corpus_sha256.clone(),
+                    shard_ordinal,
+                    training_spec: training_spec.clone(),
+                    uri: format!(
+                        "s3://borsuk-v36-test/geometry/assignments/shard-{shard_ordinal:06}.arrow"
+                    ),
+                },
+                encoded_bytes: 1,
+                row_count: 65_536,
+                sha256: format!("{:064x}", shard_ordinal + 17),
+            })
+            .collect::<Vec<_>>();
+        artifacts.push(tail_artifact.clone());
+        let admission = V36AdmittedSupercellAssignmentPreflight {
+            model_identity,
+            training_spec,
+            request: V36SupercellAssignmentAdmissionRequest {
+                worker_count: 1,
+                queue_rows_per_worker: 1,
+                sort_rows_per_worker: 1,
+                merge_fan_in: 8,
+                measured_component_terms: 1,
+                measured_elapsed_ns: 1,
+                measured_cost_microusd: 1,
+                measured_external_work_units: 1,
+                measured_external_elapsed_ns: 1,
+                measured_external_cost_microusd: 1,
+                maximum_active_wall_seconds: 1,
+                maximum_cost_microusd: 1,
+                maximum_peak_live_bytes: 1,
+                maximum_scratch_bytes: 1,
+            },
+            projection: V36SupercellAssignmentProjection {
+                logical_shards: 17,
+                merge_generations: 2,
+                merge_fan_in: 8,
+                uncompressed_assignment_bytes: 1,
+                required_scratch_bytes: 1,
+                required_peak_live_bytes: 1,
+                component_terms: 1,
+                external_work_units: 1,
+                projected_active_ns: 1,
+                projected_cost_microusd: 1,
+            },
+        };
+        let uri_prefix = "s3://borsuk-v36-test/geometry/assignments";
+        let (_, root_identity) =
+            v36_committed_assignment_root(&admission, &artifacts, uri_prefix).unwrap();
+        let committed = V36CommittedSupercellAssignments {
+            admission,
+            artifacts,
+            root_identity,
+            uri_prefix: uri_prefix.to_owned(),
+        };
+
+        let mut detached = committed.clone();
+        detached.root_identity.sha256 = "9".repeat(64);
+        let detached_tail =
+            authenticate_v36_supercell_assignment_shard_arrow(&tail_bytes, &tail_artifact).unwrap();
+        assert!(
+            load_v36_initial_assignment_merge_group(&detached, 2, vec![detached_tail]).is_err()
+        );
+
+        let mut unregistered_context = context;
+        unregistered_context.uri =
+            "s3://borsuk-v36-test/geometry/assignments/unregistered.arrow".to_owned();
+        let (unregistered_bytes, unregistered_artifact) =
+            encode_v36_supercell_assignment_shard_arrow(&unregistered_context, &tail_rows).unwrap();
+        let unregistered = authenticate_v36_supercell_assignment_shard_arrow(
+            &unregistered_bytes,
+            &unregistered_artifact,
+        )
+        .unwrap();
+        assert!(
+            load_v36_initial_assignment_merge_group(&committed, 2, vec![unregistered]).is_err()
+        );
+
+        let loaded = load_v36_initial_assignment_merge_group(&committed, 2, vec![tail]).unwrap();
+        let mut sink = InitialMergeSink::default();
+        let written = write_v36_initial_assignment_merge_group(&loaded, &mut sink).unwrap();
+        assert_eq!(written.chunks().len(), 1);
+        assert_eq!(written.chunks()[0].row_count, 1);
     }
 }
