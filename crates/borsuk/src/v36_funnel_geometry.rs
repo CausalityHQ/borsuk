@@ -2392,6 +2392,19 @@ struct V36FlatCentroidCandidate {
     posting_ordinal: u32,
 }
 
+/// Once-authenticated contiguous posting centroids shared by query accelerators.
+#[derive(Debug, Clone)]
+pub struct V36AuthenticatedPostingCentroids {
+    centroids: Arc<[[f32; 192]]>,
+}
+
+impl V36AuthenticatedPostingCentroids {
+    /// Number of authenticated posting centroids.
+    pub fn posting_count(&self) -> u32 {
+        self.centroids.len() as u32
+    }
+}
+
 impl Eq for V36FlatCentroidCandidate {}
 
 impl Ord for V36FlatCentroidCandidate {
@@ -2424,27 +2437,40 @@ pub fn v36_effective_ef_search(prefix_length: u32, ladder_rung: u32) -> Result<u
     Ok(prefix_length.max(ladder_rung))
 }
 
+/// Authenticate one contiguous posting-centroid population before query execution.
+pub fn authenticate_v36_posting_centroids(
+    centroids: Vec<[f32; 192]>,
+) -> Result<V36AuthenticatedPostingCentroids> {
+    if centroids.is_empty()
+        || centroids.len() > u32::MAX as usize
+        || centroids.iter().flatten().any(|value| {
+            !value.is_finite() || (*value == 0.0 && value.to_bits() != 0.0_f32.to_bits())
+        })
+    {
+        return Err(invalid("V36 posting centroid authority differs"));
+    }
+    Ok(V36AuthenticatedPostingCentroids {
+        centroids: Arc::from(centroids),
+    })
+}
+
 /// Select a bounded centroid-L2 candidate set without a population-sized rank buffer.
 pub fn select_v36_flat_centroid_candidates(
-    centroids: &[Vec<f32>],
+    centroids: &V36AuthenticatedPostingCentroids,
     query: &[f32],
     candidate_count: u32,
 ) -> Result<Vec<u32>> {
     let candidate_count = usize::try_from(candidate_count)
         .map_err(|_| invalid("V36 flat centroid candidate count overflows"))?;
-    if centroids.is_empty()
-        || candidate_count == 0
-        || candidate_count > centroids.len()
+    if candidate_count == 0
+        || candidate_count > centroids.centroids.len()
         || invalid_v36_vector(query)
-        || centroids
-            .iter()
-            .any(|centroid| invalid_v36_vector(centroid))
     {
         return Err(invalid("V36 flat centroid candidate authority differs"));
     }
 
     let mut best = BinaryHeap::with_capacity(candidate_count);
-    for (posting_ordinal, centroid) in centroids.iter().enumerate() {
+    for (posting_ordinal, centroid) in centroids.centroids.iter().enumerate() {
         let distance = crate::metric::squared_euclidean_simd(centroid, query);
         if !distance.is_finite() {
             return Err(invalid("V36 flat centroid distance is nonfinite"));
