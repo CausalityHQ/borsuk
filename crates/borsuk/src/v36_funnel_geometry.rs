@@ -2639,6 +2639,125 @@ impl V36CommittedSupercellAssignments {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One deterministic fixed-fan-in group in the first external merge generation.
+pub struct V36InitialAssignmentMergeGroup {
+    group_ordinal: u64,
+    input_range: std::ops::Range<usize>,
+    output_uri: String,
+}
+
+impl V36InitialAssignmentMergeGroup {
+    /// Consecutive group ordinal within generation zero.
+    pub const fn group_ordinal(&self) -> u64 {
+        self.group_ordinal
+    }
+
+    /// Exact half-open range into the committed assignment inventory.
+    pub fn input_range(&self) -> std::ops::Range<usize> {
+        self.input_range.clone()
+    }
+
+    /// Attempt-private URI reserved for this globally sorted output run.
+    pub fn output_uri(&self) -> &str {
+        &self.output_uri
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Root-bound deterministic plan for generation zero of external assignment merge.
+pub struct V36InitialAssignmentMergeGeneration {
+    generation: V36ExternalMergeGenerationProjection,
+    groups: Vec<V36InitialAssignmentMergeGroup>,
+    predecessor_root_identity: V36ArtifactIdentity,
+}
+
+impl V36InitialAssignmentMergeGeneration {
+    /// Exact generation projection admitted before assignment execution.
+    pub const fn generation(&self) -> V36ExternalMergeGenerationProjection {
+        self.generation
+    }
+
+    /// Ordered fixed-fan-in merge groups.
+    pub fn groups(&self) -> &[V36InitialAssignmentMergeGroup] {
+        &self.groups
+    }
+
+    /// Canonical committed assignment root from which the groups were derived.
+    pub const fn predecessor_root_identity(&self) -> &V36ArtifactIdentity {
+        &self.predecessor_root_identity
+    }
+}
+
+/// Plan the first global fixed-fan-in merge generation from committed authority.
+///
+/// A single-shard inventory needs no merge and returns `None`. The opaque
+/// committed handle is re-bound to its canonical root before any group is
+/// exposed, preventing detached artifact inventories from scheduling work.
+pub fn plan_v36_initial_assignment_merge_generation(
+    committed: &V36CommittedSupercellAssignments,
+) -> Result<Option<V36InitialAssignmentMergeGeneration>> {
+    let (_, expected_root_identity) = v36_committed_assignment_root(
+        &committed.admission,
+        &committed.artifacts,
+        &committed.uri_prefix,
+    )?;
+    if expected_root_identity != committed.root_identity {
+        return Err(invalid("V36 assignment merge predecessor root differs"));
+    }
+    let Some(generation) = committed
+        .admission
+        .projection
+        .merge_schedule()?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    if generation.generation_ordinal != 0
+        || generation.input_run_count
+            != u64::try_from(committed.artifacts.len())
+                .map_err(|_| invalid("V36 assignment merge input count overflows"))?
+    {
+        return Err(invalid("V36 assignment merge generation differs"));
+    }
+    let output_count = usize::try_from(generation.output_run_count)
+        .map_err(|_| invalid("V36 assignment merge output count overflows"))?;
+    let fan_in = usize::from(committed.admission.projection.merge_fan_in);
+    let mut groups = Vec::new();
+    groups
+        .try_reserve_exact(output_count)
+        .map_err(|_| invalid("V36 assignment merge groups exceed capacity"))?;
+    for group_ordinal in 0..output_count {
+        let input_start = group_ordinal
+            .checked_mul(fan_in)
+            .ok_or_else(|| invalid("V36 assignment merge input range overflows"))?;
+        let input_end = input_start
+            .checked_add(fan_in)
+            .ok_or_else(|| invalid("V36 assignment merge input range overflows"))?
+            .min(committed.artifacts.len());
+        let group_ordinal_u64 = u64::try_from(group_ordinal)
+            .map_err(|_| invalid("V36 assignment merge group ordinal overflows"))?;
+        let output_uri = format!(
+            "{}/merge/generation-{:06}/run-{group_ordinal_u64:06}.arrow",
+            committed.uri_prefix, generation.generation_ordinal
+        );
+        if !valid_v36_supercell_model_uri(&output_uri) {
+            return Err(invalid("V36 assignment merge output URI differs"));
+        }
+        groups.push(V36InitialAssignmentMergeGroup {
+            group_ordinal: group_ordinal_u64,
+            input_range: input_start..input_end,
+            output_uri,
+        });
+    }
+    Ok(Some(V36InitialAssignmentMergeGeneration {
+        generation,
+        groups,
+        predecessor_root_identity: committed.root_identity.clone(),
+    }))
+}
+
 fn v36_committed_assignment_root(
     admission: &V36AdmittedSupercellAssignmentPreflight,
     artifacts: &[V36SupercellAssignmentShardArtifact],
@@ -6385,7 +6504,15 @@ pub fn admit_v36_geometry(
 
 #[cfg(test)]
 mod tests {
-    use super::{V36RowOwners, repair_v36_empty_posting_assignments};
+    use super::{
+        V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE, V36AdmittedSupercellAssignmentPreflight,
+        V36ArtifactIdentity, V36CommittedSupercellAssignments,
+        V36ExternalMergeGenerationProjection, V36RowOwners, V36SupercellAssignmentAdmissionRequest,
+        V36SupercellAssignmentProjection, V36SupercellAssignmentShardArtifact,
+        V36SupercellAssignmentShardContext, V36SupercellTrainingSpec,
+        plan_v36_initial_assignment_merge_generation, repair_v36_empty_posting_assignments,
+        v36_committed_assignment_root,
+    };
 
     #[test]
     fn v36_row_owner_scratch_is_one_fixed_inline_record() {
@@ -6411,5 +6538,144 @@ mod tests {
 
         assert_eq!(assignments, [2, 3, 0, 1]);
         assert_eq!(counts, [1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn v36_initial_assignment_merge_generation_is_root_bound_and_fixed_fan_in() {
+        // Break caught: the external builder invents groups from callback or
+        // worker scheduling instead of the authenticated assignment root.
+        let training_spec = V36SupercellTrainingSpec {
+            corpus_rows: 17,
+            dimensions: 192,
+            maximum_block_rows: 17,
+            projected_corpus_sha256: "1".repeat(64),
+            reservoir_rows: 17,
+            super_cell_count: 4,
+        };
+        let model_identity = V36ArtifactIdentity {
+            blake3: "2".repeat(64),
+            encoded_bytes: 1,
+            role: "supercell-model".to_owned(),
+            sha256: "3".repeat(64),
+            uri: "s3://borsuk-v36-test/geometry/supercells.arrow".to_owned(),
+        };
+        let request = V36SupercellAssignmentAdmissionRequest {
+            worker_count: 1,
+            queue_rows_per_worker: 1,
+            sort_rows_per_worker: 1,
+            merge_fan_in: 8,
+            measured_component_terms: 1,
+            measured_elapsed_ns: 1,
+            measured_cost_microusd: 1,
+            measured_external_work_units: 1,
+            measured_external_elapsed_ns: 1,
+            measured_external_cost_microusd: 1,
+            maximum_active_wall_seconds: 1,
+            maximum_cost_microusd: 1,
+            maximum_peak_live_bytes: 1,
+            maximum_scratch_bytes: 1,
+        };
+        let projection = V36SupercellAssignmentProjection {
+            logical_shards: 17,
+            merge_generations: 2,
+            merge_fan_in: 8,
+            uncompressed_assignment_bytes: 1,
+            required_scratch_bytes: 1,
+            required_peak_live_bytes: 1,
+            component_terms: 1,
+            external_work_units: 1,
+            projected_active_ns: 1,
+            projected_cost_microusd: 1,
+        };
+        let admission = V36AdmittedSupercellAssignmentPreflight {
+            model_identity: model_identity.clone(),
+            training_spec: training_spec.clone(),
+            request,
+            projection,
+        };
+        let artifacts = (0..17)
+            .map(|shard_ordinal| V36SupercellAssignmentShardArtifact {
+                blake3: format!("{shard_ordinal:064x}"),
+                context: V36SupercellAssignmentShardContext {
+                    model_identity: model_identity.clone(),
+                    projected_corpus_sha256: training_spec.projected_corpus_sha256.clone(),
+                    shard_ordinal,
+                    training_spec: training_spec.clone(),
+                    uri: format!(
+                        "s3://borsuk-v36-test/geometry/assignments/shard-{shard_ordinal:06}.arrow"
+                    ),
+                },
+                encoded_bytes: 1,
+                row_count: 1,
+                sha256: format!("{:064x}", shard_ordinal + 17),
+            })
+            .collect::<Vec<_>>();
+        let uri_prefix = "s3://borsuk-v36-test/geometry/assignments";
+        let (_, root_identity) =
+            v36_committed_assignment_root(&admission, &artifacts, uri_prefix).unwrap();
+        assert_eq!(root_identity.role, V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE);
+        let committed = V36CommittedSupercellAssignments {
+            admission,
+            artifacts,
+            root_identity: root_identity.clone(),
+            uri_prefix: uri_prefix.to_owned(),
+        };
+
+        let plan = plan_v36_initial_assignment_merge_generation(&committed)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.predecessor_root_identity(), &root_identity);
+        assert_eq!(
+            plan.generation(),
+            V36ExternalMergeGenerationProjection {
+                generation_ordinal: 0,
+                input_run_count: 17,
+                output_run_count: 3,
+                full_group_count: 2,
+                tail_group_size: 1,
+            }
+        );
+        assert_eq!(
+            plan.groups()
+                .iter()
+                .map(|group| (
+                    group.group_ordinal(),
+                    group.input_range(),
+                    group.output_uri(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    0,
+                    0..8,
+                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000000.arrow",
+                ),
+                (
+                    1,
+                    8..16,
+                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000001.arrow",
+                ),
+                (
+                    2,
+                    16..17,
+                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000002.arrow",
+                ),
+            ]
+        );
+
+        let mut detached = committed.clone();
+        detached.root_identity.sha256 = "6".repeat(64);
+        assert!(plan_v36_initial_assignment_merge_generation(&detached).is_err());
+
+        let mut overlong = committed;
+        overlong.uri_prefix = format!("s3://b/{}", "a".repeat(4_063));
+        let (_, overlong_root_identity) = v36_committed_assignment_root(
+            &overlong.admission,
+            &overlong.artifacts,
+            &overlong.uri_prefix,
+        )
+        .unwrap();
+        overlong.root_identity = overlong_root_identity;
+        assert!(plan_v36_initial_assignment_merge_generation(&overlong).is_err());
     }
 }
