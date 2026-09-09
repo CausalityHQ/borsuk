@@ -14,23 +14,27 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
+    Result, V35ProjectionBackend, V36_POSTING_ACCELERATOR_EF_LADDER,
+    V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
     V36CoarseFragmentArm, V36CoarseFragmentArtifact, V36CoarseFragmentContext,
-    V36CoarseFragmentRows, V36GeometryStop, V36PostingGaussianSummary,
-    V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource, V36ResidualPq4Codebook,
-    V36ResidualPq4Width, V36TransportDirectory, V36TransportFetchObservation, V36TransportFragment,
-    V36TransportLimits, V36TransportPosting, V36UniqueLiveTopK, admit_v36_geometry,
-    allocate_v36_hamilton_postings, assign_v36_postings, audit_v36_coarse_fragment_sha256,
-    authenticate_v36_coarse_fragment, build_v36_srht192_control,
-    decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
-    decode_v36_transport_prefix, encode_v36_centered_projection_arrow,
-    encode_v36_coarse_fragment_arrow, encode_v36_residual_pq4_record, encode_v36_sign24_record,
-    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
-    project_v36_centered_row_simd, score_v36_posting_centroid, score_v36_posting_gaussian,
+    V36CoarseFragmentRows, V36GeometryStop, V36PostingAcceleratorKind,
+    V36PostingAcceleratorObservation, V36PostingGaussianSummary, V36ResidualAssignmentBlockVisitor,
+    V36ResidualAssignmentSource, V36ResidualPq4Codebook, V36ResidualPq4Width,
+    V36TransportDirectory, V36TransportFetchObservation, V36TransportFragment, V36TransportLimits,
+    V36TransportPosting, V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings,
+    assign_v36_postings, audit_v36_coarse_fragment_sha256, authenticate_v36_coarse_fragment,
+    build_v36_srht192_control, decode_v36_centered_projection_arrow,
+    decode_v36_coarse_fragment_arrow, decode_v36_transport_prefix,
+    encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
+    encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
+    project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
+    rank_v36_selected_posting_candidates, score_v36_posting_centroid, score_v36_posting_gaussian,
     score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
     select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
     train_v36_posting_gaussian, train_v36_posting_prototype_six, train_v36_residual_pq4,
+    v36_effective_ef_search, v36_posting_acceleration_required,
+    validate_v36_posting_accelerator_observation,
 };
 use sha2::{Digest, Sha256};
 
@@ -39,6 +43,122 @@ struct TestProjectionSource {
     reservoir_rows: Vec<Vec<f32>>,
     block_rows: usize,
     mutate_reservoir: bool,
+}
+
+#[test]
+fn v36_posting_accelerator_exact_rerank_preserves_binary64_authority() {
+    let scores = [-0.0_f64, -1.0, 1.0 + f64::EPSILON, 1.0, 1.0];
+    let ranked = rank_v36_selected_posting_candidates(&[4, 3, 2, 1, 0], 5, 5, |ordinal| {
+        Ok(scores[ordinal as usize])
+    })
+    .unwrap();
+    assert_eq!(
+        ranked
+            .iter()
+            .map(|item| item.posting_ordinal)
+            .collect::<Vec<_>>(),
+        vec![1, 0, 3, 4, 2]
+    );
+    assert_eq!(ranked[1].score.to_bits(), 0.0_f64.to_bits());
+
+    assert!(rank_v36_selected_posting_candidates(&[0, 0], 5, 1, |_| Ok(0.0)).is_err());
+    assert!(rank_v36_selected_posting_candidates(&[5], 5, 1, |_| Ok(0.0)).is_err());
+    assert!(rank_v36_selected_posting_candidates(&[0], 5, 2, |_| Ok(0.0)).is_err());
+    for nonfinite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(rank_v36_selected_posting_candidates(&[0], 5, 1, |_| Ok(nonfinite)).is_err());
+    }
+}
+
+#[test]
+fn v36_posting_accelerator_policy_is_exact_at_the_1024_boundary() {
+    assert!(!v36_posting_acceleration_required(1_024).unwrap());
+    assert!(v36_posting_acceleration_required(1_025).unwrap());
+    assert!(v36_posting_acceleration_required(0).is_err());
+    assert_eq!(
+        V36_POSTING_ACCELERATOR_EF_LADDER,
+        [64, 128, 256, 512, 1_024]
+    );
+    assert_eq!(v36_effective_ef_search(17, 64).unwrap(), 64);
+    assert_eq!(v36_effective_ef_search(1_500, 1_024).unwrap(), 1_500);
+    assert!(v36_effective_ef_search(0, 64).is_err());
+    assert!(v36_effective_ef_search(17, 63).is_err());
+}
+
+fn qualified_accelerator_observation() -> V36PostingAcceleratorObservation {
+    V36PostingAcceleratorObservation {
+        kind: V36PostingAcceleratorKind::HnswSelectedScore,
+        posting_count: 1_025,
+        requested_prefix_length: 256,
+        ef_search: 512,
+        prefix_matches: 999,
+        query_prefix_pairs: 1_000,
+        parity_ppm: 999_000,
+        visited_nodes: 400,
+        candidate_generation_score_evaluations: 400,
+        exact_rerank_score_evaluations: 512,
+        exhaustive_score_evaluations: 1_025,
+        allocated_bytes: 4_096,
+        accelerated_decoded_hot_p99_ns: 900,
+        exhaustive_decoded_hot_p99_ns: 1_000,
+        qualified: true,
+    }
+}
+
+#[test]
+fn v36_posting_accelerator_receipt_recomputes_parity_work_latency_and_memory() {
+    let baseline = qualified_accelerator_observation();
+    assert!(validate_v36_posting_accelerator_observation(&baseline).unwrap());
+
+    for changed in [
+        V36PostingAcceleratorObservation {
+            prefix_matches: 998,
+            parity_ppm: 998_000,
+            qualified: false,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            candidate_generation_score_evaluations: 513,
+            qualified: false,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            accelerated_decoded_hot_p99_ns: 1_000,
+            qualified: false,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            allocated_bytes: 128 * 1024 * 1024 + 1,
+            qualified: false,
+            ..baseline.clone()
+        },
+    ] {
+        assert!(!validate_v36_posting_accelerator_observation(&changed).unwrap());
+    }
+
+    for malformed in [
+        V36PostingAcceleratorObservation {
+            parity_ppm: 999_001,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            qualified: false,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            query_prefix_pairs: 0,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            prefix_matches: 1_001,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            posting_count: 1_024,
+            ..baseline
+        },
+    ] {
+        assert!(validate_v36_posting_accelerator_observation(&malformed).is_err());
+    }
 }
 
 impl V36CenteredProjectionSource for TestProjectionSource {

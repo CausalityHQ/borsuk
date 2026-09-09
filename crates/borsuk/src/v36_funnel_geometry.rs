@@ -2264,6 +2264,175 @@ pub fn score_v36_posting_prototype_six(
         .ok_or_else(|| invalid("V36 prototype-six score differs"))
 }
 
+/// Frozen candidate-count ladder for posting-summary accelerator qualification.
+pub const V36_POSTING_ACCELERATOR_EF_LADDER: [u32; 5] = [64, 128, 256, 512, 1_024];
+
+/// Candidate generator measured by one posting-summary accelerator observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V36PostingAcceleratorKind {
+    /// Bounded flat centroid squared-L2 scan followed by exact selected-score rerank.
+    SimdFlatCentroid,
+    /// HNSW traversed with centroid squared-L2 followed by exact selected-score rerank.
+    HnswCentroid,
+    /// HNSW traversed with the selected scorer followed by an exact rerank.
+    HnswSelectedScore,
+}
+
+/// One exactly recomputable accelerator qualification observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingAcceleratorObservation {
+    /// Candidate-generation strategy that produced this observation.
+    pub kind: V36PostingAcceleratorKind,
+    /// Authenticated number of posting summaries in the measured population.
+    pub posting_count: u32,
+    /// Exact selected-score prefix length requested by the causal boundary.
+    pub requested_prefix_length: u32,
+    /// Effective candidate/search width used for this ladder rung.
+    pub ef_search: u32,
+    /// Query-prefix pairs whose ordered prefix exactly matched the authority.
+    pub prefix_matches: u64,
+    /// Complete registered query-prefix-pair denominator.
+    pub query_prefix_pairs: u64,
+    /// Floor-rounded exact-prefix agreement in parts per million.
+    pub parity_ppm: u32,
+    /// Graph or flat-scan nodes visited by candidate generation.
+    pub visited_nodes: u64,
+    /// Distance evaluations performed only to generate candidates.
+    pub candidate_generation_score_evaluations: u64,
+    /// Exact selected-score evaluations used to rerank candidates.
+    pub exact_rerank_score_evaluations: u64,
+    /// Selected-score evaluations used by the exhaustive authority.
+    pub exhaustive_score_evaluations: u64,
+    /// Exact allocated capacity charged to this accelerator.
+    pub allocated_bytes: u64,
+    /// Decoded-hot p99 of candidate generation plus exact reranking.
+    pub accelerated_decoded_hot_p99_ns: u64,
+    /// Decoded-hot p99 of exhaustive exact selected scoring.
+    pub exhaustive_decoded_hot_p99_ns: u64,
+    /// Stored decision, which validation independently recomputes.
+    pub qualified: bool,
+}
+
+/// One posting with its canonical exact selected score.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct V36RankedPosting {
+    /// Dense ordinal of the posting summary.
+    pub posting_ordinal: u32,
+    /// Canonical finite binary64 selected score.
+    pub score: f64,
+}
+
+/// Whether the posting count requires an accelerator qualification result.
+pub fn v36_posting_acceleration_required(posting_count: u32) -> Result<bool> {
+    if posting_count == 0 {
+        return Err(invalid("V36 posting accelerator population differs"));
+    }
+    Ok(posting_count > 1_024)
+}
+
+/// Resolve one frozen `efSearch=max(L,e)` ladder rung.
+pub fn v36_effective_ef_search(prefix_length: u32, ladder_rung: u32) -> Result<u32> {
+    if prefix_length == 0 || !V36_POSTING_ACCELERATOR_EF_LADDER.contains(&ladder_rung) {
+        return Err(invalid("V36 posting accelerator search authority differs"));
+    }
+    Ok(prefix_length.max(ladder_rung))
+}
+
+/// Rescore and order a bounded candidate set with the exact selected scorer.
+pub fn rank_v36_selected_posting_candidates<F>(
+    candidates: &[u32],
+    posting_count: u32,
+    prefix_length: u32,
+    mut selected_score: F,
+) -> Result<Vec<V36RankedPosting>>
+where
+    F: FnMut(u32) -> Result<f64>,
+{
+    let prefix_length = usize::try_from(prefix_length)
+        .map_err(|_| invalid("V36 posting accelerator prefix overflows"))?;
+    if posting_count == 0 || prefix_length == 0 || prefix_length > candidates.len() {
+        return Err(invalid(
+            "V36 posting accelerator candidate authority differs",
+        ));
+    }
+    let mut unique = candidates.to_vec();
+    unique.sort_unstable();
+    if unique.windows(2).any(|pair| pair[0] == pair[1])
+        || unique.iter().any(|ordinal| *ordinal >= posting_count)
+    {
+        return Err(invalid(
+            "V36 posting accelerator candidate authority differs",
+        ));
+    }
+
+    let mut ranked = candidates
+        .iter()
+        .map(|posting_ordinal| {
+            let score = selected_score(*posting_ordinal)?;
+            if !score.is_finite() {
+                return Err(invalid("V36 posting accelerator score is nonfinite"));
+            }
+            Ok(V36RankedPosting {
+                posting_ordinal: *posting_ordinal,
+                score: if score == 0.0 { 0.0 } else { score },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ranked.sort_unstable_by(|left, right| {
+        left.score
+            .total_cmp(&right.score)
+            .then_with(|| left.posting_ordinal.cmp(&right.posting_ordinal))
+    });
+    ranked.truncate(prefix_length);
+    Ok(ranked)
+}
+
+/// Validate and recompute one accelerator qualification decision.
+pub fn validate_v36_posting_accelerator_observation(
+    observation: &V36PostingAcceleratorObservation,
+) -> Result<bool> {
+    if !v36_posting_acceleration_required(observation.posting_count)?
+        || observation.requested_prefix_length == 0
+        || observation.requested_prefix_length > observation.posting_count
+        || !V36_POSTING_ACCELERATOR_EF_LADDER
+            .iter()
+            .any(|rung| observation.requested_prefix_length.max(*rung) == observation.ef_search)
+        || observation.query_prefix_pairs == 0
+        || observation.prefix_matches > observation.query_prefix_pairs
+        || observation.visited_nodes == 0
+        || observation.candidate_generation_score_evaluations == 0
+        || observation.exact_rerank_score_evaluations == 0
+        || observation.exhaustive_score_evaluations == 0
+        || observation.allocated_bytes == 0
+        || observation.accelerated_decoded_hot_p99_ns == 0
+        || observation.exhaustive_decoded_hot_p99_ns == 0
+    {
+        return Err(invalid("V36 posting accelerator observation differs"));
+    }
+    let parity_ppm = observation
+        .prefix_matches
+        .checked_mul(1_000_000)
+        .ok_or_else(|| invalid("V36 posting accelerator parity overflows"))?
+        / observation.query_prefix_pairs;
+    if parity_ppm != u64::from(observation.parity_ppm) {
+        return Err(invalid("V36 posting accelerator parity differs"));
+    }
+    let score_evaluations = observation
+        .candidate_generation_score_evaluations
+        .checked_add(observation.exact_rerank_score_evaluations)
+        .ok_or_else(|| invalid("V36 posting accelerator work overflows"))?;
+    let memory_passes = observation.kind == V36PostingAcceleratorKind::SimdFlatCentroid
+        || observation.allocated_bytes <= 128 * 1024 * 1024;
+    let qualified = observation.parity_ppm >= 999_000
+        && score_evaluations < observation.exhaustive_score_evaluations
+        && observation.accelerated_decoded_hot_p99_ns < observation.exhaustive_decoded_hot_p99_ns
+        && memory_passes;
+    if observation.qualified != qualified {
+        return Err(invalid("V36 posting accelerator decision differs"));
+    }
+    Ok(qualified)
+}
+
 /// Select deterministic primary and closure owners for one projected row.
 pub fn select_v36_closure_owners(
     row: &[f32],

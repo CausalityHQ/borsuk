@@ -365,15 +365,19 @@ pub use v36_funnel_code::{
 };
 #[doc(hidden)]
 pub use v36_funnel_geometry::{
-    V36CenteredProjectedRow, V36CenteredProjection, V36CenteredProjectionBlockVisitor,
-    V36CenteredProjectionSource, V36CenteredProjectionTrainingSpec, V36CenteredSampleRole,
-    V36GeometryAdmission, V36GeometryStop, V36PostingAssignments, V36PostingGaussianSummary,
-    V36PostingPrototypeSummary, admit_v36_geometry, allocate_v36_hamilton_postings,
-    assign_v36_postings, build_v36_srht192_control, decode_v36_centered_projection_arrow,
+    V36_POSTING_ACCELERATOR_EF_LADDER, V36CenteredProjectedRow, V36CenteredProjection,
+    V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
+    V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36GeometryAdmission,
+    V36GeometryStop, V36PostingAcceleratorKind, V36PostingAcceleratorObservation,
+    V36PostingAssignments, V36PostingGaussianSummary, V36PostingPrototypeSummary, V36RankedPosting,
+    admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
+    build_v36_srht192_control, decode_v36_centered_projection_arrow,
     encode_v36_centered_projection_arrow, project_v36_centered_row_scalar,
-    project_v36_centered_row_simd, score_v36_posting_centroid, score_v36_posting_gaussian,
-    score_v36_posting_prototype_six, select_v36_closure_owners, train_v36_centered_subspace,
-    train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
+    project_v36_centered_row_simd, rank_v36_selected_posting_candidates,
+    score_v36_posting_centroid, score_v36_posting_gaussian, score_v36_posting_prototype_six,
+    select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
+    train_v36_posting_gaussian, train_v36_posting_prototype_six, v36_effective_ef_search,
+    v36_posting_acceleration_required, validate_v36_posting_accelerator_observation,
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
