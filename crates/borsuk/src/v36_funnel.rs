@@ -2487,6 +2487,58 @@ pub struct V36TransportPosting {
     pub stored_assignment_rows: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One generation-scoped transport directory validated before query service.
+pub struct V36TransportDirectory {
+    postings: BTreeMap<u32, V36TransportPosting>,
+}
+
+impl V36TransportDirectory {
+    /// Validate immutable posting and fragment authority once at generation admission.
+    pub fn try_new(directory: Vec<V36TransportPosting>) -> Result<Self> {
+        let mut postings = BTreeMap::new();
+        let mut object_uris = BTreeSet::new();
+        for posting in directory {
+            if posting.fragments.is_empty() || posting.stored_assignment_rows == 0 {
+                return Err(invalid("V36 posting directory differs"));
+            }
+            let mut previous_last_dense_ordinal = None;
+            let mut stored_assignment_rows = 0_u64;
+            for (expected, fragment) in posting.fragments.iter().enumerate() {
+                let dense_span = fragment
+                    .last_dense_ordinal
+                    .checked_sub(fragment.first_dense_ordinal)
+                    .and_then(|span| span.checked_add(1));
+                if fragment.fragment_ordinal != u32::try_from(expected).unwrap_or(u32::MAX)
+                    || dense_span.is_none_or(|span| span < u64::from(fragment.row_count))
+                    || previous_last_dense_ordinal
+                        .is_some_and(|previous| fragment.first_dense_ordinal <= previous)
+                    || fragment.encoded_bytes == 0
+                    || fragment.encoded_bytes > COARSE_FRAGMENT_LIMIT_BYTES
+                    || fragment.decoded_capacity_bytes == 0
+                    || fragment.row_count == 0
+                    || !valid_digest(&fragment.sha256)
+                    || !valid_digest(&fragment.blake3)
+                    || fragment.uri.is_empty()
+                    || !object_uris.insert(fragment.uri.clone())
+                {
+                    return Err(invalid("V36 transport fragment differs"));
+                }
+                previous_last_dense_ordinal = Some(fragment.last_dense_ordinal);
+                stored_assignment_rows = stored_assignment_rows
+                    .checked_add(u64::from(fragment.row_count))
+                    .ok_or_else(|| invalid("V36 posting row count overflows"))?;
+            }
+            if stored_assignment_rows != posting.stored_assignment_rows
+                || postings.insert(posting.posting_ordinal, posting).is_some()
+            {
+                return Err(invalid("V36 posting completeness differs"));
+            }
+        }
+        Ok(Self { postings })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Retry-inclusive classification of one observed V36 wave.
 pub enum V36TransportDisposition {
@@ -2520,58 +2572,17 @@ pub struct V36TransportPlan {
 /// Plan one V36 object wave without partially admitting a posting.
 pub fn plan_v36_transport(
     ranked_postings: &[u32],
-    directory: &[V36TransportPosting],
+    directory: &V36TransportDirectory,
     limits: V36TransportLimits,
 ) -> Result<V36TransportPlan> {
     if limits != V36TransportLimits::qualification() {
         return Err(invalid("V36 transport limits differ"));
     }
 
-    let mut postings = BTreeMap::new();
-    let mut object_uris = BTreeSet::new();
-    for posting in directory {
-        if posting.fragments.is_empty()
-            || posting.stored_assignment_rows == 0
-            || postings.insert(posting.posting_ordinal, posting).is_some()
-        {
-            return Err(invalid("V36 posting directory differs"));
-        }
-        let mut previous_last_dense_ordinal = None;
-        let mut stored_assignment_rows = 0_u64;
-        for (expected, fragment) in posting.fragments.iter().enumerate() {
-            let dense_span = fragment
-                .last_dense_ordinal
-                .checked_sub(fragment.first_dense_ordinal)
-                .and_then(|span| span.checked_add(1));
-            if fragment.fragment_ordinal != u32::try_from(expected).unwrap_or(u32::MAX)
-                || dense_span.is_none_or(|span| span < u64::from(fragment.row_count))
-                || previous_last_dense_ordinal
-                    .is_some_and(|previous| fragment.first_dense_ordinal <= previous)
-                || fragment.encoded_bytes == 0
-                || fragment.encoded_bytes > COARSE_FRAGMENT_LIMIT_BYTES
-                || fragment.decoded_capacity_bytes == 0
-                || fragment.row_count == 0
-                || !valid_digest(&fragment.sha256)
-                || !valid_digest(&fragment.blake3)
-                || fragment.uri.is_empty()
-                || !object_uris.insert(fragment.uri.as_str())
-            {
-                return Err(invalid("V36 transport fragment differs"));
-            }
-            previous_last_dense_ordinal = Some(fragment.last_dense_ordinal);
-            stored_assignment_rows = stored_assignment_rows
-                .checked_add(u64::from(fragment.row_count))
-                .ok_or_else(|| invalid("V36 posting row count overflows"))?;
-        }
-        if stored_assignment_rows != posting.stored_assignment_rows {
-            return Err(invalid("V36 posting completeness differs"));
-        }
-    }
-
     let mut ranked_unique = BTreeSet::new();
     if ranked_postings
         .iter()
-        .any(|ordinal| !ranked_unique.insert(*ordinal) || !postings.contains_key(ordinal))
+        .any(|ordinal| !ranked_unique.insert(*ordinal) || !directory.postings.contains_key(ordinal))
     {
         return Err(invalid("V36 ranked posting authority differs"));
     }
@@ -2587,7 +2598,8 @@ pub fn plan_v36_transport(
         normal_gets: 0,
     };
     for (rank_index, posting_ordinal) in ranked_postings.iter().enumerate() {
-        let posting = postings
+        let posting = directory
+            .postings
             .get(posting_ordinal)
             .ok_or_else(|| invalid("V36 ranked posting authority differs"))?;
         let posting_gets = u16::try_from(posting.fragments.len())

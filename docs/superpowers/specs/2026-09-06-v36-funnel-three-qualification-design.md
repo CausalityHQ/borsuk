@@ -618,10 +618,12 @@ binds `posting_ordinal:u32`. Its strict columns are non-null
 code. Rows are ordered by `dense_ordinal` and greedily fragmented without
 exceeding 512 KiB encoded. The resident posting directory binds every
 fragment's URI, SHA-256, BLAKE3, length, first and last dense ordinals, and row
-count. Dense
-ordinals increase within and across fragments but need not be contiguous:
-replica postings are sparse views of the primary fine plane. The planner visits
-postings by `(posting_score,posting_ordinal)` and admits **all** fragments of a
+count. Dense ordinals increase within and across fragments but need not be
+contiguous: replica postings are sparse views of the primary fine plane. The
+complete directory is authenticated and indexed once when a generation is
+admitted; query planning never rebuilds or revalidates a population-wide map.
+It visits only ranked postings by `(posting_score,posting_ordinal)` through the
+first exclusion and admits **all** fragments of a
 posting atomically only if their combined GETs/bytes fit. At the first posting
 that does not fit, it records that posting and the remaining suffix as excluded
 and stops; it never skips a dense posting to admit lower-ranked work. Partial

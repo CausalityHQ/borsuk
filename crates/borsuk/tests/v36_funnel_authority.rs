@@ -6,9 +6,9 @@ use blake3::Hasher as Blake3;
 use borsuk::{
     V36ArtifactIdentity, V36ChunkCeiling, V36CoarseCode, V36FineCodec, V36FunnelManifest,
     V36GeometryArm, V36PrimaryRows, V36ProjectionArm, V36RegisteredManifest, V36Replication,
-    V36ResourceRequest, V36ShapeScore, V36TransportDisposition, V36TransportFragment,
-    V36TransportLimits, V36TransportPosting, plan_v36_transport, project_v36_resources,
-    validate_v36_manifest,
+    V36ResourceRequest, V36ShapeScore, V36TransportDirectory, V36TransportDisposition,
+    V36TransportFragment, V36TransportLimits, V36TransportPosting, plan_v36_transport,
+    project_v36_resources, validate_v36_manifest,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -248,11 +248,12 @@ fn v36_funnel_authority_accepts_sparse_replica_fragment_ordinals() {
         posting_ordinal: 6,
         stored_assignment_rows: 4,
     }];
-    assert!(plan_v36_transport(&[6], &sparse, V36TransportLimits::qualification()).is_ok());
+    let directory = V36TransportDirectory::try_new(sparse.to_vec()).unwrap();
+    assert!(plan_v36_transport(&[6], &directory, V36TransportLimits::qualification()).is_ok());
 
     let mut overlapping = sparse;
     overlapping[0].fragments[1].first_dense_ordinal = 90;
-    assert!(plan_v36_transport(&[6], &overlapping, V36TransportLimits::qualification()).is_err());
+    assert!(V36TransportDirectory::try_new(overlapping.to_vec()).is_err());
 }
 
 #[test]
@@ -278,8 +279,9 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
             stored_assignment_rows: 1_000,
         },
     ];
+    let directory = V36TransportDirectory::try_new(postings.clone()).unwrap();
     let plan =
-        plan_v36_transport(&[0, 1, 2], &postings, V36TransportLimits::qualification()).unwrap();
+        plan_v36_transport(&[0, 1, 2], &directory, V36TransportLimits::qualification()).unwrap();
     assert_eq!(plan.admitted_postings, vec![0]);
     assert_eq!(plan.first_excluded_posting, Some(1));
     assert_eq!(plan.normal_gets, 2);
@@ -296,8 +298,8 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
         posting_ordinal: 3,
         stored_assignment_rows: 14_000,
     }];
-    let plan =
-        plan_v36_transport(&[3], &exact_normal, V36TransportLimits::qualification()).unwrap();
+    let directory = V36TransportDirectory::try_new(exact_normal.clone()).unwrap();
+    let plan = plan_v36_transport(&[3], &directory, V36TransportLimits::qualification()).unwrap();
     assert_eq!(plan.normal_gets, 14);
     assert_eq!(plan.normal_encoded_bytes, 7 * 1_048_576);
 
@@ -308,14 +310,16 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
         posting_ordinal: 4,
         stored_assignment_rows: 15_000,
     }];
-    let plan = plan_v36_transport(&[4], &excluded, V36TransportLimits::qualification()).unwrap();
+    let directory = V36TransportDirectory::try_new(excluded).unwrap();
+    let plan = plan_v36_transport(&[4], &directory, V36TransportLimits::qualification()).unwrap();
     assert!(plan.admitted_postings.is_empty());
     assert_eq!(plan.first_excluded_posting, Some(4));
 
     let mut retry_overflow = exact_normal;
     retry_overflow[0].fragments[0].retries = 3;
+    let retry_directory = V36TransportDirectory::try_new(retry_overflow).unwrap();
     assert_eq!(
-        plan_v36_transport(&[3], &retry_overflow, V36TransportLimits::qualification())
+        plan_v36_transport(&[3], &retry_directory, V36TransportLimits::qualification())
             .unwrap()
             .disposition,
         V36TransportDisposition::Indeterminate
@@ -323,7 +327,7 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
 
     let mut incomplete = postings;
     incomplete[0].fragments.pop();
-    assert!(plan_v36_transport(&[0], &incomplete, V36TransportLimits::qualification()).is_err());
+    assert!(V36TransportDirectory::try_new(incomplete).is_err());
 
     let mut valid_small_tail = fragment(5, 0, 1, 0);
     valid_small_tail.decoded_capacity_bytes = 64;
@@ -332,7 +336,8 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
         posting_ordinal: 5,
         stored_assignment_rows: 1_000,
     }];
-    assert!(plan_v36_transport(&[5], &small_tail, V36TransportLimits::qualification()).is_ok());
+    let directory = V36TransportDirectory::try_new(small_tail.to_vec()).unwrap();
+    assert!(plan_v36_transport(&[5], &directory, V36TransportLimits::qualification()).is_ok());
 }
 
 fn mib(value: u64) -> u64 {
