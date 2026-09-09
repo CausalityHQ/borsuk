@@ -790,15 +790,15 @@ where
     })
 }
 
-fn v36_nearest_rank_p99(samples: &[u64]) -> Result<u64> {
-    if samples.is_empty() || samples.contains(&0) {
+fn v36_nearest_rank_percentile(samples: &[u64], percentile: usize) -> Result<u64> {
+    if samples.is_empty() || samples.contains(&0) || !(1..=100).contains(&percentile) {
         return Err(invalid("V36 posting accelerator timing population differs"));
     }
     let mut sorted = samples.to_vec();
     sorted.sort_unstable();
     let rank = sorted
         .len()
-        .checked_mul(99)
+        .checked_mul(percentile)
         .ok_or_else(|| invalid("V36 posting accelerator timing rank overflows"))?
         .div_ceil(100);
     Ok(sorted[rank - 1])
@@ -933,8 +933,21 @@ pub fn summarize_v36_posting_accelerator_observation(
             .map(|evaluation| evaluation.allocated_bytes)
             .max()
             .ok_or_else(|| invalid("V36 posting accelerator allocation differs"))?,
-        accelerated_decoded_hot_p99_ns: v36_nearest_rank_p99(accelerated_decoded_hot_ns)?,
-        exhaustive_decoded_hot_p99_ns: v36_nearest_rank_p99(exhaustive_decoded_hot_ns)?,
+        accelerated_decoded_hot_p50_ns: v36_nearest_rank_percentile(
+            accelerated_decoded_hot_ns,
+            50,
+        )?,
+        accelerated_decoded_hot_p95_ns: v36_nearest_rank_percentile(
+            accelerated_decoded_hot_ns,
+            95,
+        )?,
+        accelerated_decoded_hot_p99_ns: v36_nearest_rank_percentile(
+            accelerated_decoded_hot_ns,
+            99,
+        )?,
+        exhaustive_decoded_hot_p50_ns: v36_nearest_rank_percentile(exhaustive_decoded_hot_ns, 50)?,
+        exhaustive_decoded_hot_p95_ns: v36_nearest_rank_percentile(exhaustive_decoded_hot_ns, 95)?,
+        exhaustive_decoded_hot_p99_ns: v36_nearest_rank_percentile(exhaustive_decoded_hot_ns, 99)?,
         qualified: false,
     };
     observation.qualified = recompute_v36_posting_accelerator_qualification(&observation)?;

@@ -386,7 +386,11 @@ fn qualified_accelerator_observation() -> V36PostingAcceleratorObservation {
         exact_rerank_score_evaluations: 512,
         exhaustive_score_evaluations: 1_025,
         allocated_bytes: 4_096,
+        accelerated_decoded_hot_p50_ns: 700,
+        accelerated_decoded_hot_p95_ns: 850,
         accelerated_decoded_hot_p99_ns: 900,
+        exhaustive_decoded_hot_p50_ns: 800,
+        exhaustive_decoded_hot_p95_ns: 950,
         exhaustive_decoded_hot_p99_ns: 1_000,
         qualified: true,
     }
@@ -438,6 +442,14 @@ fn v36_posting_accelerator_receipt_recomputes_parity_work_latency_and_memory() {
         },
         V36PostingAcceleratorObservation {
             prefix_matches: 1_001,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            accelerated_decoded_hot_p50_ns: 901,
+            ..baseline.clone()
+        },
+        V36PostingAcceleratorObservation {
+            exhaustive_decoded_hot_p95_ns: 1_001,
             ..baseline.clone()
         },
         V36PostingAcceleratorObservation {
@@ -506,7 +518,11 @@ fn v36_posting_accelerator_summary_recomputes_parity_work_and_timing() {
     assert_eq!(observation.exact_rerank_score_evaluations, 128);
     assert_eq!(observation.exhaustive_score_evaluations, 2_050);
     assert_eq!(observation.allocated_bytes, 8_192);
+    assert_eq!(observation.accelerated_decoded_hot_p50_ns, 90);
+    assert_eq!(observation.accelerated_decoded_hot_p95_ns, 105);
     assert_eq!(observation.accelerated_decoded_hot_p99_ns, 105);
+    assert_eq!(observation.exhaustive_decoded_hot_p50_ns, 130);
+    assert_eq!(observation.exhaustive_decoded_hot_p95_ns, 145);
     assert_eq!(observation.exhaustive_decoded_hot_p99_ns, 145);
     assert!(observation.qualified);
     assert!(validate_v36_posting_accelerator_observation(&observation).unwrap());

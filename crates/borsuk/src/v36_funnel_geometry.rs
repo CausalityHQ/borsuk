@@ -2365,8 +2365,16 @@ pub struct V36PostingAcceleratorObservation {
     pub exhaustive_score_evaluations: u64,
     /// Exact allocated capacity charged to this accelerator.
     pub allocated_bytes: u64,
+    /// Decoded-hot p50 of candidate generation plus exact reranking.
+    pub accelerated_decoded_hot_p50_ns: u64,
+    /// Decoded-hot p95 of candidate generation plus exact reranking.
+    pub accelerated_decoded_hot_p95_ns: u64,
     /// Decoded-hot p99 of candidate generation plus exact reranking.
     pub accelerated_decoded_hot_p99_ns: u64,
+    /// Decoded-hot p50 of exhaustive exact selected scoring.
+    pub exhaustive_decoded_hot_p50_ns: u64,
+    /// Decoded-hot p95 of exhaustive exact selected scoring.
+    pub exhaustive_decoded_hot_p95_ns: u64,
     /// Decoded-hot p99 of exhaustive exact selected scoring.
     pub exhaustive_decoded_hot_p99_ns: u64,
     /// Stored decision, which validation independently recomputes.
@@ -2737,7 +2745,13 @@ pub(crate) fn recompute_v36_posting_accelerator_qualification(
         || observation.exact_rerank_score_evaluations == 0
         || observation.exhaustive_score_evaluations == 0
         || observation.allocated_bytes == 0
+        || observation.accelerated_decoded_hot_p50_ns == 0
+        || observation.accelerated_decoded_hot_p50_ns > observation.accelerated_decoded_hot_p95_ns
+        || observation.accelerated_decoded_hot_p95_ns > observation.accelerated_decoded_hot_p99_ns
         || observation.accelerated_decoded_hot_p99_ns == 0
+        || observation.exhaustive_decoded_hot_p50_ns == 0
+        || observation.exhaustive_decoded_hot_p50_ns > observation.exhaustive_decoded_hot_p95_ns
+        || observation.exhaustive_decoded_hot_p95_ns > observation.exhaustive_decoded_hot_p99_ns
         || observation.exhaustive_decoded_hot_p99_ns == 0
     {
         return Err(invalid("V36 posting accelerator observation differs"));
