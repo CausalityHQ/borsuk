@@ -390,6 +390,7 @@ pub use v36_posting_hnsw::{
     V36PostingHnswSearch, V36PostingHnswTopology, build_v36_posting_hnsw_topology,
     diagnose_v36_exhaustive_prefix_centroid_ranks, evaluate_v36_posting_accelerator_query,
     search_v36_posting_hnsw_candidates, select_v36_exhaustive_selected_prefix,
+    summarize_v36_posting_accelerator_observation,
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{

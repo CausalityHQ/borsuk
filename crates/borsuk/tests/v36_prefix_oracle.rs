@@ -19,21 +19,23 @@ use borsuk::{
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
     V36CoarseFragmentArm, V36CoarseFragmentArtifact, V36CoarseFragmentContext,
     V36CoarseFragmentRows, V36GeometryStop, V36PostingAcceleratorKind,
-    V36PostingAcceleratorObservation, V36PostingGaussianSummary, V36PostingHnswRecipe,
-    V36PostingPrefixComparison, V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource,
-    V36ResidualPq4Codebook, V36ResidualPq4Width, V36TransportDirectory,
-    V36TransportFetchObservation, V36TransportFragment, V36TransportLimits, V36TransportPosting,
-    V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
-    audit_v36_coarse_fragment_sha256, authenticate_v36_coarse_fragment,
-    authenticate_v36_posting_centroids, build_v36_posting_hnsw_topology, build_v36_srht192_control,
-    compare_v36_posting_prefixes, decode_v36_centered_projection_arrow,
-    decode_v36_coarse_fragment_arrow, decode_v36_transport_prefix, derive_v36_posting_hnsw_levels,
+    V36PostingAcceleratorObservation, V36PostingAcceleratorQueryEvaluation,
+    V36PostingGaussianSummary, V36PostingHnswRecipe, V36PostingPrefixComparison,
+    V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource, V36ResidualPq4Codebook,
+    V36ResidualPq4Width, V36TransportDirectory, V36TransportFetchObservation, V36TransportFragment,
+    V36TransportLimits, V36TransportPosting, V36UniqueLiveTopK, admit_v36_geometry,
+    allocate_v36_hamilton_postings, assign_v36_postings, audit_v36_coarse_fragment_sha256,
+    authenticate_v36_coarse_fragment, authenticate_v36_posting_centroids,
+    build_v36_posting_hnsw_topology, build_v36_srht192_control, compare_v36_posting_prefixes,
+    decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
+    decode_v36_transport_prefix, derive_v36_posting_hnsw_levels,
     encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
     encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
     project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
     rank_v36_selected_posting_candidates, score_v36_posting_centroid, score_v36_posting_gaussian,
     score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
-    select_v36_closure_owners, select_v36_flat_centroid_candidates, train_v36_centered_subspace,
+    select_v36_closure_owners, select_v36_flat_centroid_candidates,
+    summarize_v36_posting_accelerator_observation, train_v36_centered_subspace,
     train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
     train_v36_residual_pq4, v36_effective_ef_search, v36_posting_acceleration_required,
     validate_v36_posting_accelerator_observation,
@@ -445,6 +447,140 @@ fn v36_posting_accelerator_receipt_recomputes_parity_work_latency_and_memory() {
     ] {
         assert!(validate_v36_posting_accelerator_observation(&malformed).is_err());
     }
+}
+
+fn accelerator_query_evaluation(
+    query_ordinal: u32,
+    visited_nodes: u64,
+    allocated_bytes: u64,
+) -> V36PostingAcceleratorQueryEvaluation {
+    V36PostingAcceleratorQueryEvaluation {
+        kind: V36PostingAcceleratorKind::HnswSelectedScore,
+        posting_count: 1_025,
+        ef_search: 64,
+        comparison: prefix_comparison(
+            query_ordinal,
+            2,
+            &[0, 1],
+            &(0..64).collect::<Vec<_>>(),
+            &[0, 1],
+        ),
+        visited_nodes,
+        candidate_generation_score_evaluations: visited_nodes,
+        candidate_generation_centroid_distance_evaluations: 0,
+        candidate_generation_selected_score_evaluations: visited_nodes,
+        exact_rerank_score_evaluations: 64,
+        exhaustive_score_evaluations: 1_025,
+        allocated_bytes,
+    }
+}
+
+#[test]
+fn v36_posting_accelerator_summary_recomputes_parity_work_and_timing() {
+    // Break caught: the campaign hand-assembles a passing observation while dropping
+    // a query, hiding accelerator work, or using a non-canonical p99 calculation.
+    let evaluations = vec![
+        accelerator_query_evaluation(0, 100, 4_096),
+        accelerator_query_evaluation(1, 120, 8_192),
+    ];
+    let (observation, parity) = summarize_v36_posting_accelerator_observation(
+        &evaluations,
+        &[0, 1],
+        3,
+        &[80, 90, 100, 85, 95, 105],
+        &[120, 130, 140, 125, 135, 145],
+    )
+    .unwrap();
+    assert_eq!(parity.query_prefix_pairs, 2);
+    assert_eq!(parity.ordered_prefix_matches, 2);
+    assert_eq!(parity.candidate_containment_matches, 2);
+    assert_eq!(
+        observation.kind,
+        V36PostingAcceleratorKind::HnswSelectedScore
+    );
+    assert_eq!(observation.posting_count, 1_025);
+    assert_eq!(observation.requested_prefix_length, 2);
+    assert_eq!(observation.ef_search, 64);
+    assert_eq!(observation.visited_nodes, 220);
+    assert_eq!(observation.candidate_generation_score_evaluations, 220);
+    assert_eq!(observation.exact_rerank_score_evaluations, 128);
+    assert_eq!(observation.exhaustive_score_evaluations, 2_050);
+    assert_eq!(observation.allocated_bytes, 8_192);
+    assert_eq!(observation.accelerated_decoded_hot_p99_ns, 105);
+    assert_eq!(observation.exhaustive_decoded_hot_p99_ns, 145);
+    assert!(observation.qualified);
+    assert!(validate_v36_posting_accelerator_observation(&observation).unwrap());
+
+    let mut reversed = evaluations.clone();
+    reversed.reverse();
+    assert!(
+        summarize_v36_posting_accelerator_observation(
+            &reversed,
+            &[0, 1],
+            3,
+            &[80, 90, 100, 85, 95, 105],
+            &[120, 130, 140, 125, 135, 145]
+        )
+        .is_err()
+    );
+    assert!(
+        summarize_v36_posting_accelerator_observation(
+            &evaluations,
+            &[0, 1, 2],
+            3,
+            &[80, 90, 100, 85, 95, 105],
+            &[120, 130, 140, 125, 135, 145]
+        )
+        .is_err()
+    );
+    assert!(
+        summarize_v36_posting_accelerator_observation(
+            &evaluations,
+            &[0, 1],
+            3,
+            &[80, 90, 100],
+            &[120, 130, 140]
+        )
+        .is_err()
+    );
+    assert!(
+        summarize_v36_posting_accelerator_observation(
+            &evaluations,
+            &[0, 1],
+            3,
+            &[0, 90, 100, 85, 95, 105],
+            &[120, 130, 140, 125, 135, 145]
+        )
+        .is_err()
+    );
+
+    let mut hidden_work = evaluations.clone();
+    hidden_work[0].candidate_generation_selected_score_evaluations = 1;
+    hidden_work[0].candidate_generation_score_evaluations = 1;
+    assert!(
+        summarize_v36_posting_accelerator_observation(
+            &hidden_work,
+            &[0, 1],
+            3,
+            &[80, 90, 100, 85, 95, 105],
+            &[120, 130, 140, 125, 135, 145]
+        )
+        .is_err()
+    );
+    let mut relabeled = evaluations.clone();
+    for evaluation in &mut relabeled {
+        evaluation.kind = V36PostingAcceleratorKind::SimdFlatCentroid;
+    }
+    assert!(
+        summarize_v36_posting_accelerator_observation(
+            &relabeled,
+            &[0, 1],
+            3,
+            &[80, 90, 100, 85, 95, 105],
+            &[120, 130, 140, 125, 135, 145]
+        )
+        .is_err()
+    );
 }
 
 impl V36CenteredProjectionSource for TestProjectionSource {

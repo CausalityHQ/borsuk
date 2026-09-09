@@ -2721,7 +2721,7 @@ pub fn compare_v36_posting_prefixes(
 }
 
 /// Validate and recompute one accelerator qualification decision.
-pub fn validate_v36_posting_accelerator_observation(
+pub(crate) fn recompute_v36_posting_accelerator_qualification(
     observation: &V36PostingAcceleratorObservation,
 ) -> Result<bool> {
     if !v36_posting_acceleration_required(observation.posting_count)?
@@ -2760,6 +2760,14 @@ pub fn validate_v36_posting_accelerator_observation(
         && score_evaluations < observation.exhaustive_score_evaluations
         && observation.accelerated_decoded_hot_p99_ns < observation.exhaustive_decoded_hot_p99_ns
         && memory_passes;
+    Ok(qualified)
+}
+
+/// Validate and recompute one accelerator qualification decision.
+pub fn validate_v36_posting_accelerator_observation(
+    observation: &V36PostingAcceleratorObservation,
+) -> Result<bool> {
+    let qualified = recompute_v36_posting_accelerator_qualification(observation)?;
     if observation.qualified != qualified {
         return Err(invalid("V36 posting accelerator decision differs"));
     }

@@ -5,10 +5,12 @@ use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 use crate::{
     BorsukError, Result,
     v36_funnel_geometry::{
-        V36AuthenticatedPostingCentroids, V36PostingAcceleratorKind, V36PostingHnswRecipe,
-        V36PostingPrefixComparison, V36RankedPosting, derive_v36_posting_hnsw_levels,
-        rank_v36_selected_posting_candidates, score_v36_posting_centroid,
-        select_v36_flat_centroid_candidates,
+        V36AuthenticatedPostingCentroids, V36PostingAcceleratorKind,
+        V36PostingAcceleratorObservation, V36PostingHnswRecipe, V36PostingParityEvidence,
+        V36PostingPrefixComparison, V36RankedPosting, compare_v36_posting_prefixes,
+        derive_v36_posting_hnsw_levels, rank_v36_selected_posting_candidates,
+        recompute_v36_posting_accelerator_qualification, score_v36_posting_centroid,
+        select_v36_flat_centroid_candidates, validate_v36_posting_accelerator_observation,
     },
 };
 
@@ -235,6 +237,12 @@ impl V36PostingHnswSearch {
 /// One deterministic query comparison plus exact accelerator work accounting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V36PostingAcceleratorQueryEvaluation {
+    /// Candidate-generation strategy measured by this query.
+    pub kind: V36PostingAcceleratorKind,
+    /// Authenticated number of posting summaries in the measured population.
+    pub posting_count: u32,
+    /// Effective candidate/search width used for this query.
+    pub ef_search: u32,
     /// Exhaustive selected-score authority, generated candidates, and exact rerank.
     pub comparison: V36PostingPrefixComparison,
     /// Unique posting summaries visited during candidate generation.
@@ -760,6 +768,9 @@ where
     .map(|posting| posting.posting_ordinal)
     .collect();
     Ok(V36PostingAcceleratorQueryEvaluation {
+        kind,
+        posting_count,
+        ef_search,
         comparison: V36PostingPrefixComparison {
             query_ordinal,
             requested_prefix_length: prefix_length,
@@ -777,6 +788,158 @@ where
         exhaustive_score_evaluations: exhaustive.score_evaluations,
         allocated_bytes,
     })
+}
+
+fn v36_nearest_rank_p99(samples: &[u64]) -> Result<u64> {
+    if samples.is_empty() || samples.contains(&0) {
+        return Err(invalid("V36 posting accelerator timing population differs"));
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let rank = sorted
+        .len()
+        .checked_mul(99)
+        .ok_or_else(|| invalid("V36 posting accelerator timing rank overflows"))?
+        .div_ceil(100);
+    Ok(sorted[rank - 1])
+}
+
+/// Recompute one campaign observation from ordered per-query evidence and raw timings.
+pub fn summarize_v36_posting_accelerator_observation(
+    evaluations: &[V36PostingAcceleratorQueryEvaluation],
+    expected_query_ordinals: &[u32],
+    timing_samples_per_query: u32,
+    accelerated_decoded_hot_ns: &[u64],
+    exhaustive_decoded_hot_ns: &[u64],
+) -> Result<(V36PostingAcceleratorObservation, V36PostingParityEvidence)> {
+    let first = evaluations
+        .first()
+        .ok_or_else(|| invalid("V36 posting accelerator evaluation population differs"))?;
+    let expected_timing_samples = evaluations
+        .len()
+        .checked_mul(
+            usize::try_from(timing_samples_per_query)
+                .map_err(|_| invalid("V36 posting accelerator timing population overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 posting accelerator timing population overflows"))?;
+    if expected_query_ordinals.is_empty()
+        || evaluations.len() != expected_query_ordinals.len()
+        || evaluations
+            .iter()
+            .map(|evaluation| evaluation.comparison.query_ordinal)
+            .ne(expected_query_ordinals.iter().copied())
+        || timing_samples_per_query == 0
+        || accelerated_decoded_hot_ns.len() != expected_timing_samples
+        || exhaustive_decoded_hot_ns.len() != expected_timing_samples
+    {
+        return Err(invalid("V36 posting accelerator timing population differs"));
+    }
+    for evaluation in evaluations {
+        let candidate_generation = evaluation
+            .candidate_generation_centroid_distance_evaluations
+            .checked_add(evaluation.candidate_generation_selected_score_evaluations)
+            .ok_or_else(|| invalid("V36 posting accelerator work overflows"))?;
+        let candidate_count = u64::try_from(evaluation.comparison.accelerated_candidates.len())
+            .map_err(|_| invalid("V36 posting accelerator candidate count overflows"))?;
+        let strategy_work_valid = match evaluation.kind {
+            V36PostingAcceleratorKind::SimdFlatCentroid => {
+                evaluation.visited_nodes == u64::from(evaluation.posting_count)
+                    && evaluation.candidate_generation_centroid_distance_evaluations
+                        == u64::from(evaluation.posting_count)
+                    && evaluation.candidate_generation_selected_score_evaluations == 0
+                    && candidate_count == u64::from(evaluation.ef_search)
+            }
+            V36PostingAcceleratorKind::HnswCentroid => {
+                evaluation.visited_nodes <= u64::from(evaluation.posting_count)
+                    && evaluation.candidate_generation_centroid_distance_evaluations
+                        >= evaluation.visited_nodes
+                    && evaluation.candidate_generation_selected_score_evaluations == 0
+                    && candidate_count == u64::from(evaluation.ef_search)
+            }
+            V36PostingAcceleratorKind::HnswSelectedScore => {
+                evaluation.visited_nodes <= u64::from(evaluation.posting_count)
+                    && evaluation.candidate_generation_centroid_distance_evaluations == 0
+                    && evaluation.candidate_generation_selected_score_evaluations
+                        >= evaluation.visited_nodes
+                    && candidate_count == u64::from(evaluation.ef_search)
+            }
+        };
+        if evaluation.kind != first.kind
+            || evaluation.posting_count != first.posting_count
+            || evaluation.ef_search != first.ef_search
+            || evaluation.comparison.requested_prefix_length
+                != first.comparison.requested_prefix_length
+            || evaluation.candidate_generation_score_evaluations != candidate_generation
+            || evaluation.exhaustive_score_evaluations != u64::from(evaluation.posting_count)
+            || evaluation.exact_rerank_score_evaluations != candidate_count
+            || evaluation.visited_nodes == 0
+            || evaluation.allocated_bytes == 0
+            || !strategy_work_valid
+        {
+            return Err(invalid(
+                "V36 posting accelerator evaluation authority differs",
+            ));
+        }
+    }
+    let comparisons = evaluations
+        .iter()
+        .map(|evaluation| evaluation.comparison.clone())
+        .collect::<Vec<_>>();
+    let parity = compare_v36_posting_prefixes(first.posting_count, &comparisons)?;
+    let checked_sum = |values: &[u64], label: &str| {
+        values.iter().try_fold(0_u64, |sum, value| {
+            sum.checked_add(*value).ok_or_else(|| invalid(label))
+        })
+    };
+    let visited = evaluations
+        .iter()
+        .map(|evaluation| evaluation.visited_nodes)
+        .collect::<Vec<_>>();
+    let candidate_generation = evaluations
+        .iter()
+        .map(|evaluation| evaluation.candidate_generation_score_evaluations)
+        .collect::<Vec<_>>();
+    let exact_rerank = evaluations
+        .iter()
+        .map(|evaluation| evaluation.exact_rerank_score_evaluations)
+        .collect::<Vec<_>>();
+    let exhaustive = evaluations
+        .iter()
+        .map(|evaluation| evaluation.exhaustive_score_evaluations)
+        .collect::<Vec<_>>();
+    let mut observation = V36PostingAcceleratorObservation {
+        kind: first.kind,
+        posting_count: first.posting_count,
+        requested_prefix_length: first.comparison.requested_prefix_length,
+        ef_search: first.ef_search,
+        prefix_matches: parity.ordered_prefix_matches,
+        query_prefix_pairs: parity.query_prefix_pairs,
+        parity_ppm: parity.parity_ppm,
+        visited_nodes: checked_sum(&visited, "V36 posting accelerator visit count overflows")?,
+        candidate_generation_score_evaluations: checked_sum(
+            &candidate_generation,
+            "V36 posting accelerator work overflows",
+        )?,
+        exact_rerank_score_evaluations: checked_sum(
+            &exact_rerank,
+            "V36 posting accelerator work overflows",
+        )?,
+        exhaustive_score_evaluations: checked_sum(
+            &exhaustive,
+            "V36 posting accelerator work overflows",
+        )?,
+        allocated_bytes: evaluations
+            .iter()
+            .map(|evaluation| evaluation.allocated_bytes)
+            .max()
+            .ok_or_else(|| invalid("V36 posting accelerator allocation differs"))?,
+        accelerated_decoded_hot_p99_ns: v36_nearest_rank_p99(accelerated_decoded_hot_ns)?,
+        exhaustive_decoded_hot_p99_ns: v36_nearest_rank_p99(exhaustive_decoded_hot_ns)?,
+        qualified: false,
+    };
+    observation.qualified = recompute_v36_posting_accelerator_qualification(&observation)?;
+    validate_v36_posting_accelerator_observation(&observation)?;
+    Ok((observation, parity))
 }
 
 fn squared_l2(left: &[f32; 192], right: &[f32; 192], evaluations: &mut u64) -> Result<f64> {
