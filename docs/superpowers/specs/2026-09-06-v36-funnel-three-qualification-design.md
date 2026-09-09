@@ -322,6 +322,48 @@ posting centroids is required at 1M and 10M so construction approximation
 cannot contaminate the geometry result. At 100M, construction routing may be
 introduced only after parity with the frozen exact assignment is measured.
 
+Downstream construction receives a privately constructed authenticated-model
+handle containing the decoded centroids, the complete registered Arrow object
+identity, and the exact training authority. A public `(model,identity)` pair is
+forbidden because it could attach one model's values to another model's valid
+identity. The construction runner exposes only corpus/model readers and its
+attempt-owned scratch writer; query, truth, validation, holdout, arbitrary URL,
+and page-serving capabilities are absent.
+
+Before scanning source rows, a conservative assignment admission binds the
+model and query-excluded corpus identities, dimensions, fixed logical shard
+size, worker count in `{1,2,4}`, bounded queue, sort buffer, merge fan-in,
+scratch budget, peak live bytes, calibrated component throughput, active wall
+cap, and cost cap. The admitted plan is privately constructed and required by
+the executor. A second exact admission follows committed super-cell counts and
+Hamilton allocation. It includes assignment, fixed-shard sort, every merge
+generation, local farthest-first updates, ten Lloyd assignments, worst-case
+empty-repair rescans, source-ordered reductions, checkpoint overlap, and
+concurrent-worker memory. A failed admission cannot be passed to execution.
+
+Full-corpus assignment first writes provisional, uncompressed Arrow IPC shards
+with non-null `supercell_ordinal:u32`, `source_ordinal:u64`, and
+`projected:fixed_size_list<f32,D>`. Logical shards contain exactly 65,536 rows
+except the final tail and are independent of source callback blocks, worker
+count, scheduling, timing, and local paths. Each is sorted by
+`(supercell_ordinal,source_ordinal)` and binds the corpus and authenticated
+model identities. Only after exact row coverage and replay digest validation
+does a fixed fan-in merge publish canonical per-super-cell chunks, each with
+exactly 65,536 rows except its tail and increasing source ordinals. Scratch
+fragment identities are execution evidence; canonical chunk/result identities
+must be byte-identical across registered worker counts and callback sizes.
+
+Local posting training is external-memory even when a super cell is maximally
+skewed. It persists bounded nearest-distance and assignment sidecars rather
+than treating one super-cell population as a RAM bound. Empty postings are
+repaired in increasing posting ordinal from the persisted assignment evidence,
+updating donor counts before the next repair. Centroid sums are then recomputed
+by replaying the repaired assignments in increasing source-ordinal order;
+subtracting a donor from an already accumulated floating-point sum or merging
+worker/block partial sums is forbidden. Whole fixed shards, merge groups, seed
+steps, and Lloyd iterations are resumable only after authenticated commit
+markers; partial floating-point accumulations are discarded.
+
 The construction reservoir contains the
 
 `min(rows,1,048,576)`

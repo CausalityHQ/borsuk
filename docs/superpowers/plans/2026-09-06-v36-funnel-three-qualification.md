@@ -187,6 +187,45 @@
 **Interfaces:**
 - Produces `V36PostingModel`, `V36PostingAssignment`, `V36PostingSummary`, `train_v36_geometry`, `assign_v36_closure`, and `score_v36_postings`.
 
+- [ ] **Step 0: Bind the authenticated model handle and external admissions**
+
+  Load the strict super-cell Arrow object once into a privately constructible
+  handle that retains its full registered identity and training authority.
+  Reject any API accepting a separately supplied model and identity. Add a
+  conservative pre-assignment admission and an exact post-count admission;
+  execution accepts only these opaque admitted plans. Project assignment,
+  fixed-shard sorting, merge generations, local initialization, ten Lloyd
+  passes, worst-case repair rescans, disk overlap, bounded queues, aggregate
+  worker memory, active wall, and cost. Unit-test 1M/10M/100M arithmetic and
+  each limit one unit below its required value without allocating the projected
+  population.
+
+- [ ] **Step 0a: Build and merge authenticated external training runs**
+
+  Write provisional uncompressed Arrow shards of fixed 65,536 logical rows,
+  independent of callback block and worker scheduling, sorted by
+  `(supercell_ordinal,source_ordinal)`. Use a fixed fan-in merge schedule to
+  publish canonical 65,536-row per-super-cell chunks. Strictly validate Arrow
+  FlatBuffer allocation envelopes before decode, exact schemas/nullability,
+  complete unique row coverage, corpus replay digest, model identity, scratch
+  ownership, symlink/path traversal refusal, and byte budgets. Keep worker,
+  timing, retry, and host evidence outside deterministic result bytes. Require
+  final chunk and root-manifest equality across 1/2/4 workers and three callback
+  sizes; scratch-fragment bytes may differ.
+
+- [ ] **Step 0b: Train local postings with external sidecars**
+
+  Apply the checked Hamilton allocation to committed super-cell counts and
+  reject `P<R`, `k_i>n_i`, overflow, or an incorrect total. Persist bounded
+  nearest-distance and assignment sidecars for farthest-first initialization
+  and each Lloyd iteration. Repair empties in posting order with updated donor
+  counts, then replay repaired assignments in source order for binary64 sums;
+  never subtract from an accumulated sum or merge block/worker partial sums.
+  Keep the resident trainer only as the reduced-shape scalar oracle. Mutation-
+  test corruption/stale checkpoint recovery, skewed one-run populations,
+  duplicate/gap substitution, ties, empty repairs, and equality to the resident
+  oracle before publishing authenticated posting-centroid Arrow artifacts.
+
 - [ ] **Step 1: Write frozen-arm scale-transfer REDs**
 
   Consume the prefix-screen module rather than recreating its REDs. Require the
