@@ -31,9 +31,9 @@ use borsuk::{
     project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
     rank_v36_selected_posting_candidates, score_v36_posting_centroid, score_v36_posting_gaussian,
     score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
-    select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
-    train_v36_posting_gaussian, train_v36_posting_prototype_six, train_v36_residual_pq4,
-    v36_effective_ef_search, v36_posting_acceleration_required,
+    select_v36_closure_owners, select_v36_flat_centroid_candidates, train_v36_centered_subspace,
+    train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
+    train_v36_residual_pq4, v36_effective_ef_search, v36_posting_acceleration_required,
     validate_v36_posting_accelerator_observation,
 };
 use sha2::{Digest, Sha256};
@@ -82,6 +82,31 @@ fn v36_posting_accelerator_policy_is_exact_at_the_1024_boundary() {
     assert_eq!(v36_effective_ef_search(1_500, 1_024).unwrap(), 1_500);
     assert!(v36_effective_ef_search(0, 64).is_err());
     assert!(v36_effective_ef_search(17, 63).is_err());
+}
+
+#[test]
+fn v36_posting_accelerator_flat_centroid_scan_is_bounded_and_deterministic() {
+    let mut centroids = Vec::new();
+    for first in [3.0_f32, 2.0, 1.0, -1.0, -2.0, -3.0] {
+        let mut centroid = vec![0.0_f32; 192];
+        centroid[0] = first;
+        centroids.push(centroid);
+    }
+    let query = vec![0.0_f32; 192];
+    assert_eq!(
+        select_v36_flat_centroid_candidates(&centroids, &query, 4).unwrap(),
+        vec![2, 3, 1, 4]
+    );
+    assert_eq!(
+        select_v36_flat_centroid_candidates(&centroids, &query, 6).unwrap(),
+        vec![2, 3, 1, 4, 0, 5]
+    );
+    assert!(select_v36_flat_centroid_candidates(&centroids, &query, 0).is_err());
+    assert!(select_v36_flat_centroid_candidates(&centroids, &query, 7).is_err());
+    assert!(select_v36_flat_centroid_candidates(&centroids, &query[..191], 4).is_err());
+    let mut nonfinite = centroids.clone();
+    nonfinite[0][17] = f32::NAN;
+    assert!(select_v36_flat_centroid_candidates(&nonfinite, &query, 4).is_err());
 }
 
 fn qualified_accelerator_observation() -> V36PostingAcceleratorObservation {

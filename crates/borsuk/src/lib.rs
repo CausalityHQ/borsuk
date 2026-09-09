@@ -375,9 +375,10 @@ pub use v36_funnel_geometry::{
     encode_v36_centered_projection_arrow, project_v36_centered_row_scalar,
     project_v36_centered_row_simd, rank_v36_selected_posting_candidates,
     score_v36_posting_centroid, score_v36_posting_gaussian, score_v36_posting_prototype_six,
-    select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
-    train_v36_posting_gaussian, train_v36_posting_prototype_six, v36_effective_ef_search,
-    v36_posting_acceleration_required, validate_v36_posting_accelerator_observation,
+    select_v36_closure_owners, select_v36_flat_centroid_candidates, train_v36_centered_subspace,
+    train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
+    v36_effective_ef_search, v36_posting_acceleration_required,
+    validate_v36_posting_accelerator_observation,
 };
 #[doc(hidden)]
 pub use v36_prefix_dataset::{

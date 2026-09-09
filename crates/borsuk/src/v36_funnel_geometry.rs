@@ -1,6 +1,10 @@
 //! Deterministic posting geometry for the V36 qualification funnel.
 
-use std::{collections::HashMap, io::Cursor, sync::Arc};
+use std::{
+    collections::{BinaryHeap, HashMap},
+    io::Cursor,
+    sync::Arc,
+};
 
 use crate::{
     BorsukError, Result, V35Dimensions, V36ArtifactIdentity,
@@ -2322,6 +2326,28 @@ pub struct V36RankedPosting {
     pub score: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct V36FlatCentroidCandidate {
+    distance: f32,
+    posting_ordinal: u32,
+}
+
+impl Eq for V36FlatCentroidCandidate {}
+
+impl Ord for V36FlatCentroidCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then_with(|| self.posting_ordinal.cmp(&other.posting_ordinal))
+    }
+}
+
+impl PartialOrd for V36FlatCentroidCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Whether the posting count requires an accelerator qualification result.
 pub fn v36_posting_acceleration_required(posting_count: u32) -> Result<bool> {
     if posting_count == 0 {
@@ -2336,6 +2362,51 @@ pub fn v36_effective_ef_search(prefix_length: u32, ladder_rung: u32) -> Result<u
         return Err(invalid("V36 posting accelerator search authority differs"));
     }
     Ok(prefix_length.max(ladder_rung))
+}
+
+/// Select a bounded centroid-L2 candidate set without a population-sized rank buffer.
+pub fn select_v36_flat_centroid_candidates(
+    centroids: &[Vec<f32>],
+    query: &[f32],
+    candidate_count: u32,
+) -> Result<Vec<u32>> {
+    let candidate_count = usize::try_from(candidate_count)
+        .map_err(|_| invalid("V36 flat centroid candidate count overflows"))?;
+    if centroids.is_empty()
+        || candidate_count == 0
+        || candidate_count > centroids.len()
+        || invalid_v36_vector(query)
+        || centroids
+            .iter()
+            .any(|centroid| invalid_v36_vector(centroid))
+    {
+        return Err(invalid("V36 flat centroid candidate authority differs"));
+    }
+
+    let mut best = BinaryHeap::with_capacity(candidate_count);
+    for (posting_ordinal, centroid) in centroids.iter().enumerate() {
+        let distance = crate::metric::squared_euclidean_simd(centroid, query);
+        if !distance.is_finite() {
+            return Err(invalid("V36 flat centroid distance is nonfinite"));
+        }
+        let candidate = V36FlatCentroidCandidate {
+            distance: if distance == 0.0 { 0.0 } else { distance },
+            posting_ordinal: u32::try_from(posting_ordinal)
+                .map_err(|_| invalid("V36 flat centroid ordinal overflows"))?,
+        };
+        if best.len() < candidate_count {
+            best.push(candidate);
+        } else if best.peek().is_some_and(|farthest| candidate < *farthest) {
+            best.pop();
+            best.push(candidate);
+        }
+    }
+    let mut ranked = best.into_vec();
+    ranked.sort_unstable();
+    Ok(ranked
+        .into_iter()
+        .map(|candidate| candidate.posting_ordinal)
+        .collect())
 }
 
 /// Rescore and order a bounded candidate set with the exact selected scorer.
