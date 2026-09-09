@@ -704,6 +704,53 @@ fn v36_coarse_fragment_arrow_roundtrips_strict_serving_arms_and_authority() {
 }
 
 #[test]
+fn v36_coarse_fragment_accepts_independently_hashed_pyarrow_logical_rows() {
+    // Break caught: the Rust reader accidentally requires Rust-writer padding,
+    // narrows u64 source IDs to signed i64, or changes the logical V36 schema.
+    let bytes = decode_base64_fixture(include_str!("fixtures/v36_coarse_fragment_pyarrow.b64"));
+    assert_eq!(bytes.len(), 2_114);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&bytes)),
+        "7feadf996f64bdf64c0d655fbbbab8c5745dd0a086d36ed670071f8a90981d29"
+    );
+    assert_eq!(
+        blake3::hash(&bytes).to_hex().as_str(),
+        "033130e5a93beab9a5528f0fe1978023d16787e391fca45a08003087c38b8bc8"
+    );
+    let context = v36_coarse_context(V36CoarseFragmentArm::Sign24, 4, None);
+    let artifact = V36CoarseFragmentArtifact {
+        blake3: "033130e5a93beab9a5528f0fe1978023d16787e391fca45a08003087c38b8bc8".into(),
+        context,
+        decoded_capacity_bytes: u64::try_from(
+            2_114
+                + 2 * (44 + std::mem::size_of::<borsuk::V36Sign24Record>() + 16 + 96)
+                + 64 * 1_024,
+        )
+        .unwrap(),
+        encoded_bytes: 2_114,
+        first_dense_ordinal: 7,
+        last_dense_ordinal: 11,
+        row_count: 2,
+        sha256: "7feadf996f64bdf64c0d655fbbbab8c5745dd0a086d36ed670071f8a90981d29".into(),
+    };
+    audit_v36_coarse_fragment_sha256(&bytes, &artifact).unwrap();
+    let rows = decode_v36_coarse_fragment_arrow(&bytes, &artifact).unwrap();
+    let V36CoarseFragmentRows::Sign24(rows) = rows else {
+        panic!("PyArrow fixture must decode as sign24")
+    };
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].dense_ordinal(), 7);
+    assert_eq!(rows[0].source_feature_id(), (1_u64 << 63) + 5);
+    assert_eq!(rows[0].code(), &[0; 24]);
+    assert_eq!(rows[0].residual_norm(), 0.0);
+    assert_eq!(rows[1].dense_ordinal(), 11);
+    assert_eq!(rows[1].source_feature_id(), u64::MAX - 2);
+    assert_eq!(rows[1].code()[0], 0x80);
+    assert_eq!(&rows[1].code()[1..], &[0; 23]);
+    assert_eq!(rows[1].residual_norm(), 1.25);
+}
+
+#[test]
 fn v36_coarse_fragment_arrow_rejects_order_duplicates_and_width_drift() {
     // Break caught: owner-local rows are unordered/duplicated, PQ widths are
     // mislabeled, or artifact identity fields are accepted without binding.
