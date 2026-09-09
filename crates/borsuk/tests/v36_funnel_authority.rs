@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use blake3::Hasher as Blake3;
 use borsuk::{
-    V36ArtifactIdentity, V36ChunkCeiling, V36CoarseCode, V36FineCodec, V36FunnelManifest,
+    V36ArtifactIdentity, V36ChunkCeiling, V36CoarseCode, V36CoarseFragmentArm,
+    V36CoarseFragmentArtifact, V36CoarseFragmentContext, V36FineCodec, V36FunnelManifest,
     V36GeometryArm, V36PrimaryRows, V36ProjectionArm, V36RegisteredManifest, V36Replication,
     V36ResourceRequest, V36ShapeScore, V36TransportDirectory, V36TransportDisposition,
     V36TransportFragment, V36TransportLimits, V36TransportPosting, plan_v36_transport,
@@ -214,35 +215,75 @@ fn v36_funnel_authority_accepts_only_the_closed_arm_matrix_and_exact_bytes() {
     assert!(validate_v36_manifest(&extra_bytes, &registered(&extra_bytes)).is_err());
 }
 
-fn fragment(posting: u32, ordinal: u32, kib: u64, retries: u8) -> V36TransportFragment {
+fn fragment(posting: u32, ordinal: u32, kib: u64) -> V36TransportFragment {
     let first_dense_ordinal = u64::from(ordinal) * 1_000;
+    let encoded_bytes = kib * 1_024;
+    let row_count = 1_000_u32;
+    let decoded_capacity_bytes = encoded_bytes
+        + u64::from(row_count)
+            * (44
+                + u64::try_from(std::mem::size_of::<borsuk::V36Sign24Record>()).unwrap()
+                + 16
+                + 96)
+        + 64 * 1_024;
     V36TransportFragment {
-        blake3: digest(u8::try_from(ordinal + 33).unwrap()),
-        decoded_capacity_bytes: kib * 1_024 + 4_096,
-        encoded_bytes: kib * 1_024,
-        first_dense_ordinal,
-        fragment_ordinal: ordinal,
-        last_dense_ordinal: first_dense_ordinal + 999,
-        response_metadata_bytes_per_attempt: 256,
-        retries,
-        row_count: 1_000,
-        sha256: digest(u8::try_from(ordinal + 1).unwrap()),
-        uri: format!("s3://frozen-v36/coarse/{posting}/{ordinal}"),
+        artifact: V36CoarseFragmentArtifact {
+            blake3: digest(u8::try_from(ordinal + 33).unwrap()),
+            context: V36CoarseFragmentContext {
+                arm: V36CoarseFragmentArm::Sign24,
+                codebook_sha256: None,
+                fragment_ordinal: ordinal,
+                generation_manifest_sha256: digest(90),
+                owner_centroids_sha256: digest(91),
+                posting_ordinal: posting,
+                projection_sha256: digest(92),
+                uri: format!("s3://frozen-v36/coarse/{posting}/{ordinal}"),
+            },
+            decoded_capacity_bytes,
+            encoded_bytes,
+            first_dense_ordinal,
+            last_dense_ordinal: first_dense_ordinal + 999,
+            row_count,
+            sha256: digest(u8::try_from(ordinal + 1).unwrap()),
+        },
     }
+}
+
+fn fragment_with_rows(
+    posting: u32,
+    ordinal: u32,
+    kib: u64,
+    row_count: u32,
+) -> V36TransportFragment {
+    let mut fragment = fragment(posting, ordinal, kib);
+    fragment.artifact.row_count = row_count;
+    fragment.artifact.first_dense_ordinal = u64::from(ordinal) * u64::from(row_count);
+    fragment.artifact.last_dense_ordinal =
+        fragment.artifact.first_dense_ordinal + u64::from(row_count) - 1;
+    fragment.artifact.decoded_capacity_bytes = fragment.artifact.encoded_bytes
+        + u64::from(row_count)
+            * (44
+                + u64::try_from(std::mem::size_of::<borsuk::V36Sign24Record>()).unwrap()
+                + 16
+                + 96)
+        + 64 * 1_024;
+    fragment
 }
 
 #[test]
 fn v36_funnel_authority_accepts_sparse_replica_fragment_ordinals() {
     // Break caught: replica fragments are incorrectly treated as contiguous
     // primary-plane ranges even though their dense ordinals are sparse.
-    let mut first = fragment(6, 0, 1, 0);
-    first.first_dense_ordinal = 10;
-    first.last_dense_ordinal = 90;
-    first.row_count = 2;
-    let mut second = fragment(6, 1, 1, 0);
-    second.first_dense_ordinal = 120;
-    second.last_dense_ordinal = 300;
-    second.row_count = 2;
+    let mut first = fragment(6, 0, 1);
+    first.artifact.first_dense_ordinal = 10;
+    first.artifact.last_dense_ordinal = 90;
+    first.artifact.row_count = 2;
+    first.artifact.decoded_capacity_bytes = 1_024 + 2 * 204 + 64 * 1_024;
+    let mut second = fragment(6, 1, 1);
+    second.artifact.first_dense_ordinal = 120;
+    second.artifact.last_dense_ordinal = 300;
+    second.artifact.row_count = 2;
+    second.artifact.decoded_capacity_bytes = 1_024 + 2 * 204 + 64 * 1_024;
     let sparse = [V36TransportPosting {
         fragments: vec![first, second],
         posting_ordinal: 6,
@@ -251,9 +292,23 @@ fn v36_funnel_authority_accepts_sparse_replica_fragment_ordinals() {
     let directory = V36TransportDirectory::try_new(sparse.to_vec()).unwrap();
     assert!(plan_v36_transport(&[6], &directory, V36TransportLimits::qualification()).is_ok());
 
-    let mut overlapping = sparse;
-    overlapping[0].fragments[1].first_dense_ordinal = 90;
+    let mut overlapping = sparse.clone();
+    overlapping[0].fragments[1].artifact.first_dense_ordinal = 90;
     assert!(V36TransportDirectory::try_new(overlapping.to_vec()).is_err());
+
+    let mut wrong_posting = sparse.to_vec();
+    wrong_posting[0].fragments[0]
+        .artifact
+        .context
+        .posting_ordinal = 7;
+    assert!(V36TransportDirectory::try_new(wrong_posting).is_err());
+
+    let mut mixed_generation = sparse.to_vec();
+    mixed_generation[0].fragments[1]
+        .artifact
+        .context
+        .generation_manifest_sha256 = digest(93);
+    assert!(V36TransportDirectory::try_new(mixed_generation).is_err());
 }
 
 #[test]
@@ -261,14 +316,14 @@ fn v36_funnel_authority_uses_registered_one_mib_coarse_fragments() {
     // Break caught: the old 512-KiB ceiling splits an 8,192-row PQ4-48
     // posting solely because of the Arrow envelope and wastes the GET budget.
     let one_mib = V36TransportPosting {
-        fragments: vec![fragment(7, 0, 1_024, 0)],
+        fragments: vec![fragment(7, 0, 1_024)],
         posting_ordinal: 7,
         stored_assignment_rows: 1_000,
     };
     assert!(V36TransportDirectory::try_new(vec![one_mib]).is_ok());
 
     let too_large = V36TransportPosting {
-        fragments: vec![fragment(8, 0, 1_025, 0)],
+        fragments: vec![fragment(8, 0, 1_025)],
         posting_ordinal: 8,
         stored_assignment_rows: 1_000,
     };
@@ -278,22 +333,20 @@ fn v36_funnel_authority_uses_registered_one_mib_coarse_fragments() {
 #[test]
 fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     // Break caught: the planner partially admits a posting, treats concurrency
-    // as fewer GETs, ignores decoder capacity/retries, or widens the envelope.
+    // as fewer GETs, ignores decoder capacity, or widens the normal envelope.
     let postings = vec![
         V36TransportPosting {
-            fragments: vec![fragment(0, 0, 512, 1), fragment(0, 1, 512, 0)],
+            fragments: vec![fragment(0, 0, 512), fragment(0, 1, 512)],
             posting_ordinal: 0,
             stored_assignment_rows: 2_000,
         },
         V36TransportPosting {
-            fragments: (0..13)
-                .map(|ordinal| fragment(1, ordinal, 400, 0))
-                .collect(),
+            fragments: (0..13).map(|ordinal| fragment(1, ordinal, 400)).collect(),
             posting_ordinal: 1,
             stored_assignment_rows: 13_000,
         },
         V36TransportPosting {
-            fragments: vec![fragment(2, 0, 512, 0)],
+            fragments: vec![fragment(2, 0, 512)],
             posting_ordinal: 2,
             stored_assignment_rows: 1_000,
         },
@@ -305,15 +358,13 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     assert_eq!(plan.first_excluded_posting, Some(1));
     assert_eq!(plan.normal_gets, 2);
     assert_eq!(plan.normal_encoded_bytes, 1_048_576);
-    assert_eq!(plan.hard_gets_with_retries, 3);
-    assert_eq!(plan.hard_returned_bytes_with_retries, 1_573_632);
-    assert_eq!(plan.decoded_capacity_bytes, 1_056_768);
+    assert_eq!(plan.hard_gets_with_retries, 0);
+    assert_eq!(plan.hard_returned_bytes_with_retries, 0);
+    assert_eq!(plan.decoded_capacity_bytes, 1_587_648);
     assert_eq!(plan.disposition, V36TransportDisposition::Determinate);
 
     let exact_normal = vec![V36TransportPosting {
-        fragments: (0..14)
-            .map(|ordinal| fragment(3, ordinal, 512, 0))
-            .collect(),
+        fragments: (0..14).map(|ordinal| fragment(3, ordinal, 512)).collect(),
         posting_ordinal: 3,
         stored_assignment_rows: 14_000,
     }];
@@ -322,10 +373,21 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     assert_eq!(plan.normal_gets, 14);
     assert_eq!(plan.normal_encoded_bytes, 7 * 1_048_576);
 
-    let excluded = vec![V36TransportPosting {
-        fragments: (0..15)
-            .map(|ordinal| fragment(4, ordinal, 400, 0))
+    let decoded_overflow = vec![V36TransportPosting {
+        fragments: (0..7)
+            .map(|ordinal| fragment_with_rows(9, ordinal, 1_024, 20_000))
             .collect(),
+        posting_ordinal: 9,
+        stored_assignment_rows: 140_000,
+    }];
+    let directory = V36TransportDirectory::try_new(decoded_overflow).unwrap();
+    let plan = plan_v36_transport(&[9], &directory, V36TransportLimits::qualification()).unwrap();
+    assert!(plan.admitted_postings.is_empty());
+    assert_eq!(plan.first_excluded_posting, Some(9));
+    assert_eq!(plan.decoded_capacity_bytes, 0);
+
+    let excluded = vec![V36TransportPosting {
+        fragments: (0..15).map(|ordinal| fragment(4, ordinal, 400)).collect(),
         posting_ordinal: 4,
         stored_assignment_rows: 15_000,
     }];
@@ -334,22 +396,11 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     assert!(plan.admitted_postings.is_empty());
     assert_eq!(plan.first_excluded_posting, Some(4));
 
-    let mut retry_overflow = exact_normal;
-    retry_overflow[0].fragments[0].retries = 3;
-    let retry_directory = V36TransportDirectory::try_new(retry_overflow).unwrap();
-    assert_eq!(
-        plan_v36_transport(&[3], &retry_directory, V36TransportLimits::qualification())
-            .unwrap()
-            .disposition,
-        V36TransportDisposition::Indeterminate
-    );
-
     let mut incomplete = postings;
     incomplete[0].fragments.pop();
     assert!(V36TransportDirectory::try_new(incomplete).is_err());
 
-    let mut valid_small_tail = fragment(5, 0, 1, 0);
-    valid_small_tail.decoded_capacity_bytes = 64;
+    let valid_small_tail = fragment(5, 0, 1);
     let small_tail = [V36TransportPosting {
         fragments: vec![valid_small_tail],
         posting_ordinal: 5,

@@ -1,9 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result};
+use crate::{
+    BorsukError, Result,
+    v36_funnel_code::{
+        V36AuthenticatedCoarseFragment, V36CoarseFragmentArm, V36CoarseFragmentArtifact,
+        V36CoarseFragmentRows, validate_v36_coarse_artifact,
+    },
+};
 
 const FORMAT: &str = "borsuk-v36-funnel-manifest-v3";
 const PROJECTION_DIMENSIONS: u16 = 192;
@@ -14,6 +23,7 @@ const NORMAL_BYTE_LIMIT: u64 = 7 * 1_048_576;
 const HARD_GET_LIMIT: u16 = 16;
 const HARD_BYTE_LIMIT: u64 = 8 * 1_048_576;
 const MIB: u64 = 1_048_576;
+const DECODED_QUERY_LIMIT_BYTES: u64 = 32 * MIB;
 pub(crate) const POSTING_SUMMARY_SLOT_BYTES: u64 = 4_736;
 const OBJECT_DIRECTORY_ENTRY_BYTES: u64 = 80;
 const POSTING_DIRECTORY_ENTRY_BYTES: u64 = 16;
@@ -2427,6 +2437,8 @@ pub fn validate_v36_manifest(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Normal and retry-inclusive hard transport limits for one wave.
 pub struct V36TransportLimits {
+    /// Maximum decoded fragment capacity retained by one query workspace.
+    pub decoded_bytes: u64,
     /// Normal complete-object GET cap.
     pub normal_gets: u16,
     /// Normal returned-byte cap.
@@ -2441,6 +2453,7 @@ impl V36TransportLimits {
     /// Frozen V36 qualification limits.
     pub const fn qualification() -> Self {
         Self {
+            decoded_bytes: DECODED_QUERY_LIMIT_BYTES,
             normal_gets: NORMAL_GET_LIMIT,
             normal_bytes: NORMAL_BYTE_LIMIT,
             hard_gets: HARD_GET_LIMIT,
@@ -2450,30 +2463,26 @@ impl V36TransportLimits {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact generation and model authority shared by one transport directory.
+pub struct V36TransportAuthority {
+    /// Serving arm.
+    pub arm: V36CoarseFragmentArm,
+    /// PQ codebook identity; absent only for sign24.
+    pub codebook_sha256: Option<String>,
+    /// Active generation manifest identity.
+    pub generation_manifest_sha256: String,
+    /// Owner centroid set identity.
+    pub owner_centroids_sha256: String,
+    /// Centered projection identity.
+    pub projection_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// One complete authenticated coarse Arrow fragment.
 pub struct V36TransportFragment {
-    /// Complete-object BLAKE3.
-    pub blake3: String,
-    /// Peak decoded allocation.
-    pub decoded_capacity_bytes: u64,
-    /// Complete encoded response body.
-    pub encoded_bytes: u64,
-    /// First dense assignment ordinal in this fragment.
-    pub first_dense_ordinal: u64,
-    /// Dense fragment ordinal within its posting.
-    pub fragment_ordinal: u32,
-    /// Last dense assignment ordinal in this sparse fragment.
-    pub last_dense_ordinal: u64,
-    /// Response metadata returned on every attempt.
-    pub response_metadata_bytes_per_attempt: u64,
-    /// Complete-body retry count observed for this object.
-    pub retries: u8,
-    /// Dense assignment rows in this fragment.
-    pub row_count: u32,
-    /// Complete-object SHA-256.
-    pub sha256: String,
-    /// Immutable object URI.
-    pub uri: String,
+    /// Single authenticated fragment authority consumed by both planner and
+    /// decoder; transport never duplicates its identity fields.
+    pub artifact: V36CoarseFragmentArtifact,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2490,14 +2499,19 @@ pub struct V36TransportPosting {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// One generation-scoped transport directory validated before query service.
 pub struct V36TransportDirectory {
+    authority: V36TransportAuthority,
     postings: BTreeMap<u32, V36TransportPosting>,
 }
 
 impl V36TransportDirectory {
     /// Validate immutable posting and fragment authority once at generation admission.
     pub fn try_new(directory: Vec<V36TransportPosting>) -> Result<Self> {
+        if directory.is_empty() {
+            return Err(invalid("V36 transport directory is empty"));
+        }
         let mut postings = BTreeMap::new();
         let mut object_uris = BTreeSet::new();
+        let mut directory_authority = None;
         for posting in directory {
             if posting.fragments.is_empty() || posting.stored_assignment_rows == 0 {
                 return Err(invalid("V36 posting directory differs"));
@@ -2505,28 +2519,47 @@ impl V36TransportDirectory {
             let mut previous_last_dense_ordinal = None;
             let mut stored_assignment_rows = 0_u64;
             for (expected, fragment) in posting.fragments.iter().enumerate() {
-                let dense_span = fragment
+                let artifact = &fragment.artifact;
+                let context = &artifact.context;
+                validate_v36_coarse_artifact(artifact)?;
+                let authority = V36TransportAuthority {
+                    arm: context.arm,
+                    codebook_sha256: context.codebook_sha256.clone(),
+                    generation_manifest_sha256: context.generation_manifest_sha256.clone(),
+                    owner_centroids_sha256: context.owner_centroids_sha256.clone(),
+                    projection_sha256: context.projection_sha256.clone(),
+                };
+                if directory_authority
+                    .as_ref()
+                    .is_none_or(|registered| registered == &authority)
+                {
+                    directory_authority.get_or_insert(authority);
+                } else {
+                    return Err(invalid("V36 transport generation authority differs"));
+                }
+                let dense_span = artifact
                     .last_dense_ordinal
-                    .checked_sub(fragment.first_dense_ordinal)
+                    .checked_sub(artifact.first_dense_ordinal)
                     .and_then(|span| span.checked_add(1));
-                if fragment.fragment_ordinal != u32::try_from(expected).unwrap_or(u32::MAX)
-                    || dense_span.is_none_or(|span| span < u64::from(fragment.row_count))
+                if context.posting_ordinal != posting.posting_ordinal
+                    || context.fragment_ordinal != u32::try_from(expected).unwrap_or(u32::MAX)
+                    || dense_span.is_none_or(|span| span < u64::from(artifact.row_count))
                     || previous_last_dense_ordinal
-                        .is_some_and(|previous| fragment.first_dense_ordinal <= previous)
-                    || fragment.encoded_bytes == 0
-                    || fragment.encoded_bytes > COARSE_FRAGMENT_LIMIT_BYTES
-                    || fragment.decoded_capacity_bytes == 0
-                    || fragment.row_count == 0
-                    || !valid_digest(&fragment.sha256)
-                    || !valid_digest(&fragment.blake3)
-                    || fragment.uri.is_empty()
-                    || !object_uris.insert(fragment.uri.clone())
+                        .is_some_and(|previous| artifact.first_dense_ordinal <= previous)
+                    || artifact.encoded_bytes == 0
+                    || artifact.encoded_bytes > COARSE_FRAGMENT_LIMIT_BYTES
+                    || artifact.decoded_capacity_bytes == 0
+                    || artifact.row_count == 0
+                    || !valid_digest(&artifact.sha256)
+                    || !valid_digest(&artifact.blake3)
+                    || context.uri.is_empty()
+                    || !object_uris.insert(context.uri.clone())
                 {
                     return Err(invalid("V36 transport fragment differs"));
                 }
-                previous_last_dense_ordinal = Some(fragment.last_dense_ordinal);
+                previous_last_dense_ordinal = Some(artifact.last_dense_ordinal);
                 stored_assignment_rows = stored_assignment_rows
-                    .checked_add(u64::from(fragment.row_count))
+                    .checked_add(u64::from(artifact.row_count))
                     .ok_or_else(|| invalid("V36 posting row count overflows"))?;
             }
             if stored_assignment_rows != posting.stored_assignment_rows
@@ -2535,7 +2568,16 @@ impl V36TransportDirectory {
                 return Err(invalid("V36 posting completeness differs"));
             }
         }
-        Ok(Self { postings })
+        Ok(Self {
+            authority: directory_authority
+                .ok_or_else(|| invalid("V36 transport directory authority is empty"))?,
+            postings,
+        })
+    }
+
+    /// Exact active-generation authority required by query scoring.
+    pub fn authority(&self) -> &V36TransportAuthority {
+        &self.authority
     }
 }
 
@@ -2605,7 +2647,7 @@ pub fn plan_v36_transport(
         let posting_gets = u16::try_from(posting.fragments.len())
             .map_err(|_| invalid("V36 normal GET count overflows"))?;
         let posting_bytes = posting.fragments.iter().try_fold(0_u64, |sum, fragment| {
-            sum.checked_add(fragment.encoded_bytes)
+            sum.checked_add(fragment.artifact.encoded_bytes)
         });
         let posting_bytes = posting_bytes.ok_or_else(|| invalid("V36 normal bytes overflow"))?;
         let next_gets = plan
@@ -2616,54 +2658,155 @@ pub fn plan_v36_transport(
             .normal_encoded_bytes
             .checked_add(posting_bytes)
             .ok_or_else(|| invalid("V36 normal bytes overflow"))?;
-        if next_gets > limits.normal_gets || next_bytes > limits.normal_bytes {
-            plan.first_excluded_posting = Some(ranked_postings[rank_index]);
-            break;
-        }
-
-        let mut hard_gets = plan.hard_gets_with_retries;
-        let mut hard_bytes = plan.hard_returned_bytes_with_retries;
         let mut decoded = plan.decoded_capacity_bytes;
         for fragment in &posting.fragments {
-            let attempts = u16::from(fragment.retries)
-                .checked_add(1)
-                .ok_or_else(|| invalid("V36 retry count overflows"))?;
-            hard_gets = hard_gets
-                .checked_add(attempts)
-                .ok_or_else(|| invalid("V36 hard GET count overflows"))?;
-            let returned_per_attempt = fragment
-                .encoded_bytes
-                .checked_add(fragment.response_metadata_bytes_per_attempt)
-                .ok_or_else(|| invalid("V36 hard bytes overflow"))?;
-            hard_bytes = hard_bytes
-                .checked_add(
-                    returned_per_attempt
-                        .checked_mul(u64::from(attempts))
-                        .ok_or_else(|| invalid("V36 hard bytes overflow"))?,
-                )
-                .ok_or_else(|| invalid("V36 hard bytes overflow"))?;
             decoded = decoded
-                .checked_add(fragment.decoded_capacity_bytes)
+                .checked_add(fragment.artifact.decoded_capacity_bytes)
                 .ok_or_else(|| invalid("V36 decoder capacity overflows"))?;
         }
-        if hard_gets > limits.hard_gets || hard_bytes > limits.hard_bytes {
-            plan.admitted_postings.push(*posting_ordinal);
-            plan.normal_gets = next_gets;
-            plan.normal_encoded_bytes = next_bytes;
-            plan.hard_gets_with_retries = hard_gets;
-            plan.hard_returned_bytes_with_retries = hard_bytes;
-            plan.decoded_capacity_bytes = decoded;
-            plan.disposition = V36TransportDisposition::Indeterminate;
-            return Ok(plan);
+        if next_gets > limits.normal_gets
+            || next_bytes > limits.normal_bytes
+            || decoded > limits.decoded_bytes
+        {
+            plan.first_excluded_posting = Some(ranked_postings[rank_index]);
+            break;
         }
         plan.admitted_postings.push(*posting_ordinal);
         plan.normal_gets = next_gets;
         plan.normal_encoded_bytes = next_bytes;
-        plan.hard_gets_with_retries = hard_gets;
-        plan.hard_returned_bytes_with_retries = hard_bytes;
         plan.decoded_capacity_bytes = decoded;
     }
     Ok(plan)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Fully authenticated fragments for one atomically decoded posting.
+pub struct V36DecodedTransportPosting {
+    /// Shared authenticated cache handles in registered fragment order.
+    pub fragments: Vec<Arc<V36AuthenticatedCoarseFragment>>,
+    /// Owner posting ordinal.
+    pub posting_ordinal: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Deterministic transport plan and its fully authenticated decoded prefix.
+pub struct V36DecodedTransportPrefix {
+    /// Frozen plan used to fetch the prefix.
+    pub plan: V36TransportPlan,
+    /// Complete decoded postings; no partial posting can escape.
+    pub postings: Vec<V36DecodedTransportPosting>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One cache hit or completed bounded fetch observation for a fragment.
+pub struct V36TransportFetchObservation {
+    fragment: Arc<V36AuthenticatedCoarseFragment>,
+    gets: u16,
+    returned_bytes: u64,
+}
+
+impl V36TransportFetchObservation {
+    /// Bind an authenticated cache handle to the actual transport work used to
+    /// obtain it. A warm cache hit records zero GETs and zero returned bytes.
+    pub fn try_new(
+        fragment: Arc<V36AuthenticatedCoarseFragment>,
+        gets: u16,
+        returned_bytes: u64,
+    ) -> Result<Self> {
+        let minimum = fragment
+            .artifact()
+            .encoded_bytes
+            .checked_mul(u64::from(gets))
+            .ok_or_else(|| invalid("V36 observed returned bytes overflow"))?;
+        if (gets == 0) != (returned_bytes == 0) || returned_bytes < minimum {
+            return Err(invalid("V36 transport observation differs"));
+        }
+        Ok(Self {
+            fragment,
+            gets,
+            returned_bytes,
+        })
+    }
+}
+
+/// Plan, fetch, authenticate, and atomically decode one ranked transport prefix.
+///
+/// The body callback is intentionally storage-agnostic and may read from a
+/// caller-owned bounded prefetch cache. This boundary publishes decoded rows
+/// only after every fragment and every cross-fragment identity in an
+/// admitted posting is valid.
+pub fn decode_v36_transport_prefix<F>(
+    ranked_postings: &[u32],
+    directory: &V36TransportDirectory,
+    expected_authority: &V36TransportAuthority,
+    limits: V36TransportLimits,
+    mut fetch: F,
+) -> Result<V36DecodedTransportPrefix>
+where
+    F: FnMut(&V36CoarseFragmentArtifact) -> Result<V36TransportFetchObservation>,
+{
+    if directory.authority() != expected_authority {
+        return Err(invalid("V36 active transport authority differs"));
+    }
+    let mut plan = plan_v36_transport(ranked_postings, directory, limits)?;
+    let mut decoded_postings = Vec::with_capacity(plan.admitted_postings.len());
+    for posting_ordinal in &plan.admitted_postings {
+        let posting = directory
+            .postings
+            .get(posting_ordinal)
+            .ok_or_else(|| invalid("V36 admitted posting authority differs"))?;
+        let capacity = usize::try_from(posting.stored_assignment_rows)
+            .map_err(|_| invalid("V36 posting row count overflows"))?;
+        let mut source_ids = Vec::with_capacity(capacity);
+        let mut decoded_fragments = Vec::with_capacity(posting.fragments.len());
+        for fragment in &posting.fragments {
+            let observation = fetch(&fragment.artifact)?;
+            if observation.fragment.artifact() != &fragment.artifact {
+                return Err(invalid("V36 cached fragment authority differs"));
+            }
+            plan.hard_gets_with_retries = plan
+                .hard_gets_with_retries
+                .checked_add(observation.gets)
+                .ok_or_else(|| invalid("V36 hard GET count overflows"))?;
+            plan.hard_returned_bytes_with_retries = plan
+                .hard_returned_bytes_with_retries
+                .checked_add(observation.returned_bytes)
+                .ok_or_else(|| invalid("V36 hard bytes overflow"))?;
+            if plan.hard_gets_with_retries > limits.hard_gets
+                || plan.hard_returned_bytes_with_retries > limits.hard_bytes
+            {
+                plan.disposition = V36TransportDisposition::Indeterminate;
+                return Ok(V36DecodedTransportPrefix {
+                    plan,
+                    postings: Vec::new(),
+                });
+            }
+            match observation.fragment.rows() {
+                V36CoarseFragmentRows::Sign24(rows) => rows
+                    .iter()
+                    .for_each(|row| source_ids.push(row.source_feature_id())),
+                V36CoarseFragmentRows::ResidualPq4(rows) => rows
+                    .iter()
+                    .for_each(|row| source_ids.push(row.source_feature_id())),
+            }
+            decoded_fragments.push(observation.fragment);
+        }
+        if source_ids.len() != capacity {
+            return Err(invalid("V36 decoded posting completeness differs"));
+        }
+        source_ids.sort_unstable();
+        if source_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(invalid("V36 posting source identity differs"));
+        }
+        decoded_postings.push(V36DecodedTransportPosting {
+            fragments: decoded_fragments,
+            posting_ordinal: *posting_ordinal,
+        });
+    }
+    Ok(V36DecodedTransportPrefix {
+        plan,
+        postings: decoded_postings,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

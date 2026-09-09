@@ -1,6 +1,10 @@
 //! Fast-fail scalar contracts for the V36 sequential prefix oracle.
 
-use std::{collections::HashMap, io::Cursor, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Cursor,
+    sync::Arc,
+};
 
 use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, Float64Array, RecordBatch};
 use arrow_ipc::{
@@ -15,16 +19,18 @@ use borsuk::{
     V36CoarseFragmentArm, V36CoarseFragmentArtifact, V36CoarseFragmentContext,
     V36CoarseFragmentRows, V36GeometryStop, V36PostingGaussianSummary,
     V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource, V36ResidualPq4Codebook,
-    V36ResidualPq4Width, V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings,
-    assign_v36_postings, audit_v36_coarse_fragment_sha256, build_v36_srht192_control,
+    V36ResidualPq4Width, V36TransportDirectory, V36TransportFetchObservation, V36TransportFragment,
+    V36TransportLimits, V36TransportPosting, V36UniqueLiveTopK, admit_v36_geometry,
+    allocate_v36_hamilton_postings, assign_v36_postings, audit_v36_coarse_fragment_sha256,
+    authenticate_v36_coarse_fragment, build_v36_srht192_control,
     decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
-    encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
-    encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
-    project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
-    score_v36_posting_centroid, score_v36_posting_gaussian, score_v36_posting_prototype_six,
-    score_v36_residual_pq4_record, score_v36_sign24_record, select_v36_closure_owners,
-    train_v36_centered_subspace, train_v36_posting_centroids, train_v36_posting_gaussian,
-    train_v36_posting_prototype_six, train_v36_residual_pq4,
+    decode_v36_transport_prefix, encode_v36_centered_projection_arrow,
+    encode_v36_coarse_fragment_arrow, encode_v36_residual_pq4_record, encode_v36_sign24_record,
+    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
+    project_v36_centered_row_simd, score_v36_posting_centroid, score_v36_posting_gaussian,
+    score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
+    select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
+    train_v36_posting_gaussian, train_v36_posting_prototype_six, train_v36_residual_pq4,
 };
 use sha2::{Digest, Sha256};
 
@@ -805,6 +811,179 @@ fn v36_coarse_fragment_arrow_accounts_near_ceiling_decode_workspace() {
     assert_eq!(
         decode_v36_coarse_fragment_arrow(&bytes, &artifact).unwrap(),
         rows
+    );
+}
+
+#[test]
+fn v36_coarse_transport_decodes_postings_atomically_and_deduplicates_replicas() {
+    // Break caught: a successful sibling fragment leaks candidates before a
+    // later fragment fails, or one source identity is scored twice inside an
+    // owner posting after fragment boundaries change.
+    let owner = vec![0.0_f32; 192];
+    let make = |fragment_ordinal: u32, dense_ordinal: u64, source_feature_id: u64| {
+        let identity = V36CoarseAssignmentIdentity::new(
+            u64::from(fragment_ordinal),
+            dense_ordinal,
+            source_feature_id,
+            4,
+        );
+        let rows = V36CoarseFragmentRows::Sign24(vec![
+            encode_v36_sign24_record(&identity, &vec![1.0; 192], &owner).unwrap(),
+        ]);
+        let mut context = v36_coarse_context(V36CoarseFragmentArm::Sign24, 4, None);
+        context.fragment_ordinal = fragment_ordinal;
+        context.uri = format!("s3://frozen-v36/coarse/4/{fragment_ordinal}.arrow");
+        let (bytes, artifact) = encode_v36_coarse_fragment_arrow(&context, &rows).unwrap();
+        (bytes, V36TransportFragment { artifact })
+    };
+    let (first_bytes, first) = make(0, 10, 100);
+    let (second_bytes, second) = make(1, 90, 900);
+    let directory = V36TransportDirectory::try_new(vec![V36TransportPosting {
+        fragments: vec![first.clone(), second.clone()],
+        posting_ordinal: 4,
+        stored_assignment_rows: 2,
+    }])
+    .unwrap();
+    let first_handle =
+        Arc::new(authenticate_v36_coarse_fragment(&first_bytes, &first.artifact).unwrap());
+    let second_handle =
+        Arc::new(authenticate_v36_coarse_fragment(&second_bytes, &second.artifact).unwrap());
+    let handles = BTreeMap::from([
+        (first.artifact.context.uri.clone(), first_handle.clone()),
+        (second.artifact.context.uri.clone(), second_handle.clone()),
+    ]);
+    let expected_authority = directory.authority().clone();
+    let loaded = decode_v36_transport_prefix(
+        &[4],
+        &directory,
+        &expected_authority,
+        V36TransportLimits::qualification(),
+        |artifact| {
+            V36TransportFetchObservation::try_new(
+                handles.get(&artifact.context.uri).cloned().unwrap(),
+                1,
+                artifact.encoded_bytes + 256,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(loaded.plan.admitted_postings, vec![4]);
+    assert_eq!(loaded.postings.len(), 1);
+    assert_eq!(loaded.postings[0].posting_ordinal, 4);
+    assert_eq!(loaded.postings[0].fragments.len(), 2);
+    assert!(Arc::ptr_eq(&loaded.postings[0].fragments[0], &first_handle));
+    assert_eq!(loaded.plan.hard_gets_with_retries, 2);
+    assert_eq!(
+        loaded.plan.hard_returned_bytes_with_retries,
+        first.artifact.encoded_bytes + second.artifact.encoded_bytes + 512
+    );
+
+    let cached = decode_v36_transport_prefix(
+        &[4],
+        &directory,
+        &expected_authority,
+        V36TransportLimits::qualification(),
+        |artifact| {
+            V36TransportFetchObservation::try_new(
+                handles.get(&artifact.context.uri).cloned().unwrap(),
+                0,
+                0,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(cached.plan.hard_gets_with_retries, 0);
+    assert_eq!(cached.plan.hard_returned_bytes_with_retries, 0);
+    assert!(Arc::ptr_eq(
+        &cached.postings[0].fragments[1],
+        &second_handle
+    ));
+
+    let foreign = decode_v36_transport_prefix(
+        &[4],
+        &directory,
+        &expected_authority,
+        V36TransportLimits::qualification(),
+        |_| V36TransportFetchObservation::try_new(second_handle.clone(), 0, 0),
+    )
+    .unwrap_err();
+    assert_eq!(
+        foreign.to_string(),
+        "invalid storage: V36 cached fragment authority differs"
+    );
+
+    let indeterminate = decode_v36_transport_prefix(
+        &[4],
+        &directory,
+        &expected_authority,
+        V36TransportLimits::qualification(),
+        |artifact| {
+            V36TransportFetchObservation::try_new(
+                handles.get(&artifact.context.uri).cloned().unwrap(),
+                17,
+                artifact.encoded_bytes * 17 + 256 * 17,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        indeterminate.plan.disposition,
+        borsuk::V36TransportDisposition::Indeterminate
+    );
+    assert_eq!(indeterminate.plan.hard_gets_with_retries, 17);
+    assert!(indeterminate.postings.is_empty());
+
+    let mut foreign_authority = expected_authority.clone();
+    foreign_authority.projection_sha256 = "ab".repeat(32);
+    let authority_error = decode_v36_transport_prefix(
+        &[4],
+        &directory,
+        &foreign_authority,
+        V36TransportLimits::qualification(),
+        |_| panic!("active-generation mismatch must reject before cache access"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        authority_error.to_string(),
+        "invalid storage: V36 active transport authority differs"
+    );
+
+    let (duplicate_bytes, duplicate) = make(1, 90, 100);
+    let duplicate_directory = V36TransportDirectory::try_new(vec![V36TransportPosting {
+        fragments: vec![first.clone(), duplicate.clone()],
+        posting_ordinal: 4,
+        stored_assignment_rows: 2,
+    }])
+    .unwrap();
+    let duplicate_handles = BTreeMap::from([
+        (first.artifact.context.uri.clone(), first_handle),
+        (
+            duplicate.artifact.context.uri.clone(),
+            Arc::new(
+                authenticate_v36_coarse_fragment(&duplicate_bytes, &duplicate.artifact).unwrap(),
+            ),
+        ),
+    ]);
+    assert!(
+        decode_v36_transport_prefix(
+            &[4],
+            &duplicate_directory,
+            duplicate_directory.authority(),
+            V36TransportLimits::qualification(),
+            |artifact| {
+                V36TransportFetchObservation::try_new(
+                    duplicate_handles
+                        .get(&artifact.context.uri)
+                        .cloned()
+                        .unwrap(),
+                    0,
+                    0,
+                )
+            },
+        )
+        .unwrap_err()
+        .to_string()
+        .ends_with("V36 posting source identity differs")
     );
 }
 

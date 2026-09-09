@@ -494,14 +494,41 @@ pub struct V36CoarseFragmentArtifact {
     pub sha256: String,
 }
 
-fn validate_v36_coarse_artifact(artifact: &V36CoarseFragmentArtifact) -> Result<()> {
+#[derive(Debug, Clone, PartialEq)]
+/// Opaque, artifact-bound decoded fragment admitted to a bounded query cache.
+pub struct V36AuthenticatedCoarseFragment {
+    artifact: V36CoarseFragmentArtifact,
+    rows: Arc<V36CoarseFragmentRows>,
+}
+
+impl V36AuthenticatedCoarseFragment {
+    /// Exact artifact authority bound to this decoded cache handle.
+    pub(crate) fn artifact(&self) -> &V36CoarseFragmentArtifact {
+        &self.artifact
+    }
+
+    /// Immutable decoded rows. Authentication and Arrow decoding happened
+    /// exactly once when this cache handle was constructed.
+    pub fn rows(&self) -> &V36CoarseFragmentRows {
+        self.rows.as_ref()
+    }
+}
+
+pub(crate) fn validate_v36_coarse_artifact(artifact: &V36CoarseFragmentArtifact) -> Result<()> {
     validate_v36_coarse_context(&artifact.context)?;
+    let decoded_capacity = usize::try_from(artifact.row_count)
+        .ok()
+        .zip(usize::try_from(artifact.encoded_bytes).ok())
+        .and_then(|(rows, encoded)| {
+            coarse_decoded_capacity(artifact.context.arm, rows, encoded).ok()
+        });
     if artifact.row_count == 0
         || artifact.first_dense_ordinal > artifact.last_dense_ordinal
         || artifact.encoded_bytes == 0
         || artifact.encoded_bytes > COARSE_FRAGMENT_LIMIT_BYTES as u64
         || !valid_sha256(&artifact.sha256)
         || !valid_sha256(&artifact.blake3)
+        || decoded_capacity != Some(artifact.decoded_capacity_bytes)
     {
         return Err(invalid("V36 coarse fragment artifact differs"));
     }
@@ -529,6 +556,7 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && value.bytes().any(|byte| byte != b'0')
 }
 
 fn validate_v36_coarse_context(context: &V36CoarseFragmentContext) -> Result<()> {
@@ -1007,12 +1035,12 @@ pub fn audit_v36_coarse_fragment_sha256(
     Ok(())
 }
 
-/// BLAKE3-authenticate and decode one complete V36 serving fragment at bounded
-/// query-cache admission.
-pub fn decode_v36_coarse_fragment_arrow(
+/// BLAKE3-authenticate and decode one complete V36 serving fragment into an
+/// opaque bounded-cache handle.
+pub fn authenticate_v36_coarse_fragment(
     bytes: &[u8],
     artifact: &V36CoarseFragmentArtifact,
-) -> Result<V36CoarseFragmentRows> {
+) -> Result<V36AuthenticatedCoarseFragment> {
     validate_v36_coarse_artifact(artifact)?;
     if bytes.is_empty()
         || bytes.len() > COARSE_FRAGMENT_LIMIT_BYTES
@@ -1127,7 +1155,25 @@ pub fn decode_v36_coarse_fragment_arrow(
     {
         return Err(invalid("V36 coarse fragment authority differs"));
     }
-    Ok(rows)
+    Ok(V36AuthenticatedCoarseFragment {
+        artifact: artifact.clone(),
+        rows: Arc::new(rows),
+    })
+}
+
+/// BLAKE3-authenticate and decode one complete V36 serving fragment.
+///
+/// Query runtimes should retain the handle from
+/// [`authenticate_v36_coarse_fragment`] instead of invoking this convenience
+/// wrapper on warm cache hits.
+pub fn decode_v36_coarse_fragment_arrow(
+    bytes: &[u8],
+    artifact: &V36CoarseFragmentArtifact,
+) -> Result<V36CoarseFragmentRows> {
+    Ok(authenticate_v36_coarse_fragment(bytes, artifact)?
+        .rows
+        .as_ref()
+        .clone())
 }
 
 fn canonical_f32(value: f64) -> Result<f32> {
