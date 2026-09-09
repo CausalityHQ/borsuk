@@ -1619,7 +1619,10 @@ pub struct V36SupercellAssignmentRow {
 impl V36SupercellAssignmentRow {
     /// Construct one finite projected assignment row.
     pub fn new(supercell_ordinal: u32, source_ordinal: u64, projected: [f32; 192]) -> Result<Self> {
-        if !projected.iter().all(|value| value.is_finite()) {
+        if projected
+            .iter()
+            .any(|value| !value.is_finite() || (*value == 0.0 && value.is_sign_negative()))
+        {
             return Err(invalid("V36 assignment row is nonfinite"));
         }
         Ok(Self {
@@ -1756,7 +1759,10 @@ fn validate_v36_assignment_rows(
             || row.supercell_ordinal >= context.training_spec.super_cell_count
             || row.source_ordinal < start
             || row.source_ordinal >= end
-            || !row.projected.iter().all(|value| value.is_finite())
+            || row
+                .projected
+                .iter()
+                .any(|value| !value.is_finite() || (*value == 0.0 && value.is_sign_negative()))
         {
             return Err(invalid("V36 assignment shard rows differ"));
         }
@@ -2096,32 +2102,65 @@ pub fn encode_v36_supercell_assignment_shard_arrow(
     ))
     .map_err(|_| invalid("V36 assignment shard manifest differs"))?;
     let schema = Arc::new(v36_assignment_schema(manifest));
+    let projected_values = rows
+        .len()
+        .checked_mul(192)
+        .ok_or_else(|| invalid("V36 assignment projected allocation overflows"))?;
+    let mut supercells = Vec::new();
+    supercells
+        .try_reserve_exact(rows.len())
+        .map_err(|_| invalid("V36 assignment supercell allocation exceeds capacity"))?;
+    supercells.extend(rows.iter().map(|row| row.supercell_ordinal));
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(rows.len())
+        .map_err(|_| invalid("V36 assignment source allocation exceeds capacity"))?;
+    sources.extend(rows.iter().map(|row| row.source_ordinal));
+    let mut projected_flat = Vec::new();
+    projected_flat
+        .try_reserve_exact(projected_values)
+        .map_err(|_| invalid("V36 assignment projected allocation exceeds capacity"))?;
+    projected_flat.extend(rows.iter().flat_map(|row| row.projected));
     let projected = FixedSizeListArray::try_new(
         Arc::new(Field::new("element", DataType::Float32, false)),
         192,
-        Arc::new(Float32Array::from_iter_values(
-            rows.iter().flat_map(|row| row.projected),
-        )),
+        Arc::new(Float32Array::from(projected_flat)),
         None,
     )?;
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(UInt32Array::from_iter_values(
-                rows.iter().map(|row| row.supercell_ordinal),
-            )),
-            Arc::new(UInt64Array::from_iter_values(
-                rows.iter().map(|row| row.source_ordinal),
-            )),
+            Arc::new(UInt32Array::from(supercells)),
+            Arc::new(UInt64Array::from(sources)),
             Arc::new(projected),
         ],
     )?;
     let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let maximum_encoded_bytes = rows
+        .len()
+        .checked_mul(
+            usize::try_from(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
+                .map_err(|_| invalid("V36 assignment encoded bytes overflow"))?,
+        )
+        .and_then(|bytes| {
+            bytes.checked_add(usize::try_from(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES).ok()?)
+        })
+        .ok_or_else(|| invalid("V36 assignment encoded bytes overflow"))?;
     let mut bytes = Vec::new();
-    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
-    writer.write(&batch)?;
-    writer.finish()?;
-    drop(writer);
+    bytes
+        .try_reserve_exact(maximum_encoded_bytes)
+        .map_err(|_| invalid("V36 assignment encoding allocation exceeds capacity"))?;
+    bytes.resize(maximum_encoded_bytes, 0);
+    let encoded_bytes = {
+        let mut output = Cursor::new(bytes.as_mut_slice());
+        let mut writer = FileWriter::try_new_with_options(&mut output, schema.as_ref(), options)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+        drop(writer);
+        usize::try_from(output.position())
+            .map_err(|_| invalid("V36 assignment encoded bytes overflow"))?
+    };
+    bytes.truncate(encoded_bytes);
     let encoded_bytes = u64::try_from(bytes.len())
         .map_err(|_| invalid("V36 assignment shard encoded bytes overflow"))?;
     if encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES {
@@ -2252,6 +2291,181 @@ pub fn decode_v36_supercell_assignment_shard_arrow(
         .collect::<Vec<_>>();
     validate_v36_assignment_rows(&artifact.context, &rows)?;
     Ok(rows)
+}
+
+/// Transactional destination for provisional external-assignment shards.
+///
+/// Implementations must keep provisional bytes unpublished until `commit` and
+/// delete them when `abort` is called.
+pub trait V36SupercellAssignmentShardSink {
+    /// Persist one authenticated shard as attempt-private provisional state.
+    fn write_provisional(
+        &mut self,
+        bytes: &[u8],
+        artifact: &V36SupercellAssignmentShardArtifact,
+    ) -> Result<()>;
+
+    /// Publish the complete ordered shard set after corpus replay succeeds.
+    fn commit(&mut self, artifacts: &[V36SupercellAssignmentShardArtifact]) -> Result<()>;
+
+    /// Remove every provisional shard written by this transaction.
+    fn abort(&mut self) -> Result<()>;
+}
+
+fn write_v36_assignment_buffer(
+    model: &V36AuthenticatedSupercellModel,
+    pool: &rayon::ThreadPool,
+    uri_prefix: &str,
+    sink: &mut dyn V36SupercellAssignmentShardSink,
+    shard_ordinal: u64,
+    buffered: &mut Vec<(u64, [f32; 192])>,
+    artifacts: &mut Vec<V36SupercellAssignmentShardArtifact>,
+) -> Result<()> {
+    if buffered.is_empty() {
+        return Ok(());
+    }
+    let centroids = model.model().centroids();
+    let mut assigned = Vec::new();
+    assigned
+        .try_reserve_exact(buffered.len())
+        .map_err(|_| invalid("V36 assignment result allocation exceeds capacity"))?;
+    assigned.resize(
+        buffered.len(),
+        V36SupercellAssignmentRow {
+            supercell_ordinal: 0,
+            source_ordinal: 0,
+            projected: [0.0; 192],
+        },
+    );
+    pool.install(|| {
+        buffered
+            .par_iter()
+            .zip(assigned.par_iter_mut())
+            .try_for_each(|((source_ordinal, projected), assigned)| {
+                let mut best = (squared_l2(projected, &centroids[0])?, 0_u32);
+                for (ordinal, centroid) in centroids.iter().enumerate().skip(1) {
+                    let distance = squared_l2(projected, centroid)?;
+                    if distance < best.0 {
+                        best = (
+                            distance,
+                            u32::try_from(ordinal)
+                                .map_err(|_| invalid("V36 assignment supercell overflows"))?,
+                        );
+                    }
+                }
+                *assigned = V36SupercellAssignmentRow {
+                    supercell_ordinal: best.1,
+                    source_ordinal: *source_ordinal,
+                    projected: *projected,
+                };
+                Ok::<(), BorsukError>(())
+            })
+    })?;
+    assigned.sort_unstable_by_key(|row| (row.supercell_ordinal, row.source_ordinal));
+    let uri = format!("{uri_prefix}/shard-{shard_ordinal:06}.arrow");
+    let context = bind_v36_supercell_assignment_shard_context(model, shard_ordinal, &uri)?;
+    let (bytes, artifact) = encode_v36_supercell_assignment_shard_arrow(&context, &assigned)?;
+    sink.write_provisional(&bytes, &artifact)?;
+    artifacts.push(artifact);
+    buffered.clear();
+    Ok(())
+}
+
+/// Assign one complete projected corpus into fixed, schedule-invariant shards.
+///
+/// The sink remains provisional until complete row ordering and replay digest
+/// authority succeed. Any failure requests transactional cleanup through
+/// `V36SupercellAssignmentShardSink::abort`.
+pub fn write_v36_supercell_assignment_shards(
+    model: &V36AuthenticatedSupercellModel,
+    admission: &V36AdmittedSupercellAssignmentPreflight,
+    source: &mut dyn V36ProjectedCorpusSource,
+    uri_prefix: &str,
+    sink: &mut dyn V36SupercellAssignmentShardSink,
+) -> Result<Vec<V36SupercellAssignmentShardArtifact>> {
+    let maximum_shard_rows = admission
+        .training_spec
+        .corpus_rows
+        .min(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS);
+    if admission.model_identity != *model.identity()
+        || admission.training_spec != *model.training_spec()
+        || admission.request.sort_rows_per_worker < maximum_shard_rows
+        || !valid_v36_supercell_model_uri(uri_prefix)
+    {
+        return Err(invalid("V36 assignment execution authority differs"));
+    }
+    let execute = (|| {
+        let worker_count = usize::from(admission.request.worker_count);
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(worker_count)
+            .build()
+            .map_err(|_| invalid("V36 assignment workers differ"))?;
+        let buffer_rows = usize::try_from(maximum_shard_rows)
+            .map_err(|_| invalid("V36 assignment shard rows overflow"))?;
+        let mut buffered = Vec::new();
+        buffered
+            .try_reserve_exact(buffer_rows)
+            .map_err(|_| invalid("V36 assignment buffer allocation exceeds capacity"))?;
+        let artifact_count = usize::try_from(admission.projection.logical_shards)
+            .map_err(|_| invalid("V36 assignment shard count overflows"))?;
+        let mut artifacts = Vec::new();
+        artifacts
+            .try_reserve_exact(artifact_count)
+            .map_err(|_| invalid("V36 assignment artifact allocation exceeds capacity"))?;
+        let mut shard_ordinal = 0_u64;
+        let replay_sha256 = scan_v36_projected_corpus(
+            &admission.training_spec,
+            source,
+            |source_ordinal, projected| {
+                buffered.push((
+                    source_ordinal,
+                    projected
+                        .try_into()
+                        .map_err(|_| invalid("V36 assignment projected row differs"))?,
+                ));
+                if buffered.len() == buffer_rows {
+                    write_v36_assignment_buffer(
+                        model,
+                        &pool,
+                        uri_prefix,
+                        sink,
+                        shard_ordinal,
+                        &mut buffered,
+                        &mut artifacts,
+                    )?;
+                    shard_ordinal = shard_ordinal
+                        .checked_add(1)
+                        .ok_or_else(|| invalid("V36 assignment shard ordinal overflows"))?;
+                }
+                Ok(())
+            },
+        )?;
+        if !buffered.is_empty() {
+            write_v36_assignment_buffer(
+                model,
+                &pool,
+                uri_prefix,
+                sink,
+                shard_ordinal,
+                &mut buffered,
+                &mut artifacts,
+            )?;
+        }
+        if replay_sha256 != admission.training_spec.projected_corpus_sha256
+            || artifacts.len() != artifact_count
+        {
+            return Err(invalid("V36 assignment corpus authority differs"));
+        }
+        sink.commit(&artifacts)?;
+        Ok(artifacts)
+    })();
+    match execute {
+        Ok(artifacts) => Ok(artifacts),
+        Err(source) => match sink.abort() {
+            Ok(()) => Err(source),
+            Err(cleanup) => Err(cleanup),
+        },
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2409,12 +2623,19 @@ pub fn project_v36_supercell_assignment_admission(
         .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
         .and_then(|bytes| bytes.checked_mul(u64::from(request.worker_count)))
         .ok_or_else(|| invalid("V36 external assignment worker bytes overflow"))?;
+    let canonicalization_bytes = spec
+        .corpus_rows
+        .min(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
+        .and_then(|bytes| bytes.checked_mul(4))
+        .and_then(|bytes| bytes.checked_add(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES))
+        .ok_or_else(|| invalid("V36 external assignment canonicalization bytes overflow"))?;
     let required_scratch_bytes = uncompressed_assignment_bytes
         .checked_mul(2)
         .and_then(|bytes| bytes.checked_add(aggregate_worker_bytes))
         .ok_or_else(|| invalid("V36 external assignment scratch bytes overflow"))?;
     let required_peak_live_bytes = SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
-        .checked_add(aggregate_worker_bytes)
+        .checked_add(aggregate_worker_bytes.max(canonicalization_bytes))
         .ok_or_else(|| invalid("V36 external assignment live bytes overflow"))?;
     let component_terms = u128::from(spec.corpus_rows)
         .checked_mul(u128::from(spec.super_cell_count))

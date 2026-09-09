@@ -378,10 +378,10 @@ pub use v36_funnel_geometry::{
     V36PostingPrefixComparison, V36PostingPrototypeSummary, V36ProjectedCorpusBlockVisitor,
     V36ProjectedCorpusSource, V36RankedPosting, V36SupercellAssignmentAdmissionRequest,
     V36SupercellAssignmentProjection, V36SupercellAssignmentRow,
-    V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardContext, V36SupercellModel,
-    V36SupercellPostCountAdmissionRequest, V36SupercellPostCountProjection,
-    V36SupercellTrainingPreflight, V36SupercellTrainingSpec, admit_v36_geometry,
-    admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
+    V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardContext,
+    V36SupercellAssignmentShardSink, V36SupercellModel, V36SupercellPostCountAdmissionRequest,
+    V36SupercellPostCountProjection, V36SupercellTrainingPreflight, V36SupercellTrainingSpec,
+    admit_v36_geometry, admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
     allocate_v36_hamilton_postings, assign_v36_postings, authenticate_v36_posting_centroids,
     bind_v36_registered_supercell_training_spec, bind_v36_supercell_assignment_shard_context,
     build_v36_srht192_control, compare_v36_posting_prefixes, decode_v36_centered_projection_arrow,
@@ -397,6 +397,7 @@ pub use v36_funnel_geometry::{
     train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
     train_v36_supercells, v36_effective_ef_search, v36_posting_acceleration_required,
     validate_v36_posting_accelerator_matrix, validate_v36_posting_accelerator_observation,
+    write_v36_supercell_assignment_shards,
 };
 #[doc(hidden)]
 pub use v36_posting_hnsw::{
