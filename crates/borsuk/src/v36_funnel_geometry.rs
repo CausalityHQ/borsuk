@@ -1443,6 +1443,488 @@ pub fn build_v36_srht192_control() -> Result<V35Projection> {
     )
 }
 
+/// One bounded projected-corpus block consumed during V36 geometry construction.
+pub type V36ProjectedCorpusBlockVisitor<'a> = dyn FnMut(&[u64], &[f32]) -> Result<()> + 'a;
+
+/// Restartable query-blind source of projected corpus rows.
+pub trait V36ProjectedCorpusSource {
+    /// Scan every projected row once in strictly increasing source-ordinal order.
+    fn scan(&mut self, visitor: &mut V36ProjectedCorpusBlockVisitor<'_>) -> Result<()>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact bounded authority for deterministic V36 super-cell training.
+pub struct V36SupercellTrainingSpec {
+    /// Exact query-excluded corpus population.
+    pub corpus_rows: u64,
+    /// Projected vector dimensions; V36 fixes this to 192.
+    pub dimensions: usize,
+    /// Hard row cap for every source callback.
+    pub maximum_block_rows: usize,
+    /// Registered digest of exact projected `(ordinal, f32 bits)` replay bytes.
+    pub projected_corpus_sha256: String,
+    /// Query-independent SHA-ranked reservoir population.
+    pub reservoir_rows: u64,
+    /// Number of construction-only super cells.
+    pub super_cell_count: u32,
+}
+
+/// Bind the registered dimension-independent V36 super-cell training shape.
+pub fn bind_v36_registered_supercell_training_spec(
+    corpus_rows: u64,
+    maximum_block_rows: usize,
+    projected_corpus_sha256: &str,
+) -> Result<V36SupercellTrainingSpec> {
+    if corpus_rows == 0
+        || maximum_block_rows == 0
+        || maximum_block_rows > 65_536
+        || !valid_sha256(projected_corpus_sha256)
+    {
+        return Err(invalid("V36 registered super-cell training spec differs"));
+    }
+    let super_cells = corpus_rows
+        .div_ceil(262_144)
+        .checked_next_power_of_two()
+        .ok_or_else(|| invalid("V36 registered super-cell count overflows"))?
+        .min(4_096);
+    Ok(V36SupercellTrainingSpec {
+        corpus_rows,
+        dimensions: 192,
+        maximum_block_rows,
+        projected_corpus_sha256: projected_corpus_sha256.to_owned(),
+        reservoir_rows: corpus_rows.min(1_048_576),
+        super_cell_count: u32::try_from(super_cells)
+            .map_err(|_| invalid("V36 registered super-cell count overflows"))?,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Checked work and trainer-owned memory projection for V36 super-cell training.
+pub struct V36SupercellTrainingPreflight {
+    /// Exact scalar component terms across initialization and 25 Lloyd passes.
+    pub component_terms: u128,
+    /// Ceiling-scaled active time from the registered measured kernel sample.
+    pub projected_active_ns: u128,
+    /// Maximum bytes simultaneously owned by the trainer's largest phase.
+    pub trainer_owned_peak_bytes: u64,
+    /// Whether the projected active time is inside the registered wall cap.
+    pub within_active_wall_cap: bool,
+}
+
+/// Project complete V36 super-cell work from a bounded measured kernel sample.
+pub fn project_v36_supercell_training_preflight(
+    spec: &V36SupercellTrainingSpec,
+    measured_component_terms: u128,
+    measured_elapsed_ns: u64,
+    maximum_active_wall_seconds: u64,
+) -> Result<V36SupercellTrainingPreflight> {
+    if spec.corpus_rows == 0
+        || spec.dimensions != 192
+        || spec.maximum_block_rows == 0
+        || spec.maximum_block_rows > 65_536
+        || !valid_sha256(&spec.projected_corpus_sha256)
+        || spec.reservoir_rows == 0
+        || spec.reservoir_rows > spec.corpus_rows
+        || spec.reservoir_rows > 1_048_576
+        || spec.super_cell_count == 0
+        || !spec.super_cell_count.is_power_of_two()
+        || spec.super_cell_count > 4_096
+        || u64::from(spec.super_cell_count) > spec.reservoir_rows
+        || measured_component_terms == 0
+        || measured_elapsed_ns == 0
+        || maximum_active_wall_seconds == 0
+    {
+        return Err(invalid("V36 super-cell preflight authority differs"));
+    }
+    let rows = u128::from(spec.reservoir_rows);
+    let cells = u128::from(spec.super_cell_count);
+    let initialization_distances = cells
+        .checked_sub(1)
+        .and_then(|iterations| iterations.checked_mul(rows))
+        .and_then(|value| {
+            cells
+                .checked_mul(cells - 1)
+                .and_then(|selected| value.checked_sub(selected / 2))
+        })
+        .ok_or_else(|| invalid("V36 super-cell initialization work overflows"))?;
+    let lloyd_distances = 25_u128
+        .checked_mul(rows)
+        .and_then(|value| value.checked_mul(cells))
+        .ok_or_else(|| invalid("V36 super-cell Lloyd work overflows"))?;
+    let component_terms = initialization_distances
+        .checked_add(lloyd_distances)
+        .and_then(|value| value.checked_mul(192))
+        .ok_or_else(|| invalid("V36 super-cell training work overflows"))?;
+    let projected_active_ns = component_terms
+        .checked_mul(u128::from(measured_elapsed_ns))
+        .ok_or_else(|| invalid("V36 super-cell projected time overflows"))?
+        .div_ceil(measured_component_terms);
+    let maximum_active_ns = u128::from(maximum_active_wall_seconds)
+        .checked_mul(1_000_000_000)
+        .ok_or_else(|| invalid("V36 super-cell active wall cap overflows"))?;
+
+    let rows = u64::try_from(rows).map_err(|_| invalid("V36 super-cell resident rows overflow"))?;
+    let cells = u64::from(spec.super_cell_count);
+    let block_rows = u64::try_from(spec.maximum_block_rows)
+        .map_err(|_| invalid("V36 super-cell block rows overflow"))?;
+    let block_bytes = block_rows
+        .checked_mul(192 * 4 + 8)
+        .ok_or_else(|| invalid("V36 super-cell block bytes overflow"))?;
+    let selection_phase = rows
+        .checked_mul(32 + 8)
+        .and_then(|value| value.checked_add(block_bytes))
+        .ok_or_else(|| invalid("V36 super-cell selection memory overflows"))?;
+    let centroid_bytes = cells
+        .checked_mul(8 + 192 * 4 + 8 + 192 * 8)
+        .ok_or_else(|| invalid("V36 super-cell centroid memory overflows"))?;
+    let training_phase = rows
+        .checked_mul(8 + 192 * 4 + 1 + 8 + 8 + 8)
+        .and_then(|value| value.checked_add(centroid_bytes))
+        .and_then(|value| value.checked_add(block_bytes))
+        .ok_or_else(|| invalid("V36 super-cell training memory overflows"))?;
+    Ok(V36SupercellTrainingPreflight {
+        component_terms,
+        projected_active_ns,
+        trainer_owned_peak_bytes: selection_phase.max(training_phase),
+        within_active_wall_cap: projected_active_ns <= maximum_active_ns,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Deterministic V36 super-cell centroids and reservoir evidence.
+pub struct V36SupercellModel {
+    centroids: Vec<[f32; 192]>,
+    empty_repairs: u64,
+    initialization_source_ordinals: Vec<u64>,
+    projected_corpus_sha256: String,
+    reservoir_source_ordinals: Vec<u64>,
+}
+
+impl V36SupercellModel {
+    /// Trained super-cell centroids in canonical ordinal order.
+    pub fn centroids(&self) -> &[[f32; 192]] {
+        &self.centroids
+    }
+
+    /// Total deterministic empty-centroid repairs across all Lloyd iterations.
+    pub const fn empty_repairs(&self) -> u64 {
+        self.empty_repairs
+    }
+
+    /// Reservoir source ordinals selected by deterministic farthest-first initialization.
+    pub fn initialization_source_ordinals(&self) -> &[u64] {
+        &self.initialization_source_ordinals
+    }
+
+    /// Exact fixed Lloyd iteration count.
+    pub const fn iterations(&self) -> u8 {
+        25
+    }
+
+    /// Authenticated projected-corpus replay consumed by both bounded passes.
+    pub fn projected_corpus_sha256(&self) -> &str {
+        &self.projected_corpus_sha256
+    }
+
+    /// Selected query-independent reservoir rows in source-ordinal order.
+    pub fn reservoir_source_ordinals(&self) -> &[u64] {
+        &self.reservoir_source_ordinals
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct V36ReservoirKey {
+    digest: [u8; 32],
+    source_ordinal: u64,
+}
+
+impl Ord for V36ReservoirKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.digest
+            .cmp(&other.digest)
+            .then_with(|| self.source_ordinal.cmp(&other.source_ordinal))
+    }
+}
+
+impl PartialOrd for V36ReservoirKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn scan_v36_projected_corpus(
+    spec: &V36SupercellTrainingSpec,
+    source: &mut dyn V36ProjectedCorpusSource,
+    mut consume: impl FnMut(u64, &[f32]) -> Result<()>,
+) -> Result<String> {
+    let mut expected_ordinal = 0_u64;
+    let mut replay_sha256 = Sha256::new();
+    replay_sha256.update(b"borsuk-v36-projected-corpus-replay-v1");
+    source.scan(&mut |ordinals, vectors| {
+        let expected_values = ordinals
+            .len()
+            .checked_mul(spec.dimensions)
+            .ok_or_else(|| invalid("V36 projected corpus block shape overflows"))?;
+        if ordinals.is_empty()
+            || ordinals.len() > spec.maximum_block_rows
+            || vectors.len() != expected_values
+        {
+            return Err(invalid("V36 projected corpus block differs"));
+        }
+        for (row, ordinal) in ordinals.iter().copied().enumerate() {
+            if ordinal != expected_ordinal {
+                return Err(invalid("V36 projected corpus ordering differs"));
+            }
+            let start = row
+                .checked_mul(spec.dimensions)
+                .ok_or_else(|| invalid("V36 projected corpus block shape overflows"))?;
+            let vector = &vectors[start..start + spec.dimensions];
+            if vector
+                .iter()
+                .any(|value| !value.is_finite() || (*value == 0.0 && value.is_sign_negative()))
+            {
+                return Err(invalid("V36 projected corpus vector differs"));
+            }
+            replay_sha256.update(ordinal.to_le_bytes());
+            for value in vector {
+                replay_sha256.update(value.to_bits().to_le_bytes());
+            }
+            consume(ordinal, vector)?;
+            expected_ordinal = expected_ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 projected corpus row count overflows"))?;
+        }
+        Ok(())
+    })?;
+    if expected_ordinal != spec.corpus_rows {
+        return Err(invalid("V36 projected corpus row count differs"));
+    }
+    Ok(format!("{:x}", replay_sha256.finalize()))
+}
+
+fn try_filled_v36_training_vec<T: Clone>(
+    len: usize,
+    value: T,
+    allocation: &'static str,
+) -> Result<Vec<T>> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(len)
+        .map_err(|_| invalid(allocation))?;
+    output.resize(len, value);
+    Ok(output)
+}
+
+/// Train the query-independent V36 super cells from a bounded SHA-ranked reservoir.
+pub fn train_v36_supercells(
+    spec: &V36SupercellTrainingSpec,
+    source: &mut dyn V36ProjectedCorpusSource,
+) -> Result<V36SupercellModel> {
+    if spec.corpus_rows == 0
+        || spec.dimensions != 192
+        || spec.maximum_block_rows == 0
+        || spec.maximum_block_rows > 65_536
+        || !valid_sha256(&spec.projected_corpus_sha256)
+        || spec.reservoir_rows == 0
+        || spec.reservoir_rows > spec.corpus_rows
+        || spec.reservoir_rows > 1_048_576
+        || spec.super_cell_count == 0
+        || !spec.super_cell_count.is_power_of_two()
+        || spec.super_cell_count > 4_096
+        || u64::from(spec.super_cell_count) > spec.reservoir_rows
+    {
+        return Err(invalid("V36 super-cell training authority differs"));
+    }
+    let reservoir_rows = usize::try_from(spec.reservoir_rows)
+        .map_err(|_| invalid("V36 super-cell reservoir row count overflows"))?;
+    let mut selected = BinaryHeap::new();
+    selected
+        .try_reserve_exact(reservoir_rows)
+        .map_err(|_| invalid("V36 super-cell reservoir allocation exceeds capacity"))?;
+    let replay_sha256 = scan_v36_projected_corpus(spec, source, |source_ordinal, _| {
+        let mut digest = Sha256::new();
+        digest.update(b"borsuk-v36-geometry-reservoir-v1");
+        digest.update(source_ordinal.to_le_bytes());
+        let key = V36ReservoirKey {
+            digest: digest.finalize().into(),
+            source_ordinal,
+        };
+        if selected.len() < reservoir_rows {
+            selected.push(key);
+        } else if selected.peek().is_some_and(|largest| key < *largest) {
+            selected.pop();
+            selected.push(key);
+        }
+        Ok(())
+    })?;
+    let mut reservoir_source_ordinals = Vec::new();
+    reservoir_source_ordinals
+        .try_reserve_exact(reservoir_rows)
+        .map_err(|_| invalid("V36 super-cell reservoir allocation exceeds capacity"))?;
+    reservoir_source_ordinals.extend(selected.into_iter().map(|key| key.source_ordinal));
+    reservoir_source_ordinals.sort_unstable();
+
+    if replay_sha256 != spec.projected_corpus_sha256 {
+        return Err(invalid("V36 projected corpus authority differs"));
+    }
+    let mut rows = Vec::<[f32; 192]>::new();
+    rows.try_reserve_exact(reservoir_rows)
+        .map_err(|_| invalid("V36 super-cell reservoir allocation exceeds capacity"))?;
+    let mut selected_index = 0_usize;
+    let second_replay_sha256 =
+        scan_v36_projected_corpus(spec, source, |source_ordinal, vector| {
+            if reservoir_source_ordinals.get(selected_index) == Some(&source_ordinal) {
+                rows.push(
+                    vector
+                        .try_into()
+                        .map_err(|_| invalid("V36 super-cell reservoir vector differs"))?,
+                );
+                selected_index += 1;
+            }
+            Ok(())
+        })?;
+    if second_replay_sha256 != replay_sha256
+        || rows.len() != reservoir_rows
+        || selected_index != reservoir_rows
+    {
+        return Err(invalid("V36 super-cell reservoir differs"));
+    }
+
+    let centroid_count = usize::try_from(spec.super_cell_count)
+        .map_err(|_| invalid("V36 super-cell count overflows"))?;
+    let mut selected_rows = try_filled_v36_training_vec(
+        rows.len(),
+        false,
+        "V36 super-cell selection allocation exceeds capacity",
+    )?;
+    selected_rows[0] = true;
+    let mut centroids = Vec::new();
+    centroids
+        .try_reserve_exact(centroid_count)
+        .map_err(|_| invalid("V36 super-cell centroid allocation exceeds capacity"))?;
+    centroids.push(rows[0]);
+    let mut initialization_source_ordinals = Vec::new();
+    initialization_source_ordinals
+        .try_reserve_exact(centroid_count)
+        .map_err(|_| invalid("V36 super-cell seed allocation exceeds capacity"))?;
+    initialization_source_ordinals.push(reservoir_source_ordinals[0]);
+    let mut nearest_distances = try_filled_v36_training_vec(
+        rows.len(),
+        f64::INFINITY,
+        "V36 super-cell distance allocation exceeds capacity",
+    )?;
+    while centroids.len() < centroid_count {
+        let newest = centroids
+            .last()
+            .ok_or_else(|| invalid("V36 super-cell initialization differs"))?;
+        let mut best = None::<(f64, u64, usize)>;
+        for (row_index, vector) in rows.iter().enumerate() {
+            if selected_rows[row_index] {
+                continue;
+            }
+            nearest_distances[row_index] =
+                nearest_distances[row_index].min(squared_l2(vector.as_slice(), newest.as_slice())?);
+            let candidate = (
+                nearest_distances[row_index],
+                reservoir_source_ordinals[row_index],
+                row_index,
+            );
+            if best.as_ref().is_none_or(|current| {
+                candidate.0 > current.0 || (candidate.0 == current.0 && candidate.1 < current.1)
+            }) {
+                best = Some(candidate);
+            }
+        }
+        let row_index = best
+            .map(|candidate| candidate.2)
+            .ok_or_else(|| invalid("V36 super-cell initialization differs"))?;
+        selected_rows[row_index] = true;
+        centroids.push(rows[row_index]);
+        initialization_source_ordinals.push(reservoir_source_ordinals[row_index]);
+    }
+
+    let mut assignments = try_filled_v36_training_vec(
+        rows.len(),
+        0_usize,
+        "V36 super-cell assignment allocation exceeds capacity",
+    )?;
+    let mut assigned_distances = try_filled_v36_training_vec(
+        rows.len(),
+        0.0_f64,
+        "V36 super-cell assigned-distance allocation exceeds capacity",
+    )?;
+    let mut empty_repairs = 0_u64;
+    for _ in 0..25 {
+        let mut counts = try_filled_v36_training_vec(
+            centroid_count,
+            0_usize,
+            "V36 super-cell count allocation exceeds capacity",
+        )?;
+        for (row_index, vector) in rows.iter().enumerate() {
+            let mut best = (squared_l2(vector, &centroids[0])?, 0_usize);
+            for (centroid, candidate) in centroids.iter().enumerate().skip(1) {
+                let distance = squared_l2(vector, candidate)?;
+                if distance < best.0 {
+                    best = (distance, centroid);
+                }
+            }
+            assignments[row_index] = best.1;
+            assigned_distances[row_index] = best.0;
+            counts[best.1] = counts[best.1]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 super-cell assignment count overflows"))?;
+        }
+        for empty in 0..centroid_count {
+            if counts[empty] != 0 {
+                continue;
+            }
+            let candidate = (0..rows.len())
+                .filter(|row| counts[assignments[*row]] > 1)
+                .max_by(|left, right| {
+                    assigned_distances[*left]
+                        .total_cmp(&assigned_distances[*right])
+                        .then_with(|| {
+                            reservoir_source_ordinals[*right].cmp(&reservoir_source_ordinals[*left])
+                        })
+                })
+                .ok_or_else(|| invalid("V36 super-cell empty repair differs"))?;
+            counts[assignments[candidate]] -= 1;
+            assignments[candidate] = empty;
+            counts[empty] = 1;
+            empty_repairs = empty_repairs
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 super-cell empty repair count overflows"))?;
+        }
+        let mut sums = try_filled_v36_training_vec(
+            centroid_count,
+            [0.0_f64; 192],
+            "V36 super-cell sum allocation exceeds capacity",
+        )?;
+        for (row, vector) in rows.iter().enumerate() {
+            for (sum, value) in sums[assignments[row]].iter_mut().zip(vector) {
+                *sum += f64::from(*value);
+            }
+        }
+        for centroid in 0..centroid_count {
+            let divisor = counts[centroid] as f64;
+            for dimension in 0..192 {
+                let value = (sums[centroid][dimension] / divisor) as f32;
+                if !value.is_finite() {
+                    return Err(invalid("V36 super-cell centroid is nonfinite"));
+                }
+                centroids[centroid][dimension] = if value == 0.0 { 0.0 } else { value };
+            }
+        }
+    }
+    Ok(V36SupercellModel {
+        centroids,
+        empty_repairs,
+        initialization_source_ordinals,
+        projected_corpus_sha256: replay_sha256,
+        reservoir_source_ordinals,
+    })
+}
+
 /// Allocate a fixed posting budget across non-empty runs with a one-posting
 /// lower bound and Hamilton largest-remainder apportionment.
 pub fn allocate_v36_hamilton_postings(run_rows: &[u64], total_postings: u32) -> Result<Vec<u32>> {

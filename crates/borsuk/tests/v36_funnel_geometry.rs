@@ -5,11 +5,86 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
 use arrow_schema::{DataType, Field};
 use borsuk::{
-    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
-    v36_prefix_source_schema, write_v36_prefix_source_parquet,
+    V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource, V36SupercellTrainingSpec,
+    bind_v36_registered_supercell_training_spec, load_v36_prefix_source_feature_ids,
+    project_v36_exact_assignment_preflight, project_v36_supercell_training_preflight,
+    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
 };
+use sha2::{Digest, Sha256};
 
 const SOURCE_DIMENSIONS: usize = 768;
+const ROUTING_DIMENSIONS: usize = 192;
+
+struct ProjectedSource {
+    block_rows: usize,
+    rows: Vec<(u64, Vec<f32>)>,
+    scans: usize,
+    second_scan_delta: bool,
+}
+
+impl V36ProjectedCorpusSource for ProjectedSource {
+    fn scan(&mut self, visitor: &mut V36ProjectedCorpusBlockVisitor<'_>) -> borsuk::Result<()> {
+        self.scans += 1;
+        for block in self.rows.chunks(self.block_rows) {
+            let ordinals = block.iter().map(|row| row.0).collect::<Vec<_>>();
+            let mut vectors = block
+                .iter()
+                .flat_map(|row| row.1.iter().copied())
+                .collect::<Vec<_>>();
+            if self.second_scan_delta && self.scans == 2 {
+                vectors[0] += 1.0;
+            }
+            visitor(&ordinals, &vectors)?;
+        }
+        Ok(())
+    }
+}
+
+fn projected_rows(rows: u64) -> Vec<(u64, Vec<f32>)> {
+    (0..rows)
+        .map(|ordinal| {
+            let mut vector = vec![0.0_f32; ROUTING_DIMENSIONS];
+            vector[0] = (ordinal % 4) as f32 * 10.0 + (ordinal / 4) as f32;
+            vector[1] = ordinal as f32 * 0.125;
+            (ordinal, vector)
+        })
+        .collect()
+}
+
+fn expected_reservoir_ordinals(rows: u64, retained: usize) -> Vec<u64> {
+    let mut ranked = (0..rows)
+        .map(|ordinal| {
+            let mut digest = Sha256::new();
+            digest.update(b"borsuk-v36-geometry-reservoir-v1");
+            digest.update(ordinal.to_le_bytes());
+            (digest.finalize().to_vec(), ordinal)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_unstable();
+    let mut ordinals = ranked
+        .into_iter()
+        .take(retained)
+        .map(|(_, ordinal)| ordinal)
+        .collect::<Vec<_>>();
+    ordinals.sort_unstable();
+    ordinals
+}
+
+fn projected_rows_sha256(rows: &[(u64, Vec<f32>)]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"borsuk-v36-projected-corpus-replay-v1");
+    for (ordinal, vector) in rows {
+        digest.update(ordinal.to_le_bytes());
+        for value in vector {
+            digest.update(value.to_bits().to_le_bytes());
+        }
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn projected_corpus_sha256(rows: u64) -> String {
+    projected_rows_sha256(&projected_rows(rows))
+}
 
 fn source_batch(feature_ids: Vec<u64>) -> RecordBatch {
     let rows = feature_ids.len();
@@ -126,4 +201,207 @@ fn v36_geometry_preflight_rejects_unbounded_or_ambiguous_measurements() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn v36_geometry_supercells_use_query_blind_bounded_reservoir_passes() {
+    let spec = V36SupercellTrainingSpec {
+        corpus_rows: 24,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 7,
+        projected_corpus_sha256: projected_corpus_sha256(24),
+        reservoir_rows: 16,
+        super_cell_count: 4,
+    };
+    let mut source = ProjectedSource {
+        block_rows: 7,
+        rows: projected_rows(spec.corpus_rows),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let model = train_v36_supercells(&spec, &mut source).unwrap();
+    assert_eq!(source.scans, 2);
+    assert_eq!(model.iterations(), 25);
+    assert_eq!(model.projected_corpus_sha256(), projected_corpus_sha256(24));
+    assert_eq!(
+        model.reservoir_source_ordinals(),
+        expected_reservoir_ordinals(24, 16)
+    );
+    assert_eq!(model.centroids().len(), 4);
+    assert!(model.centroids().iter().all(|centroid| {
+        centroid.len() == ROUTING_DIMENSIONS && centroid.iter().all(|value| value.is_finite())
+    }));
+}
+
+#[test]
+fn v36_geometry_supercells_registered_shape_is_dimension_independent_and_memory_bounded() {
+    for (rows, super_cells) in [(1_000_000, 4), (10_000_000, 64), (100_000_000, 512)] {
+        let spec =
+            bind_v36_registered_supercell_training_spec(rows, 65_536, &format!("{:064x}", rows))
+                .unwrap();
+        assert_eq!(spec.corpus_rows, rows);
+        assert_eq!(spec.reservoir_rows, rows.min(1_048_576));
+        assert_eq!(spec.super_cell_count, super_cells);
+        assert_eq!(spec.dimensions, ROUTING_DIMENSIONS);
+    }
+    assert!(bind_v36_registered_supercell_training_spec(0, 65_536, &"a".repeat(64)).is_err());
+    assert!(
+        bind_v36_registered_supercell_training_spec(100_000_000, 65_537, &"a".repeat(64)).is_err()
+    );
+}
+
+#[test]
+fn v36_geometry_supercell_preflight_projects_complete_training_work_and_owned_memory() {
+    for (rows, components, peak_bytes) in [
+        (1_000_000, 19_775_998_848_u128, 851_865_216),
+        (10_000_000, 334_805_735_424, 890_913_792),
+        (100_000_000, 2_679_833_149_440, 891_953_152),
+    ] {
+        let spec =
+            bind_v36_registered_supercell_training_spec(rows, 65_536, &format!("{:064x}", rows))
+                .unwrap();
+        let preflight =
+            project_v36_supercell_training_preflight(&spec, 1_000_000_000, 1_000_000_000, 43_200)
+                .unwrap();
+        assert_eq!(preflight.component_terms, components);
+        assert_eq!(preflight.projected_active_ns, components);
+        assert_eq!(preflight.trainer_owned_peak_bytes, peak_bytes);
+        assert!(preflight.within_active_wall_cap);
+    }
+
+    let spec = bind_v36_registered_supercell_training_spec(
+        100_000_000,
+        65_536,
+        &format!("{:064x}", 100_000_000),
+    )
+    .unwrap();
+    assert!(
+        !project_v36_supercell_training_preflight(&spec, 1, 1_000_000_000, 43_200)
+            .unwrap()
+            .within_active_wall_cap
+    );
+}
+
+#[test]
+fn v36_geometry_supercells_lock_farthest_ties_and_lloyd_centroid_bits() {
+    let rows = projected_rows(24);
+    let spec = V36SupercellTrainingSpec {
+        corpus_rows: 24,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 8,
+        projected_corpus_sha256: projected_rows_sha256(&rows),
+        reservoir_rows: 24,
+        super_cell_count: 4,
+    };
+    let mut source = ProjectedSource {
+        block_rows: 8,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let model = train_v36_supercells(&spec, &mut source).unwrap();
+    assert_eq!(model.initialization_source_ordinals(), [0, 23, 2, 1]);
+    let mut expected = vec![[0.0_f32; ROUTING_DIMENSIONS]; 4];
+    for (centroid, (x, y)) in
+        expected
+            .iter_mut()
+            .zip([(2.5, 1.25), (32.5, 1.625), (22.5, 1.5), (12.5, 1.375)])
+    {
+        centroid[0] = x;
+        centroid[1] = y;
+    }
+    assert_eq!(model.centroids(), expected);
+    assert_eq!(model.empty_repairs(), 0);
+
+    let duplicate_rows = (0..8)
+        .map(|ordinal| {
+            let mut vector = vec![0.0_f32; ROUTING_DIMENSIONS];
+            vector[0] = 1.0;
+            (ordinal, vector)
+        })
+        .collect::<Vec<_>>();
+    let duplicate_spec = V36SupercellTrainingSpec {
+        corpus_rows: 8,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 8,
+        projected_corpus_sha256: projected_rows_sha256(&duplicate_rows),
+        reservoir_rows: 8,
+        super_cell_count: 4,
+    };
+    let mut source = ProjectedSource {
+        block_rows: 8,
+        rows: duplicate_rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let model = train_v36_supercells(&duplicate_spec, &mut source).unwrap();
+    assert_eq!(model.initialization_source_ordinals(), [0, 1, 2, 3]);
+    assert_eq!(model.empty_repairs(), 75);
+}
+
+#[test]
+fn v36_geometry_supercells_are_block_invariant_and_reject_source_drift() {
+    let spec = V36SupercellTrainingSpec {
+        corpus_rows: 24,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 8,
+        projected_corpus_sha256: projected_corpus_sha256(24),
+        reservoir_rows: 16,
+        super_cell_count: 4,
+    };
+    let mut single = ProjectedSource {
+        block_rows: 1,
+        rows: projected_rows(spec.corpus_rows),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let mut blocked = ProjectedSource {
+        block_rows: 8,
+        rows: projected_rows(spec.corpus_rows),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let expected = train_v36_supercells(&spec, &mut single).unwrap();
+    assert_eq!(train_v36_supercells(&spec, &mut blocked).unwrap(), expected);
+
+    let mut reordered = ProjectedSource {
+        block_rows: 8,
+        rows: projected_rows(spec.corpus_rows),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    reordered.rows.swap(4, 5);
+    assert!(train_v36_supercells(&spec, &mut reordered).is_err());
+
+    let mut oversized = ProjectedSource {
+        block_rows: 9,
+        rows: projected_rows(spec.corpus_rows),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    assert!(train_v36_supercells(&spec, &mut oversized).is_err());
+
+    let mut changing = ProjectedSource {
+        block_rows: 8,
+        rows: projected_rows(spec.corpus_rows),
+        scans: 0,
+        second_scan_delta: true,
+    };
+    assert!(train_v36_supercells(&spec, &mut changing).is_err());
+
+    let mut wrong_digest = spec.clone();
+    wrong_digest.projected_corpus_sha256 = "f".repeat(64);
+    let mut source = ProjectedSource {
+        block_rows: 8,
+        rows: projected_rows(spec.corpus_rows),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    assert!(train_v36_supercells(&wrong_digest, &mut source).is_err());
+
+    let mut oversized_reservoir = spec.clone();
+    oversized_reservoir.corpus_rows = 1_048_577;
+    oversized_reservoir.reservoir_rows = 1_048_577;
+    oversized_reservoir.projected_corpus_sha256 = "e".repeat(64);
+    assert!(train_v36_supercells(&oversized_reservoir, &mut source).is_err());
 }
