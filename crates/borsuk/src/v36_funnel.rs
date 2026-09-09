@@ -2462,6 +2462,8 @@ pub struct V36TransportFragment {
     pub first_dense_ordinal: u64,
     /// Dense fragment ordinal within its posting.
     pub fragment_ordinal: u32,
+    /// Last dense assignment ordinal in this sparse fragment.
+    pub last_dense_ordinal: u64,
     /// Response metadata returned on every attempt.
     pub response_metadata_bytes_per_attempt: u64,
     /// Complete-body retry count observed for this object.
@@ -2503,8 +2505,8 @@ pub struct V36TransportPlan {
     pub decoded_capacity_bytes: u64,
     /// Whether the observed retry-inclusive wave is scoreable.
     pub disposition: V36TransportDisposition,
-    /// Posting ordinals excluded by normal limits.
-    pub excluded_postings: Vec<u32>,
+    /// First posting excluded by normal limits; its ranked suffix is implicit.
+    pub first_excluded_posting: Option<u32>,
     /// Retry-inclusive response-body bytes.
     pub hard_returned_bytes_with_retries: u64,
     /// Retry-inclusive GET count.
@@ -2534,11 +2536,17 @@ pub fn plan_v36_transport(
         {
             return Err(invalid("V36 posting directory differs"));
         }
-        let mut next_dense_ordinal = posting.fragments[0].first_dense_ordinal;
+        let mut previous_last_dense_ordinal = None;
         let mut stored_assignment_rows = 0_u64;
         for (expected, fragment) in posting.fragments.iter().enumerate() {
+            let dense_span = fragment
+                .last_dense_ordinal
+                .checked_sub(fragment.first_dense_ordinal)
+                .and_then(|span| span.checked_add(1));
             if fragment.fragment_ordinal != u32::try_from(expected).unwrap_or(u32::MAX)
-                || fragment.first_dense_ordinal != next_dense_ordinal
+                || dense_span.is_none_or(|span| span < u64::from(fragment.row_count))
+                || previous_last_dense_ordinal
+                    .is_some_and(|previous| fragment.first_dense_ordinal <= previous)
                 || fragment.encoded_bytes == 0
                 || fragment.encoded_bytes > COARSE_FRAGMENT_LIMIT_BYTES
                 || fragment.decoded_capacity_bytes == 0
@@ -2550,9 +2558,7 @@ pub fn plan_v36_transport(
             {
                 return Err(invalid("V36 transport fragment differs"));
             }
-            next_dense_ordinal = next_dense_ordinal
-                .checked_add(u64::from(fragment.row_count))
-                .ok_or_else(|| invalid("V36 fragment row range overflows"))?;
+            previous_last_dense_ordinal = Some(fragment.last_dense_ordinal);
             stored_assignment_rows = stored_assignment_rows
                 .checked_add(u64::from(fragment.row_count))
                 .ok_or_else(|| invalid("V36 posting row count overflows"))?;
@@ -2574,7 +2580,7 @@ pub fn plan_v36_transport(
         admitted_postings: Vec::new(),
         decoded_capacity_bytes: 0,
         disposition: V36TransportDisposition::Determinate,
-        excluded_postings: Vec::new(),
+        first_excluded_posting: None,
         hard_returned_bytes_with_retries: 0,
         hard_gets_with_retries: 0,
         normal_encoded_bytes: 0,
@@ -2599,8 +2605,7 @@ pub fn plan_v36_transport(
             .checked_add(posting_bytes)
             .ok_or_else(|| invalid("V36 normal bytes overflow"))?;
         if next_gets > limits.normal_gets || next_bytes > limits.normal_bytes {
-            plan.excluded_postings
-                .extend_from_slice(&ranked_postings[rank_index..]);
+            plan.first_excluded_posting = Some(ranked_postings[rank_index]);
             break;
         }
 

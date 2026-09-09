@@ -215,18 +215,44 @@ fn v36_funnel_authority_accepts_only_the_closed_arm_matrix_and_exact_bytes() {
 }
 
 fn fragment(posting: u32, ordinal: u32, kib: u64, retries: u8) -> V36TransportFragment {
+    let first_dense_ordinal = u64::from(ordinal) * 1_000;
     V36TransportFragment {
         blake3: digest(u8::try_from(ordinal + 33).unwrap()),
         decoded_capacity_bytes: kib * 1_024 + 4_096,
         encoded_bytes: kib * 1_024,
-        first_dense_ordinal: u64::from(ordinal) * 1_000,
+        first_dense_ordinal,
         fragment_ordinal: ordinal,
+        last_dense_ordinal: first_dense_ordinal + 999,
         response_metadata_bytes_per_attempt: 256,
         retries,
         row_count: 1_000,
         sha256: digest(u8::try_from(ordinal + 1).unwrap()),
         uri: format!("s3://frozen-v36/coarse/{posting}/{ordinal}"),
     }
+}
+
+#[test]
+fn v36_funnel_authority_accepts_sparse_replica_fragment_ordinals() {
+    // Break caught: replica fragments are incorrectly treated as contiguous
+    // primary-plane ranges even though their dense ordinals are sparse.
+    let mut first = fragment(6, 0, 1, 0);
+    first.first_dense_ordinal = 10;
+    first.last_dense_ordinal = 90;
+    first.row_count = 2;
+    let mut second = fragment(6, 1, 1, 0);
+    second.first_dense_ordinal = 120;
+    second.last_dense_ordinal = 300;
+    second.row_count = 2;
+    let sparse = [V36TransportPosting {
+        fragments: vec![first, second],
+        posting_ordinal: 6,
+        stored_assignment_rows: 4,
+    }];
+    assert!(plan_v36_transport(&[6], &sparse, V36TransportLimits::qualification()).is_ok());
+
+    let mut overlapping = sparse;
+    overlapping[0].fragments[1].first_dense_ordinal = 90;
+    assert!(plan_v36_transport(&[6], &overlapping, V36TransportLimits::qualification()).is_err());
 }
 
 #[test]
@@ -255,7 +281,7 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     let plan =
         plan_v36_transport(&[0, 1, 2], &postings, V36TransportLimits::qualification()).unwrap();
     assert_eq!(plan.admitted_postings, vec![0]);
-    assert_eq!(plan.excluded_postings, vec![1, 2]);
+    assert_eq!(plan.first_excluded_posting, Some(1));
     assert_eq!(plan.normal_gets, 2);
     assert_eq!(plan.normal_encoded_bytes, 1_048_576);
     assert_eq!(plan.hard_gets_with_retries, 3);
@@ -284,7 +310,7 @@ fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     }];
     let plan = plan_v36_transport(&[4], &excluded, V36TransportLimits::qualification()).unwrap();
     assert!(plan.admitted_postings.is_empty());
-    assert_eq!(plan.excluded_postings, vec![4]);
+    assert_eq!(plan.first_excluded_posting, Some(4));
 
     let mut retry_overflow = exact_normal;
     retry_overflow[0].fragments[0].retries = 3;

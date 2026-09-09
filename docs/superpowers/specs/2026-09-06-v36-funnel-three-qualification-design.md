@@ -616,8 +616,11 @@ one posting fragment; its manifest, rather than a repeated per-row column,
 binds `posting_ordinal:u32`. Its strict columns are non-null
 `dense_ordinal:u64`, `source_feature_id:u64`, and the arm's fixed-size-binary
 code. Rows are ordered by `dense_ordinal` and greedily fragmented without
-exceeding 512 KiB encoded. The resident posting directory binds every fragment's URI,
-SHA-256, BLAKE3, length, first ordinal, and row count. The planner visits
+exceeding 512 KiB encoded. The resident posting directory binds every
+fragment's URI, SHA-256, BLAKE3, length, first and last dense ordinals, and row
+count. Dense
+ordinals increase within and across fragments but need not be contiguous:
+replica postings are sparse views of the primary fine plane. The planner visits
 postings by `(posting_score,posting_ordinal)` and admits **all** fragments of a
 posting atomically only if their combined GETs/bytes fit. At the first posting
 that does not fit, it records that posting and the remaining suffix as excluded
