@@ -528,9 +528,13 @@ PQ training replays assignments in exact
 residual into bounded scratch. It never materializes all replicated residuals.
 Each subquantizer must have at least 16 retained assignments; duplicate values
 remain valid and deterministic empty-centroid repair uses the construction
-farthest-donor rule. The 20 Lloyd updates accumulate binary64 in the registered
-order and round each updated centroid to binary32 before the next assignment
-pass.
+farthest-donor rule. The 20 Lloyd updates first accumulate binary64 in the
+registered order. Empty repair then moves the registered farthest donor row by
+subtracting its binary64 residual components from the already accumulated
+donor sum and installing those same components as the empty centroid's sum;
+this subtraction order is part of the bit authority and does not imply a
+hidden replay pass. Each updated centroid is rounded to binary32 before the
+next assignment pass.
 
 ### Physical S3 layout and fine rerank
 

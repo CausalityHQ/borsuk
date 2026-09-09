@@ -351,9 +351,10 @@ pub use v36_funnel::{
     validate_v36_prefix_registered_screen_authority, validate_v36_prefix_screen_manifest,
 };
 pub use v36_funnel_code::{
-    V36CoarseAssignmentIdentity, V36ResidualPq4Codebook, V36ResidualPq4Record, V36ResidualPq4Width,
-    V36Sign24Record, V36UniqueLiveTopK, encode_v36_residual_pq4_record, encode_v36_sign24_record,
-    score_v36_residual_pq4_record, score_v36_sign24_record,
+    V36CoarseAssignmentIdentity, V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource,
+    V36ResidualPq4Codebook, V36ResidualPq4Record, V36ResidualPq4Width, V36Sign24Record,
+    V36UniqueLiveTopK, encode_v36_residual_pq4_record, encode_v36_sign24_record,
+    score_v36_residual_pq4_record, score_v36_sign24_record, train_v36_residual_pq4,
 };
 #[doc(hidden)]
 pub use v36_funnel_geometry::{

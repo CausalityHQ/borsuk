@@ -8,6 +8,7 @@ use std::{
 use crate::{BorsukError, Result};
 
 const PROJECTED_DIMENSIONS: usize = 192;
+const PQ4_CODEWORDS: usize = 16;
 
 fn invalid(message: &'static str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -18,6 +19,16 @@ fn valid_vector(vector: &[f32]) -> bool {
         && vector
             .iter()
             .all(|value| value.is_finite() && !(value.to_bits() == (-0.0_f32).to_bits()))
+}
+
+/// Visitor for one canonical block of owner-relative assignment inputs.
+pub type V36ResidualAssignmentBlockVisitor<'a> =
+    dyn FnMut(&[V36CoarseAssignmentIdentity], &[f32]) -> Result<()> + 'a;
+
+/// Replayable, bounded source used by residual-PQ training passes.
+pub trait V36ResidualAssignmentSource {
+    /// Scan canonical identities and row-major projected f32[192] blocks.
+    fn scan(&mut self, visitor: &mut V36ResidualAssignmentBlockVisitor<'_>) -> Result<()>;
 }
 
 /// Distinct construction and persisted identities for one owner-relative
@@ -218,7 +229,7 @@ pub struct V36ResidualPq4Codebook {
 impl V36ResidualPq4Codebook {
     /// Validate a subquantizer-major, codeword-major, component-major model.
     pub fn try_new(width: V36ResidualPq4Width, centroids: Vec<f32>) -> Result<Self> {
-        if centroids.len() != 16 * PROJECTED_DIMENSIONS
+        if centroids.len() != PQ4_CODEWORDS * PROJECTED_DIMENSIONS
             || centroids
                 .iter()
                 .any(|value| !value.is_finite() || value.to_bits() == (-0.0_f32).to_bits())
@@ -230,7 +241,7 @@ impl V36ResidualPq4Codebook {
 
     /// Exact raw binary32 model bytes.
     pub const fn raw_bytes(&self) -> usize {
-        16 * PROJECTED_DIMENSIONS * size_of::<f32>()
+        PQ4_CODEWORDS * PROJECTED_DIMENSIONS * size_of::<f32>()
     }
 
     /// Frozen arm width.
@@ -238,10 +249,19 @@ impl V36ResidualPq4Codebook {
         self.width
     }
 
-    fn codeword(&self, subquantizer: usize, codeword: usize) -> &[f32] {
+    /// One validated codeword in component order.
+    pub fn codeword(&self, subquantizer: usize, codeword: usize) -> Result<&[f32]> {
+        if subquantizer >= self.width.subquantizers() || codeword >= PQ4_CODEWORDS {
+            return Err(invalid("V36 residual PQ4 codeword ordinal differs"));
+        }
         let dimensions = self.width.subvector_dimensions();
-        let start = (subquantizer * 16 + codeword) * dimensions;
-        &self.centroids[start..start + dimensions]
+        let start = (subquantizer * PQ4_CODEWORDS + codeword) * dimensions;
+        Ok(&self.centroids[start..start + dimensions])
+    }
+
+    /// Complete subquantizer-major model for authority and serialization.
+    pub fn centroids(&self) -> &[f32] {
+        &self.centroids
     }
 }
 
@@ -310,12 +330,12 @@ pub fn encode_v36_residual_pq4_record(
         }
         let residual = &residual[..dimensions];
         let mut best = (
-            pq4_subvector_distance(residual, codebook.codeword(subquantizer, 0)),
+            pq4_subvector_distance(residual, codebook.codeword(subquantizer, 0)?),
             0,
         );
         for codeword in 1..16 {
             let distance =
-                pq4_subvector_distance(residual, codebook.codeword(subquantizer, codeword));
+                pq4_subvector_distance(residual, codebook.codeword(subquantizer, codeword)?);
             if distance < best.0 {
                 best = (distance, codeword);
             }
@@ -365,10 +385,315 @@ pub fn score_v36_residual_pq4_record(
         };
         distance += pq4_subvector_distance(
             &residual[..dimensions],
-            codebook.codeword(subquantizer, usize::from(codeword)),
+            codebook.codeword(subquantizer, usize::from(codeword))?,
         );
     }
     Ok(distance)
+}
+
+fn canonical_f32(value: f64) -> Result<f32> {
+    let value = value as f32;
+    if !value.is_finite() {
+        return Err(invalid("V36 residual PQ4 centroid differs"));
+    }
+    Ok(if value == 0.0 { 0.0 } else { value })
+}
+
+fn scan_v36_residual_assignments<S, F>(
+    source: &mut S,
+    owner_centroids: &[Vec<f32>],
+    expected_digest: Option<[u8; 32]>,
+    mut visit: F,
+) -> Result<(usize, [u8; 32])>
+where
+    S: V36ResidualAssignmentSource,
+    F: FnMut(V36CoarseAssignmentIdentity, &[f64; PROJECTED_DIMENSIONS]) -> Result<()>,
+{
+    let mut count = 0_usize;
+    let mut previous = None;
+    let mut digest = blake3::Hasher::new();
+    source.scan(&mut |identities, values| {
+        if identities.is_empty()
+            || values.len()
+                != identities
+                    .len()
+                    .checked_mul(PROJECTED_DIMENSIONS)
+                    .ok_or_else(|| invalid("V36 residual assignment block overflows"))?
+        {
+            return Err(invalid("V36 residual assignment block differs"));
+        }
+        let (rows, remainder) = values.as_chunks::<PROJECTED_DIMENSIONS>();
+        if !remainder.is_empty() {
+            return Err(invalid("V36 residual assignment block differs"));
+        }
+        for (identity, row) in identities.iter().zip(rows) {
+            let key = (identity.source_ordinal, identity.owner_posting_ordinal);
+            if previous.is_some_and(|prior| prior >= key) || !valid_vector(row) {
+                return Err(invalid("V36 residual assignment order differs"));
+            }
+            let owner = owner_centroids
+                .get(
+                    usize::try_from(identity.owner_posting_ordinal)
+                        .map_err(|_| invalid("V36 posting ordinal overflows"))?,
+                )
+                .filter(|owner| valid_vector(owner))
+                .ok_or_else(|| invalid("V36 residual assignment owner differs"))?;
+            digest.update(&identity.source_ordinal.to_le_bytes());
+            digest.update(&identity.dense_ordinal.to_le_bytes());
+            digest.update(&identity.source_feature_id.to_le_bytes());
+            digest.update(&identity.owner_posting_ordinal.to_le_bytes());
+            let mut residual = [0.0_f64; PROJECTED_DIMENSIONS];
+            for dimension in 0..PROJECTED_DIMENSIONS {
+                digest.update(&row[dimension].to_bits().to_le_bytes());
+                residual[dimension] = f64::from(row[dimension]) - f64::from(owner[dimension]);
+            }
+            visit(*identity, &residual)?;
+            previous = Some(key);
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 residual assignment count overflows"))?;
+        }
+        Ok(())
+    })?;
+    let actual = *digest.finalize().as_bytes();
+    if count == 0 || expected_digest.is_some_and(|expected| expected != actual) {
+        return Err(invalid("V36 residual assignment replay differs"));
+    }
+    Ok((count, actual))
+}
+
+#[derive(Clone, Copy)]
+struct RepairCandidate {
+    distance: f64,
+    key: (u64, u32),
+    values: [f64; 3],
+}
+
+fn repair_precedes(left: &RepairCandidate, right: &RepairCandidate) -> bool {
+    left.distance > right.distance || (left.distance == right.distance && left.key < right.key)
+}
+
+fn retain_repair_candidate(candidates: &mut Vec<RepairCandidate>, candidate: RepairCandidate) {
+    let index = candidates.partition_point(|existing| repair_precedes(existing, &candidate));
+    if index < PQ4_CODEWORDS - 1 {
+        candidates.insert(index, candidate);
+        if candidates.len() == PQ4_CODEWORDS {
+            candidates.pop();
+        }
+    }
+}
+
+fn model_distance(
+    centroids: &[f32],
+    width: V36ResidualPq4Width,
+    subquantizer: usize,
+    codeword: usize,
+    values: &[f64],
+) -> f64 {
+    let dimensions = width.subvector_dimensions();
+    let start = (subquantizer * PQ4_CODEWORDS + codeword) * dimensions;
+    pq4_subvector_distance(values, &centroids[start..start + dimensions])
+}
+
+fn repair_v36_pq4_empty_clusters(
+    subquantizer: usize,
+    dimensions: usize,
+    sums: &mut [f64],
+    counts: &mut [u64],
+    repairs: &[Vec<RepairCandidate>],
+) -> Result<()> {
+    let mut moved = Vec::with_capacity(PQ4_CODEWORDS - 1);
+    for empty in 0..PQ4_CODEWORDS {
+        let empty_cluster = subquantizer * PQ4_CODEWORDS + empty;
+        if counts[empty_cluster] != 0 {
+            continue;
+        }
+        let mut donor = None::<(usize, RepairCandidate)>;
+        for codeword in 0..PQ4_CODEWORDS {
+            let cluster = subquantizer * PQ4_CODEWORDS + codeword;
+            if counts[cluster] <= 1 {
+                continue;
+            }
+            if let Some(candidate) = repairs[cluster]
+                .iter()
+                .copied()
+                .find(|candidate| !moved.contains(&candidate.key))
+                && donor.is_none_or(|(_, prior)| repair_precedes(&candidate, &prior))
+            {
+                donor = Some((cluster, candidate));
+            }
+        }
+        let (donor_cluster, candidate) =
+            donor.ok_or_else(|| invalid("V36 residual PQ4 empty repair differs"))?;
+        let donor_start = donor_cluster * dimensions;
+        let empty_start = empty_cluster * dimensions;
+        for component in 0..dimensions {
+            sums[donor_start + component] -= candidate.values[component];
+        }
+        sums[empty_start..empty_start + dimensions]
+            .copy_from_slice(&candidate.values[..dimensions]);
+        counts[donor_cluster] -= 1;
+        counts[empty_cluster] = 1;
+        moved.push(candidate.key);
+    }
+    Ok(())
+}
+
+/// Train one residual PQ4 model through replayable bounded assignment scans.
+pub fn train_v36_residual_pq4<S: V36ResidualAssignmentSource>(
+    source: &mut S,
+    owner_centroids: &[Vec<f32>],
+    width: V36ResidualPq4Width,
+) -> Result<V36ResidualPq4Codebook> {
+    if owner_centroids.is_empty() || owner_centroids.iter().any(|owner| !valid_vector(owner)) {
+        return Err(invalid("V36 residual PQ4 owner authority differs"));
+    }
+    let subquantizers = width.subquantizers();
+    let dimensions = width.subvector_dimensions();
+    let mut centroids = vec![0.0_f32; PQ4_CODEWORDS * PROJECTED_DIMENSIONS];
+    let mut selected_keys = vec![Vec::<(u64, u32)>::new(); subquantizers];
+    let mut first = None;
+    let (assignment_count, replay_digest) =
+        scan_v36_residual_assignments(source, owner_centroids, None, |identity, residual| {
+            if first.is_none() {
+                first = Some((
+                    (identity.source_ordinal, identity.owner_posting_ordinal),
+                    *residual,
+                ));
+            }
+            Ok(())
+        })?;
+    if assignment_count < PQ4_CODEWORDS {
+        return Err(invalid("V36 residual PQ4 training population differs"));
+    }
+    let (first_key, first_residual) = first
+        .take()
+        .ok_or_else(|| invalid("V36 residual PQ4 training population differs"))?;
+    for (subquantizer, keys) in selected_keys.iter_mut().enumerate() {
+        let start = subquantizer * dimensions;
+        let model_start = subquantizer * PQ4_CODEWORDS * dimensions;
+        for component in 0..dimensions {
+            centroids[model_start + component] = canonical_f32(first_residual[start + component])?;
+        }
+        keys.push(first_key);
+    }
+
+    for codeword in 1..PQ4_CODEWORDS {
+        let mut best = vec![None::<RepairCandidate>; subquantizers];
+        scan_v36_residual_assignments(
+            source,
+            owner_centroids,
+            Some(replay_digest),
+            |identity, residual| {
+                let key = (identity.source_ordinal, identity.owner_posting_ordinal);
+                for subquantizer in 0..subquantizers {
+                    if selected_keys[subquantizer].contains(&key) {
+                        continue;
+                    }
+                    let start = subquantizer * dimensions;
+                    let values = &residual[start..start + dimensions];
+                    let mut distance = model_distance(&centroids, width, subquantizer, 0, values);
+                    for existing in 1..codeword {
+                        distance = distance.min(model_distance(
+                            &centroids,
+                            width,
+                            subquantizer,
+                            existing,
+                            values,
+                        ));
+                    }
+                    let mut candidate_values = [0.0_f64; 3];
+                    candidate_values[..dimensions].copy_from_slice(values);
+                    let candidate = RepairCandidate {
+                        distance,
+                        key,
+                        values: candidate_values,
+                    };
+                    if best[subquantizer].is_none_or(|prior| repair_precedes(&candidate, &prior)) {
+                        best[subquantizer] = Some(candidate);
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        for subquantizer in 0..subquantizers {
+            let selected = best[subquantizer]
+                .take()
+                .ok_or_else(|| invalid("V36 residual PQ4 seed authority differs"))?;
+            let model_start = (subquantizer * PQ4_CODEWORDS + codeword) * dimensions;
+            for component in 0..dimensions {
+                centroids[model_start + component] = canonical_f32(selected.values[component])?;
+            }
+            selected_keys[subquantizer].push(selected.key);
+        }
+    }
+
+    for _ in 0..20 {
+        let mut sums = vec![0.0_f64; centroids.len()];
+        let mut counts = vec![0_u64; subquantizers * PQ4_CODEWORDS];
+        let mut repairs = vec![Vec::<RepairCandidate>::new(); subquantizers * PQ4_CODEWORDS];
+        scan_v36_residual_assignments(
+            source,
+            owner_centroids,
+            Some(replay_digest),
+            |identity, residual| {
+                let key = (identity.source_ordinal, identity.owner_posting_ordinal);
+                for subquantizer in 0..subquantizers {
+                    let start = subquantizer * dimensions;
+                    let values = &residual[start..start + dimensions];
+                    let mut best = (
+                        model_distance(&centroids, width, subquantizer, 0, values),
+                        0,
+                    );
+                    for codeword in 1..PQ4_CODEWORDS {
+                        let distance =
+                            model_distance(&centroids, width, subquantizer, codeword, values);
+                        if distance < best.0 {
+                            best = (distance, codeword);
+                        }
+                    }
+                    let cluster = subquantizer * PQ4_CODEWORDS + best.1;
+                    counts[cluster] = counts[cluster]
+                        .checked_add(1)
+                        .ok_or_else(|| invalid("V36 residual PQ4 cluster count overflows"))?;
+                    let sum_start = cluster * dimensions;
+                    for component in 0..dimensions {
+                        sums[sum_start + component] += values[component];
+                    }
+                    let mut candidate_values = [0.0_f64; 3];
+                    candidate_values[..dimensions].copy_from_slice(values);
+                    retain_repair_candidate(
+                        &mut repairs[cluster],
+                        RepairCandidate {
+                            distance: best.0,
+                            key,
+                            values: candidate_values,
+                        },
+                    );
+                }
+                Ok(())
+            },
+        )?;
+
+        for subquantizer in 0..subquantizers {
+            repair_v36_pq4_empty_clusters(
+                subquantizer,
+                dimensions,
+                &mut sums,
+                &mut counts,
+                &repairs,
+            )?;
+        }
+
+        for (cluster, count) in counts.iter().copied().enumerate() {
+            let start = cluster * dimensions;
+            for component in 0..dimensions {
+                centroids[start + component] =
+                    canonical_f32(sums[start + component] / count as f64)?;
+            }
+        }
+    }
+    V36ResidualPq4Codebook::try_new(width, centroids)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -491,5 +816,42 @@ impl V36UniqueLiveTopK {
     /// Number of live membership records retained; bounded by K.
     pub fn membership_len(&self) -> usize {
         self.by_feature.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PQ4_CODEWORDS, RepairCandidate, repair_v36_pq4_empty_clusters};
+
+    #[test]
+    fn v36_pq4_empty_repair_moves_farthest_rows_and_updates_donor_sums() {
+        let dimensions = 2;
+        let mut counts = vec![1_u64; PQ4_CODEWORDS];
+        counts[..4].copy_from_slice(&[3, 1, 0, 0]);
+        let mut sums = vec![0.0_f64; PQ4_CODEWORDS * dimensions];
+        sums[..4].copy_from_slice(&[6.0, 60.0, 5.0, 50.0]);
+        let mut repairs = vec![Vec::new(); PQ4_CODEWORDS];
+        repairs[0] = vec![
+            RepairCandidate {
+                distance: 9.0,
+                key: (1, 0),
+                values: [3.0, 30.0, 0.0],
+            },
+            RepairCandidate {
+                distance: 4.0,
+                key: (2, 0),
+                values: [2.0, 20.0, 0.0],
+            },
+            RepairCandidate {
+                distance: 1.0,
+                key: (3, 0),
+                values: [1.0, 10.0, 0.0],
+            },
+        ];
+
+        repair_v36_pq4_empty_clusters(0, dimensions, &mut sums, &mut counts, &repairs).unwrap();
+
+        assert_eq!(&counts[..4], &[1, 1, 1, 1]);
+        assert_eq!(&sums[..8], &[1.0, 10.0, 5.0, 50.0, 3.0, 30.0, 2.0, 20.0]);
     }
 }

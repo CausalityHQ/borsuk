@@ -12,15 +12,16 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ProjectionBackend, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
-    V36GeometryStop, V36PostingGaussianSummary, V36ResidualPq4Codebook, V36ResidualPq4Width,
-    V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
+    V36GeometryStop, V36PostingGaussianSummary, V36ResidualAssignmentBlockVisitor,
+    V36ResidualAssignmentSource, V36ResidualPq4Codebook, V36ResidualPq4Width, V36UniqueLiveTopK,
+    admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
     build_v36_srht192_control, decode_v36_centered_projection_arrow,
     encode_v36_centered_projection_arrow, encode_v36_residual_pq4_record, encode_v36_sign24_record,
     project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
     project_v36_centered_row_simd, score_v36_posting_centroid, score_v36_posting_gaussian,
     score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
     select_v36_closure_owners, train_v36_centered_subspace, train_v36_posting_centroids,
-    train_v36_posting_gaussian, train_v36_posting_prototype_six,
+    train_v36_posting_gaussian, train_v36_posting_prototype_six, train_v36_residual_pq4,
 };
 use sha2::{Digest, Sha256};
 
@@ -54,6 +55,32 @@ impl V36CenteredProjectionSource for TestProjectionSource {
                 *values.last_mut().unwrap() = 31.0;
             }
             visitor(&ordinals, &values)?;
+        }
+        Ok(())
+    }
+}
+
+struct TestResidualSource {
+    identities: Vec<V36CoarseAssignmentIdentity>,
+    rows: Vec<Vec<f32>>,
+    block_rows: usize,
+    scans: usize,
+    mutate_after_first: bool,
+}
+
+impl V36ResidualAssignmentSource for TestResidualSource {
+    fn scan(&mut self, visitor: &mut V36ResidualAssignmentBlockVisitor<'_>) -> Result<()> {
+        self.scans += 1;
+        for (identities, rows) in self
+            .identities
+            .chunks(self.block_rows)
+            .zip(self.rows.chunks(self.block_rows))
+        {
+            let mut flat = rows.iter().flatten().copied().collect::<Vec<_>>();
+            if self.mutate_after_first && self.scans > 1 {
+                flat[0] += 1.0;
+            }
+            visitor(identities, &flat)?;
         }
         Ok(())
     }
@@ -506,6 +533,154 @@ fn v36_residual_pq4_records_are_owner_relative_row_major_and_exact() {
     let mut invalid = vec![0.0_f32; 3_072];
     invalid[3] = -0.0;
     assert!(V36ResidualPq4Codebook::try_new(V36ResidualPq4Width::Code48, invalid).is_err());
+}
+
+#[test]
+fn v36_residual_pq4_training_is_replay_bounded_exact_and_repairs_empty_codewords() {
+    // Break caught: residuals are materialized, assignment replay order or
+    // block boundaries change the model, Lloyd runs other than 20 passes, or
+    // duplicate values leave empty or unstable codewords.
+    let owners = vec![vec![10.0_f32; 192], vec![100.0_f32; 192]];
+    let fixture = |block_rows: usize, duplicate: bool| {
+        let identities = (0_u64..16)
+            .map(|source| {
+                V36CoarseAssignmentIdentity::new(
+                    source,
+                    100 + source,
+                    1_000 + source,
+                    u32::try_from(source % 2).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let rows =
+            identities
+                .iter()
+                .enumerate()
+                .map(|(ordinal, identity)| {
+                    let residual = if duplicate { 0.0 } else { ordinal as f32 };
+                    vec![
+                        owners[usize::try_from(identity.owner_posting_ordinal()).unwrap()][0]
+                            + residual;
+                        192
+                    ]
+                })
+                .collect::<Vec<_>>();
+        TestResidualSource {
+            identities,
+            rows,
+            block_rows,
+            scans: 0,
+            mutate_after_first: false,
+        }
+    };
+
+    for width in [V36ResidualPq4Width::Code32, V36ResidualPq4Width::Code48] {
+        let mut scalar_blocks = fixture(1, false);
+        let trained = train_v36_residual_pq4(&mut scalar_blocks, &owners, width).unwrap();
+        assert_eq!(scalar_blocks.scans, 36);
+        let mut wider_blocks = fixture(7, false);
+        assert_eq!(
+            train_v36_residual_pq4(&mut wider_blocks, &owners, width).unwrap(),
+            trained
+        );
+        assert_eq!(wider_blocks.scans, 36);
+        for subquantizer in 0..width.subquantizers() {
+            let mut first_components = (0..16)
+                .map(|codeword| trained.codeword(subquantizer, codeword).unwrap()[0])
+                .collect::<Vec<_>>();
+            first_components.sort_by(f32::total_cmp);
+            assert_eq!(
+                first_components,
+                (0..16).map(|value| value as f32).collect::<Vec<_>>()
+            );
+        }
+
+        let mut duplicates = fixture(4, true);
+        let duplicate_model = train_v36_residual_pq4(&mut duplicates, &owners, width).unwrap();
+        assert!(
+            duplicate_model
+                .centroids()
+                .iter()
+                .all(|value| *value == 0.0)
+        );
+        assert_eq!(duplicates.scans, 36);
+    }
+
+    let identities = (0_u64..32)
+        .map(|source| V36CoarseAssignmentIdentity::new(source, source, source, 0))
+        .collect::<Vec<_>>();
+    let expected_order = [
+        0.125_f32, 15.125, 7.125, 11.125, 3.125, 5.125, 9.125, 13.125, 1.125, 2.125, 4.125, 6.125,
+        8.125, 10.125, 12.125, 14.125,
+    ];
+    let rows = (0..16)
+        .flat_map(|cluster| [cluster as f32, cluster as f32 + 0.25])
+        .map(|value| {
+            (0..192)
+                .map(|dimension| 10.0 + value + dimension as f32 / 1_024.0)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for width in [V36ResidualPq4Width::Code32, V36ResidualPq4Width::Code48] {
+        let subvector_dimensions = match width {
+            V36ResidualPq4Width::Code32 => 3,
+            V36ResidualPq4Width::Code48 => 2,
+        };
+        let mut nontrivial = TestResidualSource {
+            identities: identities.clone(),
+            rows: rows.clone(),
+            block_rows: 5,
+            scans: 0,
+            mutate_after_first: false,
+        };
+        let model = train_v36_residual_pq4(&mut nontrivial, &owners, width).unwrap();
+        for subquantizer in 0..width.subquantizers() {
+            for (codeword, expected_base) in expected_order.iter().copied().enumerate() {
+                let start = subquantizer * subvector_dimensions;
+                let expected = (0..subvector_dimensions)
+                    .map(|component| expected_base + (start + component) as f32 / 1_024.0)
+                    .collect::<Vec<_>>();
+                assert_eq!(model.codeword(subquantizer, codeword).unwrap(), expected);
+            }
+        }
+        assert_eq!(nontrivial.scans, 36);
+    }
+
+    let mut replicas = fixture(4, false);
+    replicas.identities = (0_u64..8)
+        .flat_map(|source| {
+            [
+                V36CoarseAssignmentIdentity::new(source, source, 10_000 + source, 0),
+                V36CoarseAssignmentIdentity::new(source, source, 10_000 + source, 1),
+            ]
+        })
+        .collect();
+    replicas.rows = replicas
+        .identities
+        .iter()
+        .enumerate()
+        .map(|(ordinal, identity)| {
+            vec![
+                owners[usize::try_from(identity.owner_posting_ordinal()).unwrap()][0]
+                    + ordinal as f32;
+                192
+            ]
+        })
+        .collect();
+    assert!(train_v36_residual_pq4(&mut replicas, &owners, V36ResidualPq4Width::Code48).is_ok());
+
+    let mut changing = fixture(4, false);
+    changing.mutate_after_first = true;
+    assert!(train_v36_residual_pq4(&mut changing, &owners, V36ResidualPq4Width::Code32).is_err());
+
+    let mut too_small = fixture(4, false);
+    too_small.identities.pop();
+    too_small.rows.pop();
+    assert!(train_v36_residual_pq4(&mut too_small, &owners, V36ResidualPq4Width::Code32).is_err());
+    let mut unordered = fixture(4, false);
+    unordered.identities.swap(2, 3);
+    unordered.rows.swap(2, 3);
+    assert!(train_v36_residual_pq4(&mut unordered, &owners, V36ResidualPq4Width::Code48).is_err());
 }
 
 #[test]
