@@ -2874,6 +2874,58 @@ pub fn validate_v36_posting_accelerator_observation(
     Ok(qualified)
 }
 
+/// Validate complete ordered strategy/rung coverage for every registered prefix boundary.
+pub fn validate_v36_posting_accelerator_matrix(
+    posting_count: u32,
+    expected_query_prefix_pairs: u64,
+    prefix_lengths: &[u32],
+    observations: &[V36PostingAcceleratorObservation],
+) -> Result<()> {
+    if !v36_posting_acceleration_required(posting_count)?
+        || expected_query_prefix_pairs == 0
+        || prefix_lengths.is_empty()
+        || prefix_lengths
+            .iter()
+            .any(|prefix| *prefix == 0 || *prefix > 1_024 || *prefix > posting_count)
+        || prefix_lengths.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(invalid("V36 posting accelerator matrix authority differs"));
+    }
+    let mut observed = observations.iter();
+    for prefix_length in prefix_lengths {
+        for kind in [
+            V36PostingAcceleratorKind::SimdFlatCentroid,
+            V36PostingAcceleratorKind::HnswCentroid,
+            V36PostingAcceleratorKind::HnswSelectedScore,
+        ] {
+            let mut previous_ef_search = None;
+            for rung in V36_POSTING_ACCELERATOR_EF_LADDER {
+                let ef_search = v36_effective_ef_search(*prefix_length, rung)?;
+                if previous_ef_search == Some(ef_search) {
+                    continue;
+                }
+                previous_ef_search = Some(ef_search);
+                let observation = observed
+                    .next()
+                    .ok_or_else(|| invalid("V36 posting accelerator matrix is incomplete"))?;
+                if observation.kind != kind
+                    || observation.posting_count != posting_count
+                    || observation.requested_prefix_length != *prefix_length
+                    || observation.ef_search != ef_search
+                    || observation.query_prefix_pairs != expected_query_prefix_pairs
+                {
+                    return Err(invalid("V36 posting accelerator matrix cell differs"));
+                }
+                validate_v36_posting_accelerator_observation(observation)?;
+            }
+        }
+    }
+    if observed.next().is_some() {
+        return Err(invalid("V36 posting accelerator matrix has extra cells"));
+    }
+    Ok(())
+}
+
 /// Select deterministic primary and closure owners for one projected row.
 pub fn select_v36_closure_owners(
     row: &[f32],

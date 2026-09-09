@@ -38,7 +38,8 @@ use borsuk::{
     select_v36_flat_centroid_candidates, summarize_v36_posting_accelerator_observation,
     train_v36_centered_subspace, train_v36_posting_centroids, train_v36_posting_gaussian,
     train_v36_posting_prototype_six, train_v36_residual_pq4, v36_effective_ef_search,
-    v36_posting_acceleration_required, validate_v36_posting_accelerator_observation,
+    v36_posting_acceleration_required, validate_v36_posting_accelerator_matrix,
+    validate_v36_posting_accelerator_observation,
 };
 use rand_chacha::ChaCha8Rng;
 use rand_core::{RngCore, SeedableRng};
@@ -624,6 +625,63 @@ fn v36_posting_accelerator_summary_recomputes_parity_work_and_timing() {
         )
         .is_err()
     );
+}
+
+fn accelerator_matrix() -> Vec<V36PostingAcceleratorObservation> {
+    let mut matrix = Vec::new();
+    for prefix_length in [2, 256] {
+        for kind in [
+            V36PostingAcceleratorKind::SimdFlatCentroid,
+            V36PostingAcceleratorKind::HnswCentroid,
+            V36PostingAcceleratorKind::HnswSelectedScore,
+        ] {
+            let mut previous = None;
+            for rung in V36_POSTING_ACCELERATOR_EF_LADDER {
+                let ef_search = v36_effective_ef_search(prefix_length, rung).unwrap();
+                if previous == Some(ef_search) {
+                    continue;
+                }
+                previous = Some(ef_search);
+                let mut observation = qualified_accelerator_observation();
+                observation.kind = kind;
+                observation.requested_prefix_length = prefix_length;
+                observation.ef_search = ef_search;
+                observation.query_prefix_pairs = 2;
+                observation.prefix_matches = 2;
+                observation.parity_ppm = 1_000_000;
+                observation.visited_nodes = if kind == V36PostingAcceleratorKind::SimdFlatCentroid {
+                    2_050
+                } else {
+                    64
+                };
+                observation.candidate_generation_score_evaluations = observation.visited_nodes;
+                observation.exact_rerank_score_evaluations = u64::from(ef_search) * 2;
+                observation.exhaustive_score_evaluations = 2_050;
+                observation.qualified = kind != V36PostingAcceleratorKind::SimdFlatCentroid
+                    && observation.candidate_generation_score_evaluations
+                        + observation.exact_rerank_score_evaluations
+                        < observation.exhaustive_score_evaluations;
+                matrix.push(observation);
+            }
+        }
+    }
+    matrix
+}
+
+#[test]
+fn v36_posting_accelerator_matrix_rejects_missing_or_reordered_boundaries() {
+    let matrix = accelerator_matrix();
+    assert_eq!(matrix.len(), 24);
+    validate_v36_posting_accelerator_matrix(1_025, 2, &[2, 256], &matrix).unwrap();
+
+    let mut missing = matrix.clone();
+    missing.remove(7);
+    assert!(validate_v36_posting_accelerator_matrix(1_025, 2, &[2, 256], &missing).is_err());
+    let mut reordered = matrix.clone();
+    reordered.swap(7, 8);
+    assert!(validate_v36_posting_accelerator_matrix(1_025, 2, &[2, 256], &reordered).is_err());
+    assert!(validate_v36_posting_accelerator_matrix(1_025, 1, &[2, 256], &matrix).is_err());
+    assert!(validate_v36_posting_accelerator_matrix(1_025, 2, &[256, 2], &matrix).is_err());
 }
 
 impl V36CenteredProjectionSource for TestProjectionSource {
