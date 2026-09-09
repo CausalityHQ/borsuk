@@ -19,14 +19,15 @@ use borsuk::{
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
     V36CoarseFragmentArm, V36CoarseFragmentArtifact, V36CoarseFragmentContext,
     V36CoarseFragmentRows, V36GeometryStop, V36PostingAcceleratorKind,
-    V36PostingAcceleratorObservation, V36PostingGaussianSummary, V36PostingPrefixComparison,
-    V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource, V36ResidualPq4Codebook,
-    V36ResidualPq4Width, V36TransportDirectory, V36TransportFetchObservation, V36TransportFragment,
-    V36TransportLimits, V36TransportPosting, V36UniqueLiveTopK, admit_v36_geometry,
-    allocate_v36_hamilton_postings, assign_v36_postings, audit_v36_coarse_fragment_sha256,
-    authenticate_v36_coarse_fragment, authenticate_v36_posting_centroids,
-    build_v36_srht192_control, compare_v36_posting_prefixes, decode_v36_centered_projection_arrow,
-    decode_v36_coarse_fragment_arrow, decode_v36_transport_prefix,
+    V36PostingAcceleratorObservation, V36PostingGaussianSummary, V36PostingHnswRecipe,
+    V36PostingPrefixComparison, V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource,
+    V36ResidualPq4Codebook, V36ResidualPq4Width, V36TransportDirectory,
+    V36TransportFetchObservation, V36TransportFragment, V36TransportLimits, V36TransportPosting,
+    V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
+    audit_v36_coarse_fragment_sha256, authenticate_v36_coarse_fragment,
+    authenticate_v36_posting_centroids, build_v36_srht192_control, compare_v36_posting_prefixes,
+    decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
+    decode_v36_transport_prefix, derive_v36_posting_hnsw_levels,
     encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
     encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
     project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
@@ -37,6 +38,8 @@ use borsuk::{
     train_v36_residual_pq4, v36_effective_ef_search, v36_posting_acceleration_required,
     validate_v36_posting_accelerator_observation,
 };
+use rand_chacha::ChaCha8Rng;
+use rand_core::{RngCore, SeedableRng};
 use sha2::{Digest, Sha256};
 
 struct TestProjectionSource {
@@ -83,6 +86,64 @@ fn v36_posting_accelerator_policy_is_exact_at_the_1024_boundary() {
     assert_eq!(v36_effective_ef_search(1_500, 1_024).unwrap(), 1_500);
     assert!(v36_effective_ef_search(0, 64).is_err());
     assert!(v36_effective_ef_search(17, 63).is_err());
+}
+
+#[test]
+fn v36_posting_accelerator_hnsw_recipe_freezes_seed36_levels() {
+    let recipe = V36PostingHnswRecipe::frozen();
+    assert_eq!(recipe.m, 32);
+    assert_eq!(recipe.m0, 64);
+    assert_eq!(recipe.ef_construction, 200);
+    assert_eq!(recipe.seed, 36);
+    assert_eq!(recipe.maximum_level, 63);
+    assert_eq!(recipe.level_algorithm, "chacha8-u53-ln32-v1");
+    assert_eq!(recipe.neighbor_algorithm, "hnsw-diversity-fill-v1");
+
+    let mut rng = ChaCha8Rng::seed_from_u64(36);
+    let expected = (0..4_096)
+        .map(|_| {
+            let draw = rng.next_u64();
+            let unit = ((draw >> 11) + 1) as f64 / 9_007_199_254_740_992.0;
+            ((-unit.ln() / 32.0_f64.ln()).floor() as u8).min(63)
+        })
+        .collect::<Vec<_>>();
+    let actual = derive_v36_posting_hnsw_levels(4_096, &recipe).unwrap();
+    assert_eq!(actual, expected);
+    assert!(actual.iter().any(|level| *level > 0));
+
+    for changed in [
+        V36PostingHnswRecipe {
+            seed: 37,
+            ..recipe.clone()
+        },
+        V36PostingHnswRecipe {
+            m: 31,
+            ..recipe.clone()
+        },
+        V36PostingHnswRecipe {
+            m0: 63,
+            ..recipe.clone()
+        },
+        V36PostingHnswRecipe {
+            ef_construction: 199,
+            ..recipe.clone()
+        },
+        V36PostingHnswRecipe {
+            maximum_level: 62,
+            ..recipe.clone()
+        },
+        V36PostingHnswRecipe {
+            level_algorithm: "other".to_owned(),
+            ..recipe.clone()
+        },
+        V36PostingHnswRecipe {
+            neighbor_algorithm: "other".to_owned(),
+            ..recipe.clone()
+        },
+    ] {
+        assert!(derive_v36_posting_hnsw_levels(4_096, &changed).is_err());
+    }
+    assert!(derive_v36_posting_hnsw_levels(0, &recipe).is_err());
 }
 
 #[test]

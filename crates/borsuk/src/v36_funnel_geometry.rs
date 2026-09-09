@@ -2271,6 +2271,62 @@ pub fn score_v36_posting_prototype_six(
 /// Frozen candidate-count ladder for posting-summary accelerator qualification.
 pub const V36_POSTING_ACCELERATOR_EF_LADDER: [u32; 5] = [64, 128, 256, 512, 1_024];
 
+/// Frozen deterministic construction recipe for the V36 posting HNSW candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V36PostingHnswRecipe {
+    /// Maximum neighbors on layers above zero.
+    pub m: u32,
+    /// Maximum neighbors on layer zero.
+    pub m0: u32,
+    /// Construction candidate width.
+    pub ef_construction: u32,
+    /// Seed for the canonical ChaCha8 level stream.
+    pub seed: u64,
+    /// Maximum accepted node level.
+    pub maximum_level: u8,
+    /// Exact level-generation algorithm identity.
+    pub level_algorithm: String,
+    /// Exact neighbor-selection algorithm identity.
+    pub neighbor_algorithm: String,
+}
+
+impl V36PostingHnswRecipe {
+    /// Return the only recipe admitted by the V36 qualification.
+    pub fn frozen() -> Self {
+        Self {
+            m: 32,
+            m0: 64,
+            ef_construction: 200,
+            seed: 36,
+            maximum_level: 63,
+            level_algorithm: "chacha8-u53-ln32-v1".to_owned(),
+            neighbor_algorithm: "hnsw-diversity-fill-v1".to_owned(),
+        }
+    }
+}
+
+/// Derive the frozen deterministic node-level stream in posting-ordinal order.
+pub fn derive_v36_posting_hnsw_levels(
+    posting_count: u32,
+    recipe: &V36PostingHnswRecipe,
+) -> Result<Vec<u8>> {
+    if posting_count == 0 || recipe != &V36PostingHnswRecipe::frozen() {
+        return Err(invalid("V36 posting HNSW recipe differs"));
+    }
+    let mut rng = ChaCha8Rng::seed_from_u64(recipe.seed);
+    let inverse_denominator = 1.0 / 9_007_199_254_740_992.0;
+    let inverse_log_m = 1.0 / f64::from(recipe.m).ln();
+    Ok((0..posting_count)
+        .map(|_| {
+            let unit = ((rng.next_u64() >> 11) + 1) as f64 * inverse_denominator;
+            (-unit.ln() * inverse_log_m)
+                .floor()
+                .min(f64::from(recipe.maximum_level)) as u8
+        })
+        .collect())
+}
+
 /// Candidate generator measured by one posting-summary accelerator observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum V36PostingAcceleratorKind {
