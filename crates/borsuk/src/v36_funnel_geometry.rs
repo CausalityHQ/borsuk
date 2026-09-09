@@ -2326,6 +2326,66 @@ pub struct V36RankedPosting {
     pub score: f64,
 }
 
+/// Complete comparison for one registered query and causal prefix boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingPrefixComparison {
+    /// Registered query ordinal.
+    pub query_ordinal: u32,
+    /// Requested final selected-score prefix length.
+    pub requested_prefix_length: u32,
+    /// Exhaustive selected-score authority prefix.
+    pub exhaustive_prefix: Vec<u32>,
+    /// Complete bounded candidate set produced by the accelerator.
+    pub accelerated_candidates: Vec<u32>,
+    /// Exact selected-score rerank of the accelerated candidate set.
+    pub accelerated_prefix: Vec<u32>,
+}
+
+/// First positional difference between exhaustive and accelerated prefixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V36PostingOrderedDisagreement {
+    /// Registered query ordinal.
+    pub query_ordinal: u32,
+    /// Requested prefix length at this boundary.
+    pub requested_prefix_length: u32,
+    /// Zero-based position of the first difference.
+    pub position: u32,
+    /// Exhaustive posting ordinal at the differing position.
+    pub exhaustive_posting_ordinal: u32,
+    /// Accelerated posting ordinal at the differing position.
+    pub accelerated_posting_ordinal: u32,
+}
+
+/// First exhaustive-prefix posting omitted from the accelerated candidate set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V36PostingMissingCandidate {
+    /// Registered query ordinal.
+    pub query_ordinal: u32,
+    /// Requested prefix length at this boundary.
+    pub requested_prefix_length: u32,
+    /// Exhaustive posting ordinal absent from the candidate set.
+    pub exhaustive_posting_ordinal: u32,
+}
+
+/// Independently derived accelerator parity and containment evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingParityEvidence {
+    /// Number of registered query-prefix comparisons.
+    pub query_prefix_pairs: u64,
+    /// Comparisons with exactly equal ordered prefixes.
+    pub ordered_prefix_matches: u64,
+    /// `floor(1_000_000 * ordered_prefix_matches / query_prefix_pairs)`.
+    pub parity_ppm: u32,
+    /// Comparisons whose candidate set contains the complete exhaustive prefix.
+    pub candidate_containment_matches: u64,
+    /// Candidate-containment fraction in parts per million.
+    pub candidate_containment_ppm: u32,
+    /// First positional disagreement in registered comparison order.
+    pub first_ordered_disagreement: Option<V36PostingOrderedDisagreement>,
+    /// First exhaustive prefix item absent from the candidate set.
+    pub first_missing_candidate: Option<V36PostingMissingCandidate>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct V36FlatCentroidCandidate {
     distance: f32,
@@ -2456,6 +2516,122 @@ where
     });
     ranked.truncate(prefix_length);
     Ok(ranked)
+}
+
+fn sorted_v36_posting_ordinals(ordinals: &[u32], posting_count: u32) -> Option<Vec<u32>> {
+    if ordinals.iter().any(|ordinal| *ordinal >= posting_count) {
+        return None;
+    }
+    let mut sorted = ordinals.to_vec();
+    sorted.sort_unstable();
+    (!sorted.windows(2).any(|pair| pair[0] == pair[1])).then_some(sorted)
+}
+
+/// Compare complete registered accelerator prefixes against exhaustive authority.
+pub fn compare_v36_posting_prefixes(
+    posting_count: u32,
+    comparisons: &[V36PostingPrefixComparison],
+) -> Result<V36PostingParityEvidence> {
+    if posting_count == 0 || comparisons.is_empty() {
+        return Err(invalid("V36 posting accelerator parity population differs"));
+    }
+    let mut previous_key = None;
+    let mut ordered_prefix_matches = 0_u64;
+    let mut candidate_containment_matches = 0_u64;
+    let mut first_ordered_disagreement = None;
+    let mut first_missing_candidate = None;
+    for comparison in comparisons {
+        let key = (comparison.query_ordinal, comparison.requested_prefix_length);
+        if previous_key.is_some_and(|previous| previous >= key) {
+            return Err(invalid("V36 posting accelerator parity order differs"));
+        }
+        previous_key = Some(key);
+        let prefix_length = usize::try_from(comparison.requested_prefix_length)
+            .map_err(|_| invalid("V36 posting accelerator prefix overflows"))?;
+        let exhaustive_ordinals =
+            sorted_v36_posting_ordinals(&comparison.exhaustive_prefix, posting_count);
+        let accelerated_prefix_ordinals =
+            sorted_v36_posting_ordinals(&comparison.accelerated_prefix, posting_count);
+        let accelerated_candidates =
+            sorted_v36_posting_ordinals(&comparison.accelerated_candidates, posting_count);
+        if prefix_length == 0
+            || comparison.exhaustive_prefix.len() != prefix_length
+            || comparison.accelerated_prefix.len() != prefix_length
+            || comparison.accelerated_candidates.len() < prefix_length
+            || exhaustive_ordinals.is_none()
+            || accelerated_prefix_ordinals.is_none()
+            || accelerated_candidates.is_none()
+        {
+            return Err(invalid("V36 posting accelerator parity authority differs"));
+        }
+        let accelerated_candidates = accelerated_candidates
+            .ok_or_else(|| invalid("V36 posting accelerator parity authority differs"))?;
+        if comparison
+            .accelerated_prefix
+            .iter()
+            .any(|ordinal| accelerated_candidates.binary_search(ordinal).is_err())
+        {
+            return Err(invalid("V36 posting accelerator parity authority differs"));
+        }
+
+        if comparison.exhaustive_prefix == comparison.accelerated_prefix {
+            ordered_prefix_matches = ordered_prefix_matches
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 posting accelerator parity count overflows"))?;
+        } else if first_ordered_disagreement.is_none() {
+            let position = comparison
+                .exhaustive_prefix
+                .iter()
+                .zip(&comparison.accelerated_prefix)
+                .position(|(exhaustive, accelerated)| exhaustive != accelerated)
+                .ok_or_else(|| invalid("V36 posting accelerator disagreement differs"))?;
+            first_ordered_disagreement = Some(V36PostingOrderedDisagreement {
+                query_ordinal: comparison.query_ordinal,
+                requested_prefix_length: comparison.requested_prefix_length,
+                position: u32::try_from(position)
+                    .map_err(|_| invalid("V36 posting accelerator position overflows"))?,
+                exhaustive_posting_ordinal: comparison.exhaustive_prefix[position],
+                accelerated_posting_ordinal: comparison.accelerated_prefix[position],
+            });
+        }
+
+        if let Some(exhaustive_posting_ordinal) = comparison
+            .exhaustive_prefix
+            .iter()
+            .find(|ordinal| accelerated_candidates.binary_search(ordinal).is_err())
+        {
+            if first_missing_candidate.is_none() {
+                first_missing_candidate = Some(V36PostingMissingCandidate {
+                    query_ordinal: comparison.query_ordinal,
+                    requested_prefix_length: comparison.requested_prefix_length,
+                    exhaustive_posting_ordinal: *exhaustive_posting_ordinal,
+                });
+            }
+        } else {
+            candidate_containment_matches = candidate_containment_matches
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 posting accelerator containment count overflows"))?;
+        }
+    }
+
+    let query_prefix_pairs = u64::try_from(comparisons.len())
+        .map_err(|_| invalid("V36 posting accelerator pair count overflows"))?;
+    let ppm = |matches: u64| -> Result<u32> {
+        let value = matches
+            .checked_mul(1_000_000)
+            .ok_or_else(|| invalid("V36 posting accelerator ppm overflows"))?
+            / query_prefix_pairs;
+        u32::try_from(value).map_err(|_| invalid("V36 posting accelerator ppm overflows"))
+    };
+    Ok(V36PostingParityEvidence {
+        query_prefix_pairs,
+        ordered_prefix_matches,
+        parity_ppm: ppm(ordered_prefix_matches)?,
+        candidate_containment_matches,
+        candidate_containment_ppm: ppm(candidate_containment_matches)?,
+        first_ordered_disagreement,
+        first_missing_candidate,
+    })
 }
 
 /// Validate and recompute one accelerator qualification decision.

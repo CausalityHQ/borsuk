@@ -19,21 +19,22 @@ use borsuk::{
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36CoarseAssignmentIdentity,
     V36CoarseFragmentArm, V36CoarseFragmentArtifact, V36CoarseFragmentContext,
     V36CoarseFragmentRows, V36GeometryStop, V36PostingAcceleratorKind,
-    V36PostingAcceleratorObservation, V36PostingGaussianSummary, V36ResidualAssignmentBlockVisitor,
-    V36ResidualAssignmentSource, V36ResidualPq4Codebook, V36ResidualPq4Width,
-    V36TransportDirectory, V36TransportFetchObservation, V36TransportFragment, V36TransportLimits,
-    V36TransportPosting, V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings,
-    assign_v36_postings, audit_v36_coarse_fragment_sha256, authenticate_v36_coarse_fragment,
-    build_v36_srht192_control, decode_v36_centered_projection_arrow,
-    decode_v36_coarse_fragment_arrow, decode_v36_transport_prefix,
-    encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
-    encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
-    project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
-    rank_v36_selected_posting_candidates, score_v36_posting_centroid, score_v36_posting_gaussian,
-    score_v36_posting_prototype_six, score_v36_residual_pq4_record, score_v36_sign24_record,
-    select_v36_closure_owners, select_v36_flat_centroid_candidates, train_v36_centered_subspace,
-    train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
-    train_v36_residual_pq4, v36_effective_ef_search, v36_posting_acceleration_required,
+    V36PostingAcceleratorObservation, V36PostingGaussianSummary, V36PostingPrefixComparison,
+    V36ResidualAssignmentBlockVisitor, V36ResidualAssignmentSource, V36ResidualPq4Codebook,
+    V36ResidualPq4Width, V36TransportDirectory, V36TransportFetchObservation, V36TransportFragment,
+    V36TransportLimits, V36TransportPosting, V36UniqueLiveTopK, admit_v36_geometry,
+    allocate_v36_hamilton_postings, assign_v36_postings, audit_v36_coarse_fragment_sha256,
+    authenticate_v36_coarse_fragment, build_v36_srht192_control, compare_v36_posting_prefixes,
+    decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
+    decode_v36_transport_prefix, encode_v36_centered_projection_arrow,
+    encode_v36_coarse_fragment_arrow, encode_v36_residual_pq4_record, encode_v36_sign24_record,
+    project_v35_query_scalar, project_v35_query_simd, project_v36_centered_row_scalar,
+    project_v36_centered_row_simd, rank_v36_selected_posting_candidates,
+    score_v36_posting_centroid, score_v36_posting_gaussian, score_v36_posting_prototype_six,
+    score_v36_residual_pq4_record, score_v36_sign24_record, select_v36_closure_owners,
+    select_v36_flat_centroid_candidates, train_v36_centered_subspace, train_v36_posting_centroids,
+    train_v36_posting_gaussian, train_v36_posting_prototype_six, train_v36_residual_pq4,
+    v36_effective_ef_search, v36_posting_acceleration_required,
     validate_v36_posting_accelerator_observation,
 };
 use sha2::{Digest, Sha256};
@@ -107,6 +108,99 @@ fn v36_posting_accelerator_flat_centroid_scan_is_bounded_and_deterministic() {
     let mut nonfinite = centroids.clone();
     nonfinite[0][17] = f32::NAN;
     assert!(select_v36_flat_centroid_candidates(&nonfinite, &query, 4).is_err());
+}
+
+fn prefix_comparison(
+    query_ordinal: u32,
+    requested_prefix_length: u32,
+    exhaustive_prefix: &[u32],
+    accelerated_candidates: &[u32],
+    accelerated_prefix: &[u32],
+) -> V36PostingPrefixComparison {
+    V36PostingPrefixComparison {
+        query_ordinal,
+        requested_prefix_length,
+        exhaustive_prefix: exhaustive_prefix.to_vec(),
+        accelerated_candidates: accelerated_candidates.to_vec(),
+        accelerated_prefix: accelerated_prefix.to_vec(),
+    }
+}
+
+#[test]
+fn v36_posting_accelerator_parity_recomputes_order_containment_and_first_difference() {
+    let comparisons = [
+        prefix_comparison(0, 2, &[1, 2], &[3, 2, 1], &[1, 2]),
+        prefix_comparison(1, 2, &[4, 5], &[4, 6, 5], &[4, 6]),
+        prefix_comparison(2, 2, &[7, 8], &[7, 9, 10], &[7, 9]),
+    ];
+    let evidence = compare_v36_posting_prefixes(16, &comparisons).unwrap();
+    assert_eq!(evidence.query_prefix_pairs, 3);
+    assert_eq!(evidence.ordered_prefix_matches, 1);
+    assert_eq!(evidence.parity_ppm, 333_333);
+    assert_eq!(evidence.candidate_containment_matches, 2);
+    assert_eq!(evidence.candidate_containment_ppm, 666_666);
+    let disagreement = evidence.first_ordered_disagreement.unwrap();
+    assert_eq!(disagreement.query_ordinal, 1);
+    assert_eq!(disagreement.requested_prefix_length, 2);
+    assert_eq!(disagreement.position, 1);
+    assert_eq!(disagreement.exhaustive_posting_ordinal, 5);
+    assert_eq!(disagreement.accelerated_posting_ordinal, 6);
+    let missing = evidence.first_missing_candidate.unwrap();
+    assert_eq!(missing.query_ordinal, 2);
+    assert_eq!(missing.requested_prefix_length, 2);
+    assert_eq!(missing.exhaustive_posting_ordinal, 8);
+
+    let mut almost_exact = (0..1_000)
+        .map(|query| prefix_comparison(query, 1, &[0], &[0, 1], &[0]))
+        .collect::<Vec<_>>();
+    almost_exact[999].accelerated_prefix[0] = 1;
+    let evidence = compare_v36_posting_prefixes(2, &almost_exact).unwrap();
+    assert_eq!(evidence.parity_ppm, 999_000);
+    assert_eq!(evidence.candidate_containment_ppm, 1_000_000);
+}
+
+#[test]
+fn v36_posting_accelerator_parity_rejects_ambiguous_or_malformed_populations() {
+    let baseline = prefix_comparison(0, 2, &[0, 1], &[0, 1, 2], &[0, 1]);
+    assert!(compare_v36_posting_prefixes(3, std::slice::from_ref(&baseline)).is_ok());
+
+    for malformed in [
+        V36PostingPrefixComparison {
+            requested_prefix_length: 0,
+            ..baseline.clone()
+        },
+        V36PostingPrefixComparison {
+            exhaustive_prefix: vec![0],
+            ..baseline.clone()
+        },
+        V36PostingPrefixComparison {
+            accelerated_candidates: vec![0, 0, 1],
+            ..baseline.clone()
+        },
+        V36PostingPrefixComparison {
+            accelerated_prefix: vec![0, 0],
+            ..baseline.clone()
+        },
+        V36PostingPrefixComparison {
+            accelerated_candidates: vec![0, 1, 3],
+            ..baseline.clone()
+        },
+    ] {
+        assert!(compare_v36_posting_prefixes(3, &[malformed]).is_err());
+    }
+    assert!(compare_v36_posting_prefixes(0, std::slice::from_ref(&baseline)).is_err());
+    assert!(compare_v36_posting_prefixes(3, &[]).is_err());
+    assert!(
+        compare_v36_posting_prefixes(
+            3,
+            &[
+                prefix_comparison(1, 2, &[0, 1], &[0, 1], &[0, 1]),
+                baseline.clone(),
+            ],
+        )
+        .is_err()
+    );
+    assert!(compare_v36_posting_prefixes(3, &[baseline.clone(), baseline]).is_err());
 }
 
 fn qualified_accelerator_observation() -> V36PostingAcceleratorObservation {
