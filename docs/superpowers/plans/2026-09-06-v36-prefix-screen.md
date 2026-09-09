@@ -420,9 +420,42 @@ conversion remains because BORSUK is prerelease.
   non-empty run, exact apportionment of `P-R` by run row count, integer-
   remainder/run-ordinal ties, and exactly 123 postings for the skewed
   `[999997,1,1,1]` case.
-  After score freeze, require HNSW whenever posting count exceeds 1,024, with
-  exact `M=32`, `efConstruction=200`, seed 36, registered efSearch ladder, and
-  999,000-ppm parity to the exhaustive selected-scorer prefix.
+  After score freeze, keep exhaustive binary64 selected-score ordering as the
+  authority and use it directly through 1,024 postings. Above 1,024, compare a
+  bounded SIMD centroid-L2 flat candidate generator, centroid-L2 HNSW
+  traversal, and selected-score HNSW traversal; exact-rerank every candidate
+  set with the frozen binary64 selected scorer before comparison. Require
+  `(score,posting_ordinal)` ties, positive-zero normalization, finite scores,
+  and mutation tests for negative Gaussian scores, f64 near-ties, late smaller
+  ordinals, signed zero, NaN, and infinity.
+
+  Build a reusable adjacency-only topology that borrows authenticated summary
+  vectors. Pin scalar binary64 construction distance and reduction order,
+  increasing-ordinal insertion, `M=32`, `M0=64`, `efConstruction=200`, the
+  spec's exact seed-36 ChaCha8 draw/level rule, diversity selection plus
+  deterministic fill, layer caps, and exact deterministic rebuild. Test hand
+  graphs where centroid and selected-score order disagree, clustered
+  centroids, disconnected-looking local minima, equal distances, singleton
+  layers, maximum level, corrupt recipe identity, and allocated-capacity
+  accounting. Do not reuse or change the catalog `CentroidHnsw`, which owns a
+  different vector-storage and distance contract.
+
+  For `e={64,128,256,512,1024}` and `efSearch=max(L,e)`, evaluate every
+  registered query at every distinct causal-boundary `L` plus the reported
+  summary lengths. Compute parity from exact ordered-prefix matches over the
+  complete query-by-prefix denominator and require 999,000 ppm. Record
+  containment, first disagreement, centroid-rank p50/p95/p99/max, visited
+  nodes, generator distance evaluations, exact-rerank evaluations, allocated
+  capacities, and decoded-hot latency. Mutation-test denominator changes,
+  missing boundaries, L greater than 1,024, score-call undercount, graph bytes
+  above the separate 128-MiB cap, and any silent exhaustive fallback.
+
+  A candidate advances only when it meets parity, performs fewer total score
+  evaluations, and has strictly lower decoded-hot p99 than exhaustive selected
+  scoring. If no rung passes, emit a traversal-qualification terminal rather
+  than claiming acceleration. Run a reduced-shape break-even preflight first;
+  G2 then measures the frozen comparison at 10M and projects posting count,
+  bytes, work, and time independently to 100M before G4 is allowed.
 
 - [ ] **Step 2: Write coarse-code and identity REDs**
 

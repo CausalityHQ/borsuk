@@ -440,16 +440,73 @@ directions (4,628 raw bytes); every arm is charged the equal 4,736-byte slot.
 The receipt reports used bytes as well as the equal-byte slot. A fresh-query
 pass decides whether shape helps; burned V33 results are context only.
 
-A resident HNSW over posting summaries is mandatory after geometry and score
-freeze whenever posting count exceeds 1,024. Its topology is built by centroid squared-L2; query traversal
-orders candidates by the frozen selected posting score. It uses `M=32`,
-`efConstruction=200`, seed 36, and
-`efSearch=max(L,e)` for `e in {64,128,256,512,1,024}`. It must reproduce the
-exhaustive **selected scorer's** prefix at 999,000 ppm traversal parity. HNSW
-is an accelerator, never the representation authority. G2 must pass this
-traversal parity at the 10M posting count and project graph bytes plus measured
-summary-score work to the exact 100M posting count before G4 can start; an
-exhaustive 100M summary scan cannot satisfy the decoded-hot gate by assertion.
+Exhaustive binary64 selected-score ordering is always the representation
+authority. Up to 1,024 postings it is also the serving path. Above 1,024
+postings an accelerator must qualify; HNSW is a candidate, not a mandatory
+answer. Qualification compares the exhaustive selected scorer with all of the
+following candidate generators followed by an exact selected-score rerank:
+
+1. a bounded SIMD centroid-squared-L2 flat scan;
+2. HNSW traversal ordered by centroid squared-L2; and
+3. HNSW traversal ordered directly by the frozen selected posting score.
+
+Candidate generation never determines the returned order. Every admitted
+candidate is rescored with the frozen selected scorer in binary64, in the
+specified fixed reduction order, then ordered by `(score,posting_ordinal)`.
+Negative Gaussian scores are valid. Negative zero is canonicalized to positive
+zero and any non-finite intermediate or final score is a terminal numerical
+failure. This exact rerank separates topology loss from scorer arithmetic and
+prevents centroid topology from silently becoming the authority for a
+Gaussian or prototype-six arm.
+
+The HNSW topology, when evaluated, is adjacency-only and borrows the posting
+centroids from the authenticated summary plane; it must not duplicate summary
+vectors. Construction uses scalar binary64 centroid squared-L2 in fixed
+dimension order, insertion by increasing posting ordinal, `M=32`, `M0=64`,
+`efConstruction=200`, and `ChaCha8Rng::seed_from_u64(36)`. One RNG draw is
+consumed per inserted node. With
+`u=(1+(draw>>11))*2^-53`, the level is
+`min(63,floor(-ln(u)/ln(32)))`. Candidate and neighbor ties use posting
+ordinal. Neighbor selection visits candidates by `(distance,ordinal)` and
+retains a candidate only when its distance to every already-retained neighbor
+is not smaller than its distance to the inserted node; it then fills any
+remaining slots from the rejected candidates in the original candidate order.
+Layer zero is capped at `M0`; upper layers are capped at `M`. Construction,
+serialized recipe validation, and deterministic rebuild must reproduce exact
+levels and adjacency. Persisted adjacency is not required for qualification;
+if introduced later it requires a new strict versioned artifact rather than a
+compatibility reader.
+
+The candidate-count ladder is `e in {64,128,256,512,1,024}` with
+`efSearch=max(L,e)`. Each registered query is evaluated at every distinct
+posting-prefix length `L` exercised by a causal byte/GET boundary plus the
+reported summary lengths, clipped to the posting count. For each `(query,L)`,
+parity is one only when the reranked ordered prefix equals the exhaustive
+selected-score ordered prefix exactly. The receipt stores matches, total
+query-prefix pairs, and `floor(1,000,000*matches/total)`; qualification requires
+at least 999,000 ppm. It additionally records candidate containment and the
+first positional disagreement. Before traversal, it reports the maximum and
+p50/p95/p99 centroid-L2 rank of every exhaustive selected-score top-`L` item;
+this is a topology diagnostic, not a substitute for measured parity.
+
+For every generator and ladder rung the receipt reports visited nodes,
+candidate-generation distance evaluations, exact-rerank selected-score
+evaluations, allocated bytes, decoded-hot p50/p95/p99, and scalar/SIMD
+differential evidence. A rung can advance only if it meets parity, uses fewer
+total score evaluations, and has strictly lower decoded-hot p99 than the
+exhaustive selected scorer on the same registered population and queries. The
+HNSW allocation ledger includes exact capacities for levels, offsets,
+adjacency, visited state, frontier, result heap, and build scratch and has a
+separate 128-MiB cap; summary memory is charged only in the summary ledger.
+If no candidate passes both correctness and acceleration, the arm terminates
+at traversal qualification. It cannot relabel exhaustive fallback as an
+accelerated serving pass.
+
+G2 must run this comparison at the measured 10M posting count and project
+posting count, graph/flat workspace bytes, score evaluations, and measured
+time separately to the exact 100M population before G4 can start. The
+projection reports the break-even posting count. An exhaustive 100M summary
+scan cannot satisfy the decoded-hot gate by assertion.
 
 ### Coarse records and unique-candidate admission
 
@@ -666,7 +723,7 @@ The serialized checkpoints are:
 
 1. exhaustive route-owner containment;
 2. selected-scorer containment;
-3. graph traversal parity when posting count exceeds 1,024;
+3. accelerator parity and measured advantage when posting count exceeds 1,024;
 4. projected-f32 unique-candidate containment;
 5. lossy coarse-code unique-candidate containment;
 6. post-I/O admitted-row containment;
