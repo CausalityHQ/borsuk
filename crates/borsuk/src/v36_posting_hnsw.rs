@@ -5,7 +5,10 @@ use std::{cmp::Reverse, collections::BinaryHeap, mem::size_of};
 use crate::{
     BorsukError, Result,
     v36_funnel_geometry::{
-        V36AuthenticatedPostingCentroids, V36PostingHnswRecipe, derive_v36_posting_hnsw_levels,
+        V36AuthenticatedPostingCentroids, V36PostingAcceleratorKind, V36PostingHnswRecipe,
+        V36PostingPrefixComparison, V36RankedPosting, derive_v36_posting_hnsw_levels,
+        rank_v36_selected_posting_candidates, score_v36_posting_centroid,
+        select_v36_flat_centroid_candidates,
     },
 };
 
@@ -54,6 +57,13 @@ fn capacity_bytes<T>(elements: usize) -> Result<u64> {
         .ok()
         .and_then(|count| count.checked_mul(size_of::<T>() as u64))
         .ok_or_else(|| invalid("V36 posting HNSW capacity overflows"))
+}
+
+fn rerank_peak_capacity_bytes(candidates: usize) -> Result<u64> {
+    capacity_bytes::<u32>(candidates)?
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(capacity_bytes::<V36RankedPosting>(candidates).ok()?))
+        .ok_or_else(|| invalid("V36 posting rerank capacity overflows"))
 }
 
 fn construction_peak_capacity_bytes(levels: &[u8], recipe: &V36PostingHnswRecipe) -> Result<u64> {
@@ -220,6 +230,81 @@ impl V36PostingHnswSearch {
     pub fn score_evaluations(&self) -> u64 {
         self.score_evaluations
     }
+}
+
+/// One deterministic query comparison plus exact accelerator work accounting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingAcceleratorQueryEvaluation {
+    /// Exhaustive selected-score authority, generated candidates, and exact rerank.
+    pub comparison: V36PostingPrefixComparison,
+    /// Unique posting summaries visited during candidate generation.
+    pub visited_nodes: u64,
+    /// Candidate-generation score calls, excluding exact reranking.
+    pub candidate_generation_score_evaluations: u64,
+    /// Candidate-generation calls to centroid squared-L2.
+    pub candidate_generation_centroid_distance_evaluations: u64,
+    /// Candidate-generation calls to the frozen selected scorer.
+    pub candidate_generation_selected_score_evaluations: u64,
+    /// Selected-score calls used to rerank the bounded candidate set.
+    pub exact_rerank_score_evaluations: u64,
+    /// Selected-score calls used by the exhaustive authority.
+    pub exhaustive_score_evaluations: u64,
+    /// Peak accelerator capacity, including build or query scratch and exact reranking.
+    pub allocated_bytes: u64,
+}
+
+/// Separately measurable bounded exhaustive selected-score authority for one query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingExhaustiveQueryEvaluation {
+    /// Registered query ordinal.
+    query_ordinal: u32,
+    /// Requested prefix length.
+    requested_prefix_length: u32,
+    /// Exact selected-score prefix in `(score, posting_ordinal)` order.
+    prefix: Vec<u32>,
+    /// Exact selected-score calls used by the exhaustive scan.
+    score_evaluations: u64,
+    /// Peak bounded heap plus returned-prefix capacity, excluding posting summaries.
+    allocated_bytes: u64,
+}
+
+impl V36PostingExhaustiveQueryEvaluation {
+    /// Exact selected-score prefix.
+    pub fn prefix(&self) -> &[u32] {
+        &self.prefix
+    }
+
+    /// Exact selected-score calls performed by the exhaustive scan.
+    pub fn score_evaluations(&self) -> u64 {
+        self.score_evaluations
+    }
+
+    /// Peak bounded allocation excluding borrowed posting summaries.
+    pub fn allocated_bytes(&self) -> u64 {
+        self.allocated_bytes
+    }
+}
+
+/// Borrowed authority and reusable state for one accelerator query comparison.
+pub struct V36PostingAcceleratorQueryRequest<'a> {
+    /// Candidate-generation strategy under qualification.
+    pub kind: V36PostingAcceleratorKind,
+    /// Registered query ordinal.
+    pub query_ordinal: u32,
+    /// Exact selected-score prefix length.
+    pub prefix_length: u32,
+    /// Candidate/search width for this ladder rung.
+    pub ef_search: u32,
+    /// Authenticated posting-centroid population.
+    pub centroids: &'a V36AuthenticatedPostingCentroids,
+    /// One valid projected query.
+    pub query: &'a [f32],
+    /// Immutable topology over the same posting ordinals, required only by HNSW.
+    pub topology: Option<&'a V36PostingHnswTopology>,
+    /// Reusable traversal memory, required only by HNSW.
+    pub scratch: Option<&'a mut V36PostingHnswScratch>,
+    /// Separately computed exhaustive selected-score authority for this query and prefix.
+    pub exhaustive: &'a V36PostingExhaustiveQueryEvaluation,
 }
 
 /// Reusable per-worker traversal state with a fixed authenticated graph shape.
@@ -407,6 +492,204 @@ where
             .collect(),
         visited_nodes,
         score_evaluations: evaluations,
+    })
+}
+
+/// Select the exhaustive selected-score prefix with bounded `O(L)` memory.
+pub fn select_v36_exhaustive_selected_prefix<F>(
+    query_ordinal: u32,
+    posting_count: u32,
+    prefix_length: u32,
+    mut selected_score: F,
+) -> Result<V36PostingExhaustiveQueryEvaluation>
+where
+    F: FnMut(u32) -> Result<f64>,
+{
+    let posting_count_usize = usize::try_from(posting_count)
+        .map_err(|_| invalid("V36 exhaustive posting population overflows"))?;
+    let width = usize::try_from(prefix_length)
+        .ok()
+        .filter(|width| *width > 0 && *width <= posting_count_usize)
+        .ok_or_else(|| invalid("V36 exhaustive posting prefix authority differs"))?;
+    let mut best = BinaryHeap::with_capacity(width);
+    for posting_ordinal in 0..posting_count {
+        let score = selected_score(posting_ordinal)?;
+        if !score.is_finite() {
+            return Err(invalid("V36 exhaustive posting score is nonfinite"));
+        }
+        let candidate = Candidate {
+            distance: if score == 0.0 { 0.0 } else { score },
+            posting_ordinal,
+        };
+        if best.len() < width {
+            best.push(candidate);
+        } else if best.peek().is_some_and(|worst| candidate < *worst) {
+            best.pop();
+            best.push(candidate);
+        }
+    }
+    let prefix = best
+        .into_sorted_vec()
+        .into_iter()
+        .map(|candidate| candidate.posting_ordinal)
+        .collect::<Vec<_>>();
+    let allocated_bytes = u64::from(prefix_length)
+        .checked_mul((size_of::<Candidate>() + size_of::<u32>()) as u64)
+        .ok_or_else(|| invalid("V36 exhaustive posting capacity overflows"))?;
+    Ok(V36PostingExhaustiveQueryEvaluation {
+        query_ordinal,
+        requested_prefix_length: prefix_length,
+        prefix,
+        score_evaluations: u64::from(posting_count),
+        allocated_bytes,
+    })
+}
+
+/// Compare one candidate generator with the exhaustive selected-score authority.
+pub fn evaluate_v36_posting_accelerator_query<F>(
+    request: V36PostingAcceleratorQueryRequest<'_>,
+    mut selected_score: F,
+) -> Result<V36PostingAcceleratorQueryEvaluation>
+where
+    F: FnMut(u32) -> Result<f64>,
+{
+    let V36PostingAcceleratorQueryRequest {
+        kind,
+        query_ordinal,
+        prefix_length,
+        ef_search,
+        centroids,
+        query,
+        topology,
+        scratch,
+        exhaustive,
+    } = request;
+    let posting_count = centroids.posting_count();
+    if prefix_length == 0
+        || prefix_length > ef_search
+        || ef_search > posting_count
+        || query.len() != 192
+        || query
+            .iter()
+            .any(|value| !value.is_finite() || (*value == 0.0 && value.is_sign_negative()))
+        || exhaustive.query_ordinal != query_ordinal
+        || exhaustive.requested_prefix_length != prefix_length
+        || exhaustive.score_evaluations != u64::from(posting_count)
+    {
+        return Err(invalid("V36 posting accelerator query authority differs"));
+    }
+
+    let (
+        accelerated_candidates,
+        visited_nodes,
+        centroid_distance_evaluations,
+        selected_score_evaluations,
+        allocated_bytes,
+    ) = match kind {
+        V36PostingAcceleratorKind::SimdFlatCentroid => {
+            if topology.is_some() || scratch.is_some() {
+                return Err(invalid("V36 flat centroid workspace differs"));
+            }
+            let candidates = select_v36_flat_centroid_candidates(centroids, query, ef_search)?;
+            let bytes = rerank_peak_capacity_bytes(candidates.len())?;
+            (
+                candidates,
+                u64::from(posting_count),
+                u64::from(posting_count),
+                0,
+                bytes,
+            )
+        }
+        V36PostingAcceleratorKind::HnswCentroid => {
+            let (topology, scratch) = topology
+                .zip(scratch)
+                .filter(|(topology, _)| topology.node_count() == posting_count)
+                .ok_or_else(|| invalid("V36 posting HNSW workspace differs"))?;
+            let search =
+                search_v36_posting_hnsw_candidates(topology, scratch, ef_search, |ordinal| {
+                    score_v36_posting_centroid(&centroids.centroids()[ordinal as usize], query)
+                })?;
+            let candidate_bytes = rerank_peak_capacity_bytes(search.posting_ordinals.len())?;
+            let search_capacity = topology
+                .resident_bytes_excluding_centroids()
+                .checked_add(scratch.allocated_bytes())
+                .and_then(|bytes| bytes.checked_add(candidate_bytes))
+                .ok_or_else(|| invalid("V36 posting HNSW query capacity overflows"))?;
+            let allocated = search_capacity
+                .max(topology.construction_peak_capacity_bytes_excluding_centroids());
+            let visited = u64::from(search.visited_nodes());
+            let evaluations = search.score_evaluations();
+            (
+                search.posting_ordinals.into_vec(),
+                visited,
+                evaluations,
+                0,
+                allocated,
+            )
+        }
+        V36PostingAcceleratorKind::HnswSelectedScore => {
+            let (topology, scratch) = topology
+                .zip(scratch)
+                .filter(|(topology, _)| topology.node_count() == posting_count)
+                .ok_or_else(|| invalid("V36 posting HNSW workspace differs"))?;
+            let search = search_v36_posting_hnsw_candidates(
+                topology,
+                scratch,
+                ef_search,
+                &mut selected_score,
+            )?;
+            let candidate_bytes = rerank_peak_capacity_bytes(search.posting_ordinals.len())?;
+            let search_capacity = topology
+                .resident_bytes_excluding_centroids()
+                .checked_add(scratch.allocated_bytes())
+                .and_then(|bytes| bytes.checked_add(candidate_bytes))
+                .ok_or_else(|| invalid("V36 posting HNSW query capacity overflows"))?;
+            let allocated = search_capacity
+                .max(topology.construction_peak_capacity_bytes_excluding_centroids());
+            let visited = u64::from(search.visited_nodes());
+            let evaluations = search.score_evaluations();
+            (
+                search.posting_ordinals.into_vec(),
+                visited,
+                0,
+                evaluations,
+                allocated,
+            )
+        }
+    };
+    if accelerated_candidates.len() < prefix_length as usize {
+        return Err(invalid(
+            "V36 posting HNSW candidate set shorter than prefix",
+        ));
+    }
+    let rerank_evaluations = u64::try_from(accelerated_candidates.len())
+        .map_err(|_| invalid("V36 posting accelerator rerank count overflows"))?;
+    let accelerated_prefix = rank_v36_selected_posting_candidates(
+        &accelerated_candidates,
+        posting_count,
+        prefix_length,
+        &mut selected_score,
+    )?
+    .into_iter()
+    .map(|posting| posting.posting_ordinal)
+    .collect();
+    Ok(V36PostingAcceleratorQueryEvaluation {
+        comparison: V36PostingPrefixComparison {
+            query_ordinal,
+            requested_prefix_length: prefix_length,
+            exhaustive_prefix: exhaustive.prefix.clone(),
+            accelerated_candidates,
+            accelerated_prefix,
+        },
+        visited_nodes,
+        candidate_generation_score_evaluations: centroid_distance_evaluations
+            .checked_add(selected_score_evaluations)
+            .ok_or_else(|| invalid("V36 posting accelerator work overflows"))?,
+        candidate_generation_centroid_distance_evaluations: centroid_distance_evaluations,
+        candidate_generation_selected_score_evaluations: selected_score_evaluations,
+        exact_rerank_score_evaluations: rerank_evaluations,
+        exhaustive_score_evaluations: exhaustive.score_evaluations,
+        allocated_bytes,
     })
 }
 
@@ -723,7 +1006,9 @@ pub fn build_v36_posting_hnsw_topology(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v36_funnel_geometry::authenticate_v36_posting_centroids;
+    use crate::v36_funnel_geometry::{
+        V36PostingAcceleratorKind, authenticate_v36_posting_centroids, compare_v36_posting_prefixes,
+    };
 
     fn traversal_fixture() -> V36PostingHnswTopology {
         V36PostingHnswTopology {
@@ -760,6 +1045,226 @@ mod tests {
         assert_eq!(selected.visited_nodes(), 4);
         assert_eq!(selected.score_evaluations(), 7);
         assert_eq!(scratch.allocated_bytes(), allocated_bytes);
+    }
+
+    #[test]
+    fn v36_posting_accelerator_query_compares_all_generators_to_selected_score_authority() {
+        // Break caught: qualification either uses centroid distance as final authority or
+        // silently accepts an accelerated set that omits the selected-score prefix.
+        let topology = traversal_fixture();
+        let centroids = authenticate_v36_posting_centroids(
+            [0.0_f32, 1.0, 10.0, 9.0]
+                .into_iter()
+                .map(|first| {
+                    let mut centroid = [0.0_f32; 192];
+                    centroid[0] = first;
+                    centroid
+                })
+                .collect(),
+        )
+        .unwrap();
+        let query = [0.0_f32; 192];
+        let selected_scores = [10.0_f64, 9.0, 0.0, 1.0];
+        let exhaustive = select_v36_exhaustive_selected_prefix(7, 4, 2, |ordinal| {
+            Ok(selected_scores[ordinal as usize])
+        })
+        .unwrap();
+        assert_eq!(exhaustive.prefix, vec![2, 3]);
+        assert_eq!(exhaustive.score_evaluations, 4);
+        assert_eq!(exhaustive.allocated_bytes, 40);
+
+        let mut centroid_scratch = V36PostingHnswScratch::new(&topology, 2).unwrap();
+        let centroid = evaluate_v36_posting_accelerator_query(
+            V36PostingAcceleratorQueryRequest {
+                kind: V36PostingAcceleratorKind::HnswCentroid,
+                query_ordinal: 7,
+                prefix_length: 2,
+                ef_search: 2,
+                centroids: &centroids,
+                query: &query,
+                topology: Some(&topology),
+                scratch: Some(&mut centroid_scratch),
+                exhaustive: &exhaustive,
+            },
+            |ordinal| Ok(selected_scores[ordinal as usize]),
+        )
+        .unwrap();
+        assert_eq!(centroid.comparison.exhaustive_prefix, vec![2, 3]);
+        assert_eq!(centroid.comparison.accelerated_candidates, vec![0, 1]);
+        assert_eq!(centroid.comparison.accelerated_prefix, vec![1, 0]);
+        assert_eq!(centroid.visited_nodes, 3);
+        assert_eq!(centroid.candidate_generation_score_evaluations, 5);
+        assert_eq!(
+            centroid.candidate_generation_centroid_distance_evaluations,
+            5
+        );
+        assert_eq!(centroid.candidate_generation_selected_score_evaluations, 0);
+        assert_eq!(centroid.exact_rerank_score_evaluations, 2);
+        assert_eq!(centroid.exhaustive_score_evaluations, 4);
+        assert_eq!(
+            centroid.allocated_bytes,
+            topology
+                .resident_bytes_excluding_centroids()
+                .checked_add(centroid_scratch.allocated_bytes())
+                .unwrap()
+                .checked_add(48)
+                .unwrap()
+        );
+        let evidence = compare_v36_posting_prefixes(4, &[centroid.comparison]).unwrap();
+        assert_eq!(evidence.parity_ppm, 0);
+        assert_eq!(evidence.candidate_containment_ppm, 0);
+
+        let mut selected_scratch = V36PostingHnswScratch::new(&topology, 2).unwrap();
+        let selected = evaluate_v36_posting_accelerator_query(
+            V36PostingAcceleratorQueryRequest {
+                kind: V36PostingAcceleratorKind::HnswSelectedScore,
+                query_ordinal: 7,
+                prefix_length: 2,
+                ef_search: 2,
+                centroids: &centroids,
+                query: &query,
+                topology: Some(&topology),
+                scratch: Some(&mut selected_scratch),
+                exhaustive: &exhaustive,
+            },
+            |ordinal| Ok(selected_scores[ordinal as usize]),
+        )
+        .unwrap();
+        assert_eq!(selected.comparison.exhaustive_prefix, vec![2, 3]);
+        assert_eq!(selected.comparison.accelerated_candidates, vec![2, 3]);
+        assert_eq!(selected.comparison.accelerated_prefix, vec![2, 3]);
+        assert_eq!(selected.visited_nodes, 4);
+        assert_eq!(selected.candidate_generation_score_evaluations, 7);
+        assert_eq!(
+            selected.candidate_generation_centroid_distance_evaluations,
+            0
+        );
+        assert_eq!(selected.candidate_generation_selected_score_evaluations, 7);
+        assert_eq!(selected.exact_rerank_score_evaluations, 2);
+        assert_eq!(selected.exhaustive_score_evaluations, 4);
+        let evidence = compare_v36_posting_prefixes(4, &[selected.comparison]).unwrap();
+        assert_eq!(evidence.parity_ppm, 1_000_000);
+        assert_eq!(evidence.candidate_containment_ppm, 1_000_000);
+
+        let flat = evaluate_v36_posting_accelerator_query(
+            V36PostingAcceleratorQueryRequest {
+                kind: V36PostingAcceleratorKind::SimdFlatCentroid,
+                query_ordinal: 7,
+                prefix_length: 2,
+                ef_search: 2,
+                centroids: &centroids,
+                query: &query,
+                topology: None,
+                scratch: None,
+                exhaustive: &exhaustive,
+            },
+            |ordinal| Ok(selected_scores[ordinal as usize]),
+        )
+        .unwrap();
+        assert_eq!(flat.comparison.accelerated_candidates, vec![0, 1]);
+        assert_eq!(flat.visited_nodes, 4);
+        assert_eq!(flat.candidate_generation_score_evaluations, 4);
+        assert_eq!(flat.candidate_generation_centroid_distance_evaluations, 4);
+        assert_eq!(flat.candidate_generation_selected_score_evaluations, 0);
+        assert_eq!(flat.exact_rerank_score_evaluations, 2);
+        assert_eq!(flat.exhaustive_score_evaluations, 4);
+        assert_eq!(flat.allocated_bytes, 48);
+    }
+
+    #[test]
+    fn v36_posting_accelerator_query_counts_only_candidates_actually_reranked() {
+        // Break caught: a short HNSW result is charged as though all efSearch slots
+        // were populated, concealing a disconnected or otherwise incomplete graph.
+        let topology = V36PostingHnswTopology {
+            levels: vec![0, 0].into_boxed_slice(),
+            tower_offsets: vec![0, 1, 2].into_boxed_slice(),
+            edge_offsets: vec![0, 0, 0].into_boxed_slice(),
+            neighbors: Box::default(),
+            entry_posting_ordinal: 0,
+            build_distance_evaluations: 0,
+            construction_peak_capacity_bytes: 0,
+        };
+        let centroids = authenticate_v36_posting_centroids(vec![[0.0; 192]; 2]).unwrap();
+        let mut scratch = V36PostingHnswScratch::new(&topology, 2).unwrap();
+        let exhaustive =
+            select_v36_exhaustive_selected_prefix(0, 2, 1, |ordinal| Ok(f64::from(ordinal)))
+                .unwrap();
+        let evaluation = evaluate_v36_posting_accelerator_query(
+            V36PostingAcceleratorQueryRequest {
+                kind: V36PostingAcceleratorKind::HnswSelectedScore,
+                query_ordinal: 0,
+                prefix_length: 1,
+                ef_search: 2,
+                centroids: &centroids,
+                query: &[0.0; 192],
+                topology: Some(&topology),
+                scratch: Some(&mut scratch),
+                exhaustive: &exhaustive,
+            },
+            |ordinal| Ok(f64::from(ordinal)),
+        )
+        .unwrap();
+        assert_eq!(evaluation.comparison.accelerated_candidates, vec![0]);
+        assert_eq!(evaluation.exact_rerank_score_evaluations, 1);
+    }
+
+    #[test]
+    fn v36_posting_accelerator_query_rejects_short_or_invalid_query_evidence() {
+        // Break caught: a disconnected graph abort is confused with malformed ordinals,
+        // or HNSW-selected bypasses the common projected-query authority check.
+        let topology = V36PostingHnswTopology {
+            levels: vec![0, 0].into_boxed_slice(),
+            tower_offsets: vec![0, 1, 2].into_boxed_slice(),
+            edge_offsets: vec![0, 0, 0].into_boxed_slice(),
+            neighbors: Box::default(),
+            entry_posting_ordinal: 0,
+            build_distance_evaluations: 0,
+            construction_peak_capacity_bytes: 0,
+        };
+        let centroids = authenticate_v36_posting_centroids(vec![[0.0; 192]; 2]).unwrap();
+        let exhaustive =
+            select_v36_exhaustive_selected_prefix(0, 2, 2, |ordinal| Ok(f64::from(ordinal)))
+                .unwrap();
+        let mut scratch = V36PostingHnswScratch::new(&topology, 2).unwrap();
+        let short = evaluate_v36_posting_accelerator_query(
+            V36PostingAcceleratorQueryRequest {
+                kind: V36PostingAcceleratorKind::HnswSelectedScore,
+                query_ordinal: 0,
+                prefix_length: 2,
+                ef_search: 2,
+                centroids: &centroids,
+                query: &[0.0; 192],
+                topology: Some(&topology),
+                scratch: Some(&mut scratch),
+                exhaustive: &exhaustive,
+            },
+            |ordinal| Ok(f64::from(ordinal)),
+        )
+        .unwrap_err();
+        assert!(
+            short
+                .to_string()
+                .contains("candidate set shorter than prefix")
+        );
+
+        let mut invalid_query = [0.0_f32; 192];
+        invalid_query[17] = -0.0;
+        let invalid = evaluate_v36_posting_accelerator_query(
+            V36PostingAcceleratorQueryRequest {
+                kind: V36PostingAcceleratorKind::HnswSelectedScore,
+                query_ordinal: 0,
+                prefix_length: 1,
+                ef_search: 2,
+                centroids: &centroids,
+                query: &invalid_query,
+                topology: Some(&topology),
+                scratch: Some(&mut scratch),
+                exhaustive: &exhaustive,
+            },
+            |ordinal| Ok(f64::from(ordinal)),
+        )
+        .unwrap_err();
+        assert!(invalid.to_string().contains("query authority differs"));
     }
 
     #[test]
