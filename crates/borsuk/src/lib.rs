@@ -214,6 +214,7 @@ mod v35_route;
 mod v36_funnel;
 mod v36_funnel_code;
 mod v36_funnel_geometry;
+mod v36_posting_hnsw;
 mod v36_prefix_dataset;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
@@ -382,6 +383,8 @@ pub use v36_funnel_geometry::{
     train_v36_posting_gaussian, train_v36_posting_prototype_six, v36_effective_ef_search,
     v36_posting_acceleration_required, validate_v36_posting_accelerator_observation,
 };
+#[doc(hidden)]
+pub use v36_posting_hnsw::{V36PostingHnswTopology, build_v36_posting_hnsw_topology};
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
     V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointAction, V36PrefixCheckpointCompletion,

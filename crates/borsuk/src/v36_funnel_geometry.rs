@@ -2459,6 +2459,10 @@ impl V36AuthenticatedPostingCentroids {
     pub fn posting_count(&self) -> u32 {
         self.centroids.len() as u32
     }
+
+    pub(crate) fn centroids(&self) -> &[[f32; 192]] {
+        &self.centroids
+    }
 }
 
 impl Eq for V36FlatCentroidCandidate {}

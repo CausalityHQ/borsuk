@@ -25,9 +25,9 @@ use borsuk::{
     V36TransportFetchObservation, V36TransportFragment, V36TransportLimits, V36TransportPosting,
     V36UniqueLiveTopK, admit_v36_geometry, allocate_v36_hamilton_postings, assign_v36_postings,
     audit_v36_coarse_fragment_sha256, authenticate_v36_coarse_fragment,
-    authenticate_v36_posting_centroids, build_v36_srht192_control, compare_v36_posting_prefixes,
-    decode_v36_centered_projection_arrow, decode_v36_coarse_fragment_arrow,
-    decode_v36_transport_prefix, derive_v36_posting_hnsw_levels,
+    authenticate_v36_posting_centroids, build_v36_posting_hnsw_topology, build_v36_srht192_control,
+    compare_v36_posting_prefixes, decode_v36_centered_projection_arrow,
+    decode_v36_coarse_fragment_arrow, decode_v36_transport_prefix, derive_v36_posting_hnsw_levels,
     encode_v36_centered_projection_arrow, encode_v36_coarse_fragment_arrow,
     encode_v36_residual_pq4_record, encode_v36_sign24_record, project_v35_query_scalar,
     project_v35_query_simd, project_v36_centered_row_scalar, project_v36_centered_row_simd,
@@ -144,6 +144,106 @@ fn v36_posting_accelerator_hnsw_recipe_freezes_seed36_levels() {
         assert!(derive_v36_posting_hnsw_levels(4_096, &changed).is_err());
     }
     assert!(derive_v36_posting_hnsw_levels(0, &recipe).is_err());
+}
+
+#[test]
+fn v36_posting_accelerator_hnsw_topology_is_compact_bounded_and_reproducible() {
+    let centroids = (0..128_u32)
+        .map(|ordinal| {
+            let mut centroid = [0.0_f32; 192];
+            centroid[0] = ordinal as f32;
+            centroid[1] = ((ordinal * 17) % 31) as f32 * 0.25;
+            centroid[2] = ((ordinal * 29) % 47) as f32 * 0.125;
+            centroid
+        })
+        .collect::<Vec<_>>();
+    let directory = authenticate_v36_posting_centroids(centroids).unwrap();
+    let recipe = V36PostingHnswRecipe::frozen();
+    let first = build_v36_posting_hnsw_topology(&directory, &recipe).unwrap();
+    let second = build_v36_posting_hnsw_topology(&directory, &recipe).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.node_count(), 128);
+    assert_eq!(
+        first.levels(),
+        derive_v36_posting_hnsw_levels(128, &recipe).unwrap()
+    );
+    let expected_entry = first
+        .levels()
+        .iter()
+        .enumerate()
+        .max_by_key(|(ordinal, level)| (**level, std::cmp::Reverse(*ordinal)))
+        .map(|(ordinal, _)| ordinal as u32)
+        .unwrap();
+    assert_eq!(first.entry_posting_ordinal(), expected_entry);
+    assert!(first.build_distance_evaluations() > 0);
+    assert!(first.resident_bytes_excluding_centroids() < 128 * 1024 * 1024);
+    assert!(
+        first.construction_peak_capacity_bytes_excluding_centroids()
+            >= first.resident_bytes_excluding_centroids()
+    );
+    assert!(first.construction_peak_capacity_bytes_excluding_centroids() < 128 * 1024 * 1024);
+
+    let mut layer_zero_edges = 0_usize;
+    for posting in 0..first.node_count() {
+        let level = first.levels()[posting as usize];
+        for layer in 0..=level {
+            let neighbors = first.neighbors(posting, layer).unwrap();
+            let cap = if layer == 0 { 64 } else { 32 };
+            assert!(neighbors.len() <= cap);
+            assert!(!neighbors.contains(&posting));
+            assert!(neighbors.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(neighbors.iter().all(|neighbor| {
+                *neighbor < first.node_count() && first.levels()[*neighbor as usize] >= layer
+            }));
+            if layer == 0 {
+                layer_zero_edges += neighbors.len();
+            }
+        }
+        assert!(first.neighbors(posting, level.saturating_add(1)).is_none());
+    }
+    assert!(layer_zero_edges > 0);
+
+    let mut reached = vec![false; first.node_count() as usize];
+    let mut frontier = vec![first.entry_posting_ordinal()];
+    while let Some(posting) = frontier.pop() {
+        if std::mem::replace(&mut reached[posting as usize], true) {
+            continue;
+        }
+        frontier.extend(
+            first
+                .neighbors(posting, 0)
+                .unwrap()
+                .iter()
+                .copied()
+                .filter(|neighbor| !reached[*neighbor as usize]),
+        );
+    }
+    assert!(reached.into_iter().all(std::convert::identity));
+
+    let mut canonical_topology = Vec::new();
+    canonical_topology.extend_from_slice(&first.node_count().to_le_bytes());
+    canonical_topology.extend_from_slice(first.levels());
+    canonical_topology.extend_from_slice(&first.entry_posting_ordinal().to_le_bytes());
+    canonical_topology.extend_from_slice(&first.build_distance_evaluations().to_le_bytes());
+    for posting in 0..first.node_count() {
+        for layer in 0..=first.levels()[posting as usize] {
+            let neighbors = first.neighbors(posting, layer).unwrap();
+            canonical_topology.extend_from_slice(&(neighbors.len() as u32).to_le_bytes());
+            for neighbor in neighbors {
+                canonical_topology.extend_from_slice(&neighbor.to_le_bytes());
+            }
+        }
+    }
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&canonical_topology)),
+        "51c5ca15001d68dff245bd7c7ec0f1b67d878b9739e308311bbd1b870e560cce"
+    );
+
+    let mut changed = recipe;
+    changed.seed = 37;
+    assert!(build_v36_posting_hnsw_topology(&directory, &changed).is_err());
+    let singleton = authenticate_v36_posting_centroids(vec![[0.0_f32; 192]]).unwrap();
+    assert!(build_v36_posting_hnsw_topology(&singleton, &V36PostingHnswRecipe::frozen()).is_err());
 }
 
 #[test]
