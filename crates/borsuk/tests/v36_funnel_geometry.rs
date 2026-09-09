@@ -326,7 +326,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             16,
             2,
             781_048_576,
-            1_971_041_792,
+            1_971_238_400,
             768_000_000_u128,
             21_000_000_u128,
         ),
@@ -335,7 +335,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             153,
             3,
             7_810_027_008,
-            16_028_998_656,
+            16_033_127_424,
             122_880_000_000,
             230_000_000,
         ),
@@ -344,7 +344,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             1_526,
             4,
             78_100_007_936,
-            156_608_960_512,
+            156_642_449_408,
             9_830_400_000_000,
             2_500_000_000,
         ),
@@ -362,7 +362,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         assert_eq!(projected.merge_generations, merges);
         assert_eq!(projected.uncompressed_assignment_bytes, encoded);
         assert_eq!(projected.required_scratch_bytes, scratch);
-        assert_eq!(projected.required_peak_live_bytes, 630_784_000);
+        assert_eq!(projected.required_peak_live_bytes, 1_041_825_792);
         assert_eq!(projected.component_terms, terms);
         assert_eq!(projected.external_work_units, external);
         assert_eq!(projected.projected_active_ns, terms + external);
@@ -384,7 +384,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         project_v36_supercell_assignment_admission(&spec, 16 * 1_048_576, &one_worker)
             .unwrap()
             .required_peak_live_bytes,
-        630_784_000
+        1_041_825_792
     );
 }
 
@@ -503,8 +503,8 @@ fn v36_geometry_post_count_admission_projects_skew_and_hamilton_without_populati
     assert_eq!(projected.repair_distance_evaluations, 2_419_992_770);
     assert_eq!(projected.source_reduction_terms, 1_920_000_000);
     assert_eq!(projected.local_component_terms, 977_463_485_952);
-    assert_eq!(projected.required_scratch_bytes, 2_011_041_792);
-    assert_eq!(projected.required_peak_live_bytes, 425_721_856);
+    assert_eq!(projected.required_scratch_bytes, 2_011_238_400);
+    assert_eq!(projected.required_peak_live_bytes, 1_041_825_792);
     assert_eq!(projected.projected_active_ns, 978_252_485_952);
     assert_eq!(projected.projected_cost_microusd, 978_253);
 
@@ -794,7 +794,7 @@ fn v36_geometry_external_assignment_writer_is_schedule_invariant_and_transaction
                 second_scan_delta: false,
             };
             let mut sink = AssignmentShardSink::default();
-            let artifacts = write_v36_supercell_assignment_shards(
+            let committed = write_v36_supercell_assignment_shards(
                 &authenticated,
                 &admission,
                 &mut source,
@@ -805,6 +805,12 @@ fn v36_geometry_external_assignment_writer_is_schedule_invariant_and_transaction
             assert_eq!(source.scans, 1);
             assert!(sink.committed);
             assert!(!sink.aborted);
+            assert_eq!(committed.admission(), &admission);
+            assert_eq!(
+                committed.uri_prefix(),
+                "s3://borsuk-v36-test/geometry/assignments"
+            );
+            let artifacts = committed.artifacts();
             assert_eq!(artifacts.len(), 1);
             assert_eq!(sink.provisional.len(), 1);
             let observed = (

@@ -2235,19 +2235,22 @@ fn decode_v36_assignment_rows_batch(
     {
         return Err(invalid("V36 assignment shard projected rows differ"));
     }
-    Ok(supercells
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(row_count)
+        .map_err(|_| invalid("V36 assignment decoded rows exceed capacity"))?;
+    for ((&supercell_ordinal, &source_ordinal), projected) in supercells
         .values()
         .iter()
         .zip(sources.values())
         .zip(projected)
-        .map(
-            |((&supercell_ordinal, &source_ordinal), projected)| V36SupercellAssignmentRow {
-                supercell_ordinal,
-                source_ordinal,
-                projected: *projected,
-            },
-        )
-        .collect())
+    {
+        rows.push(V36SupercellAssignmentRow {
+            supercell_ordinal,
+            source_ordinal,
+            projected: *projected,
+        });
+    }
+    Ok(rows)
 }
 
 /// Authenticate and decode one complete assignment shard.
@@ -2564,6 +2567,31 @@ pub trait V36SupercellAssignmentShardSink {
     fn abort(&mut self) -> Result<()>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete assignment inventory returned only after transactional commit.
+pub struct V36CommittedSupercellAssignments {
+    admission: V36AdmittedSupercellAssignmentPreflight,
+    artifacts: Vec<V36SupercellAssignmentShardArtifact>,
+    uri_prefix: String,
+}
+
+impl V36CommittedSupercellAssignments {
+    /// Ordered authenticated assignment shards committed by the writer.
+    pub fn artifacts(&self) -> &[V36SupercellAssignmentShardArtifact] {
+        &self.artifacts
+    }
+
+    /// Exact preflight authority consumed by assignment execution.
+    pub const fn admission(&self) -> &V36AdmittedSupercellAssignmentPreflight {
+        &self.admission
+    }
+
+    /// Stable logical URI prefix shared by the committed shards.
+    pub fn uri_prefix(&self) -> &str {
+        &self.uri_prefix
+    }
+}
+
 fn write_v36_assignment_buffer(
     model: &V36AuthenticatedSupercellModel,
     pool: &rayon::ThreadPool,
@@ -2634,7 +2662,7 @@ pub fn write_v36_supercell_assignment_shards(
     source: &mut dyn V36ProjectedCorpusSource,
     uri_prefix: &str,
     sink: &mut dyn V36SupercellAssignmentShardSink,
-) -> Result<Vec<V36SupercellAssignmentShardArtifact>> {
+) -> Result<V36CommittedSupercellAssignments> {
     let maximum_shard_rows = admission
         .training_spec
         .corpus_rows
@@ -2709,10 +2737,14 @@ pub fn write_v36_supercell_assignment_shards(
             return Err(invalid("V36 assignment corpus authority differs"));
         }
         sink.commit(&artifacts)?;
-        Ok(artifacts)
+        Ok(V36CommittedSupercellAssignments {
+            admission: admission.clone(),
+            artifacts,
+            uri_prefix: uri_prefix.to_owned(),
+        })
     })();
     match execute {
-        Ok(artifacts) => Ok(artifacts),
+        Ok(committed) => Ok(committed),
         Err(source) => match sink.abort() {
             Ok(()) => Err(source),
             Err(cleanup) => Err(cleanup),
@@ -2890,10 +2922,28 @@ pub fn project_v36_supercell_assignment_admission(
         .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
         .and_then(|bytes| bytes.checked_add(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES))
         .and_then(|bytes| bytes.checked_mul(merge_reader_count))
+        .and_then(|bytes| {
+            maximum_shard_rows
+                .checked_mul(u64::try_from(std::mem::size_of::<V36SupercellAssignmentRow>()).ok()?)
+                .and_then(|decoded| decoded.checked_mul(merge_reader_count))
+                .and_then(|decoded| bytes.checked_add(decoded))
+        })
         .and_then(|bytes| bytes.checked_add(canonicalization_bytes))
         .ok_or_else(|| invalid("V36 external assignment merge memory overflows"))?;
+    let maximum_final_chunks = logical_shards
+        .checked_add(u64::from(spec.super_cell_count).saturating_sub(1))
+        .ok_or_else(|| invalid("V36 external assignment final chunk count overflows"))?;
+    let maximum_final_bytes = spec
+        .corpus_rows
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
+        .and_then(|bytes| {
+            maximum_final_chunks
+                .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES)
+                .and_then(|envelopes| bytes.checked_add(envelopes))
+        })
+        .ok_or_else(|| invalid("V36 external assignment final bytes overflow"))?;
     let required_scratch_bytes = uncompressed_assignment_bytes
-        .checked_mul(2)
+        .checked_add(maximum_final_bytes)
         .and_then(|bytes| bytes.checked_add(aggregate_worker_bytes))
         .ok_or_else(|| invalid("V36 external assignment scratch bytes overflow"))?;
     let required_peak_live_bytes = SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
