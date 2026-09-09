@@ -384,7 +384,10 @@ pub use v36_funnel_geometry::{
     v36_posting_acceleration_required, validate_v36_posting_accelerator_observation,
 };
 #[doc(hidden)]
-pub use v36_posting_hnsw::{V36PostingHnswTopology, build_v36_posting_hnsw_topology};
+pub use v36_posting_hnsw::{
+    V36PostingHnswScratch, V36PostingHnswSearch, V36PostingHnswTopology,
+    build_v36_posting_hnsw_topology, search_v36_posting_hnsw_candidates,
+};
 #[doc(hidden)]
 pub use v36_prefix_dataset::{
     V36PrefixAllQueryGtAccumulator, V36PrefixCheckpointAction, V36PrefixCheckpointCompletion,

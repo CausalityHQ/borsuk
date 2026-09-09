@@ -197,6 +197,219 @@ impl V36PostingHnswTopology {
     }
 }
 
+/// Bounded deterministic candidates and exact work from one HNSW traversal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V36PostingHnswSearch {
+    posting_ordinals: Box<[u32]>,
+    visited_nodes: u32,
+    score_evaluations: u64,
+}
+
+impl V36PostingHnswSearch {
+    /// Candidate posting ordinals ordered by the injected score and ordinal.
+    pub fn posting_ordinals(&self) -> &[u32] {
+        &self.posting_ordinals
+    }
+
+    /// Unique posting nodes scored across all graph layers.
+    pub fn visited_nodes(&self) -> u32 {
+        self.visited_nodes
+    }
+
+    /// Total calls to the injected score, including repeated upper-layer nodes.
+    pub fn score_evaluations(&self) -> u64 {
+        self.score_evaluations
+    }
+}
+
+/// Reusable per-worker traversal state with a fixed authenticated graph shape.
+pub struct V36PostingHnswScratch {
+    node_count: usize,
+    maximum_ef_search: usize,
+    seen: VisitMarks,
+    layer_seen: VisitMarks,
+    candidates: BinaryHeap<Reverse<Candidate>>,
+    results: BinaryHeap<Candidate>,
+}
+
+impl V36PostingHnswScratch {
+    /// Allocate one reusable traversal workspace for this topology and maximum width.
+    pub fn new(topology: &V36PostingHnswTopology, maximum_ef_search: u32) -> Result<Self> {
+        let node_count = topology.levels.len();
+        let maximum_ef_search = usize::try_from(maximum_ef_search)
+            .ok()
+            .filter(|width| *width > 0 && *width <= node_count)
+            .ok_or_else(|| invalid("V36 posting HNSW scratch width differs"))?;
+        Ok(Self {
+            node_count,
+            maximum_ef_search,
+            seen: VisitMarks::new(node_count),
+            layer_seen: VisitMarks::new(node_count),
+            candidates: BinaryHeap::with_capacity(node_count),
+            results: BinaryHeap::with_capacity(maximum_ef_search),
+        })
+    }
+
+    /// Exact heap capacities owned by this reusable workspace.
+    pub fn allocated_bytes(&self) -> u64 {
+        size_of::<Self>() as u64
+            + self.seen.marks.capacity() as u64 * size_of::<u32>() as u64
+            + self.layer_seen.marks.capacity() as u64 * size_of::<u32>() as u64
+            + self.candidates.capacity() as u64 * size_of::<Reverse<Candidate>>() as u64
+            + self.results.capacity() as u64 * size_of::<Candidate>() as u64
+    }
+}
+
+fn evaluate_score<F>(
+    posting_ordinal: u32,
+    scorer: &mut F,
+    seen: &mut VisitMarks,
+    visited_nodes: &mut u32,
+    evaluations: &mut u64,
+) -> Result<Candidate>
+where
+    F: FnMut(u32) -> Result<f64>,
+{
+    *evaluations = evaluations
+        .checked_add(1)
+        .ok_or_else(|| invalid("V36 posting HNSW search work overflows"))?;
+    if seen.insert(posting_ordinal) {
+        *visited_nodes = visited_nodes
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 posting HNSW visited count overflows"))?;
+    }
+    let distance = scorer(posting_ordinal)?;
+    if !distance.is_finite() {
+        return Err(invalid("V36 posting HNSW score is nonfinite"));
+    }
+    let distance = if distance == 0.0 { 0.0 } else { distance };
+    Ok(Candidate {
+        distance,
+        posting_ordinal,
+    })
+}
+
+/// Traverse one immutable topology using the caller's authoritative posting score.
+pub fn search_v36_posting_hnsw_candidates<F>(
+    topology: &V36PostingHnswTopology,
+    scratch: &mut V36PostingHnswScratch,
+    ef_search: u32,
+    mut scorer: F,
+) -> Result<V36PostingHnswSearch>
+where
+    F: FnMut(u32) -> Result<f64>,
+{
+    let width = usize::try_from(ef_search)
+        .ok()
+        .filter(|width| *width > 0 && *width <= scratch.maximum_ef_search)
+        .ok_or_else(|| invalid("V36 posting HNSW search width differs"))?;
+    if scratch.node_count != topology.levels.len() {
+        return Err(invalid("V36 posting HNSW scratch topology differs"));
+    }
+    scratch.seen.begin();
+    scratch.candidates.clear();
+    scratch.results.clear();
+    let mut visited_nodes = 0_u32;
+    let mut evaluations = 0_u64;
+    let mut current = topology.entry_posting_ordinal;
+
+    for layer in (1..=topology.levels[current as usize]).rev() {
+        let mut best = evaluate_score(
+            current,
+            &mut scorer,
+            &mut scratch.seen,
+            &mut visited_nodes,
+            &mut evaluations,
+        )?;
+        loop {
+            let mut next = best;
+            for neighbor in topology
+                .neighbors(current, layer)
+                .ok_or_else(|| invalid("V36 posting HNSW search layer differs"))?
+            {
+                let candidate = evaluate_score(
+                    *neighbor,
+                    &mut scorer,
+                    &mut scratch.seen,
+                    &mut visited_nodes,
+                    &mut evaluations,
+                )?;
+                if candidate < next {
+                    next = candidate;
+                }
+            }
+            if next.posting_ordinal == current {
+                break;
+            }
+            current = next.posting_ordinal;
+            best = next;
+        }
+    }
+
+    scratch.layer_seen.begin();
+    scratch.layer_seen.insert(current);
+    let initial = evaluate_score(
+        current,
+        &mut scorer,
+        &mut scratch.seen,
+        &mut visited_nodes,
+        &mut evaluations,
+    )?;
+    scratch.candidates.push(Reverse(initial));
+    scratch.results.push(initial);
+    while let Some(Reverse(candidate)) = scratch.candidates.pop() {
+        if scratch.results.len() == width
+            && scratch
+                .results
+                .peek()
+                .is_some_and(|worst| candidate > *worst)
+        {
+            break;
+        }
+        for neighbor in topology
+            .neighbors(candidate.posting_ordinal, 0)
+            .ok_or_else(|| invalid("V36 posting HNSW search adjacency differs"))?
+        {
+            if !scratch.layer_seen.insert(*neighbor) {
+                continue;
+            }
+            let discovered = evaluate_score(
+                *neighbor,
+                &mut scorer,
+                &mut scratch.seen,
+                &mut visited_nodes,
+                &mut evaluations,
+            )?;
+            if scratch.results.len() < width
+                || scratch
+                    .results
+                    .peek()
+                    .is_some_and(|worst| discovered < *worst)
+            {
+                scratch.candidates.push(Reverse(discovered));
+                if scratch.results.len() == width {
+                    scratch.results.pop();
+                }
+                scratch.results.push(discovered);
+            }
+        }
+    }
+    scratch.candidates.clear();
+    let mut found = Vec::with_capacity(scratch.results.len());
+    while let Some(candidate) = scratch.results.pop() {
+        found.push(candidate);
+    }
+    found.sort_unstable();
+    Ok(V36PostingHnswSearch {
+        posting_ordinals: found
+            .into_iter()
+            .map(|candidate| candidate.posting_ordinal)
+            .collect(),
+        visited_nodes,
+        score_evaluations: evaluations,
+    })
+}
+
 fn squared_l2(left: &[f32; 192], right: &[f32; 192], evaluations: &mut u64) -> Result<f64> {
     *evaluations = evaluations
         .checked_add(1)
@@ -510,6 +723,134 @@ pub fn build_v36_posting_hnsw_topology(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::v36_funnel_geometry::authenticate_v36_posting_centroids;
+
+    fn traversal_fixture() -> V36PostingHnswTopology {
+        V36PostingHnswTopology {
+            levels: vec![1, 1, 0, 0].into_boxed_slice(),
+            tower_offsets: vec![0, 2, 4, 5, 6].into_boxed_slice(),
+            edge_offsets: vec![0, 1, 2, 4, 5, 7, 8].into_boxed_slice(),
+            neighbors: vec![1, 1, 0, 2, 0, 1, 3, 2].into_boxed_slice(),
+            entry_posting_ordinal: 0,
+            build_distance_evaluations: 0,
+            construction_peak_capacity_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn v36_posting_hnsw_traversal_uses_the_injected_score_authority() {
+        let topology = traversal_fixture();
+        let mut scratch = V36PostingHnswScratch::new(&topology, 2).unwrap();
+        let allocated_bytes = scratch.allocated_bytes();
+        let centroid_scores = [0.0, 1.0, 10.0, 9.0];
+        let centroid = search_v36_posting_hnsw_candidates(&topology, &mut scratch, 2, |ordinal| {
+            Ok(centroid_scores[ordinal as usize])
+        })
+        .unwrap();
+        assert_eq!(centroid.posting_ordinals(), &[0, 1]);
+        assert_eq!(centroid.visited_nodes(), 3);
+        assert_eq!(centroid.score_evaluations(), 5);
+
+        let selected_scores = [10.0, 9.0, 0.0, 1.0];
+        let selected = search_v36_posting_hnsw_candidates(&topology, &mut scratch, 2, |ordinal| {
+            Ok(selected_scores[ordinal as usize])
+        })
+        .unwrap();
+        assert_eq!(selected.posting_ordinals(), &[2, 3]);
+        assert_eq!(selected.visited_nodes(), 4);
+        assert_eq!(selected.score_evaluations(), 7);
+        assert_eq!(scratch.allocated_bytes(), allocated_bytes);
+    }
+
+    #[test]
+    fn v36_posting_hnsw_traversal_is_bounded_total_and_fail_closed() {
+        let topology = traversal_fixture();
+        let mut scratch = V36PostingHnswScratch::new(&topology, 2).unwrap();
+        let tied =
+            search_v36_posting_hnsw_candidates(&topology, &mut scratch, 2, |_| Ok(0.0)).unwrap();
+        assert_eq!(tied.posting_ordinals(), &[0, 1]);
+        assert!(tied.visited_nodes() <= topology.node_count());
+        assert!(tied.score_evaluations() >= u64::from(tied.visited_nodes()));
+
+        let signed_zero_scores = [0.0_f64, -0.0, 1.0, 2.0];
+        let signed_zero =
+            search_v36_posting_hnsw_candidates(&topology, &mut scratch, 1, |ordinal| {
+                Ok(signed_zero_scores[ordinal as usize])
+            })
+            .unwrap();
+        assert_eq!(signed_zero.posting_ordinals(), &[0]);
+
+        assert!(
+            search_v36_posting_hnsw_candidates(&topology, &mut scratch, 0, |_| Ok(0.0)).is_err()
+        );
+        assert!(
+            search_v36_posting_hnsw_candidates(&topology, &mut scratch, 5, |_| Ok(0.0)).is_err()
+        );
+        for nonfinite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                search_v36_posting_hnsw_candidates(&topology, &mut scratch, 2, |_| Ok(nonfinite))
+                    .is_err()
+            );
+        }
+        assert!(V36PostingHnswScratch::new(&topology, 0).is_err());
+        assert!(V36PostingHnswScratch::new(&topology, 5).is_err());
+    }
+
+    #[test]
+    fn v36_posting_hnsw_built_topology_exhaustive_width_matches_brute_force() {
+        let centroids = (0..48_u32)
+            .map(|ordinal| {
+                let mut centroid = [0.0_f32; 192];
+                centroid[0] = (ordinal as f32 - 19.0) * 0.25;
+                centroid[1] = ((ordinal * 17) % 23) as f32 * 0.125;
+                let third = ((ordinal * 29) % 31) as f32;
+                centroid[2] = if third == 0.0 { 0.0 } else { third * -0.0625 };
+                centroid
+            })
+            .collect::<Vec<_>>();
+        let mut query = [0.0_f32; 192];
+        query[0] = 0.75;
+        query[1] = -0.5;
+        query[2] = 0.25;
+        let directory = authenticate_v36_posting_centroids(centroids.clone()).unwrap();
+        let topology =
+            build_v36_posting_hnsw_topology(&directory, &V36PostingHnswRecipe::frozen()).unwrap();
+        let mut scratch = V36PostingHnswScratch::new(&topology, topology.node_count()).unwrap();
+        let score = |ordinal: u32| {
+            centroids[ordinal as usize]
+                .iter()
+                .zip(query)
+                .map(|(left, right)| {
+                    let delta = f64::from(*left) - f64::from(right);
+                    delta * delta
+                })
+                .sum::<f64>()
+        };
+        let actual = search_v36_posting_hnsw_candidates(
+            &topology,
+            &mut scratch,
+            topology.node_count(),
+            |ordinal| Ok(score(ordinal)),
+        )
+        .unwrap();
+        let mut expected = (0..topology.node_count()).collect::<Vec<_>>();
+        expected.sort_unstable_by(|left, right| {
+            score(*left)
+                .total_cmp(&score(*right))
+                .then_with(|| left.cmp(right))
+        });
+        assert_eq!(actual.posting_ordinals(), expected);
+        assert_eq!(actual.visited_nodes(), topology.node_count());
+        assert!(
+            search_v36_posting_hnsw_candidates(
+                &topology,
+                &mut scratch,
+                topology.node_count(),
+                |_| Err(invalid("forced scorer failure")),
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn v36_posting_hnsw_diversity_then_fill_has_independent_oracle() {
