@@ -6,7 +6,8 @@ use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt6
 use arrow_schema::{DataType, Field};
 use borsuk::{
     V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource, V36SupercellTrainingSpec,
-    bind_v36_registered_supercell_training_spec, load_v36_prefix_source_feature_ids,
+    bind_v36_registered_supercell_training_spec, decode_v36_supercell_model_arrow,
+    encode_v36_supercell_model_arrow, load_v36_prefix_source_feature_ids,
     project_v36_exact_assignment_preflight, project_v36_supercell_training_preflight,
     train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
 };
@@ -404,4 +405,62 @@ fn v36_geometry_supercells_are_block_invariant_and_reject_source_drift() {
     oversized_reservoir.reservoir_rows = 1_048_577;
     oversized_reservoir.projected_corpus_sha256 = "e".repeat(64);
     assert!(train_v36_supercells(&oversized_reservoir, &mut source).is_err());
+}
+
+#[test]
+fn v36_geometry_supercell_model_round_trips_strict_authenticated_arrow() {
+    // Break caught: construction resumes from an unauthenticated, JSON-expanded,
+    // or schema-drifted centroid model before creating external posting runs.
+    let rows = projected_rows(24);
+    let spec = V36SupercellTrainingSpec {
+        corpus_rows: 24,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 8,
+        projected_corpus_sha256: projected_rows_sha256(&rows),
+        reservoir_rows: 24,
+        super_cell_count: 4,
+    };
+    let mut source = ProjectedSource {
+        block_rows: 8,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let model = train_v36_supercells(&spec, &mut source).unwrap();
+    let uri = "s3://borsuk-v36-test/geometry/supercells.arrow";
+    let (bytes, identity) =
+        encode_v36_supercell_model_arrow(&model, &spec, "supercell-model", uri).unwrap();
+    assert!(
+        encode_v36_supercell_model_arrow(
+            &model,
+            &spec,
+            "supercell-model",
+            "https://borsuk-v36-test/geometry/supercells.arrow",
+        )
+        .is_err()
+    );
+    let oversized_uri = format!("s3://borsuk-v36-test/{}", "x".repeat(4_096));
+    assert!(
+        encode_v36_supercell_model_arrow(&model, &spec, "supercell-model", &oversized_uri).is_err()
+    );
+    assert_eq!(identity.role, "supercell-model");
+    assert_eq!(identity.uri, uri);
+    assert_eq!(identity.encoded_bytes, bytes.len() as u64);
+    assert_eq!(
+        decode_v36_supercell_model_arrow(&bytes, &identity, &spec).unwrap(),
+        model
+    );
+
+    let mut changed_identity = identity.clone();
+    changed_identity.sha256 = "0".repeat(64);
+    assert!(decode_v36_supercell_model_arrow(&bytes, &changed_identity, &spec).is_err());
+
+    let mut changed_bytes = bytes.clone();
+    let last = changed_bytes.len() - 1;
+    changed_bytes[last] ^= 1;
+    assert!(decode_v36_supercell_model_arrow(&changed_bytes, &identity, &spec).is_err());
+
+    let mut changed_spec = spec.clone();
+    changed_spec.projected_corpus_sha256 = "f".repeat(64);
+    assert!(decode_v36_supercell_model_arrow(&bytes, &identity, &changed_spec).is_err());
 }

@@ -12,7 +12,10 @@ use crate::{
     v35_projection::{V35Projection, V35ProjectionBackend, build_v35_srht},
     v36_funnel::POSTING_SUMMARY_SLOT_BYTES,
 };
-use arrow_array::{Array, FixedSizeListArray, Float32Array, Float64Array, RecordBatch};
+use arrow_array::{
+    Array, FixedSizeListArray, Float32Array, Float64Array, ListArray, RecordBatch, UInt64Array,
+};
+use arrow_buffer::OffsetBuffer;
 use arrow_ipc::{
     MetadataVersion,
     reader::FileReader,
@@ -39,6 +42,11 @@ const CENTERED_PROJECTION_STORAGE_ORDER: &str = "source-major-f32-v1";
 const CENTERED_PROJECTION_MANIFEST_KEY: &str = "borsuk.v36.centered_projection.manifest";
 const CENTERED_PROJECTION_ROLE: &str = "centered-projection-basis";
 const CENTERED_PROJECTION_MAXIMUM_ENCODED_BYTES: u64 = 3 * 1_048_576;
+const SUPERCELL_MODEL_FORMAT: &str = "borsuk-v36-supercell-model-arrow-v1";
+const SUPERCELL_MODEL_ALGORITHM: &str = "sha-reservoir-farthest-first-lloyd25-v1";
+const SUPERCELL_MODEL_ROLE: &str = "supercell-model";
+const SUPERCELL_MODEL_MANIFEST_KEY: &str = "borsuk.v36.supercell_model.manifest";
+const SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES: u64 = 16 * 1_048_576;
 
 #[derive(Debug, Clone, PartialEq)]
 struct V36CenteredCovarianceAnalysis {
@@ -1452,7 +1460,8 @@ pub trait V36ProjectedCorpusSource {
     fn scan(&mut self, visitor: &mut V36ProjectedCorpusBlockVisitor<'_>) -> Result<()>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Exact bounded authority for deterministic V36 super-cell training.
 pub struct V36SupercellTrainingSpec {
     /// Exact query-excluded corpus population.
@@ -1600,6 +1609,17 @@ pub struct V36SupercellModel {
     reservoir_source_ordinals: Vec<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36SupercellModelManifest {
+    algorithm: String,
+    empty_repairs: u64,
+    format: String,
+    role: String,
+    training: V36SupercellTrainingSpec,
+    uri: String,
+}
+
 impl V36SupercellModel {
     /// Trained super-cell centroids in canonical ordinal order.
     pub fn centroids(&self) -> &[[f32; 192]] {
@@ -1630,6 +1650,650 @@ impl V36SupercellModel {
     pub fn reservoir_source_ordinals(&self) -> &[u64] {
         &self.reservoir_source_ordinals
     }
+}
+
+fn validate_v36_supercell_model(
+    model: &V36SupercellModel,
+    spec: &V36SupercellTrainingSpec,
+) -> Result<()> {
+    let centroid_count = usize::try_from(spec.super_cell_count)
+        .map_err(|_| invalid("V36 super-cell count overflows"))?;
+    let reservoir_rows = usize::try_from(spec.reservoir_rows)
+        .map_err(|_| invalid("V36 super-cell reservoir row count overflows"))?;
+    if spec.corpus_rows == 0
+        || spec.dimensions != 192
+        || spec.maximum_block_rows == 0
+        || spec.maximum_block_rows > 65_536
+        || !valid_sha256(&spec.projected_corpus_sha256)
+        || spec.reservoir_rows == 0
+        || spec.reservoir_rows > spec.corpus_rows
+        || spec.reservoir_rows > 1_048_576
+        || spec.super_cell_count == 0
+        || !spec.super_cell_count.is_power_of_two()
+        || spec.super_cell_count > 4_096
+        || u64::from(spec.super_cell_count) > spec.reservoir_rows
+        || model.centroids.len() != centroid_count
+        || model.initialization_source_ordinals.len() != centroid_count
+        || model.reservoir_source_ordinals.len() != reservoir_rows
+        || model.projected_corpus_sha256 != spec.projected_corpus_sha256
+        || model.empty_repairs > 25_u64.saturating_mul(u64::from(spec.super_cell_count))
+        || model
+            .centroids
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite() || (*value == 0.0 && value.is_sign_negative()))
+        || model
+            .reservoir_source_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || model
+            .reservoir_source_ordinals
+            .last()
+            .is_some_and(|ordinal| *ordinal >= spec.corpus_rows)
+        || model
+            .initialization_source_ordinals
+            .iter()
+            .enumerate()
+            .any(|(index, ordinal)| model.initialization_source_ordinals[..index].contains(ordinal))
+        || model.initialization_source_ordinals.first() != model.reservoir_source_ordinals.first()
+        || model.initialization_source_ordinals.iter().any(|ordinal| {
+            model
+                .reservoir_source_ordinals
+                .binary_search(ordinal)
+                .is_err()
+        })
+    {
+        return Err(invalid("V36 super-cell model differs"));
+    }
+    Ok(())
+}
+
+fn canonical_v36_supercell_manifest(manifest: &V36SupercellModelManifest) -> Result<String> {
+    let value = serde_json::to_value(manifest)
+        .map_err(|_| invalid("V36 super-cell model manifest differs"))?;
+    serde_json::to_string(&v36_canonical_json_value(value))
+        .map_err(|_| invalid("V36 super-cell model manifest differs"))
+}
+
+fn v36_supercell_list_offsets(length: usize) -> Result<OffsetBuffer<i32>> {
+    let length =
+        i32::try_from(length).map_err(|_| invalid("V36 super-cell model list length overflows"))?;
+    Ok(OffsetBuffer::new(vec![0_i32, length].into()))
+}
+
+fn v36_supercell_model_schema(manifest: String) -> Schema {
+    let vector_child = Arc::new(Field::new("element", DataType::Float32, false));
+    let centroid_child = Arc::new(Field::new(
+        "element",
+        DataType::FixedSizeList(vector_child, 192),
+        false,
+    ));
+    let ordinal_child = Arc::new(Field::new("element", DataType::UInt64, false));
+    Schema::new_with_metadata(
+        vec![
+            Field::new("centroids", DataType::List(centroid_child), false),
+            Field::new(
+                "initialization_source_ordinals",
+                DataType::List(ordinal_child.clone()),
+                false,
+            ),
+            Field::new(
+                "reservoir_source_ordinals",
+                DataType::List(ordinal_child),
+                false,
+            ),
+        ],
+        HashMap::from([(SUPERCELL_MODEL_MANIFEST_KEY.to_owned(), manifest)]),
+    )
+}
+
+fn valid_v36_supercell_model_uri(uri: &str) -> bool {
+    if uri.len() > 4_096 {
+        return false;
+    }
+    let Ok(parsed) = url::Url::parse(uri) else {
+        return false;
+    };
+    let path = parsed.path();
+    parsed.scheme() == "s3"
+        && parsed.host_str().is_some_and(|host| !host.is_empty())
+        && path.len() > 1
+        && !path.ends_with('/')
+        && !path.split('/').any(|part| part == "..")
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+}
+
+fn v36_supercell_untrusted_manifest(bytes: &[u8]) -> Result<String> {
+    if bytes.len() < 18
+        || bytes.len() > SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES as usize
+        || !bytes.starts_with(b"ARROW1")
+        || !bytes.ends_with(b"ARROW1")
+    {
+        return Err(invalid("V36 super-cell model IPC envelope differs"));
+    }
+    let trailer = bytes.len() - 10;
+    let footer_len = u32::from_le_bytes(
+        bytes[trailer..trailer + 4]
+            .try_into()
+            .map_err(|_| invalid("V36 super-cell model footer length differs"))?,
+    ) as usize;
+    let footer_start = trailer
+        .checked_sub(footer_len)
+        .filter(|offset| *offset >= 8)
+        .ok_or_else(|| invalid("V36 super-cell model footer extent differs"))?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer])
+        .map_err(|_| invalid("V36 super-cell model footer differs"))?;
+    if footer.version() != MetadataVersion::V5
+        || footer
+            .custom_metadata()
+            .is_some_and(|values| !values.is_empty())
+        || footer
+            .dictionaries()
+            .is_some_and(|values| !values.is_empty())
+        || footer.recordBatches().map_or(0, |values| values.len()) != 1
+    {
+        return Err(invalid("V36 super-cell model footer authority differs"));
+    }
+    let metadata = footer
+        .schema()
+        .and_then(|schema| schema.custom_metadata())
+        .ok_or_else(|| invalid("V36 super-cell model manifest is missing"))?;
+    if metadata.len() != 1 || metadata.get(0).key() != Some(SUPERCELL_MODEL_MANIFEST_KEY) {
+        return Err(invalid("V36 super-cell model manifest differs"));
+    }
+    metadata
+        .get(0)
+        .value()
+        .map(str::to_owned)
+        .ok_or_else(|| invalid("V36 super-cell model manifest differs"))
+}
+
+fn validate_v36_supercell_ipc_field(field: arrow_ipc::Field<'_>, expected: &Field) -> Result<()> {
+    if field.name() != Some(expected.name().as_str())
+        || field.nullable()
+        || field.dictionary().is_some()
+        || field
+            .custom_metadata()
+            .is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 super-cell model IPC field differs"));
+    }
+    let children = match expected.data_type() {
+        DataType::Float32 => {
+            if field
+                .type_as_floating_point()
+                .is_none_or(|value| value.precision() != arrow_ipc::Precision::SINGLE)
+            {
+                return Err(invalid("V36 super-cell model IPC float differs"));
+            }
+            Vec::new()
+        }
+        DataType::UInt64 => {
+            if field
+                .type_as_int()
+                .is_none_or(|value| value.bitWidth() != 64 || value.is_signed())
+            {
+                return Err(invalid("V36 super-cell model IPC integer differs"));
+            }
+            Vec::new()
+        }
+        DataType::FixedSizeList(child, width) => {
+            if field
+                .type_as_fixed_size_list()
+                .is_none_or(|value| value.listSize() != *width)
+            {
+                return Err(invalid("V36 super-cell model IPC fixed list differs"));
+            }
+            vec![child.as_ref()]
+        }
+        DataType::List(child) => {
+            if field.type_as_list().is_none() {
+                return Err(invalid("V36 super-cell model IPC list differs"));
+            }
+            vec![child.as_ref()]
+        }
+        _ => return Err(invalid("V36 super-cell model IPC type differs")),
+    };
+    let actual_children = field.children();
+    if actual_children.map_or(0, |values| values.len()) != children.len() {
+        return Err(invalid("V36 super-cell model IPC children differ"));
+    }
+    for (index, child) in children.iter().enumerate() {
+        validate_v36_supercell_ipc_field(
+            actual_children
+                .ok_or_else(|| invalid("V36 super-cell model IPC child is missing"))?
+                .get(index),
+            child,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_v36_supercell_ipc_schema(
+    schema: arrow_ipc::Schema<'_>,
+    expected: &Schema,
+) -> Result<()> {
+    if schema.endianness() != arrow_ipc::Endianness::Little
+        || schema.features().is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 super-cell model IPC schema differs"));
+    }
+    let metadata = schema
+        .custom_metadata()
+        .ok_or_else(|| invalid("V36 super-cell model manifest is missing"))?;
+    let expected_manifest = expected
+        .metadata()
+        .get(SUPERCELL_MODEL_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V36 super-cell model manifest differs"))?;
+    if metadata.len() != 1
+        || metadata.get(0).key() != Some(SUPERCELL_MODEL_MANIFEST_KEY)
+        || metadata.get(0).value() != Some(expected_manifest.as_str())
+    {
+        return Err(invalid("V36 super-cell model manifest differs"));
+    }
+    let fields = schema
+        .fields()
+        .ok_or_else(|| invalid("V36 super-cell model IPC fields are missing"))?;
+    if fields.len() != expected.fields().len() {
+        return Err(invalid("V36 super-cell model IPC field count differs"));
+    }
+    for (index, expected_field) in expected.fields().iter().enumerate() {
+        validate_v36_supercell_ipc_field(fields.get(index), expected_field)?;
+    }
+    Ok(())
+}
+
+fn validate_v36_supercell_ipc_envelope(
+    bytes: &[u8],
+    expected: &Schema,
+    centroid_count: usize,
+    seed_count: usize,
+    reservoir_rows: usize,
+) -> Result<()> {
+    if bytes.len() < 18
+        || bytes.len() > SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES as usize
+        || !bytes.starts_with(b"ARROW1")
+        || !bytes.ends_with(b"ARROW1")
+    {
+        return Err(invalid("V36 super-cell model IPC envelope differs"));
+    }
+    let trailer = bytes.len() - 10;
+    let footer_len = u32::from_le_bytes(
+        bytes[trailer..trailer + 4]
+            .try_into()
+            .map_err(|_| invalid("V36 super-cell model footer length differs"))?,
+    ) as usize;
+    let footer_start = trailer
+        .checked_sub(footer_len)
+        .filter(|offset| *offset >= 8)
+        .ok_or_else(|| invalid("V36 super-cell model footer extent differs"))?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer])
+        .map_err(|_| invalid("V36 super-cell model footer differs"))?;
+    validate_v36_supercell_ipc_schema(
+        footer
+            .schema()
+            .ok_or_else(|| invalid("V36 super-cell model footer schema is missing"))?,
+        expected,
+    )?;
+    if footer
+        .dictionaries()
+        .is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V36 super-cell model dictionaries are forbidden"));
+    }
+    let blocks = footer
+        .recordBatches()
+        .ok_or_else(|| invalid("V36 super-cell model batch is missing"))?;
+    if blocks.len() != 1 {
+        return Err(invalid("V36 super-cell model batch count differs"));
+    }
+    let block = blocks.get(0);
+    let block_offset = usize::try_from(block.offset())
+        .map_err(|_| invalid("V36 super-cell model batch offset differs"))?;
+    let metadata_len = usize::try_from(block.metaDataLength())
+        .map_err(|_| invalid("V36 super-cell model batch metadata differs"))?;
+    let body_len = usize::try_from(block.bodyLength())
+        .map_err(|_| invalid("V36 super-cell model batch body differs"))?;
+    let body_start = block_offset
+        .checked_add(metadata_len)
+        .ok_or_else(|| invalid("V36 super-cell model batch extent overflows"))?;
+    let body_end = body_start
+        .checked_add(body_len)
+        .ok_or_else(|| invalid("V36 super-cell model batch extent overflows"))?;
+    if block_offset < 8 || metadata_len < 8 || body_end > footer_start {
+        return Err(invalid("V36 super-cell model batch extent differs"));
+    }
+    let parse_message = |start: usize, end: usize| {
+        let metadata = bytes
+            .get(start..end)
+            .ok_or_else(|| invalid("V36 super-cell model message extent differs"))?;
+        if metadata.len() < 4 {
+            return Err(invalid("V36 super-cell model message is truncated"));
+        }
+        let prefix = if metadata.starts_with(&[255; 4]) {
+            8
+        } else {
+            4
+        };
+        let length = u32::from_le_bytes(
+            metadata
+                .get(prefix - 4..prefix)
+                .and_then(|value| value.try_into().ok())
+                .ok_or_else(|| invalid("V36 super-cell model message length differs"))?,
+        ) as usize;
+        let message_end = prefix
+            .checked_add(length)
+            .filter(|value| *value <= metadata.len())
+            .ok_or_else(|| invalid("V36 super-cell model message extent differs"))?;
+        arrow_ipc::root_as_message(&metadata[prefix..message_end])
+            .map_err(|_| invalid("V36 super-cell model message differs"))
+    };
+    let leading = parse_message(8, block_offset)?;
+    if leading.version() != MetadataVersion::V5 || leading.bodyLength() != 0 {
+        return Err(invalid("V36 super-cell model leading schema differs"));
+    }
+    validate_v36_supercell_ipc_schema(
+        leading
+            .header_as_schema()
+            .ok_or_else(|| invalid("V36 super-cell model leading schema is missing"))?,
+        expected,
+    )?;
+    let record_message = parse_message(block_offset, body_start)?;
+    let record = record_message
+        .header_as_record_batch()
+        .ok_or_else(|| invalid("V36 super-cell model record differs"))?;
+    if record_message.version() != MetadataVersion::V5
+        || record.compression().is_some()
+        || record
+            .variadicBufferCounts()
+            .is_some_and(|values| !values.is_empty())
+        || record.length() != 1
+        || usize::try_from(record_message.bodyLength()).ok() != Some(body_len)
+    {
+        return Err(invalid("V36 super-cell model record authority differs"));
+    }
+    let nodes = record
+        .nodes()
+        .ok_or_else(|| invalid("V36 super-cell model nodes are missing"))?;
+    let centroid_values = centroid_count
+        .checked_mul(192)
+        .ok_or_else(|| invalid("V36 super-cell model node length overflows"))?;
+    let expected_nodes = [
+        1,
+        centroid_count,
+        centroid_values,
+        1,
+        seed_count,
+        1,
+        reservoir_rows,
+    ];
+    if nodes.len() != expected_nodes.len()
+        || nodes.iter().zip(expected_nodes).any(|(node, length)| {
+            usize::try_from(node.length()).ok() != Some(length) || node.null_count() != 0
+        })
+    {
+        return Err(invalid("V36 super-cell model node shape differs"));
+    }
+    let buffers = record
+        .buffers()
+        .ok_or_else(|| invalid("V36 super-cell model buffers are missing"))?;
+    if buffers.len() != 13 {
+        return Err(invalid("V36 super-cell model buffer count differs"));
+    }
+    let mut slices = Vec::new();
+    slices
+        .try_reserve_exact(13)
+        .map_err(|_| invalid("V36 super-cell model buffer allocation exceeds capacity"))?;
+    let body = &bytes[body_start..body_end];
+    let mut previous_end = 0_usize;
+    for buffer in buffers {
+        let start = usize::try_from(buffer.offset())
+            .map_err(|_| invalid("V36 super-cell model buffer offset differs"))?;
+        let length = usize::try_from(buffer.length())
+            .map_err(|_| invalid("V36 super-cell model buffer length differs"))?;
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| invalid("V36 super-cell model buffer extent overflows"))?;
+        if start < previous_end {
+            return Err(invalid("V36 super-cell model buffers overlap"));
+        }
+        slices.push(
+            body.get(start..end)
+                .ok_or_else(|| invalid("V36 super-cell model buffer extent differs"))?,
+        );
+        previous_end = end;
+    }
+    for (index, count) in [
+        (0, 1),
+        (2, centroid_count),
+        (3, centroid_values),
+        (5, 1),
+        (7, seed_count),
+        (9, 1),
+        (11, reservoir_rows),
+    ] {
+        if !slices[index].is_empty() && slices[index].len() != count.div_ceil(8) {
+            return Err(invalid("V36 super-cell model validity length differs"));
+        }
+    }
+    let centroid_bytes = centroid_values
+        .checked_mul(4)
+        .ok_or_else(|| invalid("V36 super-cell model centroid bytes overflow"))?;
+    let seed_bytes = seed_count
+        .checked_mul(8)
+        .ok_or_else(|| invalid("V36 super-cell model seed bytes overflow"))?;
+    let reservoir_bytes = reservoir_rows
+        .checked_mul(8)
+        .ok_or_else(|| invalid("V36 super-cell model reservoir bytes overflow"))?;
+    for (index, length) in [
+        (1, 8),
+        (4, centroid_bytes),
+        (6, 8),
+        (8, seed_bytes),
+        (10, 8),
+        (12, reservoir_bytes),
+    ] {
+        if slices[index].len() != length {
+            return Err(invalid("V36 super-cell model value length differs"));
+        }
+    }
+    for (index, terminal) in [(1, centroid_count), (6, seed_count), (10, reservoir_rows)] {
+        let offsets = slices[index]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|value| i32::from_le_bytes(*value))
+            .collect::<Vec<_>>();
+        if offsets != [0, i32::try_from(terminal).unwrap_or(-1)] {
+            return Err(invalid("V36 super-cell model list offsets differ"));
+        }
+    }
+    Ok(())
+}
+
+/// Encode one trained V36 super-cell model as strict cross-language Arrow IPC.
+pub fn encode_v36_supercell_model_arrow(
+    model: &V36SupercellModel,
+    spec: &V36SupercellTrainingSpec,
+    role: &str,
+    uri: &str,
+) -> Result<(Vec<u8>, V36ArtifactIdentity)> {
+    validate_v36_supercell_model(model, spec)?;
+    if role != SUPERCELL_MODEL_ROLE || !valid_v36_supercell_model_uri(uri) {
+        return Err(invalid("V36 super-cell model artifact identity differs"));
+    }
+    let vector_child = Arc::new(Field::new("element", DataType::Float32, false));
+    let centroid_values = Arc::new(FixedSizeListArray::try_new(
+        vector_child.clone(),
+        192,
+        Arc::new(Float32Array::from_iter_values(
+            model.centroids.iter().flatten().copied(),
+        )),
+        None,
+    )?);
+    let centroid_child = Arc::new(Field::new(
+        "element",
+        DataType::FixedSizeList(vector_child, 192),
+        false,
+    ));
+    let centroids = Arc::new(ListArray::new(
+        centroid_child.clone(),
+        v36_supercell_list_offsets(model.centroids.len())?,
+        centroid_values,
+        None,
+    ));
+    let ordinal_child = Arc::new(Field::new("element", DataType::UInt64, false));
+    let initialization = Arc::new(ListArray::new(
+        ordinal_child.clone(),
+        v36_supercell_list_offsets(model.initialization_source_ordinals.len())?,
+        Arc::new(UInt64Array::from(
+            model.initialization_source_ordinals.clone(),
+        )),
+        None,
+    ));
+    let reservoir = Arc::new(ListArray::new(
+        ordinal_child.clone(),
+        v36_supercell_list_offsets(model.reservoir_source_ordinals.len())?,
+        Arc::new(UInt64Array::from(model.reservoir_source_ordinals.clone())),
+        None,
+    ));
+    let manifest = V36SupercellModelManifest {
+        algorithm: SUPERCELL_MODEL_ALGORITHM.to_owned(),
+        empty_repairs: model.empty_repairs,
+        format: SUPERCELL_MODEL_FORMAT.to_owned(),
+        role: role.to_owned(),
+        training: spec.clone(),
+        uri: uri.to_owned(),
+    };
+    let metadata = HashMap::from([(
+        SUPERCELL_MODEL_MANIFEST_KEY.to_owned(),
+        canonical_v36_supercell_manifest(&manifest)?,
+    )]);
+    let schema = Arc::new(v36_supercell_model_schema(
+        metadata
+            .get(SUPERCELL_MODEL_MANIFEST_KEY)
+            .expect("manifest was inserted")
+            .clone(),
+    ));
+    let batch = RecordBatch::try_new(schema.clone(), vec![centroids, initialization, reservoir])?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    let encoded_bytes = u64::try_from(bytes.len())
+        .map_err(|_| invalid("V36 super-cell model artifact length overflows"))?;
+    if encoded_bytes > SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES {
+        return Err(invalid("V36 super-cell model exceeds encoded admission"));
+    }
+    let identity = V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes,
+        role: role.to_owned(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri: uri.to_owned(),
+    };
+    Ok((bytes, identity))
+}
+
+/// Authenticate and decode one exact V36 super-cell Arrow model.
+pub fn decode_v36_supercell_model_arrow(
+    bytes: &[u8],
+    identity: &V36ArtifactIdentity,
+    expected_training: &V36SupercellTrainingSpec,
+) -> Result<V36SupercellModel> {
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if identity.role != SUPERCELL_MODEL_ROLE
+        || !valid_v36_supercell_model_uri(&identity.uri)
+        || identity.encoded_bytes != encoded_bytes
+        || encoded_bytes > SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
+        || !valid_sha256(&identity.sha256)
+        || !valid_sha256(&identity.blake3)
+        || identity.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 super-cell model artifact identity differs"));
+    }
+    let manifest_text = v36_supercell_untrusted_manifest(bytes)?;
+    let manifest: V36SupercellModelManifest = serde_json::from_str(&manifest_text)
+        .map_err(|_| invalid("V36 super-cell model manifest differs"))?;
+    let expected_schema = v36_supercell_model_schema(manifest_text.clone());
+    if canonical_v36_supercell_manifest(&manifest)? != manifest_text
+        || manifest.algorithm != SUPERCELL_MODEL_ALGORITHM
+        || manifest.format != SUPERCELL_MODEL_FORMAT
+        || manifest.role != identity.role
+        || manifest.uri != identity.uri
+        || manifest.training != *expected_training
+    {
+        return Err(invalid("V36 super-cell model manifest differs"));
+    }
+    validate_v36_supercell_ipc_envelope(
+        bytes,
+        &expected_schema,
+        usize::try_from(expected_training.super_cell_count)
+            .map_err(|_| invalid("V36 super-cell count overflows"))?,
+        usize::try_from(expected_training.super_cell_count)
+            .map_err(|_| invalid("V36 super-cell count overflows"))?,
+        usize::try_from(expected_training.reservoir_rows)
+            .map_err(|_| invalid("V36 super-cell reservoir row count overflows"))?,
+    )?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    let schema = reader.schema();
+    if reader.num_batches() != 1 || schema.as_ref() != &expected_schema {
+        return Err(invalid("V36 super-cell model Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .ok_or_else(|| invalid("V36 super-cell model batch is missing"))??;
+    if batch.num_rows() != 1 || batch.num_columns() != 3 || reader.next().is_some() {
+        return Err(invalid("V36 super-cell model batch differs"));
+    }
+    let list = |column: usize| -> Result<&ListArray> {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .filter(|array| array.null_count() == 0)
+            .ok_or_else(|| invalid("V36 super-cell model list differs"))
+    };
+    let centroid_list = list(0)?;
+    let centroid_array = centroid_list.value(0);
+    let centroid_array = centroid_array
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .filter(|array| array.null_count() == 0 && array.value_length() == 192)
+        .ok_or_else(|| invalid("V36 super-cell model centroids differ"))?;
+    let centroid_values = centroid_array
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .filter(|array| array.null_count() == 0)
+        .ok_or_else(|| invalid("V36 super-cell model centroids differ"))?;
+    let (centroids, remainder) = centroid_values.values().as_chunks::<192>();
+    if !remainder.is_empty() {
+        return Err(invalid("V36 super-cell model centroids differ"));
+    }
+    let centroids = centroids.to_vec();
+    let ordinal_values = |column: usize| -> Result<Vec<u64>> {
+        let values = list(column)?.value(0);
+        let values = values
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .filter(|array| array.null_count() == 0)
+            .ok_or_else(|| invalid("V36 super-cell model ordinals differ"))?;
+        Ok(values.values().to_vec())
+    };
+    let model = V36SupercellModel {
+        centroids,
+        empty_repairs: manifest.empty_repairs,
+        initialization_source_ordinals: ordinal_values(1)?,
+        projected_corpus_sha256: manifest.training.projected_corpus_sha256.clone(),
+        reservoir_source_ordinals: ordinal_values(2)?,
+    };
+    validate_v36_supercell_model(&model, expected_training)?;
+    Ok(model)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
