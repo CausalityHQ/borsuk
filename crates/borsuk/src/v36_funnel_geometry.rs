@@ -2644,7 +2644,9 @@ impl V36CommittedSupercellAssignments {
 pub struct V36InitialAssignmentMergeGroup {
     group_ordinal: u64,
     input_range: std::ops::Range<usize>,
-    output_uri: String,
+    output_chunk_count: u64,
+    output_root_uri: String,
+    output_row_count: u64,
 }
 
 impl V36InitialAssignmentMergeGroup {
@@ -2658,9 +2660,19 @@ impl V36InitialAssignmentMergeGroup {
         self.input_range.clone()
     }
 
-    /// Attempt-private URI reserved for this globally sorted output run.
-    pub fn output_uri(&self) -> &str {
-        &self.output_uri
+    /// Number of fixed-size Arrow chunks in this output run.
+    pub const fn output_chunk_count(&self) -> u64 {
+        self.output_chunk_count
+    }
+
+    /// Attempt-private canonical root URI reserved for this output run.
+    pub fn output_root_uri(&self) -> &str {
+        &self.output_root_uri
+    }
+
+    /// Exact number of globally sorted rows in this output run.
+    pub const fn output_row_count(&self) -> u64 {
+        self.output_row_count
     }
 }
 
@@ -2738,17 +2750,36 @@ pub fn plan_v36_initial_assignment_merge_generation(
             .min(committed.artifacts.len());
         let group_ordinal_u64 = u64::try_from(group_ordinal)
             .map_err(|_| invalid("V36 assignment merge group ordinal overflows"))?;
-        let output_uri = format!(
-            "{}/merge/generation-{:06}/run-{group_ordinal_u64:06}.arrow",
+        let output_row_count = committed.artifacts[input_start..input_end]
+            .iter()
+            .try_fold(0_u64, |rows, artifact| {
+                rows.checked_add(u64::from(artifact.row_count))
+                    .ok_or_else(|| invalid("V36 assignment merge output rows overflow"))
+            })?;
+        if output_row_count == 0 {
+            return Err(invalid("V36 assignment merge output rows differ"));
+        }
+        let output_chunk_count = output_row_count.div_ceil(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS);
+        let output_run_prefix = format!(
+            "{}/merge/generation-{:06}/run-{group_ordinal_u64:06}",
             committed.uri_prefix, generation.generation_ordinal
         );
-        if !valid_v36_supercell_model_uri(&output_uri) {
+        let output_root_uri = format!("{output_run_prefix}/root.json");
+        let last_chunk_uri = format!(
+            "{output_run_prefix}/chunk-{:06}.arrow",
+            output_chunk_count - 1
+        );
+        if !valid_v36_supercell_model_uri(&output_root_uri)
+            || !valid_v36_supercell_model_uri(&last_chunk_uri)
+        {
             return Err(invalid("V36 assignment merge output URI differs"));
         }
         groups.push(V36InitialAssignmentMergeGroup {
             group_ordinal: group_ordinal_u64,
             input_range: input_start..input_end,
-            output_uri,
+            output_chunk_count,
+            output_root_uri,
+            output_row_count,
         });
     }
     Ok(Some(V36InitialAssignmentMergeGeneration {
@@ -6545,11 +6576,11 @@ mod tests {
         // Break caught: the external builder invents groups from callback or
         // worker scheduling instead of the authenticated assignment root.
         let training_spec = V36SupercellTrainingSpec {
-            corpus_rows: 17,
+            corpus_rows: 1_048_577,
             dimensions: 192,
-            maximum_block_rows: 17,
+            maximum_block_rows: 65_536,
             projected_corpus_sha256: "1".repeat(64),
-            reservoir_rows: 17,
+            reservoir_rows: 65_536,
             super_cell_count: 4,
         };
         let model_identity = V36ArtifactIdentity {
@@ -6606,7 +6637,7 @@ mod tests {
                     ),
                 },
                 encoded_bytes: 1,
-                row_count: 1,
+                row_count: if shard_ordinal == 16 { 1 } else { 65_536 },
                 sha256: format!("{:064x}", shard_ordinal + 17),
             })
             .collect::<Vec<_>>();
@@ -6641,24 +6672,32 @@ mod tests {
                 .map(|group| (
                     group.group_ordinal(),
                     group.input_range(),
-                    group.output_uri(),
+                    group.output_row_count(),
+                    group.output_chunk_count(),
+                    group.output_root_uri(),
                 ))
                 .collect::<Vec<_>>(),
             vec![
                 (
                     0,
                     0..8,
-                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000000.arrow",
+                    524_288,
+                    8,
+                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000000/root.json",
                 ),
                 (
                     1,
                     8..16,
-                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000001.arrow",
+                    524_288,
+                    8,
+                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000001/root.json",
                 ),
                 (
                     2,
                     16..17,
-                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000002.arrow",
+                    1,
+                    1,
+                    "s3://borsuk-v36-test/geometry/assignments/merge/generation-000000/run-000002/root.json",
                 ),
             ]
         );
