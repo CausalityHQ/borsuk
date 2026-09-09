@@ -446,10 +446,10 @@ fn v36_geometry_supercell_model_round_trips_strict_authenticated_arrow() {
     assert_eq!(identity.role, "supercell-model");
     assert_eq!(identity.uri, uri);
     assert_eq!(identity.encoded_bytes, bytes.len() as u64);
-    assert_eq!(
-        decode_v36_supercell_model_arrow(&bytes, &identity, &spec).unwrap(),
-        model
-    );
+    let loaded = decode_v36_supercell_model_arrow(&bytes, &identity, &spec).unwrap();
+    assert_eq!(loaded.model(), &model);
+    assert_eq!(loaded.identity(), &identity);
+    assert_eq!(loaded.training_spec(), &spec);
 
     let mut changed_identity = identity.clone();
     changed_identity.sha256 = "0".repeat(64);

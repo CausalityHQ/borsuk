@@ -1609,6 +1609,31 @@ pub struct V36SupercellModel {
     reservoir_source_ordinals: Vec<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+/// Super-cell model inseparably bound to its authenticated artifact and training authority.
+pub struct V36AuthenticatedSupercellModel {
+    identity: V36ArtifactIdentity,
+    model: V36SupercellModel,
+    training_spec: V36SupercellTrainingSpec,
+}
+
+impl V36AuthenticatedSupercellModel {
+    /// Complete immutable Arrow artifact identity authenticated at load time.
+    pub fn identity(&self) -> &V36ArtifactIdentity {
+        &self.identity
+    }
+
+    /// Decoded model retained behind the authenticated handle.
+    pub fn model(&self) -> &V36SupercellModel {
+        &self.model
+    }
+
+    /// Exact training authority authenticated from the artifact manifest.
+    pub fn training_spec(&self) -> &V36SupercellTrainingSpec {
+        &self.training_spec
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct V36SupercellModelManifest {
@@ -2203,7 +2228,7 @@ pub fn decode_v36_supercell_model_arrow(
     bytes: &[u8],
     identity: &V36ArtifactIdentity,
     expected_training: &V36SupercellTrainingSpec,
-) -> Result<V36SupercellModel> {
+) -> Result<V36AuthenticatedSupercellModel> {
     let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if identity.role != SUPERCELL_MODEL_ROLE
         || !valid_v36_supercell_model_uri(&identity.uri)
@@ -2293,7 +2318,11 @@ pub fn decode_v36_supercell_model_arrow(
         reservoir_source_ordinals: ordinal_values(2)?,
     };
     validate_v36_supercell_model(&model, expected_training)?;
-    Ok(model)
+    Ok(V36AuthenticatedSupercellModel {
+        identity: identity.clone(),
+        model,
+        training_spec: expected_training.clone(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

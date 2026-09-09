@@ -366,8 +366,9 @@ pub use v36_funnel_code::{
 };
 #[doc(hidden)]
 pub use v36_funnel_geometry::{
-    V36_POSTING_ACCELERATOR_EF_LADDER, V36AuthenticatedPostingCentroids, V36CenteredProjectedRow,
-    V36CenteredProjection, V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
+    V36_POSTING_ACCELERATOR_EF_LADDER, V36AuthenticatedPostingCentroids,
+    V36AuthenticatedSupercellModel, V36CenteredProjectedRow, V36CenteredProjection,
+    V36CenteredProjectionBlockVisitor, V36CenteredProjectionSource,
     V36CenteredProjectionTrainingSpec, V36CenteredSampleRole, V36ExactAssignmentPreflight,
     V36GeometryAdmission, V36GeometryStop, V36PostingAcceleratorKind,
     V36PostingAcceleratorObservation, V36PostingAssignments,
