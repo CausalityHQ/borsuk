@@ -360,7 +360,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         assert_eq!(projected.merge_generations, merges);
         assert_eq!(projected.uncompressed_assignment_bytes, encoded);
         assert_eq!(projected.required_scratch_bytes, scratch);
-        assert_eq!(projected.required_peak_live_bytes, 425_721_856);
+        assert_eq!(projected.required_peak_live_bytes, 630_784_000);
         assert_eq!(projected.component_terms, terms);
         assert_eq!(projected.external_work_units, external);
         assert_eq!(projected.projected_active_ns, terms + external);
@@ -382,7 +382,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         project_v36_supercell_assignment_admission(&spec, 16 * 1_048_576, &one_worker)
             .unwrap()
             .required_peak_live_bytes,
-        221_315_072
+        630_784_000
     );
 }
 

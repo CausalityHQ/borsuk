@@ -2623,19 +2623,33 @@ pub fn project_v36_supercell_assignment_admission(
         .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
         .and_then(|bytes| bytes.checked_mul(u64::from(request.worker_count)))
         .ok_or_else(|| invalid("V36 external assignment worker bytes overflow"))?;
-    let canonicalization_bytes = spec
-        .corpus_rows
-        .min(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+    let maximum_shard_rows = spec.corpus_rows.min(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS);
+    let canonicalization_bytes = maximum_shard_rows
         .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
         .and_then(|bytes| bytes.checked_mul(4))
         .and_then(|bytes| bytes.checked_add(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES))
         .ok_or_else(|| invalid("V36 external assignment canonicalization bytes overflow"))?;
+    let merge_reader_count = if logical_shards > 1 {
+        logical_shards.min(u64::from(request.merge_fan_in))
+    } else {
+        0
+    };
+    let merge_phase_bytes = maximum_shard_rows
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
+        .and_then(|bytes| bytes.checked_add(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES))
+        .and_then(|bytes| bytes.checked_mul(merge_reader_count))
+        .and_then(|bytes| bytes.checked_add(canonicalization_bytes))
+        .ok_or_else(|| invalid("V36 external assignment merge memory overflows"))?;
     let required_scratch_bytes = uncompressed_assignment_bytes
         .checked_mul(2)
         .and_then(|bytes| bytes.checked_add(aggregate_worker_bytes))
         .ok_or_else(|| invalid("V36 external assignment scratch bytes overflow"))?;
     let required_peak_live_bytes = SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
-        .checked_add(aggregate_worker_bytes.max(canonicalization_bytes))
+        .checked_add(
+            aggregate_worker_bytes
+                .max(canonicalization_bytes)
+                .max(merge_phase_bytes),
+        )
         .ok_or_else(|| invalid("V36 external assignment live bytes overflow"))?;
     let component_terms = u128::from(spec.corpus_rows)
         .checked_mul(u128::from(spec.super_cell_count))
