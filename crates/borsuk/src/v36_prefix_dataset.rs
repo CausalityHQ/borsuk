@@ -10963,6 +10963,16 @@ fn load_v36_prefix_checkpoint_source_ids(path: &Path, expected_rows: u64) -> Res
     Ok(ids)
 }
 
+/// Load the exact ordered feature IDs from an already authenticated V36 source
+/// Parquet without decoding its embedding column.
+///
+/// The offline geometry oracle uses this bounded identity-only pass to reuse
+/// the prefix-freeze schema and membership validation. Complete-object byte
+/// authentication remains the caller's mandatory preceding boundary.
+pub fn load_v36_prefix_source_feature_ids(path: &Path, expected_rows: u64) -> Result<Vec<u64>> {
+    load_v36_prefix_checkpoint_source_ids(path, expected_rows)
+}
+
 fn load_v36_prefix_checkpoint_queries(
     artifacts: &V36PrefixMaterializedCheckpointFiles,
 ) -> Result<[Vec<V36PrefixQueryRow>; 3]> {

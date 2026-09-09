@@ -1,6 +1,56 @@
 //! V36 geometry construction work and admission contracts.
 
-use borsuk::project_v36_exact_assignment_preflight;
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+use arrow_schema::{DataType, Field};
+use borsuk::{
+    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
+    v36_prefix_source_schema, write_v36_prefix_source_parquet,
+};
+
+const SOURCE_DIMENSIONS: usize = 768;
+
+fn source_batch(feature_ids: Vec<u64>) -> RecordBatch {
+    let rows = feature_ids.len();
+    let child = Arc::new(Field::new("item", DataType::Float32, false));
+    let mut values = vec![0.0_f32; rows * SOURCE_DIMENSIONS];
+    for row in 0..rows {
+        values[row * SOURCE_DIMENSIONS + row % SOURCE_DIMENSIONS] = 1.0;
+    }
+    let embeddings = FixedSizeListArray::try_new(
+        child,
+        SOURCE_DIMENSIONS as i32,
+        Arc::new(Float32Array::from(values)),
+        None,
+    )
+    .unwrap();
+    RecordBatch::try_new(
+        Arc::new(v36_prefix_source_schema()),
+        vec![
+            Arc::new(UInt64Array::from(feature_ids)) as ArrayRef,
+            Arc::new(embeddings),
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn v36_geometry_inputs_reuse_strict_prefix_source_membership_scan() {
+    // Break caught: geometry invents a second source schema or decodes every
+    // embedding merely to establish the authenticated corpus ID order.
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.parquet");
+    let feature_ids = (7_u64..108).collect::<Vec<_>>();
+    write_v36_prefix_source_parquet(&source, &feature_ids, [source_batch(feature_ids.clone())])
+        .unwrap();
+    assert_eq!(
+        load_v36_prefix_source_feature_ids(&source, 101).unwrap(),
+        feature_ids
+    );
+    assert!(load_v36_prefix_source_feature_ids(&source, 100).is_err());
+    assert!(load_v36_prefix_source_feature_ids(&source, 102).is_err());
+}
 
 #[test]
 fn v36_geometry_preflight_projects_exact_assignment_work_before_corpus_execution() {
