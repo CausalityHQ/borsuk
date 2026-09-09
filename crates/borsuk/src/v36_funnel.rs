@@ -8,7 +8,7 @@ use crate::{BorsukError, Result};
 const FORMAT: &str = "borsuk-v36-funnel-manifest-v3";
 const PROJECTION_DIMENSIONS: u16 = 192;
 const PROJECTION_SEED: u64 = 36;
-const COARSE_FRAGMENT_LIMIT_BYTES: u64 = 512 * 1_024;
+const COARSE_FRAGMENT_LIMIT_BYTES: u64 = 1_024 * 1_024;
 const NORMAL_GET_LIMIT: u16 = 14;
 const NORMAL_BYTE_LIMIT: u64 = 7 * 1_048_576;
 const HARD_GET_LIMIT: u16 = 16;

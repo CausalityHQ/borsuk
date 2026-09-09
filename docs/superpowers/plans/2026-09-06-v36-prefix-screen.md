@@ -450,7 +450,14 @@ conversion remains because BORSUK is prerelease.
   coarse admission: the first non-fitting posting stops the suffix, so
   cumulative byte frontiers remain monotone. Preflight complete authenticated
   fragment GETs/bytes with checked arithmetic; any fragment failure rejects
-  the query without partial-posting candidates.
+  the query without partial-posting candidates. Encode only sign24/PQ serving
+  fragments as one-batch, uncompressed IPC V5 Arrow files under the registered
+  1-MiB ceiling; projected-f32 is an offline oracle over the exact identities
+  admitted by the tested code arm, not a transport arm. Require strict typed
+  sign norm and code columns, generation/projection/owner/codebook manifest
+  bindings, bounded FlatBuffer preflight before allocation, generation-time
+  SHA-256 plus cache-admission BLAKE3, and Rust/PyArrow logical interoperability
+  without claiming cross-writer byte equality.
 
 - [ ] **Step 3: Write complete fine-object REDs**
 

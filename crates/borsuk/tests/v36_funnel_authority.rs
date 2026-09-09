@@ -257,6 +257,25 @@ fn v36_funnel_authority_accepts_sparse_replica_fragment_ordinals() {
 }
 
 #[test]
+fn v36_funnel_authority_uses_registered_one_mib_coarse_fragments() {
+    // Break caught: the old 512-KiB ceiling splits an 8,192-row PQ4-48
+    // posting solely because of the Arrow envelope and wastes the GET budget.
+    let one_mib = V36TransportPosting {
+        fragments: vec![fragment(7, 0, 1_024, 0)],
+        posting_ordinal: 7,
+        stored_assignment_rows: 1_000,
+    };
+    assert!(V36TransportDirectory::try_new(vec![one_mib]).is_ok());
+
+    let too_large = V36TransportPosting {
+        fragments: vec![fragment(8, 0, 1_025, 0)],
+        posting_ordinal: 8,
+        stored_assignment_rows: 1_000,
+    };
+    assert!(V36TransportDirectory::try_new(vec![too_large]).is_err());
+}
+
+#[test]
 fn v36_funnel_authority_plans_atomic_postings_with_normal_and_retry_caps() {
     // Break caught: the planner partially admits a posting, treats concurrency
     // as fewer GETs, ignores decoder capacity/retries, or widens the envelope.
@@ -378,9 +397,9 @@ fn v36_funnel_authority_projects_checked_resident_and_remote_resources() {
     assert_eq!(projected.projection_bytes, 589_824);
     assert_eq!(projected.super_centroid_bytes, 393_216);
     assert_eq!(projected.posting_summary_bytes, 115_629_440);
-    assert_eq!(projected.minimum_coarse_fragment_count, 18_311);
+    assert_eq!(projected.minimum_coarse_fragment_count, 9_156);
     assert_eq!(projected.minimum_fine_chunk_count, 299_073);
-    assert_eq!(projected.minimum_posting_object_directory_bytes, 25_781_360);
+    assert_eq!(projected.minimum_posting_object_directory_bytes, 25_048_960);
     assert_eq!(projected.minimum_fine_interval_directory_bytes, 4_785_168);
     assert_eq!(projected.directory_bytes, 67_108_864);
     assert_eq!(projected.delta_coarse_and_csr_bytes, 402_653_184);

@@ -611,12 +611,26 @@ there is no repeated per-row quantization metadata or hidden side object. The
 offline source-f32 control reranks the exact same admitted rows. Selection and
 layout freeze precede codec evaluation.
 
-Coarse objects are also complete authenticated Arrow IPC files. Each object is
-one posting fragment; its manifest, rather than a repeated per-row column,
-binds `posting_ordinal:u32`. Its strict columns are non-null
-`dense_ordinal:u64`, `source_feature_id:u64`, and the arm's fixed-size-binary
-code. Rows are ordered by `dense_ordinal` and greedily fragmented without
-exceeding 512 KiB encoded. The resident posting directory binds every
+Serving coarse objects are complete authenticated Arrow IPC files for sign24,
+PQ4-32, and PQ4-48 only. Projected-f32 remains an offline diagnostic keyed by
+dense ordinal: it scores the exact identities admitted by the candidate code
+arm and never gets its own transport plan. This prevents its 784-byte rows from
+changing the posting prefix whose representation loss it is meant to measure.
+
+Each coarse object is one posting fragment with one uncompressed IPC V5 file
+batch. Its canonical manifest, rather than a repeated per-row column, binds the
+format version, arm, `posting_ordinal:u32`, fragment ordinal, first and last
+dense ordinals, row count, generation-manifest SHA-256, projection SHA-256,
+owner-centroid-set SHA-256, and the PQ codebook SHA-256 when applicable. Sign24
+uses strict non-null columns `dense_ordinal:u64`, `source_feature_id:u64`,
+`code:fixed_size_binary[24]`, and `residual_norm:f32`; PQ uses the first two
+columns plus `code:fixed_size_binary[32|48]`. A sign norm must be finite,
+non-negative, and not negative zero, and a zero norm requires all-zero sign
+bytes. Rows are ordered by `dense_ordinal`; source IDs are unique within the
+owner posting and may repeat across owner postings as intended replicas. Rows
+are greedily fragmented without exceeding the registered 1 MiB coarse-object
+ceiling. All fragments except the last use the maximum row count whose complete
+serialized object fits. The resident posting directory binds every
 fragment's URI, SHA-256, BLAKE3, length, first and last dense ordinals, and row
 count. Dense ordinals increase within and across fragments but need not be
 contiguous: replica postings are sparse views of the primary fine plane. The
@@ -630,7 +644,15 @@ and stops; it never skips a dense posting to admit lower-ranked work. Partial
 postings are never scored. The
 projected-f32 diagnostic scores the exact rows admitted by a candidate code
 layout using offline projected rows; it does not introduce f32 serving objects.
-All fragment costs are authenticated and checked before any fragment of a
+The directory is SHA-256-audited once at generation admission; a fetched body
+is BLAKE3-authenticated once at bounded cache admission rather than dual-hashed
+again on every query. Before Arrow allocation, a bounded FlatBuffer preflight
+checks exact file magic/footer, IPC V5, little-endian schema, one batch, exact
+node/buffer extents, null counts, dictionary absence, compression absence, and
+the derived encoded/decoded workspace limit. The registered Rust writer owns
+byte determinism; independently hashed PyArrow fixtures must decode to the same
+logical rows, including unsigned IDs above `2^63`, but foreign writers need not
+emit byte-identical padding. All fragment costs are authenticated and checked before any fragment of a
 posting is scored. Authentication, decode, width, owner, or allocation failure
 fails the query and rolls back that posting; it cannot return candidates from
 successful sibling fragments. The prefix receipt stores the first excluded
