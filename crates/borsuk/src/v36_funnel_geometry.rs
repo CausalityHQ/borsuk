@@ -2989,6 +2989,71 @@ pub struct V36PostingAssignments {
     admission: V36GeometryAdmission,
 }
 
+/// Checked exact-assignment work and measured-throughput projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V36ExactAssignmentPreflight {
+    /// Exact number of posting distances evaluated over the population.
+    pub distance_evaluations: u128,
+    /// Exact scalar component terms in those posting distances.
+    pub component_terms: u128,
+    /// Exact primary posting count implied by the target occupancy.
+    pub posting_count: u64,
+    /// Ceiling-scaled active time from the registered measured kernel sample.
+    pub projected_active_ns: u128,
+    /// Whether the projected active time is inside the registered wall cap.
+    pub within_active_wall_cap: bool,
+}
+
+/// Project exact global-assignment work from one bounded measured kernel sample.
+///
+/// This is an outcome-blind construction preflight: it can stop an infeasible
+/// corpus run before loading scientific vectors, without making a quality claim.
+pub fn project_v36_exact_assignment_preflight(
+    rows: u64,
+    dimensions: u32,
+    target_primary_rows: u64,
+    measured_rows: u64,
+    measured_postings: u32,
+    measured_elapsed_ns: u64,
+    maximum_active_wall_seconds: u64,
+) -> Result<V36ExactAssignmentPreflight> {
+    if rows == 0
+        || dimensions == 0
+        || target_primary_rows == 0
+        || measured_rows == 0
+        || measured_postings == 0
+        || measured_elapsed_ns == 0
+        || maximum_active_wall_seconds == 0
+    {
+        return Err(invalid("V36 exact-assignment preflight authority differs"));
+    }
+    let posting_count = rows.div_ceil(target_primary_rows);
+    let distance_evaluations = u128::from(rows)
+        .checked_mul(u128::from(posting_count))
+        .ok_or_else(|| invalid("V36 exact-assignment work overflows"))?;
+    let component_terms = distance_evaluations
+        .checked_mul(u128::from(dimensions))
+        .ok_or_else(|| invalid("V36 exact-assignment work overflows"))?;
+    let measured_component_terms = u128::from(measured_rows)
+        .checked_mul(u128::from(measured_postings))
+        .and_then(|value| value.checked_mul(u128::from(dimensions)))
+        .ok_or_else(|| invalid("V36 measured assignment work overflows"))?;
+    let projected_active_ns = component_terms
+        .checked_mul(u128::from(measured_elapsed_ns))
+        .ok_or_else(|| invalid("V36 projected assignment time overflows"))?
+        .div_ceil(measured_component_terms);
+    let maximum_active_ns = u128::from(maximum_active_wall_seconds)
+        .checked_mul(1_000_000_000)
+        .ok_or_else(|| invalid("V36 active wall cap overflows"))?;
+    Ok(V36ExactAssignmentPreflight {
+        distance_evaluations,
+        component_terms,
+        posting_count,
+        projected_active_ns,
+        within_active_wall_cap: projected_active_ns <= maximum_active_ns,
+    })
+}
+
 impl V36PostingAssignments {
     /// Unique source ordinals in canonical row order.
     pub fn source_ordinals(&self) -> &[u64] {
