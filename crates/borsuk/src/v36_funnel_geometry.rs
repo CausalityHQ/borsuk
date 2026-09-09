@@ -1607,6 +1607,8 @@ const V36_EXTERNAL_ASSIGNMENT_FORMAT: &str = "borsuk-v36-supercell-assignment-ar
 const V36_EXTERNAL_ASSIGNMENT_ROLE: &str = "supercell-assignment-shard";
 const V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY: &str = "borsuk.v36.supercell_assignment.manifest";
 const V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES: u64 = 64 * 1_048_576;
+const V36_EXTERNAL_ASSIGNMENT_ROOT_FORMAT: &str = "borsuk-v36-supercell-assignment-root-v1";
+const V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE: &str = "supercell-assignment-root";
 const V36_SUPERCELL_RUN_CHUNK_FORMAT: &str = "borsuk-v36-supercell-run-chunk-arrow-v1";
 const V36_SUPERCELL_RUN_CHUNK_ROLE: &str = "supercell-run-chunk";
 const V36_SUPERCELL_RUN_CHUNK_MANIFEST_KEY: &str = "borsuk.v36.supercell_run_chunk.manifest";
@@ -1695,6 +1697,40 @@ struct V36SupercellAssignmentShardManifest {
     format: String,
     role: String,
     row_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct V36SupercellAssignmentShardArtifactWire {
+    blake3: String,
+    context: V36SupercellAssignmentShardContextWire,
+    encoded_bytes: u64,
+    row_count: u32,
+    sha256: String,
+}
+
+impl From<&V36SupercellAssignmentShardArtifact> for V36SupercellAssignmentShardArtifactWire {
+    fn from(artifact: &V36SupercellAssignmentShardArtifact) -> Self {
+        Self {
+            blake3: artifact.blake3.clone(),
+            context: (&artifact.context).into(),
+            encoded_bytes: artifact.encoded_bytes,
+            row_count: artifact.row_count,
+            sha256: artifact.sha256.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct V36CommittedSupercellAssignmentsManifest {
+    artifacts: Vec<V36SupercellAssignmentShardArtifactWire>,
+    format: String,
+    merge_fan_in: u8,
+    merge_schedule: Vec<V36ExternalMergeGenerationProjection>,
+    model_identity: V36ArtifactIdentity,
+    projected_corpus_sha256: String,
+    role: String,
+    training_spec: V36SupercellTrainingSpec,
+    uri_prefix: String,
 }
 
 /// Bind one assignment shard to a previously authenticated model handle.
@@ -2560,8 +2596,13 @@ pub trait V36SupercellAssignmentShardSink {
         artifact: &V36SupercellAssignmentShardArtifact,
     ) -> Result<()>;
 
-    /// Publish the complete ordered shard set after corpus replay succeeds.
-    fn commit(&mut self, artifacts: &[V36SupercellAssignmentShardArtifact]) -> Result<()>;
+    /// Publish the canonical root last after complete corpus replay succeeds.
+    fn commit(
+        &mut self,
+        artifacts: &[V36SupercellAssignmentShardArtifact],
+        root_bytes: &[u8],
+        root_identity: &V36ArtifactIdentity,
+    ) -> Result<()>;
 
     /// Remove every provisional shard written by this transaction.
     fn abort(&mut self) -> Result<()>;
@@ -2572,6 +2613,7 @@ pub trait V36SupercellAssignmentShardSink {
 pub struct V36CommittedSupercellAssignments {
     admission: V36AdmittedSupercellAssignmentPreflight,
     artifacts: Vec<V36SupercellAssignmentShardArtifact>,
+    root_identity: V36ArtifactIdentity,
     uri_prefix: String,
 }
 
@@ -2586,10 +2628,64 @@ impl V36CommittedSupercellAssignments {
         &self.admission
     }
 
+    /// Canonical root identity published after every provisional shard.
+    pub const fn root_identity(&self) -> &V36ArtifactIdentity {
+        &self.root_identity
+    }
+
     /// Stable logical URI prefix shared by the committed shards.
     pub fn uri_prefix(&self) -> &str {
         &self.uri_prefix
     }
+}
+
+fn v36_committed_assignment_root(
+    admission: &V36AdmittedSupercellAssignmentPreflight,
+    artifacts: &[V36SupercellAssignmentShardArtifact],
+    uri_prefix: &str,
+) -> Result<(Vec<u8>, V36ArtifactIdentity)> {
+    let mut artifact_wires = Vec::new();
+    artifact_wires
+        .try_reserve_exact(artifacts.len())
+        .map_err(|_| invalid("V36 assignment root inventory exceeds capacity"))?;
+    artifact_wires.extend(
+        artifacts
+            .iter()
+            .map(V36SupercellAssignmentShardArtifactWire::from),
+    );
+    let manifest = V36CommittedSupercellAssignmentsManifest {
+        artifacts: artifact_wires,
+        format: V36_EXTERNAL_ASSIGNMENT_ROOT_FORMAT.to_owned(),
+        merge_fan_in: admission.projection.merge_fan_in,
+        merge_schedule: admission.projection.merge_schedule()?,
+        model_identity: admission.model_identity.clone(),
+        projected_corpus_sha256: admission.training_spec.projected_corpus_sha256.clone(),
+        role: V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE.to_owned(),
+        training_spec: admission.training_spec.clone(),
+        uri_prefix: uri_prefix.to_owned(),
+    };
+    let mut bytes = serde_json::to_vec(&v36_canonical_json_value(
+        serde_json::to_value(manifest)
+            .map_err(|_| invalid("V36 assignment root manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment root manifest differs"))?;
+    bytes
+        .try_reserve_exact(1)
+        .map_err(|_| invalid("V36 assignment root manifest exceeds capacity"))?;
+    bytes.push(b'\n');
+    let uri = format!("{uri_prefix}/assignment-root.json");
+    let identity = V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes: u64::try_from(bytes.len())
+            .map_err(|_| invalid("V36 assignment root length overflows"))?,
+        role: V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE.to_owned(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri,
+    };
+    if !valid_v36_supercell_model_uri(&identity.uri) {
+        return Err(invalid("V36 assignment root URI differs"));
+    }
+    Ok((bytes, identity))
 }
 
 fn write_v36_assignment_buffer(
@@ -2736,10 +2832,13 @@ pub fn write_v36_supercell_assignment_shards(
         {
             return Err(invalid("V36 assignment corpus authority differs"));
         }
-        sink.commit(&artifacts)?;
+        let (root_bytes, root_identity) =
+            v36_committed_assignment_root(admission, &artifacts, uri_prefix)?;
+        sink.commit(&artifacts, &root_bytes, &root_identity)?;
         Ok(V36CommittedSupercellAssignments {
             admission: admission.clone(),
             artifacts,
+            root_identity,
             uri_prefix: uri_prefix.to_owned(),
         })
     })();
@@ -2785,6 +2884,21 @@ pub struct V36SupercellAssignmentAdmissionRequest {
     pub maximum_scratch_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// One exact fixed-fan-in external merge generation.
+pub struct V36ExternalMergeGenerationProjection {
+    /// Zero-based generation ordinal after provisional assignment shards.
+    pub generation_ordinal: u32,
+    /// Authenticated predecessor runs consumed by this generation.
+    pub input_run_count: u64,
+    /// Deterministic runs produced by this generation.
+    pub output_run_count: u64,
+    /// Complete groups containing exactly the admitted fan-in.
+    pub full_group_count: u64,
+    /// Final partial group size, or zero when every group is full.
+    pub tail_group_size: u8,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Checked conservative projection made before any corpus row is scanned.
 pub struct V36SupercellAssignmentProjection {
@@ -2792,6 +2906,8 @@ pub struct V36SupercellAssignmentProjection {
     pub logical_shards: u64,
     /// Fixed fan-in merge generations in the worst all-shards run.
     pub merge_generations: u32,
+    /// Exact admitted merge fan-in used to derive every generation.
+    pub merge_fan_in: u8,
     /// Maximum uncompressed assignment bytes including per-shard envelopes.
     pub uncompressed_assignment_bytes: u64,
     /// Scratch required for input/output overlap and bounded worker buffers.
@@ -2806,6 +2922,50 @@ pub struct V36SupercellAssignmentProjection {
     pub projected_active_ns: u128,
     /// Ceiling-scaled assignment cost in micro-US-dollars.
     pub projected_cost_microusd: u64,
+}
+
+impl V36SupercellAssignmentProjection {
+    /// Derive the only legal fixed-fan-in generation schedule.
+    pub fn merge_schedule(&self) -> Result<Vec<V36ExternalMergeGenerationProjection>> {
+        if self.logical_shards == 0 || !(2..=64).contains(&self.merge_fan_in) {
+            return Err(invalid("V36 external assignment merge schedule differs"));
+        }
+        let fan_in = u64::from(self.merge_fan_in);
+        let mut schedule = Vec::new();
+        schedule
+            .try_reserve_exact(
+                usize::try_from(self.merge_generations)
+                    .map_err(|_| invalid("V36 external assignment merge schedule overflows"))?,
+            )
+            .map_err(|_| invalid("V36 external assignment merge schedule exceeds capacity"))?;
+        let mut input_run_count = self.logical_shards;
+        let mut generation_ordinal = 0_u32;
+        while input_run_count > 1 {
+            let full_group_count = input_run_count / fan_in;
+            let remainder = input_run_count % fan_in;
+            let tail_group_size = u8::try_from(remainder)
+                .map_err(|_| invalid("V36 external assignment merge schedule overflows"))?;
+            let output_run_count = input_run_count.div_ceil(fan_in);
+            schedule.push(V36ExternalMergeGenerationProjection {
+                generation_ordinal,
+                input_run_count,
+                output_run_count,
+                full_group_count,
+                tail_group_size,
+            });
+            input_run_count = output_run_count;
+            generation_ordinal = generation_ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 external assignment merge schedule overflows"))?;
+        }
+        if schedule.len()
+            != usize::try_from(self.merge_generations)
+                .map_err(|_| invalid("V36 external assignment merge schedule overflows"))?
+        {
+            return Err(invalid("V36 external assignment merge schedule differs"));
+        }
+        Ok(schedule)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3000,6 +3160,7 @@ pub fn project_v36_supercell_assignment_admission(
     Ok(V36SupercellAssignmentProjection {
         logical_shards,
         merge_generations,
+        merge_fan_in: request.merge_fan_in,
         uncompressed_assignment_bytes,
         required_scratch_bytes,
         required_peak_live_bytes,

@@ -10,7 +10,7 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field};
 use borsuk::{
-    V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
+    V36ArtifactIdentity, V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
     V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentRow,
     V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardSink,
     V36SupercellPostCountAdmissionRequest, V36SupercellRunChunkArtifact, V36SupercellTrainingSpec,
@@ -320,11 +320,12 @@ fn external_assignment_request() -> V36SupercellAssignmentAdmissionRequest {
 fn v36_geometry_external_assignment_admission_projects_registered_scales_without_population() {
     // Break caught: a 100M assignment is admitted from a balanced-cell RAM
     // assumption or without charging the complete uncompressed shard/merge copy.
-    for (rows, shards, merges, encoded, scratch, terms, external) in [
+    for (rows, shards, merges, schedule, encoded, scratch, terms, external) in [
         (
             1_000_000,
             16,
             2,
+            vec![(16, 2, 2, 0), (2, 1, 0, 2)],
             781_048_576,
             1_971_238_400,
             768_000_000_u128,
@@ -334,6 +335,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             10_000_000,
             153,
             3,
+            vec![(153, 20, 19, 1), (20, 3, 2, 4), (3, 1, 0, 3)],
             7_810_027_008,
             16_033_127_424,
             122_880_000_000,
@@ -343,6 +345,12 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             100_000_000,
             1_526,
             4,
+            vec![
+                (1_526, 191, 190, 6),
+                (191, 24, 23, 7),
+                (24, 3, 3, 0),
+                (3, 1, 0, 3),
+            ],
             78_100_007_936,
             156_642_449_408,
             9_830_400_000_000,
@@ -360,6 +368,20 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         .unwrap();
         assert_eq!(projected.logical_shards, shards);
         assert_eq!(projected.merge_generations, merges);
+        assert_eq!(
+            projected
+                .merge_schedule()
+                .unwrap()
+                .iter()
+                .map(|generation| (
+                    generation.input_run_count,
+                    generation.output_run_count,
+                    generation.full_group_count,
+                    generation.tail_group_size,
+                ))
+                .collect::<Vec<_>>(),
+            schedule
+        );
         assert_eq!(projected.uncompressed_assignment_bytes, encoded);
         assert_eq!(projected.required_scratch_bytes, scratch);
         assert_eq!(projected.required_peak_live_bytes, 1_041_825_792);
@@ -715,6 +737,7 @@ struct AssignmentShardSink {
     aborted: bool,
     committed: bool,
     provisional: Vec<(Vec<u8>, V36SupercellAssignmentShardArtifact)>,
+    root: Option<(Vec<u8>, V36ArtifactIdentity)>,
 }
 
 impl V36SupercellAssignmentShardSink for AssignmentShardSink {
@@ -727,7 +750,12 @@ impl V36SupercellAssignmentShardSink for AssignmentShardSink {
         Ok(())
     }
 
-    fn commit(&mut self, artifacts: &[V36SupercellAssignmentShardArtifact]) -> borsuk::Result<()> {
+    fn commit(
+        &mut self,
+        artifacts: &[V36SupercellAssignmentShardArtifact],
+        root_bytes: &[u8],
+        root_identity: &V36ArtifactIdentity,
+    ) -> borsuk::Result<()> {
         assert_eq!(
             artifacts,
             self.provisional
@@ -735,6 +763,7 @@ impl V36SupercellAssignmentShardSink for AssignmentShardSink {
                 .map(|(_, artifact)| artifact.clone())
                 .collect::<Vec<_>>()
         );
+        self.root = Some((root_bytes.to_vec(), root_identity.clone()));
         self.committed = true;
         Ok(())
     }
@@ -742,6 +771,7 @@ impl V36SupercellAssignmentShardSink for AssignmentShardSink {
     fn abort(&mut self) -> borsuk::Result<()> {
         self.aborted = true;
         self.provisional.clear();
+        self.root = None;
         Ok(())
     }
 }
@@ -810,6 +840,18 @@ fn v36_geometry_external_assignment_writer_is_schedule_invariant_and_transaction
                 committed.uri_prefix(),
                 "s3://borsuk-v36-test/geometry/assignments"
             );
+            let (root_bytes, root_identity) = sink.root.as_ref().unwrap();
+            assert_eq!(root_bytes.last(), Some(&b'\n'));
+            assert_eq!(committed.root_identity(), root_identity);
+            assert_eq!(root_identity.encoded_bytes, root_bytes.len() as u64);
+            assert_eq!(
+                root_identity.sha256,
+                format!("{:x}", Sha256::digest(root_bytes))
+            );
+            assert_eq!(
+                root_identity.uri,
+                "s3://borsuk-v36-test/geometry/assignments/assignment-root.json"
+            );
             let artifacts = committed.artifacts();
             assert_eq!(artifacts.len(), 1);
             assert_eq!(sink.provisional.len(), 1);
@@ -817,6 +859,8 @@ fn v36_geometry_external_assignment_writer_is_schedule_invariant_and_transaction
                 sink.provisional[0].0.clone(),
                 artifacts[0].sha256.clone(),
                 artifacts[0].blake3.clone(),
+                root_bytes.clone(),
+                root_identity.sha256.clone(),
             );
             if let Some(expected) = &baseline {
                 assert_eq!(&observed, expected);
@@ -825,6 +869,37 @@ fn v36_geometry_external_assignment_writer_is_schedule_invariant_and_transaction
             }
         }
     }
+
+    let baseline_root_sha256 = baseline.as_ref().unwrap().4.clone();
+    let mut alternate_schedule_request = external_assignment_request();
+    alternate_schedule_request.worker_count = 1;
+    alternate_schedule_request.queue_rows_per_worker = 4;
+    alternate_schedule_request.sort_rows_per_worker = 4;
+    alternate_schedule_request.merge_fan_in = 4;
+    alternate_schedule_request.measured_component_terms = 1;
+    alternate_schedule_request.measured_external_work_units = 1;
+    let alternate_schedule_admission =
+        admit_v36_supercell_assignment_preflight(&authenticated, &alternate_schedule_request)
+            .unwrap();
+    let mut alternate_schedule_source = ProjectedSource {
+        block_rows: 4,
+        rows: rows.clone(),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let mut alternate_schedule_sink = AssignmentShardSink::default();
+    let alternate_schedule = write_v36_supercell_assignment_shards(
+        &authenticated,
+        &alternate_schedule_admission,
+        &mut alternate_schedule_source,
+        "s3://borsuk-v36-test/geometry/assignments",
+        &mut alternate_schedule_sink,
+    )
+    .unwrap();
+    assert_ne!(
+        alternate_schedule.root_identity().sha256,
+        baseline_root_sha256
+    );
 
     let mut request = external_assignment_request();
     request.worker_count = 1;
@@ -855,6 +930,7 @@ fn v36_geometry_external_assignment_writer_is_schedule_invariant_and_transaction
     assert!(sink.aborted);
     assert!(!sink.committed);
     assert!(sink.provisional.is_empty());
+    assert!(sink.root.is_none());
 }
 
 #[test]
