@@ -1599,6 +1599,257 @@ pub fn project_v36_supercell_training_preflight(
     })
 }
 
+const V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS: u64 = 65_536;
+const V36_EXTERNAL_ASSIGNMENT_ROW_BYTES: u64 = 4 + 8 + 192 * 4;
+const V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES: u64 = 65_536;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Outcome-blind limits and calibration for external super-cell assignment.
+pub struct V36SupercellAssignmentAdmissionRequest {
+    /// Fixed construction workers; V36 registers only one, two, or four.
+    pub worker_count: u8,
+    /// Maximum queued projected rows owned by each worker.
+    pub queue_rows_per_worker: u64,
+    /// Maximum rows in each worker's in-memory sort buffer.
+    pub sort_rows_per_worker: u64,
+    /// Fixed external merge fan-in.
+    pub merge_fan_in: u8,
+    /// Component terms in the bounded calibration measurement.
+    pub measured_component_terms: u128,
+    /// Active nanoseconds in the bounded calibration measurement.
+    pub measured_elapsed_ns: u64,
+    /// Cost of the bounded calibration measurement in micro-US-dollars.
+    pub measured_cost_microusd: u64,
+    /// External sort/merge work units in the bounded I/O calibration.
+    pub measured_external_work_units: u128,
+    /// Active nanoseconds in the bounded external-work calibration.
+    pub measured_external_elapsed_ns: u64,
+    /// Cost of the external-work calibration in micro-US-dollars.
+    pub measured_external_cost_microusd: u64,
+    /// Hard active execution wall limit.
+    pub maximum_active_wall_seconds: u64,
+    /// Hard construction cost limit in micro-US-dollars.
+    pub maximum_cost_microusd: u64,
+    /// Hard aggregate process live-byte limit.
+    pub maximum_peak_live_bytes: u64,
+    /// Hard attempt-owned scratch-byte limit.
+    pub maximum_scratch_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Checked conservative projection made before any corpus row is scanned.
+pub struct V36SupercellAssignmentProjection {
+    /// Fixed logical shard count including the final tail shard.
+    pub logical_shards: u64,
+    /// Fixed fan-in merge generations in the worst all-shards run.
+    pub merge_generations: u32,
+    /// Maximum uncompressed assignment bytes including per-shard envelopes.
+    pub uncompressed_assignment_bytes: u64,
+    /// Scratch required for input/output overlap and bounded worker buffers.
+    pub required_scratch_bytes: u64,
+    /// Aggregate live bytes charged to all workers plus the model envelope.
+    pub required_peak_live_bytes: u64,
+    /// Exact assignment distance component terms.
+    pub component_terms: u128,
+    /// Conservative sort comparisons plus assignment/merge row visits.
+    pub external_work_units: u128,
+    /// Ceiling-scaled active assignment time.
+    pub projected_active_ns: u128,
+    /// Ceiling-scaled assignment cost in micro-US-dollars.
+    pub projected_cost_microusd: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Pre-assignment authority bound to one authenticated model and exact request.
+///
+/// This does not authorize post-count Hamilton allocation or local Lloyd work.
+pub struct V36AdmittedSupercellAssignmentPreflight {
+    model_identity: V36ArtifactIdentity,
+    training_spec: V36SupercellTrainingSpec,
+    request: V36SupercellAssignmentAdmissionRequest,
+    projection: V36SupercellAssignmentProjection,
+}
+
+impl V36AdmittedSupercellAssignmentPreflight {
+    /// Exact authenticated model identity inseparable from this admission.
+    pub fn model_identity(&self) -> &V36ArtifactIdentity {
+        &self.model_identity
+    }
+
+    /// Exact query-excluded corpus and model-training authority.
+    pub fn training_spec(&self) -> &V36SupercellTrainingSpec {
+        &self.training_spec
+    }
+
+    /// Complete admitted worker, buffering, calibration, and limit request.
+    pub fn request(&self) -> &V36SupercellAssignmentAdmissionRequest {
+        &self.request
+    }
+
+    /// Checked resource, work, wall, and cost projection.
+    pub const fn projection(&self) -> &V36SupercellAssignmentProjection {
+        &self.projection
+    }
+}
+
+/// Project external assignment without allocating the projected population.
+pub fn project_v36_supercell_assignment_admission(
+    spec: &V36SupercellTrainingSpec,
+    model_encoded_bytes: u64,
+    request: &V36SupercellAssignmentAdmissionRequest,
+) -> Result<V36SupercellAssignmentProjection> {
+    if spec.corpus_rows == 0
+        || spec.dimensions != 192
+        || spec.maximum_block_rows == 0
+        || spec.maximum_block_rows > 65_536
+        || !valid_sha256(&spec.projected_corpus_sha256)
+        || spec.reservoir_rows == 0
+        || spec.reservoir_rows > spec.corpus_rows
+        || spec.reservoir_rows > 1_048_576
+        || spec.super_cell_count == 0
+        || !spec.super_cell_count.is_power_of_two()
+        || spec.super_cell_count > 4_096
+        || model_encoded_bytes == 0
+        || model_encoded_bytes > SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
+        || !matches!(request.worker_count, 1 | 2 | 4)
+        || request.queue_rows_per_worker == 0
+        || request.queue_rows_per_worker > V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS
+        || request.sort_rows_per_worker == 0
+        || request.sort_rows_per_worker > V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS
+        || !(2..=64).contains(&request.merge_fan_in)
+        || request.measured_component_terms == 0
+        || request.measured_elapsed_ns == 0
+        || request.measured_cost_microusd == 0
+        || request.measured_external_work_units == 0
+        || request.measured_external_elapsed_ns == 0
+        || request.measured_external_cost_microusd == 0
+        || request.maximum_active_wall_seconds == 0
+        || request.maximum_cost_microusd == 0
+        || request.maximum_peak_live_bytes == 0
+        || request.maximum_scratch_bytes == 0
+    {
+        return Err(invalid("V36 external assignment admission differs"));
+    }
+    let logical_shards = spec
+        .corpus_rows
+        .div_ceil(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS);
+    let mut remaining_shards = logical_shards;
+    let mut merge_generations = 0_u32;
+    while remaining_shards > 1 {
+        remaining_shards = remaining_shards.div_ceil(u64::from(request.merge_fan_in));
+        merge_generations = merge_generations
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 external assignment merge generations overflow"))?;
+    }
+    let uncompressed_assignment_bytes = spec
+        .corpus_rows
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
+        .and_then(|bytes| {
+            logical_shards
+                .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES)
+                .and_then(|envelopes| bytes.checked_add(envelopes))
+        })
+        .ok_or_else(|| invalid("V36 external assignment bytes overflow"))?;
+    let worker_rows = request
+        .queue_rows_per_worker
+        .checked_add(request.sort_rows_per_worker)
+        .ok_or_else(|| invalid("V36 external assignment worker rows overflow"))?;
+    let aggregate_worker_bytes = worker_rows
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_ROW_BYTES)
+        .and_then(|bytes| bytes.checked_mul(u64::from(request.worker_count)))
+        .ok_or_else(|| invalid("V36 external assignment worker bytes overflow"))?;
+    let required_scratch_bytes = uncompressed_assignment_bytes
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(aggregate_worker_bytes))
+        .ok_or_else(|| invalid("V36 external assignment scratch bytes overflow"))?;
+    let required_peak_live_bytes = SUPERCELL_MODEL_MAXIMUM_ENCODED_BYTES
+        .checked_add(aggregate_worker_bytes)
+        .ok_or_else(|| invalid("V36 external assignment live bytes overflow"))?;
+    let component_terms = u128::from(spec.corpus_rows)
+        .checked_mul(u128::from(spec.super_cell_count))
+        .and_then(|terms| terms.checked_mul(192))
+        .ok_or_else(|| invalid("V36 external assignment work overflows"))?;
+    let sort_comparison_units = u128::from(spec.corpus_rows)
+        .checked_mul(16)
+        .ok_or_else(|| invalid("V36 external assignment sort work overflows"))?;
+    let external_row_visits = u128::from(spec.corpus_rows)
+        .checked_mul(1 + 2 * u128::from(merge_generations))
+        .ok_or_else(|| invalid("V36 external assignment merge work overflows"))?;
+    let external_work_units = sort_comparison_units
+        .checked_add(external_row_visits)
+        .ok_or_else(|| invalid("V36 external assignment external work overflows"))?;
+    if request.measured_component_terms > component_terms
+        || request.measured_external_work_units > external_work_units
+    {
+        return Err(invalid(
+            "V36 external assignment calibration exceeds projected work",
+        ));
+    }
+    let projected_compute_ns = component_terms
+        .checked_mul(u128::from(request.measured_elapsed_ns))
+        .ok_or_else(|| invalid("V36 external assignment time overflows"))?
+        .div_ceil(request.measured_component_terms);
+    let projected_external_ns = external_work_units
+        .checked_mul(u128::from(request.measured_external_elapsed_ns))
+        .ok_or_else(|| invalid("V36 external assignment time overflows"))?
+        .div_ceil(request.measured_external_work_units);
+    let projected_active_ns = projected_compute_ns
+        .checked_add(projected_external_ns)
+        .ok_or_else(|| invalid("V36 external assignment time overflows"))?;
+    let projected_compute_cost = component_terms
+        .checked_mul(u128::from(request.measured_cost_microusd))
+        .ok_or_else(|| invalid("V36 external assignment cost overflows"))?
+        .div_ceil(request.measured_component_terms);
+    let projected_external_cost = external_work_units
+        .checked_mul(u128::from(request.measured_external_cost_microusd))
+        .ok_or_else(|| invalid("V36 external assignment cost overflows"))?
+        .div_ceil(request.measured_external_work_units);
+    let projected_cost_microusd = projected_compute_cost
+        .checked_add(projected_external_cost)
+        .ok_or_else(|| invalid("V36 external assignment cost overflows"))?;
+    let projected_cost_microusd = u64::try_from(projected_cost_microusd)
+        .map_err(|_| invalid("V36 external assignment cost overflows"))?;
+    Ok(V36SupercellAssignmentProjection {
+        logical_shards,
+        merge_generations,
+        uncompressed_assignment_bytes,
+        required_scratch_bytes,
+        required_peak_live_bytes,
+        component_terms,
+        external_work_units,
+        projected_active_ns,
+        projected_cost_microusd,
+    })
+}
+
+/// Admit pre-assignment work bound to an authenticated model and exact request.
+pub fn admit_v36_supercell_assignment_preflight(
+    model: &V36AuthenticatedSupercellModel,
+    request: &V36SupercellAssignmentAdmissionRequest,
+) -> Result<V36AdmittedSupercellAssignmentPreflight> {
+    let projection = project_v36_supercell_assignment_admission(
+        model.training_spec(),
+        model.identity().encoded_bytes,
+        request,
+    )?;
+    let maximum_active_ns = u128::from(request.maximum_active_wall_seconds)
+        .checked_mul(1_000_000_000)
+        .ok_or_else(|| invalid("V36 external assignment wall cap overflows"))?;
+    if projection.projected_active_ns > maximum_active_ns
+        || projection.projected_cost_microusd > request.maximum_cost_microusd
+        || projection.required_peak_live_bytes > request.maximum_peak_live_bytes
+        || projection.required_scratch_bytes > request.maximum_scratch_bytes
+    {
+        return Err(invalid("V36 external assignment admission exceeds limits"));
+    }
+    Ok(V36AdmittedSupercellAssignmentPreflight {
+        model_identity: model.identity().clone(),
+        training_spec: model.training_spec().clone(),
+        request: request.clone(),
+        projection,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Deterministic V36 super-cell centroids and reservoir evidence.
 pub struct V36SupercellModel {

@@ -5,10 +5,12 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
 use arrow_schema::{DataType, Field};
 use borsuk::{
-    V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource, V36SupercellTrainingSpec,
-    bind_v36_registered_supercell_training_spec, decode_v36_supercell_model_arrow,
-    encode_v36_supercell_model_arrow, load_v36_prefix_source_feature_ids,
-    project_v36_exact_assignment_preflight, project_v36_supercell_training_preflight,
+    V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
+    V36SupercellAssignmentAdmissionRequest, V36SupercellTrainingSpec,
+    admit_v36_supercell_assignment_preflight, bind_v36_registered_supercell_training_spec,
+    decode_v36_supercell_model_arrow, encode_v36_supercell_model_arrow,
+    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
+    project_v36_supercell_assignment_admission, project_v36_supercell_training_preflight,
     train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
@@ -280,6 +282,153 @@ fn v36_geometry_supercell_preflight_projects_complete_training_work_and_owned_me
         !project_v36_supercell_training_preflight(&spec, 1, 1_000_000_000, 43_200)
             .unwrap()
             .within_active_wall_cap
+    );
+}
+
+fn external_assignment_request() -> V36SupercellAssignmentAdmissionRequest {
+    V36SupercellAssignmentAdmissionRequest {
+        worker_count: 4,
+        queue_rows_per_worker: 65_536,
+        sort_rows_per_worker: 65_536,
+        merge_fan_in: 8,
+        measured_component_terms: 1_000_000,
+        measured_elapsed_ns: 1_000_000,
+        measured_cost_microusd: 1,
+        measured_external_work_units: 1_000_000,
+        measured_external_elapsed_ns: 1_000_000,
+        measured_external_cost_microusd: 1,
+        maximum_active_wall_seconds: u64::MAX,
+        maximum_cost_microusd: u64::MAX,
+        maximum_peak_live_bytes: u64::MAX,
+        maximum_scratch_bytes: u64::MAX,
+    }
+}
+
+#[test]
+fn v36_geometry_external_assignment_admission_projects_registered_scales_without_population() {
+    // Break caught: a 100M assignment is admitted from a balanced-cell RAM
+    // assumption or without charging the complete uncompressed shard/merge copy.
+    for (rows, shards, merges, encoded, scratch, terms, external) in [
+        (
+            1_000_000,
+            16,
+            2,
+            781_048_576,
+            1_971_041_792,
+            768_000_000_u128,
+            21_000_000_u128,
+        ),
+        (
+            10_000_000,
+            153,
+            3,
+            7_810_027_008,
+            16_028_998_656,
+            122_880_000_000,
+            230_000_000,
+        ),
+        (
+            100_000_000,
+            1_526,
+            4,
+            78_100_007_936,
+            156_608_960_512,
+            9_830_400_000_000,
+            2_500_000_000,
+        ),
+    ] {
+        let spec =
+            bind_v36_registered_supercell_training_spec(rows, 65_536, &format!("{rows:064x}"))
+                .unwrap();
+        let projected = project_v36_supercell_assignment_admission(
+            &spec,
+            16 * 1_048_576,
+            &external_assignment_request(),
+        )
+        .unwrap();
+        assert_eq!(projected.logical_shards, shards);
+        assert_eq!(projected.merge_generations, merges);
+        assert_eq!(projected.uncompressed_assignment_bytes, encoded);
+        assert_eq!(projected.required_scratch_bytes, scratch);
+        assert_eq!(projected.required_peak_live_bytes, 425_721_856);
+        assert_eq!(projected.component_terms, terms);
+        assert_eq!(projected.external_work_units, external);
+        assert_eq!(projected.projected_active_ns, terms + external);
+        assert_eq!(
+            projected.projected_cost_microusd,
+            u64::try_from(terms.div_ceil(1_000_000) + external.div_ceil(1_000_000)).unwrap()
+        );
+    }
+}
+
+#[test]
+fn v36_geometry_external_assignment_plan_is_authenticated_and_fail_closed() {
+    // Break caught: an executor can receive an unbound projection, or a launch
+    // slips through with a resource/cost limit one unit below the exact need.
+    let rows = projected_rows(24);
+    let spec = V36SupercellTrainingSpec {
+        corpus_rows: 24,
+        dimensions: ROUTING_DIMENSIONS,
+        maximum_block_rows: 8,
+        projected_corpus_sha256: projected_rows_sha256(&rows),
+        reservoir_rows: 24,
+        super_cell_count: 4,
+    };
+    let mut source = ProjectedSource {
+        block_rows: 8,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let model = train_v36_supercells(&spec, &mut source).unwrap();
+    let uri = "s3://borsuk-v36-test/geometry/supercells.arrow";
+    let (bytes, identity) =
+        encode_v36_supercell_model_arrow(&model, &spec, "supercell-model", uri).unwrap();
+    let authenticated = decode_v36_supercell_model_arrow(&bytes, &identity, &spec).unwrap();
+    let mut request = external_assignment_request();
+    request.measured_component_terms = 1;
+    request.measured_elapsed_ns = 1;
+    request.measured_cost_microusd = 1;
+    request.measured_external_work_units = 1;
+    request.measured_external_elapsed_ns = 1;
+    request.measured_external_cost_microusd = 1;
+    let projection =
+        project_v36_supercell_assignment_admission(&spec, identity.encoded_bytes, &request)
+            .unwrap();
+    request.maximum_active_wall_seconds =
+        u64::try_from(projection.projected_active_ns.div_ceil(1_000_000_000)).unwrap();
+    request.maximum_cost_microusd = projection.projected_cost_microusd;
+    request.maximum_peak_live_bytes = projection.required_peak_live_bytes;
+    request.maximum_scratch_bytes = projection.required_scratch_bytes;
+    let admitted = admit_v36_supercell_assignment_preflight(&authenticated, &request).unwrap();
+    assert_eq!(admitted.model_identity(), &identity);
+    assert_eq!(admitted.training_spec(), &spec);
+    assert_eq!(admitted.projection(), &projection);
+    assert_eq!(admitted.request(), &request);
+
+    for mutation in 0..4 {
+        let mut rejected = request.clone();
+        match mutation {
+            0 => rejected.maximum_active_wall_seconds -= 1,
+            1 => rejected.maximum_cost_microusd -= 1,
+            2 => rejected.maximum_peak_live_bytes -= 1,
+            3 => rejected.maximum_scratch_bytes -= 1,
+            _ => unreachable!(),
+        }
+        assert!(admit_v36_supercell_assignment_preflight(&authenticated, &rejected).is_err());
+    }
+
+    let mut unbounded_calibration = request.clone();
+    unbounded_calibration.measured_component_terms = projection.component_terms + 1;
+    assert!(
+        admit_v36_supercell_assignment_preflight(&authenticated, &unbounded_calibration).is_err()
+    );
+    let mut unbounded_external_calibration = request.clone();
+    unbounded_external_calibration.measured_external_work_units =
+        projection.external_work_units + 1;
+    assert!(
+        admit_v36_supercell_assignment_preflight(&authenticated, &unbounded_external_calibration)
+            .is_err()
     );
 }
 
