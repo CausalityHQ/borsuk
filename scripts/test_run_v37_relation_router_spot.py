@@ -1413,7 +1413,7 @@ class V37SpotAuthorityTests(unittest.TestCase):
 
     def test_v37_worker_has_one_process_group_exact_stops_and_no_prefix_listing(self) -> None:
         worker = build_v37_worker_script(_plan())
-        self.assertIn("setsid", worker)
+        self.assertNotIn("setsid env", worker)
         self.assertIn("memory.current", worker)
         self.assertIn("memory.swap.current", worker)
         self.assertIn("/proc/pressure/memory", worker)

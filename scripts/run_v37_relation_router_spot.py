@@ -1546,7 +1546,7 @@ instance_id=$(curl --fail --silent --show-error \
 [[ "$instance_id" =~ ^i-[0-9a-f]{{8,17}}$ ]]
 systemd-run --wait --collect --unit="borsuk-v37-{plan.run_id}" --slice="$slice" \
   --property=MemoryMax=3G --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 \
-  setsid env PYTHONPATH="$source/.v37-python" python3 \
+  env PYTHONPATH="$source/.v37-python" python3 \
   "$source/scripts/run_v37_relation_router_spot.py" \
   --execute-v37-worker --root "$root/phase" --plan "$plan" --manifest "$manifest" \
   --binary "$binary" --instance-id "$instance_id"
