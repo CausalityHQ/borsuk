@@ -326,8 +326,8 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             16,
             2,
             vec![(16, 2, 2, 0), (2, 1, 0, 2)],
-            781_048_576,
-            1_971_238_400,
+            813_554_432,
+            2_042_344_960,
             125_000,
             768_000_000_u128,
             22_000_000_u128,
@@ -337,8 +337,8 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             153,
             3,
             vec![(153, 20, 19, 1), (20, 3, 2, 4), (3, 1, 0, 3)],
-            7_810_027_008,
-            16_033_127_424,
+            8_120_864_256,
+            16_782_793_728,
             1_250_000,
             122_880_000_000,
             240_000_000,
@@ -353,8 +353,8 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
                 (24, 3, 3, 0),
                 (3, 1, 0, 3),
             ],
-            78_100_007_936,
-            156_642_449_408,
+            81_200_253_952,
+            163_881_097_216,
             12_500_000,
             9_830_400_000_000,
             2_600_000_000,
@@ -387,7 +387,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         );
         assert_eq!(projected.uncompressed_assignment_bytes, encoded);
         assert_eq!(projected.required_scratch_bytes, scratch);
-        assert_eq!(projected.required_peak_live_bytes, 1_041_825_792);
+        assert_eq!(projected.required_peak_live_bytes, 1_060_110_336);
         assert_eq!(projected.coverage_bitmap_bytes, coverage);
         assert_eq!(projected.publication_row_visits, u128::from(rows));
         assert_eq!(projected.component_terms, terms);
@@ -411,7 +411,7 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         project_v36_supercell_assignment_admission(&spec, 16 * 1_048_576, &one_worker)
             .unwrap()
             .required_peak_live_bytes,
-        1_041_825_792
+        1_060_110_336
     );
 }
 

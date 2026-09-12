@@ -1602,7 +1602,7 @@ pub fn project_v36_supercell_training_preflight(
 
 const V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS: u64 = 65_536;
 const V36_EXTERNAL_ASSIGNMENT_ROW_BYTES: u64 = 4 + 8 + 192 * 4;
-const V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES: u64 = 65_536;
+const V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES: u64 = 2 * 1_048_576;
 const V36_EXTERNAL_ASSIGNMENT_FORMAT: &str = "borsuk-v36-supercell-assignment-arrow-v1";
 const V36_EXTERNAL_ASSIGNMENT_ROLE: &str = "supercell-assignment-shard";
 const V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY: &str = "borsuk.v36.supercell_assignment.manifest";
@@ -2201,21 +2201,23 @@ fn encode_v36_assignment_rows_arrow(
             bytes.checked_add(usize::try_from(V36_EXTERNAL_ASSIGNMENT_SHARD_ENVELOPE_BYTES).ok()?)
         })
         .ok_or_else(|| invalid("V36 assignment encoded bytes overflow"))?;
-    let mut bytes = Vec::new();
-    bytes
+    let mut output = Cursor::new(Vec::new());
+    output
+        .get_mut()
         .try_reserve_exact(maximum_encoded_bytes)
         .map_err(|_| invalid("V36 assignment encoding allocation exceeds capacity"))?;
-    bytes.resize(maximum_encoded_bytes, 0);
-    let encoded_bytes = {
-        let mut output = Cursor::new(bytes.as_mut_slice());
+    {
         let mut writer = FileWriter::try_new_with_options(&mut output, schema.as_ref(), options)?;
         writer.write(&batch)?;
         writer.finish()?;
-        drop(writer);
-        usize::try_from(output.position())
-            .map_err(|_| invalid("V36 assignment encoded bytes overflow"))?
-    };
-    bytes.truncate(encoded_bytes);
+    }
+    let bytes = output.into_inner();
+    if bytes.len() > maximum_encoded_bytes {
+        return Err(invalid(&format!(
+            "V36 assignment encoded envelope differs: {} > {maximum_encoded_bytes}",
+            bytes.len()
+        )));
+    }
     Ok(bytes)
 }
 
@@ -2650,6 +2652,13 @@ pub trait V36TerminalAssignmentSource {
         &mut self,
         artifact: &V36SupercellAssignmentShardArtifact,
     ) -> Result<Vec<u8>>;
+
+    /// Read the complete bytes of one chunk from the exact terminal merge run.
+    fn read_merge_chunk(
+        &mut self,
+        run_root: &V36ArtifactIdentity,
+        artifact: &V36InitialAssignmentMergeChunkArtifact,
+    ) -> Result<Vec<u8>>;
 }
 
 /// Transactional destination for canonical per-supercell chunks.
@@ -2696,24 +2705,26 @@ struct V36SupercellRunRootChunkEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct V36SupercellRunRootManifest {
+    assignment_root_identity: V36ArtifactIdentity,
     chunks: Vec<V36SupercellRunRootChunkEntry>,
     format: String,
     model_identity: V36ArtifactIdentity,
-    predecessor_root_identity: V36ArtifactIdentity,
     projected_corpus_sha256: String,
     role: String,
     row_count: u64,
     training_spec: V36SupercellTrainingSpec,
+    terminal_root_identity: V36ArtifactIdentity,
     uri: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Canonical per-supercell inventory returned only after root-last commit.
 pub struct V36CommittedSupercellRuns {
+    assignment_root_identity: V36ArtifactIdentity,
     chunks: Vec<V36SupercellRunChunkArtifact>,
-    predecessor_root_identity: V36ArtifactIdentity,
     root_identity: V36ArtifactIdentity,
     row_count: u64,
+    terminal_root_identity: V36ArtifactIdentity,
 }
 
 impl V36CommittedSupercellRuns {
@@ -2723,8 +2734,13 @@ impl V36CommittedSupercellRuns {
     }
 
     /// Authenticated assignment root that supplied every published row.
-    pub const fn predecessor_root_identity(&self) -> &V36ArtifactIdentity {
-        &self.predecessor_root_identity
+    pub const fn assignment_root_identity(&self) -> &V36ArtifactIdentity {
+        &self.assignment_root_identity
+    }
+
+    /// Exact sole-shard or terminal-generation root consumed by publication.
+    pub const fn terminal_root_identity(&self) -> &V36ArtifactIdentity {
+        &self.terminal_root_identity
     }
 
     /// Canonical root identity published after every chunk.
@@ -2740,10 +2756,12 @@ impl V36CommittedSupercellRuns {
 
 fn v36_supercell_run_root(
     committed: &V36CommittedSupercellAssignments,
+    terminal_root_identity: &V36ArtifactIdentity,
     chunks: &[V36SupercellRunChunkArtifact],
 ) -> Result<(Vec<u8>, V36ArtifactIdentity)> {
     let uri = format!("{}/supercells/root.json", committed.uri_prefix);
     let manifest = V36SupercellRunRootManifest {
+        assignment_root_identity: committed.root_identity.clone(),
         chunks: chunks
             .iter()
             .map(|artifact| V36SupercellRunRootChunkEntry {
@@ -2758,7 +2776,6 @@ fn v36_supercell_run_root(
             .collect(),
         format: V36_SUPERCELL_RUN_ROOT_FORMAT.to_owned(),
         model_identity: committed.admission.model_identity.clone(),
-        predecessor_root_identity: committed.root_identity.clone(),
         projected_corpus_sha256: committed
             .admission
             .training_spec
@@ -2767,6 +2784,7 @@ fn v36_supercell_run_root(
         role: V36_SUPERCELL_RUN_ROOT_ROLE.to_owned(),
         row_count: committed.admission.training_spec.corpus_rows,
         training_spec: committed.admission.training_spec.clone(),
+        terminal_root_identity: terminal_root_identity.clone(),
         uri: uri.clone(),
     };
     let mut bytes = serde_json::to_vec(&v36_canonical_json_value(
@@ -2793,10 +2811,7 @@ fn v36_supercell_run_root(
     Ok((bytes, identity))
 }
 
-/// Publish the terminal one-shard assignment as canonical per-supercell chunks.
-///
-/// A merged terminal generation is deliberately rejected until its exact source
-/// adapter is authenticated by the follow-up TDD slice.
+/// Publish the exact terminal assignment as canonical per-supercell chunks.
 pub fn publish_v36_supercell_run_chunks(
     committed: &V36CommittedSupercellAssignments,
     terminal_generation: Option<&V36CommittedInitialAssignmentMergeGeneration>,
@@ -2804,15 +2819,28 @@ pub fn publish_v36_supercell_run_chunks(
     sink: &mut dyn V36SupercellRunPublisherSink,
 ) -> Result<V36CommittedSupercellRuns> {
     let prepared = (|| {
-        if terminal_generation.is_some()
-            || !committed.admission.projection.merge_schedule()?.is_empty()
-            || committed.artifacts.len() != 1
-        {
-            return Err(invalid("V36 terminal assignment source differs"));
-        }
-        let artifact = &committed.artifacts[0];
-        let bytes = source.read_assignment_shard(artifact)?;
-        let authenticated = authenticate_v36_supercell_assignment_shard_arrow(&bytes, artifact)?;
+        let schedule = committed.admission.projection.merge_schedule()?;
+        let terminal_run = if schedule.is_empty() {
+            if terminal_generation.is_some() || committed.artifacts.len() != 1 {
+                return Err(invalid("V36 terminal assignment source differs"));
+            }
+            None
+        } else {
+            let generation = terminal_generation
+                .ok_or_else(|| invalid("V36 terminal assignment generation is missing"))?;
+            validate_v36_committed_assignment_merge_generation(committed, generation)?;
+            if schedule.last() != Some(&generation.generation)
+                || generation.generation.output_run_count != 1
+                || generation.runs.len() != 1
+            {
+                return Err(invalid("V36 terminal assignment generation differs"));
+            }
+            Some(&generation.runs[0])
+        };
+        let terminal_root_identity = terminal_generation.map_or_else(
+            || committed.root_identity.clone(),
+            |generation| generation.root_identity.clone(),
+        );
         let bitmap_len = usize::try_from(committed.admission.projection.coverage_bitmap_bytes)
             .map_err(|_| invalid("V36 supercell coverage bitmap overflows"))?;
         let mut coverage = Vec::new();
@@ -2858,43 +2886,60 @@ pub fn publish_v36_supercell_run_chunks(
             rows.clear();
             Ok(())
         };
-        for row in authenticated.rows() {
-            if current_cell.is_some_and(|cell| cell != row.supercell_ordinal) {
-                flush(
-                    &mut buffered,
-                    current_cell.unwrap(),
-                    chunk_ordinal,
-                    &mut chunks,
-                    sink,
-                )?;
-                current_cell = Some(row.supercell_ordinal);
-                chunk_ordinal = 0;
-            } else if current_cell.is_none() {
-                current_cell = Some(row.supercell_ordinal);
+        let mut process_rows = |rows: &[V36SupercellAssignmentRow]| -> Result<()> {
+            for row in rows {
+                if current_cell.is_some_and(|cell| cell != row.supercell_ordinal) {
+                    flush(
+                        &mut buffered,
+                        current_cell.unwrap(),
+                        chunk_ordinal,
+                        &mut chunks,
+                        sink,
+                    )?;
+                    current_cell = Some(row.supercell_ordinal);
+                    chunk_ordinal = 0;
+                } else if current_cell.is_none() {
+                    current_cell = Some(row.supercell_ordinal);
+                }
+                let source_ordinal = usize::try_from(row.source_ordinal)
+                    .map_err(|_| invalid("V36 supercell coverage ordinal overflows"))?;
+                let byte = coverage
+                    .get_mut(source_ordinal / 8)
+                    .ok_or_else(|| invalid("V36 supercell coverage ordinal differs"))?;
+                let mask = 1_u8 << (source_ordinal % 8);
+                if *byte & mask != 0 {
+                    return Err(invalid("V36 supercell source coverage differs"));
+                }
+                *byte |= mask;
+                buffered.push(row.clone());
+                if buffered.len() == usize::try_from(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS).unwrap() {
+                    flush(
+                        &mut buffered,
+                        current_cell.unwrap(),
+                        chunk_ordinal,
+                        &mut chunks,
+                        sink,
+                    )?;
+                    chunk_ordinal = chunk_ordinal
+                        .checked_add(1)
+                        .ok_or_else(|| invalid("V36 supercell chunk ordinal overflows"))?;
+                }
             }
-            let source = usize::try_from(row.source_ordinal)
-                .map_err(|_| invalid("V36 supercell coverage ordinal overflows"))?;
-            let byte = coverage
-                .get_mut(source / 8)
-                .ok_or_else(|| invalid("V36 supercell coverage ordinal differs"))?;
-            let mask = 1_u8 << (source % 8);
-            if *byte & mask != 0 {
-                return Err(invalid("V36 supercell source coverage differs"));
+            Ok(())
+        };
+        if let Some(run) = terminal_run {
+            for artifact in &run.chunks {
+                let bytes = source.read_merge_chunk(&run.root_identity, artifact)?;
+                let rows =
+                    decode_v36_initial_assignment_merge_chunk_against_artifact(&bytes, artifact)?;
+                process_rows(&rows)?;
             }
-            *byte |= mask;
-            buffered.push(row.clone());
-            if buffered.len() == usize::try_from(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS).unwrap() {
-                flush(
-                    &mut buffered,
-                    current_cell.unwrap(),
-                    chunk_ordinal,
-                    &mut chunks,
-                    sink,
-                )?;
-                chunk_ordinal = chunk_ordinal
-                    .checked_add(1)
-                    .ok_or_else(|| invalid("V36 supercell chunk ordinal overflows"))?;
-            }
+        } else {
+            let artifact = &committed.artifacts[0];
+            let bytes = source.read_assignment_shard(artifact)?;
+            let authenticated =
+                authenticate_v36_supercell_assignment_shard_arrow(&bytes, artifact)?;
+            process_rows(authenticated.rows())?;
         }
         if let Some(cell) = current_cell {
             flush(&mut buffered, cell, chunk_ordinal, &mut chunks, sink)?;
@@ -2914,14 +2959,16 @@ pub fn publish_v36_supercell_run_chunks(
         if published_rows != rows || chunks.is_empty() {
             return Err(invalid("V36 supercell publication rows differ"));
         }
-        let (root_bytes, root_identity) = v36_supercell_run_root(committed, &chunks)?;
+        let (root_bytes, root_identity) =
+            v36_supercell_run_root(committed, &terminal_root_identity, &chunks)?;
         Ok((
             root_bytes,
             V36CommittedSupercellRuns {
+                assignment_root_identity: committed.root_identity.clone(),
                 chunks,
-                predecessor_root_identity: committed.root_identity.clone(),
                 root_identity,
                 row_count: rows,
+                terminal_root_identity,
             },
         ))
     })();
@@ -9254,6 +9301,7 @@ mod tests {
 
     #[derive(Default)]
     struct TerminalSource {
+        merge_chunks: Vec<(Vec<u8>, V36InitialAssignmentMergeChunkArtifact)>,
         shard: Option<(Vec<u8>, V36SupercellAssignmentShardArtifact)>,
     }
 
@@ -9270,6 +9318,18 @@ mod tests {
                 return Err(invalid("terminal shard differs"));
             }
             Ok(bytes.clone())
+        }
+
+        fn read_merge_chunk(
+            &mut self,
+            _run_root: &V36ArtifactIdentity,
+            artifact: &V36InitialAssignmentMergeChunkArtifact,
+        ) -> Result<Vec<u8>> {
+            self.merge_chunks
+                .iter()
+                .find(|(_, expected)| expected == artifact)
+                .map(|(bytes, _)| bytes.clone())
+                .ok_or_else(|| invalid("missing terminal merge chunk"))
         }
     }
 
@@ -9408,6 +9468,7 @@ mod tests {
         };
         let mut source = TerminalSource {
             shard: Some((shard_bytes, shard_artifact)),
+            ..TerminalSource::default()
         };
         let mut sink = TerminalSink::default();
 
@@ -9419,7 +9480,11 @@ mod tests {
         assert_eq!(published.chunks().len(), 2);
         assert_eq!(published.row_count(), 4);
         assert_eq!(
-            published.predecessor_root_identity(),
+            published.assignment_root_identity(),
+            committed.root_identity()
+        );
+        assert_eq!(
+            published.terminal_root_identity(),
             committed.root_identity()
         );
         assert_eq!(published.root_identity(), &sink.root.as_ref().unwrap().1);
@@ -9452,6 +9517,146 @@ mod tests {
         );
         assert!(rejected_sink.aborted);
         assert!(rejected_sink.chunks.is_empty());
+    }
+
+    #[test]
+    fn v36_terminal_supercell_publisher_consumes_exact_final_merge_generation() {
+        let training_spec = V36SupercellTrainingSpec {
+            corpus_rows: 65_537,
+            dimensions: 192,
+            maximum_block_rows: 65_536,
+            projected_corpus_sha256: "1".repeat(64),
+            reservoir_rows: 4,
+            super_cell_count: 2,
+        };
+        let model_identity = V36ArtifactIdentity {
+            blake3: "2".repeat(64),
+            encoded_bytes: 1,
+            role: "supercell-model".to_owned(),
+            sha256: "3".repeat(64),
+            uri: "s3://borsuk-v36-test/geometry/supercells.arrow".to_owned(),
+        };
+        let admission = V36AdmittedSupercellAssignmentPreflight {
+            model_identity: model_identity.clone(),
+            training_spec: training_spec.clone(),
+            request: V36SupercellAssignmentAdmissionRequest {
+                worker_count: 1,
+                queue_rows_per_worker: 65_536,
+                sort_rows_per_worker: 65_536,
+                merge_fan_in: 2,
+                measured_component_terms: 1,
+                measured_elapsed_ns: 1,
+                measured_cost_microusd: 1,
+                measured_external_work_units: 1,
+                measured_external_elapsed_ns: 1,
+                measured_external_cost_microusd: 1,
+                maximum_active_wall_seconds: 1,
+                maximum_cost_microusd: 1,
+                maximum_peak_live_bytes: 1,
+                maximum_scratch_bytes: 1,
+            },
+            projection: V36SupercellAssignmentProjection {
+                logical_shards: 2,
+                merge_generations: 1,
+                merge_fan_in: 2,
+                uncompressed_assignment_bytes: 1,
+                required_scratch_bytes: 1,
+                required_peak_live_bytes: 1,
+                coverage_bitmap_bytes: 8_193,
+                component_terms: 1,
+                external_work_units: 1,
+                publication_row_visits: 65_537,
+                projected_active_ns: 1,
+                projected_cost_microusd: 1,
+            },
+        };
+        let mut projected = [0.0_f32; 192];
+        projected[0] = 1.0;
+        let first_shard = (0..65_536_u64)
+            .map(|source| {
+                V36SupercellAssignmentRow::new(
+                    u32::try_from(source % 2).unwrap(),
+                    source,
+                    projected,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut first_shard = first_shard;
+        first_shard.sort_unstable_by_key(|row| (row.supercell_ordinal, row.source_ordinal));
+        let shard_rows = [
+            first_shard,
+            vec![V36SupercellAssignmentRow::new(0, 65_536, projected).unwrap()],
+        ];
+        let uri_prefix = "s3://borsuk-v36-test/geometry/assignments";
+        let mut shard_bytes = Vec::new();
+        let mut artifacts = Vec::new();
+        for (shard_ordinal, rows) in shard_rows.iter().enumerate() {
+            let shard_ordinal = u64::try_from(shard_ordinal).unwrap();
+            let context = V36SupercellAssignmentShardContext {
+                model_identity: model_identity.clone(),
+                projected_corpus_sha256: training_spec.projected_corpus_sha256.clone(),
+                shard_ordinal,
+                training_spec: training_spec.clone(),
+                uri: format!("{uri_prefix}/shard-{shard_ordinal:06}.arrow"),
+            };
+            let (bytes, artifact) =
+                encode_v36_supercell_assignment_shard_arrow(&context, rows).unwrap();
+            shard_bytes.push(bytes);
+            artifacts.push(artifact);
+        }
+        let (_, assignment_root) =
+            v36_committed_assignment_root(&admission, &artifacts, uri_prefix).unwrap();
+        let committed = V36CommittedSupercellAssignments {
+            admission,
+            artifacts: artifacts.clone(),
+            root_identity: assignment_root,
+            uri_prefix: uri_prefix.to_owned(),
+        };
+        let authenticated = artifacts
+            .iter()
+            .zip(&shard_bytes)
+            .map(|(artifact, bytes)| {
+                authenticate_v36_supercell_assignment_shard_arrow(bytes, artifact).unwrap()
+            })
+            .collect();
+        let group = load_v36_initial_assignment_merge_group(&committed, 0, authenticated).unwrap();
+        let mut merge_sink = InitialMergeSink::default();
+        let run = write_v36_initial_assignment_merge_group(&group, &mut merge_sink).unwrap();
+        let mut generation_sink = InitialMergeGenerationSink::default();
+        let generation = commit_v36_initial_assignment_merge_generation(
+            &committed,
+            vec![run],
+            &mut generation_sink,
+        )
+        .unwrap();
+        let mut source = TerminalSource {
+            merge_chunks: merge_sink.chunks.clone(),
+            shard: None,
+        };
+        let mut sink = TerminalSink::default();
+
+        let published =
+            publish_v36_supercell_run_chunks(&committed, Some(&generation), &mut source, &mut sink)
+                .unwrap();
+
+        assert_eq!(sink.events, ["chunk", "chunk", "root"]);
+        assert_eq!(published.row_count(), 65_537);
+        assert_eq!(
+            published.terminal_root_identity(),
+            generation.root_identity()
+        );
+        assert_eq!(
+            published.assignment_root_identity(),
+            committed.root_identity()
+        );
+        assert_eq!(
+            sink.chunks
+                .iter()
+                .map(|(_, artifact)| (artifact.context.supercell_ordinal, artifact.row_count))
+                .collect::<Vec<_>>(),
+            [(0, 32_769), (1, 32_768)]
+        );
     }
 
     #[test]
