@@ -7,10 +7,11 @@ use std::{
 
 use borsuk::{
     V36GeometryStop, V36PrefixGeometryConstructionLocalRequest,
-    V36PrefixGeometryDevelopmentLocalRequest, evaluate_v36_prefix_geometry_development,
+    V36PrefixGeometryDevelopmentLocalRequest, evaluate_v36_prefix_geometry_development_scores,
     load_v36_prefix_geometry_construction_local_files,
     load_v36_prefix_geometry_development_local_files, load_v36_prefix_source_feature_ids,
     project_v36_prefix_source_resident, run_v36_resident_projected_posting_diagnostic,
+    train_v36_resident_posting_score_model,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -141,6 +142,8 @@ fn run(args: Args) -> borsuk::Result<()> {
     let admission = diagnostic.assignments().admission();
     let (containment, evaluation_elapsed_ns) = if admission.stop.is_none() {
         let evaluation = Instant::now();
+        let score_model =
+            train_v36_resident_posting_score_model(&diagnostic, usize::from(args.workers))?;
         let development = load_v36_prefix_geometry_development_local_files(
             files.inputs(),
             V36PrefixGeometryDevelopmentLocalRequest {
@@ -148,8 +151,12 @@ fn run(args: Args) -> borsuk::Result<()> {
                 development_query: args.development_query,
             },
         )?;
-        let containment =
-            evaluate_v36_prefix_geometry_development(&development, &feature_ids, &diagnostic)?;
+        let containment = evaluate_v36_prefix_geometry_development_scores(
+            &development,
+            &feature_ids,
+            &diagnostic,
+            &score_model,
+        )?;
         (Some(containment), evaluation.elapsed().as_nanos())
     } else {
         (None, 0)
@@ -166,7 +173,7 @@ fn run(args: Args) -> borsuk::Result<()> {
     );
     result.insert("corpus_rows", serde_json::json!(construction.corpus_rows()));
     result.insert(
-        "development_containment",
+        "development_score_containment",
         serde_json::to_value(containment).unwrap(),
     );
     result.insert(
@@ -189,7 +196,7 @@ fn run(args: Args) -> borsuk::Result<()> {
     result.insert("projection", serde_json::json!("srht192-seed36"));
     result.insert(
         "schema",
-        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v2"),
+        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v3"),
     );
     result.insert("source", serde_json::to_value(source_identity).unwrap());
     result.insert(

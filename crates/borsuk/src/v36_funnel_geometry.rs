@@ -7562,6 +7562,7 @@ pub struct V36ResidentPostingDiagnostic {
     assignments: V36PostingAssignments,
     centroids: Vec<Vec<f32>>,
     postings_per_supercell: Vec<u32>,
+    projected_rows: Vec<(u64, Vec<f32>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -7596,6 +7597,41 @@ pub struct V36PostingContainmentDiagnostic {
     neighbors_per_query: u32,
     oracle_recall_ppm: u32,
     prefixes: Vec<V36PostingPrefixContainment>,
+}
+
+/// Frozen equal-byte posting-score family evaluated by the V36 screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum V36PostingScoreKind {
+    /// Posting-centroid squared-L2 control.
+    Centroid,
+    /// Diagonal Gaussian lower-tail heuristic.
+    DiagonalGaussian,
+    /// Rank-two Gaussian lower-tail heuristic.
+    RankTwoGaussian,
+    /// Rank-four Gaussian lower-tail heuristic.
+    RankFourGaussian,
+    /// Centroid plus five sub-prototype squared-L2 control.
+    PrototypeSix,
+}
+
+/// Exact route-owner containment for one frozen posting scorer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct V36PostingScoreContainment {
+    kind: V36PostingScoreKind,
+    containment: V36PostingContainmentDiagnostic,
+}
+
+impl V36PostingScoreContainment {
+    /// Frozen scorer identity.
+    pub const fn kind(&self) -> V36PostingScoreKind {
+        self.kind
+    }
+
+    /// Complete monotone posting-prefix containment curve.
+    pub const fn containment(&self) -> &V36PostingContainmentDiagnostic {
+        &self.containment
+    }
 }
 
 impl V36PostingContainmentDiagnostic {
@@ -7645,6 +7681,20 @@ pub fn evaluate_v36_posting_prefix_containment(
     projected_queries: &[Vec<f32>],
     ground_truth_source_ordinals: &[Vec<u64>],
 ) -> Result<V36PostingContainmentDiagnostic> {
+    evaluate_v36_posting_containment_with_score(
+        diagnostic,
+        projected_queries,
+        ground_truth_source_ordinals,
+        |posting, query| score_v36_posting_centroid(&diagnostic.centroids[posting], query),
+    )
+}
+
+fn evaluate_v36_posting_containment_with_score(
+    diagnostic: &V36ResidentPostingDiagnostic,
+    projected_queries: &[Vec<f32>],
+    ground_truth_source_ordinals: &[Vec<u64>],
+    score: impl Fn(usize, &[f32]) -> Result<f64>,
+) -> Result<V36PostingContainmentDiagnostic> {
     let posting_count = diagnostic.centroids.len();
     let assignments = &diagnostic.assignments;
     let query_count = projected_queries.len();
@@ -7682,11 +7732,8 @@ pub fn evaluate_v36_posting_prefix_containment(
     let mut aggregate_hits = vec![0_u64; posting_count];
     let mut minimum_query_hits = vec![u64::MAX; posting_count];
     for (query, neighbors) in projected_queries.iter().zip(ground_truth_source_ordinals) {
-        let mut ranked = diagnostic
-            .centroids
-            .iter()
-            .enumerate()
-            .map(|(posting, centroid)| Ok((score_v36_posting_centroid(centroid, query)?, posting)))
+        let mut ranked = (0..posting_count)
+            .map(|posting| Ok((score(posting, query)?, posting)))
             .collect::<Result<Vec<_>>>()?;
         ranked
             .sort_unstable_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
@@ -7818,10 +7865,20 @@ fn run_v36_resident_posting_core(
             target_primary_rows,
         )?
     };
+    let mut projected_rows = rows;
+    projected_rows.sort_unstable_by_key(|row| row.0);
+    if projected_rows
+        .iter()
+        .map(|row| row.0)
+        .ne(assignments.source_ordinals.iter().copied())
+    {
+        return Err(invalid("V36 resident diagnostic row order differs"));
+    }
     Ok(V36ResidentPostingDiagnostic {
         assignments,
         centroids,
         postings_per_supercell: allocation,
+        projected_rows,
     })
 }
 
@@ -8638,6 +8695,149 @@ pub fn score_v36_posting_prototype_six(
     best.is_finite()
         .then_some(best)
         .ok_or_else(|| invalid("V36 prototype-six score differs"))
+}
+
+struct V36ResidentPostingScoreSummaries {
+    diagonal: V36PostingGaussianSummary,
+    rank_two: V36PostingGaussianSummary,
+    rank_four: V36PostingGaussianSummary,
+    prototype_six: V36PostingPrototypeSummary,
+}
+
+/// Query-independent frozen summaries for every V36 posting-score family.
+pub struct V36ResidentPostingScoreModel {
+    summaries: Vec<V36ResidentPostingScoreSummaries>,
+}
+
+/// Train every frozen equal-byte scorer from final unique primary owners.
+pub fn train_v36_resident_posting_score_model(
+    diagnostic: &V36ResidentPostingDiagnostic,
+    worker_threads: usize,
+) -> Result<V36ResidentPostingScoreModel> {
+    if worker_threads == 0 || worker_threads > 64 {
+        return Err(invalid("V36 posting score workers differ"));
+    }
+    let posting_count = diagnostic.centroids.len();
+    let assignments = &diagnostic.assignments;
+    if posting_count == 0
+        || diagnostic.projected_rows.len() != assignments.source_ordinals.len()
+        || assignments.owner_offsets.len() != diagnostic.projected_rows.len() + 1
+    {
+        return Err(invalid("V36 posting score population differs"));
+    }
+    let mut posting_rows = vec![Vec::<(u64, Vec<f32>)>::new(); posting_count];
+    for (row, projected) in diagnostic.projected_rows.iter().enumerate() {
+        if projected.0 != assignments.source_ordinals[row] {
+            return Err(invalid("V36 posting score row order differs"));
+        }
+        let start = usize::try_from(assignments.owner_offsets[row])
+            .map_err(|_| invalid("V36 posting score owner offset differs"))?;
+        let primary = usize::try_from(
+            *assignments
+                .owners
+                .get(start)
+                .ok_or_else(|| invalid("V36 posting score primary owner differs"))?,
+        )
+        .map_err(|_| invalid("V36 posting score primary owner differs"))?;
+        posting_rows
+            .get_mut(primary)
+            .ok_or_else(|| invalid("V36 posting score primary owner differs"))?
+            .push(projected.clone());
+    }
+    if posting_rows.iter().any(Vec::is_empty) {
+        return Err(invalid("V36 posting score population differs"));
+    }
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .build()
+        .map_err(|_| invalid("V36 posting score workers differ"))?;
+    let summaries = pool.install(|| {
+        posting_rows
+            .into_par_iter()
+            .map(|rows| {
+                let diagonal = train_v36_posting_gaussian(&rows, 0)?;
+                let rank_two = train_v36_posting_gaussian(&rows, 2)?;
+                let rank_four = train_v36_posting_gaussian(&rows, 4)?;
+                let prototype_six = train_v36_posting_prototype_six(&rows)?;
+                if diagonal.mean() != rank_two.mean()
+                    || diagonal.mean() != rank_four.mean()
+                    || diagonal.mean() != prototype_six.centroid()
+                {
+                    return Err(invalid("V36 posting score means differ"));
+                }
+                Ok(V36ResidentPostingScoreSummaries {
+                    diagonal,
+                    rank_two,
+                    rank_four,
+                    prototype_six,
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    Ok(V36ResidentPostingScoreModel { summaries })
+}
+
+/// Evaluate every frozen scorer after its query-independent model is complete.
+pub fn evaluate_v36_posting_score_containment_with_model(
+    diagnostic: &V36ResidentPostingDiagnostic,
+    model: &V36ResidentPostingScoreModel,
+    projected_queries: &[Vec<f32>],
+    ground_truth_source_ordinals: &[Vec<u64>],
+) -> Result<Vec<V36PostingScoreContainment>> {
+    let summaries = &model.summaries;
+    if summaries.len() != diagnostic.centroids.len() {
+        return Err(invalid("V36 posting score model differs"));
+    }
+    let evaluate = |kind,
+                    score: &dyn Fn(usize, &[f32]) -> Result<f64>|
+     -> Result<V36PostingScoreContainment> {
+        Ok(V36PostingScoreContainment {
+            kind,
+            containment: evaluate_v36_posting_containment_with_score(
+                diagnostic,
+                projected_queries,
+                ground_truth_source_ordinals,
+                score,
+            )?,
+        })
+    };
+    Ok(vec![
+        evaluate(V36PostingScoreKind::Centroid, &|posting, query| {
+            score_v36_posting_centroid(summaries[posting].diagonal.mean(), query)
+        })?,
+        evaluate(V36PostingScoreKind::DiagonalGaussian, &|posting, query| {
+            score_v36_posting_gaussian(&summaries[posting].diagonal, query)
+        })?,
+        evaluate(V36PostingScoreKind::RankTwoGaussian, &|posting, query| {
+            score_v36_posting_gaussian(&summaries[posting].rank_two, query)
+        })?,
+        evaluate(V36PostingScoreKind::RankFourGaussian, &|posting, query| {
+            score_v36_posting_gaussian(&summaries[posting].rank_four, query)
+        })?,
+        evaluate(V36PostingScoreKind::PrototypeSix, &|posting, query| {
+            score_v36_posting_prototype_six(&summaries[posting].prototype_six, query)
+        })?,
+    ])
+}
+
+/// Train and evaluate every frozen equal-byte posting scorer on one resident diagnostic.
+///
+/// Summaries consume final unique primary owners. Ground truth is used only after every
+/// summary is frozen, and no vector page is read by this diagnostic boundary.
+pub fn evaluate_v36_posting_score_containment(
+    diagnostic: &V36ResidentPostingDiagnostic,
+    projected_queries: &[Vec<f32>],
+    ground_truth_source_ordinals: &[Vec<u64>],
+    worker_threads: usize,
+) -> Result<Vec<V36PostingScoreContainment>> {
+    let model = train_v36_resident_posting_score_model(diagnostic, worker_threads)?;
+    evaluate_v36_posting_score_containment_with_model(
+        diagnostic,
+        &model,
+        projected_queries,
+        ground_truth_source_ordinals,
+    )
 }
 
 /// Frozen candidate-count ladder for posting-summary accelerator qualification.

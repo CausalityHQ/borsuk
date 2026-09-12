@@ -55,9 +55,10 @@ use crate::{
 use crate::{
     v35_projection::project_v35_query_simd,
     v36_funnel_geometry::{
-        V36PostingContainmentDiagnostic, V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
-        V36ResidentPostingDiagnostic, build_v36_srht192_control,
-        evaluate_v36_posting_prefix_containment,
+        V36PostingContainmentDiagnostic, V36PostingScoreContainment,
+        V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource, V36ResidentPostingDiagnostic,
+        V36ResidentPostingScoreModel, build_v36_srht192_control,
+        evaluate_v36_posting_prefix_containment, evaluate_v36_posting_score_containment_with_model,
     },
 };
 
@@ -3403,16 +3404,16 @@ pub fn load_v36_prefix_geometry_development_local_files(
     })
 }
 
-/// Evaluate exact GT containment for every centroid-ranked posting prefix.
-///
-/// The complete development query and GT Parquets are validated before their
-/// scientific values are consumed. This computes a routing ceiling only and
-/// performs no page or object-store reads.
-pub fn evaluate_v36_prefix_geometry_development(
+struct V36PrefixGeometryDevelopmentEvidence {
+    projected_queries: Vec<Vec<f32>>,
+    ground_truth_source_ordinals: Vec<Vec<u64>>,
+}
+
+fn load_v36_prefix_geometry_development_evidence(
     files: &V36PrefixGeometryDevelopmentLocalFiles,
     source_feature_ids: &[u64],
     diagnostic: &V36ResidentPostingDiagnostic,
-) -> Result<V36PostingContainmentDiagnostic> {
+) -> Result<V36PrefixGeometryDevelopmentEvidence> {
     if source_feature_ids.len() != diagnostic.assignments().source_ordinals().len()
         || diagnostic
             .assignments()
@@ -3491,10 +3492,48 @@ pub fn evaluate_v36_prefix_geometry_development(
     {
         return Err(invalid("V36 prefix geometry GT cardinality differs"));
     }
+    Ok(V36PrefixGeometryDevelopmentEvidence {
+        projected_queries,
+        ground_truth_source_ordinals,
+    })
+}
+
+/// Evaluate exact GT containment for every centroid-ranked posting prefix.
+///
+/// The complete development query and GT Parquets are validated before their
+/// scientific values are consumed. This computes a routing ceiling only and
+/// performs no page or object-store reads.
+pub fn evaluate_v36_prefix_geometry_development(
+    files: &V36PrefixGeometryDevelopmentLocalFiles,
+    source_feature_ids: &[u64],
+    diagnostic: &V36ResidentPostingDiagnostic,
+) -> Result<V36PostingContainmentDiagnostic> {
+    let evidence =
+        load_v36_prefix_geometry_development_evidence(files, source_feature_ids, diagnostic)?;
     evaluate_v36_posting_prefix_containment(
         diagnostic,
-        &projected_queries,
-        &ground_truth_source_ordinals,
+        &evidence.projected_queries,
+        &evidence.ground_truth_source_ordinals,
+    )
+}
+
+/// Evaluate the complete frozen equal-byte score ladder on authenticated development truth.
+///
+/// All summaries are trained before this function consumes query or truth values. The result is
+/// a page-read-free routing ceiling and cannot make a serving or holdout claim.
+pub fn evaluate_v36_prefix_geometry_development_scores(
+    files: &V36PrefixGeometryDevelopmentLocalFiles,
+    source_feature_ids: &[u64],
+    diagnostic: &V36ResidentPostingDiagnostic,
+    model: &V36ResidentPostingScoreModel,
+) -> Result<Vec<V36PostingScoreContainment>> {
+    let evidence =
+        load_v36_prefix_geometry_development_evidence(files, source_feature_ids, diagnostic)?;
+    evaluate_v36_posting_score_containment_with_model(
+        diagnostic,
+        model,
+        &evidence.projected_queries,
+        &evidence.ground_truth_source_ordinals,
     )
 }
 

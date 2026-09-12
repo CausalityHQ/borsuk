@@ -10,8 +10,8 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field};
 use borsuk::{
-    V36ArtifactIdentity, V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
-    V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentRow,
+    V36ArtifactIdentity, V36PostingScoreKind, V36ProjectedCorpusBlockVisitor,
+    V36ProjectedCorpusSource, V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentRow,
     V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardSink,
     V36SupercellPostCountAdmissionRequest, V36SupercellRunChunkArtifact, V36SupercellTrainingSpec,
     admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
@@ -20,11 +20,12 @@ use borsuk::{
     decode_v36_supercell_assignment_shard_arrow, decode_v36_supercell_model_arrow,
     decode_v36_supercell_run_chunk_arrow, encode_v36_supercell_assignment_shard_arrow,
     encode_v36_supercell_model_arrow, encode_v36_supercell_run_chunk_arrow,
-    evaluate_v36_posting_prefix_containment, load_v36_prefix_source_feature_ids,
-    project_v36_exact_assignment_preflight, project_v36_supercell_assignment_admission,
-    project_v36_supercell_post_count_admission, project_v36_supercell_training_preflight,
-    run_v36_resident_projected_posting_diagnostic, train_v36_supercells, v36_prefix_source_schema,
-    write_v36_prefix_source_parquet, write_v36_supercell_assignment_shards,
+    evaluate_v36_posting_prefix_containment, evaluate_v36_posting_score_containment,
+    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
+    project_v36_supercell_assignment_admission, project_v36_supercell_post_count_admission,
+    project_v36_supercell_training_preflight, run_v36_resident_projected_posting_diagnostic,
+    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
+    write_v36_supercell_assignment_shards,
 };
 use sha2::{Digest, Sha256};
 
@@ -197,6 +198,53 @@ fn v36_resident_posting_containment_exposes_every_prefix_before_page_reads() {
     let mut missing = truth;
     missing[0][0] = 99;
     assert!(evaluate_v36_posting_prefix_containment(&diagnostic, &queries, &missing).is_err());
+}
+
+#[test]
+fn v36_resident_score_ladder_evaluates_all_registered_families() {
+    let rows = projected_rows(32);
+    let digest = projected_rows_sha256(&rows);
+    let source = ProjectedSource {
+        block_rows: 7,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let diagnostic =
+        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &digest, 8, None, 2).unwrap();
+    let queries = diagnostic.centroids().to_vec();
+    let truth = (0..diagnostic.centroids().len())
+        .map(|posting| {
+            diagnostic
+                .assignments()
+                .source_ordinals()
+                .iter()
+                .enumerate()
+                .find(|(row, _)| {
+                    let start = diagnostic.assignments().owner_offsets()[*row] as usize;
+                    diagnostic.assignments().owners()[start] as usize == posting
+                })
+                .map(|(_, ordinal)| vec![*ordinal])
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let ladder = evaluate_v36_posting_score_containment(&diagnostic, &queries, &truth, 2).unwrap();
+    assert_eq!(
+        ladder.iter().map(|arm| arm.kind()).collect::<Vec<_>>(),
+        [
+            V36PostingScoreKind::Centroid,
+            V36PostingScoreKind::DiagonalGaussian,
+            V36PostingScoreKind::RankTwoGaussian,
+            V36PostingScoreKind::RankFourGaussian,
+            V36PostingScoreKind::PrototypeSix,
+        ]
+    );
+    for arm in ladder {
+        assert_eq!(arm.containment().query_count(), 4);
+        assert_eq!(arm.containment().neighbors_per_query(), 1);
+        assert_eq!(arm.containment().oracle_recall_ppm(), 1_000_000);
+        assert_eq!(arm.containment().prefixes().len(), 4);
+    }
 }
 
 #[test]
