@@ -22,6 +22,7 @@ from scripts.run_v37_relation_router_spot import (
     V37StagedArtifact,
     V37StagedOutput,
     V37StagedPhase,
+    V37WorkerInvocation,
     build_v37_binary_command,
     build_v37_launch_specs,
     build_v37_science_service_command,
@@ -38,6 +39,7 @@ from scripts.run_v37_relation_router_spot import (
     publish_v37_worker_success,
     run_v37_native_process,
     run_v37_spot_phase,
+    run_v37_worker_invocation,
     stage_v37_phase_inputs,
     validate_v37_local_result_bytes,
     validate_v37_preflight_admission,
@@ -780,6 +782,52 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertTrue(diagnostic.startswith(b"returncode=23\n"))
         self.assertTrue(diagnostic.endswith(b"\nlast-line\n"))
         self.assertNotIn(b"first-line", diagnostic)
+
+    def test_v37_worker_preserves_pre_native_authority_failure_before_terminal(self) -> None:
+        binary_raw = b"v37-binary-fixture\n"
+        plan = _plan("evaluate-ceiling")
+        manifest_raw, _payloads = _phase_manifest_fixture(plan)
+        plan = dataclasses.replace(
+            plan,
+            binary_bytes=len(binary_raw),
+            binary_sha256=hashlib.sha256(binary_raw).hexdigest(),
+            manifest_bytes=len(manifest_raw),
+            manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
+        )
+        plan_raw = json.dumps(
+            dataclasses.asdict(plan), sort_keys=True, separators=(",", ":")
+        ).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_path = root / "plan.json"
+            manifest_path = root / "manifest.json"
+            binary_path = root / "v37"
+            plan_path.write_bytes(plan_raw)
+            manifest_path.write_bytes(manifest_raw)
+            binary_path.write_bytes(binary_raw)
+            s3 = _S3({})
+            with self.assertRaises(KeyError):
+                run_v37_worker_invocation(
+                    V37WorkerInvocation(
+                        root=root / "phase",
+                        plan=plan_path,
+                        manifest=manifest_path,
+                        binary=binary_path,
+                        instance_id="i-v37-fixture",
+                    ),
+                    s3,
+                )
+
+        self.assertEqual(
+            [key for _bucket, key, _body in s3.writes],
+            [
+                "results/evaluate-ceiling/WORKER_FAILURE.log",
+                "results/evaluate-ceiling/ATTEMPT_TERMINAL.json",
+            ],
+        )
+        diagnostic = s3.writes[0][2]
+        self.assertLessEqual(len(diagnostic), 65_536)
+        self.assertIn(b"KeyError", diagnostic)
 
     def test_v37_controller_never_masks_hard_launch_failures_as_spot_capacity(self) -> None:
         plan, objects = _controller_plan_fixture("preflight-training")

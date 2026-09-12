@@ -2115,10 +2115,17 @@ def run_v37_worker_invocation(invocation: V37WorkerInvocation, s3_client: Any) -
             upload_once=upload_once,
         )
     except Exception as error:
+        reason = _worker_failure_reason(error)
+        if reason != "worker-exit":
+            diagnostic = f"{type(error).__name__}: {error}\n".encode()[
+                :_MAX_WORKER_FAILURE_BYTES
+            ]
+            bucket, prefix = _s3_uri(plan.output_prefix, prefix=True)
+            upload_once(bucket, prefix + "WORKER_FAILURE.log", diagnostic)
         publish_v37_worker_failure(
             plan,
             instance_id=invocation.instance_id,
-            reason=_worker_failure_reason(error),
+            reason=reason,
             upload_once=upload_once,
         )
         raise
