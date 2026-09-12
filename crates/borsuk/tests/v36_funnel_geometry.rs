@@ -320,7 +320,7 @@ fn external_assignment_request() -> V36SupercellAssignmentAdmissionRequest {
 fn v36_geometry_external_assignment_admission_projects_registered_scales_without_population() {
     // Break caught: a 100M assignment is admitted from a balanced-cell RAM
     // assumption or without charging the complete uncompressed shard/merge copy.
-    for (rows, shards, merges, schedule, encoded, scratch, terms, external) in [
+    for (rows, shards, merges, schedule, encoded, scratch, coverage, terms, external) in [
         (
             1_000_000,
             16,
@@ -328,8 +328,9 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             vec![(16, 2, 2, 0), (2, 1, 0, 2)],
             781_048_576,
             1_971_238_400,
+            125_000,
             768_000_000_u128,
-            21_000_000_u128,
+            22_000_000_u128,
         ),
         (
             10_000_000,
@@ -338,8 +339,9 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             vec![(153, 20, 19, 1), (20, 3, 2, 4), (3, 1, 0, 3)],
             7_810_027_008,
             16_033_127_424,
+            1_250_000,
             122_880_000_000,
-            230_000_000,
+            240_000_000,
         ),
         (
             100_000_000,
@@ -353,8 +355,9 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
             ],
             78_100_007_936,
             156_642_449_408,
+            12_500_000,
             9_830_400_000_000,
-            2_500_000_000,
+            2_600_000_000,
         ),
     ] {
         let spec =
@@ -385,6 +388,8 @@ fn v36_geometry_external_assignment_admission_projects_registered_scales_without
         assert_eq!(projected.uncompressed_assignment_bytes, encoded);
         assert_eq!(projected.required_scratch_bytes, scratch);
         assert_eq!(projected.required_peak_live_bytes, 1_041_825_792);
+        assert_eq!(projected.coverage_bitmap_bytes, coverage);
+        assert_eq!(projected.publication_row_visits, u128::from(rows));
         assert_eq!(projected.component_terms, terms);
         assert_eq!(projected.external_work_units, external);
         assert_eq!(projected.projected_active_ns, terms + external);

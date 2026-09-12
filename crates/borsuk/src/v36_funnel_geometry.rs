@@ -5428,10 +5428,14 @@ pub struct V36SupercellAssignmentProjection {
     pub required_scratch_bytes: u64,
     /// Aggregate live bytes charged to all workers plus the model envelope.
     pub required_peak_live_bytes: u64,
+    /// Packed one-bit-per-source exact-coverage proof used by final publication.
+    pub coverage_bitmap_bytes: u64,
     /// Exact assignment distance component terms.
     pub component_terms: u128,
     /// Conservative sort comparisons plus assignment/merge row visits.
     pub external_work_units: u128,
+    /// Complete terminal-run rows decoded and republished into per-cell chunks.
+    pub publication_row_visits: u128,
     /// Ceiling-scaled active assignment time.
     pub projected_active_ns: u128,
     /// Ceiling-scaled assignment cost in micro-US-dollars.
@@ -5616,6 +5620,17 @@ pub fn project_v36_supercell_assignment_admission(
                 .and_then(|envelopes| bytes.checked_add(envelopes))
         })
         .ok_or_else(|| invalid("V36 external assignment final bytes overflow"))?;
+    let coverage_bitmap_bytes = spec.corpus_rows.div_ceil(8);
+    let decoded_publication_chunk_bytes = maximum_shard_rows
+        .checked_mul(
+            u64::try_from(std::mem::size_of::<V36SupercellAssignmentRow>())
+                .map_err(|_| invalid("V36 external assignment row size overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 external assignment publication memory overflows"))?;
+    let publication_phase_bytes = canonicalization_bytes
+        .checked_add(decoded_publication_chunk_bytes)
+        .and_then(|bytes| bytes.checked_add(coverage_bitmap_bytes))
+        .ok_or_else(|| invalid("V36 external assignment publication memory overflows"))?;
     let required_scratch_bytes = uncompressed_assignment_bytes
         .checked_add(maximum_final_bytes)
         .and_then(|bytes| bytes.checked_add(aggregate_worker_bytes))
@@ -5624,7 +5639,8 @@ pub fn project_v36_supercell_assignment_admission(
         .checked_add(
             aggregate_worker_bytes
                 .max(canonicalization_bytes)
-                .max(merge_phase_bytes),
+                .max(merge_phase_bytes)
+                .max(publication_phase_bytes),
         )
         .ok_or_else(|| invalid("V36 external assignment live bytes overflow"))?;
     let component_terms = u128::from(spec.corpus_rows)
@@ -5634,8 +5650,9 @@ pub fn project_v36_supercell_assignment_admission(
     let sort_comparison_units = u128::from(spec.corpus_rows)
         .checked_mul(16)
         .ok_or_else(|| invalid("V36 external assignment sort work overflows"))?;
+    let publication_row_visits = u128::from(spec.corpus_rows);
     let external_row_visits = u128::from(spec.corpus_rows)
-        .checked_mul(1 + 2 * u128::from(merge_generations))
+        .checked_mul(2 + 2 * u128::from(merge_generations))
         .ok_or_else(|| invalid("V36 external assignment merge work overflows"))?;
     let external_work_units = sort_comparison_units
         .checked_add(external_row_visits)
@@ -5678,8 +5695,10 @@ pub fn project_v36_supercell_assignment_admission(
         uncompressed_assignment_bytes,
         required_scratch_bytes,
         required_peak_live_bytes,
+        coverage_bitmap_bytes,
         component_terms,
         external_work_units,
+        publication_row_visits,
         projected_active_ns,
         projected_cost_microusd,
     })
@@ -9090,8 +9109,10 @@ mod tests {
             uncompressed_assignment_bytes: 1,
             required_scratch_bytes: 1,
             required_peak_live_bytes: 1,
+            coverage_bitmap_bytes: 1,
             component_terms: 1,
             external_work_units: 1,
+            publication_row_visits: 1,
             projected_active_ns: 1,
             projected_cost_microusd: 1,
         };
@@ -9421,8 +9442,10 @@ mod tests {
                 uncompressed_assignment_bytes: 1,
                 required_scratch_bytes: 1,
                 required_peak_live_bytes: 1,
+                coverage_bitmap_bytes: 1,
                 component_terms: 1,
                 external_work_units: 1,
+                publication_row_visits: 1,
                 projected_active_ns: 1,
                 projected_cost_microusd: 1,
             },
@@ -10522,8 +10545,10 @@ mod tests {
                 uncompressed_assignment_bytes: 1,
                 required_scratch_bytes: 1,
                 required_peak_live_bytes: 1,
+                coverage_bitmap_bytes: 1,
                 component_terms: 1,
                 external_work_units: 1,
+                publication_row_visits: 1,
                 projected_active_ns: 1,
                 projected_cost_microusd: 1,
             },
