@@ -4457,3 +4457,56 @@ Every output is immutable and SHA256-bound. This evidence is
 population and exact truth but reports no ANN recall, query latency, S3 GETs,
 or serving throughput. Those measurements begin only with the sequential V36
 offline funnel; no 10M/100M or cold-S3 cell is authorized by this milestone.
+
+### V36 one-million-row resident geometry: capacity fixed, routing still open
+
+The first real 768-dimensional cohort-A geometry diagnostic used source
+`2f78e52a518368a932739b4136c20592258eb936` on causality Spot
+`r8gd.8xlarge` instance `i-058a25c20fdc1343f`. It projected all 1,000,000
+frozen rows to SRHT-192, trained 123 postings, and assigned each row to its
+nearest posting. Construction rejected before opening development truth:
+primary p99 was 21,840 rows and the maximum was 23,057, versus the 8,192-row
+target and 16,384 p99 gate. Scientific work took 200.753682064 seconds;
+the wrapper took 205 seconds, observed 1,552,844 KiB peak RSS and zero memory
+PSI. The 974-byte result is SHA256
+`be040c8efc5c967bb80c7d01040e8edf4bd21b2f87501602e3c772675ffb0ff3`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v36-geometry-oracle/runs/v36-geometry-oracle-20260912T103432Z-2f78e52a/attempt-0000/`.
+
+Source `08af3fdf046acdfeed0ae19f13a557e850c280a9` then replaced unconstrained
+ownership with deterministic capacity-aware placement. Every posting admitted
+at most 8,192 primary and stored rows: p99 and maximum were both exactly 8,192,
+mean replication was 1,000,000 ppm, and construction passed. The same frozen
+1,000 development queries and exact GT@100 then measured route-owner
+containment, without reading any vector page:
+
+| Selected postings | Aggregate GT@100 containment | Minimum query containment |
+|---:|---:|---:|
+| 8 | 894,830 ppm | 90,000 ppm |
+| 16 | 948,240 ppm | 150,000 ppm |
+| 32 | 979,770 ppm | 600,000 ppm |
+| 48 | 990,790 ppm | 780,000 ppm |
+| 51 | 991,990 ppm | 810,000 ppm |
+| 64 | 995,980 ppm | 850,000 ppm |
+| 80 | 998,320 ppm | 900,000 ppm |
+| 101 | 999,770 ppm | 970,000 ppm |
+| 116 | 1,000,000 ppm | 1,000,000 ppm |
+
+The 12,016-byte result is SHA256
+`3b39bddb800f6da453810529cbcd27d01e6c2dd66c181fb32bfda7b695abb3c3`;
+the 560-byte terminal is SHA256
+`085e1d909cac36c1ee19ea0f1f7fcdd6e551f78edbce4c7f38ee5fdeb20fbd9d`.
+Both are under
+`s3://borsuk-bench-453182569524-euc1/research/v36-geometry-oracle/runs/v36-geometry-oracle-20260912T110447Z-08af3fdf/attempt-0000/`.
+Scientific work took 203.690949743 seconds; the wrapper took 213 seconds,
+observed 1,553,152 KiB peak RSS, zero swap and zero memory PSI. The causality
+Spot instance `i-08d820641cde87ab4` and request `sir-bqkfqmpg` are terminated.
+
+Disposition: capacity-aware assignment fixes the construction blocker but not
+selective routing. Eight and sixteen postings remain far below the registered
+998,000-ppm route-containment gate. The next one-million-row-only experiment
+preserves capacity-aware primary ownership and adds the original nearest
+Voronoi owner as one bounded secondary route only for displaced rows. This
+tests whether balancing, rather than centroid representation, caused the
+quality loss. No 10M/100M, page-body, cold-S3, validation, sealed-holdout, or
+claim-eligible run is authorized by either result.
