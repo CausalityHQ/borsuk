@@ -4510,3 +4510,87 @@ Voronoi owner as one bounded secondary route only for displaced rows. This
 tests whether balancing, rather than centroid representation, caused the
 quality loss. No 10M/100M, page-body, cold-S3, validation, sealed-holdout, or
 claim-eligible run is authorized by either result.
+
+### V36 one-million-row natural-owner and score-shape falsifiers
+
+Source `f6f3acd0cdb9895721ceee884b3ac336f24f32b7` preserved the
+capacity-aware primary owner and added the original nearest Voronoi owner only
+for rows displaced by balancing. Construction remained within the 8,192-row
+primary cap: primary p99/maximum were 8,192/8,192, stored p99/maximum were
+21,840/23,057, and mean replication was 1,144,511 ppm. On the frozen 1,000
+development queries and exact GT@100, containment was 931,340/120,000 ppm at
+K=8, 968,520/230,000 ppm at K=14, 974,100/230,000 ppm at K=16, and
+993,260/600,000 ppm at K=32 (aggregate/minimum-query). Perfect containment
+still required K=116. The 12,020-byte result is SHA256
+`43d44a8ee92536b68c18d09d20cb6d2258a79a3f10151469e3643615072beec3`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v36-geometry-oracle/runs/v36-geometry-oracle-20260912T112438Z-f6f3acd0/attempt-0000/`.
+Scientific work took 202.286775083 seconds; the wrapper took 214 seconds,
+observed 1,573,128 KiB peak RSS, zero swap, and zero memory PSI. Spot instance
+`i-0654f5efb2d791352` is terminated.
+
+Source `e8af9daec819f6684488b25dbd901986ff994d8a` then froze five
+equal-byte, query-independent score models before development artifacts were
+opened: final-primary centroid, diagonal Gaussian, rank-two Gaussian,
+rank-four Gaussian, and six prototypes. It did not change ownership. At K=14,
+their aggregate/minimum-query containments were respectively 958,340/230,000,
+959,580/210,000, 916,110/10,000, 919,170/40,000, and 955,750/240,000 ppm.
+The best aggregate result, diagonal Gaussian at 959,580 ppm, remained far
+below the 998,000-ppm route gate, and every arm failed the 800,000-ppm
+minimum-query gate. The 56,323-byte result is SHA256
+`7f41e88d2c2b8752017f029b17f7de16ed7124d4a8870b053bc4d5050cc34a54`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v36-geometry-oracle/runs/v36-geometry-score-ladder-20260912T120000Z-e8af9dae/attempt-0000/`.
+Scientific work took 203.878814088 seconds; the wrapper took 207 seconds,
+observed 1,659,756 KiB peak process-group RSS, zero swap, and zero memory PSI.
+Spot instance `i-0b302445f207adb30` is terminated.
+
+Disposition: the natural owner improves containment materially over the
+balanced primary alone, but neither a single natural secondary nor richer
+fixed-size posting shapes makes fourteen posting objects selective enough.
+The final-primary score ladder also shows that diagonal covariance, low-rank
+ellipsoids, and prototypes are not substitutes for a better row-to-posting
+relation on this population. These are development-only, claim-ineligible
+diagnostics; validation, holdout, 10M, 100M, and page-body reads remain fenced.
+
+### V36 one-million-row bounded closure ladder
+
+Source `aa33d18dd8a09d323afa61aa5adba59c2343b634` evaluated the
+preregistered capacity-aware closure ladder at epsilon 0.05, 0.15, and 0.30.
+All three arms kept the same frozen projection, balanced primary assignment,
+five score models, 1,000 development queries, and exact GT@100. Closure was
+bounded to eight distinct owners per row. All three constructions passed with
+primary p99/maximum 8,192/8,192 and stored maximum 23,057; mean replication
+was only 1,144,602, 1,144,779, and 1,145,084 ppm respectively.
+
+| Epsilon | Best K=8 aggregate/minimum | Best K=14 aggregate/minimum | Best K=32 aggregate/minimum |
+|---:|---:|---:|---:|
+| 0.05 | 923,890 / 50,000 ppm | 959,590 / 210,000 ppm | 990,620 / 600,000 ppm |
+| 0.15 | 923,940 / 50,000 ppm | 959,610 / 220,000 ppm | 990,640 / 600,000 ppm |
+| 0.30 | 923,950 / 50,000 ppm | 959,630 / 220,000 ppm | 990,650 / 600,000 ppm |
+
+The K=8 and K=14 best aggregates use diagonal-Gaussian scoring; the K=32 best
+aggregates use centroid scoring. Relative to the no-closure score ladder, the
+largest epsilon improves the best K=14 aggregate by only 50 ppm and the worst
+query by 10,000 ppm. It therefore fails both registered route gates decisively.
+
+The epsilon 0.05, 0.15, and 0.30 results are respectively 56,346, 56,346, and
+56,345 bytes with SHA256
+`7cbf70c79c9bbb7f49ce96c3135b15723c836c4e89dfd891db3a3251bf97b478`,
+`f82dcaeee1793d236b00d4ebc3c04be41a1dae543f8bb1237903b83e23f3b44d`,
+and `5433681a715867b8046231116258290ffdfdb807fb940319da1669fff240c9c0`.
+They are preserved under the three
+`s3://borsuk-bench-453182569524-euc1/research/v36-geometry-oracle/runs/v36-geometry-closure-{005,015,030}-20260912T122000Z-aa33d18d/attempt-0000/`
+prefixes. Wrapper wall times were 238, 242, and 248 seconds; peak
+process-group RSS was 1,651,800, 1,579,044, and 1,579,024 KiB; every run
+reported zero swap delta and zero peak memory PSI. The three causality Spot
+instances `i-044010bf699fe3f5a`, `i-02baea02ee98f4fa2`, and
+`i-03cd452e3ab670f15` are terminated.
+
+Disposition: the epsilon ladder is rejected. It barely changes the owner
+relation and cannot recover the missing exact neighbors within fourteen
+objects. Further epsilon or score-shape tuning is not justified. The next
+experiment stays on the same frozen one-million-row development population
+and must change the query-independent row-to-posting relation while retaining
+the exact object-count, byte, memory, and determinism gates. No larger-scale
+or claim-eligible run is authorized.
