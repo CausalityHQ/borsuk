@@ -7,13 +7,17 @@ use std::{
 
 use borsuk::{
     V36GeometryStop, V36PrefixGeometryConstructionLocalRequest,
-    load_v36_prefix_geometry_construction_local_files, load_v36_prefix_source_feature_ids,
+    V36PrefixGeometryDevelopmentLocalRequest, evaluate_v36_prefix_geometry_development,
+    load_v36_prefix_geometry_construction_local_files,
+    load_v36_prefix_geometry_development_local_files, load_v36_prefix_source_feature_ids,
     project_v36_prefix_source_resident, run_v36_resident_projected_posting_diagnostic,
 };
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     authority: PathBuf,
+    development_ground_truth: PathBuf,
+    development_query: PathBuf,
     execution_authority: PathBuf,
     output: PathBuf,
     receipt: PathBuf,
@@ -33,6 +37,8 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             flag.as_str(),
             "--authority"
                 | "--execution-authority"
+                | "--development-ground-truth"
+                | "--development-query"
                 | "--receipt"
                 | "--source-registry"
                 | "--source"
@@ -53,6 +59,8 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             .ok_or_else(|| format!("V36 geometry {flag} is missing"))
     };
     let authority = take("--authority")?.into();
+    let development_ground_truth = take("--development-ground-truth")?.into();
+    let development_query = take("--development-query")?.into();
     let execution_authority = take("--execution-authority")?.into();
     let output = take("--output")?.into();
     let receipt = take("--receipt")?.into();
@@ -68,6 +76,8 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     }
     Ok(Args {
         authority,
+        development_ground_truth,
+        development_query,
         execution_authority,
         output,
         receipt,
@@ -129,6 +139,21 @@ fn run(args: Args) -> borsuk::Result<()> {
     )?;
     let geometry_elapsed_ns = geometry.elapsed().as_nanos();
     let admission = diagnostic.assignments().admission();
+    let (containment, evaluation_elapsed_ns) = if admission.stop.is_none() {
+        let evaluation = Instant::now();
+        let development = load_v36_prefix_geometry_development_local_files(
+            files.inputs(),
+            V36PrefixGeometryDevelopmentLocalRequest {
+                development_ground_truth: args.development_ground_truth,
+                development_query: args.development_query,
+            },
+        )?;
+        let containment =
+            evaluate_v36_prefix_geometry_development(&development, &feature_ids, &diagnostic)?;
+        (Some(containment), evaluation.elapsed().as_nanos())
+    } else {
+        (None, 0)
+    };
     let mut result = BTreeMap::new();
     result.insert("claim_eligible", serde_json::json!(false));
     result.insert(
@@ -140,6 +165,10 @@ fn run(args: Args) -> borsuk::Result<()> {
         serde_json::to_value(stop_name(admission.stop)).unwrap(),
     );
     result.insert("corpus_rows", serde_json::json!(construction.corpus_rows()));
+    result.insert(
+        "development_containment",
+        serde_json::to_value(containment).unwrap(),
+    );
     result.insert(
         "mean_replication_ppm",
         serde_json::json!(admission.mean_replication_ppm),
@@ -160,7 +189,7 @@ fn run(args: Args) -> borsuk::Result<()> {
     result.insert("projection", serde_json::json!("srht192-seed36"));
     result.insert(
         "schema",
-        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v1"),
+        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v2"),
     );
     result.insert("source", serde_json::to_value(source_identity).unwrap());
     result.insert(
@@ -176,6 +205,7 @@ fn run(args: Args) -> borsuk::Result<()> {
         "timing_ns",
         serde_json::json!({
             "authentication": authentication_elapsed_ns,
+            "evaluation": evaluation_elapsed_ns,
             "geometry": geometry_elapsed_ns,
             "projection": projection_elapsed_ns,
             "whole": whole.elapsed().as_nanos(),
@@ -229,6 +259,10 @@ mod tests {
             "--execute-resident-1m-geometry",
             "--authority",
             "authority.json",
+            "--development-ground-truth",
+            "development-gt100.parquet",
+            "--development-query",
+            "development-query.parquet",
             "--execution-authority",
             "execution.json",
             "--receipt",

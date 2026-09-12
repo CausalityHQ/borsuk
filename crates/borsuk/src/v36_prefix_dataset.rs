@@ -55,7 +55,9 @@ use crate::{
 use crate::{
     v35_projection::project_v35_query_simd,
     v36_funnel_geometry::{
-        V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource, build_v36_srht192_control,
+        V36PostingContainmentDiagnostic, V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
+        V36ResidentPostingDiagnostic, build_v36_srht192_control,
+        evaluate_v36_posting_prefix_containment,
     },
 };
 
@@ -3111,10 +3113,44 @@ pub struct V36PrefixGeometryConstructionLocalRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Evaluation-only local files opened after query-blind geometry construction.
+pub struct V36PrefixGeometryDevelopmentLocalRequest {
+    /// Complete authenticated development GT@100 Parquet.
+    pub development_ground_truth: PathBuf,
+    /// Complete authenticated development-query Parquet.
+    pub development_query: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated query-blind local capability for V36 geometry construction.
 pub struct V36PrefixGeometryConstructionLocalFiles {
     inputs: V36PrefixGeometryInputs,
     source: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated burnable development capability without a source handle.
+pub struct V36PrefixGeometryDevelopmentLocalFiles {
+    development: V36PrefixGeometryDevelopmentInput,
+    development_ground_truth: PathBuf,
+    development_query: PathBuf,
+}
+
+impl V36PrefixGeometryDevelopmentLocalFiles {
+    /// Return the registered development identities and row counts.
+    pub const fn input(&self) -> &V36PrefixGeometryDevelopmentInput {
+        &self.development
+    }
+
+    /// Return the authenticated development-query path.
+    pub fn development_query_path(&self) -> &Path {
+        &self.development_query
+    }
+
+    /// Return the authenticated development GT@100 path.
+    pub fn development_ground_truth_path(&self) -> &Path {
+        &self.development_ground_truth
+    }
 }
 
 impl V36PrefixGeometryConstructionLocalFiles {
@@ -3345,6 +3381,121 @@ pub fn load_v36_prefix_geometry_construction_local_files(
         inputs,
         source: request.source,
     })
+}
+
+/// Authenticate only the burnable development artifacts after construction is terminal.
+pub fn load_v36_prefix_geometry_development_local_files(
+    inputs: &V36PrefixGeometryInputs,
+    request: V36PrefixGeometryDevelopmentLocalRequest,
+) -> Result<V36PrefixGeometryDevelopmentLocalFiles> {
+    if request.development_ground_truth == request.development_query {
+        return Err(invalid("V36 prefix geometry local path roles overlap"));
+    }
+    authenticate_file(&request.development_query, inputs.development().query())?;
+    authenticate_file(
+        &request.development_ground_truth,
+        inputs.development().ground_truth(),
+    )?;
+    Ok(V36PrefixGeometryDevelopmentLocalFiles {
+        development: inputs.development().clone(),
+        development_ground_truth: request.development_ground_truth,
+        development_query: request.development_query,
+    })
+}
+
+/// Evaluate exact GT containment for every centroid-ranked posting prefix.
+///
+/// The complete development query and GT Parquets are validated before their
+/// scientific values are consumed. This computes a routing ceiling only and
+/// performs no page or object-store reads.
+pub fn evaluate_v36_prefix_geometry_development(
+    files: &V36PrefixGeometryDevelopmentLocalFiles,
+    source_feature_ids: &[u64],
+    diagnostic: &V36ResidentPostingDiagnostic,
+) -> Result<V36PostingContainmentDiagnostic> {
+    if source_feature_ids.len() != diagnostic.assignments().source_ordinals().len()
+        || diagnostic
+            .assignments()
+            .source_ordinals()
+            .iter()
+            .enumerate()
+            .any(|(ordinal, observed)| *observed != u64::try_from(ordinal).unwrap_or(u64::MAX))
+    {
+        return Err(invalid(
+            "V36 prefix geometry source ordinal binding differs",
+        ));
+    }
+    let mut source_ordinals = HashMap::with_capacity(source_feature_ids.len());
+    for (ordinal, feature_id) in source_feature_ids.iter().copied().enumerate() {
+        if source_ordinals
+            .insert(feature_id, u64::try_from(ordinal).unwrap_or(u64::MAX))
+            .is_some()
+        {
+            return Err(invalid("V36 prefix geometry source membership differs"));
+        }
+    }
+    let expected_queries = u32::try_from(files.development.query_rows)
+        .map_err(|_| invalid("V36 prefix geometry query count differs"))?;
+    let projection = build_v36_srht192_control()?;
+    let mut projected_queries = Vec::with_capacity(expected_queries as usize);
+    scan_v36_prefix_query_parquet(
+        &files.development_query,
+        u64::from(expected_queries),
+        |batch| {
+            for row in v36_prefix_query_rows_from_batch(&batch, 0, batch.num_rows())? {
+                let projected = project_v35_query_simd(&projection, &row.embedding)?;
+                projected_queries.push(
+                    projected
+                        .coordinates()
+                        .iter()
+                        .map(|value| {
+                            let value = *value as f32;
+                            if value == 0.0 { 0.0 } else { value }
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Ok(())
+        },
+    )?;
+    let mut ground_truth_source_ordinals =
+        vec![Vec::with_capacity(GT_NEIGHBORS); expected_queries as usize];
+    scan_v36_prefix_gt100_parquet(&files.development_ground_truth, expected_queries, |batch| {
+        let queries = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V36 prefix GT query column differs"))?;
+        let ids = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V36 prefix GT ID column differs"))?;
+        for row in 0..batch.num_rows() {
+            let query = usize::try_from(queries.value(row))
+                .map_err(|_| invalid("V36 prefix geometry query ordinal differs"))?;
+            let source_ordinal = source_ordinals
+                .get(&ids.value(row))
+                .copied()
+                .ok_or_else(|| invalid("V36 prefix geometry GT membership differs"))?;
+            ground_truth_source_ordinals
+                .get_mut(query)
+                .ok_or_else(|| invalid("V36 prefix geometry query ordinal differs"))?
+                .push(source_ordinal);
+        }
+        Ok(())
+    })?;
+    if ground_truth_source_ordinals
+        .iter()
+        .any(|neighbors| neighbors.len() != GT_NEIGHBORS)
+    {
+        return Err(invalid("V36 prefix geometry GT cardinality differs"));
+    }
+    evaluate_v36_posting_prefix_containment(
+        diagnostic,
+        &projected_queries,
+        &ground_truth_source_ordinals,
+    )
 }
 
 /// Authenticate the frozen prefix authority and three scientific objects before use.

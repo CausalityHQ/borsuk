@@ -7564,6 +7564,62 @@ pub struct V36ResidentPostingDiagnostic {
     postings_per_supercell: Vec<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Exact GT containment at one centroid-ranked posting prefix.
+pub struct V36PostingPrefixContainment {
+    selected_postings: u32,
+    aggregate_recall_ppm: u32,
+    minimum_query_recall_ppm: u32,
+}
+
+impl V36PostingPrefixContainment {
+    /// Number of centroid-ranked postings admitted for every query.
+    pub const fn selected_postings(&self) -> u32 {
+        self.selected_postings
+    }
+
+    /// Aggregate fraction of exact neighbors whose owners are in the prefix.
+    pub const fn aggregate_recall_ppm(&self) -> u32 {
+        self.aggregate_recall_ppm
+    }
+
+    /// Lowest per-query exact-neighbor containment in the prefix.
+    pub const fn minimum_query_recall_ppm(&self) -> u32 {
+        self.minimum_query_recall_ppm
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Query-time containment ceiling for every posting prefix, before page reads.
+pub struct V36PostingContainmentDiagnostic {
+    query_count: u32,
+    neighbors_per_query: u32,
+    oracle_recall_ppm: u32,
+    prefixes: Vec<V36PostingPrefixContainment>,
+}
+
+impl V36PostingContainmentDiagnostic {
+    /// Number of independently registered queries evaluated.
+    pub const fn query_count(&self) -> u32 {
+        self.query_count
+    }
+
+    /// Exact-neighbor count supplied for each query.
+    pub const fn neighbors_per_query(&self) -> u32 {
+        self.neighbors_per_query
+    }
+
+    /// Containment when all postings are admitted.
+    pub const fn oracle_recall_ppm(&self) -> u32 {
+        self.oracle_recall_ppm
+    }
+
+    /// Exact containment curve in increasing prefix order.
+    pub fn prefixes(&self) -> &[V36PostingPrefixContainment] {
+        &self.prefixes
+    }
+}
+
 impl V36ResidentPostingDiagnostic {
     /// Globally numbered posting centroids, grouped by supercell ordinal.
     pub fn centroids(&self) -> &[Vec<f32>] {
@@ -7579,6 +7635,134 @@ impl V36ResidentPostingDiagnostic {
     pub const fn assignments(&self) -> &V36PostingAssignments {
         &self.assignments
     }
+}
+
+/// Recompute exact-neighbor containment for every centroid-ranked posting prefix.
+///
+/// This is a page-read-free routing ceiling: it does not claim end-to-end recall or latency.
+pub fn evaluate_v36_posting_prefix_containment(
+    diagnostic: &V36ResidentPostingDiagnostic,
+    projected_queries: &[Vec<f32>],
+    ground_truth_source_ordinals: &[Vec<u64>],
+) -> Result<V36PostingContainmentDiagnostic> {
+    let posting_count = diagnostic.centroids.len();
+    let assignments = &diagnostic.assignments;
+    let query_count = projected_queries.len();
+    let neighbors_per_query = ground_truth_source_ordinals
+        .first()
+        .map(Vec::len)
+        .unwrap_or(0);
+    if posting_count == 0
+        || query_count == 0
+        || query_count != ground_truth_source_ordinals.len()
+        || neighbors_per_query == 0
+        || posting_count > u32::MAX as usize
+        || query_count > u32::MAX as usize
+        || neighbors_per_query > u32::MAX as usize
+        || assignments.owner_offsets.len() != assignments.source_ordinals.len() + 1
+        || ground_truth_source_ordinals
+            .iter()
+            .any(|neighbors| neighbors.len() != neighbors_per_query)
+    {
+        return Err(invalid("V36 posting containment authority differs"));
+    }
+    let dimensions = diagnostic.centroids[0].len();
+    if dimensions == 0
+        || diagnostic
+            .centroids
+            .iter()
+            .any(|centroid| centroid.len() != dimensions)
+        || projected_queries
+            .iter()
+            .any(|query| query.len() != dimensions)
+    {
+        return Err(invalid("V36 posting containment dimensions differ"));
+    }
+
+    let mut aggregate_hits = vec![0_u64; posting_count];
+    let mut minimum_query_hits = vec![u64::MAX; posting_count];
+    for (query, neighbors) in projected_queries.iter().zip(ground_truth_source_ordinals) {
+        let mut ranked = diagnostic
+            .centroids
+            .iter()
+            .enumerate()
+            .map(|(posting, centroid)| Ok((score_v36_posting_centroid(centroid, query)?, posting)))
+            .collect::<Result<Vec<_>>>()?;
+        ranked
+            .sort_unstable_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+        let mut rank_by_posting = vec![0_usize; posting_count];
+        for (rank, (_, posting)) in ranked.into_iter().enumerate() {
+            rank_by_posting[posting] = rank;
+        }
+        let mut first_owner_ranks = vec![0_u64; posting_count];
+        for source_ordinal in neighbors {
+            let row = assignments
+                .source_ordinals
+                .binary_search(source_ordinal)
+                .map_err(|_| invalid("V36 posting containment GT membership differs"))?;
+            let start = usize::try_from(assignments.owner_offsets[row])
+                .map_err(|_| invalid("V36 posting containment owner offset differs"))?;
+            let end = usize::try_from(assignments.owner_offsets[row + 1])
+                .map_err(|_| invalid("V36 posting containment owner offset differs"))?;
+            let earliest = assignments
+                .owners
+                .get(start..end)
+                .ok_or_else(|| invalid("V36 posting containment owner extent differs"))?
+                .iter()
+                .map(|owner| usize::try_from(*owner).unwrap_or(usize::MAX))
+                .map(|owner| rank_by_posting.get(owner).copied().unwrap_or(usize::MAX))
+                .min()
+                .filter(|rank| *rank < posting_count)
+                .ok_or_else(|| invalid("V36 posting containment owner differs"))?;
+            first_owner_ranks[earliest] = first_owner_ranks[earliest]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 posting containment hits overflow"))?;
+        }
+        let mut query_hits = 0_u64;
+        for prefix in 0..posting_count {
+            query_hits = query_hits
+                .checked_add(first_owner_ranks[prefix])
+                .ok_or_else(|| invalid("V36 posting containment hits overflow"))?;
+            aggregate_hits[prefix] = aggregate_hits[prefix]
+                .checked_add(query_hits)
+                .ok_or_else(|| invalid("V36 posting containment hits overflow"))?;
+            minimum_query_hits[prefix] = minimum_query_hits[prefix].min(query_hits);
+        }
+    }
+    let total_neighbors = u64::try_from(query_count)
+        .ok()
+        .and_then(|queries| queries.checked_mul(u64::try_from(neighbors_per_query).ok()?))
+        .ok_or_else(|| invalid("V36 posting containment denominator overflows"))?;
+    let ppm = |numerator: u64, denominator: u64| -> Result<u32> {
+        u32::try_from(
+            numerator
+                .checked_mul(1_000_000)
+                .ok_or_else(|| invalid("V36 posting containment ppm overflows"))?
+                / denominator,
+        )
+        .map_err(|_| invalid("V36 posting containment ppm differs"))
+    };
+    let mut prefixes = Vec::with_capacity(posting_count);
+    for prefix in 0..posting_count {
+        prefixes.push(V36PostingPrefixContainment {
+            selected_postings: u32::try_from(prefix + 1).unwrap(),
+            aggregate_recall_ppm: ppm(aggregate_hits[prefix], total_neighbors)?,
+            minimum_query_recall_ppm: ppm(
+                minimum_query_hits[prefix],
+                u64::try_from(neighbors_per_query).unwrap(),
+            )?,
+        });
+    }
+    let oracle_recall_ppm = prefixes
+        .last()
+        .map(|prefix| prefix.aggregate_recall_ppm)
+        .ok_or_else(|| invalid("V36 posting containment prefixes differ"))?;
+    Ok(V36PostingContainmentDiagnostic {
+        query_count: u32::try_from(query_count).unwrap(),
+        neighbors_per_query: u32::try_from(neighbors_per_query).unwrap(),
+        oracle_recall_ppm,
+        prefixes,
+    })
 }
 
 fn run_v36_resident_posting_core(

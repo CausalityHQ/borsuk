@@ -19,11 +19,12 @@ use borsuk::{
     bind_v36_supercell_run_chunk_context, decode_v36_supercell_assignment_shard_arrow,
     decode_v36_supercell_model_arrow, decode_v36_supercell_run_chunk_arrow,
     encode_v36_supercell_assignment_shard_arrow, encode_v36_supercell_model_arrow,
-    encode_v36_supercell_run_chunk_arrow, load_v36_prefix_source_feature_ids,
-    project_v36_exact_assignment_preflight, project_v36_supercell_assignment_admission,
-    project_v36_supercell_post_count_admission, project_v36_supercell_training_preflight,
-    run_v36_resident_projected_posting_diagnostic, train_v36_supercells, v36_prefix_source_schema,
-    write_v36_prefix_source_parquet, write_v36_supercell_assignment_shards,
+    encode_v36_supercell_run_chunk_arrow, evaluate_v36_posting_prefix_containment,
+    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
+    project_v36_supercell_assignment_admission, project_v36_supercell_post_count_admission,
+    project_v36_supercell_training_preflight, run_v36_resident_projected_posting_diagnostic,
+    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
+    write_v36_supercell_assignment_shards,
 };
 use sha2::{Digest, Sha256};
 
@@ -137,6 +138,65 @@ fn v36_resident_projected_posting_diagnostic_runs_the_complete_small_shape() {
         run_v36_resident_projected_posting_diagnostic(source, 32, 7, &"f".repeat(64), 8, None, 1,)
             .is_err()
     );
+}
+
+#[test]
+fn v36_resident_posting_containment_exposes_every_prefix_before_page_reads() {
+    let rows = projected_rows(32);
+    let digest = projected_rows_sha256(&rows);
+    let source = ProjectedSource {
+        block_rows: 7,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let diagnostic =
+        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &digest, 8, None, 1).unwrap();
+    let queries = diagnostic.centroids().to_vec();
+    let mut truth = Vec::new();
+    for posting in 0..diagnostic.centroids().len() {
+        truth.push(
+            diagnostic
+                .assignments()
+                .source_ordinals()
+                .iter()
+                .enumerate()
+                .find(|(row, _)| {
+                    let start = diagnostic.assignments().owner_offsets()[*row] as usize;
+                    diagnostic.assignments().owners()[start] as usize == posting
+                })
+                .map(|(_, ordinal)| vec![*ordinal])
+                .unwrap(),
+        );
+    }
+    let containment =
+        evaluate_v36_posting_prefix_containment(&diagnostic, &queries, &truth).unwrap();
+    assert_eq!(containment.query_count(), 4);
+    assert_eq!(containment.neighbors_per_query(), 1);
+    assert_eq!(containment.oracle_recall_ppm(), 1_000_000);
+    assert_eq!(containment.prefixes().len(), 4);
+    assert_eq!(
+        containment.prefixes().last().unwrap().selected_postings(),
+        4
+    );
+    assert_eq!(
+        containment
+            .prefixes()
+            .last()
+            .unwrap()
+            .aggregate_recall_ppm(),
+        1_000_000
+    );
+    assert!(
+        containment
+            .prefixes()
+            .windows(2)
+            .all(|pair| pair[0].aggregate_recall_ppm() <= pair[1].aggregate_recall_ppm())
+    );
+
+    let mut missing = truth;
+    missing[0][0] = 99;
+    assert!(evaluate_v36_posting_prefix_containment(&diagnostic, &queries, &missing).is_err());
 }
 
 fn source_batch(feature_ids: Vec<u64>) -> RecordBatch {

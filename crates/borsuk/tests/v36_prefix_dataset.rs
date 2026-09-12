@@ -24,15 +24,15 @@ use borsuk::{
     V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
     V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
     V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGeometryConstructionLocalRequest,
-    V36PrefixGeometryLocalRequest, V36PrefixGtAccumulator, V36PrefixGtHeapCheckpoint,
-    V36PrefixGtHeapEntry, V36PrefixGtParquetJob, V36PrefixIdentityRun, V36PrefixIdentityRunFile,
-    V36PrefixInputRow, V36PrefixPhaseResumeRequest, V36PrefixPopulationAuthority,
-    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
-    V36PrefixQualityRole, V36PrefixQueryRow, V36PrefixRankedSourceObject,
-    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAssignmentContract,
-    V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority,
-    V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile, V36PrefixSourceObject,
-    V36ProjectedCorpusSource, assign_v36_prefix_roles_from_selected_file,
+    V36PrefixGeometryDevelopmentLocalRequest, V36PrefixGeometryLocalRequest,
+    V36PrefixGtAccumulator, V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob,
+    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixPhaseResumeRequest,
+    V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit,
+    V36PrefixPopulationSelection, V36PrefixQualityRole, V36PrefixQueryRow,
+    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
+    V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
+    V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
+    V36PrefixSourceObject, V36ProjectedCorpusSource, assign_v36_prefix_roles_from_selected_file,
     bind_v36_prefix_external_selection_authority, bind_v36_prefix_geometry_inputs,
     bind_v36_prefix_population_authority, bind_v36_prefix_role_assignment_contract,
     bind_v36_prefix_selected_ids_contract, build_v36_srht192_control,
@@ -47,7 +47,8 @@ use borsuk::{
     encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
-    load_v36_prefix_geometry_construction_local_files, load_v36_prefix_geometry_local_files,
+    load_v36_prefix_geometry_construction_local_files,
+    load_v36_prefix_geometry_development_local_files, load_v36_prefix_geometry_local_files,
     materialize_v36_prefix_assigned_roles, materialize_v36_prefix_checkpoint_selection,
     materialize_v36_prefix_role_parquets, next_v36_prefix_checkpoint_action,
     project_v35_query_scalar, project_v36_prefix_source_resident, rank_v36_prefix_source_objects,
@@ -2759,6 +2760,22 @@ fn v36_prefix_geometry_local_files_authenticate_before_scientific_access() {
         loaded.development_ground_truth_path(),
         request.development_ground_truth.as_path()
     );
+    let development = load_v36_prefix_geometry_development_local_files(
+        loaded.inputs(),
+        V36PrefixGeometryDevelopmentLocalRequest {
+            development_ground_truth: request.development_ground_truth.clone(),
+            development_query: request.development_query.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        development.development_query_path(),
+        request.development_query.as_path()
+    );
+    assert_eq!(
+        development.development_ground_truth_path(),
+        request.development_ground_truth.as_path()
+    );
 
     fs::write(&query, b"corrupted query").unwrap();
     let construction = load_v36_prefix_geometry_construction_local_files(
@@ -2775,6 +2792,14 @@ fn v36_prefix_geometry_local_files_authenticate_before_scientific_access() {
         construction.inputs().construction().corpus_rows(),
         1_000_000
     );
+    let development = load_v36_prefix_geometry_development_local_files(
+        construction.inputs(),
+        V36PrefixGeometryDevelopmentLocalRequest {
+            development_ground_truth: request.development_ground_truth.clone(),
+            development_query: request.development_query.clone(),
+        },
+    );
+    assert!(development.is_err());
     assert!(load_v36_prefix_geometry_local_files(request).is_err());
 }
 
