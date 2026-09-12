@@ -216,6 +216,8 @@ mod v36_funnel_code;
 mod v36_funnel_geometry;
 mod v36_posting_hnsw;
 mod v36_prefix_dataset;
+#[cfg(test)]
+mod v37_relation_router;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
