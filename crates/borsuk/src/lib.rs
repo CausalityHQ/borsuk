@@ -216,7 +216,10 @@ mod v36_funnel_code;
 mod v36_funnel_geometry;
 mod v36_posting_hnsw;
 mod v36_prefix_dataset;
-#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "V37 diagnostic phases are wired incrementally by the committed plan"
+)]
 mod v37_relation_router;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
@@ -497,6 +500,10 @@ pub use v36_prefix_dataset::{
     validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
     write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
     write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+};
+#[doc(hidden)]
+pub use v37_relation_router::{
+    V37LocalArtifact, V37LocalOutput, V37LocalRunMode, V37LocalRunRequest, run_v37_local_request,
 };
 #[allow(
     dead_code,

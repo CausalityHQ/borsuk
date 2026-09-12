@@ -35,10 +35,15 @@ gate and cannot rescue logical failure.
 
 ## Projection and numeric contract
 
-The frozen V36 projection authority supplies the input vectors. The first V37
-cell uses its registered 192-dimensional projected-f32 population so the new
-result changes partition and routing only. Source ordinals remain the identity;
-row order, ties, and digests never use a local path or task schedule.
+The frozen V36 projection contract supplies the input vectors. The first V37
+cell deterministically replays the registered 768-to-192 SRHT (seed 36) over
+the authenticated V36 source, so the new result changes partition and routing
+only. Projection authority is the exact algorithm/version, source and routing
+dimensions, seed, and semantic replay SHA-256 over ordered source ordinals and
+projected f32 bits. It is not an invented Arrow-object identity: the resident
+projector does not write a projected-corpus object. Source ordinals remain the
+geometry identity; row order, ties, and digests never use a local path or task
+schedule.
 
 Every coordinate and intermediate must be finite. Squared L2 and dot products
 use the existing backend-bound fused SIMD contract with a scalar diagnostic
@@ -143,8 +148,12 @@ LF. There is no Rust-struct-memory serialization.
 
 - `ownership-tree.arrow`: nodes, f32 normals, thresholds, children, leaf and
   posting ordinals, numeric/backend authority.
-- `ownership.parquet`: non-null `source_ordinal:u64`, `posting_ordinal:u32`, and
-  posting-local ordinal, sorted by source ordinal.
+- `ownership.parquet` format v2: non-null `source_ordinal:u64`,
+  `feature_row_id:u64`, `posting_ordinal:u32`, and posting-local ordinal,
+  sorted by the exact contiguous source ordinal. Feature IDs are globally
+  unique. This query-blind identity bridge lets a later truth-only process map
+  the original V36 GT IDs without reopening corpus or query vectors. The old
+  three-column experimental format is rejected; no compatibility reader exists.
 - `relation-tree.arrow`: the independent tree and its registered seed.
 - `relations.parquet`: non-null leaf/posting/count/population records before
   prefix encoding.
@@ -153,12 +162,33 @@ LF. There is no Rust-struct-memory serialization.
   registered prefix length. A record remains exactly eight bytes.
 - canonical JSON manifests/results bind every URI, SHA-256, BLAKE3, encoded
   length, schema, source identity, projection, metric, seed, worker count, and
-  predecessor result.
+  predecessor result. A separate ceiling authority binds the V37 construction
+  authority, sealed tree and ownership identities, the original V36
+  development-GT identity, the exact query count, GT@100, and K=14. It contains
+  no source/query path or fetch instruction.
+
+The local construction receipt v2 binds the exact ordered identities of all
+six authenticated inputs and both generated artifacts. The ceiling output is
+not a free-standing score document: its canonical wrapper binds the exact
+ceiling-authority object identity, the authority's four prerequisite
+identities, and the recomputed ceiling. Construction stages both output files
+before either no-clobber commit. It never rolls back a committed path by name:
+that would create a check/unlink race with another writer. A build is
+scientifically complete only after both no-clobber commits succeed and the
+canonical terminal receipt is emitted. If the second commit loses a race, the
+first artifact remains incomplete scratch for the controller's explicit
+named-file cleanup and cannot authorize a ceiling run.
 
 Readers reject aliases, optional fallbacks, unknown fields, nulls, non-finite
 numbers, invalid graph topology, cycles, duplicate ordinals, wrong ordering,
 length/remainder drift, digest drift, and cross-object binding drift. This is a
 new pre-release format; no V36 compatibility reader is added.
+Every local input is opened once, authenticated through that file descriptor,
+and retained as a capability for all later parsing and scientific reads. The
+runner never reopens an authenticated input by pathname; cloned handles are
+rewound before independent passes. A final device/inode/length/time check still
+detects namespace replacement, but replacement cannot substitute scientific
+bytes after authentication.
 
 ## Bounds and scale projection
 
@@ -175,17 +205,43 @@ tree visits at most 1,024 nodes, emits at most 32 leaves, and reads at most
 selected posting, and byte is recorded. Warm native logical routing p99 must be
 at most 5,000,000 ns after 1,024 warmups and at least 10,000 timed queries.
 
+The resident 1M builder borrows row slices from one contiguous projected
+coordinate buffer; descriptor sorting must not clone coordinates. Source
+Parquet row-group/column-chunk working sets, descriptor arrays, hash-reservoir
+and score tuples, assignments, output writers, worker stacks, and 25% allocator
+headroom are charged with checked arithmetic before decoding. Ancestor split
+scratch is released before recursion. The former three equal coordinate-buffer
+placeholders are not an admission certificate.
+
 The 1M ownership and relation builds each have a 600-second scientific cap,
 720-second wrapper cap, 120-second progress timeout, 3 GiB process-group RSS
 cap, memory PSI full avg10 stop above 0.75, and stop on any swap growth. The
-preflight separately charges source and projected decode buffers, resident
-`rows*dimensions*4` projected coordinates, two u64 index arrays, one f32 score
-array, the largest 4,096-row sample, both trees, relation counts, prefix arrays,
-and 25% allocator headroom. It rejects before allocation when the checked sum
-exceeds 3 GiB. At least 20,000,000 fused coordinate scores per second on a
-65,536-row reduced shape are required to admit the full build. All 100M time
-and I/O projections remain provisional until an external-partition preflight
-passes; arithmetic alone is not qualification.
+ownership preflight separately charges the 65,536-row f32[768] Arrow decoder
+window plus hard 256 MiB compressed and 256 MiB uncompressed Parquet row-group
+caps. Before Parquet metadata construction, a bounded compact-Thrift preflight
+rejects footers above 16 MiB, binary fields above 1 MiB, and collection claims
+above 65,536 entries. Before Arrow decoding, it reads at most 64 KiB per page
+header, rejects compressed or uncompressed page claims above 16 MiB, bounds
+page values by the row-group shape, and requires a dictionary's physical values
+to fit its declared uncompressed bytes. The same footer, row-group, page, and
+dictionary checks protect the feature-ID-only pass and the ceiling's ownership
+and GT Parquets; projection and truth decoding cannot bypass them. The ceiling
+authority admits at most 1,000 queries before any
+per-query GT allocation. The construction projection then charges one resident
+`rows*192*4` projected buffer, feature IDs, sorted
+`(source_ordinal,index)` descriptors, member indices, 24-byte score tuples,
+assignments, the bounded 4,096-entry hash reservoir, the ownership tree, the
+streaming ownership writer, and 25% allocator headroom. For the registered 1M
+shape the checked total is 2,137,615,120 bytes, including 738,721,792 bytes for
+the bounded source decoder (the sequential 64 KiB header scratch is contained
+within its compressed-working-set budget) and 67,108,864 bytes for the maximum 32 worker
+stacks at 2 MiB each. Relation construction has a
+separate phase-specific projection and cannot reuse this number. Each phase
+rejects before allocation when its checked sum exceeds 3 GiB. At least
+20,000,000 fused coordinate scores per second on a 65,536-row reduced shape are
+required to admit the full build. All 100M time and I/O projections remain
+provisional until an external-partition preflight passes; arithmetic alone is
+not qualification.
 
 Writes route through two shallow trees and append one row to a bounded delta;
 they do not calculate graph neighbours or update covariance matrices. Release
@@ -197,9 +253,13 @@ write-throughput claim.
 
 1. Unit-test quota, topology, deterministic training, backend-bound SIMD
    behavior, scalar diagnostic agreement, codecs, and relation reductions.
-2. A construction-only process builds and seals the ownership tree/table
-   without query or GT capability. A separate truth process computes the exact
-   fourteen-posting ceiling.
+2. A construction-only process authenticates V36 source authority, replays and
+   verifies the frozen SRHT digest, then builds and seals the ownership
+   tree/table without query or GT capability. A separate truth process receives
+   only ceiling authority, tree, ownership v2, and the original V36 GT Parquet.
+   It validates GT ordering/types, maps globally unique feature IDs to source
+   ordinals, and computes the exact fourteen-posting ceiling. It cannot open a
+   source file or query vector.
 3. Stop as `layout-rejected` if aggregate is below 998,000 ppm or any query is
    below 800,000 ppm.
 4. If the ceiling passes, a query-only process emits direct selections and a

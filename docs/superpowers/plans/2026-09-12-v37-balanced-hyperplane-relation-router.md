@@ -24,6 +24,7 @@
 
 - Create `crates/borsuk/src/v37_relation_router.rs`: authority, tree training, codecs, ceiling, direct traversal, relation reduction, and result validation.
 - Modify `crates/borsuk/src/lib.rs`: export only the V37 high-level diagnostic boundary required by the example.
+- Modify `crates/borsuk/src/v36_prefix_dataset.rs`: expose only the crate-private resident projected-coordinate slice needed by the V37 borrowed trainer.
 - Create `crates/borsuk/examples/v37_relation_router.rs`: strict local-file 1M diagnostic CLI with no network/page API.
 - Create `scripts/run_v37_relation_router_spot.py`: causality Spot staging, phased capability boundary, pressure monitoring, immutable receipts, and cleanup.
 - Create `scripts/test_run_v37_relation_router_spot.py`: launcher mutation, phase-order, stop, and cleanup tests.
@@ -105,12 +106,62 @@
 
 - Create: `crates/borsuk/examples/v37_relation_router.rs`
 - Modify: `crates/borsuk/src/lib.rs`
+- Modify: `crates/borsuk/src/v36_prefix_dataset.rs`
 
 **Produces:** `V37LocalRunRequest`, `run_v37_local_request`, and canonical claim-ineligible output.
 
-- [ ] Stage example REDs named `v37_relation_cli_*` for explicit role paths and identities and distinct modes: `build-ownership`, `evaluate-ceiling`, `route-direct`, `evaluate-direct`, `build-relations`, `route-relations`, and `evaluate-relations`. Reject duplicates, omissions, unknowns, bucket/endpoint/page/D3 flags, and every phase-inappropriate query/GT/corpus input.
+- [ ] First stage example REDs named `v37_relation_cli_*` for the two fail-fast
+      modes `build-ownership` and `evaluate-ceiling`. Build receives only the
+      V36 construction authority files, source, V37 construction authority, and
+      explicit outputs. Ceiling receives only a separate ceiling authority,
+      ownership tree/table, and original V36 GT@100. Reject query/source
+      capabilities in the truth phase, GT/query capabilities in construction,
+      duplicates, omissions, unknowns, bucket/endpoint/page/D3 flags, and every
+      filesystem alias between input and output roles. Add downstream direct
+      and relation modes only after the scientific ceiling passes.
 - [ ] Run the example RED; implement the smallest parser and high-level call. Keep `main` thin and stdout canonical only.
-- [ ] Add coherent reduced-shape local files proving ceiling failure exits before relation files exist and ceiling-pass/direct-fail reaches relation evaluation.
+- [ ] Replace the projected-corpus object field with a versioned SRHT replay
+      contract (algorithm, 768-to-192 dimensions, seed 36, frozen replay
+      SHA-256); do not confuse semantic replay bytes with an encoded artifact.
+- [ ] Change ownership Parquet to format v2 with exact non-null
+      `(source_ordinal,feature_row_id,posting_ordinal,posting_local_ordinal)`,
+      rejecting the old format, duplicate IDs, gaps, population drift, and
+      local-ordinal drift. Add a ceiling authority that cross-binds construction
+      authority, tree, ownership, original GT identity, query count, GT@100,
+      and K=14.
+- [ ] Borrow row slices from the single V36 projected buffer so descriptor
+      sorting does not clone coordinates. Bound source decoder working sets and
+      reject any source row group above 65,536 rows, 256 MiB compressed, or
+      256 MiB uncompressed before decoding. Before Arrow decode, scan compact-
+      Thrift footer before metadata construction, capped at 16 MiB with 1 MiB
+      binary fields and 65,536-entry collections. Then scan page headers with at
+      most 64 KiB scratch per header; reject page claims above 16 MiB, values
+      beyond the row-group shape, and dictionary physical bytes beyond the
+      declared uncompressed page size. Apply the identical checks to the
+      feature-ID-only, ownership, and GT passes, and reject ceiling
+      authorities above 1,000 queries before allocating GT vectors. Charge the
+      decoder caps plus actual
+      descriptor/reservoir/score/assignment/writer/stack scratch;
+      release ancestor split scratch before recursion.
+- [ ] Add a GT-only scanner that reuses the strict V36 GT Parquet schema and
+      maps deliberately nonordinal feature IDs through ownership v2. It must
+      reject unknown/duplicate IDs and malformed query/rank/distance ordering
+      without opening source or query files.
+- [ ] Add coherent reduced-shape local files proving a complete
+      build-ownership to evaluate-ceiling flow, canonical bound receipts,
+      no-clobber publication, and `layout-rejected` termination before any
+      direct/relation file exists.
+- [ ] Require the build receipt v2 to bind all six authenticated input
+      identities and both generated output identities. Wrap the ceiling in a
+      bound result that includes the exact ceiling-authority identity and all
+      four prerequisite identities. Stage both construction outputs before
+      publication. Never roll back a committed path by name; if the second
+      no-clobber commit loses a race, withhold the terminal receipt and leave
+      the first file as explicit controller-cleaned scratch.
+- [ ] Retain every authenticated input file descriptor and consume only cloned,
+      rewound handles thereafter. Mutation-lock parent-directory replacement
+      so pathname swaps cannot substitute source, authority, tree, ownership,
+      or GT bytes after authentication.
 - [ ] Run library and example focused gates, strict workspace Clippy, fmt, and diff-check; commit.
 
 ### Task 7: Add Spot orchestration with fast phase stops

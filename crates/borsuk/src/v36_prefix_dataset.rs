@@ -27,6 +27,7 @@ use parquet::{
         arrow_reader::ParquetRecordBatchReaderBuilder,
     },
     file::properties::WriterProperties,
+    file::reader::ChunkReader,
     schema::types::SchemaDescriptor,
 };
 use rayon::{ThreadPoolBuilder, prelude::*};
@@ -68,6 +69,8 @@ const GT_NEIGHBORS_U64: u64 = 100;
 const DISTINCT_CANDIDATES: usize = 1_100_000;
 const CORPUS_ROWS: usize = 1_000_000;
 const PARQUET_ROW_GROUP_ROWS: usize = 65_536;
+pub(crate) const SOURCE_DECODER_COMPRESSED_CAP_BYTES: u64 = 256 * 1_048_576;
+pub(crate) const SOURCE_DECODER_UNCOMPRESSED_CAP_BYTES: u64 = 256 * 1_048_576;
 const IDENTITY_RUN_BATCH_ROWS: usize = 65_536;
 const IDENTITY_RUN_FORMAT: &str = "borsuk-v36-prefix-identity-run-v3";
 const SELECTED_IDS_BATCH_ROWS: usize = 65_536;
@@ -3204,6 +3207,11 @@ impl V36PrefixResidentProjectedSource {
     pub fn projected_corpus_sha256(&self) -> &str {
         &self.projected_corpus_sha256
     }
+
+    /// Borrow the contiguous projected f32 coordinates for an in-crate diagnostic.
+    pub(crate) fn projected_coordinates(&self) -> &[f32] {
+        &self.projected
+    }
 }
 
 impl V36ProjectedCorpusSource for V36PrefixResidentProjectedSource {
@@ -3296,6 +3304,49 @@ pub fn bind_v36_prefix_geometry_inputs(
     })
 }
 
+pub(crate) fn load_v36_prefix_geometry_authority_bytes(
+    authority_bytes: &[u8],
+    execution_bytes: &[u8],
+    receipt_bytes: &[u8],
+    registry_bytes: &[u8],
+) -> Result<V36PrefixGeometryInputs> {
+    let authority: V36PrefixFreezeAuthority = serde_json::from_slice(authority_bytes)
+        .map_err(|_| invalid("V36 prefix geometry authority JSON differs"))?;
+    let execution: V36PrefixFreezeExecutionAuthority = serde_json::from_slice(execution_bytes)
+        .map_err(|_| invalid("V36 prefix geometry execution JSON differs"))?;
+    let receipt: V36PrefixFreezeReceipt = serde_json::from_slice(receipt_bytes)
+        .map_err(|_| invalid("V36 prefix geometry receipt JSON differs"))?;
+    let registry: Vec<V36PrefixRegisteredSourceObject> = serde_json::from_slice(registry_bytes)
+        .map_err(|_| invalid("V36 prefix geometry registry JSON differs"))?;
+    if canonical_v36_prefix_freeze_authority_bytes(&authority, &registry)? != authority_bytes
+        || canonical_v36_prefix_freeze_execution_authority_bytes(&execution)? != execution_bytes
+        || crate::canonical_v36_prefix_source_registry_bytes(&authority, &registry)?
+            != registry_bytes
+        || canonical_v36_prefix_freeze_receipt_bytes(&receipt, &authority, &execution, &registry)?
+            != receipt_bytes
+    {
+        return Err(invalid("V36 prefix geometry canonical authority differs"));
+    }
+    let input = |role: &str| {
+        execution
+            .inputs
+            .iter()
+            .find(|identity| identity.role == role)
+            .ok_or_else(|| invalid("V36 prefix geometry execution input differs"))
+    };
+    let matches_identity = |bytes: &[u8], identity: &V36ArtifactIdentity| {
+        bytes.len() as u64 == identity.encoded_bytes
+            && format!("{:x}", Sha256::digest(bytes)) == identity.sha256
+            && blake3::hash(bytes).to_hex().as_str() == identity.blake3
+    };
+    if !matches_identity(authority_bytes, input("freeze-authority")?)
+        || !matches_identity(registry_bytes, input("source-registry")?)
+    {
+        return Err(invalid("V36 prefix local input authority differs"));
+    }
+    bind_v36_prefix_geometry_inputs(&receipt, &authority, &execution, &registry)
+}
+
 fn load_v36_prefix_geometry_authority(
     authority_path: &Path,
     execution_path: &Path,
@@ -3325,33 +3376,12 @@ fn load_v36_prefix_geometry_authority(
     let execution_bytes = read_authority(execution_path)?;
     let receipt_bytes = read_authority(receipt_path)?;
     let registry_bytes = read_authority(registry_path)?;
-    let authority: V36PrefixFreezeAuthority = serde_json::from_slice(&authority_bytes)
-        .map_err(|_| invalid("V36 prefix geometry authority JSON differs"))?;
-    let execution: V36PrefixFreezeExecutionAuthority = serde_json::from_slice(&execution_bytes)
-        .map_err(|_| invalid("V36 prefix geometry execution JSON differs"))?;
-    let receipt: V36PrefixFreezeReceipt = serde_json::from_slice(&receipt_bytes)
-        .map_err(|_| invalid("V36 prefix geometry receipt JSON differs"))?;
-    let registry: Vec<V36PrefixRegisteredSourceObject> = serde_json::from_slice(&registry_bytes)
-        .map_err(|_| invalid("V36 prefix geometry registry JSON differs"))?;
-    if canonical_v36_prefix_freeze_authority_bytes(&authority, &registry)? != authority_bytes
-        || canonical_v36_prefix_freeze_execution_authority_bytes(&execution)? != execution_bytes
-        || crate::canonical_v36_prefix_source_registry_bytes(&authority, &registry)?
-            != registry_bytes
-        || canonical_v36_prefix_freeze_receipt_bytes(&receipt, &authority, &execution, &registry)?
-            != receipt_bytes
-    {
-        return Err(invalid("V36 prefix geometry canonical authority differs"));
-    }
-    let input = |role: &str| {
-        execution
-            .inputs
-            .iter()
-            .find(|identity| identity.role == role)
-            .ok_or_else(|| invalid("V36 prefix geometry execution input differs"))
-    };
-    authenticate_file(authority_path, input("freeze-authority")?)?;
-    authenticate_file(registry_path, input("source-registry")?)?;
-    bind_v36_prefix_geometry_inputs(&receipt, &authority, &execution, &registry)
+    load_v36_prefix_geometry_authority_bytes(
+        &authority_bytes,
+        &execution_bytes,
+        &receipt_bytes,
+        &registry_bytes,
+    )
 }
 
 /// Authenticate construction authority and source without opening query or truth objects.
@@ -3584,6 +3614,19 @@ pub fn project_v36_prefix_source_resident(
     expected_feature_ids: &[u64],
     maximum_block_rows: usize,
 ) -> Result<V36PrefixResidentProjectedSource> {
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    project_v36_prefix_source_resident_file(file, path, expected_feature_ids, maximum_block_rows)
+}
+
+pub(crate) fn project_v36_prefix_source_resident_file(
+    file: File,
+    display_path: &Path,
+    expected_feature_ids: &[u64],
+    maximum_block_rows: usize,
+) -> Result<V36PrefixResidentProjectedSource> {
     if maximum_block_rows == 0 || maximum_block_rows > 65_536 {
         return Err(invalid("V36 prefix projected block rows differ"));
     }
@@ -3596,33 +3639,41 @@ pub fn project_v36_prefix_source_resident(
         .try_reserve_exact(value_count)
         .map_err(|_| invalid("V36 prefix projected corpus exceeds capacity"))?;
     let projection = build_v36_srht192_control()?;
-    scan_v36_prefix_source_parquet(path, expected_feature_ids, |batch| {
-        let embeddings = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .ok_or_else(|| invalid("V36 prefix projected source embedding differs"))?;
-        let values = embeddings
-            .values()
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .ok_or_else(|| invalid("V36 prefix projected source child differs"))?;
-        for row in 0..batch.num_rows() {
-            let start = row
-                .checked_mul(DIMENSIONS)
-                .ok_or_else(|| invalid("V36 prefix projected source offset overflows"))?;
-            let output =
-                project_v35_query_simd(&projection, &values.values()[start..start + DIMENSIONS])?;
-            for value in output.coordinates() {
-                let value = *value as f32;
-                if !value.is_finite() {
-                    return Err(invalid("V36 prefix projected coordinate is nonfinite"));
+    scan_v36_prefix_source_parquet_file_with_batch_size(
+        file,
+        display_path,
+        expected_feature_ids,
+        Some(maximum_block_rows),
+        |batch| {
+            let embeddings = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| invalid("V36 prefix projected source embedding differs"))?;
+            let values = embeddings
+                .values()
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| invalid("V36 prefix projected source child differs"))?;
+            for row in 0..batch.num_rows() {
+                let start = row
+                    .checked_mul(DIMENSIONS)
+                    .ok_or_else(|| invalid("V36 prefix projected source offset overflows"))?;
+                let output = project_v35_query_simd(
+                    &projection,
+                    &values.values()[start..start + DIMENSIONS],
+                )?;
+                for value in output.coordinates() {
+                    let value = *value as f32;
+                    if !value.is_finite() {
+                        return Err(invalid("V36 prefix projected coordinate is nonfinite"));
+                    }
+                    projected.push(if value == 0.0 { 0.0 } else { value });
                 }
-                projected.push(if value == 0.0 { 0.0 } else { value });
             }
-        }
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
     if projected.len() != value_count {
         return Err(invalid("V36 prefix projected corpus row count differs"));
     }
@@ -10545,20 +10596,91 @@ where
 pub fn scan_v36_prefix_source_parquet<F>(
     path: &Path,
     expected_feature_ids: &[u64],
+    consume: F,
+) -> Result<()>
+where
+    F: FnMut(RecordBatch) -> Result<()>,
+{
+    scan_v36_prefix_source_parquet_with_batch_size(path, expected_feature_ids, None, consume)
+}
+
+fn scan_v36_prefix_source_parquet_with_batch_size<F>(
+    path: &Path,
+    expected_feature_ids: &[u64],
+    batch_size: Option<usize>,
+    consume: F,
+) -> Result<()>
+where
+    F: FnMut(RecordBatch) -> Result<()>,
+{
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    scan_v36_prefix_source_parquet_file_with_batch_size(
+        file,
+        path,
+        expected_feature_ids,
+        batch_size,
+        consume,
+    )
+}
+
+fn scan_v36_prefix_source_parquet_file_with_batch_size<F>(
+    mut file: File,
+    display_path: &Path,
+    expected_feature_ids: &[u64],
+    batch_size: Option<usize>,
     mut consume: F,
 ) -> Result<()>
 where
     F: FnMut(RecordBatch) -> Result<()>,
 {
     validate_expected_feature_ids(expected_feature_ids)?;
-    let file = File::open(path).map_err(|source| BorsukError::Io {
-        path: path.to_owned(),
+    v36_prefix_external_io(display_path, file.seek(SeekFrom::Start(0)))?;
+    let page_file = file.try_clone().map_err(|source| BorsukError::Io {
+        path: display_path.to_owned(),
         source,
     })?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_v36_prefix_parquet_footer(&page_file)?;
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_source_schema())?;
     if builder.schema().as_ref() != &v36_prefix_source_schema() {
         return Err(invalid("V36 prefix source Parquet physical schema differs"));
+    }
+    if let Some(batch_size) = batch_size {
+        if batch_size == 0 {
+            return Err(invalid("V36 prefix source batch size differs"));
+        }
+        let row_groups = builder
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|group| {
+                let compressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                    total.checked_add(column.compressed_size())
+                });
+                let uncompressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                    total.checked_add(column.uncompressed_size())
+                });
+                compressed
+                    .zip(uncompressed)
+                    .map(|(compressed, uncompressed)| (group.num_rows(), compressed, uncompressed))
+                    .ok_or_else(|| invalid("V36 prefix source decoder size overflows"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        validate_v36_prefix_source_decoder_bounds(
+            &row_groups,
+            batch_size,
+            SOURCE_DECODER_COMPRESSED_CAP_BYTES,
+            SOURCE_DECODER_UNCOMPRESSED_CAP_BYTES,
+        )?;
+        validate_v36_parquet_pages(
+            &page_file,
+            builder.metadata(),
+            &[(1, 8), (DIMENSIONS as u64, 4)],
+        )?;
+        builder = builder.with_batch_size(batch_size);
     }
     let mut next_ordinal = 0_usize;
     for batch in builder.build()? {
@@ -10568,6 +10690,420 @@ where
     }
     if next_ordinal != expected_feature_ids.len() {
         return Err(invalid("V36 prefix source Parquet row count differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_v36_prefix_source_decoder_bounds(
+    row_groups: &[(i64, i64, i64)],
+    maximum_rows: usize,
+    maximum_compressed_bytes: u64,
+    maximum_uncompressed_bytes: u64,
+) -> Result<()> {
+    if row_groups.is_empty()
+        || maximum_rows == 0
+        || maximum_compressed_bytes == 0
+        || maximum_uncompressed_bytes == 0
+    {
+        return Err(invalid("V36 prefix source decoder bounds differ"));
+    }
+    let maximum_rows = i64::try_from(maximum_rows)
+        .map_err(|_| invalid("V36 prefix source decoder row bound overflows"))?;
+    let maximum_compressed_bytes = i64::try_from(maximum_compressed_bytes)
+        .map_err(|_| invalid("V36 prefix source decoder byte bound overflows"))?;
+    let maximum_uncompressed_bytes = i64::try_from(maximum_uncompressed_bytes)
+        .map_err(|_| invalid("V36 prefix source decoder byte bound overflows"))?;
+    if row_groups.iter().any(|(rows, compressed, uncompressed)| {
+        *rows <= 0
+            || *rows > maximum_rows
+            || *compressed < 0
+            || *compressed > maximum_compressed_bytes
+            || *uncompressed < 0
+            || *uncompressed > maximum_uncompressed_bytes
+    }) {
+        return Err(invalid("V36 prefix source decoder working set differs"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum V36PrefixSourcePageKind {
+    Data,
+    DataV2,
+    Dictionary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct V36PrefixSourcePageClaim {
+    compressed_bytes: i32,
+    kind: V36PrefixSourcePageKind,
+    rows: Option<i32>,
+    uncompressed_bytes: i32,
+    values: i32,
+}
+
+struct V36CompactCursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> V36CompactCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn byte(&mut self) -> Result<u8> {
+        let byte = self
+            .bytes
+            .get(self.position)
+            .copied()
+            .ok_or_else(|| invalid("V36 prefix source page header is truncated"))?;
+        self.position += 1;
+        Ok(byte)
+    }
+
+    fn varint(&mut self) -> Result<u64> {
+        let mut value = 0_u64;
+        for byte_index in 0..10 {
+            let byte = self.byte()?;
+            if byte_index == 9 && byte > 1 {
+                return Err(invalid("V36 prefix compact varint overflows"));
+            }
+            value |= u64::from(byte & 0x7f) << (byte_index * 7);
+            if byte & 0x80 == 0 {
+                return Ok(value);
+            }
+        }
+        Err(invalid("V36 prefix source page header varint differs"))
+    }
+
+    fn zigzag_i32(&mut self) -> Result<i32> {
+        let value = u32::try_from(self.varint()?)
+            .map_err(|_| invalid("V36 prefix source page header integer differs"))?;
+        Ok(((value >> 1) as i32) ^ -((value & 1) as i32))
+    }
+
+    fn field(&mut self, prior: &mut i16) -> Result<Option<(i16, u8)>> {
+        let header = self.byte()?;
+        let kind = header & 0x0f;
+        if kind == 0 {
+            return Ok(None);
+        }
+        if !(1..=12).contains(&kind) {
+            return Err(invalid("V36 prefix source page header type differs"));
+        }
+        let delta = i16::from(header >> 4);
+        let id = if delta == 0 {
+            i16::try_from(self.zigzag_i32()?)
+                .map_err(|_| invalid("V36 prefix source page header field differs"))?
+        } else {
+            prior
+                .checked_add(delta)
+                .ok_or_else(|| invalid("V36 prefix source page header field overflows"))?
+        };
+        if id <= 0 {
+            return Err(invalid("V36 prefix compact field ID differs"));
+        }
+        *prior = id;
+        Ok(Some((id, kind)))
+    }
+
+    fn skip(&mut self, kind: u8, depth: u8) -> Result<()> {
+        if depth == 0 {
+            return Err(invalid("V36 prefix source page header nesting differs"));
+        }
+        match kind {
+            1 | 2 => Ok(()),
+            3 => {
+                self.byte()?;
+                Ok(())
+            }
+            4..=6 => self.varint().map(|_| ()),
+            7 => self.advance(8),
+            8 => {
+                let length = usize::try_from(self.varint()?)
+                    .map_err(|_| invalid("V36 prefix source page header length overflows"))?;
+                if length > 1_048_576 {
+                    return Err(invalid("V36 prefix compact binary length differs"));
+                }
+                self.advance(length)
+            }
+            9 | 10 => {
+                let header = self.byte()?;
+                let mut count = usize::from(header >> 4);
+                if count == 15 {
+                    count = usize::try_from(self.varint()?).map_err(|_| {
+                        invalid("V36 prefix source page header collection overflows")
+                    })?;
+                }
+                if count > 65_536 || count > self.bytes.len() {
+                    return Err(invalid("V36 prefix source page header collection differs"));
+                }
+                let child = header & 0x0f;
+                for _ in 0..count {
+                    if child == 1 || child == 2 {
+                        self.byte()?;
+                    } else {
+                        self.skip(child, depth - 1)?;
+                    }
+                }
+                Ok(())
+            }
+            11 => {
+                let count = usize::try_from(self.varint()?)
+                    .map_err(|_| invalid("V36 prefix source page header map overflows"))?;
+                if count == 0 {
+                    return Ok(());
+                }
+                if count > 65_536 || count > self.bytes.len() {
+                    return Err(invalid("V36 prefix source page header map differs"));
+                }
+                let kinds = self.byte()?;
+                for _ in 0..count {
+                    self.skip(kinds >> 4, depth - 1)?;
+                    self.skip(kinds & 0x0f, depth - 1)?;
+                }
+                Ok(())
+            }
+            12 => {
+                let mut prior = 0;
+                while let Some((_, child)) = self.field(&mut prior)? {
+                    self.skip(child, depth - 1)?;
+                }
+                Ok(())
+            }
+            _ => Err(invalid("V36 prefix source page header type differs")),
+        }
+    }
+
+    fn advance(&mut self, length: usize) -> Result<()> {
+        self.position = self
+            .position
+            .checked_add(length)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or_else(|| invalid("V36 prefix source page header is truncated"))?;
+        Ok(())
+    }
+}
+
+fn parse_v36_prefix_source_nested_page_header(
+    cursor: &mut V36CompactCursor<'_>,
+    kind: V36PrefixSourcePageKind,
+) -> Result<(i32, Option<i32>)> {
+    let mut prior = 0;
+    let mut values = None;
+    let mut rows = None;
+    while let Some((id, field_kind)) = cursor.field(&mut prior)? {
+        if id == 1 {
+            if field_kind != 5 || values.replace(cursor.zigzag_i32()?).is_some() {
+                return Err(invalid("V36 prefix source page value count differs"));
+            }
+        } else if kind == V36PrefixSourcePageKind::DataV2 && id == 3 {
+            if field_kind != 5 || rows.replace(cursor.zigzag_i32()?).is_some() {
+                return Err(invalid("V36 prefix source page row count differs"));
+            }
+        } else {
+            cursor.skip(field_kind, 8)?;
+        }
+    }
+    Ok((
+        values.ok_or_else(|| invalid("V36 prefix source page value count is absent"))?,
+        rows,
+    ))
+}
+
+fn parse_v36_prefix_source_page_header(bytes: &[u8]) -> Result<(usize, V36PrefixSourcePageClaim)> {
+    let mut cursor = V36CompactCursor::new(bytes);
+    let mut prior = 0;
+    let mut page_type = None;
+    let mut compressed_bytes = None;
+    let mut uncompressed_bytes = None;
+    let mut nested = None;
+    while let Some((id, kind)) = cursor.field(&mut prior)? {
+        match id {
+            1 if kind == 5 && page_type.is_none() => page_type = Some(cursor.zigzag_i32()?),
+            2 if kind == 5 && uncompressed_bytes.is_none() => {
+                uncompressed_bytes = Some(cursor.zigzag_i32()?)
+            }
+            3 if kind == 5 && compressed_bytes.is_none() => {
+                compressed_bytes = Some(cursor.zigzag_i32()?)
+            }
+            5 if kind == 12 => {
+                let value = (
+                    V36PrefixSourcePageKind::Data,
+                    parse_v36_prefix_source_nested_page_header(
+                        &mut cursor,
+                        V36PrefixSourcePageKind::Data,
+                    )?,
+                );
+                if nested.replace(value).is_some() {
+                    return Err(invalid("V36 prefix source page-specific header overlaps"));
+                }
+            }
+            7 if kind == 12 => {
+                let value = (
+                    V36PrefixSourcePageKind::Dictionary,
+                    parse_v36_prefix_source_nested_page_header(
+                        &mut cursor,
+                        V36PrefixSourcePageKind::Dictionary,
+                    )?,
+                );
+                if nested.replace(value).is_some() {
+                    return Err(invalid("V36 prefix source page-specific header overlaps"));
+                }
+            }
+            8 if kind == 12 => {
+                let value = (
+                    V36PrefixSourcePageKind::DataV2,
+                    parse_v36_prefix_source_nested_page_header(
+                        &mut cursor,
+                        V36PrefixSourcePageKind::DataV2,
+                    )?,
+                );
+                if nested.replace(value).is_some() {
+                    return Err(invalid("V36 prefix source page-specific header overlaps"));
+                }
+            }
+            1..=3 => return Err(invalid("V36 prefix source page header overlaps")),
+            _ => cursor.skip(kind, 8)?,
+        }
+    }
+    let (kind, (values, rows)) =
+        nested.ok_or_else(|| invalid("V36 prefix source page-specific header is absent"))?;
+    let expected_type = match kind {
+        V36PrefixSourcePageKind::Data => 0,
+        V36PrefixSourcePageKind::Dictionary => 2,
+        V36PrefixSourcePageKind::DataV2 => 3,
+    };
+    if page_type != Some(expected_type) {
+        return Err(invalid("V36 prefix source page type differs"));
+    }
+    Ok((
+        cursor.position,
+        V36PrefixSourcePageClaim {
+            compressed_bytes: compressed_bytes
+                .ok_or_else(|| invalid("V36 prefix source compressed page size is absent"))?,
+            kind,
+            rows,
+            uncompressed_bytes: uncompressed_bytes
+                .ok_or_else(|| invalid("V36 prefix source page size is absent"))?,
+            values,
+        },
+    ))
+}
+
+fn validate_v36_prefix_source_page_header(
+    claim: &V36PrefixSourcePageClaim,
+    row_group_rows: i64,
+    maximum_values_per_row: u64,
+    physical_value_bytes: u64,
+) -> Result<()> {
+    const MAXIMUM_PAGE_BYTES: i32 = 16 * 1_048_576;
+    let maximum_values = u64::try_from(row_group_rows)
+        .ok()
+        .and_then(|rows| rows.checked_mul(maximum_values_per_row))
+        .ok_or_else(|| invalid("V36 prefix source page value bound overflows"))?;
+    let values = u64::try_from(claim.values)
+        .map_err(|_| invalid("V36 prefix source page value count differs"))?;
+    if claim.compressed_bytes <= 0
+        || claim.compressed_bytes > MAXIMUM_PAGE_BYTES
+        || claim.uncompressed_bytes <= 0
+        || claim.uncompressed_bytes > MAXIMUM_PAGE_BYTES
+        || values == 0
+        || values > maximum_values
+        || claim.rows.is_some_and(|rows| {
+            rows <= 0 || i64::from(rows) > row_group_rows || values < rows as u64
+        })
+        || (claim.kind == V36PrefixSourcePageKind::Dictionary
+            && values
+                .checked_mul(physical_value_bytes)
+                .is_none_or(|bytes| bytes > claim.uncompressed_bytes as u64))
+    {
+        return Err(invalid("V36 prefix source page allocation claim differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_v36_prefix_parquet_footer<R: ChunkReader>(file: &R) -> Result<()> {
+    const MAXIMUM_FOOTER_BYTES: usize = 16 * 1_048_576;
+    let length = file.len();
+    if length < 12 {
+        return Err(invalid("V36 prefix Parquet length differs"));
+    }
+    let head = file.get_bytes(0, 4)?;
+    let tail = file.get_bytes(length - 8, 8)?;
+    if head.as_ref() != b"PAR1" || &tail[4..] != b"PAR1" {
+        return Err(invalid("V36 prefix Parquet magic differs"));
+    }
+    let footer_length = usize::try_from(u32::from_le_bytes(
+        tail[..4]
+            .try_into()
+            .map_err(|_| invalid("V36 prefix Parquet footer length differs"))?,
+    ))
+    .map_err(|_| invalid("V36 prefix Parquet footer length overflows"))?;
+    if footer_length == 0 || footer_length > MAXIMUM_FOOTER_BYTES {
+        return Err(invalid("V36 prefix Parquet footer length differs"));
+    }
+    let footer_start = length
+        .checked_sub(8)
+        .and_then(|value| value.checked_sub(footer_length as u64))
+        .filter(|value| *value >= 4)
+        .ok_or_else(|| invalid("V36 prefix Parquet footer range differs"))?;
+    let footer = file.get_bytes(footer_start, footer_length)?;
+    let mut cursor = V36CompactCursor::new(&footer);
+    let mut prior = 0;
+    while let Some((_, kind)) = cursor.field(&mut prior)? {
+        cursor.skip(kind, 32)?;
+    }
+    if cursor.position != footer.len() {
+        return Err(invalid("V36 prefix Parquet footer bytes differ"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_v36_parquet_pages<R: ChunkReader>(
+    file: &R,
+    row_groups: &parquet::file::metadata::ParquetMetaData,
+    column_bounds: &[(u64, u64)],
+) -> Result<()> {
+    const MAXIMUM_HEADER_BYTES: usize = 64 * 1_024;
+    for group in row_groups.row_groups() {
+        if group.columns().len() != column_bounds.len() {
+            return Err(invalid("V36 prefix Parquet column count differs"));
+        }
+        for (column_index, column) in group.columns().iter().enumerate() {
+            let start = column
+                .dictionary_page_offset()
+                .unwrap_or_else(|| column.data_page_offset());
+            let mut position = u64::try_from(start)
+                .map_err(|_| invalid("V36 prefix source column offset differs"))?;
+            let length = u64::try_from(column.compressed_size())
+                .map_err(|_| invalid("V36 prefix source column length differs"))?;
+            let end = position
+                .checked_add(length)
+                .ok_or_else(|| invalid("V36 prefix source column range overflows"))?;
+            while position < end {
+                let available = usize::try_from((end - position).min(MAXIMUM_HEADER_BYTES as u64))
+                    .map_err(|_| invalid("V36 prefix source page header length overflows"))?;
+                let header_bytes = file.get_bytes(position, available)?;
+                let (header_length, claim) = parse_v36_prefix_source_page_header(&header_bytes)?;
+                let (values_per_row, physical_bytes) = column_bounds[column_index];
+                validate_v36_prefix_source_page_header(
+                    &claim,
+                    group.num_rows(),
+                    values_per_row,
+                    physical_bytes,
+                )?;
+                position = position
+                    .checked_add(header_length as u64)
+                    .and_then(|value| value.checked_add(claim.compressed_bytes as u64))
+                    .filter(|value| *value <= end)
+                    .ok_or_else(|| invalid("V36 prefix source page range differs"))?;
+            }
+            if position != end {
+                return Err(invalid("V36 prefix source column range differs"));
+            }
+        }
     }
     Ok(())
 }
@@ -10860,6 +11396,22 @@ where
 pub fn scan_v36_prefix_gt100_parquet<F>(
     path: &Path,
     expected_queries: u32,
+    consume: F,
+) -> Result<()>
+where
+    F: FnMut(RecordBatch) -> Result<()>,
+{
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    scan_v36_prefix_gt100_parquet_file(file, path, expected_queries, consume)
+}
+
+pub(crate) fn scan_v36_prefix_gt100_parquet_file<F>(
+    mut file: File,
+    display_path: &Path,
+    expected_queries: u32,
     mut consume: F,
 ) -> Result<()>
 where
@@ -10868,15 +11420,50 @@ where
     if expected_queries == 0 {
         return Err(invalid("V36 prefix GT query count differs"));
     }
-    let file = File::open(path).map_err(|source| BorsukError::Io {
-        path: path.to_owned(),
+    v36_prefix_external_io(display_path, file.seek(SeekFrom::Start(0)))?;
+    let page_file = file.try_clone().map_err(|source| BorsukError::Io {
+        path: display_path.to_owned(),
         source,
     })?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    validate_v36_prefix_parquet_footer(&page_file)?;
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_gt100_schema())?;
     if builder.schema().as_ref() != &v36_prefix_gt100_schema() {
         return Err(invalid("V36 prefix GT physical schema differs"));
     }
+    let maximum_rows = usize::try_from(expected_queries)
+        .ok()
+        .and_then(|queries| queries.checked_mul(GT_NEIGHBORS))
+        .ok_or_else(|| invalid("V36 prefix GT row count overflows"))?;
+    let row_groups = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .map(|group| {
+            let compressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                total.checked_add(column.compressed_size())
+            });
+            let uncompressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                total.checked_add(column.uncompressed_size())
+            });
+            compressed
+                .zip(uncompressed)
+                .map(|(compressed, uncompressed)| (group.num_rows(), compressed, uncompressed))
+                .ok_or_else(|| invalid("V36 prefix GT decoder size overflows"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_v36_prefix_source_decoder_bounds(
+        &row_groups,
+        maximum_rows,
+        SOURCE_DECODER_COMPRESSED_CAP_BYTES,
+        SOURCE_DECODER_UNCOMPRESSED_CAP_BYTES,
+    )?;
+    validate_v36_parquet_pages(
+        &page_file,
+        builder.metadata(),
+        &[(1, 4), (1, 2), (1, 8), (1, 8)],
+    )?;
+    builder = builder.with_batch_size(PARQUET_ROW_GROUP_ROWS);
     let mut state = GtValidationState::default();
     for batch in builder.build()? {
         let batch = batch?;
@@ -11556,11 +12143,61 @@ fn load_v36_prefix_checkpoint_source_ids(path: &Path, expected_rows: u64) -> Res
         path: path.to_owned(),
         source,
     })?;
+    load_v36_prefix_checkpoint_source_ids_file(file, path, expected_rows)
+}
+
+pub(crate) fn load_v36_prefix_source_feature_ids_file(
+    file: File,
+    display_path: &Path,
+    expected_rows: u64,
+) -> Result<Vec<u64>> {
+    load_v36_prefix_checkpoint_source_ids_file(file, display_path, expected_rows)
+}
+
+fn load_v36_prefix_checkpoint_source_ids_file(
+    mut file: File,
+    display_path: &Path,
+    expected_rows: u64,
+) -> Result<Vec<u64>> {
+    v36_prefix_external_io(display_path, file.seek(SeekFrom::Start(0)))?;
+    let page_file = file.try_clone().map_err(|source| BorsukError::Io {
+        path: display_path.to_owned(),
+        source,
+    })?;
+    validate_v36_prefix_parquet_footer(&page_file)?;
     let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_source_schema())?;
     if builder.schema().as_ref() != &v36_prefix_source_schema() {
         return Err(invalid("V36 prefix source Parquet physical schema differs"));
     }
+    let row_groups = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .map(|group| {
+            let compressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                total.checked_add(column.compressed_size())
+            });
+            let uncompressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                total.checked_add(column.uncompressed_size())
+            });
+            compressed
+                .zip(uncompressed)
+                .map(|(compressed, uncompressed)| (group.num_rows(), compressed, uncompressed))
+                .ok_or_else(|| invalid("V36 prefix source decoder size overflows"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_v36_prefix_source_decoder_bounds(
+        &row_groups,
+        PARQUET_ROW_GROUP_ROWS,
+        SOURCE_DECODER_COMPRESSED_CAP_BYTES,
+        SOURCE_DECODER_UNCOMPRESSED_CAP_BYTES,
+    )?;
+    validate_v36_parquet_pages(
+        &page_file,
+        builder.metadata(),
+        &[(1, 8), (DIMENSIONS as u64, 4)],
+    )?;
     let declared_rows = validate_v36_prefix_checkpoint_source_metadata_rows(
         builder.metadata().file_metadata().num_rows(),
         &builder
@@ -11572,7 +12209,9 @@ fn load_v36_prefix_checkpoint_source_ids(path: &Path, expected_rows: u64) -> Res
         expected_rows,
     )?;
     let projection = ProjectionMask::roots(builder.parquet_schema(), [0]);
-    builder = builder.with_projection(projection);
+    builder = builder
+        .with_projection(projection)
+        .with_batch_size(PARQUET_ROW_GROUP_ROWS);
     let mut ids = Vec::with_capacity(declared_rows);
     let mut unique = BTreeSet::new();
     for batch in builder.build()? {
@@ -12251,6 +12890,160 @@ mod tests {
     use axum::{Router, body::Body, http::Response, routing::get};
 
     use super::*;
+
+    #[test]
+    fn v36_prefix_source_scanner_honors_the_bounded_decoder_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.parquet");
+        let mut coordinates = vec![0.0_f32; 2 * DIMENSIONS];
+        coordinates[0] = 1.0;
+        coordinates[DIMENSIONS + 1] = 1.0;
+        let vectors = FixedSizeListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float32, false)),
+            DIMENSIONS as i32,
+            Arc::new(Float32Array::from(coordinates)),
+            None,
+        )
+        .unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(v36_prefix_source_schema()),
+            vec![Arc::new(UInt64Array::from(vec![7, 9])), Arc::new(vectors)],
+        )
+        .unwrap();
+        let mut writer = ArrowWriter::try_new(
+            File::create(&path).unwrap(),
+            Arc::new(v36_prefix_source_schema()),
+            Some(
+                WriterProperties::builder()
+                    .set_max_row_group_row_count(Some(1))
+                    .build(),
+            ),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut maximum_rows = 0;
+        scan_v36_prefix_source_parquet_with_batch_size(&path, &[7, 9], Some(1), |batch| {
+            maximum_rows = maximum_rows.max(batch.num_rows());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(maximum_rows, 1);
+    }
+
+    #[test]
+    fn v36_prefix_source_scanner_rejects_oversized_row_group_decoder_working_set() {
+        assert!(
+            validate_v36_prefix_source_decoder_bounds(
+                &[(65_536, 200 * 1_048_576, 240 * 1_048_576)],
+                65_536,
+                256 * 1_048_576,
+                256 * 1_048_576,
+            )
+            .is_ok()
+        );
+        for invalid in [
+            vec![(65_537, 1, 1)],
+            vec![(65_536, 256 * 1_048_576 + 1, 1)],
+            vec![(65_536, 1, 256 * 1_048_576 + 1)],
+            vec![(65_536, -1, 1)],
+        ] {
+            assert!(
+                validate_v36_prefix_source_decoder_bounds(
+                    &invalid,
+                    65_536,
+                    256 * 1_048_576,
+                    256 * 1_048_576,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn v36_prefix_source_scanner_rejects_page_header_allocation_claims() {
+        let valid = V36PrefixSourcePageClaim {
+            compressed_bytes: 2_048,
+            kind: V36PrefixSourcePageKind::Data,
+            rows: None,
+            uncompressed_bytes: 4_096,
+            values: 1_024,
+        };
+        assert!(validate_v36_prefix_source_page_header(&valid, 65_536, 768, 4).is_ok());
+
+        let oversized_dictionary = V36PrefixSourcePageClaim {
+            compressed_bytes: 4,
+            kind: V36PrefixSourcePageKind::Dictionary,
+            rows: None,
+            uncompressed_bytes: 4,
+            values: i32::MAX,
+        };
+        assert!(
+            validate_v36_prefix_source_page_header(&oversized_dictionary, 65_536, 768, 4,).is_err()
+        );
+
+        let oversized_page = V36PrefixSourcePageClaim {
+            uncompressed_bytes: 16 * 1_048_576 + 1,
+            ..valid
+        };
+        assert!(validate_v36_prefix_source_page_header(&oversized_page, 65_536, 768, 4).is_err());
+    }
+
+    #[test]
+    fn v36_prefix_source_page_parser_accepts_explicit_reordering_and_rejects_duplicates() {
+        // Compact Thrift permits an explicit field ID to move backwards. This
+        // is the same DataPageHeader as the canonical order, with fields 3, 1,
+        // 2, then 5.
+        let reordered = [
+            0x35, 0x28, // compressed_page_size = 20
+            0x05, 0x02, 0x00, // type = DATA_PAGE
+            0x05, 0x04, 0x50, // uncompressed_page_size = 40
+            0x3c, 0x15, 0x14, 0x00, // data_page_header.num_values = 10
+            0x00,
+        ];
+        let (length, claim) = parse_v36_prefix_source_page_header(&reordered).unwrap();
+        assert_eq!(length, reordered.len());
+        assert_eq!(claim.compressed_bytes, 20);
+        assert_eq!(claim.uncompressed_bytes, 40);
+        assert_eq!(claim.values, 10);
+
+        let duplicate_type = [
+            0x15, 0x00, // type = DATA_PAGE
+            0x05, 0x02, 0x00, // explicit duplicate type
+            0x15, 0x50, // uncompressed_page_size = 40
+            0x15, 0x28, // compressed_page_size = 20
+            0x2c, 0x15, 0x14, 0x00, // data_page_header.num_values = 10
+            0x00,
+        ];
+        assert!(parse_v36_prefix_source_page_header(&duplicate_type).is_err());
+    }
+
+    #[test]
+    fn v36_prefix_parquet_footer_rejects_collection_allocation_claims_before_decode() {
+        let mut oversized_footer = vec![0x19, 0xf5];
+        let mut count = 65_537_u64;
+        while count >= 0x80 {
+            oversized_footer.push((count as u8) | 0x80);
+            count >>= 7;
+        }
+        oversized_footer.push(count as u8);
+        oversized_footer.push(0x00);
+        let mut parquet = b"PAR1".to_vec();
+        parquet.extend_from_slice(&oversized_footer);
+        parquet.extend_from_slice(&(oversized_footer.len() as u32).to_le_bytes());
+        parquet.extend_from_slice(b"PAR1");
+        assert!(validate_v36_prefix_parquet_footer(&bytes::Bytes::from(parquet)).is_err());
+
+        let overflowing_varint = [
+            b'P', b'A', b'R', b'1', 0x19, 0xf5, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+            0x80, 0x02, 0x00, 0x0d, 0x00, 0x00, 0x00, b'P', b'A', b'R', b'1',
+        ];
+        assert!(
+            validate_v36_prefix_parquet_footer(&bytes::Bytes::copy_from_slice(&overflowing_varint))
+                .is_err()
+        );
+    }
 
     #[test]
     fn v36_prefix_checkpoint_query_file_rejects_total_limit_during_scan() {

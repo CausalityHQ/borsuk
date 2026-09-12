@@ -1,14 +1,17 @@
 //! Balanced hyperplane layout and relation-routing qualification for V37.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Cursor,
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
+    fs::{self, File},
+    io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
 
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, ListArray, RecordBatch, UInt8Array, UInt32Array,
-    UInt64Array,
+    Array, FixedSizeListArray, Float32Array, ListArray, RecordBatch, UInt8Array, UInt16Array,
+    UInt32Array, UInt64Array,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_ipc::{
@@ -36,9 +39,430 @@ const V37_MAXIMUM_DIRECT_NODE_VISITS: u64 = 245;
 const V37_MAXIMUM_RELATION_NODE_VISITS: u64 = 1_024;
 const V37_SELECTED_POSTINGS: u64 = 14;
 const V37_GT_NEIGHBORS: u32 = 100;
+const V37_MAXIMUM_CEILING_QUERIES: u32 = 1_000;
 const V37_AGGREGATE_RECALL_GATE_PPM: u32 = 998_000;
 const V37_MINIMUM_RECALL_GATE_PPM: u32 = 800_000;
+const V37_MAXIMUM_WORKERS: u64 = 32;
+const V37_WORKER_STACK_BYTES: u64 = 2 * 1024 * 1024;
 static V37_FMA_KERNEL: OnceLock<Option<borsuk_fma::FusedDot8x12>> = OnceLock::new();
+
+/// One strict local phase of the claim-ineligible V37 diagnostic.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V37LocalRunMode {
+    /// Authenticate and build the query-blind ownership tree and table.
+    BuildOwnership,
+    /// Authenticate the frozen development evidence and compute the exact layout ceiling.
+    EvaluateCeiling,
+}
+
+impl V37LocalRunMode {
+    fn input_roles(self) -> &'static [&'static str] {
+        const BUILD: &[&str] = &[
+            "v36-authority",
+            "v36-execution-authority",
+            "v36-receipt",
+            "v36-source-registry",
+            "v37-authority",
+            "source",
+        ];
+        const CEILING: &[&str] = &[
+            "ceiling-authority",
+            "development-ground-truth",
+            "ownership-tree",
+            "ownership",
+        ];
+        match self {
+            Self::BuildOwnership => BUILD,
+            Self::EvaluateCeiling => CEILING,
+        }
+    }
+
+    fn output_roles(self) -> &'static [&'static str] {
+        match self {
+            Self::BuildOwnership => &["ownership-tree", "ownership"],
+            Self::EvaluateCeiling => &["ceiling"],
+        }
+    }
+}
+
+/// One authenticated local input; the URI is evidence identity, never a network capability.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V37LocalArtifact {
+    role: String,
+    path: PathBuf,
+    uri: String,
+    sha256: String,
+    blake3: String,
+    encoded_bytes: u64,
+}
+
+impl V37LocalArtifact {
+    /// Construct one strict local input identity.
+    pub fn try_new(
+        role: String,
+        path: PathBuf,
+        uri: String,
+        sha256: String,
+        blake3: String,
+        encoded_bytes: u64,
+    ) -> Result<Self> {
+        let artifact = Self {
+            role,
+            path,
+            uri,
+            sha256,
+            blake3,
+            encoded_bytes,
+        };
+        if artifact.role.is_empty()
+            || artifact.path.as_os_str().is_empty()
+            || artifact.encoded_bytes == 0
+            || !valid_s3_object_uri(&artifact.uri)
+            || !valid_lower_hex_digest(&artifact.sha256)
+            || !valid_lower_hex_digest(&artifact.blake3)
+        {
+            return Err(invalid("V37 local artifact identity differs"));
+        }
+        Ok(artifact)
+    }
+
+    /// Return the phase-local role.
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+
+    /// Return the local file path without opening it.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// One explicit local output path, with no implicit storage destination.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V37LocalOutput {
+    role: String,
+    path: PathBuf,
+}
+
+impl V37LocalOutput {
+    /// Construct an explicit output role and path.
+    pub fn try_new(role: String, path: PathBuf) -> Result<Self> {
+        if role.is_empty() || path.as_os_str().is_empty() {
+            return Err(invalid("V37 local output differs"));
+        }
+        Ok(Self { role, path })
+    }
+
+    /// Return the phase-local output role.
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+
+    /// Return the explicit local output path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Capability-separated local request for one V37 diagnostic phase.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V37LocalRunRequest {
+    mode: V37LocalRunMode,
+    inputs: Vec<V37LocalArtifact>,
+    outputs: Vec<V37LocalOutput>,
+    workers: u32,
+}
+
+impl V37LocalRunRequest {
+    /// Validate exact input/output roles and reject overlapping local paths.
+    pub fn try_new(
+        mode: V37LocalRunMode,
+        inputs: Vec<V37LocalArtifact>,
+        outputs: Vec<V37LocalOutput>,
+        workers: u32,
+    ) -> Result<Self> {
+        let input_roles = inputs
+            .iter()
+            .map(V37LocalArtifact::role)
+            .collect::<Vec<_>>();
+        let output_roles = outputs.iter().map(V37LocalOutput::role).collect::<Vec<_>>();
+        let mut paths = BTreeSet::new();
+        let mut uris = BTreeSet::new();
+        if input_roles != mode.input_roles()
+            || output_roles != mode.output_roles()
+            || !matches!(workers, 1 | 2 | 4 | 8 | 16 | 32)
+            || inputs.iter().any(|input| !paths.insert(input.path()))
+            || outputs.iter().any(|output| !paths.insert(output.path()))
+            || inputs.iter().any(|input| !uris.insert(input.uri.as_str()))
+        {
+            return Err(invalid("V37 local phase capability differs"));
+        }
+        Ok(Self {
+            mode,
+            inputs,
+            outputs,
+            workers,
+        })
+    }
+
+    /// Return the exact phase.
+    pub const fn mode(&self) -> V37LocalRunMode {
+        self.mode
+    }
+
+    /// Return input roles in their canonical phase order.
+    pub fn input_roles(&self) -> Vec<&str> {
+        self.inputs.iter().map(V37LocalArtifact::role).collect()
+    }
+
+    /// Return output roles in their canonical phase order.
+    pub fn output_roles(&self) -> Vec<&str> {
+        self.outputs.iter().map(V37LocalOutput::role).collect()
+    }
+
+    /// Return the registered worker count.
+    pub const fn workers(&self) -> u32 {
+        self.workers
+    }
+}
+
+#[derive(Debug)]
+struct V37AuthenticatedInputStamp {
+    file: File,
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+#[derive(Debug)]
+struct V37AuthenticatedLocalInputs(Vec<V37AuthenticatedInputStamp>);
+
+fn authenticate_v37_local_request(
+    request: &V37LocalRunRequest,
+) -> Result<V37AuthenticatedLocalInputs> {
+    const HASH_BUFFER_BYTES: usize = 1_048_576;
+
+    let mut input_paths = BTreeSet::new();
+    let mut input_files = BTreeSet::new();
+    let mut stamps = Vec::with_capacity(request.inputs.len());
+    for input in &request.inputs {
+        let path_metadata =
+            fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
+                path: input.path.clone(),
+                source,
+            })?;
+        if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
+            return Err(invalid("V37 local input type differs"));
+        }
+        let file = File::open(&input.path).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        let metadata = file.metadata().map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if !metadata.file_type().is_file()
+            || metadata.len() != input.encoded_bytes
+            || metadata.dev() != path_metadata.dev()
+            || metadata.ino() != path_metadata.ino()
+            || !input_files.insert((metadata.dev(), metadata.ino()))
+        {
+            return Err(invalid("V37 local input identity differs"));
+        }
+        let canonical = fs::canonicalize(&input.path).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if !input_paths.insert(canonical) {
+            return Err(invalid("V37 local input paths overlap"));
+        }
+
+        let mut reader = BufReader::with_capacity(HASH_BUFFER_BYTES, file);
+        let mut sha256 = Sha256::new();
+        let mut blake3 = blake3::Hasher::new();
+        let mut observed_bytes = 0_u64;
+        let mut buffer = vec![0_u8; HASH_BUFFER_BYTES];
+        loop {
+            let read = reader.read(&mut buffer).map_err(|source| BorsukError::Io {
+                path: input.path.clone(),
+                source,
+            })?;
+            if read == 0 {
+                break;
+            }
+            observed_bytes = observed_bytes
+                .checked_add(read as u64)
+                .ok_or_else(|| invalid("V37 local input length overflows"))?;
+            sha256.update(&buffer[..read]);
+            blake3.update(&buffer[..read]);
+        }
+        if observed_bytes != input.encoded_bytes
+            || format!("{:x}", sha256.finalize()) != input.sha256
+            || blake3.finalize().to_hex().as_str() != input.blake3
+        {
+            return Err(invalid("V37 local input bytes differ"));
+        }
+        let file = reader.into_inner();
+        let after = fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if after.file_type().is_symlink()
+            || after.dev() != metadata.dev()
+            || after.ino() != metadata.ino()
+            || after.len() != metadata.len()
+            || after.mtime() != metadata.mtime()
+            || after.mtime_nsec() != metadata.mtime_nsec()
+            || after.ctime() != metadata.ctime()
+            || after.ctime_nsec() != metadata.ctime_nsec()
+        {
+            return Err(invalid("V37 local input changed during authentication"));
+        }
+        stamps.push(V37AuthenticatedInputStamp {
+            file,
+            device: after.dev(),
+            inode: after.ino(),
+            length: after.len(),
+            modified_seconds: after.mtime(),
+            modified_nanoseconds: after.mtime_nsec(),
+            changed_seconds: after.ctime(),
+            changed_nanoseconds: after.ctime_nsec(),
+        });
+    }
+
+    let mut output_paths = BTreeSet::new();
+    for output in &request.outputs {
+        match fs::symlink_metadata(&output.path) {
+            Ok(_) => return Err(invalid("V37 local output already exists")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(BorsukError::Io {
+                    path: output.path.clone(),
+                    source,
+                });
+            }
+        }
+        let parent = output
+            .path
+            .parent()
+            .ok_or_else(|| invalid("V37 local output parent differs"))?;
+        let parent_metadata = fs::symlink_metadata(parent).map_err(|source| BorsukError::Io {
+            path: parent.to_owned(),
+            source,
+        })?;
+        if parent_metadata.file_type().is_symlink() || !parent_metadata.file_type().is_dir() {
+            return Err(invalid("V37 local output parent differs"));
+        }
+        let canonical_parent = fs::canonicalize(parent).map_err(|source| BorsukError::Io {
+            path: parent.to_owned(),
+            source,
+        })?;
+        let file_name = output
+            .path
+            .file_name()
+            .ok_or_else(|| invalid("V37 local output name differs"))?;
+        let canonical = canonical_parent.join(file_name);
+        if input_paths.contains(&canonical) || !output_paths.insert(canonical) {
+            return Err(invalid("V37 local input/output paths overlap"));
+        }
+    }
+    Ok(V37AuthenticatedLocalInputs(stamps))
+}
+
+fn authenticated_v37_input_file(
+    request: &V37LocalRunRequest,
+    authenticated: &V37AuthenticatedLocalInputs,
+    role: &str,
+) -> Result<File> {
+    let index = request
+        .inputs
+        .iter()
+        .position(|input| input.role == role)
+        .ok_or_else(|| invalid("V37 authenticated input role is absent"))?;
+    let mut file = authenticated
+        .0
+        .get(index)
+        .ok_or_else(|| invalid("V37 authenticated input count differs"))?
+        .file
+        .try_clone()
+        .map_err(|source| BorsukError::Io {
+            path: request.inputs[index].path.clone(),
+            source,
+        })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| BorsukError::Io {
+            path: request.inputs[index].path.clone(),
+            source,
+        })?;
+    Ok(file)
+}
+
+fn read_v37_authenticated_input(
+    request: &V37LocalRunRequest,
+    authenticated: &V37AuthenticatedLocalInputs,
+    role: &str,
+    maximum_bytes: u64,
+) -> Result<Vec<u8>> {
+    let input = local_input(request, role)?;
+    if maximum_bytes == 0 || input.encoded_bytes > maximum_bytes {
+        return Err(invalid("V37 authenticated input length differs"));
+    }
+    let mut file = authenticated_v37_input_file(request, authenticated, role)?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+    let capacity = usize::try_from(input.encoded_bytes)
+        .map_err(|_| invalid("V37 authenticated input exceeds address space"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.read_to_end(&mut bytes)
+        .map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+    if bytes.len() as u64 != input.encoded_bytes {
+        return Err(invalid("V37 authenticated input length differs"));
+    }
+    Ok(bytes)
+}
+
+fn validate_v37_local_input_stability(
+    request: &V37LocalRunRequest,
+    authenticated: &V37AuthenticatedLocalInputs,
+) -> Result<()> {
+    if request.inputs.len() != authenticated.0.len() {
+        return Err(invalid("V37 authenticated input count differs"));
+    }
+    for (input, stamp) in request.inputs.iter().zip(&authenticated.0) {
+        let metadata = fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || metadata.dev() != stamp.device
+            || metadata.ino() != stamp.inode
+            || metadata.len() != stamp.length
+            || metadata.mtime() != stamp.modified_seconds
+            || metadata.mtime_nsec() != stamp.modified_nanoseconds
+            || metadata.ctime() != stamp.changed_seconds
+            || metadata.ctime_nsec() != stamp.changed_nanoseconds
+        {
+            return Err(invalid("V37 local input changed after authentication"));
+        }
+    }
+    Ok(())
+}
 
 /// Query-independent authority for one balanced hyperplane tree.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -101,15 +525,17 @@ pub(crate) enum V37LayoutDisposition {
 /// Checked resident-construction memory projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V37ConstructionProjection {
-    pub(crate) source_decode_bytes: u64,
-    pub(crate) projected_decode_bytes: u64,
-    pub(crate) resident_coordinate_bytes: u64,
-    pub(crate) index_bytes: u64,
-    pub(crate) score_bytes: u64,
-    pub(crate) sample_bytes: u64,
+    pub(crate) source_decode_working_bytes: u64,
+    pub(crate) resident_projected_bytes: u64,
+    pub(crate) feature_id_bytes: u64,
+    pub(crate) ordinal_index_bytes: u64,
+    pub(crate) member_index_bytes: u64,
+    pub(crate) score_tuple_bytes: u64,
+    pub(crate) assignment_bytes: u64,
+    pub(crate) reservoir_bytes: u64,
     pub(crate) tree_bytes: u64,
-    pub(crate) relation_count_bytes: u64,
-    pub(crate) relation_prefix_bytes: u64,
+    pub(crate) ownership_writer_bytes: u64,
+    pub(crate) worker_stack_bytes: u64,
     pub(crate) subtotal_bytes: u64,
     pub(crate) allocator_headroom_bytes: u64,
     pub(crate) total_bytes: u64,
@@ -141,11 +567,65 @@ pub(crate) struct V37TrainingRow {
     pub(crate) vector: Vec<f32>,
 }
 
+trait V37TrainingDataset: Sync {
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn source_ordinal(&self, index: usize) -> u64;
+    fn vector(&self, index: usize) -> &[f32];
+}
+
+struct V37OwnedTrainingDataset<'a>(&'a [V37TrainingRow]);
+
+impl V37TrainingDataset for V37OwnedTrainingDataset<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn source_ordinal(&self, index: usize) -> u64 {
+        self.0[index].source_ordinal
+    }
+
+    fn vector(&self, index: usize) -> &[f32] {
+        &self.0[index].vector
+    }
+}
+
+struct V37ResidentTrainingDataset<'a> {
+    coordinates: &'a [f32],
+    dimensions: usize,
+}
+
+impl V37TrainingDataset for V37ResidentTrainingDataset<'_> {
+    fn len(&self) -> usize {
+        self.coordinates.len() / self.dimensions
+    }
+
+    fn source_ordinal(&self, index: usize) -> u64 {
+        index as u64
+    }
+
+    fn vector(&self, index: usize) -> &[f32] {
+        let start = index * self.dimensions;
+        &self.coordinates[start..start + self.dimensions]
+    }
+}
+
 /// One deterministic source-to-posting assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V37OwnershipAssignment {
     pub(crate) source_ordinal: u64,
     pub(crate) posting_ordinal: u32,
+}
+
+/// One format-v2 ownership row bridging compact source ordinals to dataset IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V37OwnershipRecord {
+    pub(crate) source_ordinal: u64,
+    pub(crate) feature_row_id: u64,
+    pub(crate) posting_ordinal: u32,
+    pub(crate) posting_local_ordinal: u32,
 }
 
 /// One preorder node. Leaves carry a posting; internal nodes carry a plane.
@@ -325,6 +805,110 @@ pub(crate) struct V37GroundTruth {
     pub(crate) source_ordinals: Vec<u64>,
 }
 
+/// Exact dataset IDs from the separately authenticated V36 GT@100 artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37FeatureGroundTruth {
+    pub(crate) query_ordinal: u32,
+    pub(crate) feature_row_ids: Vec<u64>,
+}
+
+pub(crate) fn map_v37_feature_ground_truth(
+    ownership: &[V37OwnershipRecord],
+    truth: &[V37FeatureGroundTruth],
+) -> Result<Vec<V37GroundTruth>> {
+    if ownership.is_empty() || truth.is_empty() {
+        return Err(invalid("V37 ceiling feature authority is empty"));
+    }
+    let mut by_feature = BTreeMap::new();
+    let mut posting_locals = BTreeMap::<u32, u32>::new();
+    for (source_ordinal, row) in ownership.iter().enumerate() {
+        let expected_local = posting_locals.entry(row.posting_ordinal).or_default();
+        if row.source_ordinal != source_ordinal as u64
+            || row.posting_local_ordinal != *expected_local
+            || by_feature
+                .insert(row.feature_row_id, row.source_ordinal)
+                .is_some()
+        {
+            return Err(invalid("V37 ceiling ownership identity differs"));
+        }
+        *expected_local = expected_local
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 ceiling ownership local ordinal overflows"))?;
+    }
+
+    let mut mapped = Vec::with_capacity(truth.len());
+    let mut previous_query = None;
+    for query in truth {
+        if previous_query.is_some_and(|prior| query.query_ordinal <= prior)
+            || query.feature_row_ids.len() != V37_GT_NEIGHBORS as usize
+        {
+            return Err(invalid("V37 ceiling feature truth shape differs"));
+        }
+        previous_query = Some(query.query_ordinal);
+        let mut seen = BTreeSet::new();
+        let source_ordinals = query
+            .feature_row_ids
+            .iter()
+            .map(|feature_row_id| {
+                if !seen.insert(*feature_row_id) {
+                    return Err(invalid("V37 ceiling feature truth row is duplicated"));
+                }
+                by_feature
+                    .get(feature_row_id)
+                    .copied()
+                    .ok_or_else(|| invalid("V37 ceiling feature truth row is unknown"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        mapped.push(V37GroundTruth {
+            query_ordinal: query.query_ordinal,
+            source_ordinals,
+        });
+    }
+    Ok(mapped)
+}
+
+fn load_v37_feature_ground_truth_file(
+    file: File,
+    display_path: &Path,
+    expected_queries: u32,
+) -> Result<Vec<V37FeatureGroundTruth>> {
+    let mut truth = (0..expected_queries)
+        .map(|query_ordinal| V37FeatureGroundTruth {
+            query_ordinal,
+            feature_row_ids: Vec::with_capacity(V37_GT_NEIGHBORS as usize),
+        })
+        .collect::<Vec<_>>();
+    crate::v36_prefix_dataset::scan_v36_prefix_gt100_parquet_file(
+        file,
+        display_path,
+        expected_queries,
+        |batch| {
+            let queries = column::<UInt32Array>(&batch, 0, "V37 GT query differs")?;
+            let ranks = column::<UInt16Array>(&batch, 1, "V37 GT rank differs")?;
+            let feature_ids = column::<UInt64Array>(&batch, 2, "V37 GT feature ID differs")?;
+            for row in 0..batch.num_rows() {
+                let query = usize::try_from(queries.value(row))
+                    .map_err(|_| invalid("V37 GT query differs"))?;
+                let target = truth
+                    .get_mut(query)
+                    .ok_or_else(|| invalid("V37 GT query differs"))?;
+                if ranks.value(row) as usize != target.feature_row_ids.len() {
+                    return Err(invalid("V37 GT rank differs"));
+                }
+                target.feature_row_ids.push(feature_ids.value(row));
+            }
+            Ok(())
+        },
+    )?;
+    if truth
+        .iter()
+        .any(|query| query.feature_row_ids.len() != V37_GT_NEIGHBORS as usize)
+    {
+        return Err(invalid("V37 GT row count differs"));
+    }
+    Ok(truth)
+}
+
 /// Independently recomputable unique-owner ceiling evidence for one query.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -372,6 +956,17 @@ pub(crate) struct V37ArtifactIdentity {
     uri: String,
 }
 
+/// Versioned semantic authority for replaying the frozen V36 SRHT projection.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37ProjectionAuthority {
+    algorithm: String,
+    projected_corpus_sha256: String,
+    routing_dimensions: u64,
+    seed: u64,
+    source_dimensions: u64,
+}
+
 /// Canonical query-independent authority for one V37 construction.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -379,11 +974,25 @@ pub(crate) struct V37AuthorityManifest {
     algorithm: String,
     metric: String,
     numeric: V37NumericAuthority,
-    projection: V37ArtifactIdentity,
+    projection: V37ProjectionAuthority,
     relation: V37RelationSpec,
     schema: String,
     source: V37ArtifactIdentity,
     tree: V37TreeSpec,
+}
+
+/// Capability-minimal authority for the separate GT-only exact-K14 ceiling.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37CeilingAuthority {
+    construction_authority: V37ArtifactIdentity,
+    development_ground_truth: V37ArtifactIdentity,
+    gt_neighbors: u32,
+    ownership: V37ArtifactIdentity,
+    ownership_tree: V37ArtifactIdentity,
+    query_count: u32,
+    schema: String,
+    selected_postings: u32,
 }
 
 fn invalid(message: &str) -> BorsukError {
@@ -417,7 +1026,7 @@ fn validate_v37_artifact(identity: &V37ArtifactIdentity, role: &str) -> Result<(
 }
 
 fn validate_v37_authority(manifest: &V37AuthorityManifest) -> Result<()> {
-    if manifest.schema != "borsuk-v37-relation-authority-v1"
+    if manifest.schema != "borsuk-v37-relation-authority-v2"
         || manifest.algorithm != "balanced-hyperplane-relation-v1"
         || manifest.metric != "squared-l2"
         || !matches!(
@@ -426,15 +1035,16 @@ fn validate_v37_authority(manifest: &V37AuthorityManifest) -> Result<()> {
         )
         || manifest.numeric.lane_width != 8
         || manifest.numeric.worker_count == 0
+        || manifest.projection.algorithm != "v36-srht-f32-v1"
+        || manifest.projection.source_dimensions != 768
+        || manifest.projection.routing_dimensions != manifest.tree.dimensions
+        || manifest.projection.seed != 36
+        || !valid_lower_hex_digest(&manifest.projection.projected_corpus_sha256)
     {
         return Err(invalid("V37 manifest authority differs"));
     }
     validate_v37_specs(&manifest.tree, &manifest.relation)?;
     validate_v37_artifact(&manifest.source, "source-corpus")?;
-    validate_v37_artifact(&manifest.projection, "projected-corpus")?;
-    if manifest.source.uri == manifest.projection.uri {
-        return Err(invalid("V37 artifact roles overlap"));
-    }
     Ok(())
 }
 
@@ -474,6 +1084,68 @@ pub(crate) fn parse_v37_authority_bytes(bytes: &[u8]) -> Result<V37AuthorityMani
         return Err(invalid("V37 manifest bytes are not canonical"));
     }
     Ok(manifest)
+}
+
+fn validate_v37_ceiling_authority(authority: &V37CeilingAuthority) -> Result<()> {
+    if authority.schema != "borsuk-v37-ceiling-authority-v1"
+        || authority.query_count == 0
+        || authority.query_count > V37_MAXIMUM_CEILING_QUERIES
+        || authority.gt_neighbors != V37_GT_NEIGHBORS
+        || authority.selected_postings != V37_SELECTED_POSTINGS as u32
+    {
+        return Err(invalid("V37 ceiling authority differs"));
+    }
+    for (identity, role) in [
+        (
+            &authority.construction_authority,
+            "v37-construction-authority",
+        ),
+        (
+            &authority.development_ground_truth,
+            "development-ground-truth",
+        ),
+        (&authority.ownership, "ownership"),
+        (&authority.ownership_tree, "ownership-tree"),
+    ] {
+        validate_v37_artifact(identity, role)?;
+    }
+    let uris = [
+        authority.construction_authority.uri.as_str(),
+        authority.development_ground_truth.uri.as_str(),
+        authority.ownership.uri.as_str(),
+        authority.ownership_tree.uri.as_str(),
+    ];
+    if uris.into_iter().collect::<BTreeSet<_>>().len() != uris.len() {
+        return Err(invalid("V37 ceiling artifact roles overlap"));
+    }
+    Ok(())
+}
+
+pub(crate) fn canonical_v37_ceiling_authority_bytes(
+    authority: &V37CeilingAuthority,
+) -> Result<Vec<u8>> {
+    validate_v37_ceiling_authority(authority)?;
+    let value = serde_json::to_value(authority).map_err(|error| {
+        invalid(&format!(
+            "V37 ceiling authority serialization failed: {error}"
+        ))
+    })?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+        invalid(&format!(
+            "V37 ceiling authority serialization failed: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn parse_v37_ceiling_authority_bytes(bytes: &[u8]) -> Result<V37CeilingAuthority> {
+    let authority: V37CeilingAuthority = serde_json::from_slice(bytes)
+        .map_err(|error| invalid(&format!("V37 ceiling authority parsing failed: {error}")))?;
+    if canonical_v37_ceiling_authority_bytes(&authority)? != bytes {
+        return Err(invalid("V37 ceiling authority bytes are not canonical"));
+    }
+    Ok(authority)
 }
 
 pub(crate) fn validate_v37_specs(tree: &V37TreeSpec, relation: &V37RelationSpec) -> Result<()> {
@@ -642,49 +1314,65 @@ pub(crate) fn project_v37_construction_bytes(
 ) -> Result<V37ConstructionProjection> {
     validate_v37_specs(tree, relation)?;
     let layout = project_v37_layout(tree)?;
-    let serving = project_v37_serving_bytes(tree, relation)?;
-    let coordinate_bytes = tree
+    let resident_projected_bytes = tree
         .corpus_rows
         .checked_mul(tree.dimensions)
         .and_then(|value| value.checked_mul(4))
         .ok_or_else(|| invalid("V37 coordinate byte projection overflows"))?;
-    let source_decode_bytes = coordinate_bytes;
-    let projected_decode_bytes = coordinate_bytes;
-    let resident_coordinate_bytes = coordinate_bytes;
-    let index_bytes = tree
+    let source_decode_working_bytes = 65_536_u64
+        .checked_mul(8 + 768 * 4)
+        .and_then(|value| value.checked_add(2 * 256 * 1_048_576))
+        .ok_or_else(|| invalid("V37 source decoder byte projection overflows"))?;
+    let feature_id_bytes = tree
+        .corpus_rows
+        .checked_mul(8)
+        .ok_or_else(|| invalid("V37 feature ID byte projection overflows"))?;
+    let ordinal_index_bytes = tree
         .corpus_rows
         .checked_mul(16)
-        .ok_or_else(|| invalid("V37 index byte projection overflows"))?;
-    let score_bytes = tree
+        .ok_or_else(|| invalid("V37 ordinal index byte projection overflows"))?;
+    let member_index_bytes = tree
         .corpus_rows
-        .checked_mul(4)
-        .ok_or_else(|| invalid("V37 score byte projection overflows"))?;
-    let sample_bytes = tree
-        .training_sample_rows
-        .min(tree.corpus_rows)
-        .checked_mul(tree.dimensions)
-        .and_then(|value| value.checked_mul(4))
-        .ok_or_else(|| invalid("V37 sample byte projection overflows"))?;
-    let tree_bytes = serving
-        .ownership_tree_bytes
-        .checked_add(serving.relation_tree_bytes)
-        .ok_or_else(|| invalid("V37 tree byte projection overflows"))?;
-    let relation_count_bytes = relation
-        .leaf_count
-        .checked_mul(layout.leaf_count)
-        .and_then(|value| value.checked_mul(8))
-        .ok_or_else(|| invalid("V37 relation count projection overflows"))?;
-    let relation_prefix_bytes = serving.relation_prefix_bytes;
+        .checked_mul(8)
+        .ok_or_else(|| invalid("V37 member index byte projection overflows"))?;
+    let score_tuple_bytes = tree
+        .corpus_rows
+        .checked_mul(24)
+        .ok_or_else(|| invalid("V37 score tuple byte projection overflows"))?;
+    let assignment_bytes = tree
+        .corpus_rows
+        .checked_mul(16)
+        .ok_or_else(|| invalid("V37 assignment byte projection overflows"))?;
+    let reservoir_bytes = tree
+        .corpus_rows
+        .checked_mul(16)
+        .and_then(|value| {
+            tree.training_sample_rows
+                .min(tree.corpus_rows)
+                .checked_mul(40)
+                .and_then(|heap| value.checked_add(heap))
+        })
+        .ok_or_else(|| invalid("V37 reservoir byte projection overflows"))?;
+    let tree_bytes = v37_tree_bytes(layout.internal_node_count, tree.dimensions)?;
+    let ownership_writer_bytes = tree
+        .corpus_rows
+        .checked_mul(48)
+        .ok_or_else(|| invalid("V37 ownership writer byte projection overflows"))?;
+    let worker_stack_bytes = V37_MAXIMUM_WORKERS
+        .checked_mul(V37_WORKER_STACK_BYTES)
+        .ok_or_else(|| invalid("V37 worker stack byte projection overflows"))?;
     let subtotal_bytes = [
-        source_decode_bytes,
-        projected_decode_bytes,
-        resident_coordinate_bytes,
-        index_bytes,
-        score_bytes,
-        sample_bytes,
+        source_decode_working_bytes,
+        resident_projected_bytes,
+        feature_id_bytes,
+        ordinal_index_bytes,
+        member_index_bytes,
+        score_tuple_bytes,
+        assignment_bytes,
+        reservoir_bytes,
         tree_bytes,
-        relation_count_bytes,
-        relation_prefix_bytes,
+        ownership_writer_bytes,
+        worker_stack_bytes,
     ]
     .into_iter()
     .try_fold(0_u64, |total, value| total.checked_add(value))
@@ -699,15 +1387,17 @@ pub(crate) fn project_v37_construction_bytes(
         V37LayoutDisposition::ResourceRejected
     };
     Ok(V37ConstructionProjection {
-        source_decode_bytes,
-        projected_decode_bytes,
-        resident_coordinate_bytes,
-        index_bytes,
-        score_bytes,
-        sample_bytes,
+        source_decode_working_bytes,
+        resident_projected_bytes,
+        feature_id_bytes,
+        ordinal_index_bytes,
+        member_index_bytes,
+        score_tuple_bytes,
+        assignment_bytes,
+        reservoir_bytes,
         tree_bytes,
-        relation_count_bytes,
-        relation_prefix_bytes,
+        ownership_writer_bytes,
+        worker_stack_bytes,
         subtotal_bytes,
         allocator_headroom_bytes,
         total_bytes,
@@ -739,17 +1429,12 @@ fn scalar_dot_8x12(left: &[f32; 96], right: &[f32; 96]) -> f32 {
 pub(crate) fn score_v37_hyperplane_scalar(row: &[f32], normal: &[f32]) -> Result<f32> {
     validate_score_inputs(row, normal)?;
     let mut score = 0.0_f32;
-    let mut chunks = row.chunks_exact(96).zip(normal.chunks_exact(96));
-    for (row_chunk, normal_chunk) in &mut chunks {
-        let row_block: &[f32; 96] = row_chunk
-            .try_into()
-            .map_err(|_| invalid("V37 scalar score block differs"))?;
-        let normal_block: &[f32; 96] = normal_chunk
-            .try_into()
-            .map_err(|_| invalid("V37 scalar score block differs"))?;
+    let row_blocks = row.as_chunks::<96>().0;
+    let normal_blocks = normal.as_chunks::<96>().0;
+    for (row_block, normal_block) in row_blocks.iter().zip(normal_blocks) {
         score += scalar_dot_8x12(row_block, normal_block);
     }
-    let consumed = row.len() / 96 * 96;
+    let consumed = row_blocks.len() * 96;
     for dimension in consumed..row.len() {
         score = row[dimension].mul_add(normal[dimension], score);
     }
@@ -830,20 +1515,24 @@ pub(crate) fn select_v37_node_reservoir(
         }
         previous = Some(*ordinal);
     }
-    let mut ranked = unique
-        .into_iter()
-        .map(|source_ordinal| {
-            let mut digest = Sha256::new();
-            digest.update(b"borsuk-v37-node-reservoir-v1\n");
-            digest.update(seed.to_le_bytes());
-            digest.update(node_id.to_le_bytes());
-            digest.update(source_ordinal.to_le_bytes());
-            let key: [u8; 32] = digest.finalize().into();
-            (key, source_ordinal)
-        })
-        .collect::<Vec<_>>();
+    let limit = maximum_rows.min(unique.len());
+    let mut ranked = BinaryHeap::with_capacity(limit);
+    for source_ordinal in unique {
+        let mut digest = Sha256::new();
+        digest.update(b"borsuk-v37-node-reservoir-v1\n");
+        digest.update(seed.to_le_bytes());
+        digest.update(node_id.to_le_bytes());
+        digest.update(source_ordinal.to_le_bytes());
+        let candidate = (<[u8; 32]>::from(digest.finalize()), source_ordinal);
+        if ranked.len() < limit {
+            ranked.push(candidate);
+        } else if ranked.peek().is_some_and(|largest| candidate < *largest) {
+            ranked.pop();
+            ranked.push(candidate);
+        }
+    }
+    let mut ranked = ranked.into_vec();
     ranked.sort_unstable();
-    ranked.truncate(maximum_rows.min(ranked.len()));
     Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
 }
 
@@ -1098,19 +1787,23 @@ fn squared_distance_with_kernel(
     ))
 }
 
-fn mean_vector(rows: &[&V37TrainingRow], dimensions: usize) -> Result<Vec<f32>> {
-    if rows.is_empty() {
+fn mean_vector(
+    rows: &impl V37TrainingDataset,
+    indices: &[usize],
+    dimensions: usize,
+) -> Result<Vec<f32>> {
+    if indices.is_empty() {
         return Err(invalid("V37 two-means partition is empty"));
     }
-    let mut ordered = rows.to_vec();
-    ordered.sort_unstable_by_key(|row| row.source_ordinal);
+    let mut ordered = indices.to_vec();
+    ordered.sort_unstable_by_key(|index| rows.source_ordinal(*index));
     let mut sums = vec![0.0_f64; dimensions];
-    for row in &ordered {
-        for (sum, value) in sums.iter_mut().zip(&row.vector) {
+    for index in ordered {
+        for (sum, value) in sums.iter_mut().zip(rows.vector(index)) {
             *sum += f64::from(*value);
         }
     }
-    let divisor = ordered.len() as f64;
+    let divisor = indices.len() as f64;
     let mean = sums
         .into_iter()
         .map(|sum| (sum / divisor) as f32)
@@ -1122,7 +1815,7 @@ fn mean_vector(rows: &[&V37TrainingRow], dimensions: usize) -> Result<Vec<f32>> 
 }
 
 fn repair_v37_empty_partition_with_kernel(
-    rows: &[V37TrainingRow],
+    rows: &impl V37TrainingDataset,
     zero_rows: &mut Vec<usize>,
     one_rows: &mut Vec<usize>,
     kernel: borsuk_fma::FusedDot8x12,
@@ -1134,24 +1827,18 @@ fn repair_v37_empty_partition_with_kernel(
     } else {
         return Err(invalid("V37 empty-label repair authority differs"));
     };
-    let populated_refs = populated
-        .iter()
-        .map(|index| &rows[*index])
-        .collect::<Vec<_>>();
-    let mean = mean_vector(&populated_refs, rows[populated[0]].vector.len())?;
+    let mean = mean_vector(rows, populated, rows.vector(populated[0]).len())?;
     let donor_position = populated
         .iter()
         .enumerate()
         .map(|(position, index)| {
-            squared_distance_with_kernel(&rows[*index].vector, &mean, kernel).map(
-                |(distance, _)| {
-                    (
-                        distance,
-                        std::cmp::Reverse(rows[*index].source_ordinal),
-                        position,
-                    )
-                },
-            )
+            squared_distance_with_kernel(rows.vector(*index), &mean, kernel).map(|(distance, _)| {
+                (
+                    distance,
+                    std::cmp::Reverse(rows.source_ordinal(*index)),
+                    position,
+                )
+            })
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -1172,41 +1859,51 @@ fn repair_v37_empty_partition(
     one_rows: &mut Vec<usize>,
 ) -> Result<()> {
     let kernel = v37_fused_kernel()?;
-    repair_v37_empty_partition_with_kernel(rows, zero_rows, one_rows, kernel)
+    repair_v37_empty_partition_with_kernel(
+        &V37OwnedTrainingDataset(rows),
+        zero_rows,
+        one_rows,
+        kernel,
+    )
 }
 
 fn deployed_hyperplane(
     members: &[usize],
-    rows: &[V37TrainingRow],
-    dimensions: usize,
+    rows: &impl V37TrainingDataset,
+    ordinal_to_index: &[(u64, usize)],
+    shape: &V37TrainingShape,
     seed: u64,
     node_id: u64,
-    reservoir_rows: usize,
-    iterations: usize,
     kernel: borsuk_fma::FusedDot8x12,
 ) -> Result<Vec<f32>> {
     let ordinals = members
         .iter()
-        .map(|index| rows[*index].source_ordinal)
+        .map(|index| rows.source_ordinal(*index))
         .collect::<Vec<_>>();
-    let selected = select_v37_node_reservoir(&ordinals, seed, node_id, reservoir_rows)?;
+    let selected = select_v37_node_reservoir(&ordinals, seed, node_id, shape.reservoir_rows)?;
     let mut sample = selected
         .iter()
         .map(|ordinal| {
-            rows.binary_search_by_key(ordinal, |row| row.source_ordinal)
-                .map_err(|_| invalid("V37 reservoir row is absent"))
+            ordinal_to_index
+                .binary_search_by_key(ordinal, |entry| entry.0)
+                .ok()
+                .map(|index| ordinal_to_index[index].1)
+                .ok_or_else(|| invalid("V37 reservoir row is absent"))
         })
         .collect::<Result<Vec<_>>>()?;
-    sample.sort_unstable_by_key(|index| rows[*index].source_ordinal);
+    sample.sort_unstable_by_key(|index| rows.source_ordinal(*index));
     if sample.len() < 2 {
         return Err(invalid("V37 node reservoir cannot seed two means"));
     }
-    let mut zero = rows[sample[0]].vector.clone();
+    let mut zero = rows.vector(sample[0]).to_vec();
     let mut farthest = None;
     for index in sample.iter().skip(1) {
-        let row = &rows[*index];
-        let (distance, _) = squared_distance_with_kernel(&zero, &row.vector, kernel)?;
-        let candidate = (distance, row.source_ordinal, row.vector.clone());
+        let (distance, _) = squared_distance_with_kernel(&zero, rows.vector(*index), kernel)?;
+        let candidate = (
+            distance,
+            rows.source_ordinal(*index),
+            rows.vector(*index).to_vec(),
+        );
         if farthest
             .as_ref()
             .is_none_or(|current: &(f32, u64, Vec<f32>)| {
@@ -1224,13 +1921,12 @@ fn deployed_hyperplane(
     if distance <= 0.0 {
         return Err(invalid("V37 node geometry is degenerate"));
     }
-    for _ in 0..iterations {
+    for _ in 0..shape.two_means_iterations {
         let mut zero_rows = Vec::new();
         let mut one_rows = Vec::new();
         for index in &sample {
-            let row = &rows[*index];
-            let zero_distance = squared_distance_with_kernel(&row.vector, &zero, kernel)?.0;
-            let one_distance = squared_distance_with_kernel(&row.vector, &one, kernel)?.0;
+            let zero_distance = squared_distance_with_kernel(rows.vector(*index), &zero, kernel)?.0;
+            let one_distance = squared_distance_with_kernel(rows.vector(*index), &one, kernel)?.0;
             if zero_distance.total_cmp(&one_distance).is_gt() {
                 one_rows.push(*index);
             } else {
@@ -1240,16 +1936,8 @@ fn deployed_hyperplane(
         if zero_rows.is_empty() || one_rows.is_empty() {
             repair_v37_empty_partition_with_kernel(rows, &mut zero_rows, &mut one_rows, kernel)?;
         }
-        let zero_refs = zero_rows
-            .iter()
-            .map(|index| &rows[*index])
-            .collect::<Vec<_>>();
-        let one_refs = one_rows
-            .iter()
-            .map(|index| &rows[*index])
-            .collect::<Vec<_>>();
-        zero = mean_vector(&zero_refs, dimensions)?;
-        one = mean_vector(&one_refs, dimensions)?;
+        zero = mean_vector(rows, &zero_rows, shape.dimensions)?;
+        one = mean_vector(rows, &one_rows, shape.dimensions)?;
     }
     let mut normal = one
         .iter()
@@ -1276,8 +1964,9 @@ fn deployed_hyperplane(
     Ok(normal)
 }
 
-struct V37TreeBuilder<'a> {
-    rows: &'a [V37TrainingRow],
+struct V37TreeBuilder<'a, D: V37TrainingDataset> {
+    rows: &'a D,
+    ordinal_to_index: &'a [(u64, usize)],
     pool: &'a ThreadPool,
     block_rows: usize,
     shape: V37TrainingShape,
@@ -1289,7 +1978,7 @@ struct V37TreeBuilder<'a> {
     kernel: borsuk_fma::FusedDot8x12,
 }
 
-impl V37TreeBuilder<'_> {
+impl<D: V37TrainingDataset> V37TreeBuilder<'_, D> {
     fn score(&self, row: &[f32], normal: &[f32]) -> Result<f32> {
         let (score, backend) = score_v37_hyperplane_with_kernel(row, normal, self.kernel)?;
         if self.backend != backend {
@@ -1316,7 +2005,7 @@ impl V37TreeBuilder<'_> {
             self.leaf_populations.push(members.len() as u64);
             for index in members {
                 self.assignments.push(V37OwnershipAssignment {
-                    source_ordinal: self.rows[index].source_ordinal,
+                    source_ordinal: self.rows.source_ordinal(index),
                     posting_ordinal,
                 });
             }
@@ -1327,11 +2016,10 @@ impl V37TreeBuilder<'_> {
         let normal = deployed_hyperplane(
             &members,
             self.rows,
-            self.shape.dimensions,
+            self.ordinal_to_index,
+            &self.shape,
             self.seed,
             u64::from(node_id),
-            self.shape.reservoir_rows,
-            self.shape.two_means_iterations,
             self.kernel,
         )?;
         let score_blocks = self.pool.install(|| {
@@ -1341,8 +2029,8 @@ impl V37TreeBuilder<'_> {
                     block
                         .iter()
                         .map(|index| {
-                            self.score(&self.rows[*index].vector, &normal)
-                                .map(|score| (score, self.rows[*index].source_ordinal, *index))
+                            self.score(self.rows.vector(*index), &normal)
+                                .map(|score| (score, self.rows.source_ordinal(*index), *index))
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -1365,6 +2053,7 @@ impl V37TreeBuilder<'_> {
             .iter()
             .map(|entry| entry.2)
             .collect::<Vec<_>>();
+        drop(scored);
         let left_node = self.build(left_members, quota.left_leaves)?;
         let right_node = self.build(right_members, quota.right_leaves)?;
         self.nodes[node_id as usize] = V37BalancedNode {
@@ -1387,6 +2076,47 @@ pub(crate) fn train_v37_ownership_tree(
     worker_count: usize,
     block_rows: usize,
 ) -> Result<V37BalancedTree> {
+    train_v37_ownership_tree_dataset(
+        &V37OwnedTrainingDataset(rows),
+        shape,
+        seed,
+        worker_count,
+        block_rows,
+    )
+}
+
+pub(crate) fn train_v37_ownership_tree_resident_coordinates(
+    coordinates: &[f32],
+    shape: V37TrainingShape,
+    seed: u64,
+    worker_count: usize,
+    block_rows: usize,
+) -> Result<V37BalancedTree> {
+    if shape.dimensions == 0
+        || coordinates.is_empty()
+        || !coordinates.len().is_multiple_of(shape.dimensions)
+    {
+        return Err(invalid("V37 resident training coordinates differ"));
+    }
+    train_v37_ownership_tree_dataset(
+        &V37ResidentTrainingDataset {
+            coordinates,
+            dimensions: shape.dimensions,
+        },
+        shape,
+        seed,
+        worker_count,
+        block_rows,
+    )
+}
+
+fn train_v37_ownership_tree_dataset(
+    rows: &impl V37TrainingDataset,
+    shape: V37TrainingShape,
+    seed: u64,
+    worker_count: usize,
+    block_rows: usize,
+) -> Result<V37BalancedTree> {
     if rows.is_empty()
         || shape.dimensions == 0
         || shape.leaf_count < 2
@@ -1399,19 +2129,26 @@ pub(crate) fn train_v37_ownership_tree(
     {
         return Err(invalid("V37 training authority differs"));
     }
-    let mut rows = rows.to_vec();
-    rows.sort_unstable_by_key(|row| row.source_ordinal);
-    let mut previous = None;
-    for row in &rows {
-        if previous == Some(row.source_ordinal)
-            || row.vector.len() != shape.dimensions
-            || row.vector.iter().any(|value| !value.is_finite())
-        {
+    let mut ordinal_to_index = Vec::with_capacity(rows.len());
+    for index in 0..rows.len() {
+        let source_ordinal = rows.source_ordinal(index);
+        let vector = rows.vector(index);
+        if vector.len() != shape.dimensions || vector.iter().any(|value| !value.is_finite()) {
             return Err(invalid("V37 training row authority differs"));
         }
-        previous = Some(row.source_ordinal);
+        ordinal_to_index.push((source_ordinal, index));
     }
-    let members = (0..rows.len()).collect::<Vec<_>>();
+    ordinal_to_index.sort_unstable_by_key(|entry| entry.0);
+    if ordinal_to_index
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0)
+    {
+        return Err(invalid("V37 training row authority differs"));
+    }
+    let members = ordinal_to_index
+        .iter()
+        .map(|entry| entry.1)
+        .collect::<Vec<_>>();
     let pool = ThreadPoolBuilder::new()
         .num_threads(worker_count)
         .build()
@@ -1419,7 +2156,8 @@ pub(crate) fn train_v37_ownership_tree(
     let kernel = v37_fused_kernel()?;
     let backend = v37_fma_backend_name(kernel);
     let mut builder = V37TreeBuilder {
-        rows: &rows,
+        rows,
+        ordinal_to_index: &ordinal_to_index,
         pool: &pool,
         block_rows,
         shape,
@@ -1587,6 +2325,7 @@ fn validate_v37_balanced_tree(tree: &V37BalancedTree) -> Result<()> {
 fn v37_ownership_schema() -> Schema {
     Schema::new(vec![
         Field::new("source_ordinal", DataType::UInt64, false),
+        Field::new("feature_row_id", DataType::UInt64, false),
         Field::new("posting_ordinal", DataType::UInt32, false),
         Field::new("posting_local_ordinal", DataType::UInt32, false),
     ])
@@ -1594,19 +2333,26 @@ fn v37_ownership_schema() -> Schema {
 
 pub(crate) fn encode_v37_ownership_parquet(
     assignments: &[V37OwnershipAssignment],
+    feature_row_ids: &[u64],
     leaf_populations: &[u64],
 ) -> Result<V37EncodedOwnership> {
-    if assignments.is_empty() || leaf_populations.is_empty() {
+    if assignments.is_empty()
+        || assignments.len() != feature_row_ids.len()
+        || leaf_populations.is_empty()
+    {
         return Err(invalid("V37 ownership table is empty"));
     }
     let mut local_counts = vec![0_u32; leaf_populations.len()];
     let mut local_ordinals = Vec::with_capacity(assignments.len());
-    let mut previous = None;
-    for assignment in assignments {
-        if previous.is_some_and(|ordinal| assignment.source_ordinal <= ordinal) {
+    let mut unique_feature_ids = BTreeSet::new();
+    for (source_ordinal, (assignment, feature_row_id)) in
+        assignments.iter().zip(feature_row_ids).enumerate()
+    {
+        if assignment.source_ordinal != source_ordinal as u64
+            || !unique_feature_ids.insert(*feature_row_id)
+        {
             return Err(invalid("V37 ownership source ordering differs"));
         }
-        previous = Some(assignment.source_ordinal);
         let posting = assignment.posting_ordinal as usize;
         let local = local_counts
             .get_mut(posting)
@@ -1633,6 +2379,7 @@ pub(crate) fn encode_v37_ownership_parquet(
                     .map(|assignment| assignment.source_ordinal)
                     .collect::<Vec<_>>(),
             )),
+            Arc::new(UInt64Array::from(feature_row_ids.to_vec())),
             Arc::new(UInt32Array::from(
                 assignments
                     .iter()
@@ -1663,7 +2410,7 @@ pub(crate) fn decode_v37_ownership_parquet(
     sha256: &str,
     blake3: &str,
     leaf_populations: &[u64],
-) -> Result<Vec<V37OwnershipAssignment>> {
+) -> Result<Vec<V37OwnershipRecord>> {
     if encoded_bytes != bytes.len() as u64
         || !valid_lower_hex_digest(sha256)
         || !valid_lower_hex_digest(blake3)
@@ -1673,7 +2420,9 @@ pub(crate) fn decode_v37_ownership_parquet(
     {
         return Err(invalid("V37 ownership artifact bytes differ"));
     }
-    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let parquet_bytes = Bytes::copy_from_slice(bytes);
+    crate::v36_prefix_dataset::validate_v36_prefix_parquet_footer(&parquet_bytes)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes.clone())?;
     if builder.schema().as_ref() != &v37_ownership_schema()
         || builder.metadata().num_row_groups() != 1
     {
@@ -1687,6 +2436,34 @@ pub(crate) fn decode_v37_ownership_parquet(
         });
     let expected_rows =
         expected_rows.ok_or_else(|| invalid("V37 ownership row count overflows"))?;
+    let row_groups = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .map(|group| {
+            let compressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                total.checked_add(column.compressed_size())
+            });
+            let uncompressed = group.columns().iter().try_fold(0_i64, |total, column| {
+                total.checked_add(column.uncompressed_size())
+            });
+            compressed
+                .zip(uncompressed)
+                .map(|(compressed, uncompressed)| (group.num_rows(), compressed, uncompressed))
+                .ok_or_else(|| invalid("V37 ownership decoder size overflows"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    crate::v36_prefix_dataset::validate_v36_prefix_source_decoder_bounds(
+        &row_groups,
+        expected_rows,
+        crate::v36_prefix_dataset::SOURCE_DECODER_COMPRESSED_CAP_BYTES,
+        crate::v36_prefix_dataset::SOURCE_DECODER_UNCOMPRESSED_CAP_BYTES,
+    )?;
+    crate::v36_prefix_dataset::validate_v36_parquet_pages(
+        &parquet_bytes,
+        builder.metadata(),
+        &[(1, 8), (1, 8), (1, 4), (1, 4)],
+    )?;
     let observed_rows = usize::try_from(builder.metadata().file_metadata().num_rows())
         .map_err(|_| invalid("V37 ownership row count differs"))?;
     if observed_rows != expected_rows {
@@ -1697,10 +2474,10 @@ pub(crate) fn decode_v37_ownership_parquet(
         .try_reserve_exact(expected_rows)
         .map_err(|_| invalid("V37 ownership allocation exceeds capacity"))?;
     let mut local_counts = vec![0_u32; leaf_populations.len()];
-    let mut previous = None;
+    let mut unique_feature_ids = BTreeSet::new();
     for batch in builder.build()? {
         let batch = batch?;
-        if batch.num_columns() != 3
+        if batch.num_columns() != 4
             || batch
                 .columns()
                 .iter()
@@ -1709,25 +2486,29 @@ pub(crate) fn decode_v37_ownership_parquet(
             return Err(invalid("V37 ownership Parquet batch differs"));
         }
         let sources = column::<UInt64Array>(&batch, 0, "V37 ownership source differs")?;
-        let postings = column::<UInt32Array>(&batch, 1, "V37 ownership posting differs")?;
-        let locals = column::<UInt32Array>(&batch, 2, "V37 ownership local differs")?;
+        let feature_ids = column::<UInt64Array>(&batch, 1, "V37 ownership feature ID differs")?;
+        let postings = column::<UInt32Array>(&batch, 2, "V37 ownership posting differs")?;
+        let locals = column::<UInt32Array>(&batch, 3, "V37 ownership local differs")?;
         for row in 0..batch.num_rows() {
             let source_ordinal = sources.value(row);
+            let feature_row_id = feature_ids.value(row);
             let posting_ordinal = postings.value(row);
             let posting = posting_ordinal as usize;
-            if previous.is_some_and(|ordinal| source_ordinal <= ordinal)
+            if source_ordinal != assignments.len() as u64
+                || !unique_feature_ids.insert(feature_row_id)
                 || posting >= local_counts.len()
                 || locals.value(row) != local_counts[posting]
             {
                 return Err(invalid("V37 ownership row authority differs"));
             }
-            previous = Some(source_ordinal);
             local_counts[posting] = local_counts[posting]
                 .checked_add(1)
                 .ok_or_else(|| invalid("V37 ownership local ordinal overflows"))?;
-            assignments.push(V37OwnershipAssignment {
+            assignments.push(V37OwnershipRecord {
                 source_ordinal,
+                feature_row_id,
                 posting_ordinal,
+                posting_local_ordinal: locals.value(row),
             });
         }
     }
@@ -3165,27 +3946,548 @@ pub(crate) fn decode_v37_tree_arrow(
     Ok(tree)
 }
 
+fn local_input<'a>(request: &'a V37LocalRunRequest, role: &str) -> Result<&'a V37LocalArtifact> {
+    request
+        .inputs
+        .iter()
+        .find(|input| input.role == role)
+        .ok_or_else(|| invalid("V37 local input role is absent"))
+}
+
+fn local_output<'a>(request: &'a V37LocalRunRequest, role: &str) -> Result<&'a V37LocalOutput> {
+    request
+        .outputs
+        .iter()
+        .find(|output| output.role == role)
+        .ok_or_else(|| invalid("V37 local output role is absent"))
+}
+
+fn local_matches_identity(input: &V37LocalArtifact, identity: &V37ArtifactIdentity) -> bool {
+    input.uri == identity.uri
+        && input.sha256 == identity.sha256
+        && input.blake3 == identity.blake3
+        && input.encoded_bytes == identity.encoded_bytes
+}
+
+fn v36_matches_identity(
+    observed: &crate::V36ArtifactIdentity,
+    expected: &V37ArtifactIdentity,
+) -> bool {
+    observed.uri == expected.uri
+        && observed.sha256 == expected.sha256
+        && observed.blake3 == expected.blake3
+        && observed.encoded_bytes == expected.encoded_bytes
+}
+
+fn stage_v37_output(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid("V37 local output parent differs"))?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|source| BorsukError::Io {
+            path: parent.to_owned(),
+            source,
+        })?;
+    temporary
+        .write_all(bytes)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+    Ok(temporary)
+}
+
+fn publish_v37_output(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temporary = stage_v37_output(path, bytes)?;
+    temporary
+        .persist_noclobber(path)
+        .map_err(|error| BorsukError::Io {
+            path: path.to_owned(),
+            source: error.error,
+        })?;
+    Ok(())
+}
+
+fn publish_v37_output_pair(
+    first_path: &Path,
+    first_bytes: &[u8],
+    second_path: &Path,
+    second_bytes: &[u8],
+) -> Result<()> {
+    let first = stage_v37_output(first_path, first_bytes)?;
+    let second = stage_v37_output(second_path, second_bytes)?;
+    first
+        .persist_noclobber(first_path)
+        .map_err(|error| BorsukError::Io {
+            path: first_path.to_owned(),
+            source: error.error,
+        })?;
+    if let Err(error) = second.persist_noclobber(second_path) {
+        return Err(BorsukError::Io {
+            path: second_path.to_owned(),
+            source: error.error,
+        });
+    }
+    Ok(())
+}
+
+fn encoded_identity(role: &str, uri: String, bytes: &[u8]) -> V37ArtifactIdentity {
+    V37ArtifactIdentity {
+        blake3: blake3::hash(bytes).to_hex().to_string(),
+        encoded_bytes: bytes.len() as u64,
+        role: role.to_owned(),
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+        uri,
+    }
+}
+
+fn local_artifact_identity(input: &V37LocalArtifact) -> V37ArtifactIdentity {
+    V37ArtifactIdentity {
+        blake3: input.blake3.clone(),
+        encoded_bytes: input.encoded_bytes,
+        role: input.role.clone(),
+        sha256: input.sha256.clone(),
+        uri: input.uri.clone(),
+    }
+}
+
+fn canonical_v37_local_receipt(
+    mode: &str,
+    inputs: &[V37LocalArtifact],
+    artifacts: &[V37ArtifactIdentity],
+) -> Result<Vec<u8>> {
+    let inputs = inputs
+        .iter()
+        .map(local_artifact_identity)
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "artifacts": artifacts,
+        "claim_eligible": false,
+        "inputs": inputs,
+        "mode": mode,
+        "schema": "borsuk-v37-local-result-v2",
+    });
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V37 local result serialization failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn canonical_v37_bound_ceiling_bytes(
+    authority_input: &V37LocalArtifact,
+    authority: &V37CeilingAuthority,
+    ceiling: &V37LayoutCeiling,
+) -> Result<Vec<u8>> {
+    if authority_input.role != "ceiling-authority" {
+        return Err(invalid("V37 ceiling authority identity differs"));
+    }
+    validate_v37_ceiling_authority(authority)?;
+    validate_v37_ceiling(ceiling)?;
+    let value = serde_json::json!({
+        "ceiling": ceiling,
+        "ceiling_authority": local_artifact_identity(authority_input),
+        "claim_eligible": false,
+        "inputs": authority,
+        "schema": "borsuk-v37-bound-ceiling-v1",
+    });
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V37 bound ceiling serialization failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn validate_v37_local_build_authority(
+    request: &V37LocalRunRequest,
+    manifest: &V37AuthorityManifest,
+) -> Result<()> {
+    let source_input = local_input(request, "source")?;
+    let backend = v37_fma_backend_name(v37_fused_kernel()?);
+    if request.mode != V37LocalRunMode::BuildOwnership
+        || manifest.numeric.worker_count != request.workers
+        || manifest.numeric.fma_backend != backend
+        || !local_matches_identity(source_input, &manifest.source)
+        || project_v37_construction_bytes(&manifest.tree, &manifest.relation)?.disposition
+            != V37LayoutDisposition::Admissible
+    {
+        return Err(invalid("V37 construction input authority differs"));
+    }
+    Ok(())
+}
+
+/// Run one capability-separated local V37 fail-fast phase.
+#[doc(hidden)]
+pub fn run_v37_local_request(request: V37LocalRunRequest) -> Result<Vec<u8>> {
+    let authenticated = authenticate_v37_local_request(&request)?;
+    run_v37_authenticated_local_request(&request, &authenticated)
+}
+
+fn run_v37_authenticated_local_request(
+    request: &V37LocalRunRequest,
+    authenticated: &V37AuthenticatedLocalInputs,
+) -> Result<Vec<u8>> {
+    match request.mode {
+        V37LocalRunMode::BuildOwnership => {
+            let manifest = parse_v37_authority_bytes(&read_v37_authenticated_input(
+                request,
+                authenticated,
+                "v37-authority",
+                16 * 1_048_576,
+            )?)?;
+            validate_v37_local_build_authority(request, &manifest)?;
+            let source_input = local_input(request, "source")?;
+            let v36_authority = read_v37_authenticated_input(
+                request,
+                authenticated,
+                "v36-authority",
+                16 * 1_048_576,
+            )?;
+            let v36_execution = read_v37_authenticated_input(
+                request,
+                authenticated,
+                "v36-execution-authority",
+                16 * 1_048_576,
+            )?;
+            let v36_receipt = read_v37_authenticated_input(
+                request,
+                authenticated,
+                "v36-receipt",
+                16 * 1_048_576,
+            )?;
+            let v36_registry = read_v37_authenticated_input(
+                request,
+                authenticated,
+                "v36-source-registry",
+                16 * 1_048_576,
+            )?;
+            let inputs = crate::v36_prefix_dataset::load_v36_prefix_geometry_authority_bytes(
+                &v36_authority,
+                &v36_execution,
+                &v36_receipt,
+                &v36_registry,
+            )?;
+            let construction = inputs.construction();
+            if construction.corpus_rows() != manifest.tree.corpus_rows
+                || !v36_matches_identity(construction.source(), &manifest.source)
+            {
+                return Err(invalid("V37 construction V36 binding differs"));
+            }
+            let feature_ids = crate::v36_prefix_dataset::load_v36_prefix_source_feature_ids_file(
+                authenticated_v37_input_file(request, authenticated, "source")?,
+                &source_input.path,
+                construction.corpus_rows(),
+            )?;
+            let projected = crate::v36_prefix_dataset::project_v36_prefix_source_resident_file(
+                authenticated_v37_input_file(request, authenticated, "source")?,
+                &source_input.path,
+                &feature_ids,
+                65_536,
+            )?;
+            if projected.projected_corpus_sha256() != manifest.projection.projected_corpus_sha256 {
+                return Err(invalid("V37 projected corpus replay differs"));
+            }
+            let layout = project_v37_layout(&manifest.tree)?;
+            let tree = train_v37_ownership_tree_resident_coordinates(
+                projected.projected_coordinates(),
+                V37TrainingShape {
+                    dimensions: usize::try_from(manifest.tree.dimensions)
+                        .map_err(|_| invalid("V37 dimensions exceed address space"))?,
+                    leaf_count: layout.leaf_count,
+                    reservoir_rows: usize::try_from(manifest.tree.training_sample_rows)
+                        .map_err(|_| invalid("V37 reservoir exceeds address space"))?,
+                    two_means_iterations: usize::try_from(manifest.tree.two_means_iterations)
+                        .map_err(|_| invalid("V37 iterations exceed address space"))?,
+                },
+                manifest.tree.seed,
+                request.workers as usize,
+                65_536,
+            )?;
+            let tree_bytes = encode_v37_tree_arrow(&tree)?;
+            let ownership_bytes = encode_v37_ownership_parquet(
+                &tree.assignments,
+                projected.feature_ids(),
+                &tree.leaf_populations,
+            )?;
+            let tree_output = local_output(request, "ownership-tree")?;
+            let ownership_output = local_output(request, "ownership")?;
+            validate_v37_local_input_stability(request, authenticated)?;
+            publish_v37_output_pair(
+                &tree_output.path,
+                &tree_bytes.bytes,
+                &ownership_output.path,
+                &ownership_bytes.bytes,
+            )?;
+            canonical_v37_local_receipt(
+                "build-ownership",
+                &request.inputs,
+                &[
+                    encoded_identity(
+                        "ownership-tree",
+                        format!("file://{}", tree_output.path.display()),
+                        &tree_bytes.bytes,
+                    ),
+                    encoded_identity(
+                        "ownership",
+                        format!("file://{}", ownership_output.path.display()),
+                        &ownership_bytes.bytes,
+                    ),
+                ],
+            )
+        }
+        V37LocalRunMode::EvaluateCeiling => {
+            let authority_input = local_input(request, "ceiling-authority")?;
+            let authority = parse_v37_ceiling_authority_bytes(&read_v37_authenticated_input(
+                request,
+                authenticated,
+                "ceiling-authority",
+                16 * 1_048_576,
+            )?)?;
+            let tree_input = local_input(request, "ownership-tree")?;
+            let ownership_input = local_input(request, "ownership")?;
+            let truth_input = local_input(request, "development-ground-truth")?;
+            if !local_matches_identity(tree_input, &authority.ownership_tree)
+                || !local_matches_identity(ownership_input, &authority.ownership)
+                || !local_matches_identity(truth_input, &authority.development_ground_truth)
+            {
+                return Err(invalid("V37 ceiling input binding differs"));
+            }
+            let tree_file = read_v37_authenticated_input(
+                request,
+                authenticated,
+                "ownership-tree",
+                tree_input.encoded_bytes,
+            )?;
+            let tree = decode_v37_tree_arrow(
+                &tree_file,
+                tree_input.encoded_bytes,
+                &tree_input.sha256,
+                &tree_input.blake3,
+            )?;
+            let ownership_file = read_v37_authenticated_input(
+                request,
+                authenticated,
+                "ownership",
+                ownership_input.encoded_bytes,
+            )?;
+            let ownership = decode_v37_ownership_parquet(
+                &ownership_file,
+                ownership_input.encoded_bytes,
+                &ownership_input.sha256,
+                &ownership_input.blake3,
+                &tree.leaf_populations,
+            )?;
+            let feature_truth = load_v37_feature_ground_truth_file(
+                authenticated_v37_input_file(request, authenticated, "development-ground-truth")?,
+                &truth_input.path,
+                authority.query_count,
+            )?;
+            let truth = map_v37_feature_ground_truth(&ownership, &feature_truth)?;
+            let assignments = ownership
+                .iter()
+                .map(|row| V37OwnershipAssignment {
+                    source_ordinal: row.source_ordinal,
+                    posting_ordinal: row.posting_ordinal,
+                })
+                .collect::<Vec<_>>();
+            let ceiling = evaluate_v37_unique_owner_ceiling(
+                &assignments,
+                &truth,
+                authority.selected_postings as usize,
+            )?;
+            let bytes = canonical_v37_bound_ceiling_bytes(authority_input, &authority, &ceiling)?;
+            validate_v37_local_input_stability(request, authenticated)?;
+            publish_v37_output(&local_output(request, "ceiling")?.path, &bytes)?;
+            Ok(bytes)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, fs, path::Path};
+
+    use sha2::{Digest, Sha256};
 
     use super::{
-        V37ArtifactIdentity, V37AuthorityManifest, V37DirectSelection, V37DirectSelectionRecord,
-        V37GroundTruth, V37LayoutDisposition, V37NumericAuthority, V37RelationSpec, V37TrainingRow,
-        V37TrainingShape, V37TreeSpec, build_v37_relation_plane, canonical_v37_authority_bytes,
-        canonical_v37_ceiling_bytes, canonical_v37_direct_bytes, decode_v37_ownership_parquet,
+        V37ArtifactIdentity, V37AuthorityManifest, V37CeilingAuthority, V37DirectSelection,
+        V37DirectSelectionRecord, V37FeatureGroundTruth, V37GroundTruth, V37LayoutDisposition,
+        V37LocalArtifact, V37LocalOutput, V37LocalRunMode, V37LocalRunRequest, V37NumericAuthority,
+        V37OwnershipRecord, V37ProjectionAuthority, V37RelationSpec, V37TrainingRow,
+        V37TrainingShape, V37TreeSpec, authenticate_v37_local_request, build_v37_relation_plane,
+        canonical_v37_authority_bytes, canonical_v37_bound_ceiling_bytes,
+        canonical_v37_ceiling_authority_bytes, canonical_v37_ceiling_bytes,
+        canonical_v37_direct_bytes, canonical_v37_local_receipt, decode_v37_ownership_parquet,
         decode_v37_relation_counts_parquet, decode_v37_relation_prefixes_arrow,
         decode_v37_tree_arrow, encode_v37_ownership_parquet, encode_v37_relation_counts_parquet,
         encode_v37_relation_prefixes_arrow, encode_v37_tree_arrow, evaluate_v37_direct_recall,
-        evaluate_v37_unique_owner_ceiling, parse_v37_authority_bytes, prepare_v37_direct_router,
-        prepare_v37_relation_prefixes, prepare_v37_relation_router, project_v37_child_quota,
-        project_v37_construction_bytes, project_v37_layout, project_v37_serving_bytes,
-        project_v37_work, reduce_v37_relation_postings, repair_v37_empty_partition,
-        route_v37_corpus_member, route_v37_primary_leaf, route_v37_query,
+        evaluate_v37_unique_owner_ceiling, map_v37_feature_ground_truth, parse_v37_authority_bytes,
+        prepare_v37_direct_router, prepare_v37_relation_prefixes, prepare_v37_relation_router,
+        project_v37_child_quota, project_v37_construction_bytes, project_v37_layout,
+        project_v37_serving_bytes, project_v37_work, publish_v37_output_pair,
+        read_v37_authenticated_input, reduce_v37_relation_postings, repair_v37_empty_partition,
+        route_v37_corpus_member, route_v37_primary_leaf, route_v37_query, run_v37_local_request,
         score_v37_hyperplane_fused, score_v37_hyperplane_scalar, select_v37_direct_postings,
         select_v37_node_reservoir, select_v37_relation_postings, train_v37_ownership_tree,
-        v37_mass_q24, validate_v37_relation_prefixes, validate_v37_specs,
+        train_v37_ownership_tree_resident_coordinates, v37_mass_q24,
+        validate_v37_local_build_authority, validate_v37_local_input_stability,
+        validate_v37_relation_prefixes, validate_v37_specs,
     };
+
+    fn local_artifact(root: &Path, role: &str) -> V37LocalArtifact {
+        let path = root.join(role);
+        let bytes = format!("registered-{role}\n").into_bytes();
+        fs::write(&path, &bytes).unwrap();
+        V37LocalArtifact::try_new(
+            role.to_owned(),
+            path,
+            format!("s3://frozen-v37/{role}"),
+            format!("{:x}", Sha256::digest(&bytes)),
+            blake3::hash(&bytes).to_hex().to_string(),
+            bytes.len() as u64,
+        )
+        .unwrap()
+    }
+
+    fn local_artifact_bytes(root: &Path, role: &str, bytes: &[u8]) -> V37LocalArtifact {
+        let path = root.join(role);
+        fs::write(&path, bytes).unwrap();
+        V37LocalArtifact::try_new(
+            role.to_owned(),
+            path,
+            format!("s3://frozen-v37/{role}"),
+            format!("{:x}", Sha256::digest(bytes)),
+            blake3::hash(bytes).to_hex().to_string(),
+            bytes.len() as u64,
+        )
+        .unwrap()
+    }
+
+    fn local_build_request(root: &Path) -> V37LocalRunRequest {
+        let roles = [
+            "v36-authority",
+            "v36-execution-authority",
+            "v36-receipt",
+            "v36-source-registry",
+            "v37-authority",
+            "source",
+        ];
+        let inputs = roles
+            .iter()
+            .map(|role| local_artifact(root, role))
+            .collect();
+        let outputs = ["ownership-tree", "ownership"]
+            .into_iter()
+            .map(|role| {
+                V37LocalOutput::try_new(role.to_owned(), root.join(format!("out-{role}"))).unwrap()
+            })
+            .collect();
+        V37LocalRunRequest::try_new(V37LocalRunMode::BuildOwnership, inputs, outputs, 4).unwrap()
+    }
+
+    #[test]
+    fn v37_relation_local_authenticates_bytes_and_rejects_filesystem_aliases_before_execution() {
+        let root = tempfile::tempdir().unwrap();
+        let request = local_build_request(root.path());
+        authenticate_v37_local_request(&request).unwrap();
+
+        fs::write(root.path().join("source"), b"changed\n").unwrap();
+        assert!(authenticate_v37_local_request(&request).is_err());
+
+        let alias_root = tempfile::tempdir().unwrap();
+        let mut alias = local_build_request(alias_root.path());
+        fs::hard_link(
+            alias_root.path().join("source"),
+            alias_root.path().join("out-ownership-tree"),
+        )
+        .unwrap();
+        assert!(authenticate_v37_local_request(&alias).is_err());
+
+        fs::create_dir(alias_root.path().join("nested")).unwrap();
+        alias.outputs[0].path = alias_root.path().join("nested/../source");
+        assert!(authenticate_v37_local_request(&alias).is_err());
+    }
+
+    #[test]
+    fn v37_relation_local_detects_input_replacement_after_authentication() {
+        let root = tempfile::tempdir().unwrap();
+        let request = local_build_request(root.path());
+        let authenticated = authenticate_v37_local_request(&request).unwrap();
+        fs::write(root.path().join("source"), b"subverted-source!\n").unwrap();
+        assert!(validate_v37_local_input_stability(&request, &authenticated).is_err());
+    }
+
+    #[test]
+    fn v37_relation_local_keeps_authenticated_file_capability_across_parent_swap() {
+        let parent = tempfile::tempdir().unwrap();
+        let bundle = parent.path().join("bundle");
+        fs::create_dir(&bundle).unwrap();
+        let request = local_build_request(&bundle);
+        let authenticated = authenticate_v37_local_request(&request).unwrap();
+        let original = parent.path().join("authenticated-bundle");
+        fs::rename(&bundle, &original).unwrap();
+        fs::create_dir(&bundle).unwrap();
+        fs::write(bundle.join("source"), b"substitute-source\n").unwrap();
+
+        assert_eq!(
+            read_v37_authenticated_input(&request, &authenticated, "source", 1_048_576).unwrap(),
+            b"registered-source\n"
+        );
+    }
+
+    #[test]
+    fn v37_relation_local_receipt_binds_every_input_and_output_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let request = local_build_request(root.path());
+        let outputs = [artifact("ownership-tree", '7'), artifact("ownership", '8')];
+        let bytes =
+            canonical_v37_local_receipt("build-ownership", &request.inputs, &outputs).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v37-local-result-v2");
+        assert_eq!(value["inputs"].as_array().unwrap().len(), 6);
+        assert_eq!(value["artifacts"].as_array().unwrap().len(), 2);
+        assert_eq!(value["inputs"][0]["role"], "v36-authority");
+        assert_eq!(value["inputs"][5]["role"], "source");
+        assert_eq!(bytes.last(), Some(&b'\n'));
+    }
+
+    #[test]
+    fn v37_relation_output_pair_failure_preserves_owned_scratch_for_explicit_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = root.path().join("tree.arrow");
+        let ownership = root.path().join("ownership.parquet");
+        fs::write(&ownership, b"existing").unwrap();
+
+        assert!(publish_v37_output_pair(&tree, b"tree", &ownership, b"ownership").is_err());
+        assert_eq!(fs::read(tree).unwrap(), b"tree");
+        assert_eq!(fs::read(ownership).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn v37_relation_local_build_rejects_worker_and_backend_authority_drift() {
+        let root = tempfile::tempdir().unwrap();
+        let request = local_build_request(root.path());
+        let source = request.inputs.last().unwrap();
+        let mut manifest = authority();
+        manifest.numeric.worker_count = 4;
+        manifest.numeric.fma_backend =
+            super::v37_fma_backend_name(super::v37_fused_kernel().unwrap()).to_owned();
+        manifest.source = V37ArtifactIdentity {
+            blake3: source.blake3.clone(),
+            encoded_bytes: source.encoded_bytes,
+            role: "source-corpus".to_owned(),
+            sha256: source.sha256.clone(),
+            uri: source.uri.clone(),
+        };
+        validate_v37_local_build_authority(&request, &manifest).unwrap();
+
+        let mut wrong_workers = manifest.clone();
+        wrong_workers.numeric.worker_count = 8;
+        assert!(validate_v37_local_build_authority(&request, &wrong_workers).is_err());
+
+        let mut wrong_backend = manifest;
+        wrong_backend.numeric.fma_backend = "x86-avx-fma".to_owned();
+        assert!(validate_v37_local_build_authority(&request, &wrong_backend).is_err());
+    }
 
     fn ownership_spec(rows: u64) -> V37TreeSpec {
         V37TreeSpec {
@@ -3227,11 +4529,30 @@ mod tests {
                 lane_width: 8,
                 worker_count: 16,
             },
-            projection: artifact("projected-corpus", '2'),
+            projection: V37ProjectionAuthority {
+                algorithm: "v36-srht-f32-v1".to_owned(),
+                projected_corpus_sha256: "2".repeat(64),
+                routing_dimensions: 192,
+                seed: 36,
+                source_dimensions: 768,
+            },
             relation: relation_spec(),
-            schema: "borsuk-v37-relation-authority-v1".to_owned(),
+            schema: "borsuk-v37-relation-authority-v2".to_owned(),
             source: artifact("source-corpus", '1'),
             tree: ownership_spec(1_000_000),
+        }
+    }
+
+    fn ceiling_authority() -> V37CeilingAuthority {
+        V37CeilingAuthority {
+            construction_authority: artifact("v37-construction-authority", '3'),
+            development_ground_truth: artifact("development-ground-truth", '4'),
+            gt_neighbors: 100,
+            ownership: artifact("ownership", '5'),
+            ownership_tree: artifact("ownership-tree", '6'),
+            query_count: 1_000,
+            schema: "borsuk-v37-ceiling-authority-v1".to_owned(),
+            selected_postings: 14,
         }
     }
 
@@ -3278,18 +4599,20 @@ mod tests {
     fn v37_relation_authority_projects_exact_construction_memory_and_disposition() {
         let projection =
             project_v37_construction_bytes(&ownership_spec(1_000_000), &relation_spec()).unwrap();
-        assert_eq!(projection.source_decode_bytes, 768_000_000);
-        assert_eq!(projection.projected_decode_bytes, 768_000_000);
-        assert_eq!(projection.resident_coordinate_bytes, 768_000_000);
-        assert_eq!(projection.index_bytes, 16_000_000);
-        assert_eq!(projection.score_bytes, 4_000_000);
-        assert_eq!(projection.sample_bytes, 3_145_728);
-        assert_eq!(projection.tree_bytes, 3_373_600);
-        assert_eq!(projection.relation_count_bytes, 4_030_464);
-        assert_eq!(projection.relation_prefix_bytes, 2_129_928);
-        assert_eq!(projection.subtotal_bytes, 2_336_679_720);
-        assert_eq!(projection.allocator_headroom_bytes, 584_169_930);
-        assert_eq!(projection.total_bytes, 2_920_849_650);
+        assert_eq!(projection.source_decode_working_bytes, 738_721_792);
+        assert_eq!(projection.resident_projected_bytes, 768_000_000);
+        assert_eq!(projection.feature_id_bytes, 8_000_000);
+        assert_eq!(projection.ordinal_index_bytes, 16_000_000);
+        assert_eq!(projection.member_index_bytes, 8_000_000);
+        assert_eq!(projection.score_tuple_bytes, 24_000_000);
+        assert_eq!(projection.assignment_bytes, 16_000_000);
+        assert_eq!(projection.reservoir_bytes, 16_163_840);
+        assert_eq!(projection.tree_bytes, 97_600);
+        assert_eq!(projection.ownership_writer_bytes, 48_000_000);
+        assert_eq!(projection.worker_stack_bytes, 67_108_864);
+        assert_eq!(projection.subtotal_bytes, 1_710_092_096);
+        assert_eq!(projection.allocator_headroom_bytes, 427_523_024);
+        assert_eq!(projection.total_bytes, 2_137_615_120);
         assert_eq!(projection.disposition, V37LayoutDisposition::Admissible);
 
         let too_large =
@@ -3408,7 +4731,7 @@ mod tests {
 
         for invalid in [
             V37AuthorityManifest {
-                schema: "borsuk-v37-relation-authority-v2".to_owned(),
+                schema: "borsuk-v37-relation-authority-v1".to_owned(),
                 ..manifest.clone()
             },
             V37AuthorityManifest {
@@ -3441,15 +4764,22 @@ mod tests {
                 ..manifest.clone()
             },
             V37AuthorityManifest {
-                projection: V37ArtifactIdentity {
-                    sha256: "A".repeat(64),
+                projection: V37ProjectionAuthority {
+                    projected_corpus_sha256: "A".repeat(64),
                     ..manifest.projection.clone()
                 },
                 ..manifest.clone()
             },
             V37AuthorityManifest {
-                projection: V37ArtifactIdentity {
-                    uri: manifest.source.uri.clone(),
+                projection: V37ProjectionAuthority {
+                    algorithm: "projected-corpus-object".to_owned(),
+                    ..manifest.projection.clone()
+                },
+                ..manifest.clone()
+            },
+            V37AuthorityManifest {
+                projection: V37ProjectionAuthority {
+                    source_dimensions: 192,
                     ..manifest.projection.clone()
                 },
                 ..manifest.clone()
@@ -3479,6 +4809,150 @@ mod tests {
         let mut noncanonical = bytes.clone();
         noncanonical.insert(0, b' ');
         assert!(parse_v37_authority_bytes(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn v37_relation_authority_separates_ceiling_truth_capability_and_bindings() {
+        let authority = ceiling_authority();
+        let bytes = canonical_v37_ceiling_authority_bytes(&authority).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert!(!bytes.windows(6).any(|window| window == b"source"));
+
+        for invalid in [
+            V37CeilingAuthority {
+                query_count: 0,
+                ..authority.clone()
+            },
+            V37CeilingAuthority {
+                query_count: 1_001,
+                ..authority.clone()
+            },
+            V37CeilingAuthority {
+                gt_neighbors: 99,
+                ..authority.clone()
+            },
+            V37CeilingAuthority {
+                selected_postings: 15,
+                ..authority.clone()
+            },
+            V37CeilingAuthority {
+                ownership: V37ArtifactIdentity {
+                    uri: authority.ownership_tree.uri.clone(),
+                    ..authority.ownership.clone()
+                },
+                ..authority.clone()
+            },
+        ] {
+            assert!(canonical_v37_ceiling_authority_bytes(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn v37_relation_ceiling_result_binds_exact_authority_and_prerequisites() {
+        let root = tempfile::tempdir().unwrap();
+        let authority_input = local_artifact(root.path(), "ceiling-authority");
+        let authority = ceiling_authority();
+        let assignments = (0_u64..100)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: 0,
+            })
+            .collect::<Vec<_>>();
+        let truth = vec![V37GroundTruth {
+            query_ordinal: 0,
+            source_ordinals: (0_u64..100).collect(),
+        }];
+        let ceiling = evaluate_v37_unique_owner_ceiling(&assignments, &truth, 14).unwrap();
+        let bytes =
+            canonical_v37_bound_ceiling_bytes(&authority_input, &authority, &ceiling).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v37-bound-ceiling-v1");
+        assert_eq!(value["ceiling_authority"]["role"], "ceiling-authority");
+        assert_eq!(
+            value["inputs"]["development_ground_truth"]["role"],
+            "development-ground-truth"
+        );
+        assert_eq!(value["ceiling"]["aggregate_recall_ppm"], 1_000_000);
+        assert_eq!(bytes.last(), Some(&b'\n'));
+    }
+
+    #[test]
+    fn v37_relation_local_ceiling_runs_real_codecs_and_stops_layout_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let rows = training_rows(100, 192);
+        let tree = train_v37_ownership_tree(
+            &rows,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 16,
+                reservoir_rows: 32,
+                two_means_iterations: 8,
+            },
+            37,
+            2,
+            32,
+        )
+        .unwrap();
+        let tree_bytes = encode_v37_tree_arrow(&tree).unwrap();
+        let feature_ids = (0_u64..100)
+            .map(|ordinal| 50_000 + ordinal * 17)
+            .collect::<Vec<_>>();
+        let ownership_bytes =
+            encode_v37_ownership_parquet(&tree.assignments, &feature_ids, &tree.leaf_populations)
+                .unwrap();
+
+        let truth_path = root.path().join("development-ground-truth");
+        let truth_batch = arrow_array::RecordBatch::try_new(
+            std::sync::Arc::new(crate::v36_prefix_gt100_schema()),
+            vec![
+                std::sync::Arc::new(arrow_array::UInt32Array::from(vec![0; 100])),
+                std::sync::Arc::new(arrow_array::UInt16Array::from_iter_values(0..100)),
+                std::sync::Arc::new(arrow_array::UInt64Array::from(feature_ids)),
+                std::sync::Arc::new(arrow_array::Float64Array::from_iter_values(
+                    (0..100).map(f64::from),
+                )),
+            ],
+        )
+        .unwrap();
+        crate::write_v36_prefix_gt100_parquet(&truth_path, [truth_batch]).unwrap();
+        let truth_bytes = fs::read(&truth_path).unwrap();
+
+        let tree_input = local_artifact_bytes(root.path(), "ownership-tree", &tree_bytes.bytes);
+        let ownership_input =
+            local_artifact_bytes(root.path(), "ownership", &ownership_bytes.bytes);
+        let truth_input =
+            local_artifact_bytes(root.path(), "development-ground-truth", &truth_bytes);
+        let authority = V37CeilingAuthority {
+            construction_authority: artifact("v37-construction-authority", '3'),
+            development_ground_truth: super::local_artifact_identity(&truth_input),
+            gt_neighbors: 100,
+            ownership: super::local_artifact_identity(&ownership_input),
+            ownership_tree: super::local_artifact_identity(&tree_input),
+            query_count: 1,
+            schema: "borsuk-v37-ceiling-authority-v1".to_owned(),
+            selected_postings: 14,
+        };
+        let authority_bytes = canonical_v37_ceiling_authority_bytes(&authority).unwrap();
+        let authority_input =
+            local_artifact_bytes(root.path(), "ceiling-authority", &authority_bytes);
+        let output_path = root.path().join("ceiling.json");
+        let request = V37LocalRunRequest::try_new(
+            V37LocalRunMode::EvaluateCeiling,
+            vec![authority_input, truth_input, tree_input, ownership_input],
+            vec![V37LocalOutput::try_new("ceiling".to_owned(), output_path.clone()).unwrap()],
+            1,
+        )
+        .unwrap();
+
+        let bytes = run_v37_local_request(request).unwrap();
+        assert_eq!(fs::read(output_path).unwrap(), bytes);
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v37-bound-ceiling-v1");
+        assert_eq!(value["ceiling"]["aggregate_recall_ppm"], 880_000);
+        assert_eq!(value["ceiling"]["minimum_recall_ppm"], 880_000);
+        assert_eq!(value["ceiling"]["disposition"], "layout-rejected");
+        assert!(!root.path().join("direct.json").exists());
+        assert!(!root.path().join("relations.arrow").exists());
     }
 
     #[test]
@@ -3524,6 +4998,14 @@ mod tests {
         reversed.reverse();
         let reordered = train_v37_ownership_tree(&reversed, shape, 37, 4, 5).unwrap();
         assert_eq!(first, reordered);
+
+        let flat = rows
+            .iter()
+            .flat_map(|row| row.vector.iter().copied())
+            .collect::<Vec<_>>();
+        let borrowed =
+            train_v37_ownership_tree_resident_coordinates(&flat, shape, 37, 4, 5).unwrap();
+        assert_eq!(first, borrowed);
     }
 
     #[test]
@@ -3674,8 +5156,12 @@ mod tests {
         let batch = reader.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), tree.nodes.len() + 1);
 
+        let feature_ids = (0..rows.len())
+            .map(|ordinal| 10_000 + ordinal as u64 * 7)
+            .collect::<Vec<_>>();
         let ownership =
-            encode_v37_ownership_parquet(&tree.assignments, &tree.leaf_populations).unwrap();
+            encode_v37_ownership_parquet(&tree.assignments, &feature_ids, &tree.leaf_populations)
+                .unwrap();
         assert!(ownership.bytes.starts_with(b"PAR1"));
         assert_eq!(ownership.encoded_bytes, ownership.bytes.len() as u64);
         assert_eq!(
@@ -3688,11 +5174,40 @@ mod tests {
             )
             .unwrap(),
             tree.assignments
+                .iter()
+                .zip(&feature_ids)
+                .enumerate()
+                .map(
+                    |(source_ordinal, (assignment, feature_row_id))| V37OwnershipRecord {
+                        source_ordinal: source_ordinal as u64,
+                        feature_row_id: *feature_row_id,
+                        posting_ordinal: assignment.posting_ordinal,
+                        posting_local_ordinal: tree.assignments[..source_ordinal]
+                            .iter()
+                            .filter(|prior| prior.posting_ordinal == assignment.posting_ordinal)
+                            .count() as u32,
+                    }
+                )
+                .collect::<Vec<_>>()
         );
 
         let mut invalid_posting = tree.assignments.clone();
         invalid_posting[0].posting_ordinal = 1_000;
-        assert!(encode_v37_ownership_parquet(&invalid_posting, &tree.leaf_populations).is_err());
+        assert!(
+            encode_v37_ownership_parquet(&invalid_posting, &feature_ids, &tree.leaf_populations)
+                .is_err()
+        );
+
+        let mut duplicate_feature_ids = feature_ids;
+        duplicate_feature_ids[1] = duplicate_feature_ids[0];
+        assert!(
+            encode_v37_ownership_parquet(
+                &tree.assignments,
+                &duplicate_feature_ids,
+                &tree.leaf_populations
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3992,6 +5507,44 @@ mod tests {
         let mut unknown = truth;
         unknown[0].source_ordinals[99] = 999;
         assert!(evaluate_v37_unique_owner_ceiling(&assignments, &unknown, 14).is_err());
+    }
+
+    #[test]
+    fn v37_relation_ceiling_maps_nonordinal_feature_ids_without_source_or_query_capability() {
+        let ownership = (0_u64..100)
+            .map(|source_ordinal| V37OwnershipRecord {
+                source_ordinal,
+                feature_row_id: 50_000 + source_ordinal * 17,
+                posting_ordinal: (source_ordinal % 10) as u32,
+                posting_local_ordinal: (source_ordinal / 10) as u32,
+            })
+            .collect::<Vec<_>>();
+        let feature_truth = vec![V37FeatureGroundTruth {
+            query_ordinal: 0,
+            feature_row_ids: ownership.iter().map(|row| row.feature_row_id).collect(),
+        }];
+        let mapped = map_v37_feature_ground_truth(&ownership, &feature_truth).unwrap();
+        assert_eq!(mapped[0].source_ordinals, (0_u64..100).collect::<Vec<_>>());
+        let ceiling = evaluate_v37_unique_owner_ceiling(
+            &ownership
+                .iter()
+                .map(|row| super::V37OwnershipAssignment {
+                    source_ordinal: row.source_ordinal,
+                    posting_ordinal: row.posting_ordinal,
+                })
+                .collect::<Vec<_>>(),
+            &mapped,
+            14,
+        )
+        .unwrap();
+        assert!(ceiling.passed);
+
+        let mut unknown = feature_truth.clone();
+        unknown[0].feature_row_ids[99] = 999;
+        assert!(map_v37_feature_ground_truth(&ownership, &unknown).is_err());
+        let mut duplicate_ownership = ownership;
+        duplicate_ownership[99].feature_row_id = duplicate_ownership[0].feature_row_id;
+        assert!(map_v37_feature_ground_truth(&duplicate_ownership, &feature_truth).is_err());
     }
 
     #[test]
