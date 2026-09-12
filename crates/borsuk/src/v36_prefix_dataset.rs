@@ -52,6 +52,12 @@ use crate::{
     validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
     validate_v36_prefix_population_authority,
 };
+use crate::{
+    v35_projection::project_v35_query_simd,
+    v36_funnel_geometry::{
+        V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource, build_v36_srht192_control,
+    },
+};
 
 const DIMENSIONS: usize = 768;
 const GT_NEIGHBORS: usize = 100;
@@ -3098,6 +3104,50 @@ pub struct V36PrefixGeometryLocalFiles {
     source: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+/// Bounded replayable SRHT192 projection of one authenticated prefix source.
+pub struct V36PrefixResidentProjectedSource {
+    feature_ids: Vec<u64>,
+    maximum_block_rows: usize,
+    projected: Vec<f32>,
+    projected_corpus_sha256: String,
+}
+
+impl V36PrefixResidentProjectedSource {
+    /// Return source feature IDs in exact source-ordinal order.
+    pub fn feature_ids(&self) -> &[u64] {
+        &self.feature_ids
+    }
+
+    /// Return the exact projected row count.
+    pub fn row_count(&self) -> usize {
+        self.feature_ids.len()
+    }
+
+    /// Return the fixed routing dimension count.
+    pub const fn dimensions(&self) -> usize {
+        192
+    }
+
+    /// Return the domain-separated replay digest consumed by geometry training.
+    pub fn projected_corpus_sha256(&self) -> &str {
+        &self.projected_corpus_sha256
+    }
+}
+
+impl V36ProjectedCorpusSource for V36PrefixResidentProjectedSource {
+    fn scan(&mut self, visitor: &mut V36ProjectedCorpusBlockVisitor<'_>) -> Result<()> {
+        for start in (0..self.feature_ids.len()).step_by(self.maximum_block_rows) {
+            let end = (start + self.maximum_block_rows).min(self.feature_ids.len());
+            let ordinals = (start..end)
+                .map(|ordinal| u64::try_from(ordinal).unwrap())
+                .collect::<Vec<_>>();
+            visitor(&ordinals, &self.projected[start * 192..end * 192])?;
+        }
+        Ok(())
+    }
+}
+
 impl V36PrefixGeometryLocalFiles {
     /// Return the capability-separated semantic input authority.
     pub const fn inputs(&self) -> &V36PrefixGeometryInputs {
@@ -3248,6 +3298,74 @@ pub fn load_v36_prefix_geometry_local_files(
         development_query: request.development_query,
         inputs,
         source: request.source,
+    })
+}
+
+/// Stream a validated source Parquet once into the bounded SRHT192 diagnostic buffer.
+///
+/// The caller must authenticate the complete source object first through
+/// [`load_v36_prefix_geometry_local_files`]. Original 768-dimensional rows are
+/// retained only for the current Parquet batch.
+pub fn project_v36_prefix_source_resident(
+    path: &Path,
+    expected_feature_ids: &[u64],
+    maximum_block_rows: usize,
+) -> Result<V36PrefixResidentProjectedSource> {
+    if maximum_block_rows == 0 || maximum_block_rows > 65_536 {
+        return Err(invalid("V36 prefix projected block rows differ"));
+    }
+    let value_count = expected_feature_ids
+        .len()
+        .checked_mul(192)
+        .ok_or_else(|| invalid("V36 prefix projected corpus size overflows"))?;
+    let mut projected = Vec::new();
+    projected
+        .try_reserve_exact(value_count)
+        .map_err(|_| invalid("V36 prefix projected corpus exceeds capacity"))?;
+    let projection = build_v36_srht192_control()?;
+    scan_v36_prefix_source_parquet(path, expected_feature_ids, |batch| {
+        let embeddings = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V36 prefix projected source embedding differs"))?;
+        let values = embeddings
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V36 prefix projected source child differs"))?;
+        for row in 0..batch.num_rows() {
+            let start = row
+                .checked_mul(DIMENSIONS)
+                .ok_or_else(|| invalid("V36 prefix projected source offset overflows"))?;
+            let output =
+                project_v35_query_simd(&projection, &values.values()[start..start + DIMENSIONS])?;
+            for value in output.coordinates() {
+                let value = *value as f32;
+                if !value.is_finite() {
+                    return Err(invalid("V36 prefix projected coordinate is nonfinite"));
+                }
+                projected.push(if value == 0.0 { 0.0 } else { value });
+            }
+        }
+        Ok(())
+    })?;
+    if projected.len() != value_count {
+        return Err(invalid("V36 prefix projected corpus row count differs"));
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"borsuk-v36-projected-corpus-replay-v1");
+    for (ordinal, vector) in projected.as_chunks::<192>().0.iter().enumerate() {
+        digest.update(u64::try_from(ordinal).unwrap().to_le_bytes());
+        for value in vector {
+            digest.update(value.to_bits().to_le_bytes());
+        }
+    }
+    Ok(V36PrefixResidentProjectedSource {
+        feature_ids: expected_feature_ids.to_vec(),
+        maximum_block_rows,
+        projected,
+        projected_corpus_sha256: format!("{:x}", digest.finalize()),
     })
 }
 

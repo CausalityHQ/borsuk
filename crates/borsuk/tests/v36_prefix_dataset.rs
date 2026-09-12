@@ -31,11 +31,12 @@ use borsuk::{
     V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
     V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
     V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
-    V36PrefixSourceObject, assign_v36_prefix_roles_from_selected_file,
+    V36PrefixSourceObject, V36ProjectedCorpusSource, assign_v36_prefix_roles_from_selected_file,
     bind_v36_prefix_external_selection_authority, bind_v36_prefix_geometry_inputs,
     bind_v36_prefix_population_authority, bind_v36_prefix_role_assignment_contract,
-    bind_v36_prefix_selected_ids_contract, canonical_v36_prefix_checkpoint_manifest_bytes,
-    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
+    bind_v36_prefix_selected_ids_contract, build_v36_srht192_control,
+    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
+    canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, complete_v36_prefix_checkpoint_ground_truth,
@@ -47,7 +48,8 @@ use borsuk::{
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
     load_v36_prefix_geometry_local_files, materialize_v36_prefix_assigned_roles,
     materialize_v36_prefix_checkpoint_selection, materialize_v36_prefix_role_parquets,
-    next_v36_prefix_checkpoint_action, rank_v36_prefix_source_objects,
+    next_v36_prefix_checkpoint_action, project_v35_query_scalar,
+    project_v36_prefix_source_resident, rank_v36_prefix_source_objects,
     restore_v36_prefix_checkpoint_phase, restore_v36_prefix_file_backed_population_scan,
     restore_v36_prefix_population, run_v36_prefix_checkpoint_ground_truth,
     run_v36_prefix_checkpoint_gt100, run_v36_prefix_gt100_checkpointed,
@@ -2759,6 +2761,50 @@ fn v36_prefix_geometry_local_files_authenticate_before_scientific_access() {
 
     fs::write(&query, b"corrupted query").unwrap();
     assert!(load_v36_prefix_geometry_local_files(request).is_err());
+}
+
+#[test]
+fn v36_prefix_geometry_resident_projection_is_replayable_and_scalar_exact() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.parquet");
+    write_v36_prefix_source_parquet(&source, &[7, 9], [source_batch(false, false)]).unwrap();
+
+    let mut projected = project_v36_prefix_source_resident(&source, &[7, 9], 1).unwrap();
+    assert_eq!(projected.feature_ids(), &[7, 9]);
+    assert_eq!(projected.row_count(), 2);
+    assert_eq!(projected.dimensions(), 192);
+    assert!(
+        projected
+            .projected_corpus_sha256()
+            .bytes()
+            .any(|byte| byte != b'0')
+    );
+
+    let projection = build_v36_srht192_control().unwrap();
+    let mut first = vec![0.0_f32; DIMENSIONS];
+    first[0] = 1.0;
+    let mut second = vec![0.0_f32; DIMENSIONS];
+    second[1] = 1.0;
+    let expected = [first, second]
+        .map(|row| project_v35_query_scalar(&projection, &row).unwrap())
+        .map(|row| {
+            row.coordinates()
+                .iter()
+                .map(|value| *value as f32)
+                .collect::<Vec<_>>()
+        });
+    let mut observed = Vec::new();
+    projected
+        .scan(&mut |ordinals, values| {
+            assert_eq!(ordinals.len(), 1);
+            observed.push((ordinals[0], values.to_vec()));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        observed,
+        vec![(0, expected[0].clone()), (1, expected[1].clone())]
+    );
 }
 
 #[test]
