@@ -205,12 +205,15 @@ unit-weight edge between its primary and alternate postings. Selecting a
 posting covers an incident GT row once. The objective is maximum distinct
 coverage using at most fourteen postings.
 
-Before search, the evaluator computes a greedy feasible selection and the cheap
-admissible upper bound from the fourteen largest individual posting hit counts,
-capped at 100. If the lower selections already meet both global gates, the
-layout is feasible. If summed upper bounds or any minimum-query upper bound make
-a gate impossible, it is rejected without search. Only gate-ambiguous queries
-enter deterministic depth-first branch-and-bound over posting ordinals with:
+Before any search, the evaluator computes and retains for all 1,000 queries a
+greedy feasible selection and the cheap admissible upper bound from the
+fourteen largest individual posting hit counts, capped at 100. It reduces all
+1,000 lower and upper bounds in query-ordinal order. If the lower selections
+already meet both global gates, the layout is feasible with zero DFS visits. If
+summed upper bounds or any minimum-query upper bound make a gate impossible, it
+is rejected with zero DFS visits. Only when those complete-population bounds
+straddle a gate do gate-ambiguous queries enter deterministic depth-first
+branch-and-bound in increasing query ordinal over posting ordinals with:
 
 - a greedy incumbent as a feasible lower bound;
 - checked distinct-row bitsets for exact objective accounting;
@@ -236,9 +239,13 @@ an evaluator error, not `indeterminate`.
 Each per-query persisted certificate is at most 256 bytes: the fourteen-posting
 feasible selection, its distinct hit count, the certified upper count, exact
 flag, and visit count. The complete 1,000-query certificate section is at most
-256,000 bytes before canonical JSON framing. Validation recomputes selections,
-bounds, aggregate reductions, and dispositions rather than trusting receipt
-claims.
+256,000 bytes before canonical JSON framing. Validation receives the
+authenticated ceiling authority, sealed relation, and GT inputs; reruns the
+same deterministic evaluator under the same visit limits; and requires byte
+equality with the claimed canonical result. It thereby recomputes selections,
+frontier bounds, aggregate reductions, visit accounting, and disposition rather
+than trusting receipt claims. The compact result is not treated as a
+stand-alone proof without those authenticated inputs.
 
 Tiny fixtures independently enumerate every subset and include a case where
 greedy is suboptimal. For a scientific query, the evaluator returns an exact
