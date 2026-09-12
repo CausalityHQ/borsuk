@@ -3070,6 +3070,56 @@ pub struct V36PrefixGeometryInputs {
     development: V36PrefixGeometryDevelopmentInput,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact local files consumed by the bounded 1M geometry diagnostic.
+pub struct V36PrefixGeometryLocalRequest {
+    /// Canonical prefix-freeze authority JSON.
+    pub authority: PathBuf,
+    /// Complete authenticated development GT@100 Parquet.
+    pub development_ground_truth: PathBuf,
+    /// Complete authenticated development-query Parquet.
+    pub development_query: PathBuf,
+    /// Canonical prefix-freeze execution authority JSON.
+    pub execution_authority: PathBuf,
+    /// Canonical completed prefix-freeze receipt JSON.
+    pub receipt: PathBuf,
+    /// Complete authenticated one-million-row source Parquet.
+    pub source: PathBuf,
+    /// Canonical complete source-registry JSON.
+    pub source_registry: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated local capabilities for one bounded 1M geometry diagnostic.
+pub struct V36PrefixGeometryLocalFiles {
+    development_ground_truth: PathBuf,
+    development_query: PathBuf,
+    inputs: V36PrefixGeometryInputs,
+    source: PathBuf,
+}
+
+impl V36PrefixGeometryLocalFiles {
+    /// Return the capability-separated semantic input authority.
+    pub const fn inputs(&self) -> &V36PrefixGeometryInputs {
+        &self.inputs
+    }
+
+    /// Return the authenticated one-million-row source path.
+    pub fn source_path(&self) -> &Path {
+        &self.source
+    }
+
+    /// Return the authenticated development-query path.
+    pub fn development_query_path(&self) -> &Path {
+        &self.development_query
+    }
+
+    /// Return the authenticated development GT@100 path.
+    pub fn development_ground_truth_path(&self) -> &Path {
+        &self.development_ground_truth
+    }
+}
+
 impl V36PrefixGeometryInputs {
     /// Return the query-blind construction capability.
     pub const fn construction(&self) -> &V36PrefixGeometryConstructionInput {
@@ -3122,6 +3172,82 @@ pub fn bind_v36_prefix_geometry_inputs(
             query: output(2, "development-query")?,
             query_rows: development.rows,
         },
+    })
+}
+
+/// Authenticate the frozen prefix authority and three scientific objects before use.
+pub fn load_v36_prefix_geometry_local_files(
+    request: V36PrefixGeometryLocalRequest,
+) -> Result<V36PrefixGeometryLocalFiles> {
+    const MAXIMUM_AUTHORITY_BYTES: u64 = 16 * 1_048_576;
+
+    let paths = [
+        &request.authority,
+        &request.development_ground_truth,
+        &request.development_query,
+        &request.execution_authority,
+        &request.receipt,
+        &request.source,
+        &request.source_registry,
+    ];
+    let mut distinct = BTreeSet::new();
+    if paths.iter().any(|path| !distinct.insert(path.as_path())) {
+        return Err(invalid("V36 prefix geometry local path roles overlap"));
+    }
+    let read_authority = |path: &Path| -> Result<Vec<u8>> {
+        let length = fs::metadata(path)
+            .map_err(|source| BorsukError::Io {
+                path: path.to_owned(),
+                source,
+            })?
+            .len();
+        if length == 0 || length > MAXIMUM_AUTHORITY_BYTES {
+            return Err(invalid("V36 prefix geometry authority length differs"));
+        }
+        read_file(path)
+    };
+    let authority_bytes = read_authority(&request.authority)?;
+    let execution_bytes = read_authority(&request.execution_authority)?;
+    let receipt_bytes = read_authority(&request.receipt)?;
+    let registry_bytes = read_authority(&request.source_registry)?;
+    let authority: V36PrefixFreezeAuthority = serde_json::from_slice(&authority_bytes)
+        .map_err(|_| invalid("V36 prefix geometry authority JSON differs"))?;
+    let execution: V36PrefixFreezeExecutionAuthority = serde_json::from_slice(&execution_bytes)
+        .map_err(|_| invalid("V36 prefix geometry execution JSON differs"))?;
+    let receipt: V36PrefixFreezeReceipt = serde_json::from_slice(&receipt_bytes)
+        .map_err(|_| invalid("V36 prefix geometry receipt JSON differs"))?;
+    let registry: Vec<V36PrefixRegisteredSourceObject> = serde_json::from_slice(&registry_bytes)
+        .map_err(|_| invalid("V36 prefix geometry registry JSON differs"))?;
+    if canonical_v36_prefix_freeze_authority_bytes(&authority, &registry)? != authority_bytes
+        || canonical_v36_prefix_freeze_execution_authority_bytes(&execution)? != execution_bytes
+        || crate::canonical_v36_prefix_source_registry_bytes(&authority, &registry)?
+            != registry_bytes
+        || canonical_v36_prefix_freeze_receipt_bytes(&receipt, &authority, &execution, &registry)?
+            != receipt_bytes
+    {
+        return Err(invalid("V36 prefix geometry canonical authority differs"));
+    }
+    let input = |role: &str| {
+        execution
+            .inputs
+            .iter()
+            .find(|identity| identity.role == role)
+            .ok_or_else(|| invalid("V36 prefix geometry execution input differs"))
+    };
+    authenticate_file(&request.authority, input("freeze-authority")?)?;
+    authenticate_file(&request.source_registry, input("source-registry")?)?;
+    let inputs = bind_v36_prefix_geometry_inputs(&receipt, &authority, &execution, &registry)?;
+    authenticate_file(&request.source, inputs.construction().source())?;
+    authenticate_file(&request.development_query, inputs.development().query())?;
+    authenticate_file(
+        &request.development_ground_truth,
+        inputs.development().ground_truth(),
+    )?;
+    Ok(V36PrefixGeometryLocalFiles {
+        development_ground_truth: request.development_ground_truth,
+        development_query: request.development_query,
+        inputs,
+        source: request.source,
     })
 }
 

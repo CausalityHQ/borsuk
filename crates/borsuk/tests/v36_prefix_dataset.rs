@@ -23,9 +23,9 @@ use borsuk::{
     V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
     V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
     V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator,
-    V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob, V36PrefixIdentityRun,
-    V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixPhaseResumeRequest,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGeometryLocalRequest,
+    V36PrefixGtAccumulator, V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob,
+    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixPhaseResumeRequest,
     V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit,
     V36PrefixPopulationSelection, V36PrefixQualityRole, V36PrefixQueryRow,
     V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
@@ -45,25 +45,25 @@ use borsuk::{
     encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
-    materialize_v36_prefix_assigned_roles, materialize_v36_prefix_checkpoint_selection,
-    materialize_v36_prefix_role_parquets, next_v36_prefix_checkpoint_action,
-    rank_v36_prefix_source_objects, restore_v36_prefix_checkpoint_phase,
-    restore_v36_prefix_file_backed_population_scan, restore_v36_prefix_population,
-    run_v36_prefix_checkpoint_ground_truth, run_v36_prefix_checkpoint_gt100,
-    run_v36_prefix_gt100_checkpointed, scan_v36_prefix_gt100_parquet,
-    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
-    scan_v36_prefix_object_prefix_file_backed, scan_v36_prefix_object_prefix_resumed,
-    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_checkpoint_population,
-    select_v36_prefix_population_rows, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_freeze_receipt, validate_v36_prefix_gt_preflight_projection,
-    validate_v36_prefix_input_row, validate_v36_prefix_registered_screen_authority,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    load_v36_prefix_geometry_local_files, materialize_v36_prefix_assigned_roles,
+    materialize_v36_prefix_checkpoint_selection, materialize_v36_prefix_role_parquets,
+    next_v36_prefix_checkpoint_action, rank_v36_prefix_source_objects,
+    restore_v36_prefix_checkpoint_phase, restore_v36_prefix_file_backed_population_scan,
+    restore_v36_prefix_population, run_v36_prefix_checkpoint_ground_truth,
+    run_v36_prefix_checkpoint_gt100, run_v36_prefix_gt100_checkpointed,
+    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    scan_v36_prefix_object_prefix_checkpointed, scan_v36_prefix_object_prefix_file_backed,
+    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_checkpoint_population, select_v36_prefix_population_rows,
+    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
+    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_gt_preflight_projection, validate_v36_prefix_input_row,
+    validate_v36_prefix_registered_screen_authority, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -2626,6 +2626,139 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn v36_prefix_geometry_local_files_authenticate_before_scientific_access() {
+    let directory = tempfile::tempdir().unwrap();
+    let registry = source_registry();
+    let authority = freeze_authority(&registry);
+    let mut execution = execution_authority();
+    let population = population(&registry);
+    let authority_path = directory.path().join("authority.json");
+    let execution_path = directory.path().join("execution.json");
+    let receipt_path = directory.path().join("receipt.json");
+    let registry_path = directory.path().join("registry.json");
+    fs::write(
+        &authority_path,
+        canonical_v36_prefix_freeze_authority_bytes(&authority, &registry).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &registry_path,
+        canonical_v36_prefix_source_registry_bytes(&authority, &registry).unwrap(),
+    )
+    .unwrap();
+    execution.inputs[1] = file_identity(
+        "freeze-authority",
+        &execution.inputs[1].uri,
+        &authority_path,
+    );
+    execution.inputs[3] =
+        file_identity("source-registry", &execution.inputs[3].uri, &registry_path);
+    let source = directory.path().join("source.parquet");
+    let query = directory.path().join("development-query.parquet");
+    let ground_truth = directory.path().join("development-gt100.parquet");
+    fs::write(&source, b"authenticated source").unwrap();
+    fs::write(&query, b"authenticated query").unwrap();
+    fs::write(&ground_truth, b"authenticated ground truth").unwrap();
+    let mut outputs = [
+        ("population-authority", "population-authority.json"),
+        ("source", "source.parquet"),
+        ("development-query", "development-query.parquet"),
+        ("development-gt100", "development-gt100.parquet"),
+        ("validation-query", "validation-query.parquet"),
+        ("validation-gt100", "validation-gt100.parquet"),
+        ("sealed-holdout-query", "sealed-holdout-query.parquet"),
+        ("sealed-holdout-gt100", "sealed-holdout-gt100.parquet"),
+        ("performance-query", "performance-query.parquet"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(ordinal, (role, filename))| V36ArtifactIdentity {
+        blake3: format!("{:064x}", ordinal + 31),
+        encoded_bytes: 4_096 + ordinal as u64,
+        role: role.into(),
+        sha256: format!("{:064x}", ordinal + 41),
+        uri: format!("{}{filename}", execution.output_prefix),
+    })
+    .collect::<Vec<_>>();
+    outputs[1] = file_identity("source", &outputs[1].uri, &source);
+    outputs[2] = file_identity("development-query", &outputs[2].uri, &query);
+    outputs[3] = file_identity("development-gt100", &outputs[3].uri, &ground_truth);
+    let receipt = V36PrefixFreezeReceipt {
+        claim_eligible: false,
+        cutoff_object_ordinal: 0,
+        cutoff_row_offset: 99,
+        distinct_rows_observed: 1_100_000,
+        duplicate_rows: 100_000,
+        execution_authority_sha256: format!(
+            "{:x}",
+            Sha256::digest(
+                canonical_v36_prefix_freeze_execution_authority_bytes(&execution).unwrap()
+            )
+        ),
+        freeze_authority_sha256: format!(
+            "{:x}",
+            Sha256::digest(
+                canonical_v36_prefix_freeze_authority_bytes(&authority, &registry).unwrap()
+            )
+        ),
+        outputs,
+        physical_rows: 1_200_000,
+        population,
+        selection: V36PrefixPopulationSelection {
+            cutoff_feature_row_id: 41,
+            cutoff_score_sha256: "6".repeat(64),
+            eligible_rows: 1_100_000,
+            excluded_population_identity: authority.excluded_population_identity.clone(),
+            excluded_rows: 0,
+            selected_ids: selected_ids_identity(b"geometry local selection"),
+            selected_rows: authority.distinct_candidates,
+        },
+        schema: "borsuk-v36-prefix-freeze-receipt-v2".into(),
+        source_archive_sha256: execution.inputs[2].sha256.clone(),
+        source_registry_sha256: format!(
+            "{:x}",
+            Sha256::digest(
+                canonical_v36_prefix_source_registry_bytes(&authority, &registry).unwrap()
+            )
+        ),
+    };
+    fs::write(
+        &execution_path,
+        canonical_v36_prefix_freeze_execution_authority_bytes(&execution).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &receipt_path,
+        canonical_v36_prefix_freeze_receipt_bytes(&receipt, &authority, &execution, &registry)
+            .unwrap(),
+    )
+    .unwrap();
+    let request = V36PrefixGeometryLocalRequest {
+        authority: authority_path,
+        development_ground_truth: ground_truth,
+        development_query: query.clone(),
+        execution_authority: execution_path,
+        receipt: receipt_path,
+        source,
+        source_registry: registry_path,
+    };
+    let loaded = load_v36_prefix_geometry_local_files(request.clone()).unwrap();
+    assert_eq!(loaded.inputs().construction().corpus_rows(), 1_000_000);
+    assert_eq!(loaded.source_path(), request.source.as_path());
+    assert_eq!(
+        loaded.development_query_path(),
+        request.development_query.as_path()
+    );
+    assert_eq!(
+        loaded.development_ground_truth_path(),
+        request.development_ground_truth.as_path()
+    );
+
+    fs::write(&query, b"corrupted query").unwrap();
+    assert!(load_v36_prefix_geometry_local_files(request).is_err());
 }
 
 #[test]
