@@ -1561,8 +1561,8 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertEqual(command[:3], ["systemd-run", "--wait", "--pipe"])
         self.assertNotIn("--collect", command)
         for boundary in (
-            "User=nobody",
-            "Group=nogroup",
+            "User=65534",
+            "Group=65534",
             "PrivateNetwork=yes",
             "ProtectSystem=strict",
             "ProtectHome=yes",
@@ -1582,6 +1582,8 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertEqual(command[-2:], native)
         self.assertNotIn("AWS_", joined)
         self.assertNotIn("s3://", joined)
+        self.assertNotIn("User=nobody", joined)
+        self.assertNotIn("Group=nogroup", joined)
 
     def test_v37_worker_and_science_share_one_aggregate_memory_slice(self) -> None:
         plan = _plan("build-ownership")

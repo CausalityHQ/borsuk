@@ -1384,8 +1384,8 @@ def build_v37_science_service_command(
     ):
         raise ValueError("V37 native science service authority differs")
     properties = [
-        "User=nobody",
-        "Group=nogroup",
+        "User=65534",
+        "Group=65534",
         "PrivateNetwork=yes",
         "ProtectSystem=strict",
         "ProtectHome=yes",
