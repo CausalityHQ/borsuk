@@ -413,14 +413,14 @@ pub use v36_funnel_geometry::{
     project_v36_supercell_assignment_admission, project_v36_supercell_post_count_admission,
     project_v36_supercell_training_preflight, publish_v36_supercell_run_chunks,
     rank_v36_selected_posting_candidates, run_v36_resident_posting_diagnostic,
-    score_v36_posting_centroid, score_v36_posting_gaussian, score_v36_posting_prototype_six,
-    select_v36_closure_owners, select_v36_flat_centroid_candidates,
-    stream_v36_followup_assignment_merge_group, train_v36_centered_subspace,
-    train_v36_posting_centroids, train_v36_posting_gaussian, train_v36_posting_prototype_six,
-    train_v36_supercells, v36_effective_ef_search, v36_posting_acceleration_required,
-    validate_v36_posting_accelerator_matrix, validate_v36_posting_accelerator_observation,
-    write_v36_followup_assignment_merge_group, write_v36_initial_assignment_merge_group,
-    write_v36_supercell_assignment_shards,
+    run_v36_resident_projected_posting_diagnostic, score_v36_posting_centroid,
+    score_v36_posting_gaussian, score_v36_posting_prototype_six, select_v36_closure_owners,
+    select_v36_flat_centroid_candidates, stream_v36_followup_assignment_merge_group,
+    train_v36_centered_subspace, train_v36_posting_centroids, train_v36_posting_gaussian,
+    train_v36_posting_prototype_six, train_v36_supercells, v36_effective_ef_search,
+    v36_posting_acceleration_required, validate_v36_posting_accelerator_matrix,
+    validate_v36_posting_accelerator_observation, write_v36_followup_assignment_merge_group,
+    write_v36_initial_assignment_merge_group, write_v36_supercell_assignment_shards,
 };
 #[doc(hidden)]
 pub use v36_posting_hnsw::{

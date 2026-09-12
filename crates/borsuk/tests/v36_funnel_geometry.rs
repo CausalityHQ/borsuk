@@ -22,8 +22,8 @@ use borsuk::{
     encode_v36_supercell_run_chunk_arrow, load_v36_prefix_source_feature_ids,
     project_v36_exact_assignment_preflight, project_v36_supercell_assignment_admission,
     project_v36_supercell_post_count_admission, project_v36_supercell_training_preflight,
-    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
-    write_v36_supercell_assignment_shards,
+    run_v36_resident_projected_posting_diagnostic, train_v36_supercells, v36_prefix_source_schema,
+    write_v36_prefix_source_parquet, write_v36_supercell_assignment_shards,
 };
 use sha2::{Digest, Sha256};
 
@@ -99,6 +99,44 @@ fn projected_rows_sha256(rows: &[(u64, Vec<f32>)]) -> String {
 
 fn projected_corpus_sha256(rows: u64) -> String {
     projected_rows_sha256(&projected_rows(rows))
+}
+
+#[test]
+fn v36_resident_projected_posting_diagnostic_runs_the_complete_small_shape() {
+    let rows = projected_rows(32);
+    let digest = projected_rows_sha256(&rows);
+    let source = ProjectedSource {
+        block_rows: 7,
+        rows: rows.clone(),
+        scans: 0,
+        second_scan_delta: false,
+    };
+    let diagnostic =
+        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &digest, 8, None, 1).unwrap();
+    assert_eq!(diagnostic.postings_per_supercell(), &[4]);
+    assert_eq!(
+        diagnostic.assignments().source_ordinals(),
+        &(0..32).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        diagnostic
+            .assignments()
+            .primary_occupancy()
+            .iter()
+            .sum::<u64>(),
+        32
+    );
+
+    let source = ProjectedSource {
+        block_rows: 7,
+        rows,
+        scans: 0,
+        second_scan_delta: false,
+    };
+    assert!(
+        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &"f".repeat(64), 8, None, 1,)
+            .is_err()
+    );
 }
 
 fn source_batch(feature_ids: Vec<u64>) -> RecordBatch {

@@ -7581,6 +7581,126 @@ impl V36ResidentPostingDiagnostic {
     }
 }
 
+fn run_v36_resident_posting_core(
+    rows: Vec<(u64, Vec<f32>)>,
+    row_cells: &[usize],
+    allocation: Vec<u32>,
+    target_primary_rows: u64,
+    closure_epsilon: Option<f64>,
+    worker_threads: usize,
+    block_rows: usize,
+) -> Result<V36ResidentPostingDiagnostic> {
+    if rows.len() != row_cells.len() || target_primary_rows == 0 {
+        return Err(invalid("V36 resident diagnostic row ownership differs"));
+    }
+    let mut centroids = Vec::new();
+    centroids
+        .try_reserve_exact(
+            allocation
+                .iter()
+                .try_fold(0_usize, |sum, postings| {
+                    sum.checked_add(usize::try_from(*postings).ok()?)
+                })
+                .ok_or_else(|| invalid("V36 resident diagnostic posting count overflows"))?,
+        )
+        .map_err(|_| invalid("V36 resident diagnostic centroids exceed capacity"))?;
+    for (cell, posting_count) in allocation.iter().copied().enumerate() {
+        if posting_count == 0 {
+            continue;
+        }
+        let local = rows
+            .iter()
+            .zip(row_cells)
+            .filter(|(_, row_cell)| **row_cell == cell)
+            .map(|(row, _)| row.clone())
+            .collect::<Vec<_>>();
+        centroids.extend(train_v36_posting_centroids(&local, posting_count)?);
+    }
+    let assignments = assign_v36_postings(
+        &rows,
+        &centroids,
+        closure_epsilon,
+        worker_threads,
+        block_rows,
+        target_primary_rows,
+    )?;
+    Ok(V36ResidentPostingDiagnostic {
+        assignments,
+        centroids,
+        postings_per_supercell: allocation,
+    })
+}
+
+/// Train the complete bounded resident diagnostic directly from one replayable projection.
+///
+/// This consumes the source so its resident projection can be released before local posting
+/// training. It is claim-ineligible and capped at one million rows; scalable qualification still
+/// requires the authenticated external-run path.
+pub fn run_v36_resident_projected_posting_diagnostic<S: V36ProjectedCorpusSource>(
+    mut source: S,
+    corpus_rows: u64,
+    maximum_block_rows: usize,
+    projected_corpus_sha256: &str,
+    target_primary_rows: u64,
+    closure_epsilon: Option<f64>,
+    worker_threads: usize,
+) -> Result<V36ResidentPostingDiagnostic> {
+    if corpus_rows == 0 || corpus_rows > 1_000_000 || target_primary_rows == 0 {
+        return Err(invalid(
+            "V36 resident projected diagnostic authority differs",
+        ));
+    }
+    let spec = bind_v36_registered_supercell_training_spec(
+        corpus_rows,
+        maximum_block_rows,
+        projected_corpus_sha256,
+    )?;
+    let model = train_v36_supercells(&spec, &mut source)?;
+    let row_count = usize::try_from(corpus_rows)
+        .map_err(|_| invalid("V36 resident projected diagnostic rows overflow"))?;
+    let cell_count = usize::try_from(spec.super_cell_count)
+        .map_err(|_| invalid("V36 resident projected diagnostic cells overflow"))?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(row_count)
+        .map_err(|_| invalid("V36 resident projected diagnostic exceeds capacity"))?;
+    let mut row_cells = Vec::new();
+    row_cells
+        .try_reserve_exact(row_count)
+        .map_err(|_| invalid("V36 resident projected ownership exceeds capacity"))?;
+    let mut run_rows = vec![0_u64; cell_count];
+    let replay = scan_v36_projected_corpus(&spec, &mut source, |source_ordinal, vector| {
+        let mut best = (squared_l2(vector, &model.centroids()[0])?, 0_usize);
+        for (cell, centroid) in model.centroids().iter().enumerate().skip(1) {
+            let distance = squared_l2(vector, centroid)?;
+            if distance < best.0 {
+                best = (distance, cell);
+            }
+        }
+        run_rows[best.1] = run_rows[best.1]
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 resident projected run rows overflow"))?;
+        rows.push((source_ordinal, vector.to_vec()));
+        row_cells.push(best.1);
+        Ok(())
+    })?;
+    if replay != projected_corpus_sha256 || rows.len() != row_count {
+        return Err(invalid("V36 resident projected replay differs"));
+    }
+    let posting_count = u32::try_from(corpus_rows.div_ceil(target_primary_rows))
+        .map_err(|_| invalid("V36 resident projected posting count overflows"))?;
+    let allocation = allocate_v36_hamilton_postings(&run_rows, posting_count)?;
+    drop(source);
+    run_v36_resident_posting_core(
+        rows,
+        &row_cells,
+        allocation,
+        target_primary_rows,
+        closure_epsilon,
+        worker_threads,
+        maximum_block_rows,
+    )
+}
+
 /// Train one resident supercell at a time, then assign the complete 1M population globally.
 ///
 /// This is deliberately a claim-ineligible fail-fast bridge. It does not replace the
@@ -7682,42 +7802,15 @@ pub fn run_v36_resident_posting_diagnostic(
         return Err(invalid("V36 resident diagnostic source coverage differs"));
     }
 
-    let mut centroids = Vec::new();
-    centroids
-        .try_reserve_exact(
-            allocation
-                .iter()
-                .try_fold(0_usize, |sum, postings| {
-                    sum.checked_add(usize::try_from(*postings).ok()?)
-                })
-                .ok_or_else(|| invalid("V36 resident diagnostic posting count overflows"))?,
-        )
-        .map_err(|_| invalid("V36 resident diagnostic centroids exceed capacity"))?;
-    for (cell, posting_count) in allocation.iter().copied().enumerate() {
-        if posting_count == 0 {
-            continue;
-        }
-        let local = rows
-            .iter()
-            .zip(&row_cells)
-            .filter(|(_, row_cell)| **row_cell == cell)
-            .map(|(row, _)| row.clone())
-            .collect::<Vec<_>>();
-        centroids.extend(train_v36_posting_centroids(&local, posting_count)?);
-    }
-    let assignments = assign_v36_postings(
-        &rows,
-        &centroids,
+    run_v36_resident_posting_core(
+        rows,
+        &row_cells,
+        allocation.clone(),
+        admitted.target_primary_rows,
         closure_epsilon,
         worker_threads,
         block_rows,
-        admitted.target_primary_rows,
-    )?;
-    Ok(V36ResidentPostingDiagnostic {
-        assignments,
-        centroids,
-        postings_per_supercell: allocation.clone(),
-    })
+    )
 }
 
 fn invalid_v36_vector(vector: &[f32]) -> bool {
