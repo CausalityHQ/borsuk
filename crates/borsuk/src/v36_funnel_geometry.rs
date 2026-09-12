@@ -4407,6 +4407,94 @@ fn validate_v36_committed_assignment_merge_generation(
     Ok(())
 }
 
+/// Authenticate one persisted merge-generation root over exact committed runs.
+pub fn authenticate_v36_assignment_merge_generation_root(
+    committed: &V36CommittedSupercellAssignments,
+    predecessor: Option<&V36CommittedInitialAssignmentMergeGeneration>,
+    runs: Vec<V36CommittedInitialAssignmentMergeRun>,
+    bytes: &[u8],
+    root_identity: &V36ArtifactIdentity,
+) -> Result<V36CommittedInitialAssignmentMergeGeneration> {
+    let schedule = committed.admission.projection.merge_schedule()?;
+    let (generation_ordinal, predecessor_root_identity) = match predecessor {
+        Some(predecessor) => {
+            validate_v36_committed_assignment_merge_generation(committed, predecessor)?;
+            (
+                predecessor
+                    .generation
+                    .generation_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V36 merge generation ordinal overflows"))?,
+                predecessor.root_identity.clone(),
+            )
+        }
+        None => (0, committed.root_identity.clone()),
+    };
+    let generation = *schedule
+        .get(
+            usize::try_from(generation_ordinal)
+                .map_err(|_| invalid("V36 merge generation ordinal overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 merge generation differs"))?;
+    let uri = format!(
+        "{}/merge/generation-{generation_ordinal:06}/root.json",
+        committed.uri_prefix
+    );
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if bytes.last() != Some(&b'\n')
+        || root_identity.encoded_bytes != encoded_bytes
+        || encoded_bytes > V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_MAXIMUM_ENCODED_BYTES
+        || root_identity.role != V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_ROLE
+        || root_identity.uri != uri
+        || !valid_sha256(&root_identity.sha256)
+        || !valid_sha256(&root_identity.blake3)
+        || root_identity.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || root_identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 merge generation root identity differs"));
+    }
+    let manifest: V36InitialAssignmentMergeGenerationRootManifest =
+        serde_json::from_slice(bytes)
+            .map_err(|_| invalid("V36 merge generation root manifest differs"))?;
+    let mut canonical = serde_json::to_vec(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 merge generation root manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 merge generation root manifest differs"))?;
+    canonical
+        .try_reserve_exact(1)
+        .map_err(|_| invalid("V36 merge generation root manifest exceeds capacity"))?;
+    canonical.push(b'\n');
+    let (run_inventory_sha256, run_inventory_blake3) =
+        v36_initial_assignment_merge_run_inventory_digests(&runs)?;
+    if canonical != bytes
+        || manifest.format != V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_FORMAT
+        || manifest.generation != generation
+        || manifest.merge_fan_in != committed.admission.projection.merge_fan_in
+        || manifest.model_identity != committed.admission.model_identity
+        || manifest.predecessor_root_identity != predecessor_root_identity
+        || manifest.role != V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_ROLE
+        || manifest.run_count
+            != u64::try_from(runs.len())
+                .map_err(|_| invalid("V36 merge generation run count overflows"))?
+        || manifest.run_inventory_blake3 != run_inventory_blake3
+        || manifest.run_inventory_sha256 != run_inventory_sha256
+        || manifest.training_spec != committed.admission.training_spec
+        || manifest.uri != uri
+    {
+        return Err(invalid("V36 merge generation root manifest differs"));
+    }
+    let authenticated = V36CommittedInitialAssignmentMergeGeneration {
+        generation,
+        merge_fan_in: manifest.merge_fan_in,
+        predecessor_root_identity,
+        root_identity: root_identity.clone(),
+        runs,
+    };
+    validate_v36_committed_assignment_merge_generation(committed, &authenticated)?;
+    Ok(authenticated)
+}
+
 /// Commit one complete follow-up merge generation after all of its runs commit.
 pub fn commit_v36_followup_assignment_merge_generation(
     committed: &V36CommittedSupercellAssignments,
@@ -8696,6 +8784,7 @@ mod tests {
         V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentProjection,
         V36SupercellAssignmentRow, V36SupercellAssignmentShardArtifact,
         V36SupercellAssignmentShardContext, V36SupercellTrainingSpec,
+        authenticate_v36_assignment_merge_generation_root,
         authenticate_v36_followup_assignment_merge_run_root,
         authenticate_v36_initial_assignment_merge_run_root,
         authenticate_v36_supercell_assignment_shard_arrow,
@@ -9276,6 +9365,29 @@ mod tests {
         );
         let (generation_root_bytes, generation_root_identity) = sink.committed_root.unwrap();
         assert_eq!(sealed.root_identity(), &generation_root_identity);
+        let resumed = authenticate_v36_assignment_merge_generation_root(
+            &committed,
+            None,
+            runs.clone(),
+            &generation_root_bytes,
+            &generation_root_identity,
+        )
+        .unwrap();
+        assert_eq!(resumed.generation(), sealed.generation());
+        assert_eq!(resumed.runs(), sealed.runs());
+        assert_eq!(resumed.root_identity(), sealed.root_identity());
+        let mut corrupt_generation_root = generation_root_bytes.clone();
+        corrupt_generation_root[0] ^= 1;
+        assert!(
+            authenticate_v36_assignment_merge_generation_root(
+                &committed,
+                None,
+                runs.clone(),
+                &corrupt_generation_root,
+                &generation_root_identity,
+            )
+            .is_err()
+        );
         let generation_root: serde_json::Value =
             serde_json::from_slice(&generation_root_bytes).unwrap();
         assert_eq!(generation_root["run_count"], 3);
@@ -9408,13 +9520,29 @@ mod tests {
         let sealed_followup = commit_v36_followup_assignment_merge_generation(
             &committed,
             followup,
-            followup_runs,
+            followup_runs.clone(),
             &mut followup_sink,
         )
         .unwrap();
         assert_eq!(sealed_followup.generation().generation_ordinal, 1);
         assert_eq!(sealed_followup.runs().len(), 2);
-        let terminal = plan_v36_followup_assignment_merge_generation(&committed, sealed_followup)
+        let (followup_root_bytes, followup_root_identity) =
+            followup_sink.committed_root.as_ref().unwrap();
+        let resumed_followup = authenticate_v36_assignment_merge_generation_root(
+            &committed,
+            Some(&resumed),
+            followup_runs,
+            followup_root_bytes,
+            followup_root_identity,
+        )
+        .unwrap();
+        assert_eq!(resumed_followup.generation(), sealed_followup.generation());
+        assert_eq!(resumed_followup.runs(), sealed_followup.runs());
+        assert_eq!(
+            resumed_followup.root_identity(),
+            sealed_followup.root_identity()
+        );
+        let terminal = plan_v36_followup_assignment_merge_generation(&committed, resumed_followup)
             .unwrap()
             .unwrap();
         assert_eq!(terminal.generation().generation_ordinal, 2);

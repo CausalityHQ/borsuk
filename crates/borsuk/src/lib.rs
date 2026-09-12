@@ -391,6 +391,7 @@ pub use v36_funnel_geometry::{
     V36SupercellTrainingPreflight, V36SupercellTrainingSpec, admit_v36_geometry,
     admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
     allocate_v36_hamilton_postings, assign_v36_postings,
+    authenticate_v36_assignment_merge_generation_root,
     authenticate_v36_followup_assignment_merge_run_root,
     authenticate_v36_initial_assignment_merge_run_root, authenticate_v36_posting_centroids,
     authenticate_v36_supercell_assignment_shard_arrow, bind_v36_registered_supercell_training_spec,
