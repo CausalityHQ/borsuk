@@ -6,8 +6,9 @@ use std::{
 };
 
 use borsuk::{
-    V36GeometryStop, V36PrefixGeometryConstructionLocalRequest,
-    V36PrefixGeometryDevelopmentLocalRequest, evaluate_v36_prefix_geometry_development_scores,
+    V36CapacityOwnerPolicy, V36GeometryStop, V36PrefixGeometryConstructionLocalRequest,
+    V36PrefixGeometryDevelopmentLocalRequest, evaluate_v36_prefix_geometry_development,
+    evaluate_v36_prefix_geometry_development_scores,
     load_v36_prefix_geometry_construction_local_files,
     load_v36_prefix_geometry_development_local_files, load_v36_prefix_source_feature_ids,
     project_v36_prefix_source_resident, run_v36_resident_projected_posting_diagnostic,
@@ -17,7 +18,7 @@ use borsuk::{
 #[derive(Debug, PartialEq)]
 struct Args {
     authority: PathBuf,
-    closure_epsilon: Option<f64>,
+    owner_policy: V36CapacityOwnerPolicy,
     development_ground_truth: PathBuf,
     development_query: PathBuf,
     execution_authority: PathBuf,
@@ -39,6 +40,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             flag.as_str(),
             "--authority"
                 | "--closure-epsilon"
+                | "--unpruned-owner-count"
                 | "--execution-authority"
                 | "--development-ground-truth"
                 | "--development-query"
@@ -69,6 +71,24 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
         "0.30" => Some(0.30),
         _ => return Err("V36 geometry closure epsilon differs".into()),
     };
+    let unpruned_owner_count = match take("--unpruned-owner-count")?.as_str() {
+        "none" => None,
+        "2" => Some(2),
+        "3" => Some(3),
+        _ => return Err("V36 geometry unpruned owner count differs".into()),
+    };
+    if closure_epsilon.is_some() && unpruned_owner_count.is_some() {
+        return Err("V36 geometry owner policy differs".into());
+    }
+    let owner_policy = match (closure_epsilon, unpruned_owner_count) {
+        (None, None) => V36CapacityOwnerPolicy::Natural,
+        (Some(0.05), None) => V36CapacityOwnerPolicy::Closure05,
+        (Some(0.15), None) => V36CapacityOwnerPolicy::Closure15,
+        (Some(0.30), None) => V36CapacityOwnerPolicy::Closure30,
+        (None, Some(2)) => V36CapacityOwnerPolicy::Unpruned2,
+        (None, Some(3)) => V36CapacityOwnerPolicy::Unpruned3,
+        _ => return Err("V36 geometry owner policy differs".into()),
+    };
     let development_ground_truth = take("--development-ground-truth")?.into();
     let development_query = take("--development-query")?.into();
     let execution_authority = take("--execution-authority")?.into();
@@ -86,7 +106,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     }
     Ok(Args {
         authority,
-        closure_epsilon,
+        owner_policy,
         development_ground_truth,
         development_query,
         execution_authority,
@@ -145,37 +165,48 @@ fn run(args: Args) -> borsuk::Result<()> {
         MAXIMUM_BLOCK_ROWS,
         &projected_corpus_sha256,
         TARGET_PRIMARY_ROWS,
-        args.closure_epsilon,
+        args.owner_policy,
         usize::from(args.workers),
     )?;
     let geometry_elapsed_ns = geometry.elapsed().as_nanos();
     let admission = diagnostic.assignments().admission();
-    let (containment, evaluation_elapsed_ns) = if admission.stop.is_none() {
-        let evaluation = Instant::now();
-        let score_model =
-            train_v36_resident_posting_score_model(&diagnostic, usize::from(args.workers))?;
-        let development = load_v36_prefix_geometry_development_local_files(
-            files.inputs(),
-            V36PrefixGeometryDevelopmentLocalRequest {
-                development_ground_truth: args.development_ground_truth,
-                development_query: args.development_query,
-            },
-        )?;
-        let containment = evaluate_v36_prefix_geometry_development_scores(
-            &development,
-            &feature_ids,
-            &diagnostic,
-            &score_model,
-        )?;
-        (Some(containment), evaluation.elapsed().as_nanos())
-    } else {
-        (None, 0)
-    };
+    let (original_centroid_containment, containment, evaluation_elapsed_ns) =
+        if admission.stop.is_none() {
+            let evaluation = Instant::now();
+            let score_model =
+                train_v36_resident_posting_score_model(&diagnostic, usize::from(args.workers))?;
+            let development = load_v36_prefix_geometry_development_local_files(
+                files.inputs(),
+                V36PrefixGeometryDevelopmentLocalRequest {
+                    development_ground_truth: args.development_ground_truth,
+                    development_query: args.development_query,
+                },
+            )?;
+            let original_centroid_containment =
+                evaluate_v36_prefix_geometry_development(&development, &feature_ids, &diagnostic)?;
+            let containment = evaluate_v36_prefix_geometry_development_scores(
+                &development,
+                &feature_ids,
+                &diagnostic,
+                &score_model,
+            )?;
+            (
+                Some(original_centroid_containment),
+                Some(containment),
+                evaluation.elapsed().as_nanos(),
+            )
+        } else {
+            (None, None, 0)
+        };
     let mut result = BTreeMap::new();
     result.insert("claim_eligible", serde_json::json!(false));
     result.insert(
         "closure_epsilon",
-        serde_json::to_value(args.closure_epsilon).unwrap(),
+        serde_json::to_value(args.owner_policy.closure_epsilon()).unwrap(),
+    );
+    result.insert(
+        "unpruned_owner_count",
+        serde_json::to_value(args.owner_policy.unpruned_owner_count()).unwrap(),
     );
     result.insert(
         "construction_passed",
@@ -189,6 +220,10 @@ fn run(args: Args) -> borsuk::Result<()> {
     result.insert(
         "development_score_containment",
         serde_json::to_value(containment).unwrap(),
+    );
+    result.insert(
+        "development_original_centroid_containment",
+        serde_json::to_value(original_centroid_containment).unwrap(),
     );
     result.insert(
         "mean_replication_ppm",
@@ -210,7 +245,7 @@ fn run(args: Args) -> borsuk::Result<()> {
     result.insert("projection", serde_json::json!("srht192-seed36"));
     result.insert(
         "schema",
-        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v4"),
+        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v5"),
     );
     result.insert("source", serde_json::to_value(source_identity).unwrap());
     result.insert(
@@ -282,6 +317,8 @@ mod tests {
             "authority.json",
             "--closure-epsilon",
             "none",
+            "--unpruned-owner-count",
+            "none",
             "--development-ground-truth",
             "development-gt100.parquet",
             "--development-query",
@@ -308,7 +345,7 @@ mod tests {
     fn v36_geometry_oracle_cli_is_explicit_one_million_only_and_storage_free() {
         let parsed = parse_args(valid()).unwrap();
         assert_eq!(parsed.source, PathBuf::from("source.parquet"));
-        assert_eq!(parsed.closure_epsilon, None);
+        assert_eq!(parsed.owner_policy, V36CapacityOwnerPolicy::Natural);
         assert_eq!(parsed.workers, 4);
         let mut parallel = valid();
         let index = parallel.iter().position(|value| value == "4").unwrap();
@@ -322,10 +359,13 @@ mod tests {
                 .position(|candidate| candidate == "none")
                 .unwrap();
             closure[index] = value.into();
-            assert_eq!(
-                parse_args(closure).unwrap().closure_epsilon,
-                value.parse().ok()
-            );
+            let expected = match value {
+                "0.05" => V36CapacityOwnerPolicy::Closure05,
+                "0.15" => V36CapacityOwnerPolicy::Closure15,
+                "0.30" => V36CapacityOwnerPolicy::Closure30,
+                _ => unreachable!(),
+            };
+            assert_eq!(parse_args(closure).unwrap().owner_policy, expected);
         }
         let mut closure = valid();
         let index = closure
@@ -334,6 +374,42 @@ mod tests {
             .unwrap();
         closure[index] = "0.20".into();
         assert!(parse_args(closure).is_err());
+
+        for value in ["2", "3"] {
+            let mut unpruned = valid();
+            let flag = unpruned
+                .iter()
+                .position(|candidate| candidate == "--unpruned-owner-count")
+                .unwrap();
+            unpruned[flag + 1] = value.into();
+            let expected = if value == "2" {
+                V36CapacityOwnerPolicy::Unpruned2
+            } else {
+                V36CapacityOwnerPolicy::Unpruned3
+            };
+            assert_eq!(parse_args(unpruned).unwrap().owner_policy, expected);
+        }
+        for value in ["1", "4"] {
+            let mut unpruned = valid();
+            let flag = unpruned
+                .iter()
+                .position(|candidate| candidate == "--unpruned-owner-count")
+                .unwrap();
+            unpruned[flag + 1] = value.into();
+            assert!(parse_args(unpruned).is_err());
+        }
+        let mut conflicting = valid();
+        let closure_flag = conflicting
+            .iter()
+            .position(|candidate| candidate == "--closure-epsilon")
+            .unwrap();
+        conflicting[closure_flag + 1] = "0.05".into();
+        let unpruned_flag = conflicting
+            .iter()
+            .position(|candidate| candidate == "--unpruned-owner-count")
+            .unwrap();
+        conflicting[unpruned_flag + 1] = "2".into();
+        assert!(parse_args(conflicting).is_err());
 
         for forbidden in ["--bucket", "--page-prefix", "--endpoint", "--d3"] {
             let mut args = valid();

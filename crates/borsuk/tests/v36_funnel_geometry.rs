@@ -10,12 +10,14 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field};
 use borsuk::{
-    V36ArtifactIdentity, V36PostingScoreKind, V36ProjectedCorpusBlockVisitor,
-    V36ProjectedCorpusSource, V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentRow,
+    V36ArtifactIdentity, V36CapacityOwnerPolicy, V36PostingScoreKind,
+    V36ProjectedCorpusBlockVisitor, V36ProjectedCorpusSource,
+    V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentRow,
     V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardSink,
     V36SupercellPostCountAdmissionRequest, V36SupercellRunChunkArtifact, V36SupercellTrainingSpec,
     admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
     assign_v36_capacity_aware_postings, assign_v36_capacity_aware_postings_with_closure,
+    assign_v36_capacity_aware_postings_with_unpruned_owners,
     bind_v36_registered_supercell_training_spec, bind_v36_supercell_assignment_shard_context,
     bind_v36_supercell_run_chunk_context, decode_v36_supercell_assignment_shard_arrow,
     decode_v36_supercell_model_arrow, decode_v36_supercell_run_chunk_arrow,
@@ -113,8 +115,16 @@ fn v36_resident_projected_posting_diagnostic_runs_the_complete_small_shape() {
         scans: 0,
         second_scan_delta: false,
     };
-    let diagnostic =
-        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &digest, 8, None, 1).unwrap();
+    let diagnostic = run_v36_resident_projected_posting_diagnostic(
+        source,
+        32,
+        7,
+        &digest,
+        8,
+        V36CapacityOwnerPolicy::Natural,
+        1,
+    )
+    .unwrap();
     assert_eq!(diagnostic.postings_per_supercell(), &[4]);
     assert_eq!(
         diagnostic.assignments().source_ordinals(),
@@ -136,8 +146,16 @@ fn v36_resident_projected_posting_diagnostic_runs_the_complete_small_shape() {
         second_scan_delta: false,
     };
     assert!(
-        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &"f".repeat(64), 8, None, 1,)
-            .is_err()
+        run_v36_resident_projected_posting_diagnostic(
+            source,
+            32,
+            7,
+            &"f".repeat(64),
+            8,
+            V36CapacityOwnerPolicy::Natural,
+            1,
+        )
+        .is_err()
     );
 }
 
@@ -151,8 +169,16 @@ fn v36_resident_posting_containment_exposes_every_prefix_before_page_reads() {
         scans: 0,
         second_scan_delta: false,
     };
-    let diagnostic =
-        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &digest, 8, None, 1).unwrap();
+    let diagnostic = run_v36_resident_projected_posting_diagnostic(
+        source,
+        32,
+        7,
+        &digest,
+        8,
+        V36CapacityOwnerPolicy::Natural,
+        1,
+    )
+    .unwrap();
     let queries = diagnostic.centroids().to_vec();
     let mut truth = Vec::new();
     for posting in 0..diagnostic.centroids().len() {
@@ -210,8 +236,16 @@ fn v36_resident_score_ladder_evaluates_all_registered_families() {
         scans: 0,
         second_scan_delta: false,
     };
-    let diagnostic =
-        run_v36_resident_projected_posting_diagnostic(source, 32, 7, &digest, 8, None, 2).unwrap();
+    let diagnostic = run_v36_resident_projected_posting_diagnostic(
+        source,
+        32,
+        7,
+        &digest,
+        8,
+        V36CapacityOwnerPolicy::Natural,
+        2,
+    )
+    .unwrap();
     let queries = diagnostic.centroids().to_vec();
     let truth = (0..diagnostic.centroids().len())
         .map(|posting| {
@@ -335,6 +369,69 @@ fn v36_capacity_aware_closure_preserves_balanced_primary_and_adds_nearby_owners(
         let closed_end = closed_offsets[1] as usize;
         assert_eq!(closed.owners()[closed_start], balanced_primary);
         assert!(closed_end - closed_start <= 8);
+    }
+}
+
+#[test]
+fn v36_capacity_aware_unpruned_owners_are_exact_nested_and_worker_stable() {
+    // Break caught: epsilon/diversity pruning, noncanonical ties, or clipping
+    // silently turns the registered R2/R3 relation into a different experiment.
+    let rows = (0..32_u64)
+        .map(|ordinal| {
+            let mut vector = vec![0.0_f32; ROUTING_DIMENSIONS];
+            vector[0] = 1.45;
+            (ordinal, vector)
+        })
+        .collect::<Vec<_>>();
+    let centroids = (0..4)
+        .map(|ordinal| {
+            let mut centroid = vec![0.0_f32; ROUTING_DIMENSIONS];
+            centroid[0] = 1.0 + ordinal as f32;
+            centroid
+        })
+        .collect::<Vec<_>>();
+
+    let r2 = assign_v36_capacity_aware_postings_with_unpruned_owners(&rows, &centroids, 2, 1, 7, 8)
+        .unwrap();
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    let r3 =
+        assign_v36_capacity_aware_postings_with_unpruned_owners(&reversed, &centroids, 3, 4, 11, 8)
+            .unwrap();
+
+    assert_eq!(r2.primary_occupancy(), &[8, 8, 8, 8]);
+    assert_eq!(r3.primary_occupancy(), r2.primary_occupancy());
+    assert_eq!(r2.stored_occupancy(), &[32, 16, 8, 8]);
+    assert_eq!(r3.stored_occupancy(), &[32, 32, 24, 8]);
+    assert_eq!(r2.admission().mean_replication_ppm, 2_000_000);
+    assert_eq!(r3.admission().mean_replication_ppm, 3_000_000);
+    assert_eq!(r2.admission().stop, None);
+    assert_eq!(r3.admission().stop, None);
+
+    for row in 0..32 {
+        let r2_start = usize::try_from(r2.owner_offsets()[row]).unwrap();
+        let r2_end = usize::try_from(r2.owner_offsets()[row + 1]).unwrap();
+        let r3_start = usize::try_from(r3.owner_offsets()[row]).unwrap();
+        let r3_end = usize::try_from(r3.owner_offsets()[row + 1]).unwrap();
+        assert_eq!(r2_end - r2_start, 2);
+        assert_eq!(r3_end - r3_start, 3);
+        assert_eq!(
+            &r2.owners()[r2_start..r2_end],
+            &r3.owners()[r3_start..r3_start + 2]
+        );
+    }
+    assert_eq!(&r3.owners()[0..3], &[0, 1, 2]);
+    assert_eq!(&r3.owners()[24..27], &[1, 0, 2]);
+    assert_eq!(&r3.owners()[48..51], &[2, 0, 1]);
+    assert_eq!(&r3.owners()[72..75], &[3, 0, 1]);
+
+    for invalid in [0, 1, 4, 9] {
+        assert!(
+            assign_v36_capacity_aware_postings_with_unpruned_owners(
+                &rows, &centroids, invalid, 1, 7, 8,
+            )
+            .is_err()
+        );
     }
 }
 

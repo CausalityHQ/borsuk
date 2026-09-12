@@ -7817,7 +7817,7 @@ fn run_v36_resident_posting_core(
     row_cells: &[usize],
     allocation: Vec<u32>,
     target_primary_rows: u64,
-    closure_epsilon: Option<f64>,
+    owner_policy: V36CapacityOwnerPolicy,
     worker_threads: usize,
     block_rows: usize,
 ) -> Result<V36ResidentPostingDiagnostic> {
@@ -7847,23 +7847,34 @@ fn run_v36_resident_posting_core(
             .collect::<Vec<_>>();
         centroids.extend(train_v36_posting_centroids(&local, posting_count)?);
     }
-    let assignments = if let Some(epsilon) = closure_epsilon {
-        assign_v36_capacity_aware_postings_with_closure(
-            &rows,
-            &centroids,
-            epsilon,
-            worker_threads,
-            block_rows,
-            target_primary_rows,
-        )?
-    } else {
-        assign_v36_capacity_aware_postings(
+    let assignments = match owner_policy {
+        V36CapacityOwnerPolicy::Natural => assign_v36_capacity_aware_postings(
             &rows,
             &centroids,
             worker_threads,
             block_rows,
             target_primary_rows,
-        )?
+        )?,
+        V36CapacityOwnerPolicy::Closure05
+        | V36CapacityOwnerPolicy::Closure15
+        | V36CapacityOwnerPolicy::Closure30 => assign_v36_capacity_aware_postings_with_closure(
+            &rows,
+            &centroids,
+            owner_policy.closure_epsilon().unwrap(),
+            worker_threads,
+            block_rows,
+            target_primary_rows,
+        )?,
+        V36CapacityOwnerPolicy::Unpruned2 | V36CapacityOwnerPolicy::Unpruned3 => {
+            assign_v36_capacity_aware_postings_with_unpruned_owners(
+                &rows,
+                &centroids,
+                owner_policy.unpruned_owner_count().unwrap(),
+                worker_threads,
+                block_rows,
+                target_primary_rows,
+            )?
+        }
     };
     let mut projected_rows = rows;
     projected_rows.sort_unstable_by_key(|row| row.0);
@@ -7893,7 +7904,7 @@ pub fn run_v36_resident_projected_posting_diagnostic<S: V36ProjectedCorpusSource
     maximum_block_rows: usize,
     projected_corpus_sha256: &str,
     target_primary_rows: u64,
-    closure_epsilon: Option<f64>,
+    owner_policy: V36CapacityOwnerPolicy,
     worker_threads: usize,
 ) -> Result<V36ResidentPostingDiagnostic> {
     if corpus_rows == 0 || corpus_rows > 1_000_000 || target_primary_rows == 0 {
@@ -7946,7 +7957,7 @@ pub fn run_v36_resident_projected_posting_diagnostic<S: V36ProjectedCorpusSource
         &row_cells,
         allocation,
         target_primary_rows,
-        closure_epsilon,
+        owner_policy,
         worker_threads,
         maximum_block_rows,
     )
@@ -7959,7 +7970,7 @@ pub fn run_v36_resident_projected_posting_diagnostic<S: V36ProjectedCorpusSource
 pub fn run_v36_resident_posting_diagnostic(
     runs: &V36CommittedSupercellRuns,
     admitted: &V36AdmittedSupercellPostCountPlan,
-    closure_epsilon: Option<f64>,
+    owner_policy: V36CapacityOwnerPolicy,
     worker_threads: usize,
     block_rows: usize,
     source: &mut dyn V36SupercellRunChunkSource,
@@ -8058,7 +8069,7 @@ pub fn run_v36_resident_posting_diagnostic(
         &row_cells,
         allocation.clone(),
         admitted.target_primary_rows,
-        closure_epsilon,
+        owner_policy,
         worker_threads,
         block_rows,
     )
@@ -9561,6 +9572,44 @@ pub struct V36PostingAssignments {
     admission: V36GeometryAdmission,
 }
 
+/// Closed query-independent owner relation used by the resident 1M falsifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V36CapacityOwnerPolicy {
+    /// Balanced primary plus the natural nearest owner when displaced.
+    Natural,
+    /// Diversity-pruned epsilon-0.05 closure.
+    Closure05,
+    /// Diversity-pruned epsilon-0.15 closure.
+    Closure15,
+    /// Diversity-pruned epsilon-0.30 closure.
+    Closure30,
+    /// Balanced primary plus nearest distinct owners to exactly two total.
+    Unpruned2,
+    /// Balanced primary plus nearest distinct owners to exactly three total.
+    Unpruned3,
+}
+
+impl V36CapacityOwnerPolicy {
+    /// Closure epsilon for a pruned closure policy.
+    pub const fn closure_epsilon(self) -> Option<f64> {
+        match self {
+            Self::Closure05 => Some(0.05),
+            Self::Closure15 => Some(0.15),
+            Self::Closure30 => Some(0.30),
+            _ => None,
+        }
+    }
+
+    /// Exact total owner count for an unpruned fixed-rank policy.
+    pub const fn unpruned_owner_count(self) -> Option<u8> {
+        match self {
+            Self::Unpruned2 => Some(2),
+            Self::Unpruned3 => Some(3),
+            _ => None,
+        }
+    }
+}
+
 /// Checked exact-assignment work and measured-throughput projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct V36ExactAssignmentPreflight {
@@ -9741,6 +9790,7 @@ pub fn assign_v36_capacity_aware_postings(
         rows,
         centroids,
         None,
+        None,
         worker_threads,
         block_rows,
         target_primary_rows,
@@ -9760,6 +9810,27 @@ pub fn assign_v36_capacity_aware_postings_with_closure(
         rows,
         centroids,
         Some(closure_epsilon),
+        None,
+        worker_threads,
+        block_rows,
+        target_primary_rows,
+    )
+}
+
+/// Assign capacity-balanced primaries plus an exact unpruned nearest-owner rank.
+pub fn assign_v36_capacity_aware_postings_with_unpruned_owners(
+    rows: &[(u64, Vec<f32>)],
+    centroids: &[Vec<f32>],
+    owner_count: u8,
+    worker_threads: usize,
+    block_rows: usize,
+    target_primary_rows: u64,
+) -> Result<V36PostingAssignments> {
+    assign_v36_capacity_aware_postings_inner(
+        rows,
+        centroids,
+        None,
+        Some(owner_count),
         worker_threads,
         block_rows,
         target_primary_rows,
@@ -9770,6 +9841,7 @@ fn assign_v36_capacity_aware_postings_inner(
     rows: &[(u64, Vec<f32>)],
     centroids: &[Vec<f32>],
     closure_epsilon: Option<f64>,
+    unpruned_owner_count: Option<u8>,
     worker_threads: usize,
     block_rows: usize,
     target_primary_rows: u64,
@@ -9783,6 +9855,9 @@ fn assign_v36_capacity_aware_postings_inner(
         || block_rows > 65_536
         || target_primary_rows == 0
         || closure_epsilon.is_some_and(|epsilon| !matches!(epsilon, 0.05 | 0.15 | 0.30))
+        || unpruned_owner_count.is_some_and(|count| !matches!(count, 2 | 3))
+        || unpruned_owner_count.is_some_and(|count| centroids.len() < usize::from(count))
+        || (closure_epsilon.is_some() && unpruned_owner_count.is_some())
     {
         return Err(invalid("V36 capacity assignment authority differs"));
     }
@@ -9811,20 +9886,37 @@ fn assign_v36_capacity_aware_postings_inner(
         .build()
         .map_err(|_| invalid("V36 capacity assignment workers differ"))?;
     let mut nearest = vec![(0_usize, 0.0_f64); ordered.len()];
+    let mut nearest_three = vec![[u32::MAX; 3]; ordered.len()];
     pool.install(|| {
         ordered
             .par_chunks(block_rows)
             .zip(nearest.par_chunks_mut(block_rows))
-            .try_for_each(|(input, output)| {
-                for ((_, row), output) in input.iter().zip(output) {
-                    let mut best = (squared_l2(row, &centroids[0])?, 0_usize);
-                    for (posting, centroid) in centroids.iter().enumerate().skip(1) {
+            .zip(nearest_three.par_chunks_mut(block_rows))
+            .try_for_each(|((input, output), ranked_output)| {
+                for (((_, row), output), ranked_output) in
+                    input.iter().zip(output).zip(ranked_output)
+                {
+                    let mut ranked = [(f64::INFINITY, usize::MAX); 3];
+                    for (posting, centroid) in centroids.iter().enumerate() {
                         let distance = squared_l2(row, centroid)?;
-                        if distance < best.0 {
-                            best = (distance, posting);
+                        let candidate = (distance, posting);
+                        if let Some(position) = ranked.iter().position(|current| {
+                            candidate.0 < current.0
+                                || (candidate.0 == current.0 && candidate.1 < current.1)
+                        }) {
+                            ranked[position..].rotate_right(1);
+                            ranked[position] = candidate;
                         }
                     }
-                    *output = (best.1, best.0);
+                    *output = (ranked[0].1, ranked[0].0);
+                    for (target, (_, posting)) in ranked_output.iter_mut().zip(ranked) {
+                        *target = if posting == usize::MAX {
+                            u32::MAX
+                        } else {
+                            u32::try_from(posting)
+                                .map_err(|_| invalid("V36 posting ordinal overflows"))?
+                        };
+                    }
                 }
                 Ok::<(), BorsukError>(())
             })
@@ -9882,7 +9974,13 @@ fn assign_v36_capacity_aware_postings_inner(
             let mut owners = [0_u32; 8];
             owners[0] =
                 u32::try_from(posting).map_err(|_| invalid("V36 posting ordinal overflows"))?;
-            let closure = if let Some(epsilon) = closure_epsilon {
+            let closure = if let Some(owner_count) = unpruned_owner_count {
+                nearest_three[row]
+                    .iter()
+                    .copied()
+                    .take(usize::from(owner_count))
+                    .collect::<Vec<_>>()
+            } else if let Some(epsilon) = closure_epsilon {
                 select_v36_closure_owners(&ordered[row].1, centroids, epsilon, 8)?
             } else {
                 vec![
@@ -9891,8 +9989,11 @@ fn assign_v36_capacity_aware_postings_inner(
                 ]
             };
             let mut len = 1_usize;
+            let maximum_len = unpruned_owner_count
+                .map(usize::from)
+                .unwrap_or(owners.len());
             for candidate in closure {
-                if len == owners.len() {
+                if len == maximum_len {
                     break;
                 }
                 if !owners[..len].contains(&candidate) {
@@ -10677,9 +10778,15 @@ mod tests {
             },
         };
 
-        let diagnostic =
-            run_v36_resident_posting_diagnostic(&published, &admitted, None, 1, 4, &mut source)
-                .unwrap();
+        let diagnostic = run_v36_resident_posting_diagnostic(
+            &published,
+            &admitted,
+            V36CapacityOwnerPolicy::Natural,
+            1,
+            4,
+            &mut source,
+        )
+        .unwrap();
 
         assert_eq!(source.reads, 2);
         assert_eq!(diagnostic.postings_per_supercell(), &[1, 1]);
@@ -10690,8 +10797,15 @@ mod tests {
 
         source.chunks[0].0[0] ^= 1;
         assert!(
-            run_v36_resident_posting_diagnostic(&published, &admitted, None, 1, 4, &mut source,)
-                .is_err()
+            run_v36_resident_posting_diagnostic(
+                &published,
+                &admitted,
+                V36CapacityOwnerPolicy::Natural,
+                1,
+                4,
+                &mut source,
+            )
+            .is_err()
         );
     }
 
