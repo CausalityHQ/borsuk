@@ -4594,3 +4594,47 @@ experiment stays on the same frozen one-million-row development population
 and must change the query-independent row-to-posting relation while retaining
 the exact object-count, byte, memory, and determinism gates. No larger-scale
 or claim-eligible run is authorized.
+
+### V36 one-million-row unpruned three-owner closure
+
+Source `072eea2e9c210aaf88e37a220187b4b0ff0a2a06` tested the strongest
+bounded fixed-centroid owner arm before retiring that family. Every row kept
+its capacity-balanced primary owner and its three nearest distinct original
+centroids, ordered by squared L2 distance and centroid ordinal without an
+epsilon or diversity prune. The run used the same frozen 1,000 development
+queries and exact GT@100. Construction passed with primary p99/maximum
+8,192/8,192, but mean replication was 3,000,000 ppm and stored p99/maximum
+rose to 42,552/47,135 rows.
+
+Original-centroid containment was 995,200/640,000 ppm at K=14,
+997,080/820,000 ppm at K=17, and 998,010/870,000 ppm at K=20
+(aggregate/minimum-query). Thus the arm first satisfies both logical quality
+gates only at twenty postings, not the registered maximum of fourteen. At
+K=14 the alternative centroid, diagonal-Gaussian, rank-two Gaussian,
+rank-four Gaussian, and six-prototype scores reached respectively
+992,260/330,000, 993,840/440,000, 978,650/60,000, 978,210/80,000, and
+991,700/350,000 ppm. Richer fixed posting shapes therefore do not restore the
+missing relation either.
+
+The 67,888-byte canonical result is SHA256
+`6a2f887d9ce14711b924aa016f61616987aaaad313a92449370a7d47696f898a`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v36-geometry-oracle/runs/v36-geometry-unpruned-r3-20260912T131500Z-072eea2e/attempt-0000/`.
+Its authenticated binary is 10,650,080 bytes with SHA256
+`acfd39121b1b4dd7024367deca5145ac4e535e85cdb139b2c297d410ff31b1a7`.
+Scientific work took 203.983200783 seconds; the wrapper took 207 seconds and
+observed 1,667,492 KiB peak process-group RSS, zero swap delta, and zero peak
+memory PSI. Causality Spot instance `i-076cfdb36270a2ac8` is shutting down.
+Two preceding Spot launches, `i-0779a32a5a6bd52aa` and
+`i-0c33316092f47ce09`, terminated before downloading inputs or starting the
+scientific process because their launch requests omitted the registered IAM
+instance profile; they produced no scientific result and are not repetitions.
+
+Disposition: fixed-centroid ownership, closure, ellipsoidal scoring, and
+fixed prototypes are rejected for the fourteen-object route. The unpruned
+three-owner arm still misses the 998,000/800,000-ppm aggregate/minimum gate,
+requires twenty objects to pass, and triples stored rows. The weaker
+two-owner arm is not run. The next one-million-row falsifier must replace
+centroid ownership with a query-independent learned relation between bounded
+router leaves and pages. Physical page reads, transport qualification,
+holdout, 10M, 100M, and claim-eligible comparison remain fenced.
