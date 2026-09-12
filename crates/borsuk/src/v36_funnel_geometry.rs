@@ -1617,6 +1617,9 @@ const V36_INITIAL_ASSIGNMENT_MERGE_CHUNK_MANIFEST_KEY: &str =
 const V36_INITIAL_ASSIGNMENT_MERGE_ROOT_FORMAT: &str =
     "borsuk-v36-initial-assignment-merge-root-v1";
 const V36_INITIAL_ASSIGNMENT_MERGE_ROOT_ROLE: &str = "initial-assignment-merge-root";
+const V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_FORMAT: &str =
+    "borsuk-v36-followup-assignment-merge-root-v1";
+const V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE: &str = "followup-assignment-merge-root";
 // Covers the maximum admitted 64-input/64-chunk manifest even when every URI
 // reaches the shared 4,096-byte URI ceiling and every byte needs six-byte JSON
 // escaping, while retaining a finite bound before untrusted parsing.
@@ -3207,6 +3210,48 @@ struct V36InitialAssignmentMergeRootManifest {
     uri: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36FollowupAssignmentMergeChunkInventoryEntry {
+    blake3: String,
+    encoded_bytes: u64,
+    first_key: (u32, u64),
+    last_key: (u32, u64),
+    row_count: u32,
+    sha256: String,
+}
+
+impl From<&V36InitialAssignmentMergeChunkArtifact>
+    for V36FollowupAssignmentMergeChunkInventoryEntry
+{
+    fn from(artifact: &V36InitialAssignmentMergeChunkArtifact) -> Self {
+        Self {
+            blake3: artifact.blake3.clone(),
+            encoded_bytes: artifact.encoded_bytes,
+            first_key: artifact.first_key,
+            last_key: artifact.last_key,
+            row_count: artifact.row_count,
+            sha256: artifact.sha256.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V36FollowupAssignmentMergeRootManifest {
+    chunks: Vec<V36FollowupAssignmentMergeChunkInventoryEntry>,
+    format: String,
+    generation_ordinal: u32,
+    group_ordinal: u64,
+    input_run_roots: Vec<V36ArtifactIdentity>,
+    model_identity: V36ArtifactIdentity,
+    predecessor_root_identity: V36ArtifactIdentity,
+    role: String,
+    row_count: u64,
+    training_spec: V36SupercellTrainingSpec,
+    uri: String,
+}
+
 #[derive(Debug)]
 /// Authenticated decoded inputs for one initial merge group.
 ///
@@ -3541,6 +3586,117 @@ impl V36FollowupAssignmentMergeGeneration {
     }
 }
 
+fn v36_followup_assignment_merge_authority(
+    plan: &V36FollowupAssignmentMergeGeneration,
+) -> Result<(&V36ArtifactIdentity, &V36SupercellTrainingSpec)> {
+    let first = plan
+        .predecessor
+        .runs
+        .first()
+        .and_then(|run| run.chunks.first())
+        .ok_or_else(|| invalid("V36 followup merge predecessor is empty"))?;
+    let model_identity = &first.context.model_identity;
+    let training_spec = &first.context.training_spec;
+    for run in &plan.predecessor.runs {
+        if run.chunks.is_empty()
+            || run.chunks.iter().any(|chunk| {
+                chunk.context.model_identity != *model_identity
+                    || chunk.context.training_spec != *training_spec
+            })
+        {
+            return Err(invalid("V36 followup merge predecessor authority differs"));
+        }
+    }
+    Ok((model_identity, training_spec))
+}
+
+fn v36_followup_assignment_merge_chunk_context(
+    plan: &V36FollowupAssignmentMergeGeneration,
+    group_ordinal: u64,
+    chunk_ordinal: u64,
+) -> Result<(V36InitialAssignmentMergeChunkContext, u32)> {
+    let group = plan
+        .groups
+        .get(
+            usize::try_from(group_ordinal)
+                .map_err(|_| invalid("V36 followup merge group ordinal overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 followup merge group ordinal differs"))?;
+    if group.group_ordinal != group_ordinal || chunk_ordinal >= group.output_chunk_count {
+        return Err(invalid("V36 followup merge chunk ordinal differs"));
+    }
+    let preceding_rows = chunk_ordinal
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+        .ok_or_else(|| invalid("V36 followup merge chunk rows overflow"))?;
+    let remaining_rows = group
+        .output_row_count
+        .checked_sub(preceding_rows)
+        .ok_or_else(|| invalid("V36 followup merge chunk rows differ"))?;
+    let row_count = u32::try_from(remaining_rows.min(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS))
+        .map_err(|_| invalid("V36 followup merge chunk rows overflow"))?;
+    let run_prefix = group
+        .output_root_uri
+        .strip_suffix("/root.json")
+        .ok_or_else(|| invalid("V36 followup merge root URI differs"))?;
+    let uri = format!("{run_prefix}/chunk-{chunk_ordinal:06}.arrow");
+    let (model_identity, training_spec) = v36_followup_assignment_merge_authority(plan)?;
+    Ok((
+        V36InitialAssignmentMergeChunkContext {
+            chunk_ordinal,
+            generation_ordinal: plan.generation.generation_ordinal,
+            group_ordinal,
+            model_identity: model_identity.clone(),
+            predecessor_root_identity: plan.predecessor.root_identity.clone(),
+            training_spec: training_spec.clone(),
+            uri,
+        },
+        row_count,
+    ))
+}
+
+fn encode_v36_followup_assignment_merge_chunk_arrow(
+    plan: &V36FollowupAssignmentMergeGeneration,
+    group_ordinal: u64,
+    chunk_ordinal: u64,
+    rows: &[V36SupercellAssignmentRow],
+) -> Result<(Vec<u8>, V36InitialAssignmentMergeChunkArtifact)> {
+    let (context, row_count) =
+        v36_followup_assignment_merge_chunk_context(plan, group_ordinal, chunk_ordinal)?;
+    validate_v36_initial_assignment_merge_rows(&context.training_spec, rows, row_count)?;
+    let first_key = rows
+        .first()
+        .map(|row| (row.supercell_ordinal, row.source_ordinal))
+        .ok_or_else(|| invalid("V36 followup merge chunk is empty"))?;
+    let last_key = rows
+        .last()
+        .map(|row| (row.supercell_ordinal, row.source_ordinal))
+        .ok_or_else(|| invalid("V36 followup merge chunk is empty"))?;
+    let manifest =
+        v36_initial_assignment_merge_chunk_manifest(&context, row_count, first_key, last_key)?;
+    let schema = Arc::new(v36_assignment_schema(
+        V36_INITIAL_ASSIGNMENT_MERGE_CHUNK_MANIFEST_KEY,
+        manifest,
+    ));
+    let bytes = encode_v36_assignment_rows_arrow(schema, rows)?;
+    let encoded_bytes = u64::try_from(bytes.len())
+        .map_err(|_| invalid("V36 followup merge chunk encoded bytes overflow"))?;
+    if encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES {
+        return Err(invalid(
+            "V36 followup merge chunk exceeds encoded admission",
+        ));
+    }
+    let artifact = V36InitialAssignmentMergeChunkArtifact {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        context,
+        encoded_bytes,
+        first_key,
+        last_key,
+        row_count,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+    };
+    Ok((bytes, artifact))
+}
+
 /// Exact-object reader for one bounded committed merge chunk.
 pub trait V36AssignmentMergeChunkSource {
     /// Read the complete bytes for one root-bound chunk artifact.
@@ -3549,6 +3705,27 @@ pub trait V36AssignmentMergeChunkSource {
         run_root: &V36ArtifactIdentity,
         artifact: &V36InitialAssignmentMergeChunkArtifact,
     ) -> Result<Vec<u8>>;
+}
+
+/// Transactional destination for one follow-up globally sorted merge run.
+pub trait V36FollowupAssignmentMergeRunSink {
+    /// Persist one authenticated output chunk as attempt-private provisional state.
+    fn write_chunk_provisional(
+        &mut self,
+        bytes: &[u8],
+        artifact: &V36InitialAssignmentMergeChunkArtifact,
+    ) -> Result<()>;
+
+    /// Publish the canonical run root after every output chunk succeeds.
+    fn commit_root(
+        &mut self,
+        chunks: &[V36InitialAssignmentMergeChunkArtifact],
+        root_bytes: &[u8],
+        root_identity: &V36ArtifactIdentity,
+    ) -> Result<()>;
+
+    /// Remove every provisional output written by this transaction.
+    fn abort(&mut self) -> Result<()>;
 }
 
 struct V36FollowupAssignmentMergeCursor {
@@ -3713,6 +3890,260 @@ fn stream_v36_followup_assignment_merge_group_with_output_capacity(
     Ok(())
 }
 
+fn v36_followup_assignment_merge_root(
+    plan: &V36FollowupAssignmentMergeGeneration,
+    group_ordinal: u64,
+    chunks: &[V36InitialAssignmentMergeChunkArtifact],
+) -> Result<(Vec<u8>, V36ArtifactIdentity)> {
+    let group = plan
+        .groups
+        .get(
+            usize::try_from(group_ordinal)
+                .map_err(|_| invalid("V36 followup merge group ordinal overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 followup merge group ordinal differs"))?;
+    if group.group_ordinal != group_ordinal
+        || chunks.len()
+            != usize::try_from(group.output_chunk_count)
+                .map_err(|_| invalid("V36 followup merge chunk count overflows"))?
+    {
+        return Err(invalid("V36 followup merge chunk inventory differs"));
+    }
+    let mut row_count = 0_u64;
+    let mut previous_last = None;
+    for (chunk_ordinal, chunk) in chunks.iter().enumerate() {
+        let (expected_context, expected_rows) = v36_followup_assignment_merge_chunk_context(
+            plan,
+            group_ordinal,
+            u64::try_from(chunk_ordinal)
+                .map_err(|_| invalid("V36 followup merge chunk ordinal overflows"))?,
+        )?;
+        if chunk.context != expected_context
+            || chunk.row_count != expected_rows
+            || chunk.first_key > chunk.last_key
+            || previous_last.is_some_and(|last| last >= chunk.first_key)
+        {
+            return Err(invalid("V36 followup merge chunk inventory differs"));
+        }
+        row_count = row_count
+            .checked_add(u64::from(chunk.row_count))
+            .ok_or_else(|| invalid("V36 followup merge rows overflow"))?;
+        previous_last = Some(chunk.last_key);
+    }
+    if row_count != group.output_row_count {
+        return Err(invalid("V36 followup merge row count differs"));
+    }
+    let runs = plan
+        .predecessor
+        .runs
+        .get(group.input_range.clone())
+        .ok_or_else(|| invalid("V36 followup merge input range differs"))?;
+    let (model_identity, training_spec) = v36_followup_assignment_merge_authority(plan)?;
+    let manifest = V36FollowupAssignmentMergeRootManifest {
+        chunks: chunks
+            .iter()
+            .map(V36FollowupAssignmentMergeChunkInventoryEntry::from)
+            .collect(),
+        format: V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_FORMAT.to_owned(),
+        generation_ordinal: plan.generation.generation_ordinal,
+        group_ordinal,
+        input_run_roots: runs.iter().map(|run| run.root_identity.clone()).collect(),
+        model_identity: model_identity.clone(),
+        predecessor_root_identity: plan.predecessor.root_identity.clone(),
+        role: V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE.to_owned(),
+        row_count,
+        training_spec: training_spec.clone(),
+        uri: group.output_root_uri.clone(),
+    };
+    let mut bytes = serde_json::to_vec(&v36_canonical_json_value(
+        serde_json::to_value(manifest)
+            .map_err(|_| invalid("V36 followup merge root manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 followup merge root manifest differs"))?;
+    bytes
+        .try_reserve_exact(1)
+        .map_err(|_| invalid("V36 followup merge root exceeds capacity"))?;
+    bytes.push(b'\n');
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if encoded_bytes > V36_INITIAL_ASSIGNMENT_MERGE_ROOT_MAXIMUM_ENCODED_BYTES {
+        return Err(invalid("V36 followup merge root exceeds encoded admission"));
+    }
+    let identity = V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes,
+        role: V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE.to_owned(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri: group.output_root_uri.clone(),
+    };
+    Ok((bytes, identity))
+}
+
+/// Authenticate one compact follow-up merge root and reconstruct its chunk inventory.
+pub fn authenticate_v36_followup_assignment_merge_run_root(
+    plan: &V36FollowupAssignmentMergeGeneration,
+    group_ordinal: u64,
+    bytes: &[u8],
+    root_identity: &V36ArtifactIdentity,
+) -> Result<V36CommittedInitialAssignmentMergeRun> {
+    let group = plan
+        .groups
+        .get(
+            usize::try_from(group_ordinal)
+                .map_err(|_| invalid("V36 followup merge group ordinal overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 followup merge group ordinal differs"))?;
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if group.group_ordinal != group_ordinal
+        || bytes.last() != Some(&b'\n')
+        || root_identity.encoded_bytes != encoded_bytes
+        || encoded_bytes > V36_INITIAL_ASSIGNMENT_MERGE_ROOT_MAXIMUM_ENCODED_BYTES
+        || root_identity.role != V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE
+        || root_identity.uri != group.output_root_uri
+        || !valid_sha256(&root_identity.sha256)
+        || !valid_sha256(&root_identity.blake3)
+        || root_identity.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || root_identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 followup merge root identity differs"));
+    }
+    let manifest: V36FollowupAssignmentMergeRootManifest = serde_json::from_slice(bytes)
+        .map_err(|_| invalid("V36 followup merge root manifest differs"))?;
+    let mut canonical = serde_json::to_vec(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 followup merge root manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 followup merge root manifest differs"))?;
+    canonical
+        .try_reserve_exact(1)
+        .map_err(|_| invalid("V36 followup merge root manifest exceeds capacity"))?;
+    canonical.push(b'\n');
+    let predecessor_runs = plan
+        .predecessor
+        .runs
+        .get(group.input_range.clone())
+        .ok_or_else(|| invalid("V36 followup merge input range differs"))?;
+    let expected_input_roots: Vec<_> = predecessor_runs
+        .iter()
+        .map(|run| run.root_identity.clone())
+        .collect();
+    let (model_identity, training_spec) = v36_followup_assignment_merge_authority(plan)?;
+    if canonical != bytes
+        || manifest.format != V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_FORMAT
+        || manifest.generation_ordinal != plan.generation.generation_ordinal
+        || manifest.group_ordinal != group_ordinal
+        || manifest.input_run_roots != expected_input_roots
+        || manifest.model_identity != *model_identity
+        || manifest.predecessor_root_identity != plan.predecessor.root_identity
+        || manifest.role != V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE
+        || manifest.row_count != group.output_row_count
+        || manifest.training_spec != *training_spec
+        || manifest.uri != group.output_root_uri
+        || manifest.chunks.len()
+            != usize::try_from(group.output_chunk_count)
+                .map_err(|_| invalid("V36 followup merge chunk count overflows"))?
+    {
+        return Err(invalid("V36 followup merge root manifest differs"));
+    }
+
+    let mut chunks = Vec::new();
+    chunks
+        .try_reserve_exact(manifest.chunks.len())
+        .map_err(|_| invalid("V36 followup merge chunk inventory exceeds capacity"))?;
+    let mut row_count = 0_u64;
+    let mut previous_last = None;
+    for (chunk_ordinal, chunk) in manifest.chunks.into_iter().enumerate() {
+        let chunk_ordinal = u64::try_from(chunk_ordinal)
+            .map_err(|_| invalid("V36 followup merge chunk ordinal overflows"))?;
+        let (context, expected_rows) =
+            v36_followup_assignment_merge_chunk_context(plan, group_ordinal, chunk_ordinal)?;
+        if chunk.row_count != expected_rows
+            || chunk.encoded_bytes == 0
+            || chunk.encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES
+            || !valid_sha256(&chunk.sha256)
+            || !valid_sha256(&chunk.blake3)
+            || chunk.first_key > chunk.last_key
+            || previous_last.is_some_and(|last| last >= chunk.first_key)
+        {
+            return Err(invalid("V36 followup merge root chunk inventory differs"));
+        }
+        row_count = row_count
+            .checked_add(u64::from(chunk.row_count))
+            .ok_or_else(|| invalid("V36 followup merge chunk rows overflow"))?;
+        previous_last = Some(chunk.last_key);
+        chunks.push(V36InitialAssignmentMergeChunkArtifact {
+            blake3: chunk.blake3,
+            context,
+            encoded_bytes: chunk.encoded_bytes,
+            first_key: chunk.first_key,
+            last_key: chunk.last_key,
+            row_count: chunk.row_count,
+            sha256: chunk.sha256,
+        });
+    }
+    if row_count != group.output_row_count {
+        return Err(invalid("V36 followup merge root chunk rows differ"));
+    }
+    Ok(V36CommittedInitialAssignmentMergeRun {
+        chunks,
+        root_identity: root_identity.clone(),
+    })
+}
+
+/// Stream one follow-up merge run transaction and publish its canonical root last.
+pub fn write_v36_followup_assignment_merge_group(
+    plan: &V36FollowupAssignmentMergeGeneration,
+    group_ordinal: u64,
+    source: &mut dyn V36AssignmentMergeChunkSource,
+    sink: &mut dyn V36FollowupAssignmentMergeRunSink,
+) -> Result<V36CommittedInitialAssignmentMergeRun> {
+    let execute = (|| {
+        let group = plan
+            .groups
+            .get(
+                usize::try_from(group_ordinal)
+                    .map_err(|_| invalid("V36 followup merge group ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V36 followup merge group ordinal differs"))?;
+        if group.group_ordinal != group_ordinal {
+            return Err(invalid("V36 followup merge group ordinal differs"));
+        }
+        let mut chunks = Vec::new();
+        chunks
+            .try_reserve_exact(
+                usize::try_from(group.output_chunk_count)
+                    .map_err(|_| invalid("V36 followup merge chunk count overflows"))?,
+            )
+            .map_err(|_| invalid("V36 followup merge chunks exceed capacity"))?;
+        stream_v36_followup_assignment_merge_group(plan, group_ordinal, source, &mut |rows| {
+            let chunk_ordinal = u64::try_from(chunks.len())
+                .map_err(|_| invalid("V36 followup merge chunk ordinal overflows"))?;
+            let (bytes, artifact) = encode_v36_followup_assignment_merge_chunk_arrow(
+                plan,
+                group_ordinal,
+                chunk_ordinal,
+                rows,
+            )?;
+            sink.write_chunk_provisional(&bytes, &artifact)?;
+            chunks.push(artifact);
+            Ok(())
+        })?;
+        let (root_bytes, root_identity) =
+            v36_followup_assignment_merge_root(plan, group_ordinal, &chunks)?;
+        sink.commit_root(&chunks, &root_bytes, &root_identity)?;
+        Ok(V36CommittedInitialAssignmentMergeRun {
+            chunks,
+            root_identity,
+        })
+    })();
+    match execute {
+        Ok(committed) => Ok(committed),
+        Err(source_error) => match sink.abort() {
+            Ok(()) => Err(source_error),
+            Err(cleanup_error) => Err(cleanup_error),
+        },
+    }
+}
+
 fn validate_v36_committed_initial_assignment_merge_generation(
     committed: &V36CommittedSupercellAssignments,
     generation: &V36CommittedInitialAssignmentMergeGeneration,
@@ -3780,17 +4211,285 @@ fn validate_v36_committed_initial_assignment_merge_generation(
     Ok(())
 }
 
+fn v36_followup_assignment_merge_expected_group_rows(
+    committed: &V36CommittedSupercellAssignments,
+    generation_ordinal: u32,
+    group_ordinal: u64,
+) -> Result<u64> {
+    let mut shard_span = 1_u64;
+    for _ in 0..=generation_ordinal {
+        shard_span = shard_span
+            .checked_mul(u64::from(committed.admission.projection.merge_fan_in))
+            .ok_or_else(|| invalid("V36 followup merge shard span overflows"))?;
+    }
+    let start_shard = group_ordinal
+        .checked_mul(shard_span)
+        .ok_or_else(|| invalid("V36 followup merge shard range overflows"))?;
+    let start_row = start_shard
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+        .ok_or_else(|| invalid("V36 followup merge row range overflows"))?;
+    let span_rows = shard_span
+        .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+        .ok_or_else(|| invalid("V36 followup merge row range overflows"))?;
+    Ok(committed
+        .admission
+        .training_spec
+        .corpus_rows
+        .saturating_sub(start_row)
+        .min(span_rows))
+}
+
+fn validate_v36_committed_followup_assignment_merge_run(
+    committed: &V36CommittedSupercellAssignments,
+    generation: &V36CommittedInitialAssignmentMergeGeneration,
+    group_ordinal: u64,
+    run: &V36CommittedInitialAssignmentMergeRun,
+) -> Result<()> {
+    let expected_rows = v36_followup_assignment_merge_expected_group_rows(
+        committed,
+        generation.generation.generation_ordinal,
+        group_ordinal,
+    )?;
+    let run_prefix = format!(
+        "{}/merge/generation-{:06}/run-{group_ordinal:06}",
+        committed.uri_prefix, generation.generation.generation_ordinal
+    );
+    let expected_root_uri = format!("{run_prefix}/root.json");
+    if expected_rows == 0
+        || run.root_identity.role != V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE
+        || run.root_identity.uri != expected_root_uri
+        || run.root_identity.encoded_bytes == 0
+        || run.root_identity.encoded_bytes > V36_INITIAL_ASSIGNMENT_MERGE_ROOT_MAXIMUM_ENCODED_BYTES
+        || !valid_sha256(&run.root_identity.sha256)
+        || !valid_sha256(&run.root_identity.blake3)
+        || run.chunks.len()
+            != usize::try_from(expected_rows.div_ceil(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS))
+                .map_err(|_| invalid("V36 followup merge chunk count overflows"))?
+    {
+        return Err(invalid("V36 followup merge run inventory differs"));
+    }
+    let mut row_count = 0_u64;
+    let mut previous_last = None;
+    for (chunk_ordinal, chunk) in run.chunks.iter().enumerate() {
+        let chunk_ordinal = u64::try_from(chunk_ordinal)
+            .map_err(|_| invalid("V36 followup merge chunk ordinal overflows"))?;
+        let preceding_rows = chunk_ordinal
+            .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+            .ok_or_else(|| invalid("V36 followup merge chunk rows overflow"))?;
+        let expected_chunk_rows = u32::try_from(
+            expected_rows
+                .checked_sub(preceding_rows)
+                .ok_or_else(|| invalid("V36 followup merge chunk rows differ"))?
+                .min(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS),
+        )
+        .map_err(|_| invalid("V36 followup merge chunk rows overflow"))?;
+        let expected_uri = format!("{run_prefix}/chunk-{chunk_ordinal:06}.arrow");
+        if chunk.context.chunk_ordinal != chunk_ordinal
+            || chunk.context.generation_ordinal != generation.generation.generation_ordinal
+            || chunk.context.group_ordinal != group_ordinal
+            || chunk.context.model_identity != committed.admission.model_identity
+            || chunk.context.predecessor_root_identity != generation.predecessor_root_identity
+            || chunk.context.training_spec != committed.admission.training_spec
+            || chunk.context.uri != expected_uri
+            || chunk.row_count != expected_chunk_rows
+            || chunk.encoded_bytes == 0
+            || chunk.encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES
+            || !valid_sha256(&chunk.sha256)
+            || !valid_sha256(&chunk.blake3)
+            || chunk.first_key > chunk.last_key
+            || previous_last.is_some_and(|last| last >= chunk.first_key)
+        {
+            return Err(invalid("V36 followup merge chunk inventory differs"));
+        }
+        row_count = row_count
+            .checked_add(u64::from(chunk.row_count))
+            .ok_or_else(|| invalid("V36 followup merge rows overflow"))?;
+        previous_last = Some(chunk.last_key);
+    }
+    if row_count != expected_rows {
+        return Err(invalid("V36 followup merge row count differs"));
+    }
+    Ok(())
+}
+
+fn v36_assignment_merge_generation_root(
+    committed: &V36CommittedSupercellAssignments,
+    generation: V36ExternalMergeGenerationProjection,
+    predecessor_root_identity: &V36ArtifactIdentity,
+    runs: &[V36CommittedInitialAssignmentMergeRun],
+) -> Result<(Vec<u8>, V36ArtifactIdentity)> {
+    let uri = format!(
+        "{}/merge/generation-{:06}/root.json",
+        committed.uri_prefix, generation.generation_ordinal
+    );
+    let (run_inventory_sha256, run_inventory_blake3) =
+        v36_initial_assignment_merge_run_inventory_digests(runs)?;
+    let manifest = V36InitialAssignmentMergeGenerationRootManifest {
+        format: V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_FORMAT.to_owned(),
+        generation,
+        merge_fan_in: committed.admission.projection.merge_fan_in,
+        model_identity: committed.admission.model_identity.clone(),
+        predecessor_root_identity: predecessor_root_identity.clone(),
+        role: V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_ROLE.to_owned(),
+        run_count: u64::try_from(runs.len())
+            .map_err(|_| invalid("V36 merge generation run count overflows"))?,
+        run_inventory_blake3,
+        run_inventory_sha256,
+        training_spec: committed.admission.training_spec.clone(),
+        uri: uri.clone(),
+    };
+    let mut bytes = serde_json::to_vec(&v36_canonical_json_value(
+        serde_json::to_value(manifest).map_err(|_| invalid("V36 merge generation root differs"))?,
+    ))
+    .map_err(|_| invalid("V36 merge generation root differs"))?;
+    bytes
+        .try_reserve_exact(1)
+        .map_err(|_| invalid("V36 merge generation root exceeds capacity"))?;
+    bytes.push(b'\n');
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if encoded_bytes > V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_MAXIMUM_ENCODED_BYTES {
+        return Err(invalid(
+            "V36 merge generation root exceeds encoded admission",
+        ));
+    }
+    let identity = V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes,
+        role: V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_ROLE.to_owned(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri,
+    };
+    Ok((bytes, identity))
+}
+
+fn validate_v36_committed_assignment_merge_generation(
+    committed: &V36CommittedSupercellAssignments,
+    generation: &V36CommittedInitialAssignmentMergeGeneration,
+) -> Result<()> {
+    if generation.generation.generation_ordinal == 0 {
+        return validate_v36_committed_initial_assignment_merge_generation(committed, generation);
+    }
+    let schedule = committed.admission.projection.merge_schedule()?;
+    let expected = schedule
+        .get(
+            usize::try_from(generation.generation.generation_ordinal)
+                .map_err(|_| invalid("V36 merge generation ordinal overflows"))?,
+        )
+        .ok_or_else(|| invalid("V36 merge generation differs"))?;
+    if &generation.generation != expected
+        || generation.merge_fan_in != committed.admission.projection.merge_fan_in
+        || generation.runs.len()
+            != usize::try_from(expected.output_run_count)
+                .map_err(|_| invalid("V36 merge generation run count overflows"))?
+    {
+        return Err(invalid("V36 committed followup merge generation differs"));
+    }
+    for (group_ordinal, run) in generation.runs.iter().enumerate() {
+        validate_v36_committed_followup_assignment_merge_run(
+            committed,
+            generation,
+            u64::try_from(group_ordinal)
+                .map_err(|_| invalid("V36 followup merge group ordinal overflows"))?,
+            run,
+        )?;
+    }
+    let (_, expected_root) = v36_assignment_merge_generation_root(
+        committed,
+        generation.generation,
+        &generation.predecessor_root_identity,
+        &generation.runs,
+    )?;
+    if generation.root_identity != expected_root {
+        return Err(invalid(
+            "V36 committed followup merge generation root differs",
+        ));
+    }
+    Ok(())
+}
+
+/// Commit one complete follow-up merge generation after all of its runs commit.
+pub fn commit_v36_followup_assignment_merge_generation(
+    committed: &V36CommittedSupercellAssignments,
+    plan: V36FollowupAssignmentMergeGeneration,
+    runs: Vec<V36CommittedInitialAssignmentMergeRun>,
+    sink: &mut dyn V36InitialAssignmentMergeGenerationSink,
+) -> Result<V36CommittedInitialAssignmentMergeGeneration> {
+    validate_v36_committed_assignment_merge_generation(committed, &plan.predecessor)?;
+    if plan.predecessor.merge_fan_in != committed.admission.projection.merge_fan_in {
+        return Err(invalid("V36 followup merge generation fan-in differs"));
+    }
+    if runs.len()
+        != usize::try_from(plan.generation.output_run_count)
+            .map_err(|_| invalid("V36 followup merge generation run count overflows"))?
+    {
+        return Err(invalid(
+            "V36 followup merge generation run inventory differs",
+        ));
+    }
+    let predecessor_root_identity = plan.predecessor.root_identity.clone();
+    let generation = V36CommittedInitialAssignmentMergeGeneration {
+        generation: plan.generation,
+        merge_fan_in: plan.predecessor.merge_fan_in,
+        predecessor_root_identity,
+        root_identity: V36ArtifactIdentity {
+            blake3: String::new(),
+            encoded_bytes: 0,
+            role: String::new(),
+            sha256: String::new(),
+            uri: String::new(),
+        },
+        runs,
+    };
+    for (group_ordinal, run) in generation.runs.iter().enumerate() {
+        validate_v36_committed_followup_assignment_merge_run(
+            committed,
+            &generation,
+            u64::try_from(group_ordinal)
+                .map_err(|_| invalid("V36 followup merge group ordinal overflows"))?,
+            run,
+        )?;
+    }
+    let (root_bytes, root_identity) = v36_assignment_merge_generation_root(
+        committed,
+        generation.generation,
+        &generation.predecessor_root_identity,
+        &generation.runs,
+    )?;
+    let committed_generation = V36CommittedInitialAssignmentMergeGeneration {
+        root_identity,
+        ..generation
+    };
+    validate_v36_committed_assignment_merge_generation(committed, &committed_generation)?;
+    sink.commit_root(
+        &committed_generation.runs,
+        &root_bytes,
+        &committed_generation.root_identity,
+    )?;
+    Ok(committed_generation)
+}
+
 /// Plan generation one from the exact committed generation-zero inventory.
 pub fn plan_v36_followup_assignment_merge_generation(
     committed: &V36CommittedSupercellAssignments,
     predecessor: V36CommittedInitialAssignmentMergeGeneration,
 ) -> Result<Option<V36FollowupAssignmentMergeGeneration>> {
-    validate_v36_committed_initial_assignment_merge_generation(committed, &predecessor)?;
+    validate_v36_committed_assignment_merge_generation(committed, &predecessor)?;
     let schedule = committed.admission.projection.merge_schedule()?;
-    let Some(generation) = schedule.get(1).copied() else {
+    let next_generation = predecessor
+        .generation
+        .generation_ordinal
+        .checked_add(1)
+        .ok_or_else(|| invalid("V36 followup merge generation overflows"))?;
+    let Some(generation) = schedule
+        .get(
+            usize::try_from(next_generation)
+                .map_err(|_| invalid("V36 followup merge generation overflows"))?,
+        )
+        .copied()
+    else {
         return Ok(None);
     };
-    if generation.generation_ordinal != 1
+    if generation.generation_ordinal != next_generation
         || generation.input_run_count
             != u64::try_from(predecessor.runs.len())
                 .map_err(|_| invalid("V36 followup merge input count overflows"))?
@@ -7991,13 +8690,16 @@ mod tests {
         V36ArtifactIdentity, V36AssignmentMergeChunkSource,
         V36AuthenticatedInitialAssignmentMergeGroup, V36AuthenticatedSupercellAssignmentShard,
         V36CommittedSupercellAssignments, V36ExternalMergeGenerationProjection,
-        V36InitialAssignmentMergeChunkArtifact, V36InitialAssignmentMergeGeneration,
-        V36InitialAssignmentMergeGenerationSink, V36InitialAssignmentMergeGroup,
-        V36InitialAssignmentMergeRunSink, V36RowOwners, V36SupercellAssignmentAdmissionRequest,
-        V36SupercellAssignmentProjection, V36SupercellAssignmentRow,
-        V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardContext,
-        V36SupercellTrainingSpec, authenticate_v36_initial_assignment_merge_run_root,
+        V36FollowupAssignmentMergeRunSink, V36InitialAssignmentMergeChunkArtifact,
+        V36InitialAssignmentMergeGeneration, V36InitialAssignmentMergeGenerationSink,
+        V36InitialAssignmentMergeGroup, V36InitialAssignmentMergeRunSink, V36RowOwners,
+        V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentProjection,
+        V36SupercellAssignmentRow, V36SupercellAssignmentShardArtifact,
+        V36SupercellAssignmentShardContext, V36SupercellTrainingSpec,
+        authenticate_v36_followup_assignment_merge_run_root,
+        authenticate_v36_initial_assignment_merge_run_root,
         authenticate_v36_supercell_assignment_shard_arrow,
+        commit_v36_followup_assignment_merge_generation,
         commit_v36_initial_assignment_merge_generation,
         decode_v36_initial_assignment_merge_chunk_arrow,
         encode_v36_initial_assignment_merge_chunk_arrow,
@@ -8005,7 +8707,8 @@ mod tests {
         load_v36_initial_assignment_merge_group, plan_v36_followup_assignment_merge_generation,
         plan_v36_initial_assignment_merge_generation, repair_v36_empty_posting_assignments,
         stream_v36_followup_assignment_merge_group, v36_canonical_json_value,
-        v36_committed_assignment_root, write_v36_initial_assignment_merge_group,
+        v36_committed_assignment_root, write_v36_followup_assignment_merge_group,
+        write_v36_initial_assignment_merge_group,
     };
     use sha2::{Digest, Sha256};
 
@@ -8658,6 +9361,118 @@ mod tests {
                 ),
             ]
         );
+
+        let followup_runs = followup
+            .groups()
+            .iter()
+            .map(|group| {
+                let chunks = (0..group.output_chunk_count())
+                    .map(|chunk_ordinal| {
+                        let (context, row_count) =
+                            super::v36_followup_assignment_merge_chunk_context(
+                                &followup,
+                                group.group_ordinal(),
+                                chunk_ordinal,
+                            )
+                            .unwrap();
+                        V36InitialAssignmentMergeChunkArtifact {
+                            blake3: format!(
+                                "{:064x}",
+                                500 + group.group_ordinal() * 10 + chunk_ordinal
+                            ),
+                            context,
+                            encoded_bytes: 1,
+                            first_key: (0, chunk_ordinal * 65_536),
+                            last_key: (0, chunk_ordinal * 65_536 + u64::from(row_count) - 1),
+                            row_count,
+                            sha256: format!(
+                                "{:064x}",
+                                600 + group.group_ordinal() * 10 + chunk_ordinal
+                            ),
+                        }
+                    })
+                    .collect();
+                super::V36CommittedInitialAssignmentMergeRun {
+                    chunks,
+                    root_identity: V36ArtifactIdentity {
+                        blake3: format!("{:064x}", 700 + group.group_ordinal()),
+                        encoded_bytes: 1,
+                        role: super::V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE.to_owned(),
+                        sha256: format!("{:064x}", 800 + group.group_ordinal()),
+                        uri: group.output_root_uri().to_owned(),
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut followup_sink = InitialMergeGenerationSink::default();
+        let sealed_followup = commit_v36_followup_assignment_merge_generation(
+            &committed,
+            followup,
+            followup_runs,
+            &mut followup_sink,
+        )
+        .unwrap();
+        assert_eq!(sealed_followup.generation().generation_ordinal, 1);
+        assert_eq!(sealed_followup.runs().len(), 2);
+        let terminal = plan_v36_followup_assignment_merge_generation(&committed, sealed_followup)
+            .unwrap()
+            .unwrap();
+        assert_eq!(terminal.generation().generation_ordinal, 2);
+        assert_eq!(terminal.generation().input_run_count, 2);
+        assert_eq!(terminal.generation().output_run_count, 1);
+        assert_eq!(terminal.groups().len(), 1);
+        assert_eq!(terminal.groups()[0].output_row_count(), 4 * 65_536 + 1);
+
+        let terminal_runs = terminal
+            .groups()
+            .iter()
+            .map(|group| {
+                let chunks = (0..group.output_chunk_count())
+                    .map(|chunk_ordinal| {
+                        let (context, row_count) =
+                            super::v36_followup_assignment_merge_chunk_context(
+                                &terminal,
+                                group.group_ordinal(),
+                                chunk_ordinal,
+                            )
+                            .unwrap();
+                        V36InitialAssignmentMergeChunkArtifact {
+                            blake3: format!("{:064x}", 900 + chunk_ordinal),
+                            context,
+                            encoded_bytes: 1,
+                            first_key: (0, chunk_ordinal * 65_536),
+                            last_key: (0, chunk_ordinal * 65_536 + u64::from(row_count) - 1),
+                            row_count,
+                            sha256: format!("{:064x}", 1_000 + chunk_ordinal),
+                        }
+                    })
+                    .collect();
+                super::V36CommittedInitialAssignmentMergeRun {
+                    chunks,
+                    root_identity: V36ArtifactIdentity {
+                        blake3: "c".repeat(64),
+                        encoded_bytes: 1,
+                        role: super::V36_FOLLOWUP_ASSIGNMENT_MERGE_ROOT_ROLE.to_owned(),
+                        sha256: "d".repeat(64),
+                        uri: group.output_root_uri().to_owned(),
+                    },
+                }
+            })
+            .collect();
+        let mut mismatched = committed.clone();
+        mismatched.admission.request.merge_fan_in = 3;
+        mismatched.admission.projection.merge_fan_in = 3;
+        let mut mismatched_sink = InitialMergeGenerationSink::default();
+        assert!(
+            commit_v36_followup_assignment_merge_generation(
+                &mismatched,
+                terminal,
+                terminal_runs,
+                &mut mismatched_sink,
+            )
+            .is_err()
+        );
+        assert!(mismatched_sink.committed_root.is_none());
     }
 
     struct FollowupChunkSource {
@@ -8676,6 +9491,43 @@ mod tests {
                 .get(&artifact.context.uri)
                 .cloned()
                 .ok_or_else(|| invalid("test merge chunk is missing"))
+        }
+    }
+
+    #[derive(Default)]
+    struct FollowupRunSink {
+        committed_root: Option<(Vec<u8>, V36ArtifactIdentity)>,
+        events: Vec<&'static str>,
+        fail_chunk: bool,
+    }
+
+    impl V36FollowupAssignmentMergeRunSink for FollowupRunSink {
+        fn write_chunk_provisional(
+            &mut self,
+            _bytes: &[u8],
+            _artifact: &V36InitialAssignmentMergeChunkArtifact,
+        ) -> Result<()> {
+            self.events.push("chunk");
+            if self.fail_chunk {
+                return Err(invalid("test followup chunk write failed"));
+            }
+            Ok(())
+        }
+
+        fn commit_root(
+            &mut self,
+            _chunks: &[V36InitialAssignmentMergeChunkArtifact],
+            root_bytes: &[u8],
+            root_identity: &V36ArtifactIdentity,
+        ) -> Result<()> {
+            self.events.push("root");
+            self.committed_root = Some((root_bytes.to_vec(), root_identity.clone()));
+            Ok(())
+        }
+
+        fn abort(&mut self) -> Result<()> {
+            self.events.push("abort");
+            Ok(())
         }
     }
 
@@ -8855,6 +9707,64 @@ mod tests {
             [(0, 0), (0, 1), (1, 2), (1, 3)]
         );
 
+        let writer_bytes = chunk_bytes.clone();
+        let mut writer_source = FollowupChunkSource {
+            bytes: writer_bytes.clone(),
+            calls: Vec::new(),
+        };
+        let mut writer_sink = FollowupRunSink::default();
+        let committed = write_v36_followup_assignment_merge_group(
+            &followup,
+            0,
+            &mut writer_source,
+            &mut writer_sink,
+        )
+        .unwrap();
+        assert_eq!(writer_source.calls.len(), 2);
+        assert_eq!(writer_sink.events, ["chunk", "root"]);
+        assert_eq!(committed.chunks().len(), 1);
+        assert_eq!(committed.chunks()[0].row_count, 4);
+        let (root_bytes, root_identity) = writer_sink.committed_root.unwrap();
+        let resumed = authenticate_v36_followup_assignment_merge_run_root(
+            &followup,
+            0,
+            &root_bytes,
+            &root_identity,
+        )
+        .unwrap();
+        assert_eq!(resumed.chunks(), committed.chunks());
+        assert_eq!(resumed.root_identity(), committed.root_identity());
+        let mut corrupt_root = root_bytes;
+        corrupt_root[0] ^= 1;
+        assert!(
+            authenticate_v36_followup_assignment_merge_run_root(
+                &followup,
+                0,
+                &corrupt_root,
+                &root_identity,
+            )
+            .is_err()
+        );
+
+        let mut failing_source = FollowupChunkSource {
+            bytes: writer_bytes,
+            calls: Vec::new(),
+        };
+        let mut failing_sink = FollowupRunSink {
+            fail_chunk: true,
+            ..FollowupRunSink::default()
+        };
+        assert!(
+            write_v36_followup_assignment_merge_group(
+                &followup,
+                0,
+                &mut failing_source,
+                &mut failing_sink,
+            )
+            .is_err()
+        );
+        assert_eq!(failing_sink.events, ["chunk", "abort"]);
+
         let corrupt_uri = followup.predecessor.runs[1].chunks[0].context.uri.clone();
         chunk_bytes.get_mut(&corrupt_uri).unwrap()[0] ^= 1;
         let mut corrupt_source = FollowupChunkSource {
@@ -8970,6 +9880,120 @@ mod tests {
             .is_err()
         );
         assert_eq!(visitor_error_source.calls.len(), 1);
+    }
+
+    #[test]
+    fn v36_followup_merge_root_is_compact_at_the_100m_chunk_frontier() {
+        let corpus_rows = 100_000_000_u64;
+        let chunk_count = corpus_rows.div_ceil(super::V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS);
+        assert_eq!(chunk_count, 1_526);
+        let long_component = "x".repeat(3_900);
+        let model_identity = V36ArtifactIdentity {
+            blake3: "1".repeat(64),
+            encoded_bytes: 1,
+            role: "supercell-model".to_owned(),
+            sha256: "2".repeat(64),
+            uri: format!("s3://borsuk-v36-test/{long_component}/model.arrow"),
+        };
+        let training_spec = V36SupercellTrainingSpec {
+            corpus_rows,
+            dimensions: 192,
+            maximum_block_rows: 65_536,
+            projected_corpus_sha256: "3".repeat(64),
+            reservoir_rows: 1_048_576,
+            super_cell_count: 512,
+        };
+        let predecessor_root = V36ArtifactIdentity {
+            blake3: "4".repeat(64),
+            encoded_bytes: 1,
+            role: super::V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_ROLE.to_owned(),
+            sha256: "5".repeat(64),
+            uri: format!("s3://borsuk-v36-test/{long_component}/predecessor.json"),
+        };
+        let predecessor_chunk = V36InitialAssignmentMergeChunkArtifact {
+            blake3: "6".repeat(64),
+            context: super::V36InitialAssignmentMergeChunkContext {
+                chunk_ordinal: 0,
+                generation_ordinal: 0,
+                group_ordinal: 0,
+                model_identity: model_identity.clone(),
+                predecessor_root_identity: predecessor_root.clone(),
+                training_spec: training_spec.clone(),
+                uri: format!("s3://borsuk-v36-test/{long_component}/input.arrow"),
+            },
+            encoded_bytes: 1,
+            first_key: (0, 0),
+            last_key: (511, corpus_rows - 1),
+            row_count: u32::MAX,
+            sha256: "7".repeat(64),
+        };
+        let plan = super::V36FollowupAssignmentMergeGeneration {
+            generation: V36ExternalMergeGenerationProjection {
+                generation_ordinal: 1,
+                input_run_count: 1,
+                output_run_count: 1,
+                full_group_count: 0,
+                tail_group_size: 1,
+            },
+            groups: vec![V36InitialAssignmentMergeGroup {
+                group_ordinal: 0,
+                input_range: 0..1,
+                output_chunk_count: chunk_count,
+                output_root_uri: format!(
+                    "s3://borsuk-v36-test/{long_component}/generation-000001/run-000000/root.json"
+                ),
+                output_row_count: corpus_rows,
+            }],
+            predecessor: super::V36CommittedInitialAssignmentMergeGeneration {
+                generation: V36ExternalMergeGenerationProjection {
+                    generation_ordinal: 0,
+                    input_run_count: 2,
+                    output_run_count: 1,
+                    full_group_count: 0,
+                    tail_group_size: 2,
+                },
+                merge_fan_in: 64,
+                predecessor_root_identity: predecessor_root,
+                root_identity: V36ArtifactIdentity {
+                    blake3: "8".repeat(64),
+                    encoded_bytes: 1,
+                    role: super::V36_INITIAL_ASSIGNMENT_MERGE_GENERATION_ROOT_ROLE.to_owned(),
+                    sha256: "9".repeat(64),
+                    uri: format!(
+                        "s3://borsuk-v36-test/{long_component}/generation-000000/root.json"
+                    ),
+                },
+                runs: vec![super::V36CommittedInitialAssignmentMergeRun {
+                    chunks: vec![predecessor_chunk],
+                    root_identity: V36ArtifactIdentity {
+                        blake3: "a".repeat(64),
+                        encoded_bytes: 1,
+                        role: super::V36_INITIAL_ASSIGNMENT_MERGE_ROOT_ROLE.to_owned(),
+                        sha256: "b".repeat(64),
+                        uri: format!("s3://borsuk-v36-test/{long_component}/input-root.json"),
+                    },
+                }],
+            },
+        };
+        let mut chunks = Vec::with_capacity(usize::try_from(chunk_count).unwrap());
+        for chunk_ordinal in 0..chunk_count {
+            let (context, row_count) =
+                super::v36_followup_assignment_merge_chunk_context(&plan, 0, chunk_ordinal)
+                    .unwrap();
+            let first_source = chunk_ordinal * super::V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS;
+            let last_source = first_source + u64::from(row_count) - 1;
+            chunks.push(V36InitialAssignmentMergeChunkArtifact {
+                blake3: format!("{chunk_ordinal:064x}"),
+                context,
+                encoded_bytes: 1,
+                first_key: (0, first_source),
+                last_key: (0, last_source),
+                row_count,
+                sha256: format!("{:064x}", chunk_ordinal + 1),
+            });
+        }
+        let (bytes, _) = super::v36_followup_assignment_merge_root(&plan, 0, &chunks).unwrap();
+        assert!(bytes.len() < 1_048_576);
     }
 
     #[test]
