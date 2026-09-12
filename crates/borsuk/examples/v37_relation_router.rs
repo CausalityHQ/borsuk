@@ -9,7 +9,8 @@ use std::{
 };
 
 use borsuk::{
-    V37LocalArtifact, V37LocalOutput, V37LocalRunMode, V37LocalRunRequest, run_v37_local_request,
+    V37LocalArtifact, V37LocalOutput, V37LocalRunMode, V37LocalRunRequest,
+    run_v37_local_request_with_progress,
 };
 
 fn valid_lower_hex(value: &str) -> bool {
@@ -56,6 +57,7 @@ fn parse_v37_relation_router_args(
         return Err("missing required flag --execute-v37-local".to_owned());
     }
     let mode = match take(&mut values, "--mode")?.as_str() {
+        "preflight-training" => V37LocalRunMode::PreflightTraining,
         "build-ownership" => V37LocalRunMode::BuildOwnership,
         "evaluate-ceiling" => V37LocalRunMode::EvaluateCeiling,
         _ => return Err("V37 local mode differs".to_owned()),
@@ -64,6 +66,7 @@ fn parse_v37_relation_router_args(
         .parse::<u32>()
         .map_err(|_| "V37 local worker count differs".to_owned())?;
     let input_roles: &[&str] = match mode {
+        V37LocalRunMode::PreflightTraining => &["v37-authority"],
         V37LocalRunMode::BuildOwnership => &[
             "v36-authority",
             "v36-execution-authority",
@@ -80,6 +83,7 @@ fn parse_v37_relation_router_args(
         ],
     };
     let output_roles: &[&str] = match mode {
+        V37LocalRunMode::PreflightTraining => &[],
         V37LocalRunMode::BuildOwnership => &["ownership-tree", "ownership"],
         V37LocalRunMode::EvaluateCeiling => &["ceiling"],
     };
@@ -124,7 +128,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match run_v37_local_request(request) {
+    let mut stderr = io::stderr().lock();
+    match run_v37_local_request_with_progress(request, |bytes| {
+        stderr.write_all(bytes).and_then(|()| stderr.flush())
+    }) {
         Ok(bytes) => match io::stdout().write_all(&bytes) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -141,7 +148,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_v37_relation_router_args, run_v37_local_request};
+    use super::{parse_v37_relation_router_args, run_v37_local_request_with_progress};
     use borsuk::V37LocalRunMode;
 
     const COMMON_ROLES: [&str; 5] = [
@@ -154,7 +161,7 @@ mod tests {
 
     #[test]
     fn v37_relation_cli_exposes_only_the_high_level_local_runner() {
-        let _runner = run_v37_local_request;
+        let _runner = run_v37_local_request_with_progress::<fn(&[u8]) -> std::io::Result<()>>;
     }
 
     fn input_arguments(role: &str, marker: char) -> Vec<String> {
@@ -204,6 +211,18 @@ mod tests {
         assert_eq!(request.mode(), V37LocalRunMode::BuildOwnership);
         assert_eq!(request.input_roles(), roles);
         assert_eq!(request.output_roles(), ["ownership-tree", "ownership"]);
+        assert_eq!(request.workers(), 4);
+    }
+
+    #[test]
+    fn v37_relation_cli_parses_exact_preflight_training_capabilities() {
+        let roles = vec!["v37-authority"];
+        let request =
+            parse_v37_relation_router_args(arguments("preflight-training", &roles, &[])).unwrap();
+
+        assert_eq!(request.mode(), V37LocalRunMode::PreflightTraining);
+        assert_eq!(request.input_roles(), roles);
+        assert!(request.output_roles().is_empty());
         assert_eq!(request.workers(), 4);
     }
 

@@ -504,6 +504,7 @@ pub use v36_prefix_dataset::{
 #[doc(hidden)]
 pub use v37_relation_router::{
     V37LocalArtifact, V37LocalOutput, V37LocalRunMode, V37LocalRunRequest, run_v37_local_request,
+    run_v37_local_request_with_progress,
 };
 #[allow(
     dead_code,

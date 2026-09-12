@@ -7,6 +7,7 @@ use std::{
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
+    time::Instant,
 };
 
 use arrow_array::{
@@ -44,12 +45,19 @@ const V37_AGGREGATE_RECALL_GATE_PPM: u32 = 998_000;
 const V37_MINIMUM_RECALL_GATE_PPM: u32 = 800_000;
 const V37_MAXIMUM_WORKERS: u64 = 32;
 const V37_WORKER_STACK_BYTES: u64 = 2 * 1024 * 1024;
+const V37_PREFLIGHT_ROWS: usize = 65_536;
+const V37_PREFLIGHT_LEAVES: u64 = 16;
+const V37_PREFLIGHT_COORDINATE_SCORES: u64 = 50_331_648;
+const V37_PREFLIGHT_COORDINATE_SHA256: &str =
+    "62ebfdbb42fa5e6212437932ebe682970389b15fa8cae1d6e2aa6d8610a41608";
 static V37_FMA_KERNEL: OnceLock<Option<borsuk_fma::FusedDot8x12>> = OnceLock::new();
 
 /// One strict local phase of the claim-ineligible V37 diagnostic.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum V37LocalRunMode {
+    /// Measure the exact production scorer on a deterministic reduced shape.
+    PreflightTraining,
     /// Authenticate and build the query-blind ownership tree and table.
     BuildOwnership,
     /// Authenticate the frozen development evidence and compute the exact layout ceiling.
@@ -73,6 +81,7 @@ impl V37LocalRunMode {
             "ownership",
         ];
         match self {
+            Self::PreflightTraining => &["v37-authority"],
             Self::BuildOwnership => BUILD,
             Self::EvaluateCeiling => CEILING,
         }
@@ -80,6 +89,7 @@ impl V37LocalRunMode {
 
     fn output_roles(self) -> &'static [&'static str] {
         match self {
+            Self::PreflightTraining => &[],
             Self::BuildOwnership => &["ownership-tree", "ownership"],
             Self::EvaluateCeiling => &["ceiling"],
         }
@@ -567,6 +577,38 @@ pub(crate) struct V37TrainingRow {
     pub(crate) vector: Vec<f32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37TrainingEvidence {
+    dimensions: u64,
+    fma_backend: String,
+    leaf_count: u64,
+    partition_coordinate_scores: u64,
+    partition_coordinate_scores_per_second: u64,
+    partition_scoring_elapsed_ns: u64,
+    rows: u64,
+    training_elapsed_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct V37PreflightEvidence {
+    coordinate_generator: String,
+    coordinate_sha256: String,
+    projected_construction_bytes: u64,
+    scalar_fused_comparisons: u64,
+    scalar_fused_max_ulp_delta: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37TrainingProgress {
+    completed_internal_nodes: u64,
+    partition_coordinate_scores: u64,
+    sequence: u64,
+    total_internal_nodes: u64,
+}
+
 trait V37TrainingDataset: Sync {
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
@@ -942,6 +984,8 @@ pub(crate) struct V37LayoutCeiling {
 pub(crate) struct V37NumericAuthority {
     fma_backend: String,
     lane_width: u32,
+    preflight_coordinate_scores: u64,
+    preflight_coordinate_sha256: String,
     worker_count: u32,
 }
 
@@ -1026,7 +1070,7 @@ fn validate_v37_artifact(identity: &V37ArtifactIdentity, role: &str) -> Result<(
 }
 
 fn validate_v37_authority(manifest: &V37AuthorityManifest) -> Result<()> {
-    if manifest.schema != "borsuk-v37-relation-authority-v2"
+    if manifest.schema != "borsuk-v37-relation-authority-v3"
         || manifest.algorithm != "balanced-hyperplane-relation-v1"
         || manifest.metric != "squared-l2"
         || !matches!(
@@ -1034,6 +1078,8 @@ fn validate_v37_authority(manifest: &V37AuthorityManifest) -> Result<()> {
             "aarch64-neon-fma" | "x86-avx-fma"
         )
         || manifest.numeric.lane_width != 8
+        || manifest.numeric.preflight_coordinate_scores != V37_PREFLIGHT_COORDINATE_SCORES
+        || manifest.numeric.preflight_coordinate_sha256 != V37_PREFLIGHT_COORDINATE_SHA256
         || manifest.numeric.worker_count == 0
         || manifest.projection.algorithm != "v36-srht-f32-v1"
         || manifest.projection.source_dimensions != 768
@@ -1976,6 +2022,9 @@ struct V37TreeBuilder<'a, D: V37TrainingDataset> {
     assignments: Vec<V37OwnershipAssignment>,
     backend: &'static str,
     kernel: borsuk_fma::FusedDot8x12,
+    partition_coordinate_scores: u64,
+    partition_scoring_elapsed_ns: u64,
+    completed_internal_nodes: u64,
 }
 
 impl<D: V37TrainingDataset> V37TreeBuilder<'_, D> {
@@ -1987,7 +2036,10 @@ impl<D: V37TrainingDataset> V37TreeBuilder<'_, D> {
         Ok(score)
     }
 
-    fn build(&mut self, members: Vec<usize>, leaves: u64) -> Result<u32> {
+    fn build<F>(&mut self, members: Vec<usize>, leaves: u64, progress: &mut F) -> Result<u32>
+    where
+        F: FnMut(&V37TrainingProgress) -> Result<()>,
+    {
         let node_id =
             u32::try_from(self.nodes.len()).map_err(|_| invalid("V37 node ordinal overflows"))?;
         self.nodes.push(V37BalancedNode {
@@ -2022,6 +2074,7 @@ impl<D: V37TrainingDataset> V37TreeBuilder<'_, D> {
             u64::from(node_id),
             self.kernel,
         )?;
+        let scoring_started = Instant::now();
         let score_blocks = self.pool.install(|| {
             members
                 .par_chunks(self.block_rows)
@@ -2035,6 +2088,35 @@ impl<D: V37TrainingDataset> V37TreeBuilder<'_, D> {
                         .collect::<Result<Vec<_>>>()
                 })
                 .collect::<Result<Vec<_>>>()
+        })?;
+        let scoring_elapsed_ns = u64::try_from(scoring_started.elapsed().as_nanos())
+            .map_err(|_| invalid("V37 partition scoring duration overflows"))?;
+        let coordinate_scores = u64::try_from(members.len())
+            .ok()
+            .zip(u64::try_from(self.shape.dimensions).ok())
+            .and_then(|(rows, dimensions)| rows.checked_mul(dimensions))
+            .ok_or_else(|| invalid("V37 partition coordinate score count overflows"))?;
+        self.partition_coordinate_scores = self
+            .partition_coordinate_scores
+            .checked_add(coordinate_scores)
+            .ok_or_else(|| invalid("V37 partition coordinate score count overflows"))?;
+        self.partition_scoring_elapsed_ns = self
+            .partition_scoring_elapsed_ns
+            .checked_add(scoring_elapsed_ns)
+            .ok_or_else(|| invalid("V37 partition scoring duration overflows"))?;
+        self.completed_internal_nodes = self
+            .completed_internal_nodes
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 completed internal node count overflows"))?;
+        progress(&V37TrainingProgress {
+            completed_internal_nodes: self.completed_internal_nodes,
+            partition_coordinate_scores: self.partition_coordinate_scores,
+            sequence: self.completed_internal_nodes,
+            total_internal_nodes: self
+                .shape
+                .leaf_count
+                .checked_sub(1)
+                .ok_or_else(|| invalid("V37 internal node count underflows"))?,
         })?;
         let mut scored = score_blocks.into_iter().flatten().collect::<Vec<_>>();
         scored.sort_unstable_by(|left, right| {
@@ -2054,8 +2136,8 @@ impl<D: V37TrainingDataset> V37TreeBuilder<'_, D> {
             .map(|entry| entry.2)
             .collect::<Vec<_>>();
         drop(scored);
-        let left_node = self.build(left_members, quota.left_leaves)?;
-        let right_node = self.build(right_members, quota.right_leaves)?;
+        let left_node = self.build(left_members, quota.left_leaves, progress)?;
+        let right_node = self.build(right_members, quota.right_leaves, progress)?;
         self.nodes[node_id as usize] = V37BalancedNode {
             normal,
             boundary_score_bits: boundary.0.to_bits(),
@@ -2110,6 +2192,53 @@ pub(crate) fn train_v37_ownership_tree_resident_coordinates(
     )
 }
 
+pub(crate) fn train_v37_ownership_tree_resident_coordinates_with_evidence(
+    coordinates: &[f32],
+    shape: V37TrainingShape,
+    seed: u64,
+    worker_count: usize,
+    block_rows: usize,
+) -> Result<(V37BalancedTree, V37TrainingEvidence)> {
+    train_v37_ownership_tree_resident_coordinates_with_progress(
+        coordinates,
+        shape,
+        seed,
+        worker_count,
+        block_rows,
+        |_| Ok(()),
+    )
+}
+
+pub(crate) fn train_v37_ownership_tree_resident_coordinates_with_progress<F>(
+    coordinates: &[f32],
+    shape: V37TrainingShape,
+    seed: u64,
+    worker_count: usize,
+    block_rows: usize,
+    progress: F,
+) -> Result<(V37BalancedTree, V37TrainingEvidence)>
+where
+    F: FnMut(&V37TrainingProgress) -> Result<()>,
+{
+    if shape.dimensions == 0
+        || coordinates.is_empty()
+        || !coordinates.len().is_multiple_of(shape.dimensions)
+    {
+        return Err(invalid("V37 resident training coordinates differ"));
+    }
+    train_v37_ownership_tree_dataset_with_progress(
+        &V37ResidentTrainingDataset {
+            coordinates,
+            dimensions: shape.dimensions,
+        },
+        shape,
+        seed,
+        worker_count,
+        block_rows,
+        progress,
+    )
+}
+
 fn train_v37_ownership_tree_dataset(
     rows: &impl V37TrainingDataset,
     shape: V37TrainingShape,
@@ -2117,6 +2246,39 @@ fn train_v37_ownership_tree_dataset(
     worker_count: usize,
     block_rows: usize,
 ) -> Result<V37BalancedTree> {
+    train_v37_ownership_tree_dataset_with_evidence(rows, shape, seed, worker_count, block_rows)
+        .map(|(tree, _)| tree)
+}
+
+fn train_v37_ownership_tree_dataset_with_evidence(
+    rows: &impl V37TrainingDataset,
+    shape: V37TrainingShape,
+    seed: u64,
+    worker_count: usize,
+    block_rows: usize,
+) -> Result<(V37BalancedTree, V37TrainingEvidence)> {
+    train_v37_ownership_tree_dataset_with_progress(
+        rows,
+        shape,
+        seed,
+        worker_count,
+        block_rows,
+        |_| Ok(()),
+    )
+}
+
+fn train_v37_ownership_tree_dataset_with_progress<F>(
+    rows: &impl V37TrainingDataset,
+    shape: V37TrainingShape,
+    seed: u64,
+    worker_count: usize,
+    block_rows: usize,
+    mut progress: F,
+) -> Result<(V37BalancedTree, V37TrainingEvidence)>
+where
+    F: FnMut(&V37TrainingProgress) -> Result<()>,
+{
+    let training_started = Instant::now();
     if rows.is_empty()
         || shape.dimensions == 0
         || shape.leaf_count < 2
@@ -2167,19 +2329,46 @@ fn train_v37_ownership_tree_dataset(
         assignments: Vec::new(),
         backend,
         kernel,
+        partition_coordinate_scores: 0,
+        partition_scoring_elapsed_ns: 0,
+        completed_internal_nodes: 0,
     };
-    builder.build(members, shape.leaf_count)?;
+    builder.build(members, shape.leaf_count, &mut progress)?;
     builder
         .assignments
         .sort_unstable_by_key(|assignment| assignment.source_ordinal);
-    Ok(V37BalancedTree {
+    let tree = V37BalancedTree {
         dimensions: shape.dimensions,
         seed,
         fma_backend: builder.backend.to_owned(),
         nodes: builder.nodes,
         leaf_populations: builder.leaf_populations,
         assignments: builder.assignments,
-    })
+    };
+    let training_elapsed_ns = u64::try_from(training_started.elapsed().as_nanos())
+        .map_err(|_| invalid("V37 training duration overflows"))?;
+    if builder.partition_scoring_elapsed_ns == 0 {
+        return Err(invalid("V37 partition scoring duration differs"));
+    }
+    let partition_coordinate_scores_per_second = u64::try_from(
+        u128::from(builder.partition_coordinate_scores)
+            .checked_mul(1_000_000_000)
+            .ok_or_else(|| invalid("V37 partition throughput overflows"))?
+            / u128::from(builder.partition_scoring_elapsed_ns),
+    )
+    .map_err(|_| invalid("V37 partition throughput overflows"))?;
+    let evidence = V37TrainingEvidence {
+        dimensions: u64::try_from(shape.dimensions)
+            .map_err(|_| invalid("V37 training dimension count overflows"))?,
+        fma_backend: tree.fma_backend.clone(),
+        leaf_count: shape.leaf_count,
+        partition_coordinate_scores: builder.partition_coordinate_scores,
+        partition_coordinate_scores_per_second,
+        partition_scoring_elapsed_ns: builder.partition_scoring_elapsed_ns,
+        rows: u64::try_from(rows.len()).map_err(|_| invalid("V37 training row count overflows"))?,
+        training_elapsed_ns,
+    };
+    Ok((tree, evidence))
 }
 
 fn validate_v37_tree_geometry(tree: &V37BalancedTree) -> Result<()> {
@@ -4056,20 +4245,81 @@ fn canonical_v37_local_receipt(
     mode: &str,
     inputs: &[V37LocalArtifact],
     artifacts: &[V37ArtifactIdentity],
+    training_evidence: &V37TrainingEvidence,
+    preflight_evidence: Option<&V37PreflightEvidence>,
 ) -> Result<Vec<u8>> {
+    if training_evidence.rows == 0
+        || training_evidence.dimensions == 0
+        || training_evidence.leaf_count < 2
+        || training_evidence.partition_coordinate_scores == 0
+        || training_evidence.partition_scoring_elapsed_ns == 0
+        || training_evidence.training_elapsed_ns < training_evidence.partition_scoring_elapsed_ns
+        || !matches!(
+            training_evidence.fma_backend.as_str(),
+            "aarch64-neon-fma" | "x86-avx-fma"
+        )
+    {
+        return Err(invalid("V37 training evidence differs"));
+    }
+    let expected_scores_per_second = u64::try_from(
+        u128::from(training_evidence.partition_coordinate_scores)
+            .checked_mul(1_000_000_000)
+            .ok_or_else(|| invalid("V37 partition throughput overflows"))?
+            / u128::from(training_evidence.partition_scoring_elapsed_ns),
+    )
+    .map_err(|_| invalid("V37 partition throughput overflows"))?;
+    if training_evidence.partition_coordinate_scores_per_second != expected_scores_per_second {
+        return Err(invalid("V37 partition throughput differs"));
+    }
     let inputs = inputs
         .iter()
         .map(local_artifact_identity)
         .collect::<Vec<_>>();
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "artifacts": artifacts,
         "claim_eligible": false,
         "inputs": inputs,
         "mode": mode,
-        "schema": "borsuk-v37-local-result-v2",
+        "schema": "borsuk-v37-local-result-v3",
+        "training_evidence": training_evidence,
     });
+    if let Some(evidence) = preflight_evidence {
+        value
+            .as_object_mut()
+            .ok_or_else(|| invalid("V37 local result shape differs"))?
+            .insert(
+                "preflight_evidence".to_owned(),
+                serde_json::to_value(evidence).map_err(|error| {
+                    invalid(&format!("V37 preflight serialization failed: {error}"))
+                })?,
+            );
+    }
     let mut bytes = serde_json::to_vec(&canonical_json_value(value))
         .map_err(|error| invalid(&format!("V37 local result serialization failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn canonical_v37_training_progress_bytes(progress: &V37TrainingProgress) -> Result<Vec<u8>> {
+    if progress.sequence == 0
+        || progress.sequence != progress.completed_internal_nodes
+        || progress.completed_internal_nodes > progress.total_internal_nodes
+        || progress.partition_coordinate_scores == 0
+    {
+        return Err(invalid("V37 training progress differs"));
+    }
+    let value = serde_json::json!({
+        "completed_internal_nodes": progress.completed_internal_nodes,
+        "partition_coordinate_scores": progress.partition_coordinate_scores,
+        "schema": "borsuk-v37-training-progress-v1",
+        "sequence": progress.sequence,
+        "total_internal_nodes": progress.total_internal_nodes,
+    });
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+        invalid(&format!(
+            "V37 training progress serialization failed: {error}"
+        ))
+    })?;
     bytes.push(b'\n');
     Ok(bytes)
 }
@@ -4115,18 +4365,153 @@ fn validate_v37_local_build_authority(
     Ok(())
 }
 
+fn v37_preflight_coordinates(dimensions: usize, seed: u64) -> Result<Vec<f32>> {
+    let values = V37_PREFLIGHT_ROWS
+        .checked_mul(dimensions)
+        .ok_or_else(|| invalid("V37 preflight shape overflows"))?;
+    let mut coordinates = Vec::new();
+    coordinates
+        .try_reserve_exact(values)
+        .map_err(|_| invalid("V37 preflight coordinates exceed capacity"))?;
+    for row in 0..V37_PREFLIGHT_ROWS as u64 {
+        for dimension in 0..dimensions as u64 {
+            let mut value = seed
+                ^ row.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                ^ dimension.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            value ^= value >> 31;
+            let mantissa = u32::try_from(value >> 41)
+                .map_err(|_| invalid("V37 preflight mantissa overflows"))?;
+            coordinates.push(f32::from_bits(0x3f80_0000 | mantissa) - 1.5);
+        }
+    }
+    Ok(coordinates)
+}
+
+fn v37_preflight_evidence(
+    coordinates: &[f32],
+    dimensions: usize,
+    tree: &V37BalancedTree,
+    projected_construction_bytes: u64,
+) -> Result<V37PreflightEvidence> {
+    let mut coordinate_sha256 = Sha256::new();
+    for coordinate in coordinates {
+        coordinate_sha256.update(coordinate.to_bits().to_le_bytes());
+    }
+    let comparison_rows = (coordinates.len() / dimensions).min(1_024);
+    let mut comparisons = 0_u64;
+    for node in tree
+        .nodes
+        .iter()
+        .filter(|node| node.posting_ordinal.is_none())
+    {
+        for row in coordinates.chunks_exact(dimensions).take(comparison_rows) {
+            let scalar = score_v37_hyperplane_scalar(row, &node.normal)?;
+            let (fused, backend) = score_v37_hyperplane_fused(row, &node.normal)?;
+            if backend != tree.fma_backend || scalar.to_bits() != fused.to_bits() {
+                return Err(invalid("V37 preflight scalar/fused evidence differs"));
+            }
+            comparisons = comparisons
+                .checked_add(1)
+                .ok_or_else(|| invalid("V37 preflight comparison count overflows"))?;
+        }
+    }
+    Ok(V37PreflightEvidence {
+        coordinate_generator: "splitmix23-f32-v1".to_owned(),
+        coordinate_sha256: format!("{:x}", coordinate_sha256.finalize()),
+        projected_construction_bytes,
+        scalar_fused_comparisons: comparisons,
+        scalar_fused_max_ulp_delta: 0,
+    })
+}
+
 /// Run one capability-separated local V37 fail-fast phase.
 #[doc(hidden)]
 pub fn run_v37_local_request(request: V37LocalRunRequest) -> Result<Vec<u8>> {
-    let authenticated = authenticate_v37_local_request(&request)?;
-    run_v37_authenticated_local_request(&request, &authenticated)
+    run_v37_local_request_with_progress(request, |_| Ok(()))
 }
 
-fn run_v37_authenticated_local_request(
+/// Run one local V37 phase and report canonical native training progress.
+#[doc(hidden)]
+pub fn run_v37_local_request_with_progress<F>(
+    request: V37LocalRunRequest,
+    progress: F,
+) -> Result<Vec<u8>>
+where
+    F: FnMut(&[u8]) -> std::io::Result<()>,
+{
+    let authenticated = authenticate_v37_local_request(&request)?;
+    run_v37_authenticated_local_request(&request, &authenticated, progress)
+}
+
+fn run_v37_authenticated_local_request<F>(
     request: &V37LocalRunRequest,
     authenticated: &V37AuthenticatedLocalInputs,
-) -> Result<Vec<u8>> {
+    mut progress: F,
+) -> Result<Vec<u8>>
+where
+    F: FnMut(&[u8]) -> std::io::Result<()>,
+{
     match request.mode {
+        V37LocalRunMode::PreflightTraining => {
+            let manifest = parse_v37_authority_bytes(&read_v37_authenticated_input(
+                request,
+                authenticated,
+                "v37-authority",
+                16 * 1_048_576,
+            )?)?;
+            let dimensions = usize::try_from(manifest.tree.dimensions)
+                .map_err(|_| invalid("V37 preflight dimensions exceed address space"))?;
+            let backend = v37_fma_backend_name(v37_fused_kernel()?);
+            let construction = project_v37_construction_bytes(&manifest.tree, &manifest.relation)?;
+            if manifest.numeric.worker_count != request.workers
+                || manifest.numeric.fma_backend != backend
+                || dimensions != 192
+                || construction.disposition != V37LayoutDisposition::Admissible
+            {
+                return Err(invalid("V37 preflight authority differs"));
+            }
+            let coordinates = v37_preflight_coordinates(dimensions, manifest.tree.seed)?;
+            let (tree, evidence) = train_v37_ownership_tree_resident_coordinates_with_progress(
+                &coordinates,
+                V37TrainingShape {
+                    dimensions,
+                    leaf_count: V37_PREFLIGHT_LEAVES,
+                    reservoir_rows: usize::try_from(manifest.tree.training_sample_rows)
+                        .map_err(|_| invalid("V37 preflight reservoir exceeds address space"))?
+                        .min(V37_PREFLIGHT_ROWS),
+                    two_means_iterations: usize::try_from(manifest.tree.two_means_iterations)
+                        .map_err(|_| invalid("V37 preflight iterations exceed address space"))?,
+                },
+                manifest.tree.seed,
+                request.workers as usize,
+                65_536,
+                |snapshot| {
+                    let bytes = canonical_v37_training_progress_bytes(snapshot)?;
+                    progress(&bytes).map_err(|source| BorsukError::Io {
+                        path: PathBuf::from("<v37-training-progress>"),
+                        source,
+                    })
+                },
+            )?;
+            let preflight =
+                v37_preflight_evidence(&coordinates, dimensions, &tree, construction.total_bytes)?;
+            if preflight.coordinate_sha256 != manifest.numeric.preflight_coordinate_sha256
+                || evidence.partition_coordinate_scores
+                    != manifest.numeric.preflight_coordinate_scores
+            {
+                return Err(invalid("V37 preflight registered evidence differs"));
+            }
+            validate_v37_local_input_stability(request, authenticated)?;
+            canonical_v37_local_receipt(
+                "preflight-training",
+                &request.inputs,
+                &[],
+                &evidence,
+                Some(&preflight),
+            )
+        }
         V37LocalRunMode::BuildOwnership => {
             let manifest = parse_v37_authority_bytes(&read_v37_authenticated_input(
                 request,
@@ -4187,21 +4572,31 @@ fn run_v37_authenticated_local_request(
                 return Err(invalid("V37 projected corpus replay differs"));
             }
             let layout = project_v37_layout(&manifest.tree)?;
-            let tree = train_v37_ownership_tree_resident_coordinates(
-                projected.projected_coordinates(),
-                V37TrainingShape {
-                    dimensions: usize::try_from(manifest.tree.dimensions)
-                        .map_err(|_| invalid("V37 dimensions exceed address space"))?,
-                    leaf_count: layout.leaf_count,
-                    reservoir_rows: usize::try_from(manifest.tree.training_sample_rows)
-                        .map_err(|_| invalid("V37 reservoir exceeds address space"))?,
-                    two_means_iterations: usize::try_from(manifest.tree.two_means_iterations)
-                        .map_err(|_| invalid("V37 iterations exceed address space"))?,
-                },
-                manifest.tree.seed,
-                request.workers as usize,
-                65_536,
-            )?;
+            let (tree, training_evidence) =
+                train_v37_ownership_tree_resident_coordinates_with_progress(
+                    projected.projected_coordinates(),
+                    V37TrainingShape {
+                        dimensions: usize::try_from(manifest.tree.dimensions)
+                            .map_err(|_| invalid("V37 dimensions exceed address space"))?,
+                        leaf_count: layout.leaf_count,
+                        reservoir_rows: usize::try_from(manifest.tree.training_sample_rows)
+                            .map_err(|_| invalid("V37 reservoir exceeds address space"))?,
+                        two_means_iterations: usize::try_from(manifest.tree.two_means_iterations)
+                            .map_err(|_| {
+                            invalid("V37 iterations exceed address space")
+                        })?,
+                    },
+                    manifest.tree.seed,
+                    request.workers as usize,
+                    65_536,
+                    |snapshot| {
+                        let bytes = canonical_v37_training_progress_bytes(snapshot)?;
+                        progress(&bytes).map_err(|source| BorsukError::Io {
+                            path: PathBuf::from("<v37-training-progress>"),
+                            source,
+                        })
+                    },
+                )?;
             let tree_bytes = encode_v37_tree_arrow(&tree)?;
             let ownership_bytes = encode_v37_ownership_parquet(
                 &tree.assignments,
@@ -4232,6 +4627,8 @@ fn run_v37_authenticated_local_request(
                         &ownership_bytes.bytes,
                     ),
                 ],
+                &training_evidence,
+                None,
             )
         }
         V37LocalRunMode::EvaluateCeiling => {
@@ -4309,9 +4706,10 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V37ArtifactIdentity, V37AuthorityManifest, V37CeilingAuthority, V37DirectSelection,
-        V37DirectSelectionRecord, V37FeatureGroundTruth, V37GroundTruth, V37LayoutDisposition,
-        V37LocalArtifact, V37LocalOutput, V37LocalRunMode, V37LocalRunRequest, V37NumericAuthority,
+        V37_PREFLIGHT_COORDINATE_SCORES, V37_PREFLIGHT_COORDINATE_SHA256, V37ArtifactIdentity,
+        V37AuthorityManifest, V37CeilingAuthority, V37DirectSelection, V37DirectSelectionRecord,
+        V37FeatureGroundTruth, V37GroundTruth, V37LayoutDisposition, V37LocalArtifact,
+        V37LocalOutput, V37LocalRunMode, V37LocalRunRequest, V37NumericAuthority,
         V37OwnershipRecord, V37ProjectionAuthority, V37RelationSpec, V37TrainingRow,
         V37TrainingShape, V37TreeSpec, authenticate_v37_local_request, build_v37_relation_plane,
         canonical_v37_authority_bytes, canonical_v37_bound_ceiling_bytes,
@@ -4328,7 +4726,9 @@ mod tests {
         route_v37_corpus_member, route_v37_primary_leaf, route_v37_query, run_v37_local_request,
         score_v37_hyperplane_fused, score_v37_hyperplane_scalar, select_v37_direct_postings,
         select_v37_node_reservoir, select_v37_relation_postings, train_v37_ownership_tree,
-        train_v37_ownership_tree_resident_coordinates, v37_mass_q24,
+        train_v37_ownership_tree_resident_coordinates,
+        train_v37_ownership_tree_resident_coordinates_with_evidence,
+        train_v37_ownership_tree_resident_coordinates_with_progress, v37_mass_q24,
         validate_v37_local_build_authority, validate_v37_local_input_stability,
         validate_v37_relation_prefixes, validate_v37_specs,
     };
@@ -4439,14 +4839,34 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let request = local_build_request(root.path());
         let outputs = [artifact("ownership-tree", '7'), artifact("ownership", '8')];
-        let bytes =
-            canonical_v37_local_receipt("build-ownership", &request.inputs, &outputs).unwrap();
+        let evidence = super::V37TrainingEvidence {
+            dimensions: 192,
+            fma_backend: "aarch64-neon-fma".to_owned(),
+            leaf_count: 16,
+            partition_coordinate_scores: 76_800,
+            partition_coordinate_scores_per_second: 20_000_000,
+            partition_scoring_elapsed_ns: 3_840_000,
+            rows: 100,
+            training_elapsed_ns: 4_000_000,
+        };
+        let bytes = canonical_v37_local_receipt(
+            "build-ownership",
+            &request.inputs,
+            &outputs,
+            &evidence,
+            None,
+        )
+        .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["schema"], "borsuk-v37-local-result-v2");
+        assert_eq!(value["schema"], "borsuk-v37-local-result-v3");
         assert_eq!(value["inputs"].as_array().unwrap().len(), 6);
         assert_eq!(value["artifacts"].as_array().unwrap().len(), 2);
         assert_eq!(value["inputs"][0]["role"], "v36-authority");
         assert_eq!(value["inputs"][5]["role"], "source");
+        assert_eq!(
+            value["training_evidence"]["partition_coordinate_scores"],
+            76_800
+        );
         assert_eq!(bytes.last(), Some(&b'\n'));
     }
 
@@ -4527,6 +4947,8 @@ mod tests {
             numeric: V37NumericAuthority {
                 fma_backend: "aarch64-neon-fma".to_owned(),
                 lane_width: 8,
+                preflight_coordinate_scores: V37_PREFLIGHT_COORDINATE_SCORES,
+                preflight_coordinate_sha256: V37_PREFLIGHT_COORDINATE_SHA256.to_owned(),
                 worker_count: 16,
             },
             projection: V37ProjectionAuthority {
@@ -4537,7 +4959,7 @@ mod tests {
                 source_dimensions: 768,
             },
             relation: relation_spec(),
-            schema: "borsuk-v37-relation-authority-v2".to_owned(),
+            schema: "borsuk-v37-relation-authority-v3".to_owned(),
             source: artifact("source-corpus", '1'),
             tree: ownership_spec(1_000_000),
         }
@@ -4752,6 +5174,20 @@ mod tests {
             V37AuthorityManifest {
                 numeric: V37NumericAuthority {
                     worker_count: 0,
+                    ..manifest.numeric.clone()
+                },
+                ..manifest.clone()
+            },
+            V37AuthorityManifest {
+                numeric: V37NumericAuthority {
+                    preflight_coordinate_scores: V37_PREFLIGHT_COORDINATE_SCORES - 1,
+                    ..manifest.numeric.clone()
+                },
+                ..manifest.clone()
+            },
+            V37AuthorityManifest {
+                numeric: V37NumericAuthority {
+                    preflight_coordinate_sha256: "0".repeat(64),
                     ..manifest.numeric.clone()
                 },
                 ..manifest.clone()
@@ -5006,6 +5442,163 @@ mod tests {
         let borrowed =
             train_v37_ownership_tree_resident_coordinates(&flat, shape, 37, 4, 5).unwrap();
         assert_eq!(first, borrowed);
+    }
+
+    #[test]
+    fn v37_relation_preflight_measures_the_production_partition_scorer() {
+        let rows = training_rows(100, 192);
+        let coordinates = rows
+            .iter()
+            .flat_map(|row| row.vector.iter().copied())
+            .collect::<Vec<_>>();
+        let (tree, evidence) = train_v37_ownership_tree_resident_coordinates_with_evidence(
+            &coordinates,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 16,
+                reservoir_rows: 32,
+                two_means_iterations: 8,
+            },
+            37,
+            2,
+            32,
+        )
+        .unwrap();
+
+        assert_eq!(evidence.rows, 100);
+        assert_eq!(evidence.dimensions, 192);
+        assert_eq!(evidence.leaf_count, 16);
+        assert_eq!(evidence.partition_coordinate_scores, 76_800);
+        assert!(evidence.partition_scoring_elapsed_ns > 0);
+        assert!(evidence.training_elapsed_ns >= evidence.partition_scoring_elapsed_ns);
+        assert_eq!(evidence.fma_backend, tree.fma_backend);
+        assert_eq!(
+            evidence.partition_coordinate_scores_per_second,
+            u64::try_from(
+                u128::from(evidence.partition_coordinate_scores) * 1_000_000_000
+                    / u128::from(evidence.partition_scoring_elapsed_ns)
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn v37_relation_preflight_progress_is_native_monotone_and_exact() {
+        let rows = training_rows(100, 192);
+        let coordinates = rows
+            .iter()
+            .flat_map(|row| row.vector.iter().copied())
+            .collect::<Vec<_>>();
+        let mut progress = Vec::new();
+        let (_, evidence) = train_v37_ownership_tree_resident_coordinates_with_progress(
+            &coordinates,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 16,
+                reservoir_rows: 32,
+                two_means_iterations: 8,
+            },
+            37,
+            2,
+            32,
+            |snapshot| {
+                progress.push(snapshot.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(progress.len(), 15);
+        assert!(progress.windows(2).all(|pair| {
+            pair[0].sequence + 1 == pair[1].sequence
+                && pair[0].completed_internal_nodes + 1 == pair[1].completed_internal_nodes
+                && pair[0].partition_coordinate_scores < pair[1].partition_coordinate_scores
+        }));
+        let final_progress = progress.last().unwrap();
+        assert_eq!(final_progress.sequence, 15);
+        assert_eq!(final_progress.completed_internal_nodes, 15);
+        assert_eq!(
+            final_progress.partition_coordinate_scores,
+            evidence.partition_coordinate_scores
+        );
+        assert_eq!(final_progress.total_internal_nodes, 15);
+    }
+
+    #[test]
+    fn v37_relation_preflight_progress_is_canonical_and_runner_visible() {
+        let progress = super::V37TrainingProgress {
+            completed_internal_nodes: 7,
+            partition_coordinate_scores: 12_345_600,
+            sequence: 7,
+            total_internal_nodes: 15,
+        };
+        let bytes = super::canonical_v37_training_progress_bytes(&progress).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v37-training-progress-v1");
+        assert_eq!(value["sequence"], 7);
+        assert_eq!(value["completed_internal_nodes"], 7);
+        assert_eq!(value["total_internal_nodes"], 15);
+        assert_eq!(value["partition_coordinate_scores"], 12_345_600);
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let _runner =
+            super::run_v37_local_request_with_progress::<fn(&[u8]) -> std::io::Result<()>>;
+    }
+
+    #[test]
+    fn v37_relation_preflight_local_run_is_exactly_bounded_and_source_free() {
+        let root = tempfile::tempdir().unwrap();
+        let mut manifest = authority();
+        manifest.numeric.worker_count = 2;
+        manifest.numeric.fma_backend =
+            super::v37_fma_backend_name(super::v37_fused_kernel().unwrap()).to_owned();
+        let manifest_bytes = canonical_v37_authority_bytes(&manifest).unwrap();
+        let request = V37LocalRunRequest::try_new(
+            V37LocalRunMode::PreflightTraining,
+            vec![local_artifact_bytes(
+                root.path(),
+                "v37-authority",
+                &manifest_bytes,
+            )],
+            Vec::new(),
+            2,
+        )
+        .unwrap();
+        let mut progress = Vec::new();
+        let bytes = super::run_v37_local_request_with_progress(request, |snapshot| {
+            progress.push(snapshot.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v37-local-result-v3");
+        assert_eq!(value["mode"], "preflight-training");
+        assert_eq!(value["inputs"].as_array().unwrap().len(), 1);
+        assert!(value["artifacts"].as_array().unwrap().is_empty());
+        assert_eq!(value["training_evidence"]["rows"], 65_536);
+        assert_eq!(value["training_evidence"]["dimensions"], 192);
+        assert_eq!(value["training_evidence"]["leaf_count"], 16);
+        assert_eq!(
+            value["preflight_evidence"]["coordinate_generator"],
+            "splitmix23-f32-v1"
+        );
+        assert_eq!(
+            value["preflight_evidence"]["projected_construction_bytes"],
+            2_137_615_120_u64
+        );
+        assert_eq!(
+            value["preflight_evidence"]["scalar_fused_comparisons"],
+            15_360
+        );
+        assert_eq!(value["preflight_evidence"]["scalar_fused_max_ulp_delta"], 0);
+        assert_eq!(
+            value["preflight_evidence"]["coordinate_sha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(progress.len(), 15);
     }
 
     #[test]

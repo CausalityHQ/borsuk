@@ -243,6 +243,31 @@ required to admit the full build. All 100M time and I/O projections remain
 provisional until an external-partition preflight passes; arithmetic alone is
 not qualification.
 
+The reduced preflight is a first-class, source-free phase rather than a flag on
+the 1M builder. Its sole input is the exact V37 authority and it has no output
+path, corpus, query, truth, network, or writable-filesystem capability. It
+generates 65,536 f32[192] rows with `splitmix23-f32-v1`, requires coordinate
+SHA-256 `62ebfdbb42fa5e6212437932ebe682970389b15fa8cae1d6e2aa6d8610a41608`,
+trains the production 16-leaf partitioner, and accounts exactly 50,331,648
+coordinate scores. It also requires 15,360 scalar/fused comparisons with zero
+ULP drift and recomputes the registered full-build projection of 2,137,615,120
+bytes. The construction-authority schema is
+`borsuk-v37-relation-authority-v3`; older experimental schemas are rejected.
+
+A `build-ownership` controller may launch only after reading one canonical
+successful preflight `ATTEMPT_TERMINAL.json` and authenticating its manifest
+and result by exact URI, SHA-256, and encoded length. Admission cross-binds the
+same source commit/archive, binary, worker count, and V37 authority input to
+the build manifest. Every phase manifest is authenticated and matched to the
+plan before EC2 launch, and the guest repeats that match before downloading
+any scientific input. Every JSON authority read, including terminal polling,
+is length-bounded before its body is consumed. Python orchestration and native
+science share one deterministic transient systemd slice with an aggregate
+3 GiB/no-swap limit; the monitor reads that shared slice rather than only the
+native child service. Success and failure share the single create-only
+terminal key, with the terminal status providing the disposition, so competing
+status objects cannot race.
+
 Writes route through two shallow trees and append one row to a bounded delta;
 they do not calculate graph neighbours or update covariance matrices. Release
 qualification must later measure base-plus-delta throughput, overflow GETs,

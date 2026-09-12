@@ -174,6 +174,21 @@
 **Produces:** phase-separated construction, query-selection, and truth-evaluation workers with immutable S3 receipts.
 
 - [ ] Stage Python REDs for exact causality profile, Spot-only launch, registered AMI/type/region, IAM profile, explicit subnet, source/binary/input hashes, no prefix listing as authority, one process group, 3 GiB RSS, PSI full 0.75, zero swap growth, 600-second science/720-second wrapper/120-second progress caps, 20,000,000-coordinate/s preflight, terminal preservation, termination, and named scratch cleanup.
+- [ ] Make `preflight-training` source-free and output-free. Require the exact
+      65,536-row f32[192] generator digest, 50,331,648 production partition
+      scores, 15,360 zero-ULP scalar/fused comparisons, and the exact
+      2,137,615,120-byte full-build projection in its canonical result.
+- [ ] Use one create-only `ATTEMPT_TERMINAL.json` key for both terminal
+      dispositions. Before any `build-ownership` EC2 call, authenticate a
+      successful preflight terminal plus its bounded exact manifest and result,
+      cross-binding source commit/archive, binary, worker count, and V37
+      authority to the build manifest. Reject missing or mismatched predecessor
+      evidence before launch.
+- [ ] Authenticate and phase-bind every manifest before EC2 launch and again
+      before guest input downloads. Put Python orchestration and native science
+      in one deterministic transient systemd slice with an aggregate 3 GiB and
+      zero-swap boundary, monitor that slice, and reject oversized terminal
+      objects from metadata before reading their bodies.
 - [ ] Require construction phases to reject query/GT inputs, routing phases to reject GT, and truth phases to reject corpus inputs. `build-relations` must authenticate matching `ceiling-passed` and `direct-failed` predecessors bound to the same source, projection, tree, and ownership identities.
 - [ ] Run only the affected unittest classes under pinned dependencies; implement the minimal launcher/controller; rerun GREEN.
 - [ ] Run Ruff, py_compile, docs validator, and diff-check; commit.
