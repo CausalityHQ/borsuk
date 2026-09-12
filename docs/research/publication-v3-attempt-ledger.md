@@ -4638,3 +4638,63 @@ two-owner arm is not run. The next one-million-row falsifier must replace
 centroid ownership with a query-independent learned relation between bounded
 router leaves and pages. Physical page reads, transport qualification,
 holdout, 10M, 100M, and claim-eligible comparison remain fenced.
+
+### V37 one-million-row balanced-hyperplane ownership ceiling
+
+V37 tested the next query-independent ownership representation on the same
+frozen ReLAION cohort A: 1,000,000 f32[768] corpus vectors, 1,000 development
+queries, and exact binary64 no-FMA GT@100. The construction used the registered
+SRHT-192 projection and a balanced hyperplane tree with 8,192 target primary
+rows per leaf. It did not open query vectors or ground truth. The later ceiling
+process received only the sealed construction authority, tree, ownership map,
+and development GT; it had no corpus or query-vector capability.
+
+The source-free preflight at source
+`53342ce869248c02eac00b968721ec739b1cc539` completed on causality Spot
+`c7g.8xlarge` instance `i-0c95d81fac7900317` in `eu-central-1c`. It measured
+483,597,631 partition coordinate scores/s against the registered 20,000,000/s
+gate, 104,077,532 ns of partition scoring, and 602,244,036 ns of total
+training. All 15,360 scalar/fused comparisons matched at zero ULP, the frozen
+coordinate digest matched, and the full construction projection was
+2,137,615,120 bytes. The process-group monitor observed 47,714,304 bytes peak
+RSS, zero swap, and zero peak memory PSI. The 1,036-byte result is SHA256
+`5270eb997e24fb1c156522860b5d86faac449488ed2867906290d2ace92cbc12`;
+the canonical terminal is SHA256
+`39e9e68f502a705d56d3a5d09bfa42a6e44f0e6879b77563df9e29606ff0b644`.
+
+The admitted 1M construction completed on instance
+`i-0983a34ce680d57a1`. Native training took 7,885,851,182 ns, including
+1,883,012,814 ns for 1,336,195,200 partition coordinate scores at
+709,604,942 scores/s. It produced 123 leaves, a 209,466-byte tree with SHA256
+`ac05773d9c8b5f3e85a9cd0ca30777d0c3917651b9811c051339107169d2096c`,
+and an 18,978,493-byte ownership map with SHA256
+`fae9ad956cb727d41507884bdba6f4acb2db371e11a01ec2e0b573d03ea6d67a`.
+The wrapper took 103.126 seconds and observed 2,716,549,120 bytes peak RSS,
+zero swap, and zero peak memory PSI. Its 3,132-byte result is SHA256
+`dd0e8b77daee274626ae822cd4f7ce88ec9e3e012b8d1e965e7ec8fe48076f00`;
+the terminal is SHA256
+`5b93da3f1bc7963bbafa3d2abd595ae602c5eca32a9507cc7d3c34cfaf6989e0`.
+
+The exact unique-owner K=14 ceiling at source
+`7444895b1dc3212eedd73a43edbc9240784508a7` measured 980,290 ppm aggregate
+GT@100 containment and 700,000 ppm minimum-query containment, versus the
+registered 998,000/800,000-ppm gates. Empirical p1, p10, median, and maximum
+query recalls were 810,000, 930,000, 1,000,000, and 1,000,000 ppm. The exact
+cover used 10.178 postings/query on average, with a range of 1 through the
+hard cap of 14. The 109,134-byte bound ceiling/result is SHA256
+`40e28c2ee874c92f9eb95a518ad475ad34a0fb5456ae7593b916868257dbd602`;
+the terminal is SHA256
+`c2178a05c2c65c81057714bbfe372dcf76c0bc1d9c06d173770926974f62af79`.
+The two-second wrapper observed 163,364,864 bytes peak RSS, zero swap, and
+zero peak memory PSI on instance `i-012a3abf07a8d4cc1`.
+
+Disposition: `layout-rejected`. Relative to the prior V36 unpruned
+three-original-centroid K=14 ceiling, V37 raises the worst query from 640,000
+to 700,000 ppm but lowers aggregate containment from 995,200 to 980,290 ppm.
+It therefore does not justify direct routing or relation construction. All
+three successful Spot instances are confirmed terminated. Validation,
+sealed holdout, physical page reads, transport qualification, 10M, 100M, and
+claim-eligible comparison remain fenced. The next 1M-only falsifier must alter
+the query-independent row-to-page relation specifically enough to close the
+remaining 17,710-ppm aggregate and 100,000-ppm worst-query gaps without
+loosening the registered quality gates.
