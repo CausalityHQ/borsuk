@@ -221,6 +221,7 @@ mod v36_prefix_dataset;
     reason = "V37 diagnostic phases are wired incrementally by the committed plan"
 )]
 mod v37_relation_router;
+mod v38_boundary_spill;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -505,6 +506,10 @@ pub use v36_prefix_dataset::{
 pub use v37_relation_router::{
     V37LocalArtifact, V37LocalOutput, V37LocalRunMode, V37LocalRunRequest, run_v37_local_request,
     run_v37_local_request_with_progress,
+};
+#[doc(hidden)]
+pub use v38_boundary_spill::{
+    validate_v38_ceiling_authority_bytes, validate_v38_construction_authority_bytes,
 };
 #[allow(
     dead_code,
