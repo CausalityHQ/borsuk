@@ -1,13 +1,37 @@
 //! Balanced hyperplane layout and relation-routing qualification for V37.
 
+use std::{
+    io::Cursor,
+    sync::{Arc, OnceLock},
+};
+
+use arrow_array::{
+    Array, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array, UInt64Array,
+};
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
+use bytes::Bytes;
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::WriterProperties,
+};
+use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
+
 use crate::{BorsukError, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const V37_NODE_METADATA_BYTES: u64 = 32;
 const V37_RELATION_RECORD_BYTES: u64 = 8;
 const V37_MEMORY_LIMIT_BYTES: u64 = 3 * 1_073_741_824;
 const V37_MAXIMUM_RELATION_NODE_VISITS: u64 = 1_024;
 const V37_SELECTED_POSTINGS: u64 = 14;
+static V37_FMA_KERNEL: OnceLock<Option<borsuk_fma::FusedDot8x12>> = OnceLock::new();
 
 /// Query-independent authority for one balanced hyperplane tree.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -92,6 +116,77 @@ pub(crate) struct V37WorkProjection {
     pub(crate) maximum_relation_node_visits: u64,
     pub(crate) maximum_relation_records: u64,
     pub(crate) selected_postings: u64,
+}
+
+/// Reduced-shape tree-training parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V37TrainingShape {
+    pub(crate) dimensions: usize,
+    pub(crate) leaf_count: u64,
+    pub(crate) reservoir_rows: usize,
+    pub(crate) two_means_iterations: usize,
+}
+
+/// One authenticated projected row used by the in-memory preflight trainer.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V37TrainingRow {
+    pub(crate) source_ordinal: u64,
+    pub(crate) vector: Vec<f32>,
+}
+
+/// One deterministic source-to-posting assignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V37OwnershipAssignment {
+    pub(crate) source_ordinal: u64,
+    pub(crate) posting_ordinal: u32,
+}
+
+/// One preorder node. Leaves carry a posting; internal nodes carry a plane.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V37BalancedNode {
+    pub(crate) normal: Vec<f32>,
+    pub(crate) boundary_score_bits: u32,
+    pub(crate) boundary_source_ordinal: u64,
+    pub(crate) left_node: Option<u32>,
+    pub(crate) right_node: Option<u32>,
+    pub(crate) posting_ordinal: Option<u32>,
+    pub(crate) population: u64,
+}
+
+/// Deterministic reduced-shape ownership tree and its single-owner table.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V37BalancedTree {
+    pub(crate) dimensions: usize,
+    pub(crate) seed: u64,
+    pub(crate) fma_backend: String,
+    pub(crate) nodes: Vec<V37BalancedNode>,
+    pub(crate) leaf_populations: Vec<u64>,
+    pub(crate) assignments: Vec<V37OwnershipAssignment>,
+}
+
+/// Authenticated cross-language Arrow IPC bytes for one V37 tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37EncodedTree {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) sha256: String,
+    pub(crate) blake3: String,
+}
+
+/// Authenticated cross-language Parquet bytes for source ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37EncodedOwnership {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) sha256: String,
+    pub(crate) blake3: String,
+}
+
+/// Query-side equality semantics at one hyperplane boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V37QueryBranch {
+    pub(crate) primary_is_left: bool,
+    pub(crate) queues_sibling_zero_margin: bool,
 }
 
 /// Backend-bound numeric authority persisted with every V37 manifest.
@@ -457,13 +552,1171 @@ pub(crate) fn project_v37_construction_bytes(
     })
 }
 
+fn validate_score_inputs(row: &[f32], normal: &[f32]) -> Result<()> {
+    if row.is_empty()
+        || row.len() != normal.len()
+        || row.iter().chain(normal).any(|value| !value.is_finite())
+    {
+        return Err(invalid("V37 hyperplane score input differs"));
+    }
+    Ok(())
+}
+
+fn scalar_dot_8x12(left: &[f32; 96], right: &[f32; 96]) -> f32 {
+    let mut lanes = [0.0_f32; 8];
+    for (lane, accumulator) in lanes.iter_mut().enumerate() {
+        for step in 0..12 {
+            let dimension = lane * 12 + step;
+            *accumulator = left[dimension].mul_add(right[dimension], *accumulator);
+        }
+    }
+    lanes.into_iter().fold(0.0_f32, |sum, value| sum + value)
+}
+
+pub(crate) fn score_v37_hyperplane_scalar(row: &[f32], normal: &[f32]) -> Result<f32> {
+    validate_score_inputs(row, normal)?;
+    let mut score = 0.0_f32;
+    let mut chunks = row.chunks_exact(96).zip(normal.chunks_exact(96));
+    for (row_chunk, normal_chunk) in &mut chunks {
+        let row_block: &[f32; 96] = row_chunk
+            .try_into()
+            .map_err(|_| invalid("V37 scalar score block differs"))?;
+        let normal_block: &[f32; 96] = normal_chunk
+            .try_into()
+            .map_err(|_| invalid("V37 scalar score block differs"))?;
+        score += scalar_dot_8x12(row_block, normal_block);
+    }
+    let consumed = row.len() / 96 * 96;
+    for dimension in consumed..row.len() {
+        score = row[dimension].mul_add(normal[dimension], score);
+    }
+    if !score.is_finite() {
+        return Err(invalid("V37 hyperplane score is non-finite"));
+    }
+    Ok(if score == 0.0 { 0.0 } else { score })
+}
+
+pub(crate) fn score_v37_hyperplane_fused(
+    row: &[f32],
+    normal: &[f32],
+) -> Result<(f32, &'static str)> {
+    let kernel = v37_fused_kernel()?;
+    score_v37_hyperplane_with_kernel(row, normal, kernel)
+}
+
+fn v37_fused_kernel() -> Result<borsuk_fma::FusedDot8x12> {
+    V37_FMA_KERNEL
+        .get_or_init(|| borsuk_fma::FusedDot8x12::detect().ok())
+        .as_ref()
+        .copied()
+        .ok_or_else(|| invalid("V37 fused SIMD backend is unavailable"))
+}
+
+fn v37_fma_backend_name(kernel: borsuk_fma::FusedDot8x12) -> &'static str {
+    match kernel.backend() {
+        borsuk_fma::FmaBackend::Aarch64NeonFma => "aarch64-neon-fma",
+        borsuk_fma::FmaBackend::X86AvxFma => "x86-avx-fma",
+    }
+}
+
+fn score_v37_hyperplane_with_kernel(
+    row: &[f32],
+    normal: &[f32],
+    kernel: borsuk_fma::FusedDot8x12,
+) -> Result<(f32, &'static str)> {
+    validate_score_inputs(row, normal)?;
+    let complete = row.len() / 96;
+    let mut score = 0.0_f32;
+    for block in 0..complete {
+        let start = block * 96;
+        let row_block: &[f32; 96] = row[start..start + 96]
+            .try_into()
+            .map_err(|_| invalid("V37 fused score block differs"))?;
+        let normal_block: &[f32; 96] = normal[start..start + 96]
+            .try_into()
+            .map_err(|_| invalid("V37 fused score block differs"))?;
+        score += kernel.dot(row_block, normal_block);
+    }
+    for dimension in complete * 96..row.len() {
+        score = row[dimension].mul_add(normal[dimension], score);
+    }
+    if !score.is_finite() {
+        return Err(invalid("V37 hyperplane score is non-finite"));
+    }
+    Ok((
+        if score == 0.0 { 0.0 } else { score },
+        v37_fma_backend_name(kernel),
+    ))
+}
+
+pub(crate) fn select_v37_node_reservoir(
+    source_ordinals: &[u64],
+    seed: u64,
+    node_id: u64,
+    maximum_rows: usize,
+) -> Result<Vec<u64>> {
+    if source_ordinals.is_empty() || maximum_rows == 0 || seed == 0 {
+        return Err(invalid("V37 node reservoir authority differs"));
+    }
+    let mut previous = None;
+    let mut unique = source_ordinals.to_vec();
+    unique.sort_unstable();
+    for ordinal in &unique {
+        if previous == Some(*ordinal) {
+            return Err(invalid("V37 source ordinals are not unique"));
+        }
+        previous = Some(*ordinal);
+    }
+    let mut ranked = unique
+        .into_iter()
+        .map(|source_ordinal| {
+            let mut digest = Sha256::new();
+            digest.update(b"borsuk-v37-node-reservoir-v1\n");
+            digest.update(seed.to_le_bytes());
+            digest.update(node_id.to_le_bytes());
+            digest.update(source_ordinal.to_le_bytes());
+            let key: [u8; 32] = digest.finalize().into();
+            (key, source_ordinal)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_unstable();
+    ranked.truncate(maximum_rows.min(ranked.len()));
+    Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
+}
+
+pub(crate) fn route_v37_corpus_member(
+    score: f32,
+    source_ordinal: u64,
+    boundary_score: f32,
+    boundary_source_ordinal: u64,
+) -> Result<bool> {
+    if !score.is_finite() || !boundary_score.is_finite() {
+        return Err(invalid("V37 corpus replay score is non-finite"));
+    }
+    Ok(score
+        .total_cmp(&boundary_score)
+        .then_with(|| source_ordinal.cmp(&boundary_source_ordinal))
+        .is_le())
+}
+
+pub(crate) fn route_v37_query(score: f32, boundary_score: f32) -> Result<V37QueryBranch> {
+    if !score.is_finite() || !boundary_score.is_finite() {
+        return Err(invalid("V37 query score is non-finite"));
+    }
+    let order = score.total_cmp(&boundary_score);
+    Ok(V37QueryBranch {
+        primary_is_left: order.is_le(),
+        queues_sibling_zero_margin: order.is_eq(),
+    })
+}
+
+pub(crate) fn route_v37_primary_leaf(
+    tree: &V37BalancedTree,
+    vector: &[f32],
+    source_ordinal: u64,
+    expected_backend: &str,
+) -> Result<u32> {
+    if vector.len() != tree.dimensions
+        || vector.iter().any(|value| !value.is_finite())
+        || expected_backend != tree.fma_backend
+    {
+        return Err(invalid("V37 replay authority differs"));
+    }
+    let kernel = v37_fused_kernel()?;
+    if v37_fma_backend_name(kernel) != expected_backend {
+        return Err(invalid("V37 replay backend differs"));
+    }
+    let mut node_index = 0_usize;
+    loop {
+        let node = tree
+            .nodes
+            .get(node_index)
+            .ok_or_else(|| invalid("V37 replay node differs"))?;
+        if let Some(posting) = node.posting_ordinal {
+            return Ok(posting);
+        }
+        let (score, _) = score_v37_hyperplane_with_kernel(vector, &node.normal, kernel)?;
+        let is_left = route_v37_corpus_member(
+            score,
+            source_ordinal,
+            f32::from_bits(node.boundary_score_bits),
+            node.boundary_source_ordinal,
+        )?;
+        node_index = if is_left {
+            node.left_node
+        } else {
+            node.right_node
+        }
+        .ok_or_else(|| invalid("V37 replay child differs"))? as usize;
+    }
+}
+
+fn squared_distance_with_kernel(
+    left: &[f32],
+    right: &[f32],
+    kernel: borsuk_fma::FusedDot8x12,
+) -> Result<(f32, &'static str)> {
+    validate_score_inputs(left, right)?;
+    let complete = left.len() / 96;
+    let mut distance = 0.0_f32;
+    for block in 0..complete {
+        let start = block * 96;
+        let mut difference = [0.0_f32; 96];
+        for (output, (left, right)) in difference.iter_mut().zip(
+            left[start..start + 96]
+                .iter()
+                .zip(&right[start..start + 96]),
+        ) {
+            *output = left - right;
+        }
+        distance += kernel.dot(&difference, &difference);
+    }
+    for dimension in complete * 96..left.len() {
+        let difference = left[dimension] - right[dimension];
+        distance = difference.mul_add(difference, distance);
+    }
+    if !distance.is_finite() {
+        return Err(invalid("V37 squared distance is non-finite"));
+    }
+    Ok((
+        if distance == 0.0 { 0.0 } else { distance },
+        v37_fma_backend_name(kernel),
+    ))
+}
+
+fn mean_vector(rows: &[&V37TrainingRow], dimensions: usize) -> Result<Vec<f32>> {
+    if rows.is_empty() {
+        return Err(invalid("V37 two-means partition is empty"));
+    }
+    let mut ordered = rows.to_vec();
+    ordered.sort_unstable_by_key(|row| row.source_ordinal);
+    let mut sums = vec![0.0_f64; dimensions];
+    for row in &ordered {
+        for (sum, value) in sums.iter_mut().zip(&row.vector) {
+            *sum += f64::from(*value);
+        }
+    }
+    let divisor = ordered.len() as f64;
+    let mean = sums
+        .into_iter()
+        .map(|sum| (sum / divisor) as f32)
+        .collect::<Vec<_>>();
+    if mean.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V37 two-means mean is non-finite"));
+    }
+    Ok(mean)
+}
+
+fn repair_v37_empty_partition_with_kernel(
+    rows: &[V37TrainingRow],
+    zero_rows: &mut Vec<usize>,
+    one_rows: &mut Vec<usize>,
+    kernel: borsuk_fma::FusedDot8x12,
+) -> Result<()> {
+    let (empty, populated) = if zero_rows.is_empty() && one_rows.len() >= 2 {
+        (zero_rows, one_rows)
+    } else if one_rows.is_empty() && zero_rows.len() >= 2 {
+        (one_rows, zero_rows)
+    } else {
+        return Err(invalid("V37 empty-label repair authority differs"));
+    };
+    let populated_refs = populated
+        .iter()
+        .map(|index| &rows[*index])
+        .collect::<Vec<_>>();
+    let mean = mean_vector(&populated_refs, rows[populated[0]].vector.len())?;
+    let donor_position = populated
+        .iter()
+        .enumerate()
+        .map(|(position, index)| {
+            squared_distance_with_kernel(&rows[*index].vector, &mean, kernel).map(
+                |(distance, _)| {
+                    (
+                        distance,
+                        std::cmp::Reverse(rows[*index].source_ordinal),
+                        position,
+                    )
+                },
+            )
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .max_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        })
+        .ok_or_else(|| invalid("V37 empty-label donor is absent"))?
+        .2;
+    empty.push(populated.remove(donor_position));
+    Ok(())
+}
+
+fn repair_v37_empty_partition(
+    rows: &[V37TrainingRow],
+    zero_rows: &mut Vec<usize>,
+    one_rows: &mut Vec<usize>,
+) -> Result<()> {
+    let kernel = v37_fused_kernel()?;
+    repair_v37_empty_partition_with_kernel(rows, zero_rows, one_rows, kernel)
+}
+
+fn deployed_hyperplane(
+    members: &[usize],
+    rows: &[V37TrainingRow],
+    dimensions: usize,
+    seed: u64,
+    node_id: u64,
+    reservoir_rows: usize,
+    iterations: usize,
+    kernel: borsuk_fma::FusedDot8x12,
+) -> Result<Vec<f32>> {
+    let ordinals = members
+        .iter()
+        .map(|index| rows[*index].source_ordinal)
+        .collect::<Vec<_>>();
+    let selected = select_v37_node_reservoir(&ordinals, seed, node_id, reservoir_rows)?;
+    let mut sample = selected
+        .iter()
+        .map(|ordinal| {
+            rows.binary_search_by_key(ordinal, |row| row.source_ordinal)
+                .map_err(|_| invalid("V37 reservoir row is absent"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    sample.sort_unstable_by_key(|index| rows[*index].source_ordinal);
+    if sample.len() < 2 {
+        return Err(invalid("V37 node reservoir cannot seed two means"));
+    }
+    let mut zero = rows[sample[0]].vector.clone();
+    let mut farthest = None;
+    for index in sample.iter().skip(1) {
+        let row = &rows[*index];
+        let (distance, _) = squared_distance_with_kernel(&zero, &row.vector, kernel)?;
+        let candidate = (distance, row.source_ordinal, row.vector.clone());
+        if farthest
+            .as_ref()
+            .is_none_or(|current: &(f32, u64, Vec<f32>)| {
+                candidate
+                    .0
+                    .total_cmp(&current.0)
+                    .then_with(|| current.1.cmp(&candidate.1))
+                    .is_gt()
+            })
+        {
+            farthest = Some(candidate);
+        }
+    }
+    let (distance, _, mut one) = farthest.ok_or_else(|| invalid("V37 seed is absent"))?;
+    if distance <= 0.0 {
+        return Err(invalid("V37 node geometry is degenerate"));
+    }
+    for _ in 0..iterations {
+        let mut zero_rows = Vec::new();
+        let mut one_rows = Vec::new();
+        for index in &sample {
+            let row = &rows[*index];
+            let zero_distance = squared_distance_with_kernel(&row.vector, &zero, kernel)?.0;
+            let one_distance = squared_distance_with_kernel(&row.vector, &one, kernel)?.0;
+            if zero_distance.total_cmp(&one_distance).is_gt() {
+                one_rows.push(*index);
+            } else {
+                zero_rows.push(*index);
+            }
+        }
+        if zero_rows.is_empty() || one_rows.is_empty() {
+            repair_v37_empty_partition_with_kernel(rows, &mut zero_rows, &mut one_rows, kernel)?;
+        }
+        let zero_refs = zero_rows
+            .iter()
+            .map(|index| &rows[*index])
+            .collect::<Vec<_>>();
+        let one_refs = one_rows
+            .iter()
+            .map(|index| &rows[*index])
+            .collect::<Vec<_>>();
+        zero = mean_vector(&zero_refs, dimensions)?;
+        one = mean_vector(&one_refs, dimensions)?;
+    }
+    let mut normal = one
+        .iter()
+        .zip(&zero)
+        .map(|(one, zero)| one - zero)
+        .collect::<Vec<_>>();
+    let squared_norm = normal.iter().try_fold(0.0_f64, |sum, value| {
+        if !value.is_finite() {
+            None
+        } else {
+            Some(sum + f64::from(*value) * f64::from(*value))
+        }
+    });
+    let squared_norm = squared_norm
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| invalid("V37 hyperplane normal is degenerate"))?;
+    let inverse_norm = squared_norm.sqrt().recip() as f32;
+    for value in &mut normal {
+        *value *= inverse_norm;
+        if *value == 0.0 {
+            *value = 0.0;
+        }
+    }
+    Ok(normal)
+}
+
+struct V37TreeBuilder<'a> {
+    rows: &'a [V37TrainingRow],
+    pool: &'a ThreadPool,
+    block_rows: usize,
+    shape: V37TrainingShape,
+    seed: u64,
+    nodes: Vec<V37BalancedNode>,
+    leaf_populations: Vec<u64>,
+    assignments: Vec<V37OwnershipAssignment>,
+    backend: &'static str,
+    kernel: borsuk_fma::FusedDot8x12,
+}
+
+impl V37TreeBuilder<'_> {
+    fn score(&self, row: &[f32], normal: &[f32]) -> Result<f32> {
+        let (score, backend) = score_v37_hyperplane_with_kernel(row, normal, self.kernel)?;
+        if self.backend != backend {
+            return Err(invalid("V37 fused backend changed during construction"));
+        }
+        Ok(score)
+    }
+
+    fn build(&mut self, members: Vec<usize>, leaves: u64) -> Result<u32> {
+        let node_id =
+            u32::try_from(self.nodes.len()).map_err(|_| invalid("V37 node ordinal overflows"))?;
+        self.nodes.push(V37BalancedNode {
+            normal: Vec::new(),
+            boundary_score_bits: 0.0_f32.to_bits(),
+            boundary_source_ordinal: 0,
+            left_node: None,
+            right_node: None,
+            posting_ordinal: None,
+            population: members.len() as u64,
+        });
+        if leaves == 1 {
+            let posting_ordinal = u32::try_from(self.leaf_populations.len())
+                .map_err(|_| invalid("V37 posting ordinal overflows"))?;
+            self.leaf_populations.push(members.len() as u64);
+            for index in members {
+                self.assignments.push(V37OwnershipAssignment {
+                    source_ordinal: self.rows[index].source_ordinal,
+                    posting_ordinal,
+                });
+            }
+            self.nodes[node_id as usize].posting_ordinal = Some(posting_ordinal);
+            return Ok(node_id);
+        }
+        let quota = project_v37_child_quota(members.len() as u64, leaves)?;
+        let normal = deployed_hyperplane(
+            &members,
+            self.rows,
+            self.shape.dimensions,
+            self.seed,
+            u64::from(node_id),
+            self.shape.reservoir_rows,
+            self.shape.two_means_iterations,
+            self.kernel,
+        )?;
+        let score_blocks = self.pool.install(|| {
+            members
+                .par_chunks(self.block_rows)
+                .map(|block| {
+                    block
+                        .iter()
+                        .map(|index| {
+                            self.score(&self.rows[*index].vector, &normal)
+                                .map(|score| (score, self.rows[*index].source_ordinal, *index))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        let mut scored = score_blocks.into_iter().flatten().collect::<Vec<_>>();
+        scored.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let midpoint = usize::try_from(quota.left_rows)
+            .map_err(|_| invalid("V37 recursive quota exceeds address space"))?;
+        let boundary = scored[midpoint - 1];
+        let right_members = scored[midpoint..]
+            .iter()
+            .map(|entry| entry.2)
+            .collect::<Vec<_>>();
+        let left_members = scored[..midpoint]
+            .iter()
+            .map(|entry| entry.2)
+            .collect::<Vec<_>>();
+        let left_node = self.build(left_members, quota.left_leaves)?;
+        let right_node = self.build(right_members, quota.right_leaves)?;
+        self.nodes[node_id as usize] = V37BalancedNode {
+            normal,
+            boundary_score_bits: boundary.0.to_bits(),
+            boundary_source_ordinal: boundary.1,
+            left_node: Some(left_node),
+            right_node: Some(right_node),
+            posting_ordinal: None,
+            population: quota.left_rows + quota.right_rows,
+        };
+        Ok(node_id)
+    }
+}
+
+pub(crate) fn train_v37_ownership_tree(
+    rows: &[V37TrainingRow],
+    shape: V37TrainingShape,
+    seed: u64,
+    worker_count: usize,
+    block_rows: usize,
+) -> Result<V37BalancedTree> {
+    if rows.is_empty()
+        || shape.dimensions == 0
+        || shape.leaf_count < 2
+        || shape.reservoir_rows < 2
+        || shape.two_means_iterations != 8
+        || seed == 0
+        || worker_count == 0
+        || block_rows == 0
+        || rows.len() < shape.leaf_count as usize
+    {
+        return Err(invalid("V37 training authority differs"));
+    }
+    let mut rows = rows.to_vec();
+    rows.sort_unstable_by_key(|row| row.source_ordinal);
+    let mut previous = None;
+    for row in &rows {
+        if previous == Some(row.source_ordinal)
+            || row.vector.len() != shape.dimensions
+            || row.vector.iter().any(|value| !value.is_finite())
+        {
+            return Err(invalid("V37 training row authority differs"));
+        }
+        previous = Some(row.source_ordinal);
+    }
+    let members = (0..rows.len()).collect::<Vec<_>>();
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .build()
+        .map_err(|_| invalid("V37 worker pool construction failed"))?;
+    let kernel = v37_fused_kernel()?;
+    let backend = v37_fma_backend_name(kernel);
+    let mut builder = V37TreeBuilder {
+        rows: &rows,
+        pool: &pool,
+        block_rows,
+        shape,
+        seed,
+        nodes: Vec::new(),
+        leaf_populations: Vec::new(),
+        assignments: Vec::new(),
+        backend,
+        kernel,
+    };
+    builder.build(members, shape.leaf_count)?;
+    builder
+        .assignments
+        .sort_unstable_by_key(|assignment| assignment.source_ordinal);
+    Ok(V37BalancedTree {
+        dimensions: shape.dimensions,
+        seed,
+        fma_backend: builder.backend.to_owned(),
+        nodes: builder.nodes,
+        leaf_populations: builder.leaf_populations,
+        assignments: builder.assignments,
+    })
+}
+
+fn validate_v37_tree_geometry(tree: &V37BalancedTree) -> Result<()> {
+    if tree.dimensions == 0
+        || tree.seed == 0
+        || !matches!(
+            tree.fma_backend.as_str(),
+            "aarch64-neon-fma" | "x86-avx-fma"
+        )
+        || tree.leaf_populations.is_empty()
+        || tree.nodes.len()
+            != tree
+                .leaf_populations
+                .len()
+                .checked_mul(2)
+                .and_then(|value| value.checked_sub(1))
+                .ok_or_else(|| invalid("V37 tree node count overflows"))?
+    {
+        return Err(invalid("V37 tree authority differs"));
+    }
+    let mut observed_populations = vec![None; tree.leaf_populations.len()];
+    fn validate_preorder(
+        tree: &V37BalancedTree,
+        index: usize,
+        expected_leaves: u64,
+        next_posting: &mut usize,
+        observed_populations: &mut [Option<u64>],
+    ) -> Result<usize> {
+        if index >= tree.nodes.len() {
+            return Err(invalid("V37 tree topology differs"));
+        }
+        let node = &tree.nodes[index];
+        let boundary = f32::from_bits(node.boundary_score_bits);
+        if node.population == 0 || !boundary.is_finite() {
+            return Err(invalid("V37 tree node authority differs"));
+        }
+        match (node.left_node, node.right_node, node.posting_ordinal) {
+            (Some(left), Some(right), None) => {
+                if expected_leaves < 2 {
+                    return Err(invalid("V37 tree descendant-leaf quota differs"));
+                }
+                let quota = project_v37_child_quota(node.population, expected_leaves)?;
+                let left = left as usize;
+                let right = right as usize;
+                if left != index + 1
+                    || node.normal.len() != tree.dimensions
+                    || node.normal.iter().any(|value| !value.is_finite())
+                {
+                    return Err(invalid("V37 tree internal node differs"));
+                }
+                let squared_norm = node.normal.iter().fold(0.0_f64, |sum, value| {
+                    sum + f64::from(*value) * f64::from(*value)
+                });
+                if (squared_norm - 1.0).abs() > 1.0e-5
+                    || left >= tree.nodes.len()
+                    || right >= tree.nodes.len()
+                    || tree.nodes[left].population != quota.left_rows
+                    || tree.nodes[right].population != quota.right_rows
+                    || tree.nodes[left]
+                        .population
+                        .checked_add(tree.nodes[right].population)
+                        != Some(node.population)
+                {
+                    return Err(invalid("V37 tree internal node differs"));
+                }
+                let after_left = validate_preorder(
+                    tree,
+                    left,
+                    quota.left_leaves,
+                    next_posting,
+                    observed_populations,
+                )?;
+                if right != after_left {
+                    return Err(invalid("V37 tree preorder differs"));
+                }
+                validate_preorder(
+                    tree,
+                    right,
+                    quota.right_leaves,
+                    next_posting,
+                    observed_populations,
+                )
+            }
+            (None, None, Some(posting)) => {
+                let posting = posting as usize;
+                if expected_leaves != 1
+                    || posting != *next_posting
+                    || posting >= observed_populations.len()
+                    || !node.normal.is_empty()
+                    || observed_populations[posting]
+                        .replace(node.population)
+                        .is_some()
+                {
+                    return Err(invalid("V37 tree leaf differs"));
+                }
+                *next_posting += 1;
+                Ok(index + 1)
+            }
+            _ => Err(invalid("V37 tree node role differs")),
+        }
+    }
+    let mut next_posting = 0;
+    let next_node = validate_preorder(
+        tree,
+        0,
+        tree.leaf_populations.len() as u64,
+        &mut next_posting,
+        &mut observed_populations,
+    )?;
+    if next_node != tree.nodes.len()
+        || next_posting != tree.leaf_populations.len()
+        || observed_populations
+            .iter()
+            .zip(&tree.leaf_populations)
+            .any(|(observed, expected)| *observed != Some(*expected))
+    {
+        return Err(invalid("V37 tree topology differs"));
+    }
+    Ok(())
+}
+
+fn validate_v37_balanced_tree(tree: &V37BalancedTree) -> Result<()> {
+    validate_v37_tree_geometry(tree)?;
+    let mut counts = vec![0_u64; tree.leaf_populations.len()];
+    let mut previous = None;
+    for assignment in &tree.assignments {
+        if previous.is_some_and(|ordinal| assignment.source_ordinal <= ordinal)
+            || assignment.posting_ordinal as usize >= counts.len()
+        {
+            return Err(invalid("V37 ownership assignment differs"));
+        }
+        previous = Some(assignment.source_ordinal);
+        counts[assignment.posting_ordinal as usize] = counts[assignment.posting_ordinal as usize]
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 ownership population overflows"))?;
+    }
+    if counts != tree.leaf_populations {
+        return Err(invalid("V37 ownership populations differ"));
+    }
+    Ok(())
+}
+
+fn v37_ownership_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("source_ordinal", DataType::UInt64, false),
+        Field::new("posting_ordinal", DataType::UInt32, false),
+        Field::new("posting_local_ordinal", DataType::UInt32, false),
+    ])
+}
+
+pub(crate) fn encode_v37_ownership_parquet(
+    assignments: &[V37OwnershipAssignment],
+    leaf_populations: &[u64],
+) -> Result<V37EncodedOwnership> {
+    if assignments.is_empty() || leaf_populations.is_empty() {
+        return Err(invalid("V37 ownership table is empty"));
+    }
+    let mut local_counts = vec![0_u32; leaf_populations.len()];
+    let mut local_ordinals = Vec::with_capacity(assignments.len());
+    let mut previous = None;
+    for assignment in assignments {
+        if previous.is_some_and(|ordinal| assignment.source_ordinal <= ordinal) {
+            return Err(invalid("V37 ownership source ordering differs"));
+        }
+        previous = Some(assignment.source_ordinal);
+        let posting = assignment.posting_ordinal as usize;
+        let local = local_counts
+            .get_mut(posting)
+            .ok_or_else(|| invalid("V37 ownership posting differs"))?;
+        local_ordinals.push(*local);
+        *local = local
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 ownership local ordinal overflows"))?;
+    }
+    if local_counts
+        .iter()
+        .map(|count| u64::from(*count))
+        .ne(leaf_populations.iter().copied())
+    {
+        return Err(invalid("V37 ownership populations differ"));
+    }
+    let schema = Arc::new(v37_ownership_schema());
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(UInt64Array::from(
+                assignments
+                    .iter()
+                    .map(|assignment| assignment.source_ordinal)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt32Array::from(
+                assignments
+                    .iter()
+                    .map(|assignment| assignment.posting_ordinal)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt32Array::from(local_ordinals)),
+        ],
+    )?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(V37EncodedOwnership {
+        encoded_bytes: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        bytes,
+    })
+}
+
+pub(crate) fn decode_v37_ownership_parquet(
+    bytes: &[u8],
+    encoded_bytes: u64,
+    sha256: &str,
+    blake3: &str,
+    leaf_populations: &[u64],
+) -> Result<Vec<V37OwnershipAssignment>> {
+    if encoded_bytes != bytes.len() as u64
+        || !valid_lower_hex_digest(sha256)
+        || !valid_lower_hex_digest(blake3)
+        || format!("{:x}", Sha256::digest(bytes)) != sha256
+        || blake3::hash(bytes).to_hex().as_str() != blake3
+        || leaf_populations.is_empty()
+    {
+        return Err(invalid("V37 ownership artifact bytes differ"));
+    }
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != &v37_ownership_schema()
+        || builder.metadata().num_row_groups() != 1
+    {
+        return Err(invalid("V37 ownership Parquet schema differs"));
+    }
+    let expected_rows = leaf_populations
+        .iter()
+        .try_fold(0_usize, |sum, population| {
+            let population = usize::try_from(*population).ok()?;
+            sum.checked_add(population)
+        });
+    let expected_rows =
+        expected_rows.ok_or_else(|| invalid("V37 ownership row count overflows"))?;
+    let observed_rows = usize::try_from(builder.metadata().file_metadata().num_rows())
+        .map_err(|_| invalid("V37 ownership row count differs"))?;
+    if observed_rows != expected_rows {
+        return Err(invalid("V37 ownership row count differs"));
+    }
+    let mut assignments = Vec::new();
+    assignments
+        .try_reserve_exact(expected_rows)
+        .map_err(|_| invalid("V37 ownership allocation exceeds capacity"))?;
+    let mut local_counts = vec![0_u32; leaf_populations.len()];
+    let mut previous = None;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 3
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V37 ownership Parquet batch differs"));
+        }
+        let sources = column::<UInt64Array>(&batch, 0, "V37 ownership source differs")?;
+        let postings = column::<UInt32Array>(&batch, 1, "V37 ownership posting differs")?;
+        let locals = column::<UInt32Array>(&batch, 2, "V37 ownership local differs")?;
+        for row in 0..batch.num_rows() {
+            let source_ordinal = sources.value(row);
+            let posting_ordinal = postings.value(row);
+            let posting = posting_ordinal as usize;
+            if previous.is_some_and(|ordinal| source_ordinal <= ordinal)
+                || posting >= local_counts.len()
+                || locals.value(row) != local_counts[posting]
+            {
+                return Err(invalid("V37 ownership row authority differs"));
+            }
+            previous = Some(source_ordinal);
+            local_counts[posting] = local_counts[posting]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V37 ownership local ordinal overflows"))?;
+            assignments.push(V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal,
+            });
+        }
+    }
+    if assignments.len() != expected_rows
+        || local_counts
+            .iter()
+            .map(|count| u64::from(*count))
+            .ne(leaf_populations.iter().copied())
+    {
+        return Err(invalid("V37 ownership populations differ"));
+    }
+    Ok(assignments)
+}
+
+fn v37_tree_schema(dimensions: usize) -> Result<Schema> {
+    let dimensions =
+        i32::try_from(dimensions).map_err(|_| invalid("V37 tree dimensions exceed Arrow width"))?;
+    Ok(Schema::new(vec![
+        Field::new("record_kind", DataType::UInt8, false),
+        Field::new("node_id", DataType::UInt32, false),
+        Field::new("source_ordinal", DataType::UInt64, false),
+        Field::new("assignment_posting", DataType::UInt32, false),
+        Field::new("population", DataType::UInt64, false),
+        Field::new("boundary_score_bits", DataType::UInt32, false),
+        Field::new("boundary_source_ordinal", DataType::UInt64, false),
+        Field::new("left_node", DataType::UInt32, false),
+        Field::new("right_node", DataType::UInt32, false),
+        Field::new("node_posting", DataType::UInt32, false),
+        Field::new(
+            "normal",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                dimensions,
+            ),
+            false,
+        ),
+    ]))
+}
+
+pub(crate) fn encode_v37_tree_arrow(tree: &V37BalancedTree) -> Result<V37EncodedTree> {
+    validate_v37_balanced_tree(tree)?;
+    let schema = Arc::new(v37_tree_schema(tree.dimensions)?);
+    let row_count = tree
+        .nodes
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| invalid("V37 Arrow row count overflows"))?;
+    let mut record_kind = Vec::with_capacity(row_count);
+    let mut node_id = Vec::with_capacity(row_count);
+    let mut source_ordinal = Vec::with_capacity(row_count);
+    let mut assignment_posting = Vec::with_capacity(row_count);
+    let mut population = Vec::with_capacity(row_count);
+    let mut boundary_score_bits = Vec::with_capacity(row_count);
+    let mut boundary_source_ordinal = Vec::with_capacity(row_count);
+    let mut left_node = Vec::with_capacity(row_count);
+    let mut right_node = Vec::with_capacity(row_count);
+    let mut node_posting = Vec::with_capacity(row_count);
+    let normal_capacity = row_count
+        .checked_mul(tree.dimensions)
+        .ok_or_else(|| invalid("V37 Arrow normal count overflows"))?;
+    let mut normals = Vec::with_capacity(normal_capacity);
+    let backend_code = match tree.fma_backend.as_str() {
+        "aarch64-neon-fma" => 1,
+        "x86-avx-fma" => 2,
+        _ => return Err(invalid("V37 tree backend differs")),
+    };
+    record_kind.push(2);
+    node_id.push(
+        u32::try_from(tree.dimensions)
+            .map_err(|_| invalid("V37 tree dimensions exceed artifact authority"))?,
+    );
+    source_ordinal.push(tree.seed);
+    assignment_posting.push(backend_code);
+    population.push(tree.nodes.len() as u64);
+    boundary_score_bits.push(1);
+    boundary_source_ordinal.push(tree.leaf_populations.len() as u64);
+    left_node.push(u32::MAX);
+    right_node.push(u32::MAX);
+    node_posting.push(u32::MAX);
+    normals.resize(tree.dimensions, 0.0);
+    for (index, node) in tree.nodes.iter().enumerate() {
+        record_kind.push(0);
+        node_id.push(index as u32);
+        source_ordinal.push(u64::MAX);
+        assignment_posting.push(u32::MAX);
+        population.push(node.population);
+        boundary_score_bits.push(node.boundary_score_bits);
+        boundary_source_ordinal.push(node.boundary_source_ordinal);
+        left_node.push(node.left_node.unwrap_or(u32::MAX));
+        right_node.push(node.right_node.unwrap_or(u32::MAX));
+        node_posting.push(node.posting_ordinal.unwrap_or(u32::MAX));
+        if node.normal.is_empty() {
+            normals.resize(normals.len() + tree.dimensions, 0.0);
+        } else {
+            normals.extend_from_slice(&node.normal);
+        }
+    }
+    let normal = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        i32::try_from(tree.dimensions)
+            .map_err(|_| invalid("V37 tree dimensions exceed Arrow width"))?,
+        Arc::new(Float32Array::from(normals)),
+        None,
+    )?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt8Array::from(record_kind)),
+            Arc::new(UInt32Array::from(node_id)),
+            Arc::new(UInt64Array::from(source_ordinal)),
+            Arc::new(UInt32Array::from(assignment_posting)),
+            Arc::new(UInt64Array::from(population)),
+            Arc::new(UInt32Array::from(boundary_score_bits)),
+            Arc::new(UInt64Array::from(boundary_source_ordinal)),
+            Arc::new(UInt32Array::from(left_node)),
+            Arc::new(UInt32Array::from(right_node)),
+            Arc::new(UInt32Array::from(node_posting)),
+            Arc::new(normal),
+        ],
+    )?;
+    let mut bytes = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(V37EncodedTree {
+        encoded_bytes: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        bytes,
+    })
+}
+
+fn column<'a, T: 'static>(batch: &'a RecordBatch, index: usize, message: &str) -> Result<&'a T> {
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<T>()
+        .ok_or_else(|| invalid(message))
+}
+
+pub(crate) fn decode_v37_tree_arrow(
+    bytes: &[u8],
+    encoded_bytes: u64,
+    sha256: &str,
+    blake3: &str,
+) -> Result<V37BalancedTree> {
+    if encoded_bytes != bytes.len() as u64
+        || !valid_lower_hex_digest(sha256)
+        || !valid_lower_hex_digest(blake3)
+        || format!("{:x}", Sha256::digest(bytes)) != sha256
+        || blake3::hash(bytes).to_hex().as_str() != blake3
+    {
+        return Err(invalid("V37 tree artifact bytes differ"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    let observed_schema = reader.schema();
+    let normal_field = observed_schema
+        .fields()
+        .get(10)
+        .ok_or_else(|| invalid("V37 tree Arrow schema differs"))?;
+    let dimensions = match normal_field.data_type() {
+        DataType::FixedSizeList(child, dimensions)
+            if child.name() == "element"
+                && child.data_type() == &DataType::Float32
+                && !child.is_nullable()
+                && *dimensions > 0 =>
+        {
+            *dimensions as usize
+        }
+        _ => return Err(invalid("V37 tree Arrow normal schema differs")),
+    };
+    let expected_schema = v37_tree_schema(dimensions)?;
+    if observed_schema.as_ref() != &expected_schema {
+        return Err(invalid("V37 tree Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V37 tree Arrow batch is absent"))?;
+    if reader.next().is_some()
+        || batch.num_rows() < 2
+        || batch.columns().iter().any(|array| array.null_count() != 0)
+    {
+        return Err(invalid("V37 tree Arrow batch differs"));
+    }
+    let record_kind = column::<UInt8Array>(&batch, 0, "V37 record kind differs")?;
+    let node_ids = column::<UInt32Array>(&batch, 1, "V37 node ordinal differs")?;
+    let source_ordinals = column::<UInt64Array>(&batch, 2, "V37 source ordinal differs")?;
+    let assignment_postings = column::<UInt32Array>(&batch, 3, "V37 assignment differs")?;
+    let populations = column::<UInt64Array>(&batch, 4, "V37 population differs")?;
+    let boundaries = column::<UInt32Array>(&batch, 5, "V37 boundary differs")?;
+    let boundary_ordinals = column::<UInt64Array>(&batch, 6, "V37 boundary ordinal differs")?;
+    let left_nodes = column::<UInt32Array>(&batch, 7, "V37 left child differs")?;
+    let right_nodes = column::<UInt32Array>(&batch, 8, "V37 right child differs")?;
+    let node_postings = column::<UInt32Array>(&batch, 9, "V37 node posting differs")?;
+    let normals = column::<FixedSizeListArray>(&batch, 10, "V37 normal differs")?;
+    let authority_normal = normals.value(0);
+    let authority_normal = authority_normal
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V37 authority normal differs"))?;
+    if record_kind.value(0) != 2
+        || node_ids.value(0) as usize != dimensions
+        || assignment_postings.value(0) > 2
+        || assignment_postings.value(0) == 0
+        || boundaries.value(0) != 1
+        || left_nodes.value(0) != u32::MAX
+        || right_nodes.value(0) != u32::MAX
+        || node_postings.value(0) != u32::MAX
+        || authority_normal.values().iter().any(|value| *value != 0.0)
+    {
+        return Err(invalid("V37 tree authority record differs"));
+    }
+    let seed = source_ordinals.value(0);
+    let backend = match assignment_postings.value(0) {
+        1 => "aarch64-neon-fma".to_owned(),
+        2 => "x86-avx-fma".to_owned(),
+        _ => return Err(invalid("V37 tree backend differs")),
+    };
+    let node_count = usize::try_from(populations.value(0))
+        .map_err(|_| invalid("V37 tree node count exceeds address space"))?;
+    let leaf_count = usize::try_from(boundary_ordinals.value(0))
+        .map_err(|_| invalid("V37 tree leaf count exceeds address space"))?;
+    let expected_node_count = leaf_count
+        .checked_mul(2)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| invalid("V37 tree authority count overflows"))?;
+    let expected_rows = node_count
+        .checked_add(1)
+        .ok_or_else(|| invalid("V37 tree Arrow row count overflows"))?;
+    if leaf_count == 0 || node_count != expected_node_count || expected_rows != batch.num_rows() {
+        return Err(invalid("V37 tree Arrow row count differs"));
+    }
+    let mut nodes = Vec::with_capacity(node_count);
+    for (index, row) in (1..=node_count).enumerate() {
+        if record_kind.value(row) != 0
+            || node_ids.value(row) != index as u32
+            || source_ordinals.value(row) != u64::MAX
+            || assignment_postings.value(row) != u32::MAX
+        {
+            return Err(invalid("V37 node record differs"));
+        }
+        let values = normals.value(row);
+        let values = values
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V37 normal values differ"))?;
+        if values.null_count() != 0 || values.len() != dimensions {
+            return Err(invalid("V37 normal width differs"));
+        }
+        let posting = (node_postings.value(row) != u32::MAX).then(|| node_postings.value(row));
+        nodes.push(V37BalancedNode {
+            normal: if posting.is_some() {
+                if values.values().iter().any(|value| *value != 0.0) {
+                    return Err(invalid("V37 leaf normal differs"));
+                }
+                Vec::new()
+            } else {
+                values.values().to_vec()
+            },
+            boundary_score_bits: boundaries.value(row),
+            boundary_source_ordinal: boundary_ordinals.value(row),
+            left_node: (left_nodes.value(row) != u32::MAX).then(|| left_nodes.value(row)),
+            right_node: (right_nodes.value(row) != u32::MAX).then(|| right_nodes.value(row)),
+            posting_ordinal: posting,
+            population: populations.value(row),
+        });
+    }
+    let mut leaf_populations = vec![0_u64; leaf_count];
+    for node in &nodes {
+        if let Some(posting) = node.posting_ordinal {
+            if posting as usize >= leaf_populations.len() {
+                return Err(invalid("V37 leaf posting differs"));
+            }
+            leaf_populations[posting as usize] = node.population;
+        }
+    }
+    let tree = V37BalancedTree {
+        dimensions,
+        seed,
+        fma_backend: backend,
+        nodes,
+        leaf_populations,
+        assignments: Vec::new(),
+    };
+    validate_v37_tree_geometry(&tree)?;
+    Ok(tree)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         V37ArtifactIdentity, V37AuthorityManifest, V37LayoutDisposition, V37NumericAuthority,
-        V37RelationSpec, V37TreeSpec, canonical_v37_authority_bytes, parse_v37_authority_bytes,
+        V37RelationSpec, V37TrainingRow, V37TrainingShape, V37TreeSpec,
+        canonical_v37_authority_bytes, decode_v37_ownership_parquet, decode_v37_tree_arrow,
+        encode_v37_ownership_parquet, encode_v37_tree_arrow, parse_v37_authority_bytes,
         project_v37_child_quota, project_v37_construction_bytes, project_v37_layout,
-        project_v37_serving_bytes, project_v37_work, validate_v37_specs,
+        project_v37_serving_bytes, project_v37_work, repair_v37_empty_partition,
+        route_v37_corpus_member, route_v37_primary_leaf, route_v37_query,
+        score_v37_hyperplane_fused, score_v37_hyperplane_scalar, select_v37_node_reservoir,
+        train_v37_ownership_tree, validate_v37_specs,
     };
 
     fn ownership_spec(rows: u64) -> V37TreeSpec {
@@ -512,6 +1765,21 @@ mod tests {
             source: artifact("source-corpus", '1'),
             tree: ownership_spec(1_000_000),
         }
+    }
+
+    fn training_rows(count: u64, dimensions: usize) -> Vec<V37TrainingRow> {
+        (0..count)
+            .map(|source_ordinal| {
+                let mut vector = vec![0.0_f32; dimensions];
+                vector[0] = source_ordinal as f32;
+                vector[1] = (source_ordinal % 3) as f32 * 0.125;
+                vector[dimensions - 1] = (source_ordinal % 2) as f32 * f32::EPSILON;
+                V37TrainingRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -743,5 +2011,448 @@ mod tests {
         let mut noncanonical = bytes.clone();
         noncanonical.insert(0, b' ');
         assert!(parse_v37_authority_bytes(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn v37_relation_tree_selects_exact_framed_node_reservoir() {
+        let ordinals = (0..8).collect::<Vec<_>>();
+        assert_eq!(
+            select_v37_node_reservoir(&ordinals, 37, 0, 4).unwrap(),
+            vec![3, 7, 2, 1]
+        );
+        assert!(select_v37_node_reservoir(&ordinals, 37, 0, 0).is_err());
+        assert!(select_v37_node_reservoir(&[1, 1], 37, 0, 1).is_err());
+    }
+
+    #[test]
+    fn v37_relation_tree_trains_exact_uneven_quota_and_single_ownership() {
+        let rows = training_rows(12, 192);
+        let shape = V37TrainingShape {
+            dimensions: 192,
+            leaf_count: 3,
+            reservoir_rows: 8,
+            two_means_iterations: 8,
+        };
+        let first = train_v37_ownership_tree(&rows, shape, 37, 1, 3).unwrap();
+        assert_eq!(first.nodes.len(), 5);
+        assert_eq!(first.leaf_populations, vec![4, 4, 4]);
+        assert_eq!(first.assignments.len(), 12);
+        assert_eq!(
+            first
+                .assignments
+                .iter()
+                .map(|assignment| assignment.source_ordinal)
+                .collect::<Vec<_>>(),
+            (0..12).collect::<Vec<_>>()
+        );
+        assert!(
+            first
+                .assignments
+                .iter()
+                .all(|assignment| assignment.posting_ordinal < 3)
+        );
+
+        let mut reversed = rows.clone();
+        reversed.reverse();
+        let reordered = train_v37_ownership_tree(&reversed, shape, 37, 4, 5).unwrap();
+        assert_eq!(first, reordered);
+    }
+
+    #[test]
+    fn v37_relation_tree_fused_scores_match_registered_scalar_order() {
+        for dimensions in [192, 197] {
+            let mut row = Vec::with_capacity(dimensions);
+            let mut normal = Vec::with_capacity(dimensions);
+            for index in 0..dimensions {
+                row.push(if index % 7 == 0 {
+                    f32::from_bits(1)
+                } else {
+                    (index as f32 - 50.0) * 0.03125
+                });
+                normal.push(if index % 5 == 0 {
+                    -0.0
+                } else {
+                    (91.0 - index as f32) * 0.015625
+                });
+            }
+            let scalar = score_v37_hyperplane_scalar(&row, &normal).unwrap();
+            let (fused, backend) = score_v37_hyperplane_fused(&row, &normal).unwrap();
+            assert_eq!(fused.to_bits(), scalar.to_bits());
+            assert_ne!(backend, "scalar-control");
+
+            row.reverse();
+            normal.reverse();
+            assert_eq!(
+                score_v37_hyperplane_fused(&row, &normal)
+                    .unwrap()
+                    .0
+                    .to_bits(),
+                score_v37_hyperplane_scalar(&row, &normal)
+                    .unwrap()
+                    .to_bits()
+            );
+        }
+        assert!(score_v37_hyperplane_scalar(&[f32::NAN], &[1.0]).is_err());
+        assert!(score_v37_hyperplane_scalar(&[1.0], &[1.0, 2.0]).is_err());
+    }
+
+    #[test]
+    fn v37_relation_tree_locks_boundary_replay_and_query_equality() {
+        assert!(route_v37_corpus_member(1.0, 7, 1.0, 7).unwrap());
+        assert!(route_v37_corpus_member(1.0, 6, 1.0, 7).unwrap());
+        assert!(!route_v37_corpus_member(1.0, 8, 1.0, 7).unwrap());
+        assert!(!route_v37_corpus_member(1.5, 0, 1.0, 7).unwrap());
+
+        let equal = route_v37_query(1.0, 1.0).unwrap();
+        assert!(equal.primary_is_left);
+        assert!(equal.queues_sibling_zero_margin);
+        assert!(route_v37_query(f32::NAN, 1.0).is_err());
+
+        let mut degenerate = training_rows(8, 192);
+        for row in &mut degenerate {
+            row.vector.fill(1.0);
+        }
+        assert!(
+            train_v37_ownership_tree(
+                &degenerate,
+                V37TrainingShape {
+                    dimensions: 192,
+                    leaf_count: 2,
+                    reservoir_rows: 8,
+                    two_means_iterations: 8,
+                },
+                37,
+                1,
+                8,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v37_relation_tree_arrow_round_trip_binds_exact_bytes_and_topology() {
+        let rows = training_rows(12, 192);
+        let shape = V37TrainingShape {
+            dimensions: 192,
+            leaf_count: 3,
+            reservoir_rows: 8,
+            two_means_iterations: 8,
+        };
+        let tree = train_v37_ownership_tree(&rows, shape, 37, 2, 4).unwrap();
+        let artifact = encode_v37_tree_arrow(&tree).unwrap();
+        assert!(artifact.bytes.starts_with(b"ARROW1"));
+        assert_eq!(artifact.encoded_bytes, artifact.bytes.len() as u64);
+        assert_eq!(artifact.sha256.len(), 64);
+        assert_eq!(artifact.blake3.len(), 64);
+        assert_eq!(encode_v37_tree_arrow(&tree).unwrap().bytes, artifact.bytes);
+        let decoded = decode_v37_tree_arrow(
+            &artifact.bytes,
+            artifact.encoded_bytes,
+            &artifact.sha256,
+            &artifact.blake3,
+        )
+        .unwrap();
+        assert_eq!(decoded.dimensions, tree.dimensions);
+        assert_eq!(decoded.seed, tree.seed);
+        assert_eq!(decoded.fma_backend, tree.fma_backend);
+        assert_eq!(decoded.nodes, tree.nodes);
+        assert_eq!(decoded.leaf_populations, tree.leaf_populations);
+        assert!(decoded.assignments.is_empty());
+
+        let mut corrupted = artifact.bytes.clone();
+        let middle = corrupted.len() / 2;
+        corrupted[middle] ^= 1;
+        assert!(
+            decode_v37_tree_arrow(
+                &corrupted,
+                artifact.encoded_bytes,
+                &artifact.sha256,
+                &artifact.blake3,
+            )
+            .is_err()
+        );
+        assert!(
+            decode_v37_tree_arrow(
+                &artifact.bytes,
+                artifact.encoded_bytes + 1,
+                &artifact.sha256,
+                &artifact.blake3,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v37_relation_tree_separates_geometry_arrow_from_ownership_parquet() {
+        use arrow_ipc::reader::FileReader;
+        use std::io::Cursor;
+
+        let rows = training_rows(12, 192);
+        let tree = train_v37_ownership_tree(
+            &rows,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 3,
+                reservoir_rows: 8,
+                two_means_iterations: 8,
+            },
+            37,
+            1,
+            12,
+        )
+        .unwrap();
+        let tree_artifact = encode_v37_tree_arrow(&tree).unwrap();
+        let mut reader = FileReader::try_new(Cursor::new(&tree_artifact.bytes), None).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), tree.nodes.len() + 1);
+
+        let ownership =
+            encode_v37_ownership_parquet(&tree.assignments, &tree.leaf_populations).unwrap();
+        assert!(ownership.bytes.starts_with(b"PAR1"));
+        assert_eq!(ownership.encoded_bytes, ownership.bytes.len() as u64);
+        assert_eq!(
+            decode_v37_ownership_parquet(
+                &ownership.bytes,
+                ownership.encoded_bytes,
+                &ownership.sha256,
+                &ownership.blake3,
+                &tree.leaf_populations,
+            )
+            .unwrap(),
+            tree.assignments
+        );
+
+        let mut invalid_posting = tree.assignments.clone();
+        invalid_posting[0].posting_ordinal = 1_000;
+        assert!(encode_v37_ownership_parquet(&invalid_posting, &tree.leaf_populations).is_err());
+    }
+
+    #[test]
+    fn v37_relation_tree_arrow_rejects_graph_and_numeric_drift() {
+        let rows = training_rows(12, 192);
+        let shape = V37TrainingShape {
+            dimensions: 192,
+            leaf_count: 3,
+            reservoir_rows: 8,
+            two_means_iterations: 8,
+        };
+        let tree = train_v37_ownership_tree(&rows, shape, 37, 1, 12).unwrap();
+
+        let mut invalid_child = tree.clone();
+        invalid_child.nodes[0].left_node = Some(999);
+        assert!(encode_v37_tree_arrow(&invalid_child).is_err());
+
+        let mut non_preorder = tree.clone();
+        let left = non_preorder.nodes[0].left_node;
+        non_preorder.nodes[0].left_node = non_preorder.nodes[0].right_node;
+        non_preorder.nodes[0].right_node = left;
+        assert!(encode_v37_tree_arrow(&non_preorder).is_err());
+
+        let mut invalid_normal = tree.clone();
+        invalid_normal.nodes[0].normal[0] = f32::NAN;
+        assert!(encode_v37_tree_arrow(&invalid_normal).is_err());
+
+        let mut duplicate_posting = tree.clone();
+        let first_posting = duplicate_posting
+            .nodes
+            .iter()
+            .find_map(|node| node.posting_ordinal)
+            .unwrap();
+        let second_leaf = duplicate_posting
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.posting_ordinal.is_some())
+            .nth(1)
+            .map(|(index, _)| index)
+            .unwrap();
+        duplicate_posting.nodes[second_leaf].posting_ordinal = Some(first_posting);
+        assert!(encode_v37_tree_arrow(&duplicate_posting).is_err());
+
+        let mut reordered_postings = tree.clone();
+        let leaf_indices = reordered_postings
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.posting_ordinal.is_some())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let first = reordered_postings.nodes[leaf_indices[0]].posting_ordinal;
+        reordered_postings.nodes[leaf_indices[0]].posting_ordinal =
+            reordered_postings.nodes[leaf_indices[1]].posting_ordinal;
+        reordered_postings.nodes[leaf_indices[1]].posting_ordinal = first;
+        assert!(encode_v37_tree_arrow(&reordered_postings).is_err());
+
+        let mut missing_assignment = tree.clone();
+        missing_assignment.assignments.pop();
+        assert!(encode_v37_tree_arrow(&missing_assignment).is_err());
+    }
+
+    #[test]
+    fn v37_relation_tree_rejects_quota_preserving_population_drift() {
+        let rows = training_rows(12, 192);
+        let shape = V37TrainingShape {
+            dimensions: 192,
+            leaf_count: 3,
+            reservoir_rows: 8,
+            two_means_iterations: 8,
+        };
+        let mut tree = train_v37_ownership_tree(&rows, shape, 37, 1, 12).unwrap();
+        let leaf_nodes = tree
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| node.posting_ordinal.map(|posting| (posting, index)))
+            .collect::<Vec<_>>();
+        for ((_, node), population) in leaf_nodes.iter().zip([3_u64, 5, 4]) {
+            tree.nodes[*node].population = population;
+        }
+        tree.leaf_populations = vec![3, 5, 4];
+        for (index, assignment) in tree.assignments.iter_mut().enumerate() {
+            assignment.posting_ordinal = if index < 3 {
+                0
+            } else if index < 8 {
+                1
+            } else {
+                2
+            };
+        }
+        for index in (0..tree.nodes.len()).rev() {
+            if let (Some(left), Some(right)) =
+                (tree.nodes[index].left_node, tree.nodes[index].right_node)
+            {
+                tree.nodes[index].population =
+                    tree.nodes[left as usize].population + tree.nodes[right as usize].population;
+            }
+        }
+        assert!(encode_v37_tree_arrow(&tree).is_err());
+    }
+
+    #[test]
+    fn v37_relation_tree_replays_persisted_planes_and_backend() {
+        let rows = training_rows(12, 192);
+        let tree = train_v37_ownership_tree(
+            &rows,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 3,
+                reservoir_rows: 8,
+                two_means_iterations: 8,
+            },
+            37,
+            2,
+            4,
+        )
+        .unwrap();
+        let artifact = encode_v37_tree_arrow(&tree).unwrap();
+        let persisted_tree = decode_v37_tree_arrow(
+            &artifact.bytes,
+            artifact.encoded_bytes,
+            &artifact.sha256,
+            &artifact.blake3,
+        )
+        .unwrap();
+        for row in &rows {
+            let expected = tree
+                .assignments
+                .iter()
+                .find(|assignment| assignment.source_ordinal == row.source_ordinal)
+                .unwrap()
+                .posting_ordinal;
+            assert_eq!(
+                route_v37_primary_leaf(
+                    &persisted_tree,
+                    &row.vector,
+                    row.source_ordinal,
+                    &tree.fma_backend,
+                )
+                .unwrap(),
+                expected
+            );
+        }
+        assert!(
+            route_v37_primary_leaf(
+                &persisted_tree,
+                &rows[0].vector,
+                rows[0].source_ordinal,
+                "drift",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v37_relation_tree_arrow_rejects_malformed_authority_without_panicking() {
+        use arrow_array::{RecordBatch, UInt8Array};
+        use arrow_ipc::{
+            MetadataVersion,
+            writer::{FileWriter, IpcWriteOptions},
+        };
+        use arrow_schema::{DataType, Field, Schema};
+        use sha2::{Digest, Sha256};
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "record_kind",
+            DataType::UInt8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt8Array::from(vec![2]))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+        let mut writer =
+            FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let blake3 = blake3::hash(&bytes).to_hex().to_string();
+        let outcome = std::panic::catch_unwind(|| {
+            decode_v37_tree_arrow(&bytes, bytes.len() as u64, &sha256, &blake3)
+        });
+        assert!(outcome.is_ok());
+        assert!(outcome.unwrap().is_err());
+    }
+
+    #[test]
+    fn v37_relation_tree_repairs_empty_label_with_farthest_donor() {
+        let rows = vec![
+            V37TrainingRow {
+                source_ordinal: 0,
+                vector: vec![0.0; 192],
+            },
+            V37TrainingRow {
+                source_ordinal: 1,
+                vector: vec![2.0; 192],
+            },
+            V37TrainingRow {
+                source_ordinal: 2,
+                vector: vec![5.0; 192],
+            },
+        ];
+        let mut zero = Vec::new();
+        let mut one = vec![0, 1, 2];
+        repair_v37_empty_partition(&rows, &mut zero, &mut one).unwrap();
+        assert_eq!(zero, vec![2]);
+        assert_eq!(one, vec![0, 1]);
+
+        let tied = vec![
+            V37TrainingRow {
+                source_ordinal: 7,
+                vector: vec![-1.0; 192],
+            },
+            V37TrainingRow {
+                source_ordinal: 3,
+                vector: vec![1.0; 192],
+            },
+        ];
+        let mut zero = Vec::new();
+        let mut one = vec![0, 1];
+        repair_v37_empty_partition(&tied, &mut zero, &mut one).unwrap();
+        assert_eq!(tied[zero[0]].source_ordinal, 3);
     }
 }
