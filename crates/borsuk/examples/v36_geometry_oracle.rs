@@ -69,7 +69,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     let workers = take("--workers")?
         .parse::<u8>()
         .ok()
-        .filter(|workers| matches!(workers, 1 | 2 | 4))
+        .filter(|workers| matches!(workers, 1 | 2 | 4 | 8 | 16 | 32))
         .ok_or_else(|| "V36 geometry worker count differs".to_owned())?;
     if !fields.is_empty() {
         return Err("V36 geometry arguments differ".into());
@@ -286,6 +286,10 @@ mod tests {
         let parsed = parse_args(valid()).unwrap();
         assert_eq!(parsed.source, PathBuf::from("source.parquet"));
         assert_eq!(parsed.workers, 4);
+        let mut parallel = valid();
+        let index = parallel.iter().position(|value| value == "4").unwrap();
+        parallel[index] = "32".into();
+        assert_eq!(parse_args(parallel).unwrap().workers, 32);
 
         for forbidden in ["--bucket", "--page-prefix", "--endpoint", "--d3"] {
             let mut args = valid();
@@ -300,7 +304,7 @@ mod tests {
         assert!(parse_args(missing).is_err());
         let mut workers = valid();
         let index = workers.iter().position(|value| value == "4").unwrap();
-        workers[index] = "8".into();
+        workers[index] = "3".into();
         assert!(parse_args(workers).is_err());
     }
 }
