@@ -1454,8 +1454,17 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertIn("shutdown -h now", worker)
         self.assertIn("BOOT_FAILURE.log", worker)
         self.assertIn("--if-none-match '*'", worker)
+        self.assertIn('systemctl start "$slice"', worker)
         self.assertLess(
             worker.index('exec >"$boot_log" 2>&1'),
+            worker.index('trap cleanup EXIT INT TERM'),
+        )
+        self.assertLess(
+            worker.index('trap cleanup EXIT INT TERM'),
+            worker.index('systemctl start "$slice"'),
+        )
+        self.assertLess(
+            worker.index('systemctl start "$slice"'),
             worker.index('systemctl set-property --runtime "$slice"'),
         )
         self.assertNotIn("list-objects", worker)

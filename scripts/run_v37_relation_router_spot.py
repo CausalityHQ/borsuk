@@ -1502,7 +1502,6 @@ mkdir -p "$scratch" "$source"
 chmod 0711 "$root" "$scratch"
 boot_log="$scratch/boot.log"
 exec >"$boot_log" 2>&1
-systemctl set-property --runtime "$slice" MemoryMax=3221225472 MemorySwapMax=0 MemoryAccounting=yes
 archive="$scratch/source.tar.zst"
 binary="$scratch/v37-relation-router"
 manifest="$scratch/manifest.json"
@@ -1528,6 +1527,8 @@ cleanup() {{
   exit "$status"
 }}
 trap cleanup EXIT INT TERM
+systemctl start "$slice"
+systemctl set-property --runtime "$slice" MemoryMax=3221225472 MemorySwapMax=0 MemoryAccounting=yes
 aws s3 cp {source_archive_uri} "$archive" --only-show-errors
 aws s3 cp {binary_uri} "$binary" --only-show-errors
 aws s3 cp {manifest_uri} "$manifest" --only-show-errors
