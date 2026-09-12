@@ -1452,6 +1452,12 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertIn("MemoryMax=3G", worker)
         self.assertIn("MemorySwapMax=0", worker)
         self.assertIn("shutdown -h now", worker)
+        self.assertIn("BOOT_FAILURE.log", worker)
+        self.assertIn("--if-none-match '*'", worker)
+        self.assertLess(
+            worker.index('exec >"$boot_log" 2>&1'),
+            worker.index('systemctl set-property --runtime "$slice"'),
+        )
         self.assertNotIn("list-objects", worker)
         self.assertNotIn("s3 ls", worker)
         self.assertNotIn('"$binary" --bucket', worker)
@@ -1519,8 +1525,8 @@ class V37SpotAuthorityTests(unittest.TestCase):
         plan = _plan("build-ownership")
         expected_slice = "borsuk-v37-5a2a113184f7b4de6bfcd4cf.slice"
         worker = build_v37_worker_script(plan)
+        self.assertIn(f"slice={expected_slice}\n", worker)
         self.assertIn(
-            f"slice={expected_slice}\n"
             'systemctl set-property --runtime "$slice" '
             "MemoryMax=3221225472 MemorySwapMax=0 MemoryAccounting=yes",
             worker,

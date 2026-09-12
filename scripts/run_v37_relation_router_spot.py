@@ -1479,6 +1479,8 @@ def build_v37_worker_script(plan: V37SpotPlan) -> str:
     binary_sha256 = shlex.quote(plan.binary_sha256)
     manifest_sha256 = shlex.quote(plan.manifest_sha256)
     slice_unit = shlex.quote(_v37_slice_unit(plan.run_id))
+    output_bucket, output_prefix = _s3_uri(plan.output_prefix, prefix=True)
+    boot_failure_key = shlex.quote(output_prefix + "BOOT_FAILURE.log")
     return f"""#!/bin/bash
 set -euo pipefail
 umask 077
@@ -1496,9 +1498,11 @@ root=/var/lib/borsuk-v37-relation
 scratch="$root/scratch"
 source="$root/source"
 slice={slice_unit}
-systemctl set-property --runtime "$slice" MemoryMax=3221225472 MemorySwapMax=0 MemoryAccounting=yes
 mkdir -p "$scratch" "$source"
 chmod 0711 "$root" "$scratch"
+boot_log="$scratch/boot.log"
+exec >"$boot_log" 2>&1
+systemctl set-property --runtime "$slice" MemoryMax=3221225472 MemorySwapMax=0 MemoryAccounting=yes
 archive="$scratch/source.tar.zst"
 binary="$scratch/v37-relation-router"
 manifest="$scratch/manifest.json"
@@ -1511,9 +1515,17 @@ validate_boot_object() {{
   test "${{actual_sha256%% *}}" = "$expected_sha256"
 }}
 cleanup() {{
-  rm -f "$archive" "$binary" "$manifest" "$plan"
+  status=$?
+  trap - EXIT INT TERM
+  if test "$status" -ne 0 && test -s "$boot_log"; then
+    aws s3api put-object --bucket {shlex.quote(output_bucket)} \
+      --key {boot_failure_key} --body "$boot_log" --if-none-match '*' \
+      --checksum-algorithm SHA256 >/dev/null || true
+  fi
+  rm -f "$archive" "$binary" "$manifest" "$plan" "$boot_log"
   rmdir "$scratch" 2>/dev/null || true
   shutdown -h now
+  exit "$status"
 }}
 trap cleanup EXIT INT TERM
 aws s3 cp {source_archive_uri} "$archive" --only-show-errors
