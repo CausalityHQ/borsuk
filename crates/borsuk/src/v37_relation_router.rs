@@ -7,8 +7,10 @@ use std::{
 };
 
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array, UInt64Array,
+    Array, FixedSizeListArray, Float32Array, ListArray, RecordBatch, UInt8Array, UInt32Array,
+    UInt64Array,
 };
+use arrow_buffer::OffsetBuffer;
 use arrow_ipc::{
     MetadataVersion,
     reader::FileReader,
@@ -210,6 +212,13 @@ pub(crate) struct V37DirectRouter<'a> {
     maximum_node_visits: usize,
 }
 
+/// A validated independent relation tree ready for bounded leaf probing.
+pub(crate) struct V37RelationRouter<'a> {
+    tree: &'a V37BalancedTree,
+    kernel: borsuk_fma::FusedDot8x12,
+    maximum_node_visits: usize,
+}
+
 /// GT-free selection evidence associated with one query ordinal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V37DirectSelectionRecord {
@@ -246,6 +255,67 @@ pub(crate) struct V37DirectRoutingResult {
     pub(crate) minimum_recall_ppm: u32,
     pub(crate) passed: bool,
     pub(crate) disposition: String,
+}
+
+/// One full, untruncated relation count with its exact Q24 mass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V37RelationRecord {
+    pub(crate) posting_ordinal: u32,
+    pub(crate) count: u64,
+    pub(crate) mass_q24: u32,
+}
+
+/// Full relation counts for one independently trained routing leaf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37RelationLeaf {
+    pub(crate) population: u64,
+    pub(crate) records: Vec<V37RelationRecord>,
+}
+
+/// Query-blind leaf-to-ownership relation plane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37RelationPlane {
+    posting_count: u32,
+    prefix_lengths: Vec<u32>,
+    pub(crate) leaves: Vec<V37RelationLeaf>,
+}
+
+/// Deterministic posting selection from ranked relation leaves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37RelationSelection {
+    pub(crate) selected_postings: Vec<u32>,
+    pub(crate) touched_records: u32,
+}
+
+/// Relation-tree traversal evidence plus the resulting posting votes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37RoutedRelationSelection {
+    pub(crate) routing: V37DirectSelection,
+    pub(crate) votes: V37RelationSelection,
+}
+
+/// Content-addressed cross-language relation artifact bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37EncodedRelationArtifact {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) sha256: String,
+    pub(crate) blake3: String,
+}
+
+/// Structure-of-arrays serving prefixes for each registered prefix length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37RelationPrefixes {
+    pub(crate) posting_count: u32,
+    pub(crate) prefix_lengths: Vec<u32>,
+    pub(crate) leaf_offsets: Vec<Vec<u64>>,
+    pub(crate) posting_ordinals: Vec<Vec<u32>>,
+    pub(crate) masses_q24: Vec<Vec<u32>>,
+}
+
+/// Immutable serving prefixes validated once before any query work.
+pub(crate) struct V37ValidatedRelationPrefixes<'a> {
+    prefixes: &'a V37RelationPrefixes,
 }
 
 /// Exact GT row identities for one separately authorized ceiling query.
@@ -873,17 +943,56 @@ pub(crate) fn select_v37_direct_postings(
     router: &V37DirectRouter<'_>,
     query: &[f32],
 ) -> Result<V37DirectSelection> {
-    let tree = router.tree;
+    select_v37_tree_postings(
+        router.tree,
+        router.kernel,
+        router.maximum_node_visits,
+        V37_SELECTED_POSTINGS as usize,
+        query,
+    )
+}
+
+pub(crate) fn prepare_v37_relation_router<'a>(
+    tree: &'a V37BalancedTree,
+    expected_backend: &str,
+    maximum_node_visits: usize,
+) -> Result<V37RelationRouter<'a>> {
+    validate_v37_tree_geometry(tree)?;
+    if expected_backend != tree.fma_backend
+        || tree.leaf_populations.len() < 32
+        || maximum_node_visits == 0
+        || maximum_node_visits > V37_MAXIMUM_RELATION_NODE_VISITS as usize
+        || maximum_node_visits > tree.nodes.len()
+    {
+        return Err(invalid("V37 relation routing authority differs"));
+    }
+    let kernel = v37_fused_kernel()?;
+    if v37_fma_backend_name(kernel) != expected_backend {
+        return Err(invalid("V37 relation routing backend differs"));
+    }
+    Ok(V37RelationRouter {
+        tree,
+        kernel,
+        maximum_node_visits,
+    })
+}
+
+fn select_v37_tree_postings(
+    tree: &V37BalancedTree,
+    kernel: borsuk_fma::FusedDot8x12,
+    maximum_node_visits: usize,
+    posting_limit: usize,
+    query: &[f32],
+) -> Result<V37DirectSelection> {
     if query.len() != tree.dimensions || query.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V37 direct routing authority differs"));
     }
-    let kernel = router.kernel;
     let mut queue = vec![(0.0_f32, 0_u32)];
     let mut visited = vec![false; tree.nodes.len()];
-    let mut selected_postings = Vec::with_capacity(V37_SELECTED_POSTINGS as usize);
+    let mut selected_postings = Vec::with_capacity(posting_limit);
     let mut node_visits = 0_usize;
     let mut scored_internal_nodes = 0_usize;
-    while selected_postings.len() < V37_SELECTED_POSTINGS as usize {
+    while selected_postings.len() < posting_limit {
         let next = queue
             .iter()
             .enumerate()
@@ -898,7 +1007,7 @@ pub(crate) fn select_v37_direct_postings(
         node_visits = node_visits
             .checked_add(1)
             .ok_or_else(|| invalid("V37 direct node visits overflow"))?;
-        if node_visits > router.maximum_node_visits {
+        if node_visits > maximum_node_visits {
             return Err(invalid("V37 direct node visit limit exceeded"));
         }
         let node_index = node_id as usize;
@@ -2028,6 +2137,757 @@ pub(crate) fn canonical_v37_direct_bytes(result: &V37DirectRoutingResult) -> Res
     Ok(bytes)
 }
 
+fn v37_mass_q24(count: u64, population: u64) -> Result<u32> {
+    if count == 0 || count > population {
+        return Err(invalid("V37 relation mass authority differs"));
+    }
+    let numerator = u128::from(count)
+        .checked_mul(1_u128 << 24)
+        .ok_or_else(|| invalid("V37 relation mass overflows"))?;
+    let denominator = u128::from(population);
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    let doubled_remainder = remainder
+        .checked_mul(2)
+        .ok_or_else(|| invalid("V37 relation rounding overflows"))?;
+    let rounded = quotient
+        .checked_add(u128::from(
+            doubled_remainder > denominator
+                || (doubled_remainder == denominator && quotient % 2 == 1),
+        ))
+        .ok_or_else(|| invalid("V37 relation rounding overflows"))?;
+    u32::try_from(rounded).map_err(|_| invalid("V37 relation mass exceeds Q24"))
+}
+
+pub(crate) fn build_v37_relation_plane(
+    relation_memberships: &[V37OwnershipAssignment],
+    ownership: &[V37OwnershipAssignment],
+    relation_leaf_count: u32,
+    posting_count: u32,
+    prefix_lengths: &[u32],
+) -> Result<V37RelationPlane> {
+    if relation_leaf_count == 0
+        || posting_count < V37_SELECTED_POSTINGS as u32
+        || prefix_lengths != [16, 32, 64]
+        || relation_memberships.len() != ownership.len()
+        || relation_memberships.is_empty()
+    {
+        return Err(invalid("V37 relation plane authority differs"));
+    }
+    let leaf_count = usize::try_from(relation_leaf_count)
+        .map_err(|_| invalid("V37 relation leaf count exceeds address space"))?;
+    let mut populations = vec![0_u64; leaf_count];
+    let mut counts = vec![BTreeMap::<u32, u64>::new(); leaf_count];
+    let mut relation_memberships = relation_memberships.to_vec();
+    let mut ownership = ownership.to_vec();
+    relation_memberships.sort_unstable_by_key(|row| row.source_ordinal);
+    ownership.sort_unstable_by_key(|row| row.source_ordinal);
+    let mut previous_source = None;
+    for (membership, owner) in relation_memberships.iter().zip(&ownership) {
+        if membership.source_ordinal != owner.source_ordinal
+            || previous_source.is_some_and(|source| membership.source_ordinal <= source)
+            || membership.posting_ordinal >= relation_leaf_count
+            || owner.posting_ordinal >= posting_count
+        {
+            return Err(invalid("V37 relation row binding differs"));
+        }
+        previous_source = Some(membership.source_ordinal);
+        let leaf = membership.posting_ordinal as usize;
+        populations[leaf] = populations[leaf]
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 relation population overflows"))?;
+        let count = counts[leaf].entry(owner.posting_ordinal).or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 relation count overflows"))?;
+    }
+    let leaves = populations
+        .into_iter()
+        .zip(counts)
+        .map(|(population, counts)| {
+            if population == 0 {
+                return Err(invalid("V37 relation leaf is empty"));
+            }
+            let mut ranked = counts.into_iter().collect::<Vec<_>>();
+            ranked.sort_unstable_by(|left, right| {
+                right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
+            });
+            let records = ranked
+                .into_iter()
+                .map(|(posting_ordinal, count)| {
+                    Ok(V37RelationRecord {
+                        posting_ordinal,
+                        count,
+                        mass_q24: v37_mass_q24(count, population)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(V37RelationLeaf {
+                population,
+                records,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(V37RelationPlane {
+        posting_count,
+        prefix_lengths: prefix_lengths.to_vec(),
+        leaves,
+    })
+}
+
+pub(crate) fn reduce_v37_relation_postings(
+    plane: &V37RelationPlane,
+    probed_leaves: &[u32],
+    prefix_length: u32,
+    primary_posting: u32,
+) -> Result<V37RelationSelection> {
+    if probed_leaves.is_empty()
+        || probed_leaves.len() > 32
+        || !plane.prefix_lengths.contains(&prefix_length)
+        || primary_posting >= plane.posting_count
+    {
+        return Err(invalid("V37 relation selection authority differs"));
+    }
+    let mut votes = BTreeMap::<u32, (u64, u32)>::new();
+    let mut seen_leaves = BTreeSet::new();
+    let mut touched_records = 0_u32;
+    for (rank, leaf_ordinal) in probed_leaves.iter().copied().enumerate() {
+        if !seen_leaves.insert(leaf_ordinal) {
+            return Err(invalid("V37 relation leaf is duplicated"));
+        }
+        let leaf = plane
+            .leaves
+            .get(leaf_ordinal as usize)
+            .ok_or_else(|| invalid("V37 relation leaf differs"))?;
+        let weight = 32_u64
+            .checked_sub(u64::try_from(rank).map_err(|_| invalid("V37 rank overflows"))?)
+            .ok_or_else(|| invalid("V37 relation rank underflows"))?;
+        for record in leaf.records.iter().take(prefix_length as usize) {
+            touched_records = touched_records
+                .checked_add(1)
+                .ok_or_else(|| invalid("V37 touched record count overflows"))?;
+            let contribution = weight
+                .checked_mul(u64::from(record.mass_q24))
+                .ok_or_else(|| invalid("V37 relation vote overflows"))?;
+            let candidate = votes
+                .entry(record.posting_ordinal)
+                .or_insert((0, rank as u32));
+            candidate.0 = candidate
+                .0
+                .checked_add(contribution)
+                .ok_or_else(|| invalid("V37 relation vote overflows"))?;
+            candidate.1 = candidate.1.min(rank as u32);
+        }
+    }
+    votes.entry(primary_posting).or_insert((0, u32::MAX));
+    if votes.len() < V37_SELECTED_POSTINGS as usize {
+        return Err(invalid("V37 relation candidate shortage"));
+    }
+    let mut candidates = votes.into_iter().collect::<Vec<_>>();
+    candidates.sort_unstable_by(|left, right| {
+        right
+            .1
+            .0
+            .cmp(&left.1.0)
+            .then_with(|| left.1.1.cmp(&right.1.1))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    Ok(V37RelationSelection {
+        selected_postings: candidates
+            .into_iter()
+            .take(V37_SELECTED_POSTINGS as usize)
+            .map(|(posting, _)| posting)
+            .collect(),
+        touched_records,
+    })
+}
+
+pub(crate) fn select_v37_relation_postings(
+    router: &V37RelationRouter<'_>,
+    prefixes: &V37ValidatedRelationPrefixes<'_>,
+    query: &[f32],
+    leaf_probes: u32,
+    prefix_length: u32,
+    primary_posting: u32,
+) -> Result<V37RoutedRelationSelection> {
+    let probes = usize::try_from(leaf_probes)
+        .map_err(|_| invalid("V37 relation probe count exceeds address space"))?;
+    if !matches!(leaf_probes, 8 | 16 | 32)
+        || probes > router.tree.leaf_populations.len()
+        || prefixes.prefixes.leaf_offsets.first().map(Vec::len)
+            != Some(router.tree.leaf_populations.len() + 1)
+    {
+        return Err(invalid("V37 relation probe authority differs"));
+    }
+    let routing = select_v37_tree_postings(
+        router.tree,
+        router.kernel,
+        router.maximum_node_visits,
+        probes,
+        query,
+    )?;
+    let votes = reduce_v37_relation_prefixes(
+        prefixes.prefixes,
+        &routing.selected_postings,
+        prefix_length,
+        primary_posting,
+    )?;
+    Ok(V37RoutedRelationSelection { routing, votes })
+}
+
+pub(crate) fn validate_v37_relation_prefixes(prefixes: &V37RelationPrefixes) -> Result<()> {
+    if prefixes.posting_count < V37_SELECTED_POSTINGS as u32
+        || prefixes.prefix_lengths != [16, 32, 64]
+        || prefixes.leaf_offsets.len() != 3
+        || prefixes.posting_ordinals.len() != 3
+        || prefixes.masses_q24.len() != 3
+    {
+        return Err(invalid("V37 relation prefix authority differs"));
+    }
+    let leaf_count = prefixes.leaf_offsets[0]
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| invalid("V37 relation prefix leaf count differs"))?;
+    if leaf_count == 0 {
+        return Err(invalid("V37 relation prefix leaf count differs"));
+    }
+    for row in 0..3 {
+        let offsets = &prefixes.leaf_offsets[row];
+        let postings = &prefixes.posting_ordinals[row];
+        let masses = &prefixes.masses_q24[row];
+        if offsets.len() != leaf_count + 1
+            || offsets.first() != Some(&0)
+            || offsets.windows(2).any(|pair| pair[0] > pair[1])
+            || offsets.last().copied() != Some(postings.len() as u64)
+            || postings.len() != masses.len()
+        {
+            return Err(invalid("V37 relation prefix extent differs"));
+        }
+        for leaf in 0..leaf_count {
+            let start = usize::try_from(offsets[leaf])
+                .map_err(|_| invalid("V37 relation prefix offset exceeds address space"))?;
+            let end = usize::try_from(offsets[leaf + 1])
+                .map_err(|_| invalid("V37 relation prefix offset exceeds address space"))?;
+            if end - start > prefixes.prefix_lengths[row] as usize
+                || postings[start..end]
+                    .iter()
+                    .any(|posting| *posting >= prefixes.posting_count)
+                || postings[start..end]
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != end - start
+                || masses[start..end].iter().any(|mass| *mass > 1 << 24)
+                || masses[start..end].windows(2).any(|pair| pair[0] < pair[1])
+            {
+                return Err(invalid("V37 relation prefix record differs"));
+            }
+        }
+    }
+    for shorter in 0..2 {
+        for leaf in 0..leaf_count {
+            let short_start = prefixes.leaf_offsets[shorter][leaf];
+            let short_end = prefixes.leaf_offsets[shorter][leaf + 1];
+            let long_start = prefixes.leaf_offsets[shorter + 1][leaf];
+            let long_end = prefixes.leaf_offsets[shorter + 1][leaf + 1];
+            let short_start = short_start as usize;
+            let short_end = short_end as usize;
+            let long_start = long_start as usize;
+            let long_end = long_end as usize;
+            let short_len = short_end - short_start;
+            let long_len = long_end - long_start;
+            if short_len > long_len
+                || prefixes.posting_ordinals[shorter][short_start..short_end]
+                    != prefixes.posting_ordinals[shorter + 1][long_start..long_start + short_len]
+                || prefixes.masses_q24[shorter][short_start..short_end]
+                    != prefixes.masses_q24[shorter + 1][long_start..long_start + short_len]
+                || (short_len < prefixes.prefix_lengths[shorter] as usize && short_len != long_len)
+            {
+                return Err(invalid("V37 relation prefix nesting differs"));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_v37_relation_prefixes(
+    prefixes: &V37RelationPrefixes,
+) -> Result<V37ValidatedRelationPrefixes<'_>> {
+    validate_v37_relation_prefixes(prefixes)?;
+    Ok(V37ValidatedRelationPrefixes { prefixes })
+}
+
+fn reduce_v37_relation_prefixes(
+    prefixes: &V37RelationPrefixes,
+    probed_leaves: &[u32],
+    prefix_length: u32,
+    primary_posting: u32,
+) -> Result<V37RelationSelection> {
+    let row = prefixes
+        .prefix_lengths
+        .iter()
+        .position(|value| *value == prefix_length)
+        .ok_or_else(|| invalid("V37 relation prefix length differs"))?;
+    if probed_leaves.is_empty()
+        || probed_leaves.len() > 32
+        || primary_posting >= prefixes.posting_count
+    {
+        return Err(invalid("V37 relation selection authority differs"));
+    }
+    let mut votes = BTreeMap::<u32, (u64, u32)>::new();
+    let mut seen_leaves = BTreeSet::new();
+    let mut touched_records = 0_u32;
+    for (rank, leaf) in probed_leaves.iter().copied().enumerate() {
+        if !seen_leaves.insert(leaf) {
+            return Err(invalid("V37 relation leaf is duplicated"));
+        }
+        let leaf = leaf as usize;
+        let start = *prefixes.leaf_offsets[row]
+            .get(leaf)
+            .ok_or_else(|| invalid("V37 relation leaf differs"))? as usize;
+        let end = *prefixes.leaf_offsets[row]
+            .get(leaf + 1)
+            .ok_or_else(|| invalid("V37 relation leaf differs"))? as usize;
+        let weight = 32_u64 - rank as u64;
+        for index in start..end {
+            touched_records = touched_records
+                .checked_add(1)
+                .ok_or_else(|| invalid("V37 touched record count overflows"))?;
+            let posting = prefixes.posting_ordinals[row][index];
+            let contribution = weight
+                .checked_mul(u64::from(prefixes.masses_q24[row][index]))
+                .ok_or_else(|| invalid("V37 relation vote overflows"))?;
+            let candidate = votes.entry(posting).or_insert((0, rank as u32));
+            candidate.0 = candidate
+                .0
+                .checked_add(contribution)
+                .ok_or_else(|| invalid("V37 relation vote overflows"))?;
+            candidate.1 = candidate.1.min(rank as u32);
+        }
+    }
+    votes.entry(primary_posting).or_insert((0, u32::MAX));
+    if votes.len() < V37_SELECTED_POSTINGS as usize {
+        return Err(invalid("V37 relation candidate shortage"));
+    }
+    let mut candidates = votes.into_iter().collect::<Vec<_>>();
+    candidates.sort_unstable_by(|left, right| {
+        right
+            .1
+            .0
+            .cmp(&left.1.0)
+            .then_with(|| left.1.1.cmp(&right.1.1))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    Ok(V37RelationSelection {
+        selected_postings: candidates
+            .into_iter()
+            .take(V37_SELECTED_POSTINGS as usize)
+            .map(|(posting, _)| posting)
+            .collect(),
+        touched_records,
+    })
+}
+
+fn validate_v37_relation_plane(plane: &V37RelationPlane) -> Result<()> {
+    if plane.posting_count < V37_SELECTED_POSTINGS as u32
+        || plane.prefix_lengths != [16, 32, 64]
+        || plane.leaves.is_empty()
+    {
+        return Err(invalid("V37 relation plane authority differs"));
+    }
+    for leaf in &plane.leaves {
+        let mut previous = None;
+        let mut seen_postings = BTreeSet::new();
+        let mut total = 0_u64;
+        for record in &leaf.records {
+            if record.posting_ordinal >= plane.posting_count
+                || !seen_postings.insert(record.posting_ordinal)
+                || record.count == 0
+                || record.mass_q24 != v37_mass_q24(record.count, leaf.population)?
+                || previous.is_some_and(|(count, posting)| {
+                    record.count > count
+                        || (record.count == count && record.posting_ordinal <= posting)
+                })
+            {
+                return Err(invalid("V37 relation record authority differs"));
+            }
+            previous = Some((record.count, record.posting_ordinal));
+            total = total
+                .checked_add(record.count)
+                .ok_or_else(|| invalid("V37 relation population overflows"))?;
+        }
+        if leaf.population == 0 || leaf.records.is_empty() || total != leaf.population {
+            return Err(invalid("V37 relation leaf authority differs"));
+        }
+    }
+    Ok(())
+}
+
+fn v37_relation_counts_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("relation_leaf_ordinal", DataType::UInt32, false),
+        Field::new("rank", DataType::UInt32, false),
+        Field::new("posting_ordinal", DataType::UInt32, false),
+        Field::new("count", DataType::UInt64, false),
+        Field::new("leaf_population", DataType::UInt64, false),
+    ])
+}
+
+fn encoded_v37_relation_artifact(bytes: Vec<u8>) -> V37EncodedRelationArtifact {
+    V37EncodedRelationArtifact {
+        encoded_bytes: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        bytes,
+    }
+}
+
+pub(crate) fn encode_v37_relation_counts_parquet(
+    plane: &V37RelationPlane,
+) -> Result<V37EncodedRelationArtifact> {
+    validate_v37_relation_plane(plane)?;
+    let row_count = plane
+        .leaves
+        .iter()
+        .try_fold(0_usize, |sum, leaf| sum.checked_add(leaf.records.len()))
+        .ok_or_else(|| invalid("V37 relation row count overflows"))?;
+    let mut leaves = Vec::with_capacity(row_count);
+    let mut ranks = Vec::with_capacity(row_count);
+    let mut postings = Vec::with_capacity(row_count);
+    let mut counts = Vec::with_capacity(row_count);
+    let mut populations = Vec::with_capacity(row_count);
+    for (leaf_ordinal, leaf) in plane.leaves.iter().enumerate() {
+        for (rank, record) in leaf.records.iter().enumerate() {
+            leaves.push(
+                u32::try_from(leaf_ordinal)
+                    .map_err(|_| invalid("V37 relation leaf exceeds artifact width"))?,
+            );
+            ranks.push(
+                u32::try_from(rank)
+                    .map_err(|_| invalid("V37 relation rank exceeds artifact width"))?,
+            );
+            postings.push(record.posting_ordinal);
+            counts.push(record.count);
+            populations.push(leaf.population);
+        }
+    }
+    let schema = Arc::new(v37_relation_counts_schema());
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(UInt32Array::from(leaves)),
+            Arc::new(UInt32Array::from(ranks)),
+            Arc::new(UInt32Array::from(postings)),
+            Arc::new(UInt64Array::from(counts)),
+            Arc::new(UInt64Array::from(populations)),
+        ],
+    )?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(encoded_v37_relation_artifact(bytes))
+}
+
+pub(crate) fn decode_v37_relation_counts_parquet(
+    bytes: &[u8],
+    encoded_bytes: u64,
+    sha256: &str,
+    blake3: &str,
+    relation_leaf_count: u32,
+    posting_count: u32,
+    prefix_lengths: &[u32],
+) -> Result<V37RelationPlane> {
+    if encoded_bytes != bytes.len() as u64
+        || format!("{:x}", Sha256::digest(bytes)) != sha256
+        || blake3::hash(bytes).to_hex().as_str() != blake3
+        || !valid_lower_hex_digest(sha256)
+        || !valid_lower_hex_digest(blake3)
+        || relation_leaf_count == 0
+    {
+        return Err(invalid("V37 relation count artifact differs"));
+    }
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != &v37_relation_counts_schema()
+        || builder.metadata().num_row_groups() != 1
+    {
+        return Err(invalid("V37 relation count schema differs"));
+    }
+    let leaf_count = relation_leaf_count as usize;
+    let mut leaves = vec![
+        V37RelationLeaf {
+            population: 0,
+            records: Vec::new(),
+        };
+        leaf_count
+    ];
+    let mut expected_leaf = 0_usize;
+    let mut expected_rank = 0_u32;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 5
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V37 relation count batch differs"));
+        }
+        let leaf_ordinals = column::<UInt32Array>(&batch, 0, "V37 relation leaf differs")?;
+        let ranks = column::<UInt32Array>(&batch, 1, "V37 relation rank differs")?;
+        let postings = column::<UInt32Array>(&batch, 2, "V37 relation posting differs")?;
+        let counts = column::<UInt64Array>(&batch, 3, "V37 relation count differs")?;
+        let populations = column::<UInt64Array>(&batch, 4, "V37 relation population differs")?;
+        for row in 0..batch.num_rows() {
+            let leaf = leaf_ordinals.value(row) as usize;
+            if leaf >= leaf_count || leaf < expected_leaf || leaf > expected_leaf + 1 {
+                return Err(invalid("V37 relation leaf ordering differs"));
+            }
+            if leaf != expected_leaf {
+                if leaves[expected_leaf].records.is_empty() {
+                    return Err(invalid("V37 relation leaf is absent"));
+                }
+                expected_leaf = leaf;
+                expected_rank = 0;
+            }
+            if ranks.value(row) != expected_rank
+                || (leaves[leaf].population != 0
+                    && leaves[leaf].population != populations.value(row))
+            {
+                return Err(invalid("V37 relation count ordering differs"));
+            }
+            leaves[leaf].population = populations.value(row);
+            leaves[leaf].records.push(V37RelationRecord {
+                posting_ordinal: postings.value(row),
+                count: counts.value(row),
+                mass_q24: v37_mass_q24(counts.value(row), populations.value(row))?,
+            });
+            expected_rank = expected_rank
+                .checked_add(1)
+                .ok_or_else(|| invalid("V37 relation rank overflows"))?;
+        }
+    }
+    let plane = V37RelationPlane {
+        posting_count,
+        prefix_lengths: prefix_lengths.to_vec(),
+        leaves,
+    };
+    validate_v37_relation_plane(&plane)?;
+    Ok(plane)
+}
+
+fn v37_list_field(name: &str, data_type: DataType) -> Field {
+    Field::new(
+        name,
+        DataType::List(Arc::new(Field::new("element", data_type, false))),
+        false,
+    )
+}
+
+fn v37_relation_prefix_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("prefix_length", DataType::UInt32, false),
+        Field::new("posting_count", DataType::UInt32, false),
+        Field::new("relation_leaf_count", DataType::UInt32, false),
+        v37_list_field("leaf_offsets", DataType::UInt64),
+        v37_list_field("posting_ordinals", DataType::UInt32),
+        v37_list_field("masses_q24", DataType::UInt32),
+    ])
+}
+
+fn v37_list_offsets(lengths: &[usize]) -> Result<OffsetBuffer<i32>> {
+    let mut offsets = Vec::with_capacity(lengths.len() + 1);
+    offsets.push(0_i32);
+    let mut total = 0_usize;
+    for length in lengths {
+        total = total
+            .checked_add(*length)
+            .ok_or_else(|| invalid("V37 relation list length overflows"))?;
+        offsets.push(
+            i32::try_from(total)
+                .map_err(|_| invalid("V37 relation list exceeds Arrow offset width"))?,
+        );
+    }
+    Ok(OffsetBuffer::new(offsets.into()))
+}
+
+pub(crate) fn encode_v37_relation_prefixes_arrow(
+    plane: &V37RelationPlane,
+) -> Result<V37EncodedRelationArtifact> {
+    validate_v37_relation_plane(plane)?;
+    let mut leaf_offsets = Vec::new();
+    let mut postings = Vec::new();
+    let mut masses = Vec::new();
+    let mut offset_lengths = Vec::new();
+    let mut record_lengths = Vec::new();
+    for prefix in &plane.prefix_lengths {
+        let mut offsets = Vec::with_capacity(plane.leaves.len() + 1);
+        offsets.push(0_u64);
+        let start = postings.len();
+        for leaf in &plane.leaves {
+            for record in leaf.records.iter().take(*prefix as usize) {
+                postings.push(record.posting_ordinal);
+                masses.push(record.mass_q24);
+            }
+            offsets.push(
+                u64::try_from(postings.len() - start)
+                    .map_err(|_| invalid("V37 relation prefix length exceeds u64"))?,
+            );
+        }
+        offset_lengths.push(offsets.len());
+        record_lengths.push(postings.len() - start);
+        leaf_offsets.extend(offsets);
+    }
+    let u64_child = Arc::new(Field::new("element", DataType::UInt64, false));
+    let u32_child = Arc::new(Field::new("element", DataType::UInt32, false));
+    let leaf_offsets = ListArray::new(
+        Arc::clone(&u64_child),
+        v37_list_offsets(&offset_lengths)?,
+        Arc::new(UInt64Array::from(leaf_offsets)),
+        None,
+    );
+    let posting_ordinals = ListArray::new(
+        Arc::clone(&u32_child),
+        v37_list_offsets(&record_lengths)?,
+        Arc::new(UInt32Array::from(postings)),
+        None,
+    );
+    let masses_q24 = ListArray::new(
+        u32_child,
+        v37_list_offsets(&record_lengths)?,
+        Arc::new(UInt32Array::from(masses)),
+        None,
+    );
+    let rows = plane.prefix_lengths.len();
+    let schema = Arc::new(v37_relation_prefix_schema());
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(UInt32Array::from(plane.prefix_lengths.clone())),
+            Arc::new(UInt32Array::from(vec![plane.posting_count; rows])),
+            Arc::new(UInt32Array::from(vec![plane.leaves.len() as u32; rows])),
+            Arc::new(leaf_offsets),
+            Arc::new(posting_ordinals),
+            Arc::new(masses_q24),
+        ],
+    )?;
+    let mut bytes = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(encoded_v37_relation_artifact(bytes))
+}
+
+pub(crate) fn decode_v37_relation_prefixes_arrow(
+    bytes: &[u8],
+    encoded_bytes: u64,
+    sha256: &str,
+    blake3: &str,
+) -> Result<V37RelationPrefixes> {
+    if encoded_bytes != bytes.len() as u64
+        || format!("{:x}", Sha256::digest(bytes)) != sha256
+        || blake3::hash(bytes).to_hex().as_str() != blake3
+        || !valid_lower_hex_digest(sha256)
+        || !valid_lower_hex_digest(blake3)
+    {
+        return Err(invalid("V37 relation prefix artifact differs"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &v37_relation_prefix_schema() {
+        return Err(invalid("V37 relation prefix schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V37 relation prefix batch is absent"))?;
+    if reader.next().is_some()
+        || batch.num_rows() != 3
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V37 relation prefix batch differs"));
+    }
+    let prefixes = column::<UInt32Array>(&batch, 0, "V37 prefix lengths differ")?;
+    let posting_counts = column::<UInt32Array>(&batch, 1, "V37 posting count differs")?;
+    let leaf_counts = column::<UInt32Array>(&batch, 2, "V37 relation leaf count differs")?;
+    let offsets = column::<ListArray>(&batch, 3, "V37 leaf offsets differ")?;
+    let postings = column::<ListArray>(&batch, 4, "V37 prefix postings differ")?;
+    let masses = column::<ListArray>(&batch, 5, "V37 prefix masses differ")?;
+    let prefix_lengths = (0..3).map(|row| prefixes.value(row)).collect::<Vec<_>>();
+    if prefix_lengths != [16, 32, 64]
+        || (1..3).any(|row| posting_counts.value(row) != posting_counts.value(0))
+        || (1..3).any(|row| leaf_counts.value(row) != leaf_counts.value(0))
+        || posting_counts.value(0) < V37_SELECTED_POSTINGS as u32
+        || leaf_counts.value(0) == 0
+    {
+        return Err(invalid("V37 relation prefix authority differs"));
+    }
+    let mut leaf_offsets = Vec::with_capacity(3);
+    let mut posting_ordinals = Vec::with_capacity(3);
+    let mut masses_q24 = Vec::with_capacity(3);
+    for row in 0..3 {
+        let offset_array = offsets.value(row);
+        let posting_array = postings.value(row);
+        let mass_array = masses.value(row);
+        if offset_array.null_count() != 0
+            || posting_array.null_count() != 0
+            || mass_array.null_count() != 0
+        {
+            return Err(invalid("V37 relation prefix child null differs"));
+        }
+        let offset_values = offset_array
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V37 relation offset values differ"))?
+            .values()
+            .to_vec();
+        let posting_values = posting_array
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V37 relation posting values differ"))?
+            .values()
+            .to_vec();
+        let mass_values = mass_array
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V37 relation mass values differ"))?
+            .values()
+            .to_vec();
+        if offset_values.len() != leaf_counts.value(row) as usize + 1
+            || offset_values.first() != Some(&0)
+            || offset_values.windows(2).any(|pair| pair[0] > pair[1])
+            || offset_values.last().copied() != Some(posting_values.len() as u64)
+            || posting_values.len() != mass_values.len()
+            || posting_values
+                .iter()
+                .any(|posting| *posting >= posting_counts.value(row))
+            || mass_values.iter().any(|mass| *mass > 1 << 24)
+        {
+            return Err(invalid("V37 relation prefix values differ"));
+        }
+        leaf_offsets.push(offset_values);
+        posting_ordinals.push(posting_values);
+        masses_q24.push(mass_values);
+    }
+    let prefixes = V37RelationPrefixes {
+        posting_count: posting_counts.value(0),
+        prefix_lengths,
+        leaf_offsets,
+        posting_ordinals,
+        masses_q24,
+    };
+    validate_v37_relation_prefixes(&prefixes)?;
+    Ok(prefixes)
+}
+
 fn v37_tree_schema(dimensions: usize) -> Result<Schema> {
     let dimensions =
         i32::try_from(dimensions).map_err(|_| invalid("V37 tree dimensions exceed Arrow width"))?;
@@ -2312,15 +3172,19 @@ mod tests {
     use super::{
         V37ArtifactIdentity, V37AuthorityManifest, V37DirectSelection, V37DirectSelectionRecord,
         V37GroundTruth, V37LayoutDisposition, V37NumericAuthority, V37RelationSpec, V37TrainingRow,
-        V37TrainingShape, V37TreeSpec, canonical_v37_authority_bytes, canonical_v37_ceiling_bytes,
-        canonical_v37_direct_bytes, decode_v37_ownership_parquet, decode_v37_tree_arrow,
-        encode_v37_ownership_parquet, encode_v37_tree_arrow, evaluate_v37_direct_recall,
+        V37TrainingShape, V37TreeSpec, build_v37_relation_plane, canonical_v37_authority_bytes,
+        canonical_v37_ceiling_bytes, canonical_v37_direct_bytes, decode_v37_ownership_parquet,
+        decode_v37_relation_counts_parquet, decode_v37_relation_prefixes_arrow,
+        decode_v37_tree_arrow, encode_v37_ownership_parquet, encode_v37_relation_counts_parquet,
+        encode_v37_relation_prefixes_arrow, encode_v37_tree_arrow, evaluate_v37_direct_recall,
         evaluate_v37_unique_owner_ceiling, parse_v37_authority_bytes, prepare_v37_direct_router,
-        project_v37_child_quota, project_v37_construction_bytes, project_v37_layout,
-        project_v37_serving_bytes, project_v37_work, repair_v37_empty_partition,
+        prepare_v37_relation_prefixes, prepare_v37_relation_router, project_v37_child_quota,
+        project_v37_construction_bytes, project_v37_layout, project_v37_serving_bytes,
+        project_v37_work, reduce_v37_relation_postings, repair_v37_empty_partition,
         route_v37_corpus_member, route_v37_primary_leaf, route_v37_query,
         score_v37_hyperplane_fused, score_v37_hyperplane_scalar, select_v37_direct_postings,
-        select_v37_node_reservoir, train_v37_ownership_tree, validate_v37_specs,
+        select_v37_node_reservoir, select_v37_relation_postings, train_v37_ownership_tree,
+        v37_mass_q24, validate_v37_relation_prefixes, validate_v37_specs,
     };
 
     fn ownership_spec(rows: u64) -> V37TreeSpec {
@@ -3295,5 +4159,309 @@ mod tests {
             evaluate_v37_direct_recall(&assignments, &truth, &foreign_ceiling, &selections)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v37_relation_plane_builds_full_counts_before_exact_q24_prefixes() {
+        let relation_membership = (0_u64..64)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: (source_ordinal % 2) as u32,
+            })
+            .collect::<Vec<_>>();
+        let ownership = (0_u64..64)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: ((source_ordinal / 2) % 16) as u32,
+            })
+            .collect::<Vec<_>>();
+        let plane =
+            build_v37_relation_plane(&relation_membership, &ownership, 2, 16, &[16, 32, 64])
+                .unwrap();
+        assert_eq!(plane.leaves.len(), 2);
+        assert_eq!(plane.leaves[0].population, 32);
+        assert_eq!(plane.leaves[0].records.len(), 16);
+        assert_eq!(plane.leaves[0].records[0].posting_ordinal, 0);
+        assert_eq!(plane.leaves[0].records[0].count, 2);
+        assert_eq!(plane.leaves[0].records[0].mass_q24, 1_048_576);
+        assert_eq!(plane.leaves[1].records[15].posting_ordinal, 15);
+
+        let mut reordered_membership = relation_membership.clone();
+        let mut reordered_ownership = ownership.clone();
+        reordered_membership.reverse();
+        reordered_ownership.reverse();
+        assert_eq!(
+            build_v37_relation_plane(
+                &reordered_membership,
+                &reordered_ownership,
+                2,
+                16,
+                &[16, 32, 64],
+            )
+            .unwrap(),
+            plane
+        );
+
+        let selected = reduce_v37_relation_postings(&plane, &[0], 16, 15).unwrap();
+        assert_eq!(selected.selected_postings, (0..14).collect::<Vec<_>>());
+        assert_eq!(selected.touched_records, 16);
+
+        let mut duplicate = relation_membership;
+        duplicate[1].source_ordinal = 0;
+        assert!(build_v37_relation_plane(&duplicate, &ownership, 2, 16, &[16, 32, 64]).is_err());
+    }
+
+    #[test]
+    fn v37_relation_plane_votes_by_leaf_rank_and_rejects_candidate_shortage() {
+        let relation_membership = (0_u64..46)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: (source_ordinal / 23) as u32,
+            })
+            .collect::<Vec<_>>();
+        let ownership = (0_u64..46)
+            .map(|source_ordinal| {
+                let local = source_ordinal % 23;
+                let leaf = source_ordinal / 23;
+                let posting_ordinal = if local < 9 {
+                    leaf as u32
+                } else if leaf == 0 {
+                    (local - 8) as u32
+                } else if local == 9 {
+                    0
+                } else {
+                    (local - 8) as u32
+                };
+                super::V37OwnershipAssignment {
+                    source_ordinal,
+                    posting_ordinal,
+                }
+            })
+            .collect::<Vec<_>>();
+        let plane =
+            build_v37_relation_plane(&relation_membership, &ownership, 2, 15, &[16, 32, 64])
+                .unwrap();
+        let forward = reduce_v37_relation_postings(&plane, &[0, 1], 16, 14).unwrap();
+        let reversed = reduce_v37_relation_postings(&plane, &[1, 0], 16, 14).unwrap();
+        assert_eq!(forward.selected_postings[0], 0);
+        assert_eq!(reversed.selected_postings[0], 1);
+
+        let shortage_membership = (0_u64..4)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: 0,
+            })
+            .collect::<Vec<_>>();
+        let shortage_ownership = (0_u64..4)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: (source_ordinal % 2) as u32,
+            })
+            .collect::<Vec<_>>();
+        let shortage = build_v37_relation_plane(
+            &shortage_membership,
+            &shortage_ownership,
+            1,
+            14,
+            &[16, 32, 64],
+        )
+        .unwrap();
+        assert!(reduce_v37_relation_postings(&shortage, &[0], 16, 0).is_err());
+    }
+
+    #[test]
+    fn v37_relation_plane_routes_bounded_independent_leaves_before_voting() {
+        let rows = training_rows(512, 192);
+        let tree = train_v37_ownership_tree(
+            &rows,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 32,
+                reservoir_rows: 64,
+                two_means_iterations: 8,
+            },
+            73,
+            4,
+            64,
+        )
+        .unwrap();
+        let relation_membership = tree.assignments.clone();
+        let ownership = (0_u64..512)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: (source_ordinal % 16) as u32,
+            })
+            .collect::<Vec<_>>();
+        let plane =
+            build_v37_relation_plane(&relation_membership, &ownership, 32, 16, &[16, 32, 64])
+                .unwrap();
+        let encoded = encode_v37_relation_prefixes_arrow(&plane).unwrap();
+        let prefixes = decode_v37_relation_prefixes_arrow(
+            &encoded.bytes,
+            encoded.encoded_bytes,
+            &encoded.sha256,
+            &encoded.blake3,
+        )
+        .unwrap();
+        let prefixes = prepare_v37_relation_prefixes(&prefixes).unwrap();
+        let router = prepare_v37_relation_router(&tree, &tree.fma_backend, 63).unwrap();
+        for probes in [8, 16, 32] {
+            let selected =
+                select_v37_relation_postings(&router, &prefixes, &rows[0].vector, probes, 16, 15)
+                    .unwrap();
+            assert_eq!(selected.votes.selected_postings.len(), 14);
+            assert_eq!(selected.routing.selected_postings.len(), probes as usize);
+            assert!(selected.routing.node_visits <= 63);
+            assert_eq!(selected.routing.fma_backend, tree.fma_backend);
+        }
+        assert!(prepare_v37_relation_router(&tree, &tree.fma_backend, 1_025).is_err());
+        assert!(
+            select_v37_relation_postings(&router, &prefixes, &rows[0].vector, 7, 16, 15).is_err()
+        );
+    }
+
+    #[test]
+    fn v37_relation_plane_codecs_bind_cross_language_structure_and_ties_even() {
+        assert_eq!(v37_mass_q24(1, 1 << 25).unwrap(), 0);
+        assert_eq!(v37_mass_q24(3, 1 << 25).unwrap(), 2);
+        assert_eq!(v37_mass_q24(7, 7).unwrap(), 1 << 24);
+
+        let relation_membership = (0_u64..320)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: (source_ordinal % 2) as u32,
+            })
+            .collect::<Vec<_>>();
+        let ownership = (0_u64..320)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: ((source_ordinal / 2) % 80) as u32,
+            })
+            .collect::<Vec<_>>();
+        let plane =
+            build_v37_relation_plane(&relation_membership, &ownership, 2, 80, &[16, 32, 64])
+                .unwrap();
+        let mut duplicate_posting = plane.clone();
+        duplicate_posting.leaves[0].records[1].posting_ordinal =
+            duplicate_posting.leaves[0].records[0].posting_ordinal;
+        assert!(encode_v37_relation_counts_parquet(&duplicate_posting).is_err());
+        let counts = encode_v37_relation_counts_parquet(&plane).unwrap();
+        assert_eq!(
+            decode_v37_relation_counts_parquet(
+                &counts.bytes,
+                counts.encoded_bytes,
+                &counts.sha256,
+                &counts.blake3,
+                2,
+                80,
+                &[16, 32, 64],
+            )
+            .unwrap(),
+            plane
+        );
+        assert!(
+            decode_v37_relation_counts_parquet(
+                &counts.bytes,
+                counts.encoded_bytes,
+                &"0".repeat(64),
+                &counts.blake3,
+                2,
+                80,
+                &[16, 32, 64],
+            )
+            .is_err()
+        );
+
+        let prefixes = encode_v37_relation_prefixes_arrow(&plane).unwrap();
+        let decoded = decode_v37_relation_prefixes_arrow(
+            &prefixes.bytes,
+            prefixes.encoded_bytes,
+            &prefixes.sha256,
+            &prefixes.blake3,
+        )
+        .unwrap();
+        assert_eq!(decoded.prefix_lengths, vec![16, 32, 64]);
+        assert_eq!(decoded.leaf_offsets.len(), 3);
+        assert_eq!(decoded.leaf_offsets[0], vec![0, 16, 32]);
+        assert_eq!(decoded.leaf_offsets[1], vec![0, 32, 64]);
+        assert_eq!(decoded.leaf_offsets[2], vec![0, 64, 128]);
+        assert_eq!(decoded.posting_ordinals[2].len(), 128);
+        assert_eq!(decoded.masses_q24[2].len(), 128);
+        let mut drift = decoded.clone();
+        drift.leaf_offsets[0][1] += 1;
+        assert!(validate_v37_relation_prefixes(&drift).is_err());
+
+        let mut increasing_mass = decoded;
+        for masses in &mut increasing_mass.masses_q24 {
+            masses[0] = 0;
+            masses[1] = 1;
+        }
+        assert!(validate_v37_relation_prefixes(&increasing_mass).is_err());
+    }
+
+    #[test]
+    fn v37_relation_plane_recovers_a_posting_missed_by_direct_routing() {
+        let ownership = (0_u64..128)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: if source_ordinal < 100 {
+                    0
+                } else {
+                    1 + ((source_ordinal - 100) % 14) as u32
+                },
+            })
+            .collect::<Vec<_>>();
+        let relation_membership = (0_u64..128)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: (source_ordinal % 8) as u32,
+            })
+            .collect::<Vec<_>>();
+        let plane =
+            build_v37_relation_plane(&relation_membership, &ownership, 8, 15, &[16, 32, 64])
+                .unwrap();
+        let relation =
+            reduce_v37_relation_postings(&plane, &(0..8).collect::<Vec<_>>(), 16, 14).unwrap();
+        assert!(relation.selected_postings.contains(&0));
+
+        let truth = vec![V37GroundTruth {
+            query_ordinal: 0,
+            source_ordinals: (0..100).collect(),
+        }];
+        let ceiling = evaluate_v37_unique_owner_ceiling(&ownership, &truth, 14).unwrap();
+        let direct = evaluate_v37_direct_recall(
+            &ownership,
+            &truth,
+            &ceiling,
+            &[V37DirectSelectionRecord {
+                query_ordinal: 0,
+                selection: V37DirectSelection {
+                    selected_postings: (1..=14).collect(),
+                    node_visits: 20,
+                    scored_internal_nodes: 6,
+                    fma_backend: "aarch64-neon-fma".to_owned(),
+                },
+            }],
+        )
+        .unwrap();
+        assert_eq!(direct.aggregate_recall_ppm, 0);
+
+        let recovered = evaluate_v37_direct_recall(
+            &ownership,
+            &truth,
+            &ceiling,
+            &[V37DirectSelectionRecord {
+                query_ordinal: 0,
+                selection: V37DirectSelection {
+                    selected_postings: relation.selected_postings,
+                    node_visits: 22,
+                    scored_internal_nodes: 8,
+                    fma_backend: "aarch64-neon-fma".to_owned(),
+                },
+            }],
+        )
+        .unwrap();
+        assert_eq!(recovered.aggregate_recall_ppm, 1_000_000);
+        assert!(recovered.passed);
     }
 }
