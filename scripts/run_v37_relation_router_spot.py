@@ -1517,7 +1517,6 @@ cleanup() {{
   status=$?
   trap - EXIT INT TERM
   if test "$status" -ne 0 && test -s "$boot_log"; then
-    sync -f "$boot_log"
     aws s3 cp "$boot_log" {boot_failure_uri} --only-show-errors || true
   fi
   rm -f "$archive" "$binary" "$manifest" "$plan" "$boot_log"
