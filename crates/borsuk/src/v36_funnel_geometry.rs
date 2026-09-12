@@ -7847,19 +7847,19 @@ fn run_v36_resident_posting_core(
             .collect::<Vec<_>>();
         centroids.extend(train_v36_posting_centroids(&local, posting_count)?);
     }
-    let assignments = if closure_epsilon.is_none() {
-        assign_v36_capacity_aware_postings(
+    let assignments = if let Some(epsilon) = closure_epsilon {
+        assign_v36_capacity_aware_postings_with_closure(
             &rows,
             &centroids,
+            epsilon,
             worker_threads,
             block_rows,
             target_primary_rows,
         )?
     } else {
-        assign_v36_postings(
+        assign_v36_capacity_aware_postings(
             &rows,
             &centroids,
-            closure_epsilon,
             worker_threads,
             block_rows,
             target_primary_rows,
@@ -9737,6 +9737,43 @@ pub fn assign_v36_capacity_aware_postings(
     block_rows: usize,
     target_primary_rows: u64,
 ) -> Result<V36PostingAssignments> {
+    assign_v36_capacity_aware_postings_inner(
+        rows,
+        centroids,
+        None,
+        worker_threads,
+        block_rows,
+        target_primary_rows,
+    )
+}
+
+/// Assign capacity-balanced primaries plus deterministic nearby closure owners.
+pub fn assign_v36_capacity_aware_postings_with_closure(
+    rows: &[(u64, Vec<f32>)],
+    centroids: &[Vec<f32>],
+    closure_epsilon: f64,
+    worker_threads: usize,
+    block_rows: usize,
+    target_primary_rows: u64,
+) -> Result<V36PostingAssignments> {
+    assign_v36_capacity_aware_postings_inner(
+        rows,
+        centroids,
+        Some(closure_epsilon),
+        worker_threads,
+        block_rows,
+        target_primary_rows,
+    )
+}
+
+fn assign_v36_capacity_aware_postings_inner(
+    rows: &[(u64, Vec<f32>)],
+    centroids: &[Vec<f32>],
+    closure_epsilon: Option<f64>,
+    worker_threads: usize,
+    block_rows: usize,
+    target_primary_rows: u64,
+) -> Result<V36PostingAssignments> {
     if rows.is_empty()
         || centroids.is_empty()
         || centroids.len() > u32::MAX as usize
@@ -9745,6 +9782,7 @@ pub fn assign_v36_capacity_aware_postings(
         || block_rows == 0
         || block_rows > 65_536
         || target_primary_rows == 0
+        || closure_epsilon.is_some_and(|epsilon| !matches!(epsilon, 0.05 | 0.15 | 0.30))
     {
         return Err(invalid("V36 capacity assignment authority differs"));
     }
@@ -9844,15 +9882,28 @@ pub fn assign_v36_capacity_aware_postings(
             let mut owners = [0_u32; 8];
             owners[0] =
                 u32::try_from(posting).map_err(|_| invalid("V36 posting ordinal overflows"))?;
-            let nearest_posting = nearest[row].0;
-            let len = if nearest_posting == posting {
-                1
+            let closure = if let Some(epsilon) = closure_epsilon {
+                select_v36_closure_owners(&ordered[row].1, centroids, epsilon, 8)?
             } else {
-                owners[1] = u32::try_from(nearest_posting)
-                    .map_err(|_| invalid("V36 posting ordinal overflows"))?;
-                2
+                vec![
+                    u32::try_from(nearest[row].0)
+                        .map_err(|_| invalid("V36 posting ordinal overflows"))?,
+                ]
             };
-            Ok(V36RowOwners { len, owners })
+            let mut len = 1_usize;
+            for candidate in closure {
+                if len == owners.len() {
+                    break;
+                }
+                if !owners[..len].contains(&candidate) {
+                    owners[len] = candidate;
+                    len += 1;
+                }
+            }
+            Ok(V36RowOwners {
+                len: u8::try_from(len).map_err(|_| invalid("V36 owner count overflows"))?,
+                owners,
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     finish_v36_posting_assignments(&ordered, row_owners, centroids.len(), target_primary_rows)

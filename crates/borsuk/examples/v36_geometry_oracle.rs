@@ -14,9 +14,10 @@ use borsuk::{
     train_v36_resident_posting_score_model,
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct Args {
     authority: PathBuf,
+    closure_epsilon: Option<f64>,
     development_ground_truth: PathBuf,
     development_query: PathBuf,
     execution_authority: PathBuf,
@@ -37,6 +38,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
         if !matches!(
             flag.as_str(),
             "--authority"
+                | "--closure-epsilon"
                 | "--execution-authority"
                 | "--development-ground-truth"
                 | "--development-query"
@@ -60,6 +62,13 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             .ok_or_else(|| format!("V36 geometry {flag} is missing"))
     };
     let authority = take("--authority")?.into();
+    let closure_epsilon = match take("--closure-epsilon")?.as_str() {
+        "none" => None,
+        "0.05" => Some(0.05),
+        "0.15" => Some(0.15),
+        "0.30" => Some(0.30),
+        _ => return Err("V36 geometry closure epsilon differs".into()),
+    };
     let development_ground_truth = take("--development-ground-truth")?.into();
     let development_query = take("--development-query")?.into();
     let execution_authority = take("--execution-authority")?.into();
@@ -77,6 +86,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     }
     Ok(Args {
         authority,
+        closure_epsilon,
         development_ground_truth,
         development_query,
         execution_authority,
@@ -135,7 +145,7 @@ fn run(args: Args) -> borsuk::Result<()> {
         MAXIMUM_BLOCK_ROWS,
         &projected_corpus_sha256,
         TARGET_PRIMARY_ROWS,
-        None,
+        args.closure_epsilon,
         usize::from(args.workers),
     )?;
     let geometry_elapsed_ns = geometry.elapsed().as_nanos();
@@ -163,6 +173,10 @@ fn run(args: Args) -> borsuk::Result<()> {
     };
     let mut result = BTreeMap::new();
     result.insert("claim_eligible", serde_json::json!(false));
+    result.insert(
+        "closure_epsilon",
+        serde_json::to_value(args.closure_epsilon).unwrap(),
+    );
     result.insert(
         "construction_passed",
         serde_json::json!(admission.stop.is_none()),
@@ -196,7 +210,7 @@ fn run(args: Args) -> borsuk::Result<()> {
     result.insert("projection", serde_json::json!("srht192-seed36"));
     result.insert(
         "schema",
-        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v3"),
+        serde_json::json!("borsuk-v36-resident-1m-geometry-result-v4"),
     );
     result.insert("source", serde_json::to_value(source_identity).unwrap());
     result.insert(
@@ -266,6 +280,8 @@ mod tests {
             "--execute-resident-1m-geometry",
             "--authority",
             "authority.json",
+            "--closure-epsilon",
+            "none",
             "--development-ground-truth",
             "development-gt100.parquet",
             "--development-query",
@@ -292,11 +308,32 @@ mod tests {
     fn v36_geometry_oracle_cli_is_explicit_one_million_only_and_storage_free() {
         let parsed = parse_args(valid()).unwrap();
         assert_eq!(parsed.source, PathBuf::from("source.parquet"));
+        assert_eq!(parsed.closure_epsilon, None);
         assert_eq!(parsed.workers, 4);
         let mut parallel = valid();
         let index = parallel.iter().position(|value| value == "4").unwrap();
         parallel[index] = "32".into();
         assert_eq!(parse_args(parallel).unwrap().workers, 32);
+
+        for value in ["0.05", "0.15", "0.30"] {
+            let mut closure = valid();
+            let index = closure
+                .iter()
+                .position(|candidate| candidate == "none")
+                .unwrap();
+            closure[index] = value.into();
+            assert_eq!(
+                parse_args(closure).unwrap().closure_epsilon,
+                value.parse().ok()
+            );
+        }
+        let mut closure = valid();
+        let index = closure
+            .iter()
+            .position(|candidate| candidate == "none")
+            .unwrap();
+        closure[index] = "0.20".into();
+        assert!(parse_args(closure).is_err());
 
         for forbidden in ["--bucket", "--page-prefix", "--endpoint", "--d3"] {
             let mut args = valid();

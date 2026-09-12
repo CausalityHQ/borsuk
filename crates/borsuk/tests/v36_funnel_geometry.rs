@@ -15,17 +15,17 @@ use borsuk::{
     V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardSink,
     V36SupercellPostCountAdmissionRequest, V36SupercellRunChunkArtifact, V36SupercellTrainingSpec,
     admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
-    assign_v36_capacity_aware_postings, bind_v36_registered_supercell_training_spec,
-    bind_v36_supercell_assignment_shard_context, bind_v36_supercell_run_chunk_context,
-    decode_v36_supercell_assignment_shard_arrow, decode_v36_supercell_model_arrow,
-    decode_v36_supercell_run_chunk_arrow, encode_v36_supercell_assignment_shard_arrow,
-    encode_v36_supercell_model_arrow, encode_v36_supercell_run_chunk_arrow,
-    evaluate_v36_posting_prefix_containment, evaluate_v36_posting_score_containment,
-    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
-    project_v36_supercell_assignment_admission, project_v36_supercell_post_count_admission,
-    project_v36_supercell_training_preflight, run_v36_resident_projected_posting_diagnostic,
-    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
-    write_v36_supercell_assignment_shards,
+    assign_v36_capacity_aware_postings, assign_v36_capacity_aware_postings_with_closure,
+    bind_v36_registered_supercell_training_spec, bind_v36_supercell_assignment_shard_context,
+    bind_v36_supercell_run_chunk_context, decode_v36_supercell_assignment_shard_arrow,
+    decode_v36_supercell_model_arrow, decode_v36_supercell_run_chunk_arrow,
+    encode_v36_supercell_assignment_shard_arrow, encode_v36_supercell_model_arrow,
+    encode_v36_supercell_run_chunk_arrow, evaluate_v36_posting_prefix_containment,
+    evaluate_v36_posting_score_containment, load_v36_prefix_source_feature_ids,
+    project_v36_exact_assignment_preflight, project_v36_supercell_assignment_admission,
+    project_v36_supercell_post_count_admission, project_v36_supercell_training_preflight,
+    run_v36_resident_projected_posting_diagnostic, train_v36_supercells, v36_prefix_source_schema,
+    write_v36_prefix_source_parquet, write_v36_supercell_assignment_shards,
 };
 use sha2::{Digest, Sha256};
 
@@ -292,6 +292,50 @@ fn v36_capacity_aware_assignment_bounds_skew_without_worker_drift() {
     assert_eq!(single.stored_occupancy(), &[32, 8, 8, 8]);
     assert_eq!(single.admission().stop, None);
     assert_eq!(single.admission().mean_replication_ppm, 1_750_000);
+}
+
+#[test]
+fn v36_capacity_aware_closure_preserves_balanced_primary_and_adds_nearby_owners() {
+    let rows = (0..32_u64)
+        .map(|ordinal| {
+            let mut vector = vec![0.0_f32; ROUTING_DIMENSIONS];
+            vector[0] = 1.45;
+            (ordinal, vector)
+        })
+        .collect::<Vec<_>>();
+    let centroids = (0..4)
+        .map(|ordinal| {
+            let mut centroid = vec![0.0_f32; ROUTING_DIMENSIONS];
+            centroid[0] = 1.0 + ordinal as f32;
+            centroid
+        })
+        .collect::<Vec<_>>();
+    let balanced = assign_v36_capacity_aware_postings(&rows, &centroids, 1, 7, 8).unwrap();
+    let closed =
+        assign_v36_capacity_aware_postings_with_closure(&rows, &centroids, 0.30, 4, 11, 8).unwrap();
+    let reordered = assign_v36_capacity_aware_postings_with_closure(
+        &rows.iter().cloned().rev().collect::<Vec<_>>(),
+        &centroids,
+        0.30,
+        2,
+        13,
+        8,
+    )
+    .unwrap();
+    assert_eq!(closed, reordered);
+    assert_eq!(closed.primary_occupancy(), balanced.primary_occupancy());
+    assert!(closed.admission().mean_replication_ppm > balanced.admission().mean_replication_ppm);
+    for (balanced_offsets, closed_offsets) in balanced
+        .owner_offsets()
+        .windows(2)
+        .zip(closed.owner_offsets().windows(2))
+    {
+        let balanced_primary = balanced.owners()[balanced_offsets[0] as usize];
+        let closed_start = closed_offsets[0] as usize;
+        let closed_end = closed_offsets[1] as usize;
+        assert_eq!(closed.owners()[closed_start], balanced_primary);
+        assert!(closed_end - closed_start <= 8);
+    }
 }
 
 fn source_batch(feature_ids: Vec<u64>) -> RecordBatch {
