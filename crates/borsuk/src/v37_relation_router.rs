@@ -2371,7 +2371,7 @@ where
     Ok((tree, evidence))
 }
 
-fn validate_v37_tree_geometry(tree: &V37BalancedTree) -> Result<()> {
+pub(crate) fn validate_v37_tree_geometry(tree: &V37BalancedTree) -> Result<()> {
     if tree.dimensions == 0
         || tree.seed == 0
         || !matches!(
