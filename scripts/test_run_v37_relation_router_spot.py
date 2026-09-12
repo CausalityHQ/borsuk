@@ -1431,17 +1431,20 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertIn('chmod 0711 "$root" "$scratch"', worker)
         self.assertNotIn('chmod 0500 "$binary"', worker)
         self.assertIn("tar --zstd -xf", worker)
-        self.assertIn("dnf install -y python3-pip", worker)
         self.assertIn(
-            'python3 -m pip install --no-cache-dir --target "$source/.v37-python"',
+            'env PYTHONPATH="$source/.v37-python" python3 -c',
+            worker,
+        )
+        self.assertIn('boto3.__version__ == "1.42.97"', worker)
+        self.assertIn('blake3.__version__ == "1.0.8"', worker)
+        self.assertIn(
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
             worker,
         )
         self.assertIn('env PYTHONPATH="$source/.v37-python" python3', worker)
         self.assertNotIn("uv run", worker)
-        self.assertIn(
-            '--requirement "$source/scripts/requirements-v37-relation-router.txt"',
-            worker,
-        )
+        self.assertNotIn("dnf install", worker)
+        self.assertNotIn("pip install", worker)
         self.assertNotIn("boto3==1.34.46", worker)
         requirements = (
             Path(__file__).with_name("requirements-v37-relation-router.txt").read_text()
@@ -1453,7 +1456,7 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertIn("MemorySwapMax=0", worker)
         self.assertIn("shutdown -h now", worker)
         self.assertIn("BOOT_FAILURE.log", worker)
-        self.assertIn("--if-none-match '*'", worker)
+        self.assertIn('aws s3 cp "$boot_log"', worker)
         self.assertIn('systemctl start "$slice"', worker)
         self.assertLess(
             worker.index('exec >"$boot_log" 2>&1'),

@@ -1479,8 +1479,8 @@ def build_v37_worker_script(plan: V37SpotPlan) -> str:
     binary_sha256 = shlex.quote(plan.binary_sha256)
     manifest_sha256 = shlex.quote(plan.manifest_sha256)
     slice_unit = shlex.quote(_v37_slice_unit(plan.run_id))
-    output_bucket, output_prefix = _s3_uri(plan.output_prefix, prefix=True)
-    boot_failure_key = shlex.quote(output_prefix + "BOOT_FAILURE.log")
+    _s3_uri(plan.output_prefix, prefix=True)
+    boot_failure_uri = shlex.quote(plan.output_prefix + "BOOT_FAILURE.log")
     return f"""#!/bin/bash
 set -euo pipefail
 umask 077
@@ -1517,9 +1517,8 @@ cleanup() {{
   status=$?
   trap - EXIT INT TERM
   if test "$status" -ne 0 && test -s "$boot_log"; then
-    aws s3api put-object --bucket {shlex.quote(output_bucket)} \
-      --key {boot_failure_key} --body "$boot_log" --if-none-match '*' \
-      --checksum-algorithm SHA256 >/dev/null || true
+    sync -f "$boot_log"
+    aws s3 cp "$boot_log" {boot_failure_uri} --only-show-errors || true
   fi
   rm -f "$archive" "$binary" "$manifest" "$plan" "$boot_log"
   rmdir "$scratch" 2>/dev/null || true
@@ -1537,10 +1536,8 @@ validate_boot_object "$binary" {plan.binary_bytes} {binary_sha256}
 validate_boot_object "$manifest" {plan.manifest_bytes} {manifest_sha256}
 chmod 0555 "$binary"
 tar --zstd -xf "$archive" -C "$source"
-dnf install -y python3-pip
-python3 -m pip install --no-cache-dir --target "$source/.v37-python" \
-  --disable-pip-version-check \
-  --requirement "$source/scripts/requirements-v37-relation-router.txt"
+env PYTHONPATH="$source/.v37-python" python3 -c \
+  'import boto3, blake3; assert boto3.__version__ == "1.42.97"; assert blake3.__version__ == "1.0.8"; assert blake3.blake3(b"").hexdigest() == "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"'
 imds_token=$(curl --fail --silent --show-error --request PUT \
   --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
   http://169.254.169.254/latest/api/token)
