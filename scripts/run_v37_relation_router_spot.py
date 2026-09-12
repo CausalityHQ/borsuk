@@ -1524,6 +1524,10 @@ validate_boot_object "$binary" {plan.binary_bytes} {binary_sha256}
 validate_boot_object "$manifest" {plan.manifest_bytes} {manifest_sha256}
 chmod 0555 "$binary"
 tar --zstd -xf "$archive" -C "$source"
+dnf install -y python3-pip
+python3 -m pip install --no-cache-dir --target "$source/.v37-python" \
+  --disable-pip-version-check \
+  --requirement "$source/scripts/requirements-v37-relation-router.txt"
 imds_token=$(curl --fail --silent --show-error --request PUT \
   --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
   http://169.254.169.254/latest/api/token)
@@ -1533,9 +1537,8 @@ instance_id=$(curl --fail --silent --show-error \
 [[ "$instance_id" =~ ^i-[0-9a-f]{{8,17}}$ ]]
 systemd-run --wait --collect --unit="borsuk-v37-{plan.run_id}" --slice="$slice" \
   --property=MemoryMax=3G --property=MemorySwapMax=0 --property=RuntimeMaxSec=600 \
-  setsid uv run --python 3.12 \
-  --with-requirements "$source/scripts/requirements-v37-relation-router.txt" \
-  python "$source/scripts/run_v37_relation_router_spot.py" \
+  setsid env PYTHONPATH="$source/.v37-python" python3 \
+  "$source/scripts/run_v37_relation_router_spot.py" \
   --execute-v37-worker --root "$root/phase" --plan "$plan" --manifest "$manifest" \
   --binary "$binary" --instance-id "$instance_id"
 # Worker publishes exactly one canonical ATTEMPT_TERMINAL.json disposition.

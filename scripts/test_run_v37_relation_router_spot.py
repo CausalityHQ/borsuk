@@ -1431,9 +1431,15 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertIn('chmod 0711 "$root" "$scratch"', worker)
         self.assertNotIn('chmod 0500 "$binary"', worker)
         self.assertIn("tar --zstd -xf", worker)
-        self.assertIn("uv run --python 3.12", worker)
+        self.assertIn("dnf install -y python3-pip", worker)
         self.assertIn(
-            '--with-requirements "$source/scripts/requirements-v37-relation-router.txt"',
+            'python3 -m pip install --no-cache-dir --target "$source/.v37-python"',
+            worker,
+        )
+        self.assertIn('env PYTHONPATH="$source/.v37-python" python3', worker)
+        self.assertNotIn("uv run", worker)
+        self.assertIn(
+            '--requirement "$source/scripts/requirements-v37-relation-router.txt"',
             worker,
         )
         self.assertNotIn("boto3==1.34.46", worker)
