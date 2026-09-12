@@ -1044,7 +1044,7 @@ class V37SpotAuthorityTests(unittest.TestCase):
                 "construction_authority": {
                     "blake3": "41" * 32,
                     "encoded_bytes": 512,
-                    "role": "v37-authority",
+                    "role": "v37-construction-authority",
                     "sha256": "42" * 32,
                     "uri": "s3://fixture/inputs/v37-authority",
                 },

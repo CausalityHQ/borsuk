@@ -638,7 +638,7 @@ def _validate_v37_ceiling_result(
     if (
         type(construction) is not dict
         or set(construction) != identity_keys
-        or construction.get("role") != "v37-authority"
+        or construction.get("role") != "v37-construction-authority"
         or _LOWER_SHA256.fullmatch(str(construction.get("sha256"))) is None
         or _LOWER_SHA256.fullmatch(str(construction.get("blake3"))) is None
         or type(construction.get("encoded_bytes")) is not int
