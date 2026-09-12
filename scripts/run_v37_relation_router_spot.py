@@ -1516,7 +1516,7 @@ validate_boot_object() {{
 cleanup() {{
   status=$?
   trap - EXIT INT TERM
-  if test "$status" -ne 0 && test -s "$boot_log"; then
+  if test -s "$boot_log"; then
     aws s3 cp "$boot_log" {boot_failure_uri} --only-show-errors || true
   fi
   rm -f "$archive" "$binary" "$manifest" "$plan" "$boot_log"

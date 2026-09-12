@@ -1457,6 +1457,8 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertIn("shutdown -h now", worker)
         self.assertIn("BOOT_FAILURE.log", worker)
         self.assertIn('aws s3 cp "$boot_log"', worker)
+        self.assertIn('if test -s "$boot_log"; then', worker)
+        self.assertNotIn('test "$status" -ne 0 && test -s "$boot_log"', worker)
         self.assertNotIn('sync -f "$boot_log"', worker)
         self.assertIn('systemctl start "$slice"', worker)
         self.assertLess(
