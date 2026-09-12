@@ -30,6 +30,7 @@ use sha2::{Digest, Sha256};
 const V37_NODE_METADATA_BYTES: u64 = 32;
 const V37_RELATION_RECORD_BYTES: u64 = 8;
 const V37_MEMORY_LIMIT_BYTES: u64 = 3 * 1_073_741_824;
+const V37_MAXIMUM_DIRECT_NODE_VISITS: u64 = 245;
 const V37_MAXIMUM_RELATION_NODE_VISITS: u64 = 1_024;
 const V37_SELECTED_POSTINGS: u64 = 14;
 const V37_GT_NEIGHBORS: u32 = 100;
@@ -191,6 +192,60 @@ pub(crate) struct V37EncodedOwnership {
 pub(crate) struct V37QueryBranch {
     pub(crate) primary_is_left: bool,
     pub(crate) queues_sibling_zero_margin: bool,
+}
+
+/// Deterministic GT-free best-bin-first selection over one ownership tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37DirectSelection {
+    pub(crate) selected_postings: Vec<u32>,
+    pub(crate) node_visits: u32,
+    pub(crate) scored_internal_nodes: u32,
+    pub(crate) fma_backend: String,
+}
+
+/// A geometry- and backend-validated tree ready for bounded query traversal.
+pub(crate) struct V37DirectRouter<'a> {
+    tree: &'a V37BalancedTree,
+    kernel: borsuk_fma::FusedDot8x12,
+    maximum_node_visits: usize,
+}
+
+/// GT-free selection evidence associated with one query ordinal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37DirectSelectionRecord {
+    pub(crate) query_ordinal: u32,
+    pub(crate) selection: V37DirectSelection,
+}
+
+/// Separately recomputed direct-routing quality for one query.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37DirectSample {
+    pub(crate) query_ordinal: u32,
+    pub(crate) selected_postings: Vec<u32>,
+    pub(crate) node_visits: u32,
+    pub(crate) scored_internal_nodes: u32,
+    pub(crate) hits: u32,
+    pub(crate) recall_ppm: u32,
+    pub(crate) ceiling_hits: u32,
+    pub(crate) ceiling_gap_hits: u32,
+}
+
+/// Claim-ineligible quality result for direct hyperplane-tree routing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37DirectRoutingResult {
+    schema: String,
+    claim_eligible: bool,
+    selected_postings_limit: u32,
+    aggregate_gate_ppm: u32,
+    minimum_gate_ppm: u32,
+    fma_backend: String,
+    pub(crate) samples: Vec<V37DirectSample>,
+    pub(crate) aggregate_recall_ppm: u32,
+    pub(crate) minimum_recall_ppm: u32,
+    pub(crate) passed: bool,
+    pub(crate) disposition: String,
 }
 
 /// Exact GT row identities for one separately authorized ceiling query.
@@ -787,6 +842,118 @@ pub(crate) fn route_v37_primary_leaf(
         }
         .ok_or_else(|| invalid("V37 replay child differs"))? as usize;
     }
+}
+
+pub(crate) fn prepare_v37_direct_router<'a>(
+    tree: &'a V37BalancedTree,
+    expected_backend: &str,
+    maximum_node_visits: usize,
+) -> Result<V37DirectRouter<'a>> {
+    validate_v37_tree_geometry(tree)?;
+    if expected_backend != tree.fma_backend
+        || tree.leaf_populations.len() < V37_SELECTED_POSTINGS as usize
+        || maximum_node_visits == 0
+        || maximum_node_visits > V37_MAXIMUM_DIRECT_NODE_VISITS as usize
+        || maximum_node_visits > tree.nodes.len()
+    {
+        return Err(invalid("V37 direct routing authority differs"));
+    }
+    let kernel = v37_fused_kernel()?;
+    if v37_fma_backend_name(kernel) != expected_backend {
+        return Err(invalid("V37 direct routing backend differs"));
+    }
+    Ok(V37DirectRouter {
+        tree,
+        kernel,
+        maximum_node_visits,
+    })
+}
+
+pub(crate) fn select_v37_direct_postings(
+    router: &V37DirectRouter<'_>,
+    query: &[f32],
+) -> Result<V37DirectSelection> {
+    let tree = router.tree;
+    if query.len() != tree.dimensions || query.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V37 direct routing authority differs"));
+    }
+    let kernel = router.kernel;
+    let mut queue = vec![(0.0_f32, 0_u32)];
+    let mut visited = vec![false; tree.nodes.len()];
+    let mut selected_postings = Vec::with_capacity(V37_SELECTED_POSTINGS as usize);
+    let mut node_visits = 0_usize;
+    let mut scored_internal_nodes = 0_usize;
+    while selected_postings.len() < V37_SELECTED_POSTINGS as usize {
+        let next = queue
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            })
+            .map(|(index, _)| index)
+            .ok_or_else(|| invalid("V37 direct routing candidate shortage"))?;
+        let (path_penalty, node_id) = queue.swap_remove(next);
+        node_visits = node_visits
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 direct node visits overflow"))?;
+        if node_visits > router.maximum_node_visits {
+            return Err(invalid("V37 direct node visit limit exceeded"));
+        }
+        let node_index = node_id as usize;
+        let already_visited = visited
+            .get_mut(node_index)
+            .ok_or_else(|| invalid("V37 direct node differs"))?;
+        if std::mem::replace(already_visited, true) {
+            return Err(invalid("V37 direct node was visited twice"));
+        }
+        let node = &tree.nodes[node_index];
+        if let Some(posting) = node.posting_ordinal {
+            if selected_postings.contains(&posting) {
+                return Err(invalid("V37 direct posting is duplicated"));
+            }
+            selected_postings.push(posting);
+            continue;
+        }
+        scored_internal_nodes = scored_internal_nodes
+            .checked_add(1)
+            .ok_or_else(|| invalid("V37 direct score count overflows"))?;
+        let (score, _) = score_v37_hyperplane_with_kernel(query, &node.normal, kernel)?;
+        let boundary = f32::from_bits(node.boundary_score_bits);
+        let branch = route_v37_query(score, boundary)?;
+        let margin = score - boundary;
+        let squared_margin = margin * margin;
+        if !squared_margin.is_finite() || squared_margin < 0.0 {
+            return Err(invalid("V37 direct margin is non-finite"));
+        }
+        let sibling_penalty = if squared_margin.total_cmp(&path_penalty).is_gt() {
+            squared_margin
+        } else {
+            path_penalty
+        };
+        let left = node
+            .left_node
+            .ok_or_else(|| invalid("V37 direct left child is absent"))?;
+        let right = node
+            .right_node
+            .ok_or_else(|| invalid("V37 direct right child is absent"))?;
+        let (primary, sibling) = if branch.primary_is_left {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        queue.push((path_penalty, primary));
+        queue.push((sibling_penalty, sibling));
+    }
+    Ok(V37DirectSelection {
+        selected_postings,
+        node_visits: u32::try_from(node_visits)
+            .map_err(|_| invalid("V37 direct node visits exceed receipt width"))?,
+        scored_internal_nodes: u32::try_from(scored_internal_nodes)
+            .map_err(|_| invalid("V37 direct score count exceeds receipt width"))?,
+        fma_backend: tree.fma_backend.clone(),
+    })
 }
 
 fn squared_distance_with_kernel(
@@ -1649,6 +1816,218 @@ pub(crate) fn canonical_v37_ceiling_bytes(result: &V37LayoutCeiling) -> Result<V
     Ok(bytes)
 }
 
+fn validate_v37_direct_result(result: &V37DirectRoutingResult) -> Result<()> {
+    if result.schema != "borsuk-v37-direct-routing-v1"
+        || result.claim_eligible
+        || result.selected_postings_limit != V37_SELECTED_POSTINGS as u32
+        || result.aggregate_gate_ppm != V37_AGGREGATE_RECALL_GATE_PPM
+        || result.minimum_gate_ppm != V37_MINIMUM_RECALL_GATE_PPM
+        || !matches!(
+            result.fma_backend.as_str(),
+            "aarch64-neon-fma" | "x86-avx-fma"
+        )
+        || result.samples.is_empty()
+    {
+        return Err(invalid("V37 direct result authority differs"));
+    }
+    let mut total_hits = 0_u64;
+    let mut minimum_recall_ppm = u32::MAX;
+    let mut previous_query = None;
+    for sample in &result.samples {
+        let unique = sample
+            .selected_postings
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let expected_recall = sample
+            .hits
+            .checked_mul(1_000_000 / V37_GT_NEIGHBORS)
+            .ok_or_else(|| invalid("V37 direct recall overflows"))?;
+        if previous_query.is_some_and(|query| sample.query_ordinal <= query)
+            || sample.selected_postings.len() != V37_SELECTED_POSTINGS as usize
+            || unique.len() != sample.selected_postings.len()
+            || sample.node_visits == 0
+            || u64::from(sample.node_visits) > V37_MAXIMUM_DIRECT_NODE_VISITS
+            || sample.scored_internal_nodes == 0
+            || sample
+                .scored_internal_nodes
+                .checked_add(V37_SELECTED_POSTINGS as u32)
+                != Some(sample.node_visits)
+            || sample.scored_internal_nodes > sample.node_visits
+            || sample.hits > V37_GT_NEIGHBORS
+            || sample.ceiling_hits > V37_GT_NEIGHBORS
+            || sample.hits > sample.ceiling_hits
+            || sample.ceiling_gap_hits != sample.ceiling_hits - sample.hits
+            || sample.recall_ppm != expected_recall
+        {
+            return Err(invalid("V37 direct sample differs"));
+        }
+        previous_query = Some(sample.query_ordinal);
+        total_hits = total_hits
+            .checked_add(u64::from(sample.hits))
+            .ok_or_else(|| invalid("V37 direct hit total overflows"))?;
+        minimum_recall_ppm = minimum_recall_ppm.min(sample.recall_ppm);
+    }
+    let denominator = u64::try_from(result.samples.len())
+        .ok()
+        .and_then(|queries| queries.checked_mul(u64::from(V37_GT_NEIGHBORS)))
+        .ok_or_else(|| invalid("V37 direct denominator overflows"))?;
+    let aggregate_recall_ppm = u32::try_from(
+        total_hits
+            .checked_mul(1_000_000)
+            .ok_or_else(|| invalid("V37 direct aggregate overflows"))?
+            / denominator,
+    )
+    .map_err(|_| invalid("V37 direct aggregate exceeds ppm range"))?;
+    let passed = aggregate_recall_ppm >= V37_AGGREGATE_RECALL_GATE_PPM
+        && minimum_recall_ppm >= V37_MINIMUM_RECALL_GATE_PPM;
+    let disposition = if passed {
+        "direct-passed"
+    } else {
+        "direct-failed"
+    };
+    if result.aggregate_recall_ppm != aggregate_recall_ppm
+        || result.minimum_recall_ppm != minimum_recall_ppm
+        || result.passed != passed
+        || result.disposition != disposition
+    {
+        return Err(invalid("V37 direct aggregate differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn evaluate_v37_direct_recall(
+    assignments: &[V37OwnershipAssignment],
+    truth: &[V37GroundTruth],
+    ceiling: &V37LayoutCeiling,
+    selections: &[V37DirectSelectionRecord],
+) -> Result<V37DirectRoutingResult> {
+    validate_v37_ceiling(ceiling)?;
+    if truth.len() != selections.len() || truth.len() != ceiling.samples.len() {
+        return Err(invalid("V37 direct evidence cardinality differs"));
+    }
+    if evaluate_v37_unique_owner_ceiling(assignments, truth, V37_SELECTED_POSTINGS as usize)?
+        != *ceiling
+    {
+        return Err(invalid("V37 direct ceiling binding differs"));
+    }
+    let mut ownership = BTreeMap::new();
+    let mut previous_source = None;
+    for assignment in assignments {
+        if previous_source.is_some_and(|source| assignment.source_ordinal <= source)
+            || ownership
+                .insert(assignment.source_ordinal, assignment.posting_ordinal)
+                .is_some()
+        {
+            return Err(invalid("V37 direct ownership differs"));
+        }
+        previous_source = Some(assignment.source_ordinal);
+    }
+    let backend = selections
+        .first()
+        .map(|record| record.selection.fma_backend.clone())
+        .ok_or_else(|| invalid("V37 direct selection is absent"))?;
+    let mut samples = Vec::with_capacity(truth.len());
+    for ((query, record), ceiling_sample) in truth.iter().zip(selections).zip(&ceiling.samples) {
+        if query.query_ordinal != record.query_ordinal
+            || query.query_ordinal != ceiling_sample.query_ordinal
+            || query.source_ordinals.len() != V37_GT_NEIGHBORS as usize
+            || record.selection.fma_backend != backend
+        {
+            return Err(invalid("V37 direct query binding differs"));
+        }
+        let selected = record
+            .selection
+            .selected_postings
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if selected.len() != V37_SELECTED_POSTINGS as usize {
+            return Err(invalid("V37 direct selected postings differ"));
+        }
+        let mut seen_truth = BTreeSet::new();
+        let mut hits = 0_u32;
+        for source_ordinal in &query.source_ordinals {
+            if !seen_truth.insert(*source_ordinal) {
+                return Err(invalid("V37 direct truth row is duplicated"));
+            }
+            let posting = ownership
+                .get(source_ordinal)
+                .ok_or_else(|| invalid("V37 direct truth row is unknown"))?;
+            if selected.contains(posting) {
+                hits = hits
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V37 direct hits overflow"))?;
+            }
+        }
+        if hits > ceiling_sample.hits {
+            return Err(invalid("V37 direct hits exceed layout ceiling"));
+        }
+        samples.push(V37DirectSample {
+            query_ordinal: query.query_ordinal,
+            selected_postings: record.selection.selected_postings.clone(),
+            node_visits: record.selection.node_visits,
+            scored_internal_nodes: record.selection.scored_internal_nodes,
+            hits,
+            recall_ppm: hits * (1_000_000 / V37_GT_NEIGHBORS),
+            ceiling_hits: ceiling_sample.hits,
+            ceiling_gap_hits: ceiling_sample.hits - hits,
+        });
+    }
+    let total_hits = samples
+        .iter()
+        .try_fold(0_u64, |sum, sample| sum.checked_add(u64::from(sample.hits)));
+    let total_hits = total_hits.ok_or_else(|| invalid("V37 direct hit total overflows"))?;
+    let denominator = u64::try_from(samples.len())
+        .ok()
+        .and_then(|queries| queries.checked_mul(u64::from(V37_GT_NEIGHBORS)))
+        .ok_or_else(|| invalid("V37 direct denominator overflows"))?;
+    let aggregate_recall_ppm = u32::try_from(
+        total_hits
+            .checked_mul(1_000_000)
+            .ok_or_else(|| invalid("V37 direct aggregate overflows"))?
+            / denominator,
+    )
+    .map_err(|_| invalid("V37 direct aggregate exceeds ppm range"))?;
+    let minimum_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .ok_or_else(|| invalid("V37 direct sample is absent"))?;
+    let passed = aggregate_recall_ppm >= V37_AGGREGATE_RECALL_GATE_PPM
+        && minimum_recall_ppm >= V37_MINIMUM_RECALL_GATE_PPM;
+    let result = V37DirectRoutingResult {
+        schema: "borsuk-v37-direct-routing-v1".to_owned(),
+        claim_eligible: false,
+        selected_postings_limit: V37_SELECTED_POSTINGS as u32,
+        aggregate_gate_ppm: V37_AGGREGATE_RECALL_GATE_PPM,
+        minimum_gate_ppm: V37_MINIMUM_RECALL_GATE_PPM,
+        fma_backend: backend,
+        samples,
+        aggregate_recall_ppm,
+        minimum_recall_ppm,
+        passed,
+        disposition: if passed {
+            "direct-passed"
+        } else {
+            "direct-failed"
+        }
+        .to_owned(),
+    };
+    validate_v37_direct_result(&result)?;
+    Ok(result)
+}
+
+pub(crate) fn canonical_v37_direct_bytes(result: &V37DirectRoutingResult) -> Result<Vec<u8>> {
+    validate_v37_direct_result(result)?;
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V37 direct serialization failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V37 direct serialization failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn v37_tree_schema(dimensions: usize) -> Result<Schema> {
     let dimensions =
         i32::try_from(dimensions).map_err(|_| invalid("V37 tree dimensions exceed Arrow width"))?;
@@ -1928,17 +2307,20 @@ pub(crate) fn decode_v37_tree_arrow(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{
-        V37ArtifactIdentity, V37AuthorityManifest, V37GroundTruth, V37LayoutDisposition,
-        V37NumericAuthority, V37RelationSpec, V37TrainingRow, V37TrainingShape, V37TreeSpec,
-        canonical_v37_authority_bytes, canonical_v37_ceiling_bytes, decode_v37_ownership_parquet,
-        decode_v37_tree_arrow, encode_v37_ownership_parquet, encode_v37_tree_arrow,
-        evaluate_v37_unique_owner_ceiling, parse_v37_authority_bytes, project_v37_child_quota,
-        project_v37_construction_bytes, project_v37_layout, project_v37_serving_bytes,
-        project_v37_work, repair_v37_empty_partition, route_v37_corpus_member,
-        route_v37_primary_leaf, route_v37_query, score_v37_hyperplane_fused,
-        score_v37_hyperplane_scalar, select_v37_node_reservoir, train_v37_ownership_tree,
-        validate_v37_specs,
+        V37ArtifactIdentity, V37AuthorityManifest, V37DirectSelection, V37DirectSelectionRecord,
+        V37GroundTruth, V37LayoutDisposition, V37NumericAuthority, V37RelationSpec, V37TrainingRow,
+        V37TrainingShape, V37TreeSpec, canonical_v37_authority_bytes, canonical_v37_ceiling_bytes,
+        canonical_v37_direct_bytes, decode_v37_ownership_parquet, decode_v37_tree_arrow,
+        encode_v37_ownership_parquet, encode_v37_tree_arrow, evaluate_v37_direct_recall,
+        evaluate_v37_unique_owner_ceiling, parse_v37_authority_bytes, prepare_v37_direct_router,
+        project_v37_child_quota, project_v37_construction_bytes, project_v37_layout,
+        project_v37_serving_bytes, project_v37_work, repair_v37_empty_partition,
+        route_v37_corpus_member, route_v37_primary_leaf, route_v37_query,
+        score_v37_hyperplane_fused, score_v37_hyperplane_scalar, select_v37_direct_postings,
+        select_v37_node_reservoir, train_v37_ownership_tree, validate_v37_specs,
     };
 
     fn ownership_spec(rows: u64) -> V37TreeSpec {
@@ -2746,5 +3128,172 @@ mod tests {
         let mut unknown = truth;
         unknown[0].source_ordinals[99] = 999;
         assert!(evaluate_v37_unique_owner_ceiling(&assignments, &unknown, 14).is_err());
+    }
+
+    #[test]
+    fn v37_relation_direct_selects_exact_fourteen_without_truth() {
+        let rows = training_rows(128, 192);
+        let tree = train_v37_ownership_tree(
+            &rows,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 16,
+                reservoir_rows: 32,
+                two_means_iterations: 8,
+            },
+            37,
+            4,
+            17,
+        )
+        .unwrap();
+        let router = prepare_v37_direct_router(&tree, &tree.fma_backend, 31).unwrap();
+        let selected = select_v37_direct_postings(&router, &rows[17].vector).unwrap();
+        assert_eq!(selected.selected_postings.len(), 14);
+        assert_eq!(
+            selected
+                .selected_postings
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            14
+        );
+        assert!(selected.node_visits <= 31);
+        assert!(selected.scored_internal_nodes <= 15);
+        assert_eq!(selected.fma_backend, tree.fma_backend);
+
+        let artifact = encode_v37_tree_arrow(&tree).unwrap();
+        let persisted = decode_v37_tree_arrow(
+            &artifact.bytes,
+            artifact.encoded_bytes,
+            &artifact.sha256,
+            &artifact.blake3,
+        )
+        .unwrap();
+        let persisted_router =
+            prepare_v37_direct_router(&persisted, &tree.fma_backend, 31).unwrap();
+        assert_eq!(
+            select_v37_direct_postings(&persisted_router, &rows[17].vector).unwrap(),
+            selected
+        );
+    }
+
+    #[test]
+    fn v37_relation_direct_locks_equality_backend_and_visit_bounds() {
+        let rows = training_rows(128, 192);
+        let mut tree = train_v37_ownership_tree(
+            &rows,
+            V37TrainingShape {
+                dimensions: 192,
+                leaf_count: 16,
+                reservoir_rows: 32,
+                two_means_iterations: 8,
+            },
+            37,
+            1,
+            128,
+        )
+        .unwrap();
+        for node in &mut tree.nodes {
+            if node.posting_ordinal.is_none() {
+                node.normal.fill(0.0);
+                node.normal[0] = 1.0;
+                node.boundary_score_bits = 0.0_f32.to_bits();
+            }
+        }
+        let query = vec![0.0; 192];
+        let router = prepare_v37_direct_router(&tree, &tree.fma_backend, 31).unwrap();
+        let equal = select_v37_direct_postings(&router, &query).unwrap();
+        assert_eq!(equal.selected_postings, (0..14).collect::<Vec<_>>());
+        assert!(prepare_v37_direct_router(&tree, "scalar-control", 31).is_err());
+        let short = prepare_v37_direct_router(&tree, &tree.fma_backend, 13).unwrap();
+        assert!(select_v37_direct_postings(&short, &query).is_err());
+        let mut nonfinite = query;
+        nonfinite[0] = f32::NAN;
+        assert!(select_v37_direct_postings(&router, &nonfinite).is_err());
+    }
+
+    #[test]
+    fn v37_relation_direct_recomputes_recall_and_ceiling_gap_separately() {
+        let assignments = (0_u64..200)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: if source_ordinal < 100 {
+                    (source_ordinal % 20) as u32
+                } else {
+                    0
+                },
+            })
+            .collect::<Vec<_>>();
+        let truth = vec![
+            V37GroundTruth {
+                query_ordinal: 0,
+                source_ordinals: (0..100).collect(),
+            },
+            V37GroundTruth {
+                query_ordinal: 1,
+                source_ordinals: (100..200).collect(),
+            },
+        ];
+        let ceiling = evaluate_v37_unique_owner_ceiling(&assignments, &truth, 14).unwrap();
+        let selections = vec![
+            V37DirectSelectionRecord {
+                query_ordinal: 0,
+                selection: V37DirectSelection {
+                    selected_postings: (0..14).collect(),
+                    node_visits: 20,
+                    scored_internal_nodes: 6,
+                    fma_backend: "aarch64-neon-fma".to_owned(),
+                },
+            },
+            V37DirectSelectionRecord {
+                query_ordinal: 1,
+                selection: V37DirectSelection {
+                    selected_postings: (1..15).collect(),
+                    node_visits: 22,
+                    scored_internal_nodes: 8,
+                    fma_backend: "aarch64-neon-fma".to_owned(),
+                },
+            },
+        ];
+        let result =
+            evaluate_v37_direct_recall(&assignments, &truth, &ceiling, &selections).unwrap();
+        assert_eq!(result.samples[0].hits, 70);
+        assert_eq!(result.samples[0].ceiling_gap_hits, 0);
+        assert_eq!(result.samples[1].hits, 0);
+        assert_eq!(result.samples[1].ceiling_gap_hits, 100);
+        assert_eq!(result.aggregate_recall_ppm, 350_000);
+        assert_eq!(result.minimum_recall_ppm, 0);
+        assert!(!result.passed);
+        assert_eq!(result.disposition, "direct-failed");
+        let bytes = canonical_v37_direct_bytes(&result).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut drift = result;
+        drift.samples[0].ceiling_gap_hits = 1;
+        assert!(canonical_v37_direct_bytes(&drift).is_err());
+
+        let mut impossible_work =
+            evaluate_v37_direct_recall(&assignments, &truth, &ceiling, &selections).unwrap();
+        impossible_work.samples[0].node_visits -= 1;
+        assert!(canonical_v37_direct_bytes(&impossible_work).is_err());
+
+        let mut excessive_work =
+            evaluate_v37_direct_recall(&assignments, &truth, &ceiling, &selections).unwrap();
+        excessive_work.samples[0].node_visits = 246;
+        assert!(canonical_v37_direct_bytes(&excessive_work).is_err());
+
+        let foreign_assignments = (0_u64..200)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: 0,
+            })
+            .collect::<Vec<_>>();
+        let foreign_ceiling =
+            evaluate_v37_unique_owner_ceiling(&foreign_assignments, &truth, 14).unwrap();
+        assert!(
+            evaluate_v37_direct_recall(&assignments, &truth, &foreign_ceiling, &selections)
+                .is_err()
+        );
     }
 }
