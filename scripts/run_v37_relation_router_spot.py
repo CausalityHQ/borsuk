@@ -35,6 +35,7 @@ PREFLIGHT_COORDINATE_SHA256 = (
     "62ebfdbb42fa5e6212437932ebe682970389b15fa8cae1d6e2aa6d8610a41608"
 )
 _MAX_AUTHORITY_JSON_BYTES = 1_048_576
+_MAX_WORKER_FAILURE_BYTES = 65_536
 _CAPACITY_ERRORS = {
     "InsufficientFreeAddressesInSubnet",
     "InsufficientInstanceCapacity",
@@ -890,6 +891,11 @@ def execute_v37_worker(
         command = build_v37_binary_command(binary, staged)
         returncode, sample = execute(command, staged, stdout_path, progress_log_path)
         if returncode != 0:
+            header = f"returncode={returncode}\n".encode()
+            progress_raw = progress_log_path.read_bytes()
+            diagnostic = header + progress_raw[-(_MAX_WORKER_FAILURE_BYTES - len(header)) :]
+            bucket, prefix = _s3_uri(plan.output_prefix, prefix=True)
+            upload_once(bucket, prefix + "WORKER_FAILURE.log", diagnostic)
             raise RuntimeError(f"V37 native worker exited {returncode}")
         stop = classify_v37_monitor_sample(sample)
         if stop is not None:

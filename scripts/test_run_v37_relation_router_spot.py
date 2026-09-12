@@ -734,6 +734,53 @@ class V37SpotAuthorityTests(unittest.TestCase):
         self.assertTrue(uploads[-1][1].endswith("ATTEMPT_TERMINAL.json"))
         validate_v37_terminal_bytes(terminal_raw, plan, "complete")
 
+    def test_v37_worker_preserves_bounded_native_failure_before_cleanup(self) -> None:
+        plan = _plan("preflight-training")
+        manifest_raw, payloads = _phase_manifest_fixture(plan)
+        plan = dataclasses.replace(
+            plan,
+            manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
+            manifest_bytes=len(manifest_raw),
+        )
+        native_stderr = b"first-line\n" + b"x" * 70_000 + b"\nlast-line\n"
+
+        def download(_bucket: str, _key: str, path: Path) -> None:
+            path.write_bytes(payloads[path.name])
+
+        def execute(_command, _staged, _stdout_path, progress_path):  # noqa: ANN001
+            progress_path.write_bytes(native_stderr)
+            return 23, V37MonitorSample(1, 0, None, 123_456, 0, 0)
+
+        uploads = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "phase"
+            with self.assertRaisesRegex(RuntimeError, "native worker exited 23"):
+                execute_v37_worker(
+                    plan,
+                    root=root,
+                    manifest_raw=manifest_raw,
+                    binary=Path("/opt/v37"),
+                    instance_id="i-v37-fixture",
+                    download=download,
+                    execute=execute,
+                    upload_once=lambda bucket, key, body: uploads.append(
+                        (bucket, key, body)
+                    ),
+                )
+            self.assertFalse(root.exists())
+
+        self.assertEqual(len(uploads), 1)
+        bucket, key, diagnostic = uploads[0]
+        self.assertEqual(bucket, "fixture")
+        self.assertEqual(
+            key,
+            "results/preflight-training/WORKER_FAILURE.log",
+        )
+        self.assertLessEqual(len(diagnostic), 65_536)
+        self.assertTrue(diagnostic.startswith(b"returncode=23\n"))
+        self.assertTrue(diagnostic.endswith(b"\nlast-line\n"))
+        self.assertNotIn(b"first-line", diagnostic)
+
     def test_v37_controller_never_masks_hard_launch_failures_as_spot_capacity(self) -> None:
         plan, objects = _controller_plan_fixture("preflight-training")
         ec2 = _DeniedEC2()
