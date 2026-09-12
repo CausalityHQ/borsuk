@@ -1609,6 +1609,7 @@ const V36_EXTERNAL_ASSIGNMENT_MANIFEST_KEY: &str = "borsuk.v36.supercell_assignm
 const V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES: u64 = 64 * 1_048_576;
 const V36_EXTERNAL_ASSIGNMENT_ROOT_FORMAT: &str = "borsuk-v36-supercell-assignment-root-v1";
 const V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE: &str = "supercell-assignment-root";
+const V36_EXTERNAL_ASSIGNMENT_ROOT_MAXIMUM_ENCODED_BYTES: u64 = 16 * 1_048_576;
 const V36_INITIAL_ASSIGNMENT_MERGE_CHUNK_FORMAT: &str =
     "borsuk-v36-initial-assignment-merge-chunk-arrow-v1";
 const V36_INITIAL_ASSIGNMENT_MERGE_CHUNK_ROLE: &str = "initial-assignment-merge-chunk";
@@ -1743,7 +1744,8 @@ impl From<&V36SupercellAssignmentShardArtifact> for V36SupercellAssignmentShardA
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct V36CommittedSupercellAssignmentsManifest {
     artifacts: Vec<V36SupercellAssignmentShardArtifactWire>,
     format: String,
@@ -5060,6 +5062,11 @@ fn v36_committed_assignment_root(
         .try_reserve_exact(1)
         .map_err(|_| invalid("V36 assignment root manifest exceeds capacity"))?;
     bytes.push(b'\n');
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        > V36_EXTERNAL_ASSIGNMENT_ROOT_MAXIMUM_ENCODED_BYTES
+    {
+        return Err(invalid("V36 assignment root exceeds encoded admission"));
+    }
     let uri = format!("{uri_prefix}/assignment-root.json");
     let identity = V36ArtifactIdentity {
         blake3: blake3::hash(&bytes).to_hex().to_string(),
@@ -5073,6 +5080,125 @@ fn v36_committed_assignment_root(
         return Err(invalid("V36 assignment root URI differs"));
     }
     Ok((bytes, identity))
+}
+
+/// Authenticate one persisted assignment root against the admitted execution.
+pub fn authenticate_v36_supercell_assignment_root(
+    admission: &V36AdmittedSupercellAssignmentPreflight,
+    bytes: &[u8],
+    root_identity: &V36ArtifactIdentity,
+) -> Result<V36CommittedSupercellAssignments> {
+    let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if bytes.last() != Some(&b'\n')
+        || root_identity.encoded_bytes != encoded_bytes
+        || encoded_bytes > V36_EXTERNAL_ASSIGNMENT_ROOT_MAXIMUM_ENCODED_BYTES
+        || root_identity.role != V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE
+        || !valid_v36_supercell_model_uri(&root_identity.uri)
+        || !valid_sha256(&root_identity.sha256)
+        || !valid_sha256(&root_identity.blake3)
+        || root_identity.sha256 != format!("{:x}", Sha256::digest(bytes))
+        || root_identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+    {
+        return Err(invalid("V36 assignment root identity differs"));
+    }
+    let manifest: V36CommittedSupercellAssignmentsManifest = serde_json::from_slice(bytes)
+        .map_err(|_| invalid("V36 assignment root manifest differs"))?;
+    let mut canonical = serde_json::to_vec(&v36_canonical_json_value(
+        serde_json::to_value(&manifest)
+            .map_err(|_| invalid("V36 assignment root manifest differs"))?,
+    ))
+    .map_err(|_| invalid("V36 assignment root manifest differs"))?;
+    canonical
+        .try_reserve_exact(1)
+        .map_err(|_| invalid("V36 assignment root manifest exceeds capacity"))?;
+    canonical.push(b'\n');
+    let expected_shards = usize::try_from(admission.projection.logical_shards)
+        .map_err(|_| invalid("V36 assignment shard count overflows"))?;
+    if canonical != bytes
+        || manifest.format != V36_EXTERNAL_ASSIGNMENT_ROOT_FORMAT
+        || manifest.merge_fan_in != admission.projection.merge_fan_in
+        || manifest.merge_schedule != admission.projection.merge_schedule()?
+        || manifest.model_identity != admission.model_identity
+        || manifest.projected_corpus_sha256 != admission.training_spec.projected_corpus_sha256
+        || manifest.role != V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE
+        || manifest.training_spec != admission.training_spec
+        || manifest.artifacts.len() != expected_shards
+        || !valid_v36_supercell_model_uri(&manifest.uri_prefix)
+        || root_identity.uri != format!("{}/assignment-root.json", manifest.uri_prefix)
+    {
+        return Err(invalid("V36 assignment root manifest differs"));
+    }
+
+    let mut artifacts = Vec::new();
+    artifacts
+        .try_reserve_exact(expected_shards)
+        .map_err(|_| invalid("V36 assignment root inventory exceeds capacity"))?;
+    let mut row_count = 0_u64;
+    for (shard_ordinal, artifact) in manifest.artifacts.iter().enumerate() {
+        let shard_ordinal = u64::try_from(shard_ordinal)
+            .map_err(|_| invalid("V36 assignment shard ordinal overflows"))?;
+        let start = shard_ordinal
+            .checked_mul(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+            .ok_or_else(|| invalid("V36 assignment shard range overflows"))?;
+        let expected_rows = u32::try_from(
+            admission
+                .training_spec
+                .corpus_rows
+                .min(
+                    start
+                        .checked_add(V36_EXTERNAL_ASSIGNMENT_SHARD_ROWS)
+                        .ok_or_else(|| invalid("V36 assignment shard range overflows"))?,
+                )
+                .checked_sub(start)
+                .ok_or_else(|| invalid("V36 assignment shard range differs"))?,
+        )
+        .map_err(|_| invalid("V36 assignment shard row count overflows"))?;
+        let context = V36SupercellAssignmentShardContext {
+            model_identity: artifact.context.model_identity.clone(),
+            projected_corpus_sha256: artifact.context.projected_corpus_sha256.clone(),
+            shard_ordinal: artifact.context.shard_ordinal,
+            training_spec: artifact.context.training_spec.clone(),
+            uri: artifact.context.uri.clone(),
+        };
+        validate_v36_assignment_context(&context)?;
+        if context.model_identity != admission.model_identity
+            || context.projected_corpus_sha256 != admission.training_spec.projected_corpus_sha256
+            || context.shard_ordinal != shard_ordinal
+            || context.training_spec != admission.training_spec
+            || context.uri != format!("{}/shard-{shard_ordinal:06}.arrow", manifest.uri_prefix)
+            || artifact.row_count != expected_rows
+            || artifact.encoded_bytes == 0
+            || artifact.encoded_bytes > V36_EXTERNAL_ASSIGNMENT_MAXIMUM_ENCODED_BYTES
+            || !valid_sha256(&artifact.sha256)
+            || !valid_sha256(&artifact.blake3)
+        {
+            return Err(invalid("V36 assignment root shard inventory differs"));
+        }
+        row_count = row_count
+            .checked_add(u64::from(artifact.row_count))
+            .ok_or_else(|| invalid("V36 assignment root rows overflow"))?;
+        artifacts.push(V36SupercellAssignmentShardArtifact {
+            blake3: artifact.blake3.clone(),
+            context,
+            encoded_bytes: artifact.encoded_bytes,
+            row_count: artifact.row_count,
+            sha256: artifact.sha256.clone(),
+        });
+    }
+    if row_count != admission.training_spec.corpus_rows {
+        return Err(invalid("V36 assignment root rows differ"));
+    }
+    let (expected_bytes, expected_identity) =
+        v36_committed_assignment_root(admission, &artifacts, &manifest.uri_prefix)?;
+    if expected_bytes != bytes || expected_identity != *root_identity {
+        return Err(invalid("V36 assignment root authority differs"));
+    }
+    Ok(V36CommittedSupercellAssignments {
+        admission: admission.clone(),
+        artifacts,
+        root_identity: root_identity.clone(),
+        uri_prefix: manifest.uri_prefix,
+    })
 }
 
 fn write_v36_assignment_buffer(
@@ -8787,6 +8913,7 @@ mod tests {
         authenticate_v36_assignment_merge_generation_root,
         authenticate_v36_followup_assignment_merge_run_root,
         authenticate_v36_initial_assignment_merge_run_root,
+        authenticate_v36_supercell_assignment_root,
         authenticate_v36_supercell_assignment_shard_arrow,
         commit_v36_followup_assignment_merge_generation,
         commit_v36_initial_assignment_merge_generation,
@@ -8992,7 +9119,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let uri_prefix = "s3://borsuk-v36-test/geometry/assignments";
-        let (_, root_identity) =
+        let (root_bytes, root_identity) =
             v36_committed_assignment_root(&admission, &artifacts, uri_prefix).unwrap();
         assert_eq!(root_identity.role, V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE);
         let committed = V36CommittedSupercellAssignments {
@@ -9001,6 +9128,25 @@ mod tests {
             root_identity: root_identity.clone(),
             uri_prefix: uri_prefix.to_owned(),
         };
+        let resumed = authenticate_v36_supercell_assignment_root(
+            committed.admission(),
+            &root_bytes,
+            &root_identity,
+        )
+        .unwrap();
+        assert_eq!(resumed.artifacts(), committed.artifacts());
+        assert_eq!(resumed.root_identity(), committed.root_identity());
+        assert_eq!(resumed.uri_prefix(), committed.uri_prefix());
+        let mut corrupt_root = root_bytes;
+        corrupt_root[0] ^= 1;
+        assert!(
+            authenticate_v36_supercell_assignment_root(
+                committed.admission(),
+                &corrupt_root,
+                &root_identity,
+            )
+            .is_err()
+        );
 
         let plan = plan_v36_initial_assignment_merge_generation(&committed)
             .unwrap()
