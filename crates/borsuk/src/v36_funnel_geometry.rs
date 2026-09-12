@@ -7550,6 +7550,176 @@ pub fn train_v36_posting_centroids(
     Ok(centroids)
 }
 
+/// Exact-object reader used by the bounded 1M resident geometry diagnostic.
+pub trait V36SupercellRunChunkSource {
+    /// Read one complete registered per-supercell Arrow chunk.
+    fn read_chunk(&mut self, artifact: &V36SupercellRunChunkArtifact) -> Result<Vec<u8>>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Claim-ineligible 1M bridge result used to fail fast before scalable training.
+pub struct V36ResidentPostingDiagnostic {
+    assignments: V36PostingAssignments,
+    centroids: Vec<Vec<f32>>,
+    postings_per_supercell: Vec<u32>,
+}
+
+impl V36ResidentPostingDiagnostic {
+    /// Globally numbered posting centroids, grouped by supercell ordinal.
+    pub fn centroids(&self) -> &[Vec<f32>] {
+        &self.centroids
+    }
+
+    /// Exact Hamilton posting allocation in supercell ordinal order.
+    pub fn postings_per_supercell(&self) -> &[u32] {
+        &self.postings_per_supercell
+    }
+
+    /// Final ownership recomputed against every posting, never the training partition only.
+    pub const fn assignments(&self) -> &V36PostingAssignments {
+        &self.assignments
+    }
+}
+
+/// Train one resident supercell at a time, then assign the complete 1M population globally.
+///
+/// This is deliberately a claim-ineligible fail-fast bridge. It does not replace the
+/// external-sidecar trainer required for 10M/100M construction qualification.
+pub fn run_v36_resident_posting_diagnostic(
+    runs: &V36CommittedSupercellRuns,
+    admitted: &V36AdmittedSupercellPostCountPlan,
+    closure_epsilon: Option<f64>,
+    worker_threads: usize,
+    block_rows: usize,
+    source: &mut dyn V36SupercellRunChunkSource,
+) -> Result<V36ResidentPostingDiagnostic> {
+    const MAXIMUM_DIAGNOSTIC_ROWS: u64 = 1_000_000;
+
+    let spec = admitted.assignment_preflight.training_spec();
+    let allocation = &admitted.projection.postings_per_supercell;
+    if spec.corpus_rows == 0
+        || spec.corpus_rows > MAXIMUM_DIAGNOSTIC_ROWS
+        || runs.row_count != spec.corpus_rows
+        || runs.assignment_root_identity.role != V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE
+        || admitted.run_rows.len() != usize::try_from(spec.super_cell_count).unwrap_or(usize::MAX)
+        || allocation.len() != admitted.run_rows.len()
+        || allocate_v36_hamilton_postings(
+            &admitted.run_rows,
+            u32::try_from(spec.corpus_rows.div_ceil(admitted.target_primary_rows))
+                .map_err(|_| invalid("V36 resident diagnostic posting count overflows"))?,
+        )? != *allocation
+    {
+        return Err(invalid("V36 resident diagnostic authority differs"));
+    }
+
+    let row_count = usize::try_from(spec.corpus_rows)
+        .map_err(|_| invalid("V36 resident diagnostic row count overflows"))?;
+    let cell_count = usize::try_from(spec.super_cell_count)
+        .map_err(|_| invalid("V36 resident diagnostic supercell count overflows"))?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(row_count)
+        .map_err(|_| invalid("V36 resident diagnostic rows exceed capacity"))?;
+    let mut row_cells = Vec::new();
+    row_cells
+        .try_reserve_exact(row_count)
+        .map_err(|_| invalid("V36 resident diagnostic cells exceed capacity"))?;
+    let mut observed_run_rows = vec![0_u64; cell_count];
+    let mut coverage = vec![0_u8; row_count.div_ceil(8)];
+    let mut previous_chunk = None::<(u32, u64)>;
+
+    for artifact in &runs.chunks {
+        let context = &artifact.context;
+        let key = (context.supercell_ordinal, context.chunk_ordinal);
+        let expected_ordinal = previous_chunk.map_or(0, |(cell, ordinal)| {
+            if cell == context.supercell_ordinal {
+                ordinal + 1
+            } else {
+                0
+            }
+        });
+        if previous_chunk.is_some_and(|previous| key <= previous)
+            || context.chunk_ordinal != expected_ordinal
+            || context.training_spec != *spec
+            || context.model_identity != admitted.assignment_preflight.model_identity
+            || context.projected_corpus_sha256 != spec.projected_corpus_sha256
+        {
+            return Err(invalid("V36 resident diagnostic chunk inventory differs"));
+        }
+        let bytes = source.read_chunk(artifact)?;
+        let decoded = decode_v36_supercell_run_chunk_arrow(&bytes, artifact)?;
+        let cell = usize::try_from(context.supercell_ordinal)
+            .map_err(|_| invalid("V36 resident diagnostic supercell overflows"))?;
+        for row in decoded {
+            let ordinal = usize::try_from(row.source_ordinal)
+                .map_err(|_| invalid("V36 resident diagnostic source ordinal overflows"))?;
+            let byte = coverage
+                .get_mut(ordinal / 8)
+                .ok_or_else(|| invalid("V36 resident diagnostic source coverage differs"))?;
+            let mask = 1_u8 << (ordinal % 8);
+            if *byte & mask != 0 {
+                return Err(invalid("V36 resident diagnostic source coverage differs"));
+            }
+            *byte |= mask;
+            observed_run_rows[cell] = observed_run_rows[cell]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 resident diagnostic run count overflows"))?;
+            rows.push((row.source_ordinal, row.projected.to_vec()));
+            row_cells.push(cell);
+        }
+        previous_chunk = Some(key);
+    }
+    if rows.len() != row_count
+        || observed_run_rows != admitted.run_rows
+        || coverage.iter().enumerate().any(|(byte_index, byte)| {
+            let expected = if byte_index + 1 == coverage.len() && row_count % 8 != 0 {
+                (1_u8 << (row_count % 8)) - 1
+            } else {
+                u8::MAX
+            };
+            *byte != expected
+        })
+    {
+        return Err(invalid("V36 resident diagnostic source coverage differs"));
+    }
+
+    let mut centroids = Vec::new();
+    centroids
+        .try_reserve_exact(
+            allocation
+                .iter()
+                .try_fold(0_usize, |sum, postings| {
+                    sum.checked_add(usize::try_from(*postings).ok()?)
+                })
+                .ok_or_else(|| invalid("V36 resident diagnostic posting count overflows"))?,
+        )
+        .map_err(|_| invalid("V36 resident diagnostic centroids exceed capacity"))?;
+    for (cell, posting_count) in allocation.iter().copied().enumerate() {
+        if posting_count == 0 {
+            continue;
+        }
+        let local = rows
+            .iter()
+            .zip(&row_cells)
+            .filter(|(_, row_cell)| **row_cell == cell)
+            .map(|(row, _)| row.clone())
+            .collect::<Vec<_>>();
+        centroids.extend(train_v36_posting_centroids(&local, posting_count)?);
+    }
+    let assignments = assign_v36_postings(
+        &rows,
+        &centroids,
+        closure_epsilon,
+        worker_threads,
+        block_rows,
+        admitted.target_primary_rows,
+    )?;
+    Ok(V36ResidentPostingDiagnostic {
+        assignments,
+        centroids,
+        postings_per_supercell: allocation.clone(),
+    })
+}
+
 fn invalid_v36_vector(vector: &[f32]) -> bool {
     vector.len() != 192
         || vector
@@ -9271,17 +9441,18 @@ pub fn admit_v36_geometry(
 mod tests {
     use super::{
         Result, V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE, V36AdmittedSupercellAssignmentPreflight,
-        V36ArtifactIdentity, V36AssignmentMergeChunkSource,
+        V36AdmittedSupercellPostCountPlan, V36ArtifactIdentity, V36AssignmentMergeChunkSource,
         V36AuthenticatedInitialAssignmentMergeGroup, V36AuthenticatedSupercellAssignmentShard,
-        V36CommittedSupercellAssignments, V36ExternalMergeGenerationProjection,
-        V36FollowupAssignmentMergeRunSink, V36InitialAssignmentMergeChunkArtifact,
-        V36InitialAssignmentMergeGeneration, V36InitialAssignmentMergeGenerationSink,
-        V36InitialAssignmentMergeGroup, V36InitialAssignmentMergeRunSink,
-        V36PublicationCommitStatus, V36RowOwners, V36SupercellAssignmentAdmissionRequest,
-        V36SupercellAssignmentProjection, V36SupercellAssignmentRow,
-        V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardContext,
-        V36SupercellRunPublisherSink, V36SupercellTrainingSpec, V36TerminalAssignmentSource,
-        authenticate_v36_assignment_merge_generation_root,
+        V36CommittedSupercellAssignments, V36CommittedSupercellRuns,
+        V36ExternalMergeGenerationProjection, V36FollowupAssignmentMergeRunSink,
+        V36InitialAssignmentMergeChunkArtifact, V36InitialAssignmentMergeGeneration,
+        V36InitialAssignmentMergeGenerationSink, V36InitialAssignmentMergeGroup,
+        V36InitialAssignmentMergeRunSink, V36PublicationCommitStatus, V36RowOwners,
+        V36SupercellAssignmentAdmissionRequest, V36SupercellAssignmentProjection,
+        V36SupercellAssignmentRow, V36SupercellAssignmentShardArtifact,
+        V36SupercellAssignmentShardContext, V36SupercellRunChunkContext,
+        V36SupercellRunChunkSource, V36SupercellRunPublisherSink, V36SupercellTrainingSpec,
+        V36TerminalAssignmentSource, authenticate_v36_assignment_merge_generation_root,
         authenticate_v36_followup_assignment_merge_run_root,
         authenticate_v36_initial_assignment_merge_run_root,
         authenticate_v36_supercell_assignment_root,
@@ -9290,12 +9461,13 @@ mod tests {
         commit_v36_initial_assignment_merge_generation,
         decode_v36_initial_assignment_merge_chunk_arrow,
         encode_v36_initial_assignment_merge_chunk_arrow,
-        encode_v36_supercell_assignment_shard_arrow, invalid,
+        encode_v36_supercell_assignment_shard_arrow, encode_v36_supercell_run_chunk_arrow, invalid,
         load_v36_initial_assignment_merge_group, plan_v36_followup_assignment_merge_generation,
         plan_v36_initial_assignment_merge_generation, publish_v36_supercell_run_chunks,
-        repair_v36_empty_posting_assignments, stream_v36_followup_assignment_merge_group,
-        v36_canonical_json_value, v36_committed_assignment_root,
-        write_v36_followup_assignment_merge_group, write_v36_initial_assignment_merge_group,
+        repair_v36_empty_posting_assignments, run_v36_resident_posting_diagnostic,
+        stream_v36_followup_assignment_merge_group, v36_canonical_json_value,
+        v36_committed_assignment_root, write_v36_followup_assignment_merge_group,
+        write_v36_initial_assignment_merge_group,
     };
     use sha2::{Digest, Sha256};
 
@@ -9656,6 +9828,183 @@ mod tests {
                 .map(|(_, artifact)| (artifact.context.supercell_ordinal, artifact.row_count))
                 .collect::<Vec<_>>(),
             [(0, 32_769), (1, 32_768)]
+        );
+    }
+
+    #[derive(Default)]
+    struct ResidentChunkSource {
+        chunks: Vec<(Vec<u8>, super::V36SupercellRunChunkArtifact)>,
+        reads: usize,
+    }
+
+    impl V36SupercellRunChunkSource for ResidentChunkSource {
+        fn read_chunk(
+            &mut self,
+            artifact: &super::V36SupercellRunChunkArtifact,
+        ) -> Result<Vec<u8>> {
+            self.reads += 1;
+            self.chunks
+                .iter()
+                .find(|(_, expected)| expected == artifact)
+                .map(|(bytes, _)| bytes.clone())
+                .ok_or_else(|| invalid("missing resident diagnostic chunk"))
+        }
+    }
+
+    #[test]
+    fn v36_resident_posting_diagnostic_trains_authenticated_runs_but_assigns_globally() {
+        // Break caught: the 1M fail-fast bridge trusts unauthenticated row
+        // bytes or incorrectly treats the training supercell as final posting
+        // ownership instead of comparing every row with every posting.
+        let training_spec = V36SupercellTrainingSpec {
+            corpus_rows: 4,
+            dimensions: 192,
+            maximum_block_rows: 4,
+            projected_corpus_sha256: "1".repeat(64),
+            reservoir_rows: 4,
+            super_cell_count: 2,
+        };
+        let model_identity = V36ArtifactIdentity {
+            blake3: "2".repeat(64),
+            encoded_bytes: 1,
+            role: "supercell-model".to_owned(),
+            sha256: "3".repeat(64),
+            uri: "s3://borsuk-v36-test/geometry/supercells.arrow".to_owned(),
+        };
+        let assignment_preflight = V36AdmittedSupercellAssignmentPreflight {
+            model_identity: model_identity.clone(),
+            training_spec: training_spec.clone(),
+            request: V36SupercellAssignmentAdmissionRequest {
+                worker_count: 1,
+                queue_rows_per_worker: 4,
+                sort_rows_per_worker: 4,
+                merge_fan_in: 2,
+                measured_component_terms: 1,
+                measured_elapsed_ns: 1,
+                measured_cost_microusd: 1,
+                measured_external_work_units: 1,
+                measured_external_elapsed_ns: 1,
+                measured_external_cost_microusd: 1,
+                maximum_active_wall_seconds: 1,
+                maximum_cost_microusd: 1,
+                maximum_peak_live_bytes: 1,
+                maximum_scratch_bytes: 1,
+            },
+            projection: V36SupercellAssignmentProjection {
+                logical_shards: 1,
+                merge_generations: 0,
+                merge_fan_in: 2,
+                uncompressed_assignment_bytes: 1,
+                required_scratch_bytes: 1,
+                required_peak_live_bytes: 1,
+                coverage_bitmap_bytes: 1,
+                component_terms: 1,
+                external_work_units: 1,
+                publication_row_visits: 4,
+                projected_active_ns: 1,
+                projected_cost_microusd: 1,
+            },
+        };
+        let admitted = V36AdmittedSupercellPostCountPlan {
+            assignment_preflight,
+            run_rows: vec![2, 2],
+            target_primary_rows: 2,
+            request: super::V36SupercellPostCountAdmissionRequest {
+                measured_component_terms: 1,
+                measured_elapsed_ns: 1,
+                measured_cost_microusd: 1,
+                maximum_active_wall_seconds: 1,
+                maximum_cost_microusd: 1,
+                maximum_peak_live_bytes: 1,
+                maximum_scratch_bytes: 1,
+            },
+            projection: super::V36SupercellPostCountProjection {
+                posting_count: 2,
+                postings_per_supercell: vec![1, 1],
+                initialization_distance_evaluations: 0,
+                lloyd_distance_evaluations: 40,
+                repair_distance_evaluations: 40,
+                source_reduction_terms: 7_680,
+                local_component_terms: 23_040,
+                required_scratch_bytes: 1,
+                required_peak_live_bytes: 1,
+                projected_active_ns: 1,
+                projected_cost_microusd: 1,
+            },
+        };
+        let vector = |x: f32| {
+            let mut value = [0.0_f32; 192];
+            value[0] = x;
+            value
+        };
+        let rows = [
+            vec![
+                V36SupercellAssignmentRow::new(0, 0, vector(0.0)).unwrap(),
+                V36SupercellAssignmentRow::new(0, 1, vector(100.0)).unwrap(),
+            ],
+            vec![
+                V36SupercellAssignmentRow::new(1, 2, vector(51.0)).unwrap(),
+                V36SupercellAssignmentRow::new(1, 3, vector(52.0)).unwrap(),
+            ],
+        ];
+        let mut source = ResidentChunkSource::default();
+        let mut artifacts = Vec::new();
+        for (cell, rows) in rows.iter().enumerate() {
+            let context = V36SupercellRunChunkContext {
+                model_identity: model_identity.clone(),
+                projected_corpus_sha256: training_spec.projected_corpus_sha256.clone(),
+                supercell_ordinal: u32::try_from(cell).unwrap(),
+                chunk_ordinal: 0,
+                training_spec: training_spec.clone(),
+                uri: format!(
+                    "s3://borsuk-v36-test/geometry/assignments/supercells/cell-{cell:06}/chunk-000000.arrow"
+                ),
+            };
+            let (bytes, artifact) = encode_v36_supercell_run_chunk_arrow(&context, rows).unwrap();
+            source.chunks.push((bytes, artifact.clone()));
+            artifacts.push(artifact);
+        }
+        let published = V36CommittedSupercellRuns {
+            assignment_root_identity: V36ArtifactIdentity {
+                blake3: "4".repeat(64),
+                encoded_bytes: 1,
+                role: V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE.to_owned(),
+                sha256: "5".repeat(64),
+                uri: "s3://borsuk-v36-test/geometry/assignments/assignment-root.json".to_owned(),
+            },
+            chunks: artifacts,
+            root_identity: V36ArtifactIdentity {
+                blake3: "6".repeat(64),
+                encoded_bytes: 1,
+                role: super::V36_SUPERCELL_RUN_ROOT_ROLE.to_owned(),
+                sha256: "7".repeat(64),
+                uri: "s3://borsuk-v36-test/geometry/assignments/supercells/root.json".to_owned(),
+            },
+            row_count: 4,
+            terminal_root_identity: V36ArtifactIdentity {
+                blake3: "8".repeat(64),
+                encoded_bytes: 1,
+                role: V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE.to_owned(),
+                sha256: "9".repeat(64),
+                uri: "s3://borsuk-v36-test/geometry/assignments/assignment-root.json".to_owned(),
+            },
+        };
+
+        let diagnostic =
+            run_v36_resident_posting_diagnostic(&published, &admitted, None, 1, 4, &mut source)
+                .unwrap();
+
+        assert_eq!(source.reads, 2);
+        assert_eq!(diagnostic.postings_per_supercell(), &[1, 1]);
+        assert_eq!(diagnostic.centroids()[0][0].to_bits(), 50.0_f32.to_bits());
+        assert_eq!(diagnostic.centroids()[1][0].to_bits(), 51.5_f32.to_bits());
+        assert_eq!(diagnostic.assignments().source_ordinals(), &[0, 1, 2, 3]);
+        assert_eq!(diagnostic.assignments().primary_occupancy(), &[1, 3]);
+
+        source.chunks[0].0[0] ^= 1;
+        assert!(
+            run_v36_resident_posting_diagnostic(&published, &admitted, None, 1, 4, &mut source,)
+                .is_err()
         );
     }
 
