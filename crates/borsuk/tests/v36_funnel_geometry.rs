@@ -15,16 +15,16 @@ use borsuk::{
     V36SupercellAssignmentShardArtifact, V36SupercellAssignmentShardSink,
     V36SupercellPostCountAdmissionRequest, V36SupercellRunChunkArtifact, V36SupercellTrainingSpec,
     admit_v36_supercell_assignment_preflight, admit_v36_supercell_post_count,
-    bind_v36_registered_supercell_training_spec, bind_v36_supercell_assignment_shard_context,
-    bind_v36_supercell_run_chunk_context, decode_v36_supercell_assignment_shard_arrow,
-    decode_v36_supercell_model_arrow, decode_v36_supercell_run_chunk_arrow,
-    encode_v36_supercell_assignment_shard_arrow, encode_v36_supercell_model_arrow,
-    encode_v36_supercell_run_chunk_arrow, evaluate_v36_posting_prefix_containment,
-    load_v36_prefix_source_feature_ids, project_v36_exact_assignment_preflight,
-    project_v36_supercell_assignment_admission, project_v36_supercell_post_count_admission,
-    project_v36_supercell_training_preflight, run_v36_resident_projected_posting_diagnostic,
-    train_v36_supercells, v36_prefix_source_schema, write_v36_prefix_source_parquet,
-    write_v36_supercell_assignment_shards,
+    assign_v36_capacity_aware_postings, bind_v36_registered_supercell_training_spec,
+    bind_v36_supercell_assignment_shard_context, bind_v36_supercell_run_chunk_context,
+    decode_v36_supercell_assignment_shard_arrow, decode_v36_supercell_model_arrow,
+    decode_v36_supercell_run_chunk_arrow, encode_v36_supercell_assignment_shard_arrow,
+    encode_v36_supercell_model_arrow, encode_v36_supercell_run_chunk_arrow,
+    evaluate_v36_posting_prefix_containment, load_v36_prefix_source_feature_ids,
+    project_v36_exact_assignment_preflight, project_v36_supercell_assignment_admission,
+    project_v36_supercell_post_count_admission, project_v36_supercell_training_preflight,
+    run_v36_resident_projected_posting_diagnostic, train_v36_supercells, v36_prefix_source_schema,
+    write_v36_prefix_source_parquet, write_v36_supercell_assignment_shards,
 };
 use sha2::{Digest, Sha256};
 
@@ -197,6 +197,47 @@ fn v36_resident_posting_containment_exposes_every_prefix_before_page_reads() {
     let mut missing = truth;
     missing[0][0] = 99;
     assert!(evaluate_v36_posting_prefix_containment(&diagnostic, &queries, &missing).is_err());
+}
+
+#[test]
+fn v36_capacity_aware_assignment_bounds_skew_without_worker_drift() {
+    let rows = (0..32_u64)
+        .map(|ordinal| {
+            let mut vector = vec![0.0_f32; ROUTING_DIMENSIONS];
+            vector[0] = 1.0;
+            (ordinal, vector)
+        })
+        .collect::<Vec<_>>();
+    let centroids = (0..4)
+        .map(|ordinal| {
+            let mut centroid = vec![0.0_f32; ROUTING_DIMENSIONS];
+            centroid[0] = 1.0 + ordinal as f32;
+            centroid
+        })
+        .collect::<Vec<_>>();
+    let single = assign_v36_capacity_aware_postings(&rows, &centroids, 1, 7, 8).unwrap();
+    let parallel = assign_v36_capacity_aware_postings(&rows, &centroids, 4, 11, 8).unwrap();
+    let mut reversed_rows = rows.clone();
+    reversed_rows.reverse();
+    let reordered =
+        assign_v36_capacity_aware_postings(&reversed_rows, &centroids, 2, 13, 8).unwrap();
+    assert_eq!(single, parallel);
+    assert_eq!(single, reordered);
+    assert_eq!(single.source_ordinals(), &(0..32).collect::<Vec<_>>());
+    assert_eq!(single.owner_offsets(), &(0..=32).collect::<Vec<_>>());
+    assert_eq!(
+        single.owners(),
+        &[0; 8]
+            .into_iter()
+            .chain([1; 8])
+            .chain([2; 8])
+            .chain([3; 8])
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(single.primary_occupancy(), &[8, 8, 8, 8]);
+    assert_eq!(single.stored_occupancy(), &[8, 8, 8, 8]);
+    assert_eq!(single.admission().stop, None);
+    assert_eq!(single.admission().mean_replication_ppm, 1_000_000);
 }
 
 fn source_batch(feature_ids: Vec<u64>) -> RecordBatch {
@@ -628,10 +669,10 @@ fn v36_geometry_post_count_admission_projects_skew_and_hamilton_without_populati
     assert_eq!(projected.repair_distance_evaluations, 2_419_992_770);
     assert_eq!(projected.source_reduction_terms, 1_920_000_000);
     assert_eq!(projected.local_component_terms, 977_463_485_952);
-    assert_eq!(projected.required_scratch_bytes, 2_011_238_400);
-    assert_eq!(projected.required_peak_live_bytes, 1_041_825_792);
-    assert_eq!(projected.projected_active_ns, 978_252_485_952);
-    assert_eq!(projected.projected_cost_microusd, 978_253);
+    assert_eq!(projected.required_scratch_bytes, 2_082_344_960);
+    assert_eq!(projected.required_peak_live_bytes, 1_060_110_336);
+    assert_eq!(projected.projected_active_ns, 978_253_485_952);
+    assert_eq!(projected.projected_cost_microusd, 978_254);
 
     assert!(
         project_v36_supercell_post_count_admission(

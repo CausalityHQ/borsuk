@@ -7800,14 +7800,24 @@ fn run_v36_resident_posting_core(
             .collect::<Vec<_>>();
         centroids.extend(train_v36_posting_centroids(&local, posting_count)?);
     }
-    let assignments = assign_v36_postings(
-        &rows,
-        &centroids,
-        closure_epsilon,
-        worker_threads,
-        block_rows,
-        target_primary_rows,
-    )?;
+    let assignments = if closure_epsilon.is_none() {
+        assign_v36_capacity_aware_postings(
+            &rows,
+            &centroids,
+            worker_threads,
+            block_rows,
+            target_primary_rows,
+        )?
+    } else {
+        assign_v36_postings(
+            &rows,
+            &centroids,
+            closure_epsilon,
+            worker_threads,
+            block_rows,
+            target_primary_rows,
+        )?
+    };
     Ok(V36ResidentPostingDiagnostic {
         assignments,
         centroids,
@@ -9454,6 +9464,191 @@ struct V36RowOwners {
     owners: [u32; 8],
 }
 
+fn finish_v36_posting_assignments(
+    ordered: &[&(u64, Vec<f32>)],
+    row_owners: Vec<V36RowOwners>,
+    posting_count: usize,
+    target_primary_rows: u64,
+) -> Result<V36PostingAssignments> {
+    let source_ordinals = ordered.iter().map(|row| row.0).collect::<Vec<_>>();
+    let mut owner_offsets = Vec::with_capacity(ordered.len() + 1);
+    let owner_count = row_owners.iter().try_fold(0_usize, |sum, row| {
+        sum.checked_add(usize::from(row.len))
+            .ok_or_else(|| invalid("V36 owner count overflows"))
+    })?;
+    let mut owners = Vec::with_capacity(owner_count);
+    owner_offsets.push(0);
+    for row in row_owners {
+        owners.extend_from_slice(&row.owners[..usize::from(row.len)]);
+        owner_offsets
+            .push(u64::try_from(owners.len()).map_err(|_| invalid("V36 owner count overflows"))?);
+    }
+
+    let mut primary_occupancy = vec![0_u64; posting_count];
+    let mut stored_occupancy = vec![0_u64; posting_count];
+    for offsets in owner_offsets.windows(2) {
+        let start =
+            usize::try_from(offsets[0]).map_err(|_| invalid("V36 owner offset overflows"))?;
+        let end = usize::try_from(offsets[1]).map_err(|_| invalid("V36 owner offset overflows"))?;
+        let row_owners = owners
+            .get(start..end)
+            .filter(|row_owners| !row_owners.is_empty())
+            .ok_or_else(|| invalid("V36 owner offsets differ"))?;
+        let primary =
+            usize::try_from(row_owners[0]).map_err(|_| invalid("V36 posting ordinal overflows"))?;
+        let primary_count = primary_occupancy
+            .get_mut(primary)
+            .ok_or_else(|| invalid("V36 posting ordinal differs"))?;
+        *primary_count = primary_count
+            .checked_add(1)
+            .ok_or_else(|| invalid("V36 primary occupancy overflows"))?;
+        for owner in row_owners {
+            let owner =
+                usize::try_from(*owner).map_err(|_| invalid("V36 posting ordinal overflows"))?;
+            let stored_count = stored_occupancy
+                .get_mut(owner)
+                .ok_or_else(|| invalid("V36 posting ordinal differs"))?;
+            *stored_count = stored_count
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 stored occupancy overflows"))?;
+        }
+    }
+    let admission = admit_v36_geometry(&primary_occupancy, &stored_occupancy, target_primary_rows)?;
+    Ok(V36PostingAssignments {
+        source_ordinals,
+        owner_offsets,
+        owners,
+        primary_occupancy,
+        stored_occupancy,
+        admission,
+    })
+}
+
+/// Assign exactly one primary owner per row while enforcing the target capacity.
+///
+/// Each overloaded posting retains its closest rows. Overflow rows are then processed in
+/// source-ordinal order and placed in the nearest posting with residual capacity. Distance
+/// scoring is parallel, while capacity decisions use one canonical order so worker and block
+/// counts cannot change the artifact.
+pub fn assign_v36_capacity_aware_postings(
+    rows: &[(u64, Vec<f32>)],
+    centroids: &[Vec<f32>],
+    worker_threads: usize,
+    block_rows: usize,
+    target_primary_rows: u64,
+) -> Result<V36PostingAssignments> {
+    if rows.is_empty()
+        || centroids.is_empty()
+        || centroids.len() > u32::MAX as usize
+        || worker_threads == 0
+        || worker_threads > 64
+        || block_rows == 0
+        || block_rows > 65_536
+        || target_primary_rows == 0
+    {
+        return Err(invalid("V36 capacity assignment authority differs"));
+    }
+    let row_count = u64::try_from(rows.len())
+        .map_err(|_| invalid("V36 capacity assignment row count overflows"))?;
+    let centroid_count = u64::try_from(centroids.len())
+        .map_err(|_| invalid("V36 capacity assignment posting count overflows"))?;
+    if row_count.div_ceil(target_primary_rows) != centroid_count {
+        return Err(invalid("V36 capacity assignment geometry differs"));
+    }
+    let capacity = usize::try_from(target_primary_rows.min(row_count))
+        .map_err(|_| invalid("V36 capacity assignment target overflows"))?;
+    let mut ordered = rows.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+    if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0)
+        || ordered.iter().any(|(_, vector)| invalid_v36_vector(vector))
+        || centroids
+            .iter()
+            .any(|centroid| invalid_v36_vector(centroid))
+    {
+        return Err(invalid("V36 capacity assignment vector differs"));
+    }
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .build()
+        .map_err(|_| invalid("V36 capacity assignment workers differ"))?;
+    let mut nearest = vec![(0_usize, 0.0_f64); ordered.len()];
+    pool.install(|| {
+        ordered
+            .par_chunks(block_rows)
+            .zip(nearest.par_chunks_mut(block_rows))
+            .try_for_each(|(input, output)| {
+                for ((_, row), output) in input.iter().zip(output) {
+                    let mut best = (squared_l2(row, &centroids[0])?, 0_usize);
+                    for (posting, centroid) in centroids.iter().enumerate().skip(1) {
+                        let distance = squared_l2(row, centroid)?;
+                        if distance < best.0 {
+                            best = (distance, posting);
+                        }
+                    }
+                    *output = (best.1, best.0);
+                }
+                Ok::<(), BorsukError>(())
+            })
+    })?;
+
+    let mut rows_by_posting = vec![Vec::<usize>::new(); centroids.len()];
+    for (row, (posting, _)) in nearest.iter().copied().enumerate() {
+        rows_by_posting[posting].push(row);
+    }
+    let mut assigned = vec![usize::MAX; ordered.len()];
+    let mut remaining = vec![capacity; centroids.len()];
+    let mut overflow = Vec::new();
+    for (posting, posting_rows) in rows_by_posting.iter_mut().enumerate() {
+        posting_rows.sort_unstable_by(|left, right| {
+            nearest[*left]
+                .1
+                .total_cmp(&nearest[*right].1)
+                .then_with(|| ordered[*left].0.cmp(&ordered[*right].0))
+        });
+        let retained = posting_rows.len().min(capacity);
+        for row in &posting_rows[..retained] {
+            assigned[*row] = posting;
+        }
+        remaining[posting] -= retained;
+        overflow.extend_from_slice(&posting_rows[retained..]);
+    }
+    overflow.sort_unstable_by_key(|row| ordered[*row].0);
+    for row in overflow {
+        let vector = &ordered[row].1;
+        let mut best = None::<(f64, usize)>;
+        for (posting, centroid) in centroids.iter().enumerate() {
+            if remaining[posting] == 0 {
+                continue;
+            }
+            let distance = squared_l2(vector, centroid)?;
+            if best.is_none_or(|candidate| {
+                distance < candidate.0 || (distance == candidate.0 && posting < candidate.1)
+            }) {
+                best = Some((distance, posting));
+            }
+        }
+        let posting = best
+            .map(|candidate| candidate.1)
+            .ok_or_else(|| invalid("V36 capacity assignment has no residual slot"))?;
+        assigned[row] = posting;
+        remaining[posting] -= 1;
+    }
+    if assigned.contains(&usize::MAX) {
+        return Err(invalid("V36 capacity assignment is incomplete"));
+    }
+    let row_owners = assigned
+        .into_iter()
+        .map(|posting| {
+            let mut owners = [0_u32; 8];
+            owners[0] =
+                u32::try_from(posting).map_err(|_| invalid("V36 posting ordinal overflows"))?;
+            Ok(V36RowOwners { len: 1, owners })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    finish_v36_posting_assignments(&ordered, row_owners, centroids.len(), target_primary_rows)
+}
+
 /// Assign a projected population to exact primary and optional closure owners
 /// with byte-identical output across worker and block counts.
 pub fn assign_v36_postings(
@@ -9535,52 +9730,7 @@ pub fn assign_v36_postings(
             })
     })?;
 
-    let source_ordinals = ordered.iter().map(|row| row.0).collect::<Vec<_>>();
-    let mut owner_offsets = Vec::with_capacity(ordered.len() + 1);
-    let owner_count = row_owners.iter().try_fold(0_usize, |sum, row| {
-        sum.checked_add(usize::from(row.len))
-            .ok_or_else(|| invalid("V36 owner count overflows"))
-    })?;
-    let mut owners = Vec::with_capacity(owner_count);
-    owner_offsets.push(0);
-    for row in row_owners {
-        owners.extend_from_slice(&row.owners[..usize::from(row.len)]);
-        owner_offsets
-            .push(u64::try_from(owners.len()).map_err(|_| invalid("V36 owner count overflows"))?);
-    }
-
-    let mut primary_occupancy = vec![0_u64; centroids.len()];
-    let mut stored_occupancy = vec![0_u64; centroids.len()];
-    for offsets in owner_offsets.windows(2) {
-        let start =
-            usize::try_from(offsets[0]).map_err(|_| invalid("V36 owner offset overflows"))?;
-        let end = usize::try_from(offsets[1]).map_err(|_| invalid("V36 owner offset overflows"))?;
-        let row_owners = owners
-            .get(start..end)
-            .filter(|row_owners| !row_owners.is_empty())
-            .ok_or_else(|| invalid("V36 owner offsets differ"))?;
-        let primary =
-            usize::try_from(row_owners[0]).map_err(|_| invalid("V36 posting ordinal overflows"))?;
-        primary_occupancy[primary] = primary_occupancy[primary]
-            .checked_add(1)
-            .ok_or_else(|| invalid("V36 primary occupancy overflows"))?;
-        for owner in row_owners {
-            let owner =
-                usize::try_from(*owner).map_err(|_| invalid("V36 posting ordinal overflows"))?;
-            stored_occupancy[owner] = stored_occupancy[owner]
-                .checked_add(1)
-                .ok_or_else(|| invalid("V36 stored occupancy overflows"))?;
-        }
-    }
-    let admission = admit_v36_geometry(&primary_occupancy, &stored_occupancy, target_primary_rows)?;
-    Ok(V36PostingAssignments {
-        source_ordinals,
-        owner_offsets,
-        owners,
-        primary_occupancy,
-        stored_occupancy,
-        admission,
-    })
+    finish_v36_posting_assignments(&ordered, row_owners, centroids.len(), target_primary_rows)
 }
 
 /// First registered construction-side reason a V36 geometry is rejected.
