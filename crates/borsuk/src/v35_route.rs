@@ -1100,7 +1100,7 @@ mod tests {
     fn v35_route_quantized_center_matches_serving_f64_decode() {
         let (scale, codes, decoded) = quantize_center(&[0.1, 1.0]).unwrap();
         for (code, value) in codes.iter().zip(decoded) {
-            assert_eq!(f64::from(value), f64::from(*code) * f64::from(scale));
+            assert_eq!(value, f64::from(*code) * f64::from(scale));
         }
     }
 }

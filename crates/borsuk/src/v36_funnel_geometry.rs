@@ -10231,7 +10231,7 @@ mod tests {
         Result, V36_EXTERNAL_ASSIGNMENT_ROOT_ROLE, V36AdmittedSupercellAssignmentPreflight,
         V36AdmittedSupercellPostCountPlan, V36ArtifactIdentity, V36AssignmentMergeChunkSource,
         V36AuthenticatedInitialAssignmentMergeGroup, V36AuthenticatedSupercellAssignmentShard,
-        V36CommittedSupercellAssignments, V36CommittedSupercellRuns,
+        V36CapacityOwnerPolicy, V36CommittedSupercellAssignments, V36CommittedSupercellRuns,
         V36ExternalMergeGenerationProjection, V36FollowupAssignmentMergeRunSink,
         V36InitialAssignmentMergeChunkArtifact, V36InitialAssignmentMergeGeneration,
         V36InitialAssignmentMergeGenerationSink, V36InitialAssignmentMergeGroup,
