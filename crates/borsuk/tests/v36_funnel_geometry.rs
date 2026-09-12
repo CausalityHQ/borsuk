@@ -224,20 +224,26 @@ fn v36_capacity_aware_assignment_bounds_skew_without_worker_drift() {
     assert_eq!(single, parallel);
     assert_eq!(single, reordered);
     assert_eq!(single.source_ordinals(), &(0..32).collect::<Vec<_>>());
-    assert_eq!(single.owner_offsets(), &(0..=32).collect::<Vec<_>>());
+    assert_eq!(
+        single.owner_offsets(),
+        &[
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38,
+            40, 42, 44, 46, 48, 50, 52, 54, 56
+        ]
+    );
     assert_eq!(
         single.owners(),
         &[0; 8]
             .into_iter()
-            .chain([1; 8])
-            .chain([2; 8])
-            .chain([3; 8])
+            .chain([1, 0].repeat(8))
+            .chain([2, 0].repeat(8))
+            .chain([3, 0].repeat(8))
             .collect::<Vec<_>>()
     );
     assert_eq!(single.primary_occupancy(), &[8, 8, 8, 8]);
-    assert_eq!(single.stored_occupancy(), &[8, 8, 8, 8]);
+    assert_eq!(single.stored_occupancy(), &[32, 8, 8, 8]);
     assert_eq!(single.admission().stop, None);
-    assert_eq!(single.admission().mean_replication_ppm, 1_000_000);
+    assert_eq!(single.admission().mean_replication_ppm, 1_750_000);
 }
 
 fn source_batch(feature_ids: Vec<u64>) -> RecordBatch {

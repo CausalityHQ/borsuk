@@ -9639,11 +9639,20 @@ pub fn assign_v36_capacity_aware_postings(
     }
     let row_owners = assigned
         .into_iter()
-        .map(|posting| {
+        .enumerate()
+        .map(|(row, posting)| {
             let mut owners = [0_u32; 8];
             owners[0] =
                 u32::try_from(posting).map_err(|_| invalid("V36 posting ordinal overflows"))?;
-            Ok(V36RowOwners { len: 1, owners })
+            let nearest_posting = nearest[row].0;
+            let len = if nearest_posting == posting {
+                1
+            } else {
+                owners[1] = u32::try_from(nearest_posting)
+                    .map_err(|_| invalid("V36 posting ordinal overflows"))?;
+                2
+            };
+            Ok(V36RowOwners { len, owners })
         })
         .collect::<Result<Vec<_>>>()?;
     finish_v36_posting_assignments(&ordered, row_owners, centroids.len(), target_primary_rows)
