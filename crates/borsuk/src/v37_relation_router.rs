@@ -1,6 +1,7 @@
 //! Balanced hyperplane layout and relation-routing qualification for V37.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     io::Cursor,
     sync::{Arc, OnceLock},
 };
@@ -31,6 +32,9 @@ const V37_RELATION_RECORD_BYTES: u64 = 8;
 const V37_MEMORY_LIMIT_BYTES: u64 = 3 * 1_073_741_824;
 const V37_MAXIMUM_RELATION_NODE_VISITS: u64 = 1_024;
 const V37_SELECTED_POSTINGS: u64 = 14;
+const V37_GT_NEIGHBORS: u32 = 100;
+const V37_AGGREGATE_RECALL_GATE_PPM: u32 = 998_000;
+const V37_MINIMUM_RECALL_GATE_PPM: u32 = 800_000;
 static V37_FMA_KERNEL: OnceLock<Option<borsuk_fma::FusedDot8x12>> = OnceLock::new();
 
 /// Query-independent authority for one balanced hyperplane tree.
@@ -187,6 +191,40 @@ pub(crate) struct V37EncodedOwnership {
 pub(crate) struct V37QueryBranch {
     pub(crate) primary_is_left: bool,
     pub(crate) queues_sibling_zero_margin: bool,
+}
+
+/// Exact GT row identities for one separately authorized ceiling query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37GroundTruth {
+    pub(crate) query_ordinal: u32,
+    pub(crate) source_ordinals: Vec<u64>,
+}
+
+/// Independently recomputable unique-owner ceiling evidence for one query.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37CeilingSample {
+    pub(crate) query_ordinal: u32,
+    pub(crate) selected_postings: Vec<u32>,
+    pub(crate) hits: u32,
+    pub(crate) recall_ppm: u32,
+}
+
+/// Claim-ineligible exact K14 layout-ceiling result.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V37LayoutCeiling {
+    schema: String,
+    claim_eligible: bool,
+    gt_neighbors: u32,
+    selected_postings_limit: u32,
+    aggregate_gate_ppm: u32,
+    minimum_gate_ppm: u32,
+    pub(crate) samples: Vec<V37CeilingSample>,
+    pub(crate) aggregate_recall_ppm: u32,
+    pub(crate) minimum_recall_ppm: u32,
+    pub(crate) passed: bool,
+    pub(crate) disposition: String,
 }
 
 /// Backend-bound numeric authority persisted with every V37 manifest.
@@ -1428,6 +1466,189 @@ pub(crate) fn decode_v37_ownership_parquet(
     Ok(assignments)
 }
 
+fn validate_v37_ceiling(result: &V37LayoutCeiling) -> Result<()> {
+    if result.schema != "borsuk-v37-layout-ceiling-v1"
+        || result.claim_eligible
+        || result.gt_neighbors != V37_GT_NEIGHBORS
+        || result.selected_postings_limit != V37_SELECTED_POSTINGS as u32
+        || result.aggregate_gate_ppm != V37_AGGREGATE_RECALL_GATE_PPM
+        || result.minimum_gate_ppm != V37_MINIMUM_RECALL_GATE_PPM
+        || result.samples.is_empty()
+    {
+        return Err(invalid("V37 ceiling authority differs"));
+    }
+    let mut total_hits = 0_u64;
+    let mut minimum_recall_ppm = u32::MAX;
+    let mut previous_query = None;
+    for sample in &result.samples {
+        let unique = sample
+            .selected_postings
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let expected_recall = sample
+            .hits
+            .checked_mul(1_000_000 / V37_GT_NEIGHBORS)
+            .ok_or_else(|| invalid("V37 ceiling recall overflows"))?;
+        if previous_query.is_some_and(|query| sample.query_ordinal <= query)
+            || sample.selected_postings.is_empty()
+            || sample.selected_postings.len() > V37_SELECTED_POSTINGS as usize
+            || unique.len() != sample.selected_postings.len()
+            || sample.hits > V37_GT_NEIGHBORS
+            || sample.recall_ppm != expected_recall
+        {
+            return Err(invalid("V37 ceiling sample differs"));
+        }
+        previous_query = Some(sample.query_ordinal);
+        total_hits = total_hits
+            .checked_add(u64::from(sample.hits))
+            .ok_or_else(|| invalid("V37 ceiling hit total overflows"))?;
+        minimum_recall_ppm = minimum_recall_ppm.min(sample.recall_ppm);
+    }
+    let denominator = u64::try_from(result.samples.len())
+        .ok()
+        .and_then(|queries| queries.checked_mul(u64::from(V37_GT_NEIGHBORS)))
+        .ok_or_else(|| invalid("V37 ceiling denominator overflows"))?;
+    let aggregate_recall_ppm = u32::try_from(
+        total_hits
+            .checked_mul(1_000_000)
+            .ok_or_else(|| invalid("V37 ceiling aggregate overflows"))?
+            / denominator,
+    )
+    .map_err(|_| invalid("V37 ceiling aggregate exceeds ppm range"))?;
+    let passed = aggregate_recall_ppm >= V37_AGGREGATE_RECALL_GATE_PPM
+        && minimum_recall_ppm >= V37_MINIMUM_RECALL_GATE_PPM;
+    let disposition = if passed {
+        "ceiling-passed"
+    } else {
+        "layout-rejected"
+    };
+    if result.aggregate_recall_ppm != aggregate_recall_ppm
+        || result.minimum_recall_ppm != minimum_recall_ppm
+        || result.passed != passed
+        || result.disposition != disposition
+    {
+        return Err(invalid("V37 ceiling aggregate differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn evaluate_v37_unique_owner_ceiling(
+    assignments: &[V37OwnershipAssignment],
+    truth: &[V37GroundTruth],
+    selected_postings_limit: usize,
+) -> Result<V37LayoutCeiling> {
+    if assignments.is_empty()
+        || truth.is_empty()
+        || selected_postings_limit != V37_SELECTED_POSTINGS as usize
+    {
+        return Err(invalid("V37 ceiling input authority differs"));
+    }
+    let mut ownership = BTreeMap::new();
+    let mut previous_source = None;
+    for assignment in assignments {
+        if previous_source.is_some_and(|source| assignment.source_ordinal <= source)
+            || ownership
+                .insert(assignment.source_ordinal, assignment.posting_ordinal)
+                .is_some()
+        {
+            return Err(invalid("V37 ceiling ownership differs"));
+        }
+        previous_source = Some(assignment.source_ordinal);
+    }
+    let mut samples = Vec::with_capacity(truth.len());
+    let mut previous_query = None;
+    for query in truth {
+        if previous_query.is_some_and(|ordinal| query.query_ordinal <= ordinal)
+            || query.source_ordinals.len() != V37_GT_NEIGHBORS as usize
+        {
+            return Err(invalid("V37 ceiling truth shape differs"));
+        }
+        previous_query = Some(query.query_ordinal);
+        let mut seen = BTreeSet::new();
+        let mut counts = BTreeMap::<u32, u32>::new();
+        for source_ordinal in &query.source_ordinals {
+            if !seen.insert(*source_ordinal) {
+                return Err(invalid("V37 ceiling truth row is duplicated"));
+            }
+            let posting = ownership
+                .get(source_ordinal)
+                .ok_or_else(|| invalid("V37 ceiling truth row is unknown"))?;
+            let count = counts.entry(*posting).or_default();
+            *count = count
+                .checked_add(1)
+                .ok_or_else(|| invalid("V37 ceiling posting count overflows"))?;
+        }
+        let mut ranked = counts.into_iter().collect::<Vec<_>>();
+        ranked.sort_unstable_by(|left, right| {
+            right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
+        });
+        ranked.truncate(selected_postings_limit);
+        let hits = ranked
+            .iter()
+            .try_fold(0_u32, |sum, (_, count)| sum.checked_add(*count));
+        let hits = hits.ok_or_else(|| invalid("V37 ceiling hits overflow"))?;
+        samples.push(V37CeilingSample {
+            query_ordinal: query.query_ordinal,
+            selected_postings: ranked.iter().map(|(posting, _)| *posting).collect(),
+            hits,
+            recall_ppm: hits * (1_000_000 / V37_GT_NEIGHBORS),
+        });
+    }
+    let total_hits = samples
+        .iter()
+        .try_fold(0_u64, |sum, sample| sum.checked_add(u64::from(sample.hits)));
+    let total_hits = total_hits.ok_or_else(|| invalid("V37 ceiling hit total overflows"))?;
+    let denominator = u64::try_from(samples.len())
+        .ok()
+        .and_then(|queries| queries.checked_mul(u64::from(V37_GT_NEIGHBORS)))
+        .ok_or_else(|| invalid("V37 ceiling denominator overflows"))?;
+    let aggregate_recall_ppm = u32::try_from(
+        total_hits
+            .checked_mul(1_000_000)
+            .ok_or_else(|| invalid("V37 ceiling aggregate overflows"))?
+            / denominator,
+    )
+    .map_err(|_| invalid("V37 ceiling aggregate exceeds ppm range"))?;
+    let minimum_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .ok_or_else(|| invalid("V37 ceiling sample is absent"))?;
+    let passed = aggregate_recall_ppm >= V37_AGGREGATE_RECALL_GATE_PPM
+        && minimum_recall_ppm >= V37_MINIMUM_RECALL_GATE_PPM;
+    let result = V37LayoutCeiling {
+        schema: "borsuk-v37-layout-ceiling-v1".to_owned(),
+        claim_eligible: false,
+        gt_neighbors: V37_GT_NEIGHBORS,
+        selected_postings_limit: V37_SELECTED_POSTINGS as u32,
+        aggregate_gate_ppm: V37_AGGREGATE_RECALL_GATE_PPM,
+        minimum_gate_ppm: V37_MINIMUM_RECALL_GATE_PPM,
+        samples,
+        aggregate_recall_ppm,
+        minimum_recall_ppm,
+        passed,
+        disposition: if passed {
+            "ceiling-passed"
+        } else {
+            "layout-rejected"
+        }
+        .to_owned(),
+    };
+    validate_v37_ceiling(&result)?;
+    Ok(result)
+}
+
+pub(crate) fn canonical_v37_ceiling_bytes(result: &V37LayoutCeiling) -> Result<Vec<u8>> {
+    validate_v37_ceiling(result)?;
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V37 ceiling serialization failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V37 ceiling serialization failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn v37_tree_schema(dimensions: usize) -> Result<Schema> {
     let dimensions =
         i32::try_from(dimensions).map_err(|_| invalid("V37 tree dimensions exceed Arrow width"))?;
@@ -1708,15 +1929,16 @@ pub(crate) fn decode_v37_tree_arrow(
 #[cfg(test)]
 mod tests {
     use super::{
-        V37ArtifactIdentity, V37AuthorityManifest, V37LayoutDisposition, V37NumericAuthority,
-        V37RelationSpec, V37TrainingRow, V37TrainingShape, V37TreeSpec,
-        canonical_v37_authority_bytes, decode_v37_ownership_parquet, decode_v37_tree_arrow,
-        encode_v37_ownership_parquet, encode_v37_tree_arrow, parse_v37_authority_bytes,
-        project_v37_child_quota, project_v37_construction_bytes, project_v37_layout,
-        project_v37_serving_bytes, project_v37_work, repair_v37_empty_partition,
-        route_v37_corpus_member, route_v37_primary_leaf, route_v37_query,
-        score_v37_hyperplane_fused, score_v37_hyperplane_scalar, select_v37_node_reservoir,
-        train_v37_ownership_tree, validate_v37_specs,
+        V37ArtifactIdentity, V37AuthorityManifest, V37GroundTruth, V37LayoutDisposition,
+        V37NumericAuthority, V37RelationSpec, V37TrainingRow, V37TrainingShape, V37TreeSpec,
+        canonical_v37_authority_bytes, canonical_v37_ceiling_bytes, decode_v37_ownership_parquet,
+        decode_v37_tree_arrow, encode_v37_ownership_parquet, encode_v37_tree_arrow,
+        evaluate_v37_unique_owner_ceiling, parse_v37_authority_bytes, project_v37_child_quota,
+        project_v37_construction_bytes, project_v37_layout, project_v37_serving_bytes,
+        project_v37_work, repair_v37_empty_partition, route_v37_corpus_member,
+        route_v37_primary_leaf, route_v37_query, score_v37_hyperplane_fused,
+        score_v37_hyperplane_scalar, select_v37_node_reservoir, train_v37_ownership_tree,
+        validate_v37_specs,
     };
 
     fn ownership_spec(rows: u64) -> V37TreeSpec {
@@ -2454,5 +2676,75 @@ mod tests {
         let mut one = vec![0, 1];
         repair_v37_empty_partition(&tied, &mut zero, &mut one).unwrap();
         assert_eq!(tied[zero[0]].source_ordinal, 3);
+    }
+
+    #[test]
+    fn v37_relation_ceiling_sums_exact_largest_fourteen_owner_counts() {
+        let assignments = (0_u64..200)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: if source_ordinal < 100 {
+                    (source_ordinal % 20) as u32
+                } else {
+                    0
+                },
+            })
+            .collect::<Vec<_>>();
+        let truth = vec![
+            V37GroundTruth {
+                query_ordinal: 0,
+                source_ordinals: (0..100).collect(),
+            },
+            V37GroundTruth {
+                query_ordinal: 1,
+                source_ordinals: (100..200).collect(),
+            },
+        ];
+        let result = evaluate_v37_unique_owner_ceiling(&assignments, &truth, 14).unwrap();
+        assert_eq!(
+            result.samples[0].selected_postings,
+            (0..14).collect::<Vec<_>>()
+        );
+        assert_eq!(result.samples[0].hits, 70);
+        assert_eq!(result.samples[0].recall_ppm, 700_000);
+        assert_eq!(result.samples[1].selected_postings, vec![0]);
+        assert_eq!(result.samples[1].hits, 100);
+        assert_eq!(result.aggregate_recall_ppm, 850_000);
+        assert_eq!(result.minimum_recall_ppm, 700_000);
+        assert!(!result.passed);
+        assert_eq!(result.disposition, "layout-rejected");
+    }
+
+    #[test]
+    fn v37_relation_ceiling_rejects_truth_and_result_drift() {
+        let assignments = (0_u64..100)
+            .map(|source_ordinal| super::V37OwnershipAssignment {
+                source_ordinal,
+                posting_ordinal: 0,
+            })
+            .collect::<Vec<_>>();
+        let truth = vec![V37GroundTruth {
+            query_ordinal: 0,
+            source_ordinals: (0..100).collect(),
+        }];
+        let result = evaluate_v37_unique_owner_ceiling(&assignments, &truth, 14).unwrap();
+        assert!(result.passed);
+        assert_eq!(result.disposition, "ceiling-passed");
+        let bytes = canonical_v37_ceiling_bytes(&result).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut drift = result.clone();
+        drift.samples[0].hits = 99;
+        assert!(canonical_v37_ceiling_bytes(&drift).is_err());
+
+        let mut short = truth.clone();
+        short[0].source_ordinals.pop();
+        assert!(evaluate_v37_unique_owner_ceiling(&assignments, &short, 14).is_err());
+        let mut duplicate = truth.clone();
+        duplicate[0].source_ordinals[99] = 0;
+        assert!(evaluate_v37_unique_owner_ceiling(&assignments, &duplicate, 14).is_err());
+        let mut unknown = truth;
+        unknown[0].source_ordinals[99] = 999;
+        assert!(evaluate_v37_unique_owner_ceiling(&assignments, &unknown, 14).is_err());
     }
 }
