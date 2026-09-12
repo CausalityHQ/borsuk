@@ -23,15 +23,16 @@ use borsuk::{
     V36PrefixExternalSelectionAuthority, V36PrefixExternalSelectionLimits,
     V36PrefixExternalSelectionRequest, V36PrefixFileBackedResumeRequest,
     V36PrefixFileBackedScanRequest, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGeometryLocalRequest,
-    V36PrefixGtAccumulator, V36PrefixGtHeapCheckpoint, V36PrefixGtHeapEntry, V36PrefixGtParquetJob,
-    V36PrefixIdentityRun, V36PrefixIdentityRunFile, V36PrefixInputRow, V36PrefixPhaseResumeRequest,
-    V36PrefixPopulationAuthority, V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit,
-    V36PrefixPopulationSelection, V36PrefixQualityRole, V36PrefixQueryRow,
-    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixResumeBinding,
-    V36PrefixRoleAssignmentContract, V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest,
-    V36PrefixRoleAuthority, V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile,
-    V36PrefixSourceObject, V36ProjectedCorpusSource, assign_v36_prefix_roles_from_selected_file,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGeometryConstructionLocalRequest,
+    V36PrefixGeometryLocalRequest, V36PrefixGtAccumulator, V36PrefixGtHeapCheckpoint,
+    V36PrefixGtHeapEntry, V36PrefixGtParquetJob, V36PrefixIdentityRun, V36PrefixIdentityRunFile,
+    V36PrefixInputRow, V36PrefixPhaseResumeRequest, V36PrefixPopulationAuthority,
+    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit, V36PrefixPopulationSelection,
+    V36PrefixQualityRole, V36PrefixQueryRow, V36PrefixRankedSourceObject,
+    V36PrefixRegisteredSourceObject, V36PrefixResumeBinding, V36PrefixRoleAssignmentContract,
+    V36PrefixRoleAssignmentFile, V36PrefixRoleAssignmentRequest, V36PrefixRoleAuthority,
+    V36PrefixSelectedIdsContract, V36PrefixSelectedIdsFile, V36PrefixSourceObject,
+    V36ProjectedCorpusSource, assign_v36_prefix_roles_from_selected_file,
     bind_v36_prefix_external_selection_authority, bind_v36_prefix_geometry_inputs,
     bind_v36_prefix_population_authority, bind_v36_prefix_role_assignment_contract,
     bind_v36_prefix_selected_ids_contract, build_v36_srht192_control,
@@ -46,10 +47,10 @@ use borsuk::{
     encode_v36_prefix_selected_ids, exact_v36_prefix_gt100,
     externally_build_v36_prefix_identity_run, externally_select_v36_prefix_population_rows,
     load_v36_prefix_checkpoint_head, load_v36_prefix_freeze_preflight,
-    load_v36_prefix_geometry_local_files, materialize_v36_prefix_assigned_roles,
-    materialize_v36_prefix_checkpoint_selection, materialize_v36_prefix_role_parquets,
-    next_v36_prefix_checkpoint_action, project_v35_query_scalar,
-    project_v36_prefix_source_resident, rank_v36_prefix_source_objects,
+    load_v36_prefix_geometry_construction_local_files, load_v36_prefix_geometry_local_files,
+    materialize_v36_prefix_assigned_roles, materialize_v36_prefix_checkpoint_selection,
+    materialize_v36_prefix_role_parquets, next_v36_prefix_checkpoint_action,
+    project_v35_query_scalar, project_v36_prefix_source_resident, rank_v36_prefix_source_objects,
     restore_v36_prefix_checkpoint_phase, restore_v36_prefix_file_backed_population_scan,
     restore_v36_prefix_population, run_v36_prefix_checkpoint_ground_truth,
     run_v36_prefix_checkpoint_gt100, run_v36_prefix_gt100_checkpointed,
@@ -2760,6 +2761,20 @@ fn v36_prefix_geometry_local_files_authenticate_before_scientific_access() {
     );
 
     fs::write(&query, b"corrupted query").unwrap();
+    let construction = load_v36_prefix_geometry_construction_local_files(
+        V36PrefixGeometryConstructionLocalRequest {
+            authority: request.authority.clone(),
+            execution_authority: request.execution_authority.clone(),
+            receipt: request.receipt.clone(),
+            source: request.source.clone(),
+            source_registry: request.source_registry.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        construction.inputs().construction().corpus_rows(),
+        1_000_000
+    );
     assert!(load_v36_prefix_geometry_local_files(request).is_err());
 }
 

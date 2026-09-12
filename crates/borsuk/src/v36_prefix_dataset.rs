@@ -3096,6 +3096,40 @@ pub struct V36PrefixGeometryLocalRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Query-blind local files consumed by V36 geometry construction.
+pub struct V36PrefixGeometryConstructionLocalRequest {
+    /// Canonical prefix-freeze authority JSON.
+    pub authority: PathBuf,
+    /// Canonical prefix-freeze execution authority JSON.
+    pub execution_authority: PathBuf,
+    /// Canonical completed prefix-freeze receipt JSON.
+    pub receipt: PathBuf,
+    /// Complete authenticated one-million-row source Parquet.
+    pub source: PathBuf,
+    /// Canonical complete source-registry JSON.
+    pub source_registry: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated query-blind local capability for V36 geometry construction.
+pub struct V36PrefixGeometryConstructionLocalFiles {
+    inputs: V36PrefixGeometryInputs,
+    source: PathBuf,
+}
+
+impl V36PrefixGeometryConstructionLocalFiles {
+    /// Return the capability-separated semantic authority without opening evaluation files.
+    pub const fn inputs(&self) -> &V36PrefixGeometryInputs {
+        &self.inputs
+    }
+
+    /// Return the authenticated one-million-row source path.
+    pub fn source_path(&self) -> &Path {
+        &self.source
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Authenticated local capabilities for one bounded 1M geometry diagnostic.
 pub struct V36PrefixGeometryLocalFiles {
     development_ground_truth: PathBuf,
@@ -3225,23 +3259,17 @@ pub fn bind_v36_prefix_geometry_inputs(
     })
 }
 
-/// Authenticate the frozen prefix authority and three scientific objects before use.
-pub fn load_v36_prefix_geometry_local_files(
-    request: V36PrefixGeometryLocalRequest,
-) -> Result<V36PrefixGeometryLocalFiles> {
+fn load_v36_prefix_geometry_authority(
+    authority_path: &Path,
+    execution_path: &Path,
+    receipt_path: &Path,
+    registry_path: &Path,
+) -> Result<V36PrefixGeometryInputs> {
     const MAXIMUM_AUTHORITY_BYTES: u64 = 16 * 1_048_576;
 
-    let paths = [
-        &request.authority,
-        &request.development_ground_truth,
-        &request.development_query,
-        &request.execution_authority,
-        &request.receipt,
-        &request.source,
-        &request.source_registry,
-    ];
+    let paths = [authority_path, execution_path, receipt_path, registry_path];
     let mut distinct = BTreeSet::new();
-    if paths.iter().any(|path| !distinct.insert(path.as_path())) {
+    if paths.iter().any(|path| !distinct.insert(*path)) {
         return Err(invalid("V36 prefix geometry local path roles overlap"));
     }
     let read_authority = |path: &Path| -> Result<Vec<u8>> {
@@ -3256,10 +3284,10 @@ pub fn load_v36_prefix_geometry_local_files(
         }
         read_file(path)
     };
-    let authority_bytes = read_authority(&request.authority)?;
-    let execution_bytes = read_authority(&request.execution_authority)?;
-    let receipt_bytes = read_authority(&request.receipt)?;
-    let registry_bytes = read_authority(&request.source_registry)?;
+    let authority_bytes = read_authority(authority_path)?;
+    let execution_bytes = read_authority(execution_path)?;
+    let receipt_bytes = read_authority(receipt_path)?;
+    let registry_bytes = read_authority(registry_path)?;
     let authority: V36PrefixFreezeAuthority = serde_json::from_slice(&authority_bytes)
         .map_err(|_| invalid("V36 prefix geometry authority JSON differs"))?;
     let execution: V36PrefixFreezeExecutionAuthority = serde_json::from_slice(&execution_bytes)
@@ -3284,9 +3312,64 @@ pub fn load_v36_prefix_geometry_local_files(
             .find(|identity| identity.role == role)
             .ok_or_else(|| invalid("V36 prefix geometry execution input differs"))
     };
-    authenticate_file(&request.authority, input("freeze-authority")?)?;
-    authenticate_file(&request.source_registry, input("source-registry")?)?;
-    let inputs = bind_v36_prefix_geometry_inputs(&receipt, &authority, &execution, &registry)?;
+    authenticate_file(authority_path, input("freeze-authority")?)?;
+    authenticate_file(registry_path, input("source-registry")?)?;
+    bind_v36_prefix_geometry_inputs(&receipt, &authority, &execution, &registry)
+}
+
+/// Authenticate construction authority and source without opening query or truth objects.
+pub fn load_v36_prefix_geometry_construction_local_files(
+    request: V36PrefixGeometryConstructionLocalRequest,
+) -> Result<V36PrefixGeometryConstructionLocalFiles> {
+    let mut distinct = BTreeSet::new();
+    if [
+        &request.authority,
+        &request.execution_authority,
+        &request.receipt,
+        &request.source,
+        &request.source_registry,
+    ]
+    .into_iter()
+    .any(|path| !distinct.insert(path.as_path()))
+    {
+        return Err(invalid("V36 prefix geometry local path roles overlap"));
+    }
+    let inputs = load_v36_prefix_geometry_authority(
+        &request.authority,
+        &request.execution_authority,
+        &request.receipt,
+        &request.source_registry,
+    )?;
+    authenticate_file(&request.source, inputs.construction().source())?;
+    Ok(V36PrefixGeometryConstructionLocalFiles {
+        inputs,
+        source: request.source,
+    })
+}
+
+/// Authenticate the frozen prefix authority and three scientific objects before use.
+pub fn load_v36_prefix_geometry_local_files(
+    request: V36PrefixGeometryLocalRequest,
+) -> Result<V36PrefixGeometryLocalFiles> {
+    let paths = [
+        &request.authority,
+        &request.development_ground_truth,
+        &request.development_query,
+        &request.execution_authority,
+        &request.receipt,
+        &request.source,
+        &request.source_registry,
+    ];
+    let mut distinct = BTreeSet::new();
+    if paths.iter().any(|path| !distinct.insert(path.as_path())) {
+        return Err(invalid("V36 prefix geometry local path roles overlap"));
+    }
+    let inputs = load_v36_prefix_geometry_authority(
+        &request.authority,
+        &request.execution_authority,
+        &request.receipt,
+        &request.source_registry,
+    )?;
     authenticate_file(&request.source, inputs.construction().source())?;
     authenticate_file(&request.development_query, inputs.development().query())?;
     authenticate_file(
