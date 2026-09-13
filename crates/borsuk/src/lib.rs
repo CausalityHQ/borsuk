@@ -518,6 +518,10 @@ pub use v38_boundary_spill::{
     run_v38_local_request_with_progress, validate_v38_ceiling_authority_bytes,
     validate_v38_construction_authority_bytes,
 };
+#[doc(hidden)]
+pub use v40_spill_router::{
+    V40LocalArtifact, V40LocalOutput, V40LocalRunMode, V40LocalRunRequest, run_v40_local_request,
+};
 #[allow(
     dead_code,
     reason = "V24 pseudoquery qualification is wired incrementally by the committed plan"

@@ -4,8 +4,8 @@ use crate::v37_relation_router::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
-    io::{BufReader, Read},
+    fs::{self, File, OpenOptions},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
@@ -23,6 +23,8 @@ use sha2::{Digest, Sha256};
 
 const V40_MAXIMUM_FRONTIER_POSTINGS: usize = 64;
 const V40_MAXIMUM_NODE_POPS: usize = 1_024;
+const V40_DIRECT_QUERY_COUNT: u64 = 1_000;
+const V40_DIRECT_SELECTED_POSTINGS: usize = 21;
 
 fn valid_digest(value: &str) -> bool {
     value.len() == 64
@@ -45,8 +47,12 @@ fn valid_s3_uri(value: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum V40LocalRunMode {
+/// One capability-separated local V40 direct-router phase.
+#[doc(hidden)]
+pub enum V40LocalRunMode {
+    /// Select postings from query vectors without ground truth access.
     SelectDirect,
+    /// Evaluate sealed selections with ground truth but no query-vector access.
     EvaluateDirect,
 }
 
@@ -74,7 +80,9 @@ impl V40LocalRunMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V40LocalArtifact {
+/// One authenticated local input whose URI is evidence, not a network capability.
+#[doc(hidden)]
+pub struct V40LocalArtifact {
     role: String,
     path: PathBuf,
     uri: String,
@@ -84,7 +92,8 @@ pub(crate) struct V40LocalArtifact {
 }
 
 impl V40LocalArtifact {
-    pub(crate) fn try_new(
+    /// Construct one strict phase-local input identity.
+    pub fn try_new(
         role: String,
         path: PathBuf,
         uri: String,
@@ -113,23 +122,28 @@ impl V40LocalArtifact {
         })
     }
 
-    pub(crate) fn role(&self) -> &str {
+    /// Return the exact phase-local role.
+    pub fn role(&self) -> &str {
         &self.role
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    /// Return the local path without opening it.
+    pub fn path(&self) -> &Path {
         &self.path
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V40LocalOutput {
+/// One explicit create-only V40 output.
+#[doc(hidden)]
+pub struct V40LocalOutput {
     role: String,
     path: PathBuf,
 }
 
 impl V40LocalOutput {
-    pub(crate) fn try_new(role: String, path: PathBuf) -> Result<Self> {
+    /// Construct one strict output identity.
+    pub fn try_new(role: String, path: PathBuf) -> Result<Self> {
         if role.is_empty() || path.as_os_str().is_empty() {
             return Err(BorsukError::InvalidStorage(
                 "V40 local output identity differs".to_owned(),
@@ -138,17 +152,21 @@ impl V40LocalOutput {
         Ok(Self { role, path })
     }
 
-    pub(crate) fn role(&self) -> &str {
+    /// Return the output role.
+    pub fn role(&self) -> &str {
         &self.role
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    /// Return the create-only output path.
+    pub fn path(&self) -> &Path {
         &self.path
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V40LocalRunRequest {
+/// Exact local inputs and output for one V40 direct phase.
+#[doc(hidden)]
+pub struct V40LocalRunRequest {
     mode: V40LocalRunMode,
     inputs: Vec<V40LocalArtifact>,
     outputs: Vec<V40LocalOutput>,
@@ -156,7 +174,8 @@ pub(crate) struct V40LocalRunRequest {
 }
 
 impl V40LocalRunRequest {
-    pub(crate) fn try_new(
+    /// Validate exact roles, worker values, and path/URI separation.
+    pub fn try_new(
         mode: V40LocalRunMode,
         inputs: Vec<V40LocalArtifact>,
         outputs: Vec<V40LocalOutput>,
@@ -188,12 +207,24 @@ impl V40LocalRunRequest {
         })
     }
 
-    pub(crate) fn input_roles(&self) -> Vec<&str> {
+    /// Return input roles in their authoritative order.
+    pub fn input_roles(&self) -> Vec<&str> {
         self.inputs.iter().map(V40LocalArtifact::role).collect()
     }
 
-    pub(crate) fn output_roles(&self) -> Vec<&str> {
+    /// Return output roles in their authoritative order.
+    pub fn output_roles(&self) -> Vec<&str> {
         self.outputs.iter().map(V40LocalOutput::role).collect()
+    }
+
+    /// Return this request's phase.
+    pub fn mode(&self) -> V40LocalRunMode {
+        self.mode
+    }
+
+    /// Return the frozen worker count.
+    pub fn workers(&self) -> u32 {
+        self.workers
     }
 }
 
@@ -314,6 +345,161 @@ pub(crate) fn authenticate_v40_local_request(
         }
     }
     Ok(V40AuthenticatedLocalInputs { files })
+}
+
+fn v40_local_input<'a>(
+    request: &'a V40LocalRunRequest,
+    role: &str,
+) -> Result<&'a V40LocalArtifact> {
+    request
+        .inputs
+        .iter()
+        .find(|input| input.role == role)
+        .ok_or_else(|| BorsukError::InvalidStorage("V40 local input role differs".to_owned()))
+}
+
+fn v40_authenticated_input_file(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+    role: &str,
+) -> Result<File> {
+    let index = request
+        .inputs
+        .iter()
+        .position(|input| input.role == role)
+        .ok_or_else(|| BorsukError::InvalidStorage("V40 local input role differs".to_owned()))?;
+    let mut file = authenticated
+        .files
+        .get(index)
+        .ok_or_else(|| BorsukError::InvalidStorage("V40 authenticated input differs".to_owned()))?
+        .try_clone()
+        .map_err(|source| BorsukError::Io {
+            path: request.inputs[index].path.clone(),
+            source,
+        })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| BorsukError::Io {
+            path: request.inputs[index].path.clone(),
+            source,
+        })?;
+    Ok(file)
+}
+
+fn read_v40_authenticated_input(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+    role: &str,
+) -> Result<Vec<u8>> {
+    let input = v40_local_input(request, role)?;
+    let capacity = usize::try_from(input.encoded_bytes).map_err(|_| {
+        BorsukError::InvalidStorage("V40 local input exceeds address space".to_owned())
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    v40_authenticated_input_file(request, authenticated, role)?
+        .take(input.encoded_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+    if bytes.len() != capacity {
+        return Err(BorsukError::InvalidStorage(
+            "V40 authenticated input length differs".to_owned(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn v40_canonical_json(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut entries = object.into_iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, v40_canonical_json(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(v40_canonical_json).collect())
+        }
+        value => value,
+    }
+}
+
+fn v40_selection_receipt_bytes(
+    request: &V40LocalRunRequest,
+    selections: &[V40DirectSelectionRecord],
+    output_bytes: &[u8],
+) -> Result<Vec<u8>> {
+    let inputs = request
+        .inputs
+        .iter()
+        .map(|input| {
+            serde_json::json!({
+                "blake3": input.blake3,
+                "encoded_bytes": input.encoded_bytes,
+                "role": input.role,
+                "sha256": input.sha256,
+                "uri": input.uri,
+            })
+        })
+        .collect::<Vec<_>>();
+    let output = request.outputs.first().ok_or_else(|| {
+        BorsukError::InvalidStorage("V40 direct selection output differs".to_owned())
+    })?;
+    let total_node_pops = selections.iter().try_fold(0_u64, |total, selection| {
+        total.checked_add(u64::from(selection.node_pops))
+    });
+    let total_node_pops = total_node_pops.ok_or_else(|| {
+        BorsukError::InvalidStorage("V40 direct selection work overflows".to_owned())
+    })?;
+    let value = serde_json::json!({
+        "artifact": {
+            "blake3": blake3::hash(output_bytes).to_hex().to_string(),
+            "encoded_bytes": output_bytes.len(),
+            "role": output.role,
+            "sha256": format!("{:x}", Sha256::digest(output_bytes)),
+            "uri": format!("file://{}", output.path.display()),
+        },
+        "claim_eligible": false,
+        "evidence": {
+            "fma_backend": selections[0].fma_backend,
+            "maximum_node_pops": V40_MAXIMUM_NODE_POPS,
+            "query_count": selections.len(),
+            "selected_postings": V40_DIRECT_SELECTED_POSTINGS,
+            "total_node_pops": total_node_pops,
+        },
+        "inputs": inputs,
+        "mode": "select-direct",
+        "schema": "borsuk-v40-local-result-v1",
+    });
+    let mut bytes = serde_json::to_vec(&v40_canonical_json(value)).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V40 result serialization failed: {error}"))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn publish_v40_output(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+    output.write_all(bytes).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    output.sync_all().map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 fn v40_direct_selection_schema() -> Schema {
@@ -689,6 +875,70 @@ pub(crate) fn select_v40_direct_queries(
     }
     validate_v40_direct_selections(&records, selected_postings, Some(expected_backend))?;
     Ok(records)
+}
+
+/// Run one authenticated local V40 direct phase without any storage client.
+#[doc(hidden)]
+pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
+    if request.mode != V40LocalRunMode::SelectDirect {
+        return Err(BorsukError::InvalidStorage(
+            "V40 direct evaluation runner is not yet available".to_owned(),
+        ));
+    }
+    let authenticated = authenticate_v40_local_request(&request)?;
+    let authority_bytes = read_v40_authenticated_input(&request, &authenticated, "v37-authority")?;
+    let binding = crate::v37_relation_router::v37_v40_selection_binding(&authority_bytes)?;
+    if binding.workers != request.workers {
+        return Err(BorsukError::InvalidStorage(
+            "V40 direct worker authority differs".to_owned(),
+        ));
+    }
+    let tree_input = v40_local_input(&request, "ownership-tree")?;
+    let tree_bytes = read_v40_authenticated_input(&request, &authenticated, "ownership-tree")?;
+    let tree = crate::v37_relation_router::decode_v37_tree_arrow(
+        &tree_bytes,
+        tree_input.encoded_bytes,
+        &tree_input.sha256,
+        &tree_input.blake3,
+    )?;
+    let corpus_rows = tree
+        .leaf_populations
+        .iter()
+        .try_fold(0_u64, |total, population| total.checked_add(*population))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V40 direct tree population overflows".to_owned())
+        })?;
+    if tree.dimensions as u64 != binding.dimensions
+        || tree.seed != binding.tree_seed
+        || tree.fma_backend != binding.fma_backend
+        || tree.leaf_populations.len() as u64 != binding.leaf_count
+        || corpus_rows != binding.corpus_rows
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V40 direct tree binding differs".to_owned(),
+        ));
+    }
+    let query_input = v40_local_input(&request, "development-query")?;
+    let queries = load_v40_projected_queries_file(
+        v40_authenticated_input_file(&request, &authenticated, "development-query")?,
+        &query_input.path,
+        V40_DIRECT_QUERY_COUNT,
+    )?;
+    let maximum_node_pops = V40_MAXIMUM_NODE_POPS.min(tree.nodes.len());
+    let selections = select_v40_direct_queries(
+        &tree,
+        &binding.fma_backend,
+        &queries,
+        V40_DIRECT_SELECTED_POSTINGS,
+        maximum_node_pops,
+    )?;
+    let output_bytes =
+        encode_v40_direct_selections_parquet(&selections, V40_DIRECT_SELECTED_POSTINGS)?;
+    let output = request.outputs.first().ok_or_else(|| {
+        BorsukError::InvalidStorage("V40 direct selection output differs".to_owned())
+    })?;
+    publish_v40_output(&output.path, &output_bytes)?;
+    v40_selection_receipt_bytes(&request, &selections, &output_bytes)
 }
 
 pub(crate) fn evaluate_v40_direct_recall(

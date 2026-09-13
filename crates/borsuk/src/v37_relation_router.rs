@@ -1048,6 +1048,7 @@ pub(crate) struct V37V40SelectionBinding {
     pub(crate) leaf_count: u64,
     pub(crate) tree_seed: u64,
     pub(crate) fma_backend: String,
+    pub(crate) workers: u32,
 }
 
 /// Capability-minimal authority for the separate GT-only exact-K14 ceiling.
@@ -1183,6 +1184,7 @@ pub(crate) fn v37_v40_selection_binding(bytes: &[u8]) -> Result<V37V40SelectionB
         leaf_count: layout.leaf_count,
         tree_seed: manifest.tree.seed,
         fma_backend: manifest.numeric.fma_backend,
+        workers: manifest.numeric.worker_count,
     })
 }
 
@@ -5103,6 +5105,7 @@ mod tests {
         assert_eq!(binding.leaf_count, 123);
         assert_eq!(binding.tree_seed, 37);
         assert_eq!(binding.fma_backend, "aarch64-neon-fma");
+        assert_eq!(binding.workers, 16);
 
         let mut drifted = bytes;
         drifted.pop();
