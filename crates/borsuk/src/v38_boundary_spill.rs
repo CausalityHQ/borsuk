@@ -32,7 +32,7 @@ const V38_MAXIMUM_ROWS_PER_POSTING: u32 = 10_240;
 const V38_PROJECTED_RECORD_BYTES: u32 = 48;
 const V38_PROJECTED_FRAMING_ALLOWANCE_BYTES: u32 = 32_768;
 const V38_SELECTED_POSTINGS: u32 = 14;
-const V38_CEILING_POSTING_BUDGETS: [u32; 7] = [14, 16, 18, 20, 24, 28, 32];
+const V38_CEILING_POSTING_BUDGETS: [u32; 10] = [14, 16, 18, 20, 21, 22, 23, 24, 28, 32];
 const V38_MAXIMUM_CEILING_POSTINGS: u32 = 32;
 const V38_AGGREGATE_GATE_PPM: u32 = 998_000;
 const V38_MINIMUM_GATE_PPM: u32 = 800_000;
@@ -4883,14 +4883,14 @@ mod tests {
 
     #[test]
     fn v39_budget_ceiling_accepts_only_the_preregistered_posting_ladder() {
-        for selected_postings in [14, 16, 18, 20, 24, 28, 32] {
+        for selected_postings in [14, 16, 18, 20, 21, 22, 23, 24, 28, 32] {
             let mut authority = ceiling_authority();
             authority.selected_postings = selected_postings;
             let bytes = canonical_v38_ceiling_authority_bytes(&authority).unwrap();
             assert_eq!(validate_v38_ceiling_authority_bytes(&bytes).unwrap(), bytes);
         }
 
-        for selected_postings in [0, 13, 15, 22, 31, 33] {
+        for selected_postings in [0, 13, 15, 19, 25, 31, 33] {
             let mut authority = ceiling_authority();
             authority.selected_postings = selected_postings;
             assert!(canonical_v38_ceiling_authority_bytes(&authority).is_err());
