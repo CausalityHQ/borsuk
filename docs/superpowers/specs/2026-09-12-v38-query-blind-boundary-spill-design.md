@@ -42,11 +42,26 @@ graph-derived packing, or all possible high-dimensional layouts.
 Construction authenticates and retains file capabilities for these exact V37
 objects:
 
-- construction authority and successful construction result;
+- construction authority;
+- the successful build-ownership phase manifest, native local result, and Spot
+  terminal as three separately registered immutable objects;
 - ownership tree Arrow IPC object;
 - primary ownership Parquet object;
 - the original V36 source Parquet object; and
-- the projection/numeric authority bound by the V37 construction result.
+- the projection/numeric authority bound by the V37 construction authority.
+
+The three execution objects form one explicit predecessor proof, not a
+compatibility envelope. The phase manifest binds the V37 source commit, worker
+count, exact staged input identities, and ownership-tree/ownership S3 output
+URIs. The native result binds those staged inputs, the deployed fused backend,
+training arithmetic, and the two output contents. Its historical `file://`
+output names bind to the manifest and terminal by exact role, basename,
+SHA-256, BLAKE3, and encoded length; local path prefixes are not authority. The
+terminal binds the source commit, archive, binary, phase manifest, native
+result, instance, monitor, and published S3 output identities. V38 rejects any
+missing object, unknown field, noncanonical bytes, failed disposition, or
+broken link across this graph. There are no aliases, optional fallbacks, or
+synthetic combined predecessor receipts.
 
 The construction service cannot read query vectors, GT, development results,
 validation, holdout, prior per-query failures, or S3 page bodies. It has no
@@ -186,12 +201,12 @@ object size. Later physical qualification must serialize the complete coarse
 object and reject it above 512 KiB; it may not use this allowance to omit
 metadata or create a side object.
 
-The construction manifest binds every input and output role, URI, SHA-256,
-BLAKE3, encoded length, schema, source identity, V37 predecessor, numeric
-backend, fixed limits, and construction counts. Input and output role/URI sets
-are disjoint. Readers reject aliases, optional fallbacks, unknown fields,
-nullability drift, invalid enums, type drift, order drift, digest drift, and
-cross-object inconsistencies.
+The V38 construction authority binds every input and output role, URI,
+SHA-256, BLAKE3, encoded length, schema, source identity, every explicit V37
+predecessor object, numeric backend, fixed limits, and construction counts.
+Input and output role/URI sets are disjoint. Readers reject aliases, optional
+fallbacks, unknown fields, nullability drift, invalid enums, type drift, order
+drift, digest drift, and cross-object inconsistencies.
 
 ## Multi-owner K=14 evaluator
 
@@ -278,17 +293,31 @@ the checked resident projection would exceed that amount. Monitoring records
 `memory.current`, `memory.peak`, anonymous/file/kernel components, swap, and
 PSI separately; it does not label cgroup memory as RSS.
 
+The one-million scientific path consumes the projected coordinate buffer
+directly by fixed row index: it must not materialize a million-element slice
+reference vector. Admission transfers its relation buffer into the sealed
+relation without cloning it. The registered peak projection is therefore the
+measured V37 peak `2,716,549,120 + 67,108,864 = 2,783,657,984` bytes; tests
+inventory the live proposal, ranking, accepted-owner, capacity, and block
+scratch allocations that fit inside the 64 MiB increment.
+
 At 1M, evaluating 122 internal nodes over 192 projected dimensions costs at
 most 23,424,000,000 coordinate multiply-accumulates plus bounded propagation
 and sorting. The source-free preflight executes the actual scoring and ordering
-path and must project no more than 300 seconds for scoring and 450 seconds total
-construction. The one-million construction retains the 600-second scientific,
+path and must project no more than 300 seconds for scoring. Its total
+construction projection adds the scaled spill post-processing time and an
+explicit 120-second predecessor replay allowance, conservatively rounded above
+the authenticated V37 build's measured 103.126-second wrapper. The sum must not
+exceed 450 seconds; a scoring-only pass cannot admit construction. The
+one-million construction retains the 600-second scientific,
 720-second wrapper, 120-second progress, 3 GiB cgroup-memory, PSI-full-avg10
 0.75, and zero-swap-growth stops.
 
 The ceiling evaluator has a 120-second scientific cap, 180-second wrapper cap,
 30-second progress timeout, 256 MiB cgroup-memory cap, PSI-full-avg10 stop above
-0.75, and zero-swap-growth stop. A controller/resource stop is infrastructure
+0.75, and zero-swap-growth stop. It emits deterministic progress after each
+32-query preparation or solver block and at the final query; progress callback
+failure aborts the phase. A controller/resource stop is infrastructure
 failure and does not convert an unknown scientific bound into a rejection.
 
 At 100M, assignment payload is at most 6 GB before framing, but projected

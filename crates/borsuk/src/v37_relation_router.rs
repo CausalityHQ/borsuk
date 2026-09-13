@@ -909,7 +909,7 @@ pub(crate) fn map_v37_feature_ground_truth(
     Ok(mapped)
 }
 
-fn load_v37_feature_ground_truth_file(
+pub(crate) fn load_v37_feature_ground_truth_file(
     file: File,
     display_path: &Path,
     expected_queries: u32,
@@ -1025,6 +1025,21 @@ pub(crate) struct V37AuthorityManifest {
     tree: V37TreeSpec,
 }
 
+/// Minimal immutable V37 construction facts consumed by the V38 successor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37V38ConstructionBinding {
+    pub(crate) corpus_rows: u64,
+    pub(crate) dimensions: u64,
+    pub(crate) fma_backend: String,
+    pub(crate) projected_corpus_sha256: String,
+    pub(crate) source_blake3: String,
+    pub(crate) source_bytes: u64,
+    pub(crate) source_sha256: String,
+    pub(crate) source_uri: String,
+    pub(crate) tree_seed: u64,
+    pub(crate) workers: u32,
+}
+
 /// Capability-minimal authority for the separate GT-only exact-K14 ceiling.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1130,6 +1145,23 @@ pub(crate) fn parse_v37_authority_bytes(bytes: &[u8]) -> Result<V37AuthorityMani
         return Err(invalid("V37 manifest bytes are not canonical"));
     }
     Ok(manifest)
+}
+
+/// Parse V37 authority through its native validator and expose only successor facts.
+pub(crate) fn v37_v38_construction_binding(bytes: &[u8]) -> Result<V37V38ConstructionBinding> {
+    let manifest = parse_v37_authority_bytes(bytes)?;
+    Ok(V37V38ConstructionBinding {
+        corpus_rows: manifest.tree.corpus_rows,
+        dimensions: manifest.tree.dimensions,
+        fma_backend: manifest.numeric.fma_backend,
+        projected_corpus_sha256: manifest.projection.projected_corpus_sha256,
+        source_blake3: manifest.source.blake3,
+        source_bytes: manifest.source.encoded_bytes,
+        source_sha256: manifest.source.sha256,
+        source_uri: manifest.source.uri,
+        tree_seed: manifest.tree.seed,
+        workers: manifest.numeric.worker_count,
+    })
 }
 
 fn validate_v37_ceiling_authority(authority: &V37CeilingAuthority) -> Result<()> {

@@ -509,7 +509,9 @@ pub use v37_relation_router::{
 };
 #[doc(hidden)]
 pub use v38_boundary_spill::{
-    validate_v38_ceiling_authority_bytes, validate_v38_construction_authority_bytes,
+    V38LocalArtifact, V38LocalOutput, V38LocalRunMode, V38LocalRunRequest, run_v38_local_request,
+    run_v38_local_request_with_progress, validate_v38_ceiling_authority_bytes,
+    validate_v38_construction_authority_bytes,
 };
 #[allow(
     dead_code,

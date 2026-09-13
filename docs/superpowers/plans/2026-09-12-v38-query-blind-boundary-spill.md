@@ -201,15 +201,23 @@ pub fn run_v38_local_request(request: V38LocalRunRequest) -> Result<Vec<u8>>;
 
 - [ ] **Step 1: Stage CLI REDs.** Add `v38_boundary_cli_*` tests for exactly three modes: `preflight-spill`, `build-spill`, and `evaluate-ceiling`. Require explicit file paths plus URI/SHA-256/BLAKE3/length identities. Reject missing, duplicate, unknown, bucket, endpoint, page, query-in-build, GT-in-build, source-in-ceiling, validation, holdout, 10M, 100M, and D3 flags.
 - [ ] **Step 2: Stage capability REDs.** `build-spill` receives exact roles
-  `v38-authority`, `v37-authority`, `v37-construction-result`, `v37-tree`,
-  `v37-ownership`, and `source`. The V37 authority supplies the projection and
-  numeric contents; the V37 result must bind that exact authority plus the
-  tree, ownership, source, commit, archive, binary, backend, and worker count.
+  `v38-authority`, `v37-authority`, `v37-build-manifest`, `v37-local-result`,
+  `v37-terminal`, `v37-tree`, `v37-ownership`, and `source`. The V37 authority
+  supplies the projection and numeric contents. Parse the three execution
+  objects through strict, non-aliased historical schemas: the manifest must
+  bind the exact staged V37 authority/source inputs, output S3 URIs, source
+  commit, and workers; the native result must bind the manifest inputs,
+  backend, arithmetic, and exact tree/ownership contents; and the terminal
+  must bind that manifest and result plus the source archive, binary, instance,
+  monitor, and published output identities. Historical `file://` output paths
+  in the native result bind by role, basename, SHA-256, BLAKE3, and encoded
+  length, never by host-local prefix. Do not create a compatibility envelope or
+  accept an optional predecessor object.
   `evaluate-ceiling` receives exact roles `v38-ceiling-authority`,
   `v38-construction-result`, `spill-relation`, `spill-postings`, and `gt100`.
   Assert role/path/device/inode disjointness and retained authenticated
   descriptors.
-- [ ] **Step 3: Stage preflight REDs.** Freeze a synthetic 65,536-row f32[192] generator, actual fused tree scoring/propagation/proposal ordering, scalar comparison, external-run merge, Parquet encode/decode, solver fixtures, projected work, and full checked memory ledger. Require projected scoring at least 78,080,000 coordinates/s, at most 300 seconds scoring, and at most 450 seconds total construction.
+- [ ] **Step 3: Stage preflight REDs.** Freeze a synthetic 65,536-row f32[192] generator, actual fused tree scoring/propagation/proposal ordering, scalar comparison, external-run merge, Parquet encode/decode, solver fixtures, projected work, and full checked memory ledger. The scientific path consumes one flat projected-coordinate buffer by row index and moves admitted relation records into the final relation; prohibit a million-element slice-reference vector and a full relation clone. Require projected scoring at least 78,080,000 coordinates/s and at most 300 seconds. Project total construction as scaled scoring plus scaled spill post-processing plus an explicit 120-second predecessor-replay allowance, conservatively above the authenticated 103.126-second V37 wrapper, and require the total at most 450 seconds. Bind the peak projection to the measured V37 peak plus the exact checked 64 MiB auxiliary allowance: `2,716,549,120 + 67,108,864 = 2,783,657,984` bytes.
 - [ ] **Step 4: Run the example/library REDs.** Run
   `cargo test -p borsuk --lib v38_boundary_local_ -- --nocapture`, then only
   after its terminal run
@@ -217,6 +225,7 @@ pub fn run_v38_local_request(request: V38LocalRunRequest) -> Result<Vec<u8>>;
   Accept only missing high-level boundary/parser symbols.
 - [ ] **Step 5: Implement the loader and thin CLI.** Parse and authenticate before semantic use, retain handles, replay the fixed V36 SRHT through existing crate-private functions, and write outputs to no-clobber temporary siblings before commit. `main` prints canonical stdout only and exits nonzero on error.
 - [ ] **Step 6: Prove phase isolation.** Tests must plant forbidden query/GT/source/page files and verify the corresponding phase cannot open them. Construction and ceiling must run as separate processes; a combined debug path is forbidden.
+- [ ] **Step 6a: Prove liveness.** Require deterministic canonical build progress after each completed row block and deterministic ceiling progress after each 32-query preparation/solver block plus the final query. Callback failure must abort the phase so the controller's 120-second build and 30-second ceiling progress stops cannot be defeated by silent work.
 - [ ] **Step 7: Prove GREEN and commit.** Run local selectors, example tests, fmt, strict workspace/all-targets Clippy, and diff-check. Commit the complete local boundary.
 
 ### Task 5: Add causality Spot orchestration and fast terminal evidence
