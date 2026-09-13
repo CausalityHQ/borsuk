@@ -2,8 +2,24 @@ use crate::error::{BorsukError, Result};
 use crate::v37_relation_router::{
     V37BalancedTree, V37FeatureGroundTruth, select_v37_tree_postings_with_limit,
 };
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File},
+    io::{BufReader, Read},
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use arrow_array::{Array, RecordBatch, StringArray, UInt32Array};
+use arrow_schema::{DataType, Field, Schema};
+use bytes::Bytes;
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::WriterProperties,
+};
+use sha2::{Digest, Sha256};
 
 const V40_MAXIMUM_FRONTIER_POSTINGS: usize = 64;
 const V40_MAXIMUM_NODE_POPS: usize = 1_024;
@@ -179,6 +195,332 @@ impl V40LocalRunRequest {
     pub(crate) fn output_roles(&self) -> Vec<&str> {
         self.outputs.iter().map(V40LocalOutput::role).collect()
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct V40AuthenticatedLocalInputs {
+    files: Vec<File>,
+}
+
+pub(crate) fn authenticate_v40_local_request(
+    request: &V40LocalRunRequest,
+) -> Result<V40AuthenticatedLocalInputs> {
+    const HASH_BUFFER_BYTES: usize = 1_048_576;
+    let invalid =
+        || BorsukError::InvalidStorage("V40 local input authentication differs".to_owned());
+    let mut canonical_inputs = BTreeSet::new();
+    let mut file_ids = BTreeSet::new();
+    let mut files = Vec::with_capacity(request.inputs.len());
+    for input in &request.inputs {
+        let before = fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if before.file_type().is_symlink()
+            || !before.file_type().is_file()
+            || before.len() != input.encoded_bytes
+        {
+            return Err(invalid());
+        }
+        let file = File::open(&input.path).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        let opened = file.metadata().map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if opened.dev() != before.dev()
+            || opened.ino() != before.ino()
+            || !file_ids.insert((opened.dev(), opened.ino()))
+            || !canonical_inputs.insert(fs::canonicalize(&input.path).map_err(|source| {
+                BorsukError::Io {
+                    path: input.path.clone(),
+                    source,
+                }
+            })?)
+        {
+            return Err(invalid());
+        }
+        let mut reader = BufReader::with_capacity(HASH_BUFFER_BYTES, file);
+        let mut sha256 = Sha256::new();
+        let mut blake3 = blake3::Hasher::new();
+        let mut observed_bytes = 0_u64;
+        let mut buffer = vec![0_u8; HASH_BUFFER_BYTES];
+        loop {
+            let read = reader.read(&mut buffer).map_err(|source| BorsukError::Io {
+                path: input.path.clone(),
+                source,
+            })?;
+            if read == 0 {
+                break;
+            }
+            observed_bytes = observed_bytes
+                .checked_add(read as u64)
+                .ok_or_else(invalid)?;
+            sha256.update(&buffer[..read]);
+            blake3.update(&buffer[..read]);
+        }
+        let after = fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if observed_bytes != input.encoded_bytes
+            || format!("{:x}", sha256.finalize()) != input.sha256
+            || blake3.finalize().to_hex().as_str() != input.blake3
+            || after.file_type().is_symlink()
+            || after.dev() != before.dev()
+            || after.ino() != before.ino()
+            || after.len() != before.len()
+            || after.mtime() != before.mtime()
+            || after.mtime_nsec() != before.mtime_nsec()
+            || after.ctime() != before.ctime()
+            || after.ctime_nsec() != before.ctime_nsec()
+        {
+            return Err(invalid());
+        }
+        files.push(reader.into_inner());
+    }
+
+    let mut canonical_outputs = BTreeSet::new();
+    for output in &request.outputs {
+        match fs::symlink_metadata(&output.path) {
+            Ok(_) => return Err(invalid()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(BorsukError::Io {
+                    path: output.path.clone(),
+                    source,
+                });
+            }
+        }
+        let parent = output.path.parent().ok_or_else(invalid)?;
+        let parent_metadata = fs::symlink_metadata(parent).map_err(|source| BorsukError::Io {
+            path: parent.to_owned(),
+            source,
+        })?;
+        if parent_metadata.file_type().is_symlink() || !parent_metadata.file_type().is_dir() {
+            return Err(invalid());
+        }
+        let output_name = output.path.file_name().ok_or_else(invalid)?;
+        let canonical = fs::canonicalize(parent)
+            .map_err(|source| BorsukError::Io {
+                path: parent.to_owned(),
+                source,
+            })?
+            .join(output_name);
+        if canonical_inputs.contains(&canonical) || !canonical_outputs.insert(canonical) {
+            return Err(invalid());
+        }
+    }
+    Ok(V40AuthenticatedLocalInputs { files })
+}
+
+fn v40_direct_selection_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("selection_rank", DataType::UInt32, false),
+        Field::new("posting_ordinal", DataType::UInt32, false),
+        Field::new("node_pops", DataType::UInt32, false),
+        Field::new("scored_internal_nodes", DataType::UInt32, false),
+        Field::new("fma_backend", DataType::Utf8, false),
+    ])
+}
+
+fn validate_v40_direct_selections(
+    records: &[V40DirectSelectionRecord],
+    selected_postings: usize,
+    expected_backend: Option<&str>,
+) -> Result<()> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 direct selection authority differs".to_owned());
+    if records.is_empty() || selected_postings == 0 {
+        return Err(invalid());
+    }
+    for (query, record) in records.iter().enumerate() {
+        let expected_query = u32::try_from(query).map_err(|_| invalid())?;
+        let postings = record
+            .posting_ordinals
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if record.query_ordinal != expected_query
+            || record.posting_ordinals.len() != selected_postings
+            || postings.len() != selected_postings
+            || record.node_pops == 0
+            || record.scored_internal_nodes == 0
+            || record.scored_internal_nodes > record.node_pops
+            || !matches!(
+                record.fma_backend.as_str(),
+                "aarch64-neon-fma" | "x86-avx-fma"
+            )
+            || expected_backend.is_some_and(|backend| record.fma_backend != backend)
+        {
+            return Err(invalid());
+        }
+    }
+    if records
+        .windows(2)
+        .any(|pair| pair[0].fma_backend != pair[1].fma_backend)
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+pub(crate) fn encode_v40_direct_selections_parquet(
+    records: &[V40DirectSelectionRecord],
+    selected_postings: usize,
+) -> Result<Vec<u8>> {
+    validate_v40_direct_selections(records, selected_postings, None)?;
+    let rows = records
+        .len()
+        .checked_mul(selected_postings)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V40 direct selection row count overflows".to_owned())
+        })?;
+    let mut queries = Vec::with_capacity(rows);
+    let mut ranks = Vec::with_capacity(rows);
+    let mut postings = Vec::with_capacity(rows);
+    let mut node_pops = Vec::with_capacity(rows);
+    let mut scores = Vec::with_capacity(rows);
+    let mut backends = Vec::with_capacity(rows);
+    for record in records {
+        for (rank, posting) in record.posting_ordinals.iter().copied().enumerate() {
+            queries.push(record.query_ordinal);
+            ranks.push(u32::try_from(rank).map_err(|_| {
+                BorsukError::InvalidStorage("V40 direct selection rank overflows".to_owned())
+            })?);
+            postings.push(posting);
+            node_pops.push(record.node_pops);
+            scores.push(record.scored_internal_nodes);
+            backends.push(record.fma_backend.clone());
+        }
+    }
+    let schema = Arc::new(v40_direct_selection_schema());
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from(queries)),
+            Arc::new(UInt32Array::from(ranks)),
+            Arc::new(UInt32Array::from(postings)),
+            Arc::new(UInt32Array::from(node_pops)),
+            Arc::new(UInt32Array::from(scores)),
+            Arc::new(StringArray::from(backends)),
+        ],
+    )?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_max_row_group_row_count(Some(4_096))
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(bytes)
+}
+
+pub(crate) fn decode_v40_direct_selections_parquet(
+    bytes: &[u8],
+    expected_queries: u32,
+    selected_postings: usize,
+    expected_backend: &str,
+) -> Result<Vec<V40DirectSelectionRecord>> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct selection Parquet differs".to_owned());
+    if expected_queries == 0 || selected_postings == 0 {
+        return Err(invalid());
+    }
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != &v40_direct_selection_schema() {
+        return Err(invalid());
+    }
+    let expected_rows = usize::try_from(expected_queries)
+        .map_err(|_| invalid())?
+        .checked_mul(selected_postings)
+        .ok_or_else(invalid)?;
+    let mut records = Vec::with_capacity(expected_queries as usize);
+    let mut observed_rows = 0_usize;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.schema().as_ref() != &v40_direct_selection_schema()
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid());
+        }
+        let queries = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let ranks = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let postings = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let node_pops = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let scores = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let backends = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(invalid)?;
+        for row in 0..batch.num_rows() {
+            let flat_row = observed_rows.checked_add(row).ok_or_else(invalid)?;
+            let query = flat_row / selected_postings;
+            let rank = flat_row % selected_postings;
+            if queries.value(row) as usize != query
+                || ranks.value(row) as usize != rank
+                || backends.value(row) != expected_backend
+            {
+                return Err(invalid());
+            }
+            if rank == 0 {
+                records.push(V40DirectSelectionRecord {
+                    query_ordinal: queries.value(row),
+                    posting_ordinals: Vec::with_capacity(selected_postings),
+                    node_pops: node_pops.value(row),
+                    scored_internal_nodes: scores.value(row),
+                    fma_backend: backends.value(row).to_owned(),
+                });
+            }
+            let record = records.get_mut(query).ok_or_else(invalid)?;
+            if record.node_pops != node_pops.value(row)
+                || record.scored_internal_nodes != scores.value(row)
+                || record.fma_backend != backends.value(row)
+            {
+                return Err(invalid());
+            }
+            record.posting_ordinals.push(postings.value(row));
+        }
+        observed_rows = observed_rows
+            .checked_add(batch.num_rows())
+            .ok_or_else(invalid)?;
+    }
+    if observed_rows != expected_rows || records.len() != expected_queries as usize {
+        return Err(invalid());
+    }
+    validate_v40_direct_selections(
+        records.as_slice(),
+        selected_postings,
+        Some(expected_backend),
+    )?;
+    Ok(records)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,16 +720,20 @@ pub(crate) fn evaluate_v40_direct_recall(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use super::super::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, score_v37_hyperplane_fused,
     };
     use super::{
         V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact, V40LocalOutput,
-        V40LocalRunMode, V40LocalRunRequest, evaluate_v40_direct_recall, select_v40_tree_frontier,
+        V40LocalRunMode, V40LocalRunRequest, authenticate_v40_local_request,
+        decode_v40_direct_selections_parquet, encode_v40_direct_selections_parquet,
+        evaluate_v40_direct_recall, select_v40_tree_frontier,
     };
     use crate::v37_relation_router::V37FeatureGroundTruth;
+    use sha2::{Digest, Sha256};
+    use tempfile::tempdir;
 
     fn four_leaf_tree() -> V37BalancedTree {
         let normal = vec![1.0_f32, 0.0, 0.0];
@@ -699,5 +1045,79 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn local_artifact_bytes(root: &std::path::Path, role: &str, bytes: &[u8]) -> V40LocalArtifact {
+        let path = root.join(role);
+        fs::write(&path, bytes).unwrap();
+        V40LocalArtifact::try_new(
+            role.to_owned(),
+            path,
+            format!("s3://fixture/v40/{role}"),
+            format!("{:x}", Sha256::digest(bytes)),
+            blake3::hash(bytes).to_hex().to_string(),
+            bytes.len() as u64,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn v40_direct_artifact_authentication_rejects_byte_and_output_drift() {
+        let root = tempdir().unwrap();
+        let inputs = [
+            ("v37-authority", b"authority".as_slice()),
+            ("ownership-tree", b"tree".as_slice()),
+            ("development-query", b"query".as_slice()),
+        ]
+        .map(|(role, bytes)| local_artifact_bytes(root.path(), role, bytes))
+        .to_vec();
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::SelectDirect,
+            inputs,
+            vec![
+                V40LocalOutput::try_new(
+                    "direct-selection".to_owned(),
+                    root.path().join("selection.parquet"),
+                )
+                .unwrap(),
+            ],
+            16,
+        )
+        .unwrap();
+        assert!(authenticate_v40_local_request(&request).is_ok());
+
+        fs::write(root.path().join("ownership-tree"), b"drift").unwrap();
+        assert!(authenticate_v40_local_request(&request).is_err());
+
+        fs::write(root.path().join("ownership-tree"), b"tree").unwrap();
+        fs::write(root.path().join("selection.parquet"), b"occupied").unwrap();
+        assert!(authenticate_v40_local_request(&request).is_err());
+    }
+
+    #[test]
+    fn v40_direct_artifact_selection_parquet_round_trips_and_fails_closed() {
+        let (_, _, selections, _) = direct_evaluation_fixture();
+        let bytes = encode_v40_direct_selections_parquet(&selections, 2).unwrap();
+        assert_eq!(
+            decode_v40_direct_selections_parquet(&bytes, 2, 2, "aarch64-neon-fma").unwrap(),
+            selections
+        );
+        assert!(decode_v40_direct_selections_parquet(&bytes, 2, 3, "aarch64-neon-fma").is_err());
+        assert!(
+            decode_v40_direct_selections_parquet(
+                &bytes[..bytes.len() - 1],
+                2,
+                2,
+                "aarch64-neon-fma"
+            )
+            .is_err()
+        );
+
+        let mut reordered = selections.clone();
+        reordered.swap(0, 1);
+        assert!(encode_v40_direct_selections_parquet(&reordered, 2).is_err());
+        let mut backend_drift = selections;
+        backend_drift[1].fma_backend = "x86-avx-fma".to_owned();
+        assert!(encode_v40_direct_selections_parquet(&backend_drift, 2).is_err());
     }
 }
