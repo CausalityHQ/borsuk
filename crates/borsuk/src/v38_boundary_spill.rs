@@ -1179,6 +1179,28 @@ fn canonical_v38_progress_bytes(completed_rows: u64, total_rows: u64) -> Result<
     )
 }
 
+fn report_v38_build_scoring_progress<F>(
+    completed_rows: u64,
+    total_rows: u64,
+    progress: &mut F,
+) -> Result<()>
+where
+    F: FnMut(&[u8]) -> std::io::Result<()>,
+{
+    if completed_rows > total_rows || total_rows == 0 {
+        return Err(invalid("V38 build progress differs"));
+    }
+    if completed_rows == total_rows {
+        return Ok(());
+    }
+    progress(&canonical_v38_progress_bytes(completed_rows, total_rows)?).map_err(|source| {
+        BorsukError::Io {
+            path: PathBuf::from("<v38-build-progress>"),
+            source,
+        }
+    })
+}
+
 fn canonical_v38_ceiling_progress_bytes(completed_queries: u32) -> Result<Vec<u8>> {
     if completed_queries > V38_QUERY_COUNT {
         return Err(invalid("V38 ceiling progress differs"));
@@ -1479,14 +1501,7 @@ fn run_v38_build(
             workers: request.workers,
         },
         |completed_rows| {
-            progress(&canonical_v38_progress_bytes(
-                completed_rows,
-                authority.spec.corpus_rows,
-            )?)
-            .map_err(|source| BorsukError::Io {
-                path: PathBuf::from("<v38-build-progress>"),
-                source,
-            })
+            report_v38_build_scoring_progress(completed_rows, authority.spec.corpus_rows, progress)
         },
     )?;
     let relation_bytes = encode_v38_spill_relation_parquet(&relation.records)?;
@@ -3866,11 +3881,11 @@ mod tests {
         encode_v38_spill_relation_parquet, encode_v38_spill_relation_parquet_with_row_group_size,
         evaluate_v38_multi_owner_ceiling, evaluate_v38_multi_owner_ceiling_with_progress,
         project_v38_admission_auxiliary_bytes, project_v38_spill_capacity,
-        propose_v38_alternate_owner, run_v38_local_request, run_v38_local_request_with_progress,
-        solve_v38_coverage_batch, solve_v38_query_coverage, summarize_v38_spill_relation,
-        validate_v38_ceiling_authority_bytes, validate_v38_ceiling_bytes,
-        validate_v38_construction_authority_bytes, validate_v38_spill_spec,
-        validate_v38_v37_construction_evidence,
+        propose_v38_alternate_owner, report_v38_build_scoring_progress, run_v38_local_request,
+        run_v38_local_request_with_progress, solve_v38_coverage_batch, solve_v38_query_coverage,
+        summarize_v38_spill_relation, validate_v38_ceiling_authority_bytes,
+        validate_v38_ceiling_bytes, validate_v38_construction_authority_bytes,
+        validate_v38_spill_spec, validate_v38_v37_construction_evidence,
     };
     use crate::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, V37FeatureGroundTruth, V37OwnershipRecord,
@@ -5172,6 +5187,26 @@ mod tests {
         assert_eq!(bytes, 52_003_936);
         assert!(bytes <= 64 * 1_048_576);
         assert!(project_v38_admission_auxiliary_bytes(u64::MAX, 250_000, 123).is_err());
+    }
+
+    #[test]
+    fn v38_boundary_build_progress_reserves_the_terminal_marker_for_publication() {
+        let mut snapshots = Vec::new();
+        report_v38_build_scoring_progress(983_040, 1_000_000, &mut |snapshot| {
+            snapshots.push(snapshot.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        report_v38_build_scoring_progress(1_000_000, 1_000_000, &mut |snapshot| {
+            snapshots.push(snapshot.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(snapshots.len(), 1);
+        let snapshot: serde_json::Value = serde_json::from_slice(&snapshots[0]).unwrap();
+        assert_eq!(snapshot["completed_rows"], 983_040);
+        assert_eq!(snapshot["total_rows"], 1_000_000);
+        assert!(report_v38_build_scoring_progress(1_000_001, 1_000_000, &mut |_| Ok(())).is_err());
     }
 
     #[test]
