@@ -172,6 +172,16 @@ struct V41BurnedDiagnosticResult {
     minimum_recall_ppm: Option<u32>,
     passed: Option<bool>,
     stopping_query_ordinal: Option<u32>,
+    query_neighbor_screens: Vec<V41QueryNeighborScreen>,
+}
+
+#[derive(Debug, Serialize)]
+struct V41QueryNeighborScreen {
+    neighbor_count: usize,
+    query_hits: Vec<u32>,
+    aggregate_recall_ppm: Option<u32>,
+    minimum_recall_ppm: Option<u32>,
+    passed: Option<bool>,
 }
 
 pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<Vec<u8>> {
@@ -235,13 +245,28 @@ pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<
         split.diagnostic_ordinals(),
         PAGE_COUNT,
     )?;
+    let query_neighbor_screens = [1, 4, 16, 64]
+        .into_iter()
+        .map(|neighbor_count| {
+            let evaluation =
+                borsuk_v41::v41_evaluate_query_neighbors(&training, &diagnostic, neighbor_count)
+                    .map_err(|error| invalid(&error.to_string()))?;
+            Ok(V41QueryNeighborScreen {
+                neighbor_count,
+                query_hits: evaluation.query_hits().to_vec(),
+                aggregate_recall_ppm: evaluation.aggregate_recall_ppm(),
+                minimum_recall_ppm: evaluation.minimum_recall_ppm(),
+                passed: evaluation.passed(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let spec = borsuk_v41::V41TrainingSpec::diagnostic_epochs(request.epochs)
         .map_err(|error| invalid(&error.to_string()))?;
     let mut sink = V41TrainingStateParquetSink::try_new(&request.training_state)?;
     let trained = borsuk_v41::train_v41_model(&training, &spec, request.workers, &mut sink)
         .map_err(|error| invalid(&error.to_string()))?;
     sink.finish()?;
-    let evaluation = borsuk_v41::v41_evaluate_model(trained.model(), &diagnostic)
+    let evaluation = borsuk_v41::v41_evaluate_model_complete(trained.model(), &diagnostic)
         .map_err(|error| invalid(&error.to_string()))?;
     v41_canonical_json_bytes(&V41BurnedDiagnosticResult {
         schema: "borsuk-v41-burned-diagnostic-v1",
@@ -260,6 +285,7 @@ pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<
         minimum_recall_ppm: evaluation.minimum_recall_ppm(),
         passed: evaluation.passed(),
         stopping_query_ordinal: evaluation.stopping_query_ordinal(),
+        query_neighbor_screens,
     })
 }
 

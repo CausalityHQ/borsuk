@@ -718,6 +718,86 @@ pub fn select_v41_pages(
     Ok(V41Selection { pages, scores_bits })
 }
 
+pub fn select_v41_pages_by_query_neighbors(
+    training: &V41TrainingData,
+    query: &[f32; V41_QUERY_DIMENSIONS],
+    neighbor_count: usize,
+) -> Result<V41Selection> {
+    if neighbor_count == 0
+        || neighbor_count > training.examples.len()
+        || query.iter().any(|value| !valid_model_number(*value))
+        || training.page_count < V41_SELECTED_PAGES as u32
+    {
+        return Err(invalid("V41 query-neighbor authority differs"));
+    }
+    let mut neighbors = training
+        .examples
+        .iter()
+        .map(|example| {
+            let mut distance = 0.0_f32;
+            for (left, right) in query.iter().zip(&example.query) {
+                let delta = left - right;
+                distance = delta.mul_add(delta, distance);
+            }
+            if !distance.is_finite() {
+                return Err(invalid("V41 query-neighbor distance is non-finite"));
+            }
+            Ok((distance, example.query_ordinal, example))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    neighbors.sort_unstable_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    let weighted_pairs = neighbors
+        .into_iter()
+        .take(neighbor_count)
+        .enumerate()
+        .flat_map(|(rank, (_, _, example))| {
+            let weight = 1.0_f32 / (rank + 1) as f32;
+            example
+                .owners
+                .iter()
+                .copied()
+                .map(move |(primary, alternate)| (weight, primary, alternate))
+        })
+        .collect::<Vec<_>>();
+    let mut covered = vec![false; weighted_pairs.len()];
+    let mut selected = vec![false; training.page_count as usize];
+    let mut pages = Vec::with_capacity(V41_SELECTED_PAGES);
+    let mut scores_bits = Vec::with_capacity(V41_SELECTED_PAGES);
+    for _ in 0..V41_SELECTED_PAGES {
+        let mut gains = vec![0.0_f32; training.page_count as usize];
+        for (index, (weight, primary, alternate)) in weighted_pairs.iter().enumerate() {
+            if covered[index] {
+                continue;
+            }
+            gains[*primary as usize] += *weight;
+            if let Some(alternate) = alternate {
+                gains[*alternate as usize] += *weight;
+            }
+        }
+        let (page, gain) = gains
+            .into_iter()
+            .enumerate()
+            .filter(|(page, _)| !selected[*page])
+            .max_by(|left, right| {
+                left.1
+                    .total_cmp(&right.1)
+                    .then_with(|| right.0.cmp(&left.0))
+            })
+            .ok_or_else(|| invalid("V41 query-neighbor selection is incomplete"))?;
+        selected[page] = true;
+        pages.push(page as u32);
+        scores_bits.push(gain.to_bits());
+        for (index, (_, primary, alternate)) in weighted_pairs.iter().enumerate() {
+            covered[index] |= *primary == page as u32 || *alternate == Some(page as u32);
+        }
+    }
+    Ok(V41Selection { pages, scores_bits })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V41EvaluationResult {
     query_hits: Vec<u32>,
@@ -757,14 +837,50 @@ pub fn v41_evaluate_model(
     model: &V41ResidualModel,
     data: &V41TrainingData,
 ) -> Result<V41EvaluationResult> {
+    v41_evaluate_model_inner(model, data, true)
+}
+
+pub fn v41_evaluate_model_complete(
+    model: &V41ResidualModel,
+    data: &V41TrainingData,
+) -> Result<V41EvaluationResult> {
+    v41_evaluate_model_inner(model, data, false)
+}
+
+fn v41_evaluate_model_inner(
+    model: &V41ResidualModel,
+    data: &V41TrainingData,
+    fail_fast: bool,
+) -> Result<V41EvaluationResult> {
     if model.page_count() != data.page_count as usize {
         return Err(invalid("V41 evaluation page count differs"));
     }
+    v41_evaluate_with(data, fail_fast, |query| select_v41_pages(model, query))
+}
+
+pub fn v41_evaluate_query_neighbors(
+    training: &V41TrainingData,
+    data: &V41TrainingData,
+    neighbor_count: usize,
+) -> Result<V41EvaluationResult> {
+    if training.page_count != data.page_count {
+        return Err(invalid("V41 query-neighbor page count differs"));
+    }
+    v41_evaluate_with(data, false, |query| {
+        select_v41_pages_by_query_neighbors(training, query, neighbor_count)
+    })
+}
+
+fn v41_evaluate_with(
+    data: &V41TrainingData,
+    fail_fast: bool,
+    mut select: impl FnMut(&[f32; V41_QUERY_DIMENSIONS]) -> Result<V41Selection>,
+) -> Result<V41EvaluationResult> {
     let allowed_misses = data.examples.len() * 100 * 2 / 1_000;
     let mut query_hits = Vec::with_capacity(data.examples.len());
     let mut total_hits = 0_usize;
     for example in &data.examples {
-        let selection = select_v41_pages(model, &example.query)?;
+        let selection = select(&example.query)?;
         let selected = selection.pages.iter().copied().collect::<BTreeSet<_>>();
         let hits = example
             .owners
@@ -779,7 +895,7 @@ pub fn v41_evaluate_model(
         query_hits
             .push(u32::try_from(hits).map_err(|_| invalid("V41 evaluation query hits overflow"))?);
         let misses = query_hits.len() * 100 - total_hits;
-        if hits < 80 || misses > allowed_misses {
+        if fail_fast && (hits < 80 || misses > allowed_misses) {
             return Ok(V41EvaluationResult {
                 query_hits,
                 aggregate_recall_ppm: None,
@@ -1363,8 +1479,9 @@ mod tests {
     use super::{
         Result as V41Result, V41AdamWState, V41ResidualModel, V41TrainingData, V41TrainingExample,
         V41TrainingRecord, V41TrainingSink, V41TrainingSpec, initialize_v41_model, score_v41_pages,
-        select_v41_pages, train_v41_model, v41_adamw_step, v41_evaluate_model, v41_inference_macs,
-        v41_marginal_targets, v41_parameter_bytes, v41_parameter_count,
+        select_v41_pages, select_v41_pages_by_query_neighbors, train_v41_model, v41_adamw_step,
+        v41_evaluate_model, v41_evaluate_model_complete, v41_evaluate_query_neighbors,
+        v41_inference_macs, v41_marginal_targets, v41_parameter_bytes, v41_parameter_count,
     };
 
     fn evaluation_model() -> V41ResidualModel {
@@ -1416,6 +1533,56 @@ mod tests {
         assert_eq!(result.aggregate_recall_ppm(), None);
         assert_eq!(result.minimum_recall_ppm(), None);
         assert_eq!(result.passed(), None);
+    }
+
+    #[test]
+    fn v41_evaluation_complete_mode_preserves_failure_distribution() {
+        let mut weak = vec![(0, None); 79];
+        weak.extend(vec![(23, None); 21]);
+        let data = V41TrainingData::try_new(
+            vec![
+                V41TrainingExample::try_new(10, [0.0; 768], vec![(0, None); 100]).unwrap(),
+                V41TrainingExample::try_new(20, [0.0; 768], weak).unwrap(),
+            ],
+            24,
+        )
+        .unwrap();
+        let result = v41_evaluate_model_complete(&evaluation_model(), &data).unwrap();
+        assert_eq!(result.query_hits(), &[100, 79]);
+        assert_eq!(result.aggregate_recall_ppm(), Some(895_000));
+        assert_eq!(result.minimum_recall_ppm(), Some(790_000));
+        assert_eq!(result.passed(), Some(false));
+        assert_eq!(result.stopping_query_ordinal(), None);
+    }
+
+    #[test]
+    fn v41_query_neighbor_router_transfers_weighted_owner_coverage() {
+        let mut left = [0.0; 768];
+        left[0] = 1.0;
+        let mut right = [0.0; 768];
+        right[1] = 1.0;
+        let training = V41TrainingData::try_new(
+            vec![
+                V41TrainingExample::try_new(0, left, vec![(0, None); 100]).unwrap(),
+                V41TrainingExample::try_new(1, right, vec![(23, None); 100]).unwrap(),
+            ],
+            24,
+        )
+        .unwrap();
+        let selection = select_v41_pages_by_query_neighbors(&training, &right, 1).unwrap();
+        assert_eq!(selection.pages()[0], 23);
+        assert_eq!(selection.pages().len(), 21);
+        assert!(select_v41_pages_by_query_neighbors(&training, &right, 0).is_err());
+        assert!(select_v41_pages_by_query_neighbors(&training, &right, 3).is_err());
+
+        let diagnostic = V41TrainingData::try_new(
+            vec![V41TrainingExample::try_new(2, right, vec![(23, None); 100]).unwrap()],
+            24,
+        )
+        .unwrap();
+        let result = v41_evaluate_query_neighbors(&training, &diagnostic, 1).unwrap();
+        assert_eq!(result.query_hits(), &[100]);
+        assert_eq!(result.aggregate_recall_ppm(), Some(1_000_000));
     }
 
     #[test]
