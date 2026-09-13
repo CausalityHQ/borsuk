@@ -57,9 +57,10 @@ authenticate before semantic use.
 Before training, a query-only split audit opens the development and validation
 query Parquet roles together without either GT role. It rejects any
 bit-identical `f32[768]` query vector that occurs in both roles and records both
-row counts and vector-bitset digests. Holdout remains unopened. Only after a
-validation pass does a second query-only audit open the holdout query role and
-reject bit-identical overlap with either already authenticated vector-bitset.
+row counts, sorted exact vector fingerprints, and vector-set digests. Holdout
+remains unopened. Only after a validation pass does a second query-only audit
+open the holdout query role and reject bit-identical overlap against the two
+authenticated fingerprint sets without reopening either earlier query file.
 This prevents workload leakage without exposing validation or holdout truth.
 
 Development is already burned. Exact duplicate `f32[768]` query vectors must
@@ -75,9 +76,14 @@ A trusted, model-free partition phase materializes query and GT Parquet for
 the development training and diagnostic partitions. Each child binds the
 authenticated parent byte identity, exact sorted parent ordinals, split-rule
 identity, and its exact role. One canonical partition manifest binds the four
-completed child identities together without circular child hashes. Diagnostic
-training receives only the training children; it has no descriptor, path, URI,
-or role for diagnostic GT.
+completed child identities together without circular child hashes. The trusted
+partition phase also emits three least-authority projections: training query/GT,
+diagnostic query only, and diagnostic GT only. Each projection binds the opaque
+full-manifest digest but contains only the identities its consumer may open.
+Diagnostic training receives the training projection and first split-audit
+terminal; it has no descriptor, path, URI, or role for diagnostic query or GT.
+Diagnostic selection receives only the query projection, and diagnostic
+evaluation receives only the GT projection plus sealed selection and relation.
 
 Training is explicitly supervised and may open only development query, GT,
 and relation artifacts. Selection may open query vectors and the frozen model,

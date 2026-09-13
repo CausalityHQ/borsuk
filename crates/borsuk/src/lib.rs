@@ -227,6 +227,11 @@ mod v38_boundary_spill;
     reason = "V40 router components are wired incrementally by the committed plan"
 )]
 mod v40_spill_router;
+#[allow(
+    dead_code,
+    reason = "V41 learned router phases are wired incrementally by the committed plan"
+)]
+mod v41_learned_router;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]

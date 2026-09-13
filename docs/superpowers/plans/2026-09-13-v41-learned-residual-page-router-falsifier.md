@@ -80,11 +80,11 @@ Expected: the new commit is the identical local, tracking, and canonical remote 
 
 **Interfaces:**
 - Consumes: exact local artifact identity tuples `(role, path, uri, sha256, blake3, encoded_bytes)` and frozen V36/V38/V39/V40 control artifacts.
-- Produces: `V41LocalArtifact`, `V41LocalOutput`, `V41LocalRunMode`, `V41LocalRunRequest`, `V41DevelopmentSplit`, and `validate_v41_authority`.
+- Produces: `V41LocalArtifact`, `V41LocalOutput`, `V41LocalRunMode`, `V41LocalRunRequest`, `V41QuerySplitAudit`, `V41DevelopmentSplit`, and strict partition manifest/projection types. Task 6 owns descriptor-retained byte authentication and `validate_v41_authority` once every frozen role schema exists.
 
 - [ ] **Step 1: Write the authority and capability REDs**
 
-Add tests named `v41_authority_rejects_identity_schema_and_generation_drift`, `v41_authority_modes_admit_only_phase_local_capabilities`, `v41_authority_split_audits_reject_cross_role_vector_duplicates`, `v41_authority_development_split_is_duplicate_safe_and_order_exact`, and `v41_authority_partition_children_bind_parent_ordinals_and_siblings`. Use literal digests and construct duplicate bit-identical query groups within development, across development/validation, and across validation/holdout.
+Add tests named `v41_authority_rejects_identity_schema_and_generation_drift`, `v41_authority_modes_admit_only_phase_local_capabilities`, `v41_authority_split_audits_reject_cross_role_vector_duplicates`, `v41_authority_development_split_is_duplicate_safe_and_order_exact`, and `v41_authority_partition_children_bind_parent_ordinals_and_manifest`. Use literal digests and construct duplicate bit-identical query groups within development, across development/validation, and across both development/validation with holdout.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +116,7 @@ Expected: unresolved V41 authority/split symbols only; the filter names exactly 
 
 - [ ] **Step 3: Implement strict types and split**
 
-Validate exact role allowlists per phase, full 64-hex digests, nonzero lengths, source/archive/index/backend/generation bindings, unique input/output paths and URIs, and descriptor-retained single opens. `AuditDevelopmentValidation` opens exactly those two query Parquet roles and the V36 freeze receipt, no GT/holdout role; `AuditHoldout` is unavailable until validation passes and opens only holdout query plus the prior query-bitset receipts. Each rejects a cross-role bit-identical `f32[768]` vector and records exact row counts and vector-bitset digests. Every training phase requires the first audit terminal. Compute each within-development duplicate-group key as:
+Validate exact role allowlists per phase, full 64-hex digests, nonzero lengths, and unique input/output paths and URIs. `AuditDevelopmentValidation` admits exactly those two query Parquet roles and the V36 freeze receipt, no GT/holdout role. Its receipt records exact sorted vector fingerprints, row counts, and set digests. `AuditHoldout` is unavailable until validation passes and admits only holdout query plus the prior authenticated fingerprint receipt; it checks membership without reopening development or validation queries. Every training phase requires the first audit terminal role. Task 6 performs descriptor-retained single opens, byte authentication, strict frozen schemas, source/archive/index/backend/generation cross-bindings, and predecessor-PASS validation before semantic use. Compute each within-development duplicate-group key as:
 
 ```rust
 sha256(b"borsuk-v41-development-split-v1" || concat(query_f32_bits_le))
@@ -124,7 +124,7 @@ sha256(b"borsuk-v41-development-split-v1" || concat(query_f32_bits_le))
 
 Sort by `(digest, minimum_query_ordinal)`, place a whole group in training only when its addition remains at most 800 rows, and place every remaining group in diagnostic. Record actual counts.
 
-`PartitionDevelopment` is model-free. It opens the authenticated full development query/GT parents plus the split receipt and creates four strict Parquet children: training query/GT and diagnostic query/GT. Each child records sorted original query ordinals and binds both parent byte identities, the split-rule digest, and its exact role. After all four children authenticate, one canonical partition manifest binds their four complete identities without circular child hashes. `TrainDiagnostic` receives only the training children; `SelectDiagnostic` receives only diagnostic query; `EvaluateDiagnostic` receives only diagnostic GT, sealed selection, and relation.
+`PartitionDevelopment` is model-free. It opens the authenticated full development query/GT parents plus the split receipt and creates four strict Parquet children: training query/GT and diagnostic query/GT. Each child records sorted original query ordinals and binds both complete parent byte identities, the split-rule digest, and its exact role. Validation compares the children against the authenticated parents and the independently recomputed split, so coordinated parent or ordinal substitution fails. After all four children authenticate, one canonical partition manifest binds their four complete identities without circular child hashes. The trusted phase derives three least-authority receipts bound to the opaque manifest digest: training query/GT, diagnostic query only, and diagnostic GT only. `TrainDiagnostic` receives the split audit, training receipt, and training children; `SelectDiagnostic` receives only the diagnostic-query receipt and query; `EvaluateDiagnostic` receives only the diagnostic-evaluation receipt, diagnostic GT, sealed selection, and relation.
 
 - [ ] **Step 4: Run GREEN and commit**
 
@@ -383,7 +383,7 @@ Expected: missing high-level runner/parser symbols only; the filters name exactl
 
 - [ ] **Step 3: Implement the thin boundary**
 
-Each mode receives only its allowlisted roles, opens each input once for declared length plus one overflow byte, authenticates before semantic use, and uses exclusive create-new outputs. The example parses exact identity tuples and `--workers`, requires `--execute-v41`, imports no object-store/AWS/page-store type, writes progress to stderr, writes canonical result bytes to stdout, and exits nonzero on every error.
+Each mode receives only its allowlisted roles, opens each input once for declared length plus one overflow byte, retains those descriptors through parsing, authenticates strict frozen schemas and source/archive/index/backend/generation bindings before semantic use, validates every required predecessor PASS, and uses exclusive create-new outputs. `validate_v41_authority` owns that boundary. The example parses exact identity tuples and `--workers`, requires `--execute-v41`, imports no object-store/AWS/page-store type, writes progress to stderr, writes canonical result bytes to stdout, and exits nonzero on every error.
 
 - [ ] **Step 4: Run GREEN and commit**
 
