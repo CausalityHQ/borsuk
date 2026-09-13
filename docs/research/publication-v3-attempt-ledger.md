@@ -4845,7 +4845,7 @@ GT@100. Selection never received ground truth. Truth evaluation opened only
 the sealed selection and GT artifacts. The logical quality gates remained
 998,000 ppm aggregate and 800,000 ppm minimum recall at exactly 21 postings.
 
-The source-free worst-case preflight at source
+The registered source-free preflight at source
 `597452727b70521b806b9ce0958ba056bf7f512b` used the authenticated
 12,389,312-byte release binary (SHA256
 `1b81c9bc86cd8980777f0e1deed4b666fe951a2a46e012f68a9a808bc27d6c1f`)
@@ -4896,12 +4896,13 @@ selection invocation used 16 workers instead of the frozen V37 authority's 32;
 it was rejected before query work in 0.00 seconds and is retained only as an
 authority-gate log, not as a scientific repetition.
 
-Disposition: `router-rejected`. Direct routing was 80,500 ppm below the exact
-K=21 layout ceiling, and the overlap-aware accepted-spill policy made aggregate
-recall another 4,940 ppm worse instead of closing that gap. Compute and memory
-are not the blocker; query-to-posting discrimination is. Per the fail-fast
-ladder, coarse S3 request/byte simulation is skipped because logical quality
-failed. The next experiment stays on one million rows, changes the routing
+Disposition: `router-rejected`. Direct routing was 80,500 ppm below the
+authenticated K=21 feasible witness, and the overlap-aware accepted-spill
+policy made aggregate recall another 4,940 ppm worse instead of closing that
+gap. Compute and memory are not the blocker; query-to-posting discrimination
+is. Per the fail-fast ladder, coarse S3 request/byte simulation is skipped
+because logical quality failed. The next experiment stays on one million rows
+and changes the routing
 representation rather than tuning this spill score, and must pass a burned-dev
 gate followed by one sealed 1M holdout before any 10M/100M or physical page
 read. The causality Spot instance `i-0469b7b8e234cc1fe` is terminating after
