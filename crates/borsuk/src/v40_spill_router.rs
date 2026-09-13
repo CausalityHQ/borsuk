@@ -642,6 +642,38 @@ pub(crate) fn select_v40_tree_frontier(
     })
 }
 
+pub(crate) fn select_v40_direct_queries(
+    tree: &V37BalancedTree,
+    expected_backend: &str,
+    queries: &[Vec<f32>],
+    selected_postings: usize,
+    maximum_node_pops: usize,
+) -> Result<Vec<V40DirectSelectionRecord>> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct query authority differs".to_owned());
+    if queries.is_empty() {
+        return Err(invalid());
+    }
+    let mut records = Vec::with_capacity(queries.len());
+    for (query_ordinal, query) in queries.iter().enumerate() {
+        let frontier = select_v40_tree_frontier(
+            tree,
+            expected_backend,
+            query,
+            selected_postings,
+            maximum_node_pops,
+        )?;
+        records.push(V40DirectSelectionRecord {
+            query_ordinal: u32::try_from(query_ordinal).map_err(|_| invalid())?,
+            posting_ordinals: frontier.posting_ordinals,
+            node_pops: frontier.node_pops,
+            scored_internal_nodes: frontier.scored_internal_nodes,
+            fma_backend: frontier.fma_backend,
+        });
+    }
+    validate_v40_direct_selections(&records, selected_postings, Some(expected_backend))?;
+    Ok(records)
+}
+
 pub(crate) fn evaluate_v40_direct_recall(
     spec: &V40EvaluationSpec,
     owners: &[(u64, u32, Option<u32>)],
@@ -772,7 +804,8 @@ mod tests {
         V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact, V40LocalOutput,
         V40LocalRunMode, V40LocalRunRequest, authenticate_v40_local_request,
         decode_v40_direct_selections_parquet, encode_v40_direct_selections_parquet,
-        evaluate_v40_direct_recall, load_v40_projected_queries, select_v40_tree_frontier,
+        evaluate_v40_direct_recall, load_v40_projected_queries, select_v40_direct_queries,
+        select_v40_tree_frontier,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
@@ -1214,5 +1247,29 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(observed, expected);
         assert!(load_v40_projected_queries(&path, 1).is_err());
+    }
+
+    #[test]
+    fn v40_direct_query_selector_seals_backend_and_work_evidence() {
+        let tree = four_leaf_tree();
+        let selections = select_v40_direct_queries(
+            &tree,
+            &tree.fma_backend,
+            &[vec![1.0, 0.0, 0.0], vec![-1.0, 0.0, 0.0]],
+            2,
+            7,
+        )
+        .unwrap();
+        assert_eq!(selections.len(), 2);
+        assert_eq!(selections[0].query_ordinal, 0);
+        assert_eq!(selections[0].posting_ordinals, vec![3, 0]);
+        assert_eq!(selections[1].query_ordinal, 1);
+        assert_eq!(selections[1].posting_ordinals, vec![0, 1]);
+        assert!(
+            selections
+                .iter()
+                .all(|selection| selection.fma_backend == tree.fma_backend)
+        );
+        assert!(select_v40_direct_queries(&tree, &tree.fma_backend, &[], 2, 7).is_err());
     }
 }
