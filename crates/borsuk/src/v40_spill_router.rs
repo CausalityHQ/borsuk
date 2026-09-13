@@ -61,8 +61,14 @@ pub enum V40LocalRunMode {
 impl V40LocalRunMode {
     fn input_roles(self) -> &'static [&'static str] {
         match self {
-            Self::SelectDirect => &["v37-authority", "ownership-tree", "development-query"],
+            Self::SelectDirect => &[
+                "cohort-authority",
+                "v37-authority",
+                "ownership-tree",
+                "development-query",
+            ],
             Self::EvaluateDirect => &[
+                "cohort-authority",
                 "v38-ceiling-authority",
                 "v38-construction-result",
                 "spill-relation",
@@ -486,7 +492,7 @@ fn v40_selection_receipt_bytes(
     Ok(bytes)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct V40SelectionReceiptArtifact {
     blake3: String,
@@ -494,6 +500,71 @@ struct V40SelectionReceiptArtifact {
     role: String,
     sha256: String,
     uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40DirectCohortAuthority {
+    development_ground_truth: V40SelectionReceiptArtifact,
+    development_query: V40SelectionReceiptArtifact,
+    ownership_tree: V40SelectionReceiptArtifact,
+    query_count: u64,
+    schema: String,
+    v37_authority: V40SelectionReceiptArtifact,
+}
+
+fn valid_v40_cohort_identity(identity: &V40SelectionReceiptArtifact, role: &str) -> bool {
+    identity.role == role
+        && valid_s3_uri(&identity.uri)
+        && valid_digest(&identity.sha256)
+        && valid_digest(&identity.blake3)
+        && identity.encoded_bytes > 0
+}
+
+fn parse_v40_direct_cohort_authority_bytes(bytes: &[u8]) -> Result<V40DirectCohortAuthority> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct cohort authority differs".to_owned());
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let mut canonical = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(invalid());
+    }
+    let authority: V40DirectCohortAuthority =
+        serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let identities = [
+        (&authority.v37_authority, "v37-authority"),
+        (&authority.ownership_tree, "ownership-tree"),
+        (&authority.development_query, "development-query"),
+        (
+            &authority.development_ground_truth,
+            "development-ground-truth",
+        ),
+    ];
+    let uris = identities
+        .iter()
+        .map(|(identity, _)| identity.uri.as_str())
+        .collect::<BTreeSet<_>>();
+    if authority.schema != "borsuk-v40-direct-cohort-authority-v1"
+        || authority.query_count != V40_DIRECT_QUERY_COUNT
+        || identities
+            .iter()
+            .any(|(identity, role)| !valid_v40_cohort_identity(identity, role))
+        || uris.len() != identities.len()
+    {
+        return Err(invalid());
+    }
+    Ok(authority)
+}
+
+fn v40_cohort_identity_matches_local(
+    expected: &V40SelectionReceiptArtifact,
+    observed: &V40LocalArtifact,
+) -> bool {
+    expected.role == observed.role
+        && expected.uri == observed.uri
+        && expected.sha256 == observed.sha256
+        && expected.blake3 == observed.blake3
+        && expected.encoded_bytes == observed.encoded_bytes
 }
 
 #[derive(Debug, Deserialize)]
@@ -523,7 +594,12 @@ fn valid_v40_local_file_uri(value: &str) -> bool {
         .is_some_and(|path| path.starts_with('/') && path.len() > 1 && !path.contains(['?', '#']))
 }
 
-fn parse_v40_selection_receipt_bytes(bytes: &[u8], selection: &V40LocalArtifact) -> Result<String> {
+fn parse_v40_selection_receipt_bytes(
+    bytes: &[u8],
+    selection: &V40LocalArtifact,
+    cohort_input: &V40LocalArtifact,
+    cohort: &V40DirectCohortAuthority,
+) -> Result<String> {
     let invalid =
         || BorsukError::InvalidStorage("V40 direct selection receipt authority differs".to_owned());
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
@@ -566,8 +642,18 @@ fn parse_v40_selection_receipt_bytes(bytes: &[u8], selection: &V40LocalArtifact)
             evidence.fma_backend.as_str(),
             "aarch64-neon-fma" | "x86-avx-fma"
         )
-        || input_roles != ["v37-authority", "ownership-tree", "development-query"]
+        || input_roles
+            != [
+                "cohort-authority",
+                "v37-authority",
+                "ownership-tree",
+                "development-query",
+            ]
         || input_uris.len() != receipt.inputs.len()
+        || !v40_cohort_identity_matches_local(&receipt.inputs[0], cohort_input)
+        || receipt.inputs[1] != cohort.v37_authority
+        || receipt.inputs[2] != cohort.ownership_tree
+        || receipt.inputs[3] != cohort.development_query
         || receipt.inputs.iter().any(|input| {
             !valid_s3_uri(&input.uri)
                 || !valid_digest(&input.sha256)
@@ -1107,6 +1193,19 @@ pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
     if request.mode == V40LocalRunMode::EvaluateDirect {
         return run_v40_evaluate_direct(&request, &authenticated);
     }
+    let cohort_bytes = read_v40_authenticated_input(&request, &authenticated, "cohort-authority")?;
+    let cohort = parse_v40_direct_cohort_authority_bytes(&cohort_bytes)?;
+    for (role, expected) in [
+        ("v37-authority", &cohort.v37_authority),
+        ("ownership-tree", &cohort.ownership_tree),
+        ("development-query", &cohort.development_query),
+    ] {
+        if !v40_cohort_identity_matches_local(expected, v40_local_input(&request, role)?) {
+            return Err(BorsukError::InvalidStorage(
+                "V40 direct cohort input binding differs".to_owned(),
+            ));
+        }
+    }
     let authority_bytes = read_v40_authenticated_input(&request, &authenticated, "v37-authority")?;
     let binding = crate::v37_relation_router::v37_v40_selection_binding(&authority_bytes)?;
     if binding.workers != request.workers {
@@ -1186,6 +1285,25 @@ fn run_v40_evaluate_direct(
     let construction_bytes =
         read_v40_authenticated_input(request, authenticated, "v38-construction-result")?;
     let binding = v38_v40_evaluation_binding(&ceiling_bytes, &construction_bytes)?;
+    let cohort_input = v40_local_input(request, "cohort-authority")?;
+    let cohort_bytes = read_v40_authenticated_input(request, authenticated, "cohort-authority")?;
+    let cohort = parse_v40_direct_cohort_authority_bytes(&cohort_bytes)?;
+    if cohort.query_count != u64::from(binding.query_count)
+        || !v40_cohort_identity_matches_local(
+            &cohort.development_ground_truth,
+            v40_local_input(request, "development-ground-truth")?,
+        )
+        || cohort.v37_authority.uri != binding.v37_authority_uri
+        || cohort.v37_authority.sha256 != binding.v37_authority_sha256
+        || cohort.v37_authority.blake3 != binding.v37_authority_blake3
+        || cohort.v37_authority.encoded_bytes != binding.v37_authority_bytes
+        || cohort.ownership_tree.uri != binding.ownership_tree_uri
+        || cohort.ownership_tree.sha256 != binding.ownership_tree_sha256
+        || cohort.ownership_tree.blake3 != binding.ownership_tree_blake3
+        || cohort.ownership_tree.encoded_bytes != binding.ownership_tree_bytes
+    {
+        return Err(invalid());
+    }
     for (role, uri, sha256, blake3, encoded_bytes) in [
         (
             "spill-relation",
@@ -1231,7 +1349,8 @@ fn run_v40_evaluate_direct(
     let selection = v40_local_input(request, "direct-selection")?;
     let selection_receipt =
         read_v40_authenticated_input(request, authenticated, "direct-selection-result")?;
-    let backend = parse_v40_selection_receipt_bytes(&selection_receipt, selection)?;
+    let backend =
+        parse_v40_selection_receipt_bytes(&selection_receipt, selection, cohort_input, &cohort)?;
     let selection_bytes = read_v40_authenticated_input(request, authenticated, "direct-selection")?;
     let selections = decode_v40_direct_selections_parquet(
         &selection_bytes,
@@ -1389,8 +1508,8 @@ mod tests {
         V40LocalRunMode, V40LocalRunRequest, authenticate_v40_local_request,
         decode_v40_direct_selections_parquet, encode_v40_direct_selections_parquet,
         evaluate_v40_direct_recall, load_v40_projected_queries, load_v40_projected_queries_file,
-        parse_v40_selection_receipt_bytes, select_v40_direct_queries, select_v40_tree_frontier,
-        v40_evaluation_result_bytes,
+        parse_v40_direct_cohort_authority_bytes, parse_v40_selection_receipt_bytes,
+        select_v40_direct_queries, select_v40_tree_frontier, v40_evaluation_result_bytes,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
@@ -1589,6 +1708,7 @@ mod tests {
         let request = V40LocalRunRequest::try_new(
             V40LocalRunMode::EvaluateDirect,
             [
+                "cohort-authority",
                 "v38-ceiling-authority",
                 "v38-construction-result",
                 "spill-relation",
@@ -1612,7 +1732,7 @@ mod tests {
         assert_eq!(value["evidence"]["aggregate_recall_ppm"], 750_000);
         assert_eq!(value["evidence"]["minimum_recall_ppm"], 750_000);
         assert_eq!(value["evidence"]["passed"], true);
-        assert_eq!(value["inputs"].as_array().unwrap().len(), 7);
+        assert_eq!(value["inputs"].as_array().unwrap().len(), 8);
 
         let mut drifted = evaluation;
         drifted.aggregate_recall_ppm -= 1;
@@ -1637,11 +1757,59 @@ mod tests {
         V40LocalOutput::try_new(role.to_owned(), PathBuf::from(format!("/tmp/v40-{role}"))).unwrap()
     }
 
+    fn cohort_authority_bytes() -> Vec<u8> {
+        let identity = |role: &str| {
+            serde_json::json!({
+                "blake3": "2".repeat(64),
+                "encoded_bytes": 17,
+                "role": role,
+                "sha256": "1".repeat(64),
+                "uri": format!("s3://fixture/v40/{role}"),
+            })
+        };
+        let value = serde_json::json!({
+            "development_ground_truth": identity("development-ground-truth"),
+            "development_query": identity("development-query"),
+            "ownership_tree": identity("ownership-tree"),
+            "query_count": 1_000,
+            "schema": "borsuk-v40-direct-cohort-authority-v1",
+            "v37_authority": identity("v37-authority"),
+        });
+        let mut bytes = serde_json::to_vec(&super::v40_canonical_json(value)).unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+
+    #[test]
+    fn v40_direct_cohort_authority_binds_router_query_and_truth_identities() {
+        let bytes = cohort_authority_bytes();
+        let authority = parse_v40_direct_cohort_authority_bytes(&bytes).unwrap();
+        assert_eq!(authority.query_count, 1_000);
+        assert_eq!(authority.v37_authority.role, "v37-authority");
+        assert_eq!(authority.ownership_tree.role, "ownership-tree");
+        assert_eq!(authority.development_query.role, "development-query");
+        assert_eq!(
+            authority.development_ground_truth.role,
+            "development-ground-truth"
+        );
+
+        let mut drifted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        drifted["development_query"]["sha256"] = serde_json::json!("a".repeat(63));
+        let mut drifted = serde_json::to_vec(&super::v40_canonical_json(drifted)).unwrap();
+        drifted.push(b'\n');
+        assert!(parse_v40_direct_cohort_authority_bytes(&drifted).is_err());
+    }
+
     #[test]
     fn v40_authority_direct_modes_separate_query_and_truth_capabilities() {
-        let selection_inputs = ["v37-authority", "ownership-tree", "development-query"]
-            .map(local_artifact)
-            .to_vec();
+        let selection_inputs = [
+            "cohort-authority",
+            "v37-authority",
+            "ownership-tree",
+            "development-query",
+        ]
+        .map(local_artifact)
+        .to_vec();
         let selection = V40LocalRunRequest::try_new(
             V40LocalRunMode::SelectDirect,
             selection_inputs,
@@ -1651,11 +1819,17 @@ mod tests {
         .unwrap();
         assert_eq!(
             selection.input_roles(),
-            vec!["v37-authority", "ownership-tree", "development-query"]
+            vec![
+                "cohort-authority",
+                "v37-authority",
+                "ownership-tree",
+                "development-query",
+            ]
         );
         assert_eq!(selection.output_roles(), vec!["direct-selection"]);
 
         let evaluation_inputs = [
+            "cohort-authority",
             "v38-ceiling-authority",
             "v38-construction-result",
             "spill-relation",
@@ -1707,9 +1881,14 @@ mod tests {
             .is_err()
         );
 
-        let mut inputs = ["v37-authority", "ownership-tree", "development-query"]
-            .map(local_artifact)
-            .to_vec();
+        let mut inputs = [
+            "cohort-authority",
+            "v37-authority",
+            "ownership-tree",
+            "development-query",
+        ]
+        .map(local_artifact)
+        .to_vec();
         inputs.swap(0, 1);
         assert!(
             V40LocalRunRequest::try_new(
@@ -1721,9 +1900,14 @@ mod tests {
             .is_err()
         );
 
-        let mut overlap = ["v37-authority", "ownership-tree", "development-query"]
-            .map(local_artifact)
-            .to_vec();
+        let mut overlap = [
+            "cohort-authority",
+            "v37-authority",
+            "ownership-tree",
+            "development-query",
+        ]
+        .map(local_artifact)
+        .to_vec();
         overlap[1] = overlap[0].clone();
         assert!(
             V40LocalRunRequest::try_new(
@@ -1735,9 +1919,14 @@ mod tests {
             .is_err()
         );
 
-        let inputs = ["v37-authority", "ownership-tree", "development-query"]
-            .map(local_artifact)
-            .to_vec();
+        let inputs = [
+            "cohort-authority",
+            "v37-authority",
+            "ownership-tree",
+            "development-query",
+        ]
+        .map(local_artifact)
+        .to_vec();
         assert!(
             V40LocalRunRequest::try_new(
                 V40LocalRunMode::SelectDirect,
@@ -1773,6 +1962,7 @@ mod tests {
     fn v40_direct_artifact_authentication_rejects_byte_and_output_drift() {
         let root = tempdir().unwrap();
         let inputs = [
+            ("cohort-authority", b"cohort".as_slice()),
             ("v37-authority", b"authority".as_slice()),
             ("ownership-tree", b"tree".as_slice()),
             ("development-query", b"query".as_slice()),
@@ -1845,9 +2035,14 @@ mod tests {
         let output_path = root.path().join("selection.parquet");
         let request = V40LocalRunRequest::try_new(
             V40LocalRunMode::SelectDirect,
-            ["v37-authority", "ownership-tree", "development-query"]
-                .map(local_artifact)
-                .to_vec(),
+            [
+                "cohort-authority",
+                "v37-authority",
+                "ownership-tree",
+                "development-query",
+            ]
+            .map(local_artifact)
+            .to_vec(),
             vec![
                 V40LocalOutput::try_new("direct-selection".to_owned(), output_path.clone())
                     .unwrap(),
@@ -1866,13 +2061,30 @@ mod tests {
             u64::try_from(selection_bytes.len()).unwrap(),
         )
         .unwrap();
+        let cohort = parse_v40_direct_cohort_authority_bytes(&cohort_authority_bytes()).unwrap();
 
         assert_eq!(
-            parse_v40_selection_receipt_bytes(&receipt, &selection).unwrap(),
+            parse_v40_selection_receipt_bytes(&receipt, &selection, &request.inputs[0], &cohort,)
+                .unwrap(),
             "aarch64-neon-fma"
         );
         assert!(
-            parse_v40_selection_receipt_bytes(&receipt[..receipt.len() - 1], &selection).is_err()
+            parse_v40_selection_receipt_bytes(
+                &receipt[..receipt.len() - 1],
+                &selection,
+                &request.inputs[0],
+                &cohort,
+            )
+            .is_err()
+        );
+
+        let mut drifted: serde_json::Value = serde_json::from_slice(&receipt).unwrap();
+        drifted["inputs"][3]["sha256"] = serde_json::json!("a".repeat(64));
+        let mut drifted = serde_json::to_vec(&super::v40_canonical_json(drifted)).unwrap();
+        drifted.push(b'\n');
+        assert!(
+            parse_v40_selection_receipt_bytes(&drifted, &selection, &request.inputs[0], &cohort,)
+                .is_err()
         );
     }
 

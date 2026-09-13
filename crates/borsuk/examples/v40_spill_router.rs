@@ -51,10 +51,14 @@ fn parse_v40_spill_router_args(
         .parse::<u32>()
         .map_err(|_| "V40 worker count differs".to_owned())?;
     let input_roles = match mode {
-        V40LocalRunMode::SelectDirect => {
-            &["v37-authority", "ownership-tree", "development-query"][..]
-        }
+        V40LocalRunMode::SelectDirect => &[
+            "cohort-authority",
+            "v37-authority",
+            "ownership-tree",
+            "development-query",
+        ][..],
         V40LocalRunMode::EvaluateDirect => &[
+            "cohort-authority",
             "v38-ceiling-authority",
             "v38-construction-result",
             "spill-relation",
@@ -125,8 +129,14 @@ mod tests {
     use super::parse_v40_spill_router_args;
     use borsuk::{V40LocalRunMode, run_v40_local_request};
 
-    const SELECT_ROLES: [&str; 3] = ["v37-authority", "ownership-tree", "development-query"];
-    const EVALUATE_ROLES: [&str; 7] = [
+    const SELECT_ROLES: [&str; 4] = [
+        "cohort-authority",
+        "v37-authority",
+        "ownership-tree",
+        "development-query",
+    ];
+    const EVALUATE_ROLES: [&str; 8] = [
+        "cohort-authority",
         "v38-ceiling-authority",
         "v38-construction-result",
         "spill-relation",

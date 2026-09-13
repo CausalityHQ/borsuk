@@ -474,6 +474,14 @@ pub(crate) struct V38V40EvaluationBinding {
     pub(crate) selected_postings: u32,
     pub(crate) aggregate_gate_ppm: u32,
     pub(crate) minimum_gate_ppm: u32,
+    pub(crate) v37_authority_uri: String,
+    pub(crate) v37_authority_sha256: String,
+    pub(crate) v37_authority_blake3: String,
+    pub(crate) v37_authority_bytes: u64,
+    pub(crate) ownership_tree_uri: String,
+    pub(crate) ownership_tree_sha256: String,
+    pub(crate) ownership_tree_blake3: String,
+    pub(crate) ownership_tree_bytes: u64,
     pub(crate) relation_uri: String,
     pub(crate) relation_sha256: String,
     pub(crate) relation_blake3: String,
@@ -2014,6 +2022,14 @@ pub(crate) fn v38_v40_evaluation_binding(
         selected_postings: authority.selected_postings,
         aggregate_gate_ppm: authority.aggregate_gate_ppm,
         minimum_gate_ppm: authority.minimum_gate_ppm,
+        v37_authority_uri: result.inputs[1].uri.clone(),
+        v37_authority_sha256: result.inputs[1].sha256.clone(),
+        v37_authority_blake3: result.inputs[1].blake3.clone(),
+        v37_authority_bytes: result.inputs[1].encoded_bytes,
+        ownership_tree_uri: result.inputs[5].uri.clone(),
+        ownership_tree_sha256: result.inputs[5].sha256.clone(),
+        ownership_tree_blake3: result.inputs[5].blake3.clone(),
+        ownership_tree_bytes: result.inputs[5].encoded_bytes,
         relation_uri: authority.relation.uri,
         relation_sha256: authority.relation.sha256,
         relation_blake3: authority.relation.blake3,
@@ -4866,6 +4882,8 @@ mod tests {
         assert_eq!(binding.selected_postings, 21);
         assert_eq!(binding.aggregate_gate_ppm, 998_000);
         assert_eq!(binding.minimum_gate_ppm, 800_000);
+        assert_eq!(binding.v37_authority_sha256, result.inputs[1].sha256);
+        assert_eq!(binding.ownership_tree_sha256, result.inputs[5].sha256);
         assert_eq!(binding.relation_sha256, authority.relation.sha256);
         assert_eq!(binding.postings_sha256, authority.posting_summary.sha256);
         assert_eq!(
