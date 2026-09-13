@@ -4764,3 +4764,74 @@ The next experiment remains one-million-row and must first falsify a materially
 different query-independent relation or a preregistered adaptive read policy;
 it must not tune on these development queries or loosen the registered quality
 gates.
+
+### V39 one-million-row boundary-spill posting-budget bracket
+
+V39 varied only the maximum number of postings selected by the exact V38
+source-free ceiling. The population, relation, posting summary, development
+GT@100, solver limits, and 998,000/800,000-ppm quality gates remained frozen.
+This is an oracle layout-feasibility bracket: the solver receives ground truth
+and may inspect all 123 posting memberships. It is not a deployable router or a
+measurement of online/S3 query latency. No corpus vectors or page bodies were
+read by any ceiling phase.
+
+At source `5ce027862376081a0db6f503f1e2f1ad09d577e5`, the authenticated
+ceiling results were:
+
+- K=16: 993,190 ppm aggregate, 800,000 ppm minimum, both exact certified
+  upper bounds; 999 exact certificates and 349,815 solver visits. The
+  167,466-byte result is SHA256
+  `57dde9b0f1b1734ce32156d1e5b5c07527f7906af296f49bfbf1fe9e2dd5cb66`;
+  the 2,526-byte terminal is SHA256
+  `95a783cd071d7eb7c990a10b0199a81a4a7c25b9357ada5ab57c45dbd2a4c0c1`.
+- K=18: 996,120 ppm aggregate and 840,000 ppm minimum, both exact
+  certified upper bounds; 999 exact certificates and 388,737 solver visits.
+  The 172,578-byte result is SHA256
+  `0947bb3b4512d302a342dc0a0c110bb24b77599a1d40cf317dc080ab84fba802`;
+  the 2,524-byte terminal is SHA256
+  `506190246116108ff584e2ecdbaebd9068a98f7a1fdc0d2f27b6a158eea8b18d`.
+- K=20: 997,970 ppm aggregate and 880,000 ppm minimum, both exact
+  certified upper bounds; all 1,000 certificates were exact and consumed
+  428,608 solver visits. It misses the aggregate gate by three GT hits. The
+  177,846-byte result is SHA256
+  `060a59404ea46bd60947c4e78974165a0181d767afc8c64ad33c13e1a725a8c1`;
+  the 2,525-byte terminal is SHA256
+  `933dc421467cefb72a507a597677c61b4a60c077aeaf985874d1a4eadf7c3194`.
+- K=24: the feasible lower bound reached 999,510 ppm aggregate and 930,000
+  ppm minimum; certified upper bounds were 1,000,000 ppm, with 981 exact
+  certificates. The lower bound already passed, so no solver visits were
+  required. The 188,740-byte result is SHA256
+  `cc1cc14fc3f68bb106dbd6e0133b9bcc4821715995509c735481daf9e921daef`;
+  the 2,523-byte terminal is SHA256
+  `797f3e1f8aa844e99fa5140ed2147698f95a99d8ea1237e140f819d712961f5e`.
+
+The K=21 boundary was then authenticated at source
+`a810646a68f3abd74600e4cba8e5fef432ad4900`. A fresh construction reproduced
+the exact prior 25,136,186-byte relation and 3,608-byte posting summary hashes.
+Construction took 94.027645534 seconds of science and 113.122812674 seconds
+wrapper time, with a 3,084,148,736-byte process-group peak, zero swap, and zero
+peak memory PSI. Its 4,265-byte result is SHA256
+`f495f58f5ef9a9adb6e2d163436a608e2d890337fa72ff1dd857d660925f40a0`.
+The release binary was 12,365,624 bytes, SHA256
+`d65743614366da85a5ee4d8ef403aef068c175497168763240ee6b19088dd1d3`.
+
+K=21 passed with a 998,510-ppm feasible aggregate and 900,000-ppm feasible
+minimum. Certified upper bounds were 1,000,000 ppm; 957 certificates were
+exact, and the passing lower bound required no solver visits. Science took
+2.001241233 seconds and the wrapper took 2.59595589 seconds, with a
+268,435,456-byte peak, zero swap, and zero peak memory PSI. The canonical
+180,482-byte result is SHA256
+`3bdc79beed354fb76ee9bd2350120964bd9e6acbefb6f44212f0b61925dfd941`;
+the 2,565-byte terminal is SHA256
+`ef68bdb40c2695ac55a3cd871c737205c48fbf9b8c6c0ccc6ff382e74c8e76a9`.
+
+Disposition: `layout-feasible` at K=21, which is the minimum passing integer
+budget because the exact K=20 upper bound fails. This closes only the V38
+layout-capacity question on the burned development queries. It does not show
+that a query-blind router can find the oracle's postings, nor bound the number
+of unique candidate records, S3 range requests, transferred bytes, reranking
+cost, or cold latency. The next one-million-row phase must preregister a GT-free
+router and an S3 request/byte simulator, select no parameters on the sealed
+holdout, and preserve a fresh holdout for the final decision. All successful
+Spot instances are confirmed terminated; 10M, 100M, physical page reads, D3,
+and claim-eligible comparison remain fenced.
