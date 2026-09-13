@@ -696,6 +696,90 @@ pub fn select_v41_pages(
     Ok(V41Selection { pages, scores_bits })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V41EvaluationResult {
+    query_hits: Vec<u32>,
+    aggregate_recall_ppm: Option<u32>,
+    minimum_recall_ppm: Option<u32>,
+    passed: Option<bool>,
+    stopping_query_ordinal: Option<u32>,
+}
+
+impl V41EvaluationResult {
+    pub fn query_hits(&self) -> &[u32] {
+        &self.query_hits
+    }
+
+    pub fn evaluated_queries(&self) -> usize {
+        self.query_hits.len()
+    }
+
+    pub fn aggregate_recall_ppm(&self) -> Option<u32> {
+        self.aggregate_recall_ppm
+    }
+
+    pub fn minimum_recall_ppm(&self) -> Option<u32> {
+        self.minimum_recall_ppm
+    }
+
+    pub fn passed(&self) -> Option<bool> {
+        self.passed
+    }
+
+    pub fn stopping_query_ordinal(&self) -> Option<u32> {
+        self.stopping_query_ordinal
+    }
+}
+
+pub fn v41_evaluate_model(
+    model: &V41ResidualModel,
+    data: &V41TrainingData,
+) -> Result<V41EvaluationResult> {
+    if model.page_count() != data.page_count as usize {
+        return Err(invalid("V41 evaluation page count differs"));
+    }
+    let allowed_misses = data.examples.len() * 100 * 2 / 1_000;
+    let mut query_hits = Vec::with_capacity(data.examples.len());
+    let mut total_hits = 0_usize;
+    for example in &data.examples {
+        let selection = select_v41_pages(model, &example.query)?;
+        let selected = selection.pages.iter().copied().collect::<BTreeSet<_>>();
+        let hits = example
+            .owners
+            .iter()
+            .filter(|(primary, alternate)| {
+                selected.contains(primary) || alternate.is_some_and(|page| selected.contains(&page))
+            })
+            .count();
+        total_hits = total_hits
+            .checked_add(hits)
+            .ok_or_else(|| invalid("V41 evaluation hit count overflows"))?;
+        query_hits
+            .push(u32::try_from(hits).map_err(|_| invalid("V41 evaluation query hits overflow"))?);
+        let misses = query_hits.len() * 100 - total_hits;
+        if hits < 80 || misses > allowed_misses {
+            return Ok(V41EvaluationResult {
+                query_hits,
+                aggregate_recall_ppm: None,
+                minimum_recall_ppm: None,
+                passed: None,
+                stopping_query_ordinal: Some(example.query_ordinal),
+            });
+        }
+    }
+    let query_count = data.examples.len();
+    let aggregate_recall_ppm = u32::try_from(total_hits * 10_000 / query_count)
+        .map_err(|_| invalid("V41 aggregate recall overflows"))?;
+    let minimum_recall_ppm = query_hits.iter().copied().min().unwrap_or(0) * 10_000;
+    Ok(V41EvaluationResult {
+        query_hits,
+        aggregate_recall_ppm: Some(aggregate_recall_ppm),
+        minimum_recall_ppm: Some(minimum_recall_ppm),
+        passed: Some(aggregate_recall_ppm >= 998_000 && minimum_recall_ppm >= 800_000),
+        stopping_query_ordinal: None,
+    })
+}
+
 fn v41_initialization_key() -> [u8; 32] {
     Sha256::digest(b"borsuk-v41-residual-router-initialization-v1").into()
 }
@@ -1257,9 +1341,60 @@ mod tests {
     use super::{
         Result as V41Result, V41AdamWState, V41ResidualModel, V41TrainingData, V41TrainingExample,
         V41TrainingRecord, V41TrainingSink, V41TrainingSpec, initialize_v41_model, score_v41_pages,
-        select_v41_pages, train_v41_model, v41_adamw_step, v41_inference_macs,
+        select_v41_pages, train_v41_model, v41_adamw_step, v41_evaluate_model, v41_inference_macs,
         v41_marginal_targets, v41_parameter_bytes, v41_parameter_count,
     };
+
+    fn evaluation_model() -> V41ResidualModel {
+        V41ResidualModel::try_new(
+            vec![0.0; 64 * 768],
+            vec![0.0; 64],
+            vec![0.0; 64 * 64],
+            vec![0.0; 24 * 64],
+            (0..24).map(|page| (24 - page) as f32).collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn v41_evaluation_recomputes_complete_hits_and_gates() {
+        let data = V41TrainingData::try_new(
+            (0..2)
+                .map(|query_ordinal| {
+                    V41TrainingExample::try_new(query_ordinal, [0.0; 768], vec![(0, None); 100])
+                        .unwrap()
+                })
+                .collect(),
+            24,
+        )
+        .unwrap();
+        let result = v41_evaluate_model(&evaluation_model(), &data).unwrap();
+        assert_eq!(result.query_hits(), &[100, 100]);
+        assert_eq!(result.aggregate_recall_ppm(), Some(1_000_000));
+        assert_eq!(result.minimum_recall_ppm(), Some(1_000_000));
+        assert_eq!(result.passed(), Some(true));
+    }
+
+    #[test]
+    fn v41_evaluation_rejected_prefix_never_claims_full_metrics() {
+        let mut weak = vec![(0, None); 79];
+        weak.extend(vec![(23, None); 21]);
+        let data = V41TrainingData::try_new(
+            vec![
+                V41TrainingExample::try_new(10, [0.0; 768], vec![(0, None); 100]).unwrap(),
+                V41TrainingExample::try_new(20, [0.0; 768], weak).unwrap(),
+            ],
+            24,
+        )
+        .unwrap();
+        let result = v41_evaluate_model(&evaluation_model(), &data).unwrap();
+        assert_eq!(result.query_hits(), &[100, 79]);
+        assert_eq!(result.evaluated_queries(), 2);
+        assert_eq!(result.stopping_query_ordinal(), Some(20));
+        assert_eq!(result.aggregate_recall_ppm(), None);
+        assert_eq!(result.minimum_recall_ppm(), None);
+        assert_eq!(result.passed(), None);
+    }
 
     fn reference_targets(
         owners: &[(u64, u32, Option<u32>)],
