@@ -53,6 +53,7 @@ wide = "0.7"
 borsuk-fma = { path = "../borsuk-fma" }
 borsuk-pq4 = { path = "../borsuk-pq4" }
 borsuk-v25 = { path = "../borsuk-v25" }
+borsuk-v41 = { path = "../borsuk-v41" }
 zstd = "0.13"
 
 [dev-dependencies]

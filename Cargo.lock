@@ -381,6 +381,7 @@ dependencies = [
  "borsuk-fma",
  "borsuk-pq4",
  "borsuk-v25",
+ "borsuk-v41",
  "bytes",
  "chrono",
  "criterion",
@@ -492,6 +493,10 @@ dependencies = [
  "sha2",
  "tempfile",
 ]
+
+[[package]]
+name = "borsuk-v41"
+version = "0.0.0"
 
 [[package]]
 name = "brotli"

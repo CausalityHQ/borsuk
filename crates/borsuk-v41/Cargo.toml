@@ -1,0 +1,12 @@
+[package]
+name = "borsuk-v41"
+version = "0.0.0"
+description = "Dependency-light learned router research core for BORSUK V41"
+edition.workspace = true
+publish = false
+license-file = "../../LICENSE"
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

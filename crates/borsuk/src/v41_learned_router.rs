@@ -1,4 +1,5 @@
 use crate::error::{BorsukError, Result};
+use crate::v38_boundary_spill::v38_v40_owner_rows_from_artifacts;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -39,6 +40,26 @@ fn valid_s3_uri(value: &str) -> bool {
         && !key.is_empty()
         && !bucket.contains(['?', '#'])
         && !key.contains(['?', '#'])
+}
+
+pub(crate) fn v41_marginal_targets_from_v38_artifacts(
+    relation_bytes: &[u8],
+    posting_summary_bytes: &[u8],
+    source_rows: usize,
+    posting_count: u32,
+    maximum_rows_per_posting: u32,
+    gt_feature_ids: &[u64],
+    selected: &[u32],
+) -> Result<Vec<f32>> {
+    let owners = v38_v40_owner_rows_from_artifacts(
+        relation_bytes,
+        posting_summary_bytes,
+        source_rows,
+        posting_count,
+        maximum_rows_per_posting,
+    )?;
+    borsuk_v41::v41_marginal_targets(&owners, gt_feature_ids, selected, posting_count)
+        .map_err(|error| invalid(&error.to_string()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -753,7 +774,12 @@ mod tests {
         V41LocalArtifact, V41LocalOutput, V41LocalRunMode, V41LocalRunRequest,
         V41PartitionChildAuthority, audit_v41_holdout_query_role, audit_v41_query_roles,
         project_v41_development_partition, split_v41_development_queries,
-        validate_v41_development_partition, validate_v41_development_partition_against,
+        v41_marginal_targets_from_v38_artifacts, validate_v41_development_partition,
+        validate_v41_development_partition_against,
+    };
+    use crate::v38_boundary_spill::{
+        V38SpillRecord, encode_v38_posting_summary_parquet, encode_v38_spill_relation_parquet,
+        summarize_v38_spill_relation,
     };
     use sha2::{Digest, Sha256};
     use std::{collections::BTreeMap, path::PathBuf};
@@ -1211,6 +1237,58 @@ mod tests {
                 SHA_A,
                 &[0, 2],
                 &[1, 3],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v41_target_adapter_reuses_v38_owner_decoder() {
+        let mut records = Vec::new();
+        let mut alternate_local = [25_u32; 4];
+        for source_ordinal in 0_u64..100 {
+            let primary = u32::try_from(source_ordinal % 4).unwrap();
+            records.push(V38SpillRecord {
+                source_ordinal,
+                feature_row_id: 10_000 + source_ordinal,
+                posting_ordinal: primary,
+                owner_role: 0,
+                posting_local_ordinal: u32::try_from(source_ordinal / 4).unwrap(),
+                alternate_violation_bits: None,
+            });
+            if source_ordinal % 5 == 0 {
+                let alternate = (primary + 1) % 4;
+                let local = &mut alternate_local[usize::try_from(alternate).unwrap()];
+                records.push(V38SpillRecord {
+                    source_ordinal,
+                    feature_row_id: 10_000 + source_ordinal,
+                    posting_ordinal: alternate,
+                    owner_role: 1,
+                    posting_local_ordinal: *local,
+                    alternate_violation_bits: Some(0.0_f32.to_bits()),
+                });
+                *local += 1;
+            }
+        }
+        let relation = encode_v38_spill_relation_parquet(&records).unwrap();
+        let summaries = summarize_v38_spill_relation(&records, 4, 30).unwrap();
+        let postings = encode_v38_posting_summary_parquet(&summaries).unwrap();
+        let gt = (10_000_u64..10_100).collect::<Vec<_>>();
+
+        assert_eq!(
+            v41_marginal_targets_from_v38_artifacts(&relation, &postings, 100, 4, 30, &gt, &[],)
+                .unwrap(),
+            vec![0.30; 4]
+        );
+        assert!(
+            v41_marginal_targets_from_v38_artifacts(
+                &relation,
+                &postings[..postings.len() - 1],
+                100,
+                4,
+                30,
+                &gt,
+                &[],
             )
             .is_err()
         );
