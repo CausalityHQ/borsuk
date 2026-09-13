@@ -1596,7 +1596,7 @@ class V38SpotMonitorTests(unittest.TestCase):
         self.assertIn("--property=ProtectHome=true", command)
         self.assertIn("--property=ProtectControlGroups=true", command)
         self.assertIn("--property=CapabilityBoundingSet=", command)
-        self.assertIn("--property=InaccessiblePaths=/run", command)
+        self.assertNotIn("--property=InaccessiblePaths=/run", command)
         self.assertIn("--property=TemporaryFileSystem=/work:ro", command)
         self.assertIn("--property=MemorySwapMax=0", command)
         self.assertIn("--property=BindReadOnlyPaths=/work/inputs /work/v38", command)

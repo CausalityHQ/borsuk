@@ -842,7 +842,6 @@ def build_v38_science_service_command(
         "--property=PrivateDevices=true",
         "--property=RestrictSUIDSGID=true",
         "--property=CapabilityBoundingSet=",
-        "--property=InaccessiblePaths=/run",
         "--property=PrivateTmp=true",
         f"--property=TemporaryFileSystem={sandbox_root}:ro",
         f"--property=MemoryMax={memory_limit}",
