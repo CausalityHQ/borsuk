@@ -3,9 +3,183 @@ use crate::v37_relation_router::{
     V37BalancedTree, V37FeatureGroundTruth, select_v37_tree_postings_with_limit,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 const V40_MAXIMUM_FRONTIER_POSTINGS: usize = 64;
 const V40_MAXIMUM_NODE_POPS: usize = 1_024;
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_s3_uri(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("s3://") else {
+        return false;
+    };
+    let Some((bucket, key)) = rest.split_once('/') else {
+        return false;
+    };
+    !bucket.is_empty()
+        && !key.is_empty()
+        && !bucket.contains(['?', '#'])
+        && !key.contains(['?', '#'])
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V40LocalRunMode {
+    SelectDirect,
+    EvaluateDirect,
+}
+
+impl V40LocalRunMode {
+    fn input_roles(self) -> &'static [&'static str] {
+        match self {
+            Self::SelectDirect => &["v37-authority", "ownership-tree", "development-query"],
+            Self::EvaluateDirect => &[
+                "v38-ceiling-authority",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+                "development-ground-truth",
+                "direct-selection",
+            ],
+        }
+    }
+
+    fn output_roles(self) -> &'static [&'static str] {
+        match self {
+            Self::SelectDirect => &["direct-selection"],
+            Self::EvaluateDirect => &["direct-result"],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V40LocalArtifact {
+    role: String,
+    path: PathBuf,
+    uri: String,
+    sha256: String,
+    blake3: String,
+    encoded_bytes: u64,
+}
+
+impl V40LocalArtifact {
+    pub(crate) fn try_new(
+        role: String,
+        path: PathBuf,
+        uri: String,
+        sha256: String,
+        blake3: String,
+        encoded_bytes: u64,
+    ) -> Result<Self> {
+        if role.is_empty()
+            || path.as_os_str().is_empty()
+            || !valid_s3_uri(&uri)
+            || !valid_digest(&sha256)
+            || !valid_digest(&blake3)
+            || encoded_bytes == 0
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V40 local artifact identity differs".to_owned(),
+            ));
+        }
+        Ok(Self {
+            role,
+            path,
+            uri,
+            sha256,
+            blake3,
+            encoded_bytes,
+        })
+    }
+
+    pub(crate) fn role(&self) -> &str {
+        &self.role
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V40LocalOutput {
+    role: String,
+    path: PathBuf,
+}
+
+impl V40LocalOutput {
+    pub(crate) fn try_new(role: String, path: PathBuf) -> Result<Self> {
+        if role.is_empty() || path.as_os_str().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "V40 local output identity differs".to_owned(),
+            ));
+        }
+        Ok(Self { role, path })
+    }
+
+    pub(crate) fn role(&self) -> &str {
+        &self.role
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V40LocalRunRequest {
+    mode: V40LocalRunMode,
+    inputs: Vec<V40LocalArtifact>,
+    outputs: Vec<V40LocalOutput>,
+    workers: u32,
+}
+
+impl V40LocalRunRequest {
+    pub(crate) fn try_new(
+        mode: V40LocalRunMode,
+        inputs: Vec<V40LocalArtifact>,
+        outputs: Vec<V40LocalOutput>,
+        workers: u32,
+    ) -> Result<Self> {
+        let input_roles = inputs
+            .iter()
+            .map(V40LocalArtifact::role)
+            .collect::<Vec<_>>();
+        let output_roles = outputs.iter().map(V40LocalOutput::role).collect::<Vec<_>>();
+        let mut paths = BTreeSet::new();
+        let mut uris = BTreeSet::new();
+        if input_roles != mode.input_roles()
+            || output_roles != mode.output_roles()
+            || !matches!(workers, 1 | 2 | 4 | 8 | 16 | 32)
+            || inputs.iter().any(|input| !paths.insert(input.path()))
+            || outputs.iter().any(|output| !paths.insert(output.path()))
+            || inputs.iter().any(|input| !uris.insert(input.uri.as_str()))
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V40 local phase capability differs".to_owned(),
+            ));
+        }
+        Ok(Self {
+            mode,
+            inputs,
+            outputs,
+            workers,
+        })
+    }
+
+    pub(crate) fn input_roles(&self) -> Vec<&str> {
+        self.inputs.iter().map(V40LocalArtifact::role).collect()
+    }
+
+    pub(crate) fn output_roles(&self) -> Vec<&str> {
+        self.outputs.iter().map(V40LocalOutput::role).collect()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V40TreeFrontier {
@@ -204,12 +378,14 @@ pub(crate) fn evaluate_v40_direct_recall(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::super::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, score_v37_hyperplane_fused,
     };
     use super::{
-        V40DirectSelectionRecord, V40EvaluationSpec, evaluate_v40_direct_recall,
-        select_v40_tree_frontier,
+        V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact, V40LocalOutput,
+        V40LocalRunMode, V40LocalRunRequest, evaluate_v40_direct_recall, select_v40_tree_frontier,
     };
     use crate::v37_relation_router::V37FeatureGroundTruth;
 
@@ -389,6 +565,139 @@ mod tests {
 
         assert!(
             evaluate_v40_direct_recall(&spec, &owners, &selections, &truth, "x86-avx-fma").is_err()
+        );
+    }
+
+    fn local_artifact(role: &str) -> V40LocalArtifact {
+        V40LocalArtifact::try_new(
+            role.to_owned(),
+            PathBuf::from(format!("/tmp/v40-{role}")),
+            format!("s3://fixture/v40/{role}"),
+            "1".repeat(64),
+            "2".repeat(64),
+            17,
+        )
+        .unwrap()
+    }
+
+    fn local_output(role: &str) -> V40LocalOutput {
+        V40LocalOutput::try_new(role.to_owned(), PathBuf::from(format!("/tmp/v40-{role}"))).unwrap()
+    }
+
+    #[test]
+    fn v40_authority_direct_modes_separate_query_and_truth_capabilities() {
+        let selection_inputs = ["v37-authority", "ownership-tree", "development-query"]
+            .map(local_artifact)
+            .to_vec();
+        let selection = V40LocalRunRequest::try_new(
+            V40LocalRunMode::SelectDirect,
+            selection_inputs,
+            vec![local_output("direct-selection")],
+            16,
+        )
+        .unwrap();
+        assert_eq!(
+            selection.input_roles(),
+            vec!["v37-authority", "ownership-tree", "development-query"]
+        );
+        assert_eq!(selection.output_roles(), vec!["direct-selection"]);
+
+        let evaluation_inputs = [
+            "v38-ceiling-authority",
+            "v38-construction-result",
+            "spill-relation",
+            "spill-postings",
+            "development-ground-truth",
+            "direct-selection",
+        ]
+        .map(local_artifact)
+        .to_vec();
+        let evaluation = V40LocalRunRequest::try_new(
+            V40LocalRunMode::EvaluateDirect,
+            evaluation_inputs,
+            vec![local_output("direct-result")],
+            1,
+        )
+        .unwrap();
+        assert_eq!(evaluation.output_roles(), vec!["direct-result"]);
+        assert!(!evaluation.input_roles().contains(&"development-query"));
+        assert!(
+            !selection
+                .input_roles()
+                .contains(&"development-ground-truth")
+        );
+    }
+
+    #[test]
+    fn v40_authority_direct_modes_reject_identity_role_and_path_drift() {
+        assert!(
+            V40LocalArtifact::try_new(
+                "ownership-tree".to_owned(),
+                PathBuf::from("/tmp/tree"),
+                "file:///tmp/tree".to_owned(),
+                "1".repeat(64),
+                "2".repeat(64),
+                17,
+            )
+            .is_err()
+        );
+        assert!(
+            V40LocalArtifact::try_new(
+                "ownership-tree".to_owned(),
+                PathBuf::from("/tmp/tree"),
+                "s3://fixture/tree".to_owned(),
+                "1".repeat(63),
+                "2".repeat(64),
+                17,
+            )
+            .is_err()
+        );
+
+        let mut inputs = ["v37-authority", "ownership-tree", "development-query"]
+            .map(local_artifact)
+            .to_vec();
+        inputs.swap(0, 1);
+        assert!(
+            V40LocalRunRequest::try_new(
+                V40LocalRunMode::SelectDirect,
+                inputs,
+                vec![local_output("direct-selection")],
+                16,
+            )
+            .is_err()
+        );
+
+        let mut overlap = ["v37-authority", "ownership-tree", "development-query"]
+            .map(local_artifact)
+            .to_vec();
+        overlap[1] = overlap[0].clone();
+        assert!(
+            V40LocalRunRequest::try_new(
+                V40LocalRunMode::SelectDirect,
+                overlap,
+                vec![local_output("direct-selection")],
+                16,
+            )
+            .is_err()
+        );
+
+        let inputs = ["v37-authority", "ownership-tree", "development-query"]
+            .map(local_artifact)
+            .to_vec();
+        assert!(
+            V40LocalRunRequest::try_new(
+                V40LocalRunMode::SelectDirect,
+                inputs,
+                vec![
+                    V40LocalOutput::try_new(
+                        "direct-selection".to_owned(),
+                        PathBuf::from("/tmp/v40-ownership-tree"),
+                    )
+                    .unwrap()
+                ],
+                3,
+            )
+            .is_err()
         );
     }
 }
