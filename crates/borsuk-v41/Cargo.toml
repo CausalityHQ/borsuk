@@ -10,6 +10,10 @@ rust-version.workspace = true
 
 [dependencies]
 borsuk-fma = { path = "../borsuk-fma" }
+libm = "0.2.15"
+rand_chacha = "0.9"
+rand_core = "0.9"
+sha2 = "0.10"
 
 [lints]
 workspace = true
