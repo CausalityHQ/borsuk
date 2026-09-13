@@ -1296,21 +1296,710 @@ pub(crate) fn admit_v38_spill_proposals(
     Ok(relation)
 }
 
+type V38CoverageMask = [u64; 2];
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V38CoverageCertificate {
+    query_ordinal: u32,
+    selected_postings: Vec<u32>,
+    feasible_hits: u32,
+    certified_upper_hits: u32,
+    exact: bool,
+    solver_visits: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct V38CoverageFrame {
+    candidates: V38CoverageMask,
+    selected: V38CoverageMask,
+    covered: V38CoverageMask,
+    selected_count: u32,
+}
+
+fn v38_mask_contains(mask: V38CoverageMask, ordinal: u32) -> bool {
+    mask[(ordinal / 64) as usize] & (1_u64 << (ordinal % 64)) != 0
+}
+
+fn v38_mask_insert(mask: &mut V38CoverageMask, ordinal: u32) {
+    mask[(ordinal / 64) as usize] |= 1_u64 << (ordinal % 64);
+}
+
+fn v38_mask_remove(mask: &mut V38CoverageMask, ordinal: u32) {
+    mask[(ordinal / 64) as usize] &= !(1_u64 << (ordinal % 64));
+}
+
+fn v38_coverage_hits(mask: V38CoverageMask) -> u32 {
+    mask[0].count_ones() + mask[1].count_ones()
+}
+
+fn v38_uncovered_gain(posting: V38CoverageMask, covered: V38CoverageMask) -> u32 {
+    (posting[0] & !covered[0]).count_ones() + (posting[1] & !covered[1]).count_ones()
+}
+
+fn v38_padded_selection(
+    selected: V38CoverageMask,
+    posting_count: u32,
+    selected_postings: u32,
+) -> Vec<u32> {
+    let mut postings = (0..posting_count)
+        .filter(|posting| v38_mask_contains(selected, *posting))
+        .collect::<Vec<_>>();
+    for posting in 0..posting_count {
+        if postings.len() == selected_postings as usize {
+            break;
+        }
+        if !v38_mask_contains(selected, posting) {
+            postings.push(posting);
+        }
+    }
+    postings.sort_unstable();
+    postings
+}
+
+fn v38_selection_hits(selection: &[u32], posting_masks: &[V38CoverageMask]) -> u32 {
+    let covered = selection.iter().fold([0_u64; 2], |mut covered, posting| {
+        let posting = posting_masks[*posting as usize];
+        covered[0] |= posting[0];
+        covered[1] |= posting[1];
+        covered
+    });
+    v38_coverage_hits(covered)
+}
+
+fn v38_frame_upper(
+    frame: V38CoverageFrame,
+    posting_masks: &[V38CoverageMask],
+    posting_count: u32,
+    selected_postings: u32,
+    truth_rows: u32,
+) -> u32 {
+    let covered = v38_coverage_hits(frame.covered);
+    let slots = (selected_postings - frame.selected_count) as usize;
+    let mut largest = [0_u32; V38_SELECTED_POSTINGS as usize];
+    for posting in 0..posting_count {
+        if !v38_mask_contains(frame.candidates, posting) {
+            continue;
+        }
+        let gain = v38_uncovered_gain(posting_masks[posting as usize], frame.covered);
+        for index in 0..slots {
+            if gain > largest[index] {
+                largest[index..slots].rotate_right(1);
+                largest[index] = gain;
+                break;
+            }
+        }
+    }
+    covered
+        .saturating_add(largest[..slots].iter().sum())
+        .min(truth_rows)
+}
+
+fn v38_update_coverage_incumbent(
+    frame: V38CoverageFrame,
+    posting_masks: &[V38CoverageMask],
+    posting_count: u32,
+    selected_postings: u32,
+    incumbent_hits: &mut u32,
+    incumbent_selection: &mut Vec<u32>,
+) {
+    let selection = v38_padded_selection(frame.selected, posting_count, selected_postings);
+    let hits = v38_selection_hits(&selection, posting_masks);
+    if hits > *incumbent_hits || hits == *incumbent_hits && selection < *incumbent_selection {
+        *incumbent_hits = hits;
+        *incumbent_selection = selection;
+    }
+}
+
+pub(crate) fn solve_v38_query_coverage(
+    owners: &[(u32, Option<u32>)],
+    posting_count: u32,
+    selected_postings: u32,
+    maximum_solver_nodes: u64,
+) -> Result<V38CoverageCertificate> {
+    if owners.is_empty()
+        || owners.len() > V38_GT_NEIGHBORS as usize
+        || posting_count == 0
+        || posting_count > V38_POSTING_COUNT
+        || selected_postings == 0
+        || selected_postings > posting_count
+        || selected_postings > V38_SELECTED_POSTINGS
+        || maximum_solver_nodes == 0
+    {
+        return Err(invalid("V38 query coverage authority differs"));
+    }
+
+    let mut posting_masks = vec![[0_u64; 2]; posting_count as usize];
+    for (row, (primary, alternate)) in owners.iter().copied().enumerate() {
+        if primary >= posting_count
+            || alternate.is_some_and(|posting| posting >= posting_count || posting == primary)
+        {
+            return Err(invalid("V38 query coverage owner differs"));
+        }
+        let word = row / 64;
+        let bit = 1_u64 << (row % 64);
+        posting_masks[primary as usize][word] |= bit;
+        if let Some(posting) = alternate {
+            posting_masks[posting as usize][word] |= bit;
+        }
+    }
+
+    let mut greedy_selected = [0_u64; 2];
+    let mut greedy_covered = [0_u64; 2];
+    for _ in 0..selected_postings {
+        let mut best = None;
+        for posting in 0..posting_count {
+            if v38_mask_contains(greedy_selected, posting) {
+                continue;
+            }
+            let gain = v38_uncovered_gain(posting_masks[posting as usize], greedy_covered);
+            if best.is_none_or(|(_, best_gain)| gain > best_gain) {
+                best = Some((posting, gain));
+            }
+        }
+        let Some((posting, gain)) = best else {
+            break;
+        };
+        if gain == 0 {
+            break;
+        }
+        v38_mask_insert(&mut greedy_selected, posting);
+        greedy_covered[0] |= posting_masks[posting as usize][0];
+        greedy_covered[1] |= posting_masks[posting as usize][1];
+    }
+    let mut incumbent_selection =
+        v38_padded_selection(greedy_selected, posting_count, selected_postings);
+    let mut incumbent_hits = v38_selection_hits(&incumbent_selection, &posting_masks);
+
+    let mut candidates = [0_u64; 2];
+    for posting in 0..posting_count {
+        v38_mask_insert(&mut candidates, posting);
+    }
+    let root = V38CoverageFrame {
+        candidates,
+        selected: [0_u64; 2],
+        covered: [0_u64; 2],
+        selected_count: 0,
+    };
+    let truth_rows = owners.len() as u32;
+    let mut stack = vec![root];
+    let mut solver_visits = 0_u64;
+    let mut interrupted_upper = None;
+
+    while let Some(frame) = stack.pop() {
+        solver_visits += 1;
+        let upper = v38_frame_upper(
+            frame,
+            &posting_masks,
+            posting_count,
+            selected_postings,
+            truth_rows,
+        );
+        v38_update_coverage_incumbent(
+            frame,
+            &posting_masks,
+            posting_count,
+            selected_postings,
+            &mut incumbent_hits,
+            &mut incumbent_selection,
+        );
+        if solver_visits == maximum_solver_nodes {
+            interrupted_upper = Some(upper);
+            break;
+        }
+        if upper < incumbent_hits || frame.selected_count == selected_postings {
+            continue;
+        }
+
+        let mut branch = None;
+        for posting in 0..posting_count {
+            if !v38_mask_contains(frame.candidates, posting) {
+                continue;
+            }
+            let gain = v38_uncovered_gain(posting_masks[posting as usize], frame.covered);
+            if branch.is_none_or(|(_, best_gain)| gain > best_gain) {
+                branch = Some((posting, gain));
+            }
+        }
+        let Some((posting, gain)) = branch else {
+            continue;
+        };
+        if gain == 0 {
+            continue;
+        }
+
+        let mut remaining = frame.candidates;
+        v38_mask_remove(&mut remaining, posting);
+        stack.push(V38CoverageFrame {
+            candidates: remaining,
+            ..frame
+        });
+        let mut selected = frame.selected;
+        v38_mask_insert(&mut selected, posting);
+        stack.push(V38CoverageFrame {
+            candidates: remaining,
+            selected,
+            covered: [
+                frame.covered[0] | posting_masks[posting as usize][0],
+                frame.covered[1] | posting_masks[posting as usize][1],
+            ],
+            selected_count: frame.selected_count + 1,
+        });
+    }
+
+    let exact = interrupted_upper.is_none();
+    let certified_upper_hits = if exact {
+        incumbent_hits
+    } else {
+        stack
+            .iter()
+            .copied()
+            .map(|frame| {
+                v38_frame_upper(
+                    frame,
+                    &posting_masks,
+                    posting_count,
+                    selected_postings,
+                    truth_rows,
+                )
+            })
+            .chain(interrupted_upper)
+            .fold(incumbent_hits, u32::max)
+    };
+    Ok(V38CoverageCertificate {
+        query_ordinal: 0,
+        selected_postings: incumbent_selection,
+        feasible_hits: incumbent_hits,
+        certified_upper_hits,
+        exact,
+        solver_visits,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum V38TerminalDisposition {
+    LayoutFeasible,
+    LayoutRejected,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V38LayoutCeiling {
+    schema: String,
+    claim_eligible: bool,
+    authority: V38CeilingAuthority,
+    gt_neighbors: u32,
+    selected_postings: u32,
+    aggregate_gate_ppm: u32,
+    minimum_gate_ppm: u32,
+    certificates: Vec<V38CoverageCertificate>,
+    aggregate_feasible_ppm: u32,
+    aggregate_certified_upper_ppm: u32,
+    minimum_feasible_ppm: u32,
+    minimum_certified_upper_ppm: u32,
+    exact_query_count: u32,
+    total_solver_visits: u64,
+    passed: bool,
+    disposition: V38TerminalDisposition,
+}
+
+fn v38_zero_visit_bounds(
+    query_ordinal: u32,
+    owners: &[(u32, Option<u32>)],
+    posting_count: u32,
+    selected_postings: u32,
+) -> Result<V38CoverageCertificate> {
+    if owners.is_empty()
+        || owners.len() > V38_GT_NEIGHBORS as usize
+        || posting_count == 0
+        || posting_count > V38_POSTING_COUNT
+        || selected_postings == 0
+        || selected_postings > posting_count
+        || selected_postings > V38_SELECTED_POSTINGS
+    {
+        return Err(invalid("V38 query coverage authority differs"));
+    }
+    let mut posting_masks = vec![[0_u64; 2]; posting_count as usize];
+    for (row, (primary, alternate)) in owners.iter().copied().enumerate() {
+        if primary >= posting_count
+            || alternate.is_some_and(|posting| posting >= posting_count || posting == primary)
+        {
+            return Err(invalid("V38 query coverage owner differs"));
+        }
+        let word = row / 64;
+        let bit = 1_u64 << (row % 64);
+        posting_masks[primary as usize][word] |= bit;
+        if let Some(posting) = alternate {
+            posting_masks[posting as usize][word] |= bit;
+        }
+    }
+
+    let mut selected = [0_u64; 2];
+    let mut covered = [0_u64; 2];
+    for _ in 0..selected_postings {
+        let mut best = None;
+        for posting in 0..posting_count {
+            if v38_mask_contains(selected, posting) {
+                continue;
+            }
+            let gain = v38_uncovered_gain(posting_masks[posting as usize], covered);
+            if best.is_none_or(|(_, best_gain)| gain > best_gain) {
+                best = Some((posting, gain));
+            }
+        }
+        let Some((posting, gain)) = best else {
+            break;
+        };
+        if gain == 0 {
+            break;
+        }
+        v38_mask_insert(&mut selected, posting);
+        covered[0] |= posting_masks[posting as usize][0];
+        covered[1] |= posting_masks[posting as usize][1];
+    }
+    let selected = v38_padded_selection(selected, posting_count, selected_postings);
+    let feasible_hits = v38_selection_hits(&selected, &posting_masks);
+    let mut candidates = [0_u64; 2];
+    for posting in 0..posting_count {
+        v38_mask_insert(&mut candidates, posting);
+    }
+    let certified_upper_hits = v38_frame_upper(
+        V38CoverageFrame {
+            candidates,
+            selected: [0_u64; 2],
+            covered: [0_u64; 2],
+            selected_count: 0,
+        },
+        &posting_masks,
+        posting_count,
+        selected_postings,
+        owners.len() as u32,
+    );
+    Ok(V38CoverageCertificate {
+        query_ordinal,
+        selected_postings: selected,
+        feasible_hits,
+        certified_upper_hits,
+        exact: feasible_hits == certified_upper_hits,
+        solver_visits: 0,
+    })
+}
+
+fn solve_v38_coverage_batch(
+    query_owners: &[Vec<(u32, Option<u32>)>],
+    posting_count: u32,
+    selected_postings: u32,
+    maximum_query_solver_nodes: u64,
+    maximum_solver_nodes: u64,
+) -> Result<Vec<V38CoverageCertificate>> {
+    if query_owners.is_empty()
+        || maximum_query_solver_nodes == 0
+        || maximum_query_solver_nodes > V38_MAXIMUM_QUERY_SOLVER_NODES
+        || maximum_solver_nodes == 0
+        || maximum_solver_nodes > V38_MAXIMUM_SOLVER_NODES
+    {
+        return Err(invalid("V38 coverage batch authority differs"));
+    }
+    let mut certificates = query_owners
+        .iter()
+        .enumerate()
+        .map(|(query_ordinal, owners)| {
+            v38_zero_visit_bounds(
+                query_ordinal as u32,
+                owners,
+                posting_count,
+                selected_postings,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut total_solver_visits = 0_u64;
+    for (query_ordinal, (certificate, owners)) in
+        certificates.iter_mut().zip(query_owners).enumerate()
+    {
+        if certificate.exact {
+            continue;
+        }
+        let remaining = maximum_solver_nodes.saturating_sub(total_solver_visits);
+        if remaining == 0 {
+            break;
+        }
+        let mut solved = solve_v38_query_coverage(
+            owners,
+            posting_count,
+            selected_postings,
+            remaining.min(maximum_query_solver_nodes),
+        )?;
+        solved.query_ordinal = query_ordinal as u32;
+        total_solver_visits = total_solver_visits
+            .checked_add(solved.solver_visits)
+            .ok_or_else(|| invalid("V38 solver visits overflow"))?;
+        *certificate = solved;
+    }
+    Ok(certificates)
+}
+
+fn v38_recall_ppm(hits: u64, queries: usize) -> Result<u32> {
+    let denominator = u64::try_from(queries)
+        .ok()
+        .and_then(|queries| queries.checked_mul(u64::from(V38_GT_NEIGHBORS)))
+        .ok_or_else(|| invalid("V38 ceiling denominator overflows"))?;
+    u32::try_from(
+        hits.checked_mul(1_000_000)
+            .ok_or_else(|| invalid("V38 ceiling recall overflows"))?
+            / denominator,
+    )
+    .map_err(|_| invalid("V38 ceiling recall exceeds ppm range"))
+}
+
+fn v38_finish_layout_ceiling(
+    authority: &V38CeilingAuthority,
+    certificates: Vec<V38CoverageCertificate>,
+) -> Result<V38LayoutCeiling> {
+    validate_ceiling_authority(authority)?;
+    let feasible_hits = certificates.iter().try_fold(0_u64, |sum, certificate| {
+        sum.checked_add(u64::from(certificate.feasible_hits))
+    });
+    let feasible_hits = feasible_hits.ok_or_else(|| invalid("V38 feasible hits overflow"))?;
+    let upper_hits = certificates.iter().try_fold(0_u64, |sum, certificate| {
+        sum.checked_add(u64::from(certificate.certified_upper_hits))
+    });
+    let upper_hits = upper_hits.ok_or_else(|| invalid("V38 upper hits overflow"))?;
+    let aggregate_feasible_ppm = v38_recall_ppm(feasible_hits, certificates.len())?;
+    let aggregate_certified_upper_ppm = v38_recall_ppm(upper_hits, certificates.len())?;
+    let minimum_feasible_ppm = certificates
+        .iter()
+        .map(|certificate| certificate.feasible_hits * 10_000)
+        .min()
+        .ok_or_else(|| invalid("V38 ceiling certificate is absent"))?;
+    let minimum_certified_upper_ppm = certificates
+        .iter()
+        .map(|certificate| certificate.certified_upper_hits * 10_000)
+        .min()
+        .ok_or_else(|| invalid("V38 ceiling certificate is absent"))?;
+    let total_solver_visits = certificates.iter().try_fold(0_u64, |sum, certificate| {
+        sum.checked_add(certificate.solver_visits)
+    });
+    let total_solver_visits =
+        total_solver_visits.ok_or_else(|| invalid("V38 solver visits overflow"))?;
+    let feasible = aggregate_feasible_ppm >= V38_AGGREGATE_GATE_PPM
+        && minimum_feasible_ppm >= V38_MINIMUM_GATE_PPM;
+    let rejected = aggregate_certified_upper_ppm < V38_AGGREGATE_GATE_PPM
+        || minimum_certified_upper_ppm < V38_MINIMUM_GATE_PPM;
+    let disposition = if feasible {
+        V38TerminalDisposition::LayoutFeasible
+    } else if rejected {
+        V38TerminalDisposition::LayoutRejected
+    } else {
+        V38TerminalDisposition::Indeterminate
+    };
+    Ok(V38LayoutCeiling {
+        schema: "borsuk-v38-boundary-spill-ceiling-v1".to_owned(),
+        claim_eligible: false,
+        authority: authority.clone(),
+        gt_neighbors: V38_GT_NEIGHBORS,
+        selected_postings: V38_SELECTED_POSTINGS,
+        aggregate_gate_ppm: V38_AGGREGATE_GATE_PPM,
+        minimum_gate_ppm: V38_MINIMUM_GATE_PPM,
+        exact_query_count: certificates
+            .iter()
+            .filter(|certificate| certificate.exact)
+            .count() as u32,
+        certificates,
+        aggregate_feasible_ppm,
+        aggregate_certified_upper_ppm,
+        minimum_feasible_ppm,
+        minimum_certified_upper_ppm,
+        total_solver_visits,
+        passed: disposition == V38TerminalDisposition::LayoutFeasible,
+        disposition,
+    })
+}
+
+pub(crate) fn evaluate_v38_multi_owner_ceiling(
+    authority: &V38CeilingAuthority,
+    relation: &V38SpillRelation,
+    truth: &[crate::v37_relation_router::V37FeatureGroundTruth],
+) -> Result<V38LayoutCeiling> {
+    validate_ceiling_authority(authority)?;
+    if relation.postings.len() != V38_POSTING_COUNT as usize
+        || truth.len() != V38_QUERY_COUNT as usize
+    {
+        return Err(invalid("V38 ceiling input population differs"));
+    }
+    validate_v38_spill_relation_shape(&relation.records)?;
+    validate_v38_posting_summaries(&relation.postings)?;
+    if summarize_v38_spill_relation(
+        &relation.records,
+        V38_POSTING_COUNT,
+        V38_MAXIMUM_ROWS_PER_POSTING,
+    )? != relation.postings
+    {
+        return Err(invalid("V38 ceiling posting summary differs"));
+    }
+
+    let mut owners_by_feature = std::collections::BTreeMap::new();
+    for record in &relation.records {
+        if record.owner_role == 0 {
+            if owners_by_feature
+                .insert(record.feature_row_id, (record.posting_ordinal, None))
+                .is_some()
+            {
+                return Err(invalid("V38 ceiling feature owner is duplicated"));
+            }
+        } else {
+            let owners = owners_by_feature
+                .get_mut(&record.feature_row_id)
+                .ok_or_else(|| invalid("V38 ceiling primary feature owner is absent"))?;
+            if owners.1.replace(record.posting_ordinal).is_some() {
+                return Err(invalid("V38 ceiling alternate feature owner is duplicated"));
+            }
+        }
+    }
+
+    let mut query_owners = Vec::with_capacity(truth.len());
+    let mut certificates = Vec::with_capacity(truth.len());
+    for (query_ordinal, query) in truth.iter().enumerate() {
+        if query.query_ordinal != query_ordinal as u32
+            || query.feature_row_ids.len() != V38_GT_NEIGHBORS as usize
+            || query
+                .feature_row_ids
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != V38_GT_NEIGHBORS as usize
+        {
+            return Err(invalid("V38 ceiling truth shape differs"));
+        }
+        let owners = query
+            .feature_row_ids
+            .iter()
+            .map(|feature| {
+                owners_by_feature
+                    .get(feature)
+                    .copied()
+                    .ok_or_else(|| invalid("V38 ceiling truth feature is unknown"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        certificates.push(v38_zero_visit_bounds(
+            query.query_ordinal,
+            &owners,
+            V38_POSTING_COUNT,
+            V38_SELECTED_POSTINGS,
+        )?);
+        query_owners.push(owners);
+    }
+
+    let bounds = v38_finish_layout_ceiling(authority, certificates)?;
+    if bounds.disposition != V38TerminalDisposition::Indeterminate {
+        return Ok(bounds);
+    }
+
+    let certificates = solve_v38_coverage_batch(
+        &query_owners,
+        V38_POSTING_COUNT,
+        V38_SELECTED_POSTINGS,
+        V38_MAXIMUM_QUERY_SOLVER_NODES,
+        V38_MAXIMUM_SOLVER_NODES,
+    )?;
+    v38_finish_layout_ceiling(authority, certificates)
+}
+
+fn validate_v38_layout_ceiling(result: &V38LayoutCeiling) -> Result<()> {
+    if result.schema != "borsuk-v38-boundary-spill-ceiling-v1"
+        || result.claim_eligible
+        || result.gt_neighbors != V38_GT_NEIGHBORS
+        || result.selected_postings != V38_SELECTED_POSTINGS
+        || result.aggregate_gate_ppm != V38_AGGREGATE_GATE_PPM
+        || result.minimum_gate_ppm != V38_MINIMUM_GATE_PPM
+        || result.certificates.len() != V38_QUERY_COUNT as usize
+    {
+        return Err(invalid("V38 ceiling result authority differs"));
+    }
+    for (query_ordinal, certificate) in result.certificates.iter().enumerate() {
+        let unique = certificate
+            .selected_postings
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if certificate.query_ordinal != query_ordinal as u32
+            || certificate.selected_postings.len() != V38_SELECTED_POSTINGS as usize
+            || unique.len() != certificate.selected_postings.len()
+            || !certificate
+                .selected_postings
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            || certificate
+                .selected_postings
+                .last()
+                .is_none_or(|posting| *posting >= V38_POSTING_COUNT)
+            || certificate.feasible_hits > certificate.certified_upper_hits
+            || certificate.certified_upper_hits > V38_GT_NEIGHBORS
+            || certificate.exact && certificate.feasible_hits != certificate.certified_upper_hits
+            || certificate.solver_visits > V38_MAXIMUM_QUERY_SOLVER_NODES
+            || canonical_bytes(certificate, "coverage certificate")?.len()
+                > V38_MAXIMUM_CERTIFICATE_BYTES as usize
+        {
+            return Err(invalid("V38 ceiling certificate differs"));
+        }
+    }
+    let expected = v38_finish_layout_ceiling(&result.authority, result.certificates.clone())?;
+    if &expected != result || result.total_solver_visits > V38_MAXIMUM_SOLVER_NODES {
+        return Err(invalid("V38 ceiling aggregate differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn canonical_v38_ceiling_bytes(result: &V38LayoutCeiling) -> Result<Vec<u8>> {
+    validate_v38_layout_ceiling(result)?;
+    canonical_bytes(result, "ceiling result")
+}
+
+pub(crate) fn validate_v38_ceiling_bytes(
+    authority: &V38CeilingAuthority,
+    relation: &V38SpillRelation,
+    truth: &[crate::v37_relation_router::V37FeatureGroundTruth],
+    claimed: &[u8],
+) -> Result<Vec<u8>> {
+    let result: V38LayoutCeiling = serde_json::from_slice(claimed)
+        .map_err(|error| invalid(&format!("V38 ceiling result parsing failed: {error}")))?;
+    if &result.authority != authority {
+        return Err(invalid("V38 ceiling result authority binding differs"));
+    }
+    let canonical = canonical_v38_ceiling_bytes(&result)?;
+    if canonical != claimed {
+        return Err(invalid("V38 ceiling result bytes are not canonical"));
+    }
+    let replay = evaluate_v38_multi_owner_ceiling(authority, relation, truth)?;
+    let expected = canonical_v38_ceiling_bytes(&replay)?;
+    if expected != canonical {
+        return Err(invalid("V38 ceiling replay differs"));
+    }
+    Ok(canonical)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        V38ArtifactIdentity, V38CeilingAuthority, V38ConstructionAuthority, V38OutputTarget,
-        V38PostingSummary, V38SpillProposal, V38SpillRelation, V38SpillSpec,
-        admit_v38_spill_proposals, build_v38_spill_relation, canonical_v38_ceiling_authority_bytes,
-        canonical_v38_construction_authority_bytes, decode_v38_posting_summary_parquet,
-        decode_v38_spill_relation_parquet, encode_v38_posting_summary_parquet,
-        encode_v38_spill_relation_parquet, encode_v38_spill_relation_parquet_with_row_group_size,
+        V38ArtifactIdentity, V38CeilingAuthority, V38ConstructionAuthority, V38CoverageCertificate,
+        V38LayoutCeiling, V38OutputTarget, V38PostingSummary, V38SpillProposal, V38SpillRecord,
+        V38SpillRelation, V38SpillSpec, V38TerminalDisposition, admit_v38_spill_proposals,
+        build_v38_spill_relation, canonical_bytes, canonical_v38_ceiling_authority_bytes,
+        canonical_v38_ceiling_bytes, canonical_v38_construction_authority_bytes,
+        decode_v38_posting_summary_parquet, decode_v38_spill_relation_parquet,
+        encode_v38_posting_summary_parquet, encode_v38_spill_relation_parquet,
+        encode_v38_spill_relation_parquet_with_row_group_size, evaluate_v38_multi_owner_ceiling,
         project_v38_admission_auxiliary_bytes, project_v38_spill_capacity,
-        propose_v38_alternate_owner, summarize_v38_spill_relation,
-        validate_v38_ceiling_authority_bytes, validate_v38_construction_authority_bytes,
+        propose_v38_alternate_owner, solve_v38_coverage_batch, solve_v38_query_coverage,
+        summarize_v38_spill_relation, validate_v38_ceiling_authority_bytes,
+        validate_v38_ceiling_bytes, validate_v38_construction_authority_bytes,
         validate_v38_spill_spec,
     };
-    use crate::v37_relation_router::{V37BalancedNode, V37BalancedTree, V37OwnershipRecord};
+    use crate::v37_relation_router::{
+        V37BalancedNode, V37BalancedTree, V37FeatureGroundTruth, V37OwnershipRecord,
+    };
 
     fn digest(byte: u8) -> String {
         format!("{byte:02x}").repeat(32)
@@ -1891,5 +2580,266 @@ mod tests {
         let mut changed = rows;
         changed[0][0] = f32::NAN;
         assert!(build_v38_spill_relation(&tree, &changed, &primary, 3, 3, 1).is_err());
+    }
+
+    fn brute_force_cover(
+        owners: &[(u32, Option<u32>)],
+        posting_count: u32,
+        selected_postings: u32,
+    ) -> (u32, Vec<u32>) {
+        let mut best = (0_u32, Vec::new());
+        for mask in 0_u64..(1_u64 << posting_count) {
+            if mask.count_ones() > selected_postings {
+                continue;
+            }
+            let hits = owners
+                .iter()
+                .filter(|(primary, alternate)| {
+                    mask & (1_u64 << primary) != 0
+                        || alternate.is_some_and(|posting| mask & (1_u64 << posting) != 0)
+                })
+                .count() as u32;
+            let mut selection = (0..posting_count)
+                .filter(|posting| mask & (1_u64 << posting) != 0)
+                .collect::<Vec<_>>();
+            for posting in 0..posting_count {
+                if selection.len() == selected_postings as usize {
+                    break;
+                }
+                if !selection.contains(&posting) {
+                    selection.push(posting);
+                }
+            }
+            selection.sort_unstable();
+            if hits > best.0 || hits == best.0 && (best.1.is_empty() || selection < best.1) {
+                best = (hits, selection);
+            }
+        }
+        best
+    }
+
+    fn greedy_trap() -> Vec<(u32, Option<u32>)> {
+        vec![
+            (0, Some(1)),
+            (0, Some(1)),
+            (0, Some(1)),
+            (0, Some(2)),
+            (0, Some(2)),
+            (0, Some(2)),
+            (1, None),
+            (1, None),
+            (2, None),
+            (2, None),
+        ]
+    }
+
+    #[test]
+    fn v38_boundary_cover_exact_solver_beats_greedy_and_pads_selection() {
+        let certificate: V38CoverageCertificate =
+            solve_v38_query_coverage(&greedy_trap(), 4, 2, 250_000).unwrap();
+        assert_eq!(certificate.feasible_hits, 10);
+        assert_eq!(certificate.certified_upper_hits, 10);
+        assert!(certificate.exact);
+        assert_eq!(certificate.selected_postings, vec![1, 2]);
+
+        let loops = vec![(2, None), (2, None), (4, None)];
+        let padded = solve_v38_query_coverage(&loops, 6, 4, 250_000).unwrap();
+        assert_eq!(padded.feasible_hits, 3);
+        assert_eq!(padded.selected_postings.len(), 4);
+        assert!(
+            padded
+                .selected_postings
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+    }
+
+    #[test]
+    fn v38_boundary_cover_matches_exhaustive_fixed_seed_graphs() {
+        let mut state = 0x38_d15c_a11_u64;
+        for _ in 0..128 {
+            let posting_count = 6;
+            let mut owners = Vec::new();
+            for _ in 0..12 {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                let primary = ((state >> 32) % u64::from(posting_count)) as u32;
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                let candidate = ((state >> 32) % u64::from(posting_count)) as u32;
+                let alternate = (candidate != primary && state & 1 == 1).then_some(candidate);
+                owners.push((primary, alternate));
+            }
+            let expected = brute_force_cover(&owners, posting_count, 3);
+            let actual = solve_v38_query_coverage(&owners, posting_count, 3, 250_000).unwrap();
+            assert_eq!((actual.feasible_hits, actual.selected_postings), expected);
+        }
+    }
+
+    #[test]
+    fn v38_boundary_cover_interruption_preserves_incumbent_and_frontier_upper_bound() {
+        let stopped = solve_v38_query_coverage(&greedy_trap(), 4, 2, 1).unwrap();
+        assert!(!stopped.exact);
+        assert_eq!(stopped.feasible_hits, 8);
+        assert!(stopped.certified_upper_hits >= stopped.feasible_hits);
+        assert!(stopped.certified_upper_hits >= 10);
+        assert_eq!(stopped.solver_visits, 1);
+
+        let pending_sibling = solve_v38_query_coverage(&greedy_trap(), 4, 2, 3).unwrap();
+        assert!(!pending_sibling.exact);
+        assert_eq!(pending_sibling.feasible_hits, 8);
+        assert_eq!(pending_sibling.certified_upper_hits, 10);
+        assert_eq!(pending_sibling.solver_visits, 3);
+
+        let exact = solve_v38_query_coverage(&greedy_trap(), 4, 2, 250_000).unwrap();
+        assert!(exact.exact);
+        assert_eq!(exact.certified_upper_hits, exact.feasible_hits);
+    }
+
+    #[test]
+    fn v38_boundary_cover_total_budget_preserves_unsearched_query_bounds() {
+        let queries = vec![greedy_trap(), greedy_trap()];
+        let certificates = solve_v38_coverage_batch(&queries, 4, 2, 3, 3).unwrap();
+        assert_eq!(certificates.len(), 2);
+        assert_eq!(certificates[0].solver_visits, 3);
+        assert_eq!(certificates[0].feasible_hits, 8);
+        assert_eq!(certificates[0].certified_upper_hits, 10);
+        assert_eq!(certificates[1].solver_visits, 0);
+        assert_eq!(certificates[1].feasible_hits, 8);
+        assert_eq!(certificates[1].certified_upper_hits, 10);
+        assert!(!certificates[1].exact);
+    }
+
+    fn complete_population_relation(with_alternates: bool) -> V38SpillRelation {
+        let mut records = Vec::new();
+        for source_ordinal in 0_u64..123 {
+            records.push(V38SpillRecord {
+                source_ordinal,
+                feature_row_id: 10_000 + source_ordinal,
+                posting_ordinal: source_ordinal as u32,
+                owner_role: 0,
+                posting_local_ordinal: 0,
+                alternate_violation_bits: None,
+            });
+            if with_alternates && source_ordinal < 100 {
+                records.push(V38SpillRecord {
+                    source_ordinal,
+                    feature_row_id: 10_000 + source_ordinal,
+                    posting_ordinal: 100 + source_ordinal as u32 % 14,
+                    owner_role: 1,
+                    posting_local_ordinal: 1 + source_ordinal as u32 / 14,
+                    alternate_violation_bits: Some((source_ordinal as f32 / 100.0).to_bits()),
+                });
+            }
+        }
+        let postings = summarize_v38_spill_relation(&records, 123, 10_240).unwrap();
+        V38SpillRelation { records, postings }
+    }
+
+    fn complete_population_truth() -> Vec<V37FeatureGroundTruth> {
+        (0_u32..1_000)
+            .map(|query_ordinal| V37FeatureGroundTruth {
+                query_ordinal,
+                feature_row_ids: (10_000_u64..10_100).collect(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn v38_boundary_cover_complete_bounds_short_circuit_feasible_without_dfs() {
+        let result: V38LayoutCeiling = evaluate_v38_multi_owner_ceiling(
+            &ceiling_authority(),
+            &complete_population_relation(true),
+            &complete_population_truth(),
+        )
+        .unwrap();
+        assert_eq!(result.disposition, V38TerminalDisposition::LayoutFeasible);
+        assert_eq!(result.aggregate_feasible_ppm, 1_000_000);
+        assert_eq!(result.minimum_feasible_ppm, 1_000_000);
+        assert_eq!(result.total_solver_visits, 0);
+        assert_eq!(result.certificates.len(), 1_000);
+    }
+
+    #[test]
+    fn v38_boundary_cover_complete_bounds_short_circuit_rejected_without_dfs() {
+        let result: V38LayoutCeiling = evaluate_v38_multi_owner_ceiling(
+            &ceiling_authority(),
+            &complete_population_relation(false),
+            &complete_population_truth(),
+        )
+        .unwrap();
+        assert_eq!(result.disposition, V38TerminalDisposition::LayoutRejected);
+        assert_eq!(result.aggregate_certified_upper_ppm, 140_000);
+        assert_eq!(result.minimum_certified_upper_ppm, 140_000);
+        assert_eq!(result.total_solver_visits, 0);
+        assert_eq!(result.certificates.len(), 1_000);
+    }
+
+    #[test]
+    fn v38_boundary_cover_canonical_replay_rejects_claimed_evidence_drift() {
+        let authority = ceiling_authority();
+        let relation = complete_population_relation(true);
+        let truth = complete_population_truth();
+        let result = evaluate_v38_multi_owner_ceiling(&authority, &relation, &truth).unwrap();
+        let bytes = canonical_v38_ceiling_bytes(&result).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(
+            validate_v38_ceiling_bytes(&authority, &relation, &truth, &bytes).unwrap(),
+            bytes
+        );
+        let mut changed_authority = authority.clone();
+        changed_authority.relation.sha256 = digest(99);
+        assert!(validate_v38_ceiling_bytes(&changed_authority, &relation, &truth, &bytes).is_err());
+
+        let mut forged = result.clone();
+        forged.certificates[0].selected_postings = (0..14).collect();
+        forged.certificates[0].feasible_hits = 14;
+        forged.certificates[0].certified_upper_hits = 100;
+        forged.certificates[0].exact = false;
+        forged.aggregate_feasible_ppm = 999_140;
+        forged.aggregate_certified_upper_ppm = 1_000_000;
+        forged.minimum_feasible_ppm = 140_000;
+        forged.minimum_certified_upper_ppm = 1_000_000;
+        forged.exact_query_count = 999;
+        forged.total_solver_visits = 0;
+        forged.passed = false;
+        forged.disposition = V38TerminalDisposition::Indeterminate;
+        let forged_bytes = canonical_v38_ceiling_bytes(&forged).unwrap();
+        assert!(validate_v38_ceiling_bytes(&authority, &relation, &truth, &forged_bytes).is_err());
+
+        let mutations: [fn(&mut V38LayoutCeiling); 20] = [
+            |value| value.schema.push_str("-changed"),
+            |value| value.claim_eligible = true,
+            |value| value.gt_neighbors -= 1,
+            |value| value.selected_postings -= 1,
+            |value| value.aggregate_gate_ppm -= 1,
+            |value| value.minimum_gate_ppm -= 1,
+            |value| value.certificates[0].query_ordinal = 1,
+            |value| value.certificates[0].selected_postings.swap(0, 1),
+            |value| value.certificates[0].feasible_hits -= 1,
+            |value| value.certificates[0].certified_upper_hits -= 1,
+            |value| value.certificates[0].exact = false,
+            |value| value.certificates[0].solver_visits = 1,
+            |value| value.aggregate_feasible_ppm -= 1,
+            |value| value.aggregate_certified_upper_ppm -= 1,
+            |value| value.minimum_feasible_ppm -= 1,
+            |value| value.minimum_certified_upper_ppm -= 1,
+            |value| value.exact_query_count -= 1,
+            |value| value.total_solver_visits = 1,
+            |value| value.passed = false,
+            |value| value.disposition = V38TerminalDisposition::Indeterminate,
+        ];
+        for mutation in mutations {
+            let mut changed = result.clone();
+            mutation(&mut changed);
+            let claimed = canonical_bytes(&changed, "mutated ceiling").unwrap();
+            assert!(validate_v38_ceiling_bytes(&authority, &relation, &truth, &claimed).is_err());
+        }
+        assert!(
+            validate_v38_ceiling_bytes(&authority, &relation, &truth, &bytes[..bytes.len() - 1])
+                .is_err()
+        );
     }
 }
