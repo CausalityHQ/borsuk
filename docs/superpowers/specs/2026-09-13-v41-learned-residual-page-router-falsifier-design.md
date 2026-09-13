@@ -139,10 +139,17 @@ ordinal then parameter ordinal order.
 
 Training uses the 32-byte SHA-256 digest
 `sha256("borsuk-v41-residual-router-initialization-v1")` as its initialization
-ChaCha20 key. Every matrix and page embedding uses Xavier-uniform samples from
-that stream; `b` and every `c_p` start at positive zero. Epoch `e` uses the
-separate 32-byte key `sha256(initialization_digest || e.to_le_bytes())` for
-Fisher-Yates. Training runs 50 epochs in batches of 64 states. AdamW uses
+ChaCha20 key. Initialization consumes the stream in row-major `W_q`, row-major
+`W_s`, then page-ordinal-major `page_embeddings` order. `W_q` uses Xavier fans
+`768,64`; `W_s` and every page embedding use fans `64,64`. Each sample maps the
+high 24 bits of the next little-endian `u32` to `u=(word>>8)*2^-24` and computes
+`u.mul_add(2*sqrt(6/(fan_in+fan_out)), -sqrt(6/(fan_in+fan_out)))` with checked
+f32 operations. `b` and every `c_p` start at positive zero. Epochs are
+zero-based `u32` values `0..50`. Epoch `e` uses the separate 32-byte key
+`sha256(initialization_digest || e.to_le_bytes())` for descending Fisher-Yates;
+bounded indices use rejection sampling over the largest half-open `u32` range
+whose length is divisible by the bound. Training runs 50 epochs in batches of
+64 states. AdamW uses
 learning rate `0.001`, beta1 `0.9`, beta2 `0.999`, epsilon `1e-8`, decoupled
 weight decay `0.0001`, global gradient-norm clipping at `1.0`, bias-corrected
 first and second moments, and no learning-rate schedule. Literal golden tests
@@ -151,6 +158,27 @@ checked f32 plus new 64- and 768-element registered kernels in `borsuk-fma`;
 an unavailable fused backend is a stop, never a scalar scientific fallback.
 No post-diagnostic checkpoint is selected. The final model repeats the same
 procedure from the same initialization over all 1,000 development queries.
+
+Each rollout keeps one immutable selection-rank-ordered prefix for model
+arithmetic. Label computation derives a separate ascending membership copy;
+sorting must never reorder the embedding sum. Relation authority is validated
+once and each query's 100 owner pairs are resolved once before any epoch, so a
+training state never rescans the complete relation. Original state ordinal is
+`query_position*21+rollout_step` before shuffling. Fisher-Yates determines
+batch membership; within a batch, state gradients reduce by ascending original
+state ordinal and then ascending parameter ordinal. Worker count changes real
+parallel per-state computation, but never this canonical reduction order.
+
+Softmax subtracts the maximum unmasked score, evaluates `expf` in page order,
+and sums probabilities, loss terms, and gradients in ascending page order.
+The implementation uses one pinned software `expf`/`sqrtf` implementation for
+training artifact reproducibility; fused registered kernels still own matrix
+and dot products. ReLU's derivative at exactly zero is zero. Adam bias powers
+use checked repeated f32 multiplication from one through step `t`, never
+`powf`. Finite signed-zero training intermediates are normalized to positive
+zero before validation and persistence. These rules, the fused backend, target
+triple, and math implementation identity are training authority; bit equality
+is required only under identical authority.
 
 The fused order is part of the artifact authority. A 64-element dot uses eight
 lanes; lane `l` consumes dimensions `8*l + s` for `s=0..7`, then lanes reduce
@@ -214,8 +242,12 @@ and authorities, manifests, results, progress, and terminals use recursively
 sorted compact JSON plus one LF. No Rust layout, pickle, framework checkpoint,
 or native memory dump is an artifact.
 
-- training-state Parquet records epoch, query ordinal, rollout step, selected
-  page, exact target summary, loss, and stop counters;
+- training-state Parquet is emitted in `(epoch, original_state_ordinal)` order
+  and records epoch, original state ordinal, query ordinal, rollout step,
+  rollout-selected page, rank-ordered prefix, ascending membership, nonzero
+  target-page count, target sum bits, loss bits from the live batch model,
+  optimizer step before/after, and stop counters; the frozen model owns only
+  the recorded rollout page while the live model owns loss and gradients;
 - selection Parquet records query ordinal, rank, page ordinal, score bits,
   backend, and model identity;
 - Arrow model tensors have fixed names, shapes, order, f32 type, and no nulls;

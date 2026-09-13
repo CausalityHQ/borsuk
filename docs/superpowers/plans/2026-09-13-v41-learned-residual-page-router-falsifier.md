@@ -280,6 +280,16 @@ assert_eq!(serial_model_bytes, parallel_model_bytes);
 
 Mutation cases cover initialization seed, zero bias/page-bias initialization, Fisher-Yates epoch-key derivation, batch boundary, selection-rank embedding accumulation, gradient flow through selected and candidate embeddings, positive-state batch-mean normalization, whole-zero-gain batch step suppression, gradient parameter order, clipping, Adam moments/bias correction/step, decoupled weight decay, non-finite intermediates, and any checkpoint selection.
 
+Lock the spec's exact Xavier fan pairs, tensor stream order, high-24-bit RNG
+mapping, zero-based `u32` epoch key, rejection-sampled descending Fisher-Yates,
+original (pre-shuffle) state ordinal, pinned software `expf`/`sqrtf`, ascending
+page reductions, zero ReLU derivative, repeated-multiplication beta powers, and
+positive-zero normalization. Preserve a rank-ordered prefix for the model and
+derive a separate ascending membership copy for labels. The gradient golden
+must use a non-sorted three-page prefix with cancellation-sensitive embeddings
+and independently check candidate embedding, selected embedding, and
+non-symmetric `W_s` derivatives before weight decay.
+
 - [ ] **Step 2: Run the RED**
 
 Run: `cargo test -p borsuk-v41 --lib v41_training_ -- --nocapture`
@@ -289,6 +299,15 @@ Expected: unresolved trainer/spec symbols only; the filter names exactly four st
 - [ ] **Step 3: Implement deterministic training**
 
 Use the 32-byte initialization digest directly as the ChaCha20 key. Xavier-initialize matrices/embeddings and initialize both bias tensors to positive zero. At each epoch, clone the current model as the immutable rollout model, generate only that epoch's `query_count*21` ordered page-prefix states, and derive the shuffle RNG key as `sha256(initialization_digest || epoch.to_le_bytes())`. The live batch model accumulates selected embeddings in rollout-rank order and differentiates through selected and candidate embeddings. Mean listwise cross-entropy over positive-gain states only; a whole-zero-gain batch does not update or increment the Adam step. Reduce gradients in state then parameter order, clip one checked global norm, then apply literal bias-corrected Adam moments and decoupled weight decay. Stream training-state Parquet in at most 4,096-row groups; never retain all 50 epochs. Golden fixtures lock forward/backward/update bits.
+
+Validate the complete relation once, resolve each query's 100 owner pairs once,
+and recompute state gains only from those bounded pairs. Parallel workers compute
+real per-state forward/backward records into ordinal-addressed slots; batches
+reduce completed records by ascending original state ordinal, so scheduling and
+worker count cannot change bits. The frozen epoch model owns rollout choices;
+the live batch model owns loss and gradients. Evaluate learning on fixed early
+prefixes with balanced page popularity and a required context-dependent ranking
+reversal; K21 coverage over 24 pages is not a learning oracle.
 
 - [ ] **Step 4: Run GREEN and commit**
 
