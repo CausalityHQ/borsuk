@@ -66,6 +66,7 @@ impl V40LocalRunMode {
                 "spill-relation",
                 "spill-postings",
                 "development-ground-truth",
+                "direct-selection-result",
                 "direct-selection",
             ],
         }
@@ -1302,6 +1303,7 @@ mod tests {
             "spill-relation",
             "spill-postings",
             "development-ground-truth",
+            "direct-selection-result",
             "direct-selection",
         ]
         .map(local_artifact)

@@ -125,12 +125,13 @@ mod tests {
     use borsuk::{V40LocalRunMode, run_v40_local_request};
 
     const SELECT_ROLES: [&str; 3] = ["v37-authority", "ownership-tree", "development-query"];
-    const EVALUATE_ROLES: [&str; 6] = [
+    const EVALUATE_ROLES: [&str; 7] = [
         "v38-ceiling-authority",
         "v38-construction-result",
         "spill-relation",
         "spill-postings",
         "development-ground-truth",
+        "direct-selection-result",
         "direct-selection",
     ];
 
