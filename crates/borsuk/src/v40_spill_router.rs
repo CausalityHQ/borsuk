@@ -579,6 +579,132 @@ fn parse_v40_selection_receipt_bytes(bytes: &[u8], selection: &V40LocalArtifact)
     Ok(evidence.fma_backend.clone())
 }
 
+fn v40_evaluation_result_bytes(
+    request: &V40LocalRunRequest,
+    spec: &V40EvaluationSpec,
+    evaluation: &V40DirectEvaluation,
+    expected_backend: &str,
+) -> Result<Vec<u8>> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 direct evaluation result authority differs".to_owned());
+    if request.mode != V40LocalRunMode::EvaluateDirect
+        || request.input_roles() != V40LocalRunMode::EvaluateDirect.input_roles()
+        || !matches!(expected_backend, "aarch64-neon-fma" | "x86-avx-fma")
+        || evaluation.samples.is_empty()
+        || spec.selected_postings == 0
+        || spec.gt_neighbors == 0
+        || spec.aggregate_gate_ppm > 1_000_000
+        || spec.minimum_gate_ppm > 1_000_000
+    {
+        return Err(invalid());
+    }
+    let mut total_hits = 0_u64;
+    let mut minimum_recall_ppm = 1_000_000_u32;
+    let selected_postings = usize::try_from(spec.selected_postings).map_err(|_| invalid())?;
+    for (query_ordinal, sample) in evaluation.samples.iter().enumerate() {
+        let unique = sample
+            .selected_postings
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let expected_recall = u32::try_from(
+            u64::from(sample.hits)
+                .checked_mul(1_000_000)
+                .ok_or_else(invalid)?
+                / u64::from(spec.gt_neighbors),
+        )
+        .map_err(|_| invalid())?;
+        if sample.query_ordinal != u32::try_from(query_ordinal).map_err(|_| invalid())?
+            || sample.selected_postings.len() != selected_postings
+            || unique.len() != selected_postings
+            || sample.node_pops == 0
+            || sample.node_pops as usize > V40_MAXIMUM_NODE_POPS
+            || sample.scored_internal_nodes == 0
+            || sample.scored_internal_nodes > sample.node_pops
+            || sample.hits > spec.gt_neighbors
+            || sample.recall_ppm != expected_recall
+        {
+            return Err(invalid());
+        }
+        total_hits = total_hits
+            .checked_add(u64::from(sample.hits))
+            .ok_or_else(invalid)?;
+        minimum_recall_ppm = minimum_recall_ppm.min(sample.recall_ppm);
+    }
+    let possible_hits = u64::try_from(evaluation.samples.len())
+        .map_err(|_| invalid())?
+        .checked_mul(u64::from(spec.gt_neighbors))
+        .ok_or_else(invalid)?;
+    let aggregate_recall_ppm =
+        u32::try_from(total_hits.checked_mul(1_000_000).ok_or_else(invalid)? / possible_hits)
+            .map_err(|_| invalid())?;
+    let passed = aggregate_recall_ppm >= spec.aggregate_gate_ppm
+        && minimum_recall_ppm >= spec.minimum_gate_ppm;
+    let disposition = if passed {
+        "direct-passed"
+    } else {
+        "direct-failed"
+    };
+    if evaluation.total_hits != total_hits
+        || evaluation.aggregate_recall_ppm != aggregate_recall_ppm
+        || evaluation.minimum_recall_ppm != minimum_recall_ppm
+        || evaluation.passed != passed
+        || evaluation.disposition != disposition
+    {
+        return Err(invalid());
+    }
+    let inputs = request
+        .inputs
+        .iter()
+        .map(|input| {
+            serde_json::json!({
+                "blake3": input.blake3,
+                "encoded_bytes": input.encoded_bytes,
+                "role": input.role,
+                "sha256": input.sha256,
+                "uri": input.uri,
+            })
+        })
+        .collect::<Vec<_>>();
+    let samples = evaluation
+        .samples
+        .iter()
+        .map(|sample| {
+            serde_json::json!({
+                "hits": sample.hits,
+                "node_pops": sample.node_pops,
+                "query_ordinal": sample.query_ordinal,
+                "recall_ppm": sample.recall_ppm,
+                "scored_internal_nodes": sample.scored_internal_nodes,
+                "selected_postings": sample.selected_postings,
+            })
+        })
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "evidence": {
+            "aggregate_gate_ppm": spec.aggregate_gate_ppm,
+            "aggregate_recall_ppm": aggregate_recall_ppm,
+            "disposition": disposition,
+            "fma_backend": expected_backend,
+            "gt_neighbors": spec.gt_neighbors,
+            "minimum_gate_ppm": spec.minimum_gate_ppm,
+            "minimum_recall_ppm": minimum_recall_ppm,
+            "passed": passed,
+            "query_count": evaluation.samples.len(),
+            "samples": samples,
+            "selected_postings": spec.selected_postings,
+            "total_hits": total_hits,
+        },
+        "inputs": inputs,
+        "mode": "evaluate-direct",
+        "schema": "borsuk-v40-local-result-v1",
+    });
+    let mut bytes = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn publish_v40_output(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut output = OpenOptions::new()
         .write(true)
@@ -1169,6 +1295,7 @@ mod tests {
         decode_v40_direct_selections_parquet, encode_v40_direct_selections_parquet,
         evaluate_v40_direct_recall, load_v40_projected_queries, load_v40_projected_queries_file,
         parse_v40_selection_receipt_bytes, select_v40_direct_queries, select_v40_tree_frontier,
+        v40_evaluation_result_bytes,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
@@ -1355,6 +1482,47 @@ mod tests {
 
         assert!(
             evaluate_v40_direct_recall(&spec, &owners, &selections, &truth, "x86-avx-fma").is_err()
+        );
+    }
+
+    #[test]
+    fn v40_direct_evaluation_receipt_recomputes_quality_and_binds_inputs() {
+        let (spec, owners, selections, truth) = direct_evaluation_fixture();
+        let evaluation =
+            evaluate_v40_direct_recall(&spec, &owners, &selections, &truth, "aarch64-neon-fma")
+                .unwrap();
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::EvaluateDirect,
+            [
+                "v38-ceiling-authority",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+                "development-ground-truth",
+                "direct-selection-result",
+                "direct-selection",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            vec![local_output("direct-result")],
+            4,
+        )
+        .unwrap();
+        let bytes =
+            v40_evaluation_result_bytes(&request, &spec, &evaluation, "aarch64-neon-fma").unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["mode"], "evaluate-direct");
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["evidence"]["aggregate_recall_ppm"], 750_000);
+        assert_eq!(value["evidence"]["minimum_recall_ppm"], 750_000);
+        assert_eq!(value["evidence"]["passed"], true);
+        assert_eq!(value["inputs"].as_array().unwrap().len(), 7);
+
+        let mut drifted = evaluation;
+        drifted.aggregate_recall_ppm -= 1;
+        assert!(
+            v40_evaluation_result_bytes(&request, &spec, &drifted, "aarch64-neon-fma").is_err()
         );
     }
 
