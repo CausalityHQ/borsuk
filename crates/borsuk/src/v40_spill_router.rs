@@ -2,17 +2,28 @@ use crate::error::{BorsukError, Result};
 use crate::v37_relation_router::{
     V37BalancedTree, V37FeatureGroundTruth, select_v37_tree_postings_with_limit,
 };
-use crate::v38_boundary_spill::{v38_v40_evaluation_binding, v38_v40_owner_rows_from_artifacts};
+use crate::v38_boundary_spill::{
+    V38PostingSummary, V38SpillRecord, v38_v40_evaluation_binding,
+    v38_v40_owner_rows_from_artifacts, validate_v38_posting_summaries,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{BufReader, Read, Seek, SeekFrom, Write},
+    io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use arrow_array::{Array, RecordBatch, StringArray, UInt32Array};
+use arrow_array::{
+    Array, ListArray, RecordBatch, StringArray, UInt8Array, UInt32Array, UInt64Array,
+};
+use arrow_buffer::OffsetBuffer;
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use parquet::{
@@ -27,6 +38,796 @@ const V40_MAXIMUM_FRONTIER_POSTINGS: usize = 64;
 const V40_MAXIMUM_NODE_POPS: usize = 1_024;
 const V40_DIRECT_QUERY_COUNT: u64 = 1_000;
 const V40_DIRECT_SELECTED_POSTINGS: usize = 21;
+const V40_Q24_TOTAL: u32 = 1 << 24;
+const V40_MAXIMUM_ALTERNATES_PER_POSTING: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V40SpillCount {
+    pub(crate) primary_posting: u32,
+    pub(crate) alternate_posting: Option<u32>,
+    pub(crate) count: u64,
+    pub(crate) primary_population: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V40PackedSpillSummary {
+    pub(crate) offsets: Vec<u64>,
+    pub(crate) alternate_postings: Vec<u32>,
+    pub(crate) masses_q24: Vec<u32>,
+    pub(crate) residual_masses_q24: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V40RouterArm {
+    DirectTree,
+    AcceptedSpill,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V40Selection {
+    pub(crate) arm: V40RouterArm,
+    pub(crate) posting_ordinals: Vec<u32>,
+    pub(crate) objective_value: u128,
+    pub(crate) candidate_count: u32,
+    pub(crate) marginal_recomputations: u64,
+}
+
+pub(crate) fn build_v40_spill_counts(
+    records: &[V38SpillRecord],
+    summaries: &[V38PostingSummary],
+) -> Result<Vec<V40SpillCount>> {
+    let invalid = || BorsukError::InvalidStorage("V40 spill count authority differs".to_owned());
+    validate_v38_posting_summaries(summaries)?;
+    let posting_count = u32::try_from(summaries.len()).map_err(|_| invalid())?;
+    if posting_count == 0
+        || summaries.iter().enumerate().any(|(posting, summary)| {
+            summary.posting_ordinal as usize != posting
+                || summary.primary_population == 0
+                || summary.total_population
+                    != summary
+                        .primary_population
+                        .checked_add(summary.alternate_population)
+                        .unwrap_or(u64::MAX)
+        })
+    {
+        return Err(invalid());
+    }
+
+    let mut next_primary = vec![0_u64; summaries.len()];
+    let mut next_alternate = summaries
+        .iter()
+        .map(|summary| summary.primary_population)
+        .collect::<Vec<_>>();
+    let mut previous_key = None;
+    let mut row = 0_usize;
+    while row < records.len() {
+        let primary = records.get(row).ok_or_else(invalid)?;
+        let key = (primary.source_ordinal, primary.owner_role);
+        if primary.owner_role != 0
+            || primary.alternate_violation_bits.is_some()
+            || previous_key.is_some_and(|previous| key <= previous)
+            || primary.posting_ordinal >= posting_count
+            || u64::from(primary.posting_local_ordinal)
+                != next_primary[primary.posting_ordinal as usize]
+        {
+            return Err(invalid());
+        }
+        next_primary[primary.posting_ordinal as usize] = next_primary
+            [primary.posting_ordinal as usize]
+            .checked_add(1)
+            .ok_or_else(invalid)?;
+        let alternate = records.get(row + 1).filter(|record| {
+            record.source_ordinal == primary.source_ordinal && record.owner_role == 1
+        });
+        if let Some(alternate) = alternate {
+            let value = alternate
+                .alternate_violation_bits
+                .map(f32::from_bits)
+                .ok_or_else(invalid)?;
+            if alternate.feature_row_id != primary.feature_row_id
+                || alternate.posting_ordinal >= posting_count
+                || alternate.posting_ordinal == primary.posting_ordinal
+                || !value.is_finite()
+                || value.total_cmp(&0.0).is_lt()
+                || u64::from(alternate.posting_local_ordinal)
+                    != next_alternate[alternate.posting_ordinal as usize]
+            {
+                return Err(invalid());
+            }
+            next_alternate[alternate.posting_ordinal as usize] = next_alternate
+                [alternate.posting_ordinal as usize]
+                .checked_add(1)
+                .ok_or_else(invalid)?;
+            previous_key = Some((alternate.source_ordinal, alternate.owner_role));
+            row += 2;
+        } else {
+            previous_key = Some(key);
+            row += 1;
+        }
+    }
+    if records.is_empty()
+        || summaries.iter().enumerate().any(|(posting, summary)| {
+            next_primary[posting] != summary.primary_population
+                || next_alternate[posting] != summary.total_population
+        })
+    {
+        return Err(invalid());
+    }
+
+    let mut counts = Vec::new();
+    for (posting, summary) in summaries.iter().enumerate() {
+        let mut alternates = BTreeMap::<u32, u64>::new();
+        let mut residual = 0_u64;
+        let mut row = 0_usize;
+        while row < records.len() {
+            let primary = &records[row];
+            let alternate = records.get(row + 1).filter(|record| {
+                record.source_ordinal == primary.source_ordinal && record.owner_role == 1
+            });
+            if primary.posting_ordinal as usize == posting {
+                if let Some(alternate) = alternate {
+                    let count = alternates.entry(alternate.posting_ordinal).or_default();
+                    *count = count.checked_add(1).ok_or_else(invalid)?;
+                } else {
+                    residual = residual.checked_add(1).ok_or_else(invalid)?;
+                }
+            }
+            row += usize::from(alternate.is_some()) + 1;
+        }
+        let mut alternates = alternates.into_iter().collect::<Vec<_>>();
+        alternates.sort_unstable_by(|left, right| {
+            right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
+        });
+        let observed = alternates
+            .iter()
+            .try_fold(residual, |total, (_, count)| total.checked_add(*count))
+            .ok_or_else(invalid)?;
+        if observed != summary.primary_population || summary.posting_ordinal as usize != posting {
+            return Err(invalid());
+        }
+        counts.extend(
+            alternates
+                .into_iter()
+                .map(|(alternate, count)| V40SpillCount {
+                    primary_posting: posting as u32,
+                    alternate_posting: Some(alternate),
+                    count,
+                    primary_population: summary.primary_population,
+                }),
+        );
+        counts.push(V40SpillCount {
+            primary_posting: posting as u32,
+            alternate_posting: None,
+            count: residual,
+            primary_population: summary.primary_population,
+        });
+    }
+    Ok(counts)
+}
+
+pub(crate) fn pack_v40_spill_summary(
+    counts: &[V40SpillCount],
+    posting_count: u32,
+) -> Result<V40PackedSpillSummary> {
+    let invalid = || BorsukError::InvalidStorage("V40 packed spill summary differs".to_owned());
+    if posting_count == 0 || counts.is_empty() {
+        return Err(invalid());
+    }
+    let mut offsets = Vec::with_capacity(posting_count as usize + 1);
+    let mut alternate_postings = Vec::new();
+    let mut masses_q24 = Vec::new();
+    let mut residual_masses_q24 = Vec::with_capacity(posting_count as usize);
+    offsets.push(0);
+    let mut cursor = 0_usize;
+    for primary in 0..posting_count {
+        let start = cursor;
+        while cursor < counts.len() && counts[cursor].primary_posting == primary {
+            cursor += 1;
+        }
+        let rows = &counts[start..cursor];
+        if rows.is_empty() {
+            return Err(invalid());
+        }
+        let population = rows[0].primary_population;
+        let alternate_rows = &rows[..rows.len() - 1];
+        let alternate_ids = alternate_rows
+            .iter()
+            .filter_map(|row| row.alternate_posting)
+            .collect::<BTreeSet<_>>();
+        if population == 0
+            || rows.iter().any(|row| row.primary_population != population)
+            || rows
+                .last()
+                .is_none_or(|row| row.alternate_posting.is_some())
+            || alternate_rows.iter().any(|row| {
+                row.alternate_posting
+                    .is_none_or(|alternate| alternate >= posting_count || alternate == primary)
+                    || row.count == 0
+            })
+            || alternate_ids.len() != alternate_rows.len()
+            || alternate_rows.windows(2).any(|pair| {
+                pair[0].count < pair[1].count
+                    || pair[0].count == pair[1].count
+                        && pair[0].alternate_posting > pair[1].alternate_posting
+            })
+        {
+            return Err(invalid());
+        }
+        let retained = rows
+            .len()
+            .saturating_sub(1)
+            .min(V40_MAXIMUM_ALTERNATES_PER_POSTING);
+        let mut categories = rows[..retained]
+            .iter()
+            .map(|row| (row.alternate_posting, row.count, 0_u32, 0_u64))
+            .collect::<Vec<_>>();
+        let residual_count = rows[retained..]
+            .iter()
+            .try_fold(0_u64, |total, row| total.checked_add(row.count))
+            .ok_or_else(invalid)?;
+        categories.push((None, residual_count, 0, 0));
+        let observed = categories
+            .iter()
+            .try_fold(0_u64, |total, (_, count, _, _)| total.checked_add(*count))
+            .ok_or_else(invalid)?;
+        if observed != population {
+            return Err(invalid());
+        }
+        let mut assigned = 0_u32;
+        for category in &mut categories {
+            let numerator = u128::from(category.1) * u128::from(V40_Q24_TOTAL);
+            category.2 =
+                u32::try_from(numerator / u128::from(population)).map_err(|_| invalid())?;
+            category.3 =
+                u64::try_from(numerator % u128::from(population)).map_err(|_| invalid())?;
+            assigned = assigned.checked_add(category.2).ok_or_else(invalid)?;
+        }
+        let remaining = V40_Q24_TOTAL.checked_sub(assigned).ok_or_else(invalid)?;
+        let mut order = (0..categories.len()).collect::<Vec<_>>();
+        order.sort_unstable_by(|&left, &right| {
+            categories[right]
+                .3
+                .cmp(&categories[left].3)
+                .then_with(|| {
+                    categories[left]
+                        .0
+                        .is_none()
+                        .cmp(&categories[right].0.is_none())
+                })
+                .then_with(|| {
+                    categories[left]
+                        .0
+                        .unwrap_or(u32::MAX)
+                        .cmp(&categories[right].0.unwrap_or(u32::MAX))
+                })
+        });
+        for index in order.into_iter().take(remaining as usize) {
+            categories[index].2 = categories[index].2.checked_add(1).ok_or_else(invalid)?;
+        }
+        if categories.iter().map(|category| category.2).sum::<u32>() != V40_Q24_TOTAL {
+            return Err(invalid());
+        }
+        for category in &categories[..retained] {
+            alternate_postings.push(category.0.ok_or_else(invalid)?);
+            masses_q24.push(category.2);
+        }
+        residual_masses_q24.push(categories[retained].2);
+        offsets.push(u64::try_from(alternate_postings.len()).map_err(|_| invalid())?);
+    }
+    if cursor != counts.len() {
+        return Err(invalid());
+    }
+    Ok(V40PackedSpillSummary {
+        offsets,
+        alternate_postings,
+        masses_q24,
+        residual_masses_q24,
+    })
+}
+
+fn v40_spill_count_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("primary_posting", DataType::UInt32, false),
+        Field::new("category_role", DataType::UInt8, false),
+        Field::new("alternate_posting", DataType::UInt32, true),
+        Field::new("count", DataType::UInt64, false),
+        Field::new("primary_population", DataType::UInt64, false),
+    ])
+}
+
+pub(crate) fn encode_v40_spill_counts_parquet(
+    counts: &[V40SpillCount],
+    posting_count: u32,
+) -> Result<Vec<u8>> {
+    pack_v40_spill_summary(counts, posting_count)?;
+    let schema = Arc::new(v40_spill_count_schema());
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                counts.iter().map(|row| row.primary_posting),
+            )),
+            Arc::new(UInt8Array::from_iter_values(
+                counts
+                    .iter()
+                    .map(|row| u8::from(row.alternate_posting.is_some())),
+            )),
+            Arc::new(UInt32Array::from(
+                counts
+                    .iter()
+                    .map(|row| row.alternate_posting)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                counts.iter().map(|row| row.count),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                counts.iter().map(|row| row.primary_population),
+            )),
+        ],
+    )?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_max_row_group_row_count(Some(1_048_576))
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(bytes)
+}
+
+pub(crate) fn decode_v40_spill_counts_parquet(
+    bytes: &[u8],
+    posting_count: u32,
+) -> Result<Vec<V40SpillCount>> {
+    let invalid = || BorsukError::InvalidStorage("V40 spill count Parquet differs".to_owned());
+    if posting_count == 0 {
+        return Err(invalid());
+    }
+    if bytes.len() < 12 || !bytes.starts_with(b"PAR1") || !bytes.ends_with(b"PAR1") {
+        return Err(invalid());
+    }
+    let footer_length = u32::from_le_bytes(
+        bytes[bytes.len() - 8..bytes.len() - 4]
+            .try_into()
+            .map_err(|_| invalid())?,
+    ) as usize;
+    if footer_length > bytes.len().saturating_sub(12) {
+        return Err(invalid());
+    }
+    let footer_start = bytes.len() - footer_length - 8;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != &v40_spill_count_schema()
+        || builder.metadata().num_row_groups() != 1
+        || builder.metadata().file_metadata().num_rows() <= 0
+    {
+        return Err(invalid());
+    }
+    let mut ranges = Vec::new();
+    let mut push_range = |offset: i64, length: i64| -> Result<()> {
+        let start = usize::try_from(offset).map_err(|_| invalid())?;
+        let length = usize::try_from(length).map_err(|_| invalid())?;
+        let end = start.checked_add(length).ok_or_else(invalid)?;
+        if length == 0 {
+            return Err(invalid());
+        }
+        ranges.push((start, end));
+        Ok(())
+    };
+    for column in builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .flat_map(|group| group.columns())
+    {
+        if column.file_path().is_some() {
+            return Err(invalid());
+        }
+        push_range(
+            column
+                .dictionary_page_offset()
+                .unwrap_or_else(|| column.data_page_offset()),
+            column.compressed_size(),
+        )?;
+        for (offset, length) in [
+            (column.column_index_offset(), column.column_index_length()),
+            (column.offset_index_offset(), column.offset_index_length()),
+            (column.bloom_filter_offset(), column.bloom_filter_length()),
+        ] {
+            match (offset, length) {
+                (Some(offset), Some(length)) => push_range(offset, i64::from(length))?,
+                (None, None) => {}
+                _ => return Err(invalid()),
+            }
+        }
+    }
+    ranges.sort_unstable();
+    let mut referenced_end = 4_usize;
+    for (start, end) in ranges {
+        if start != referenced_end || end <= start || end > footer_start {
+            return Err(invalid());
+        }
+        referenced_end = end;
+    }
+    if referenced_end != footer_start {
+        return Err(invalid());
+    }
+    let mut counts = Vec::new();
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.schema().as_ref() != &v40_spill_count_schema()
+            || batch.columns()[..2]
+                .iter()
+                .chain(batch.columns()[3..].iter())
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid());
+        }
+        let primary = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let role = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(invalid)?;
+        let alternate = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let count = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let population = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        for row in 0..batch.num_rows() {
+            let alternate_posting = (!alternate.is_null(row)).then(|| alternate.value(row));
+            if role.value(row) != u8::from(alternate_posting.is_some()) {
+                return Err(invalid());
+            }
+            counts.push(V40SpillCount {
+                primary_posting: primary.value(row),
+                alternate_posting,
+                count: count.value(row),
+                primary_population: population.value(row),
+            });
+        }
+    }
+    pack_v40_spill_summary(&counts, posting_count)?;
+    Ok(counts)
+}
+
+fn v40_packed_spill_summary_schema() -> Schema {
+    let list = |name: &str, data_type| {
+        Field::new(
+            name,
+            DataType::List(Arc::new(Field::new("item", data_type, false))),
+            false,
+        )
+    };
+    Schema::new(vec![
+        list("offsets", DataType::UInt64),
+        list("alternate_postings", DataType::UInt32),
+        list("masses_q24", DataType::UInt32),
+        list("residual_masses_q24", DataType::UInt32),
+    ])
+}
+
+fn v40_list_offsets(length: usize) -> Result<OffsetBuffer<i32>> {
+    let length = i32::try_from(length)
+        .map_err(|_| BorsukError::InvalidStorage("V40 Arrow list length overflows".to_owned()))?;
+    Ok(OffsetBuffer::new(vec![0_i32, length].into()))
+}
+
+pub(crate) fn encode_v40_packed_spill_summary_arrow(
+    summary: &V40PackedSpillSummary,
+) -> Result<Vec<u8>> {
+    validate_v40_packed_spill_summary(summary)?;
+    let schema = Arc::new(v40_packed_spill_summary_schema());
+    let child = |index: usize| match schema.field(index).data_type() {
+        DataType::List(child) => Ok(Arc::clone(child)),
+        _ => Err(BorsukError::InvalidStorage(
+            "V40 packed spill Arrow schema differs".to_owned(),
+        )),
+    };
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(ListArray::new(
+                child(0)?,
+                v40_list_offsets(summary.offsets.len())?,
+                Arc::new(UInt64Array::from(summary.offsets.clone())),
+                None,
+            )),
+            Arc::new(ListArray::new(
+                child(1)?,
+                v40_list_offsets(summary.alternate_postings.len())?,
+                Arc::new(UInt32Array::from(summary.alternate_postings.clone())),
+                None,
+            )),
+            Arc::new(ListArray::new(
+                child(2)?,
+                v40_list_offsets(summary.masses_q24.len())?,
+                Arc::new(UInt32Array::from(summary.masses_q24.clone())),
+                None,
+            )),
+            Arc::new(ListArray::new(
+                child(3)?,
+                v40_list_offsets(summary.residual_masses_q24.len())?,
+                Arc::new(UInt32Array::from(summary.residual_masses_q24.clone())),
+                None,
+            )),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(bytes)
+}
+
+pub(crate) fn decode_v40_packed_spill_summary_arrow(
+    bytes: &[u8],
+    posting_count: u32,
+) -> Result<V40PackedSpillSummary> {
+    let invalid = || BorsukError::InvalidStorage("V40 packed spill Arrow differs".to_owned());
+    if bytes.len() < 18 || !bytes.starts_with(b"ARROW1") || !bytes.ends_with(b"ARROW1") {
+        return Err(invalid());
+    }
+    let footer_length = u32::from_le_bytes(
+        bytes[bytes.len() - 10..bytes.len() - 6]
+            .try_into()
+            .map_err(|_| invalid())?,
+    ) as usize;
+    if footer_length > bytes.len().saturating_sub(18) {
+        return Err(invalid());
+    }
+    let trailer = bytes.len() - 10;
+    let footer_start = trailer - footer_length;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer]).map_err(|_| invalid())?;
+    if footer
+        .dictionaries()
+        .is_some_and(|dictionaries| !dictionaries.is_empty())
+    {
+        return Err(invalid());
+    }
+    let blocks = footer.recordBatches().ok_or_else(invalid)?;
+    if blocks.len() != 1 {
+        return Err(invalid());
+    }
+    let block = blocks.get(0);
+    let block_offset = usize::try_from(block.offset()).map_err(|_| invalid())?;
+    let metadata_length = usize::try_from(block.metaDataLength()).map_err(|_| invalid())?;
+    let body_length = usize::try_from(block.bodyLength()).map_err(|_| invalid())?;
+    let referenced_end = block_offset
+        .checked_add(metadata_length)
+        .and_then(|value| value.checked_add(body_length))
+        .ok_or_else(invalid)?;
+    if block_offset < 8
+        || metadata_length < 8
+        || bytes.get(referenced_end..footer_start) != Some(&[255, 255, 255, 255, 0, 0, 0, 0])
+    {
+        return Err(invalid());
+    }
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &v40_packed_spill_summary_schema() || reader.num_batches() != 1 {
+        return Err(invalid());
+    }
+    let batch = reader.next().transpose()?.ok_or_else(invalid)?;
+    if reader.next().is_some()
+        || batch.num_rows() != 1
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid());
+    }
+    let u64_values = |index: usize| -> Result<Vec<u64>> {
+        let list = batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(invalid)?;
+        let list_values = list.value(0);
+        let values = list_values
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        if values.null_count() != 0 {
+            return Err(invalid());
+        }
+        Ok(values.values().to_vec())
+    };
+    let u32_values = |index: usize| -> Result<Vec<u32>> {
+        let list = batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(invalid)?;
+        let list_values = list.value(0);
+        let values = list_values
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        if values.null_count() != 0 {
+            return Err(invalid());
+        }
+        Ok(values.values().to_vec())
+    };
+    let summary = V40PackedSpillSummary {
+        offsets: u64_values(0)?,
+        alternate_postings: u32_values(1)?,
+        masses_q24: u32_values(2)?,
+        residual_masses_q24: u32_values(3)?,
+    };
+    if validate_v40_packed_spill_summary(&summary)? != posting_count as usize {
+        return Err(invalid());
+    }
+    Ok(summary)
+}
+
+fn validate_v40_packed_spill_summary(summary: &V40PackedSpillSummary) -> Result<usize> {
+    let invalid = || BorsukError::InvalidStorage("V40 packed spill summary differs".to_owned());
+    let posting_count = summary.residual_masses_q24.len();
+    if posting_count == 0
+        || summary.offsets.len() != posting_count + 1
+        || summary.offsets.first() != Some(&0)
+        || summary.alternate_postings.len() != summary.masses_q24.len()
+        || summary.offsets.last().copied() != Some(summary.alternate_postings.len() as u64)
+    {
+        return Err(invalid());
+    }
+    for primary in 0..posting_count {
+        let start = usize::try_from(summary.offsets[primary]).map_err(|_| invalid())?;
+        let end = usize::try_from(summary.offsets[primary + 1]).map_err(|_| invalid())?;
+        if end < start || end > summary.alternate_postings.len() || end - start > 32 {
+            return Err(invalid());
+        }
+        let alternates = &summary.alternate_postings[start..end];
+        let unique = alternates.iter().copied().collect::<BTreeSet<_>>();
+        if unique.len() != alternates.len()
+            || alternates.iter().any(|&alternate| {
+                alternate as usize >= posting_count || alternate as usize == primary
+            })
+        {
+            return Err(invalid());
+        }
+        let total = summary.masses_q24[start..end]
+            .iter()
+            .try_fold(summary.residual_masses_q24[primary], |sum, mass| {
+                sum.checked_add(*mass)
+            })
+            .ok_or_else(invalid)?;
+        if total != V40_Q24_TOTAL {
+            return Err(invalid());
+        }
+    }
+    Ok(posting_count)
+}
+
+pub(crate) fn select_v40_accepted_spill_postings(
+    frontier: &V40TreeFrontier,
+    summary: &V40PackedSpillSummary,
+    selected_postings: usize,
+) -> Result<V40Selection> {
+    let invalid = || BorsukError::InvalidStorage("V40 marginal selection differs".to_owned());
+    let posting_count = validate_v40_packed_spill_summary(summary)?;
+    let frontier_unique = frontier
+        .posting_ordinals
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if frontier.posting_ordinals.is_empty()
+        || frontier.posting_ordinals.len() > V40_MAXIMUM_FRONTIER_POSTINGS
+        || frontier_unique.len() != frontier.posting_ordinals.len()
+        || frontier_unique
+            .iter()
+            .any(|posting| *posting as usize >= posting_count)
+        || selected_postings == 0
+    {
+        return Err(invalid());
+    }
+
+    let mut candidates = frontier_unique;
+    for &primary in &frontier.posting_ordinals {
+        let start = usize::try_from(summary.offsets[primary as usize]).map_err(|_| invalid())?;
+        let end = usize::try_from(summary.offsets[primary as usize + 1]).map_err(|_| invalid())?;
+        candidates.extend(summary.alternate_postings[start..end].iter().copied());
+    }
+    if candidates.len() < selected_postings
+        || candidates.len()
+            > V40_MAXIMUM_FRONTIER_POSTINGS * (V40_MAXIMUM_ALTERNATES_PER_POSTING + 1)
+    {
+        return Err(invalid());
+    }
+    let best_frontier_rank = frontier
+        .posting_ordinals
+        .iter()
+        .enumerate()
+        .map(|(rank, &posting)| (posting, rank as u32))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected = BTreeSet::new();
+    let mut posting_ordinals = Vec::with_capacity(selected_postings);
+    let mut objective_value = 0_u128;
+    let mut marginal_recomputations = 0_u64;
+    while posting_ordinals.len() < selected_postings {
+        let mut best = None;
+        for &candidate in &candidates {
+            if selected.contains(&candidate) {
+                continue;
+            }
+            marginal_recomputations = marginal_recomputations.checked_add(1).ok_or_else(invalid)?;
+            let mut gain = 0_u128;
+            for (rank, &primary) in frontier.posting_ordinals.iter().enumerate() {
+                if selected.contains(&primary) {
+                    continue;
+                }
+                let weight = u128::try_from(frontier.posting_ordinals.len() - rank)
+                    .map_err(|_| invalid())?;
+                if candidate == primary {
+                    gain = gain
+                        .checked_add(
+                            weight
+                                .checked_mul(u128::from(
+                                    summary.residual_masses_q24[primary as usize],
+                                ))
+                                .ok_or_else(invalid)?,
+                        )
+                        .ok_or_else(invalid)?;
+                }
+                let start =
+                    usize::try_from(summary.offsets[primary as usize]).map_err(|_| invalid())?;
+                let end = usize::try_from(summary.offsets[primary as usize + 1])
+                    .map_err(|_| invalid())?;
+                for edge in start..end {
+                    let alternate = summary.alternate_postings[edge];
+                    if !selected.contains(&alternate)
+                        && (candidate == primary || candidate == alternate)
+                    {
+                        gain = gain
+                            .checked_add(
+                                weight
+                                    .checked_mul(u128::from(summary.masses_q24[edge]))
+                                    .ok_or_else(invalid)?,
+                            )
+                            .ok_or_else(invalid)?;
+                    }
+                }
+            }
+            let rank = best_frontier_rank
+                .get(&candidate)
+                .copied()
+                .unwrap_or(u32::MAX);
+            let key = (gain, std::cmp::Reverse(rank), std::cmp::Reverse(candidate));
+            if best.as_ref().is_none_or(|(best_key, _)| key > *best_key) {
+                best = Some((key, candidate));
+            }
+        }
+        let ((gain, _, _), candidate) = best.ok_or_else(invalid)?;
+        selected.insert(candidate);
+        posting_ordinals.push(candidate);
+        objective_value = objective_value.checked_add(gain).ok_or_else(invalid)?;
+    }
+    Ok(V40Selection {
+        arm: V40RouterArm::AcceptedSpill,
+        posting_ordinals,
+        objective_value,
+        candidate_count: u32::try_from(candidates.len()).map_err(|_| invalid())?,
+        marginal_recomputations,
+    })
+}
 
 fn valid_digest(value: &str) -> bool {
     value.len() == 64
@@ -1498,18 +2299,20 @@ pub(crate) fn evaluate_v40_direct_recall(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, fs::File, path::PathBuf, sync::Arc};
+    use std::{collections::BTreeSet, fs, fs::File, path::PathBuf, sync::Arc};
 
     use super::super::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, score_v37_hyperplane_fused,
     };
     use super::{
         V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact, V40LocalOutput,
-        V40LocalRunMode, V40LocalRunRequest, authenticate_v40_local_request,
-        decode_v40_direct_selections_parquet, encode_v40_direct_selections_parquet,
+        V40LocalRunMode, V40LocalRunRequest, V40PackedSpillSummary, authenticate_v40_local_request,
+        decode_v40_direct_selections_parquet, decode_v40_packed_spill_summary_arrow,
+        encode_v40_direct_selections_parquet, encode_v40_packed_spill_summary_arrow,
         evaluate_v40_direct_recall, load_v40_projected_queries, load_v40_projected_queries_file,
         parse_v40_direct_cohort_authority_bytes, parse_v40_selection_receipt_bytes,
-        select_v40_direct_queries, select_v40_tree_frontier, v40_evaluation_result_bytes,
+        select_v40_accepted_spill_postings, select_v40_direct_queries, select_v40_tree_frontier,
+        v40_evaluation_result_bytes,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
@@ -1594,6 +2397,162 @@ mod tests {
         );
         assert!(select_v40_tree_frontier(&tree, &tree.fma_backend, &[0.0; 3], 0, 7).is_err());
         assert!(select_v40_tree_frontier(&tree, &tree.fma_backend, &[0.0; 3], 4, 0).is_err());
+    }
+
+    #[test]
+    fn v40_marginal_selector_chooses_distinct_coverage_and_zero_gain_ties() {
+        let frontier = super::V40TreeFrontier {
+            posting_ordinals: vec![0, 1],
+            node_pops: 5,
+            scored_internal_nodes: 3,
+            fma_backend: "aarch64-neon-fma".to_owned(),
+        };
+        let summary = V40PackedSpillSummary {
+            offsets: vec![0, 1, 2, 2],
+            alternate_postings: vec![2, 2],
+            masses_q24: vec![1 << 24, 1 << 24],
+            residual_masses_q24: vec![0, 0, 1 << 24],
+        };
+        let selection = select_v40_accepted_spill_postings(&frontier, &summary, 2).unwrap();
+        assert_eq!(selection.posting_ordinals, vec![2, 0]);
+        assert_eq!(selection.objective_value, 3 * (1 << 24));
+        assert_eq!(selection.candidate_count, 3);
+        assert_eq!(selection.marginal_recomputations, 5);
+    }
+
+    #[test]
+    fn v40_marginal_selector_rejects_summary_and_candidate_shortage() {
+        let frontier = super::V40TreeFrontier {
+            posting_ordinals: vec![0, 1],
+            node_pops: 5,
+            scored_internal_nodes: 3,
+            fma_backend: "aarch64-neon-fma".to_owned(),
+        };
+        let summary = V40PackedSpillSummary {
+            offsets: vec![0, 1, 2],
+            alternate_postings: vec![1, 0],
+            masses_q24: vec![8, 8],
+            residual_masses_q24: vec![(1 << 24) - 8; 2],
+        };
+        assert!(select_v40_accepted_spill_postings(&frontier, &summary, 3).is_err());
+        let mut drifted = summary.clone();
+        drifted.offsets[2] = 1;
+        assert!(select_v40_accepted_spill_postings(&frontier, &drifted, 2).is_err());
+        let mut drifted = summary;
+        drifted.masses_q24[0] = 9;
+        assert!(select_v40_accepted_spill_postings(&frontier, &drifted, 2).is_err());
+    }
+
+    #[test]
+    fn v40_marginal_selector_matches_exhaustive_tiny_reference() {
+        let frontier = super::V40TreeFrontier {
+            posting_ordinals: vec![0, 1, 2, 3],
+            node_pops: 9,
+            scored_internal_nodes: 5,
+            fma_backend: "aarch64-neon-fma".to_owned(),
+        };
+        let summary = V40PackedSpillSummary {
+            offsets: vec![0, 1, 2, 3, 4, 4, 4, 4, 4],
+            alternate_postings: vec![4, 4, 5, 5],
+            masses_q24: vec![5, 6, 7, 8],
+            residual_masses_q24: vec![
+                (1 << 24) - 5,
+                (1 << 24) - 6,
+                (1 << 24) - 7,
+                (1 << 24) - 8,
+                1 << 24,
+                1 << 24,
+                1 << 24,
+                1 << 24,
+            ],
+        };
+        let objective = |selected: &BTreeSet<u32>| {
+            frontier
+                .posting_ordinals
+                .iter()
+                .enumerate()
+                .map(|(rank, &primary)| {
+                    let weight = (frontier.posting_ordinals.len() - rank) as u128;
+                    let mut covered = u128::from(summary.residual_masses_q24[primary as usize])
+                        * u128::from(selected.contains(&primary));
+                    let start = summary.offsets[primary as usize] as usize;
+                    let end = summary.offsets[primary as usize + 1] as usize;
+                    for edge in start..end {
+                        covered += u128::from(summary.masses_q24[edge])
+                            * u128::from(
+                                selected.contains(&primary)
+                                    || selected.contains(&summary.alternate_postings[edge]),
+                            );
+                    }
+                    weight * covered
+                })
+                .sum::<u128>()
+        };
+        let candidates = [0_u32, 1, 2, 3, 4, 5];
+        let mut selected = BTreeSet::new();
+        let mut expected = Vec::new();
+        while expected.len() < 4 {
+            let before = objective(&selected);
+            let candidate = candidates
+                .iter()
+                .copied()
+                .filter(|candidate| !selected.contains(candidate))
+                .max_by_key(|candidate| {
+                    let mut with_candidate = selected.clone();
+                    with_candidate.insert(*candidate);
+                    let rank = frontier
+                        .posting_ordinals
+                        .iter()
+                        .position(|posting| posting == candidate)
+                        .unwrap_or(usize::MAX);
+                    (
+                        objective(&with_candidate) - before,
+                        std::cmp::Reverse(rank),
+                        std::cmp::Reverse(*candidate),
+                    )
+                })
+                .unwrap();
+            selected.insert(candidate);
+            expected.push(candidate);
+        }
+        let actual = select_v40_accepted_spill_postings(&frontier, &summary, 4).unwrap();
+        assert_eq!(actual.posting_ordinals, expected);
+        assert_eq!(actual.objective_value, objective(&selected));
+    }
+
+    #[test]
+    fn v40_spill_summary_arrow_is_strict_and_round_trips() {
+        let summary = V40PackedSpillSummary {
+            offsets: vec![0, 2, 3, 3],
+            alternate_postings: vec![1, 2, 0],
+            masses_q24: vec![8, 7, 1 << 23],
+            residual_masses_q24: vec![(1 << 24) - 15, 1 << 23, 1 << 24],
+        };
+        let bytes = encode_v40_packed_spill_summary_arrow(&summary).unwrap();
+        assert_eq!(
+            decode_v40_packed_spill_summary_arrow(&bytes, 3).unwrap(),
+            summary
+        );
+
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode_v40_packed_spill_summary_arrow(&trailing, 3).is_err());
+        let footer_length =
+            u32::from_le_bytes(bytes[bytes.len() - 10..bytes.len() - 6].try_into().unwrap())
+                as usize;
+        let footer = bytes[bytes.len() - footer_length - 10..].to_vec();
+        let mut copied_footer = bytes.clone();
+        copied_footer.extend_from_slice(b"hidden-arrow-payload");
+        copied_footer.extend_from_slice(&footer);
+        assert!(decode_v40_packed_spill_summary_arrow(&copied_footer, 3).is_err());
+        assert!(decode_v40_packed_spill_summary_arrow(&bytes, 2).is_err());
+
+        let mut malformed = summary.clone();
+        malformed.offsets[2] = 2;
+        assert!(encode_v40_packed_spill_summary_arrow(&malformed).is_err());
+        let mut malformed = summary;
+        malformed.residual_masses_q24[0] += 1;
+        assert!(encode_v40_packed_spill_summary_arrow(&malformed).is_err());
     }
 
     fn direct_evaluation_fixture() -> (

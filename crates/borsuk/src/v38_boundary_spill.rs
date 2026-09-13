@@ -2053,22 +2053,22 @@ pub(crate) struct V38SpillProposal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V38SpillRecord {
-    source_ordinal: u64,
-    feature_row_id: u64,
-    posting_ordinal: u32,
-    owner_role: u8,
-    posting_local_ordinal: u32,
-    alternate_violation_bits: Option<u32>,
+    pub(crate) source_ordinal: u64,
+    pub(crate) feature_row_id: u64,
+    pub(crate) posting_ordinal: u32,
+    pub(crate) owner_role: u8,
+    pub(crate) posting_local_ordinal: u32,
+    pub(crate) alternate_violation_bits: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V38PostingSummary {
-    posting_ordinal: u32,
-    primary_population: u64,
-    alternate_population: u64,
-    total_population: u64,
-    projected_payload_bytes: u64,
-    projected_framing_allowance_bytes: u32,
+    pub(crate) posting_ordinal: u32,
+    pub(crate) primary_population: u64,
+    pub(crate) alternate_population: u64,
+    pub(crate) total_population: u64,
+    pub(crate) projected_payload_bytes: u64,
+    pub(crate) projected_framing_allowance_bytes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2496,7 +2496,7 @@ pub(crate) fn summarize_v38_spill_relation(
     Ok(summaries)
 }
 
-fn validate_v38_posting_summaries(summaries: &[V38PostingSummary]) -> Result<()> {
+pub(crate) fn validate_v38_posting_summaries(summaries: &[V38PostingSummary]) -> Result<()> {
     if summaries.is_empty() {
         return Err(invalid("V38 spill posting summary is empty"));
     }
@@ -4030,6 +4030,10 @@ mod tests {
     use crate::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, V37FeatureGroundTruth, V37OwnershipRecord,
     };
+    use crate::v40_spill_router::{
+        V40SpillCount, build_v40_spill_counts, decode_v40_spill_counts_parquet,
+        encode_v40_spill_counts_parquet, pack_v40_spill_summary,
+    };
 
     fn digest(byte: u8) -> String {
         format!("{byte:02x}").repeat(32)
@@ -5299,6 +5303,151 @@ mod tests {
             decode_v38_posting_summary_parquet(&summary_bytes, &relation, 2, 3).unwrap(),
             summaries
         );
+    }
+
+    #[test]
+    fn v40_spill_summary_counts_exact_accepted_owners_and_q24_mass() {
+        let (_primary, relation) = codec_fixture();
+        let summaries = summarize_v38_spill_relation(&relation, 2, 3).unwrap();
+        let counts = build_v40_spill_counts(&relation, &summaries).unwrap();
+        assert_eq!(counts.len(), 4);
+        assert_eq!(
+            counts
+                .iter()
+                .map(|row| (
+                    row.primary_posting,
+                    row.alternate_posting,
+                    row.count,
+                    row.primary_population,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, Some(1), 1, 2),
+                (0, None, 1, 2),
+                (1, Some(0), 1, 2),
+                (1, None, 1, 2)
+            ]
+        );
+
+        let packed = pack_v40_spill_summary(&counts, 2).unwrap();
+        assert_eq!(packed.offsets, vec![0, 1, 2]);
+        assert_eq!(packed.alternate_postings, vec![1, 0]);
+        assert_eq!(packed.masses_q24, vec![1 << 23, 1 << 23]);
+        assert_eq!(packed.residual_masses_q24, vec![1 << 23, 1 << 23]);
+    }
+
+    #[test]
+    fn v40_spill_summary_truncates_top32_and_apportions_q24_deterministically() {
+        let mut counts = (1..=34)
+            .map(|alternate| V40SpillCount {
+                primary_posting: 0,
+                alternate_posting: Some(alternate),
+                count: 1,
+                primary_population: 34,
+            })
+            .collect::<Vec<_>>();
+        counts.push(V40SpillCount {
+            primary_posting: 0,
+            alternate_posting: None,
+            count: 0,
+            primary_population: 34,
+        });
+        for primary in 1..35 {
+            counts.push(V40SpillCount {
+                primary_posting: primary,
+                alternate_posting: None,
+                count: 1,
+                primary_population: 1,
+            });
+        }
+        let packed = pack_v40_spill_summary(&counts, 35).unwrap();
+        assert_eq!(packed.offsets[0..=2], [0, 32, 32]);
+        assert_eq!(packed.alternate_postings, (1..=32).collect::<Vec<_>>());
+        assert_eq!(packed.masses_q24[0..17], [493_448; 17]);
+        assert_eq!(packed.masses_q24[17..], [493_447; 15]);
+        assert_eq!(packed.residual_masses_q24[0], 986_895);
+        assert_eq!(packed.residual_masses_q24[1], 1 << 24);
+    }
+
+    #[test]
+    fn v40_spill_summary_rejects_category_order_identity_and_population_drift() {
+        let valid = vec![
+            V40SpillCount {
+                primary_posting: 0,
+                alternate_posting: Some(1),
+                count: 1,
+                primary_population: 2,
+            },
+            V40SpillCount {
+                primary_posting: 0,
+                alternate_posting: None,
+                count: 1,
+                primary_population: 2,
+            },
+            V40SpillCount {
+                primary_posting: 1,
+                alternate_posting: None,
+                count: 1,
+                primary_population: 1,
+            },
+        ];
+        assert!(pack_v40_spill_summary(&valid, 2).is_ok());
+        for changed in [
+            {
+                let mut rows = valid.clone();
+                rows[0].alternate_posting = Some(0);
+                rows
+            },
+            {
+                let mut rows = valid.clone();
+                rows[0].alternate_posting = Some(2);
+                rows
+            },
+            {
+                let mut rows = valid.clone();
+                rows.insert(1, rows[0]);
+                rows[0].primary_population = 3;
+                rows[1].primary_population = 3;
+                rows[2].primary_population = 3;
+                rows
+            },
+            {
+                let mut rows = valid.clone();
+                rows[0].count = 2;
+                rows
+            },
+        ] {
+            assert!(pack_v40_spill_summary(&changed, 2).is_err());
+        }
+    }
+
+    #[test]
+    fn v40_spill_summary_counts_parquet_is_strict_and_round_trips() {
+        let (_primary, relation) = codec_fixture();
+        let summaries = summarize_v38_spill_relation(&relation, 2, 3).unwrap();
+        let counts = build_v40_spill_counts(&relation, &summaries).unwrap();
+        let bytes = encode_v40_spill_counts_parquet(&counts, 2).unwrap();
+        assert_eq!(decode_v40_spill_counts_parquet(&bytes, 2).unwrap(), counts);
+
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode_v40_spill_counts_parquet(&trailing, 2).is_err());
+        let footer_length =
+            u32::from_le_bytes(bytes[bytes.len() - 8..bytes.len() - 4].try_into().unwrap())
+                as usize;
+        let footer = bytes[bytes.len() - footer_length - 8..].to_vec();
+        let mut copied_footer = bytes.clone();
+        copied_footer.extend_from_slice(b"hidden-parquet-payload");
+        copied_footer.extend_from_slice(&footer);
+        assert!(decode_v40_spill_counts_parquet(&copied_footer, 2).is_err());
+        assert!(decode_v40_spill_counts_parquet(&bytes, 3).is_err());
+
+        let mut reordered = counts.clone();
+        reordered.swap(0, 1);
+        assert!(encode_v40_spill_counts_parquet(&reordered, 2).is_err());
+        let mut population_drift = counts;
+        population_drift[0].primary_population += 1;
+        assert!(encode_v40_spill_counts_parquet(&population_drift, 2).is_err());
     }
 
     #[test]
