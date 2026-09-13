@@ -2430,8 +2430,8 @@ plan_path="$scratch/plan.json"
 boot_log="$scratch/boot.log"
 boot_failure_log="$scratch/boot-failure.log"
 mkdir -p "$root"
-dnf install -y python3.12
 if test "${{V38_IN_SLICE:-0}}" != 1; then
+  dnf install -y python3.12
   systemctl start "$slice_unit"
   systemctl set-property --runtime "$slice_unit" MemoryMax={memory_limit} MemorySwapMax=0 MemoryAccounting=yes
   exec systemd-run --wait --collect --pipe \
