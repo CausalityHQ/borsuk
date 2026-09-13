@@ -21,6 +21,16 @@
 - Rust compilation and science use `causality` AWS Spot while the local devbox remains swap-pressured.
 - No validation, holdout, 10M, 100M, physical S3, fine-vector fetch, compatibility reader, alias, or migration path belongs to V40.
 
+## Accelerated execution order
+
+Task numbering groups related components; it is not the execution order after
+Task 1. Implement the direct-only portions of Tasks 4, 5, and 6 immediately
+after Task 1, then execute Task 7 Steps 1-2. If the authenticated direct arm
+passes, skip Tasks 2-3 and every accepted-spill mode permanently. Only an
+authenticated `direct-failed` terminal authorizes Tasks 2-3 and the
+challenger-only portions of Tasks 4-7. This preserves every quality and
+resource gate while avoiding work on a fallback before the baseline needs it.
+
 ---
 
 ### Task 1: Deterministic K21 tree frontier
