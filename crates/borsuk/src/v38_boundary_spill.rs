@@ -638,6 +638,32 @@ fn same_local_output(
         && observed.encoded_bytes == published.encoded_bytes
 }
 
+fn projected_v37_partition_coordinate_scores(
+    rows: u64,
+    leaves: u32,
+    dimensions: u64,
+) -> Result<u64> {
+    if rows == 0 || leaves < 2 || dimensions == 0 {
+        return Err(invalid("V37 partition work authority differs"));
+    }
+    let mut pending = vec![(rows, u64::from(leaves))];
+    let mut scored_rows = 0_u64;
+    while let Some((node_rows, node_leaves)) = pending.pop() {
+        if node_leaves == 1 {
+            continue;
+        }
+        let quota = crate::v37_relation_router::project_v37_child_quota(node_rows, node_leaves)?;
+        scored_rows = scored_rows
+            .checked_add(node_rows)
+            .ok_or_else(|| invalid("V37 partition work overflows"))?;
+        pending.push((quota.right_rows, quota.right_leaves));
+        pending.push((quota.left_rows, quota.left_leaves));
+    }
+    scored_rows
+        .checked_mul(dimensions)
+        .ok_or_else(|| invalid("V37 partition work overflows"))
+}
+
 fn validate_v38_v37_construction_evidence(
     authority: &V38ConstructionAuthority,
     v37_authority_bytes: &[u8],
@@ -701,16 +727,11 @@ fn validate_v38_v37_construction_evidence(
         .inputs
         .get(6)
         .ok_or_else(|| invalid("V38 source authority is absent"))?;
-    let expected_partition_scores = u64::from(
-        result
-            .training_evidence
-            .leaf_count
-            .checked_sub(1)
-            .ok_or_else(|| invalid("V37 leaf count differs"))?,
-    )
-    .checked_mul(result.training_evidence.rows)
-    .and_then(|scores| scores.checked_mul(result.training_evidence.dimensions))
-    .ok_or_else(|| invalid("V37 partition work overflows"))?;
+    let expected_partition_scores = projected_v37_partition_coordinate_scores(
+        result.training_evidence.rows,
+        result.training_evidence.leaf_count,
+        result.training_evidence.dimensions,
+    )?;
     let expected_partition_throughput =
         if result.training_evidence.partition_scoring_elapsed_ns == 0 {
             0
@@ -4369,8 +4390,8 @@ mod tests {
                     "dimensions": 192,
                     "fma_backend": backend,
                     "leaf_count": 123,
-                    "partition_coordinate_scores": 23_424_000_000_u64,
-                    "partition_coordinate_scores_per_second": 23_424_000_000_u64,
+                    "partition_coordinate_scores": 1_336_195_200_u64,
+                    "partition_coordinate_scores_per_second": 1_336_195_200_u64,
                     "partition_scoring_elapsed_ns": 1_000_000_000_u64,
                     "rows": 1_000_000,
                     "training_elapsed_ns": 2_000_000_000_u64,
@@ -4425,6 +4446,42 @@ mod tests {
             &terminal,
         )
         .unwrap();
+
+        let mut wrong_partition_authority = authority.clone();
+        let mut wrong_partition_result: serde_json::Value =
+            serde_json::from_slice(&result).unwrap();
+        wrong_partition_result["training_evidence"]["partition_coordinate_scores"] =
+            serde_json::json!(23_424_000_000_u64);
+        wrong_partition_result["training_evidence"]["partition_coordinate_scores_per_second"] =
+            serde_json::json!(23_424_000_000_u64);
+        let wrong_partition_result =
+            canonical_bytes(&wrong_partition_result, "wrong V37 partition work").unwrap();
+        replace_artifact_bytes(
+            &mut wrong_partition_authority.inputs[2],
+            &wrong_partition_result,
+        );
+        let mut wrong_partition_terminal: serde_json::Value =
+            serde_json::from_slice(&terminal).unwrap();
+        wrong_partition_terminal["result"]["encoded_bytes"] =
+            serde_json::json!(wrong_partition_authority.inputs[2].encoded_bytes);
+        wrong_partition_terminal["result"]["sha256"] =
+            serde_json::json!(wrong_partition_authority.inputs[2].sha256);
+        let wrong_partition_terminal =
+            canonical_bytes(&wrong_partition_terminal, "wrong V37 partition terminal").unwrap();
+        replace_artifact_bytes(
+            &mut wrong_partition_authority.inputs[3],
+            &wrong_partition_terminal,
+        );
+        assert!(
+            validate_v38_v37_construction_evidence(
+                &wrong_partition_authority,
+                &v37_authority,
+                &manifest,
+                &wrong_partition_result,
+                &wrong_partition_terminal,
+            )
+            .is_err()
+        );
 
         let mut changed: serde_json::Value = serde_json::from_slice(&terminal).unwrap();
         changed["artifacts"][0]["sha256"] = serde_json::json!(digest(99));
