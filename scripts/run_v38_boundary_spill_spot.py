@@ -2441,6 +2441,7 @@ if test "${{V38_IN_SLICE:-0}}" != 1; then
     --property=RuntimeMaxSec={wrapper_runtime_limit} \
     env V38_IN_SLICE=1 /bin/bash "$0"
 fi
+dnf install -y python3.12
 mkdir -p "$scratch" "$source_root"
 printf '%s' {shlex.quote(encoded_plan)} | base64 -d >"$plan_path"
 exec >"$boot_log" 2>&1
@@ -2476,7 +2477,7 @@ tar --zstd -xf "$archive_path" -C "$source_root"
 imds_token=$(curl --fail --silent --show-error --request PUT --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
 instance_id=$(curl --fail --silent --show-error --header "X-aws-ec2-metadata-token: $imds_token" http://169.254.169.254/latest/meta-data/instance-id)
 [[ "$instance_id" =~ ^i-[0-9a-f]{{8,17}}$ ]]
-env PYTHONPATH="$source_root/.v38-python" python3 \\
+env PYTHONPATH="$source_root/.v38-python" python3.12 \\
   "$source_root/scripts/run_v38_boundary_spill_spot.py" \\
   --execute-v38-worker --root "$phase_root" --plan "$plan_path" \\
   --manifest "$manifest_path" --binary "$binary_path" --instance-id "$instance_id"
