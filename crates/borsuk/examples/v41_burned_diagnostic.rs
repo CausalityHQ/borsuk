@@ -23,6 +23,8 @@ fn run() -> Result<Vec<u8>, String> {
         "--development-gt",
         "--spill-relation",
         "--spill-postings",
+        "--v40-direct-selection",
+        "--v40-ownership-tree",
         "--training-state",
         "--epochs",
         "--workers",
@@ -39,6 +41,8 @@ fn run() -> Result<Vec<u8>, String> {
         development_gt: PathBuf::from(value(&args, "--development-gt")?),
         spill_relation: PathBuf::from(value(&args, "--spill-relation")?),
         spill_postings: PathBuf::from(value(&args, "--spill-postings")?),
+        v40_direct_selection: PathBuf::from(value(&args, "--v40-direct-selection")?),
+        v40_ownership_tree: PathBuf::from(value(&args, "--v40-ownership-tree")?),
         training_state: PathBuf::from(value(&args, "--training-state")?),
         epochs: value(&args, "--epochs")?
             .parse()

@@ -763,13 +763,17 @@ pub fn select_v41_pages_by_query_neighbors(
                 .map(move |(primary, alternate)| (weight, primary, alternate))
         })
         .collect::<Vec<_>>();
-    select_v41_pages_by_weighted_pairs(&weighted_pairs, training.page_count)
+    select_v41_pages_by_weighted_pairs(&weighted_pairs, training.page_count, None)
 }
 
 fn select_v41_pages_by_weighted_pairs(
     weighted_pairs: &[(f32, u32, Option<u32>)],
     page_count: u32,
+    allowed: Option<&[bool]>,
 ) -> Result<V41Selection> {
+    if allowed.is_some_and(|pages| pages.len() != page_count as usize) {
+        return Err(invalid("V41 allowed page authority differs"));
+    }
     let mut covered = vec![false; weighted_pairs.len()];
     let mut selected = vec![false; page_count as usize];
     let mut pages = Vec::with_capacity(V41_SELECTED_PAGES);
@@ -788,7 +792,7 @@ fn select_v41_pages_by_weighted_pairs(
         let (page, gain) = gains
             .into_iter()
             .enumerate()
-            .filter(|(page, _)| !selected[*page])
+            .filter(|(page, _)| !selected[*page] && allowed.is_none_or(|pages| pages[*page]))
             .max_by(|left, right| {
                 left.1
                     .total_cmp(&right.1)
@@ -812,7 +816,87 @@ pub fn v41_evaluate_owner_greedy(data: &V41TrainingData) -> Result<V41Evaluation
             .iter()
             .map(|(primary, alternate)| (1.0_f32, *primary, *alternate))
             .collect::<Vec<_>>();
-        select_v41_pages_by_weighted_pairs(&weighted_pairs, data.page_count)
+        select_v41_pages_by_weighted_pairs(&weighted_pairs, data.page_count, None)
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V41UnionCeilingResult {
+    greedy: V41EvaluationResult,
+    any_owner_upper: V41EvaluationResult,
+}
+
+impl V41UnionCeilingResult {
+    pub fn greedy(&self) -> &V41EvaluationResult {
+        &self.greedy
+    }
+
+    pub fn any_owner_upper(&self) -> &V41EvaluationResult {
+        &self.any_owner_upper
+    }
+}
+
+pub fn v41_evaluate_model_union_ceiling(
+    model: &V41ResidualModel,
+    data: &V41TrainingData,
+    baseline_selections: &[(u32, Vec<u32>)],
+) -> Result<V41UnionCeilingResult> {
+    if baseline_selections.len() != data.examples.len()
+        || baseline_selections
+            .iter()
+            .zip(&data.examples)
+            .any(|((ordinal, pages), example)| {
+                *ordinal != example.query_ordinal
+                    || pages.len() < V41_SELECTED_PAGES
+                    || pages.len() > data.page_count as usize
+                    || pages.iter().collect::<BTreeSet<_>>().len() != pages.len()
+                    || pages.iter().any(|page| *page >= data.page_count)
+            })
+    {
+        return Err(invalid("V41 baseline selection authority differs"));
+    }
+
+    let mut greedy_hits = Vec::with_capacity(data.examples.len());
+    let mut upper_hits = Vec::with_capacity(data.examples.len());
+    for (example, (_, baseline)) in data.examples.iter().zip(baseline_selections) {
+        let neural = select_v41_pages(model, &example.query)?;
+        let mut allowed = vec![false; data.page_count as usize];
+        for page in baseline.iter().chain(neural.pages()) {
+            allowed[*page as usize] = true;
+        }
+        let upper = example
+            .owners
+            .iter()
+            .filter(|(primary, alternate)| {
+                allowed[*primary as usize] || alternate.is_some_and(|page| allowed[page as usize])
+            })
+            .count();
+        upper_hits.push(
+            u32::try_from(upper).map_err(|_| invalid("V41 union upper hit count overflows"))?,
+        );
+
+        let weighted_pairs = example
+            .owners
+            .iter()
+            .map(|(primary, alternate)| (1.0_f32, *primary, *alternate))
+            .collect::<Vec<_>>();
+        let selection =
+            select_v41_pages_by_weighted_pairs(&weighted_pairs, data.page_count, Some(&allowed))?;
+        let selected = selection.pages.iter().copied().collect::<BTreeSet<_>>();
+        let hits = example
+            .owners
+            .iter()
+            .filter(|(primary, alternate)| {
+                selected.contains(primary) || alternate.is_some_and(|page| selected.contains(&page))
+            })
+            .count();
+        greedy_hits.push(
+            u32::try_from(hits).map_err(|_| invalid("V41 union greedy hit count overflows"))?,
+        );
+    }
+    Ok(V41UnionCeilingResult {
+        greedy: v41_complete_evaluation(greedy_hits)?,
+        any_owner_upper: v41_complete_evaluation(upper_hits)?,
     })
 }
 
@@ -925,7 +1009,12 @@ fn v41_evaluate_with(
             });
         }
     }
-    let query_count = data.examples.len();
+    v41_complete_evaluation(query_hits)
+}
+
+fn v41_complete_evaluation(query_hits: Vec<u32>) -> Result<V41EvaluationResult> {
+    let query_count = query_hits.len();
+    let total_hits = query_hits.iter().map(|hits| *hits as usize).sum::<usize>();
     let aggregate_recall_ppm = u32::try_from(total_hits * 10_000 / query_count)
         .map_err(|_| invalid("V41 aggregate recall overflows"))?;
     let minimum_recall_ppm = query_hits.iter().copied().min().unwrap_or(0) * 10_000;
@@ -1496,9 +1585,9 @@ mod tests {
         Result as V41Result, V41AdamWState, V41ResidualModel, V41TrainingData, V41TrainingExample,
         V41TrainingRecord, V41TrainingSink, V41TrainingSpec, initialize_v41_model, score_v41_pages,
         select_v41_pages, select_v41_pages_by_query_neighbors, train_v41_model, v41_adamw_step,
-        v41_evaluate_model, v41_evaluate_model_complete, v41_evaluate_owner_greedy,
-        v41_evaluate_query_neighbors, v41_inference_macs, v41_marginal_targets,
-        v41_parameter_bytes, v41_parameter_count,
+        v41_evaluate_model, v41_evaluate_model_complete, v41_evaluate_model_union_ceiling,
+        v41_evaluate_owner_greedy, v41_evaluate_query_neighbors, v41_inference_macs,
+        v41_marginal_targets, v41_parameter_bytes, v41_parameter_count,
     };
 
     fn evaluation_model() -> V41ResidualModel {
@@ -1604,6 +1693,15 @@ mod tests {
         let oracle = v41_evaluate_owner_greedy(&diagnostic).unwrap();
         assert_eq!(oracle.query_hits(), &[100]);
         assert_eq!(oracle.passed(), Some(true));
+
+        let union = v41_evaluate_model_union_ceiling(
+            &evaluation_model(),
+            &diagnostic,
+            &[(2, (0..20).chain(std::iter::once(23)).collect())],
+        )
+        .unwrap();
+        assert_eq!(union.greedy().query_hits(), &[100]);
+        assert_eq!(union.any_owner_upper().query_hits(), &[100]);
     }
 
     #[test]

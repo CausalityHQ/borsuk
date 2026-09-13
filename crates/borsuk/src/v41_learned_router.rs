@@ -149,6 +149,8 @@ pub struct V41BurnedDiagnosticRequest {
     pub development_gt: PathBuf,
     pub spill_relation: PathBuf,
     pub spill_postings: PathBuf,
+    pub v40_direct_selection: PathBuf,
+    pub v40_ownership_tree: PathBuf,
     pub training_state: PathBuf,
     pub epochs: u32,
     pub workers: usize,
@@ -173,6 +175,10 @@ struct V41BurnedDiagnosticResult {
     passed: Option<bool>,
     stopping_query_ordinal: Option<u32>,
     owner_greedy_screen: V41OwnerGreedyScreen,
+    v40_v41_union_greedy_screen: V41OwnerGreedyScreen,
+    v40_v41_union_any_owner_upper: V41OwnerGreedyScreen,
+    v40_frontier64_v41_union_greedy_screen: V41OwnerGreedyScreen,
+    v40_frontier64_v41_union_any_owner_upper: V41OwnerGreedyScreen,
     query_neighbor_screens: Vec<V41QueryNeighborScreen>,
 }
 
@@ -228,6 +234,54 @@ pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<
         path: request.spill_postings.clone(),
         source,
     })?;
+    let direct_selection_bytes =
+        fs::read(&request.v40_direct_selection).map_err(|source| BorsukError::Io {
+            path: request.v40_direct_selection.clone(),
+            source,
+        })?;
+    let direct_selections = crate::v40_spill_router::decode_v40_direct_selections_parquet(
+        &direct_selection_bytes,
+        V41_DEVELOPMENT_QUERY_COUNT as u32,
+        21,
+        "aarch64-neon-fma",
+    )?;
+    let tree_bytes = fs::read(&request.v40_ownership_tree).map_err(|source| BorsukError::Io {
+        path: request.v40_ownership_tree.clone(),
+        source,
+    })?;
+    let tree_sha256 = format!("{:x}", Sha256::digest(&tree_bytes));
+    let tree_blake3 = blake3::hash(&tree_bytes).to_hex().to_string();
+    let tree = crate::v37_relation_router::decode_v37_tree_arrow(
+        &tree_bytes,
+        tree_bytes.len() as u64,
+        &tree_sha256,
+        &tree_blake3,
+    )?;
+    let projection = crate::v36_funnel_geometry::build_v36_srht192_control()?;
+    let query_vectors = queries
+        .iter()
+        .map(|query| {
+            crate::v35_projection::project_v35_query_simd(&projection, &query.embedding).map(
+                |projected| {
+                    projected
+                        .coordinates()
+                        .iter()
+                        .map(|value| {
+                            let value = *value as f32;
+                            if value == 0.0 { 0.0 } else { value }
+                        })
+                        .collect::<Vec<_>>()
+                },
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let frontier64 = crate::v40_spill_router::select_v40_direct_queries(
+        &tree,
+        "aarch64-neon-fma",
+        &query_vectors,
+        64,
+        tree.nodes.len().min(1_024),
+    )?;
     let owners = v38_v40_owner_rows_from_artifacts(
         &relation_bytes,
         &postings_bytes,
@@ -285,6 +339,44 @@ pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<
     sink.finish()?;
     let evaluation = borsuk_v41::v41_evaluate_model_complete(trained.model(), &diagnostic)
         .map_err(|error| invalid(&error.to_string()))?;
+    let diagnostic_direct_selections = split
+        .diagnostic_ordinals()
+        .iter()
+        .map(|ordinal| {
+            let record = direct_selections
+                .get(*ordinal as usize)
+                .ok_or_else(|| invalid("V41 direct selection query differs"))?;
+            Ok((record.query_ordinal, record.posting_ordinals.clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let union = borsuk_v41::v41_evaluate_model_union_ceiling(
+        trained.model(),
+        &diagnostic,
+        &diagnostic_direct_selections,
+    )
+    .map_err(|error| invalid(&error.to_string()))?;
+    let diagnostic_frontier64 = split
+        .diagnostic_ordinals()
+        .iter()
+        .map(|ordinal| {
+            let record = frontier64
+                .get(*ordinal as usize)
+                .ok_or_else(|| invalid("V41 frontier query differs"))?;
+            Ok((record.query_ordinal, record.posting_ordinals.clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let frontier64_union = borsuk_v41::v41_evaluate_model_union_ceiling(
+        trained.model(),
+        &diagnostic,
+        &diagnostic_frontier64,
+    )
+    .map_err(|error| invalid(&error.to_string()))?;
+    let evaluation_summary = |value: &borsuk_v41::V41EvaluationResult| V41OwnerGreedyScreen {
+        query_hits: value.query_hits().to_vec(),
+        aggregate_recall_ppm: value.aggregate_recall_ppm(),
+        minimum_recall_ppm: value.minimum_recall_ppm(),
+        passed: value.passed(),
+    };
     v41_canonical_json_bytes(&V41BurnedDiagnosticResult {
         schema: "borsuk-v41-burned-diagnostic-v1",
         claim_eligible: false,
@@ -303,6 +395,12 @@ pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<
         passed: evaluation.passed(),
         stopping_query_ordinal: evaluation.stopping_query_ordinal(),
         owner_greedy_screen,
+        v40_v41_union_greedy_screen: evaluation_summary(union.greedy()),
+        v40_v41_union_any_owner_upper: evaluation_summary(union.any_owner_upper()),
+        v40_frontier64_v41_union_greedy_screen: evaluation_summary(frontier64_union.greedy()),
+        v40_frontier64_v41_union_any_owner_upper: evaluation_summary(
+            frontier64_union.any_owner_upper(),
+        ),
         query_neighbor_screens,
     })
 }
