@@ -74,6 +74,7 @@ pub(crate) struct V40Selection {
     pub(crate) objective_value: u128,
     pub(crate) candidate_count: u32,
     pub(crate) marginal_recomputations: u64,
+    pub(crate) category_updates: u64,
 }
 
 pub(crate) fn build_v40_spill_counts(
@@ -1107,10 +1108,41 @@ pub(crate) fn select_v40_accepted_spill_postings(
         .enumerate()
         .map(|(rank, &posting)| (posting, rank as u32))
         .collect::<BTreeMap<_, _>>();
+    let mut gains = candidates
+        .iter()
+        .copied()
+        .map(|candidate| (candidate, 0_u128))
+        .collect::<BTreeMap<_, _>>();
+    for (rank, &primary) in frontier.posting_ordinals.iter().enumerate() {
+        let weight =
+            u128::try_from(frontier.posting_ordinals.len() - rank).map_err(|_| invalid())?;
+        let primary_index = primary as usize;
+        let residual = weight
+            .checked_mul(u128::from(summary.residual_masses_q24[primary_index]))
+            .ok_or_else(invalid)?;
+        let primary_gain = gains.get_mut(&primary).ok_or_else(invalid)?;
+        *primary_gain = primary_gain.checked_add(residual).ok_or_else(invalid)?;
+        let start = usize::try_from(summary.offsets[primary_index]).map_err(|_| invalid())?;
+        let end = usize::try_from(summary.offsets[primary_index + 1]).map_err(|_| invalid())?;
+        for edge in start..end {
+            let alternate = summary.alternate_postings[edge];
+            let contribution = weight
+                .checked_mul(u128::from(summary.masses_q24[edge]))
+                .ok_or_else(invalid)?;
+            let primary_gain = gains.get_mut(&primary).ok_or_else(invalid)?;
+            *primary_gain = primary_gain.checked_add(contribution).ok_or_else(invalid)?;
+            let alternate_gain = gains.get_mut(&alternate).ok_or_else(invalid)?;
+            *alternate_gain = alternate_gain
+                .checked_add(contribution)
+                .ok_or_else(invalid)?;
+        }
+    }
+
     let mut selected = BTreeSet::new();
     let mut posting_ordinals = Vec::with_capacity(selected_postings);
     let mut objective_value = 0_u128;
     let mut marginal_recomputations = 0_u64;
+    let mut category_updates = 0_u64;
     while posting_ordinals.len() < selected_postings {
         let mut best = None;
         for &candidate in &candidates {
@@ -1118,43 +1150,7 @@ pub(crate) fn select_v40_accepted_spill_postings(
                 continue;
             }
             marginal_recomputations = marginal_recomputations.checked_add(1).ok_or_else(invalid)?;
-            let mut gain = 0_u128;
-            for (rank, &primary) in frontier.posting_ordinals.iter().enumerate() {
-                if selected.contains(&primary) {
-                    continue;
-                }
-                let weight = u128::try_from(frontier.posting_ordinals.len() - rank)
-                    .map_err(|_| invalid())?;
-                if candidate == primary {
-                    gain = gain
-                        .checked_add(
-                            weight
-                                .checked_mul(u128::from(
-                                    summary.residual_masses_q24[primary as usize],
-                                ))
-                                .ok_or_else(invalid)?,
-                        )
-                        .ok_or_else(invalid)?;
-                }
-                let start =
-                    usize::try_from(summary.offsets[primary as usize]).map_err(|_| invalid())?;
-                let end = usize::try_from(summary.offsets[primary as usize + 1])
-                    .map_err(|_| invalid())?;
-                for edge in start..end {
-                    let alternate = summary.alternate_postings[edge];
-                    if !selected.contains(&alternate)
-                        && (candidate == primary || candidate == alternate)
-                    {
-                        gain = gain
-                            .checked_add(
-                                weight
-                                    .checked_mul(u128::from(summary.masses_q24[edge]))
-                                    .ok_or_else(invalid)?,
-                            )
-                            .ok_or_else(invalid)?;
-                    }
-                }
-            }
+            let gain = *gains.get(&candidate).ok_or_else(invalid)?;
             let rank = best_frontier_rank
                 .get(&candidate)
                 .copied()
@@ -1165,6 +1161,40 @@ pub(crate) fn select_v40_accepted_spill_postings(
             }
         }
         let ((gain, _, _), candidate) = best.ok_or_else(invalid)?;
+        for (rank, &primary) in frontier.posting_ordinals.iter().enumerate() {
+            if selected.contains(&primary) {
+                continue;
+            }
+            let weight =
+                u128::try_from(frontier.posting_ordinals.len() - rank).map_err(|_| invalid())?;
+            let primary_index = primary as usize;
+            let start = usize::try_from(summary.offsets[primary_index]).map_err(|_| invalid())?;
+            let end = usize::try_from(summary.offsets[primary_index + 1]).map_err(|_| invalid())?;
+            for edge in start..end {
+                let alternate = summary.alternate_postings[edge];
+                if selected.contains(&alternate) {
+                    continue;
+                }
+                let affected = if candidate == primary {
+                    Some(alternate)
+                } else if candidate == alternate {
+                    Some(primary)
+                } else {
+                    None
+                };
+                let Some(affected) = affected else {
+                    continue;
+                };
+                let contribution = weight
+                    .checked_mul(u128::from(summary.masses_q24[edge]))
+                    .ok_or_else(invalid)?;
+                let affected_gain = gains.get_mut(&affected).ok_or_else(invalid)?;
+                *affected_gain = affected_gain
+                    .checked_sub(contribution)
+                    .ok_or_else(invalid)?;
+                category_updates = category_updates.checked_add(1).ok_or_else(invalid)?;
+            }
+        }
         selected.insert(candidate);
         posting_ordinals.push(candidate);
         objective_value = objective_value.checked_add(gain).ok_or_else(invalid)?;
@@ -1175,6 +1205,7 @@ pub(crate) fn select_v40_accepted_spill_postings(
         objective_value,
         candidate_count: u32::try_from(candidates.len()).map_err(|_| invalid())?,
         marginal_recomputations,
+        category_updates,
     })
 }
 
@@ -4522,6 +4553,45 @@ mod tests {
         drifted[0].marginal_recomputations = 13;
         drifted[0].objective_value = 34_896_609_281;
         assert!(encode_v40_accepted_selections_parquet(&drifted, 2).is_err());
+    }
+
+    #[test]
+    fn v40_challenger_incremental_selector_bounds_worst_case_category_updates() {
+        let posting_count = 2_112_usize;
+        let mut offsets = Vec::with_capacity(posting_count + 1);
+        let mut alternate_postings = Vec::with_capacity(2_048);
+        let mut masses_q24 = Vec::with_capacity(2_048);
+        let mut residual_masses_q24 = Vec::with_capacity(posting_count);
+        offsets.push(0);
+        for primary in 0..posting_count {
+            if primary < 64 {
+                for alternate in 0..32 {
+                    alternate_postings.push(u32::try_from(64 + primary * 32 + alternate).unwrap());
+                    masses_q24.push(1);
+                }
+                residual_masses_q24.push(super::V40_Q24_TOTAL - 32);
+            } else {
+                residual_masses_q24.push(super::V40_Q24_TOTAL);
+            }
+            offsets.push(alternate_postings.len() as u64);
+        }
+        let summary = V40PackedSpillSummary {
+            offsets,
+            alternate_postings,
+            masses_q24,
+            residual_masses_q24,
+        };
+        let frontier = super::V40TreeFrontier {
+            posting_ordinals: (0..64).collect(),
+            node_pops: 127,
+            scored_internal_nodes: 63,
+            fma_backend: "aarch64-neon-fma".to_owned(),
+        };
+        let selected = select_v40_accepted_spill_postings(&frontier, &summary, 21).unwrap();
+        assert_eq!(selected.candidate_count, 2_112);
+        assert_eq!(selected.marginal_recomputations, 44_142);
+        assert_eq!(selected.category_updates, 672);
+        assert_eq!(selected.posting_ordinals, (0..21).collect::<Vec<_>>());
     }
 
     #[test]
