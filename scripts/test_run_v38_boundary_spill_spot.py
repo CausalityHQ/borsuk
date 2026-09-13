@@ -1953,6 +1953,10 @@ class V38SpotMonitorTests(unittest.TestCase):
         self.assertIn('env PYTHONPATH="$source_root/.v38-python" python3.12', script)
         self.assertIn('if test "${V38_IN_SLICE:-0}" != 1; then', script)
         self.assertIn("V38_IN_SLICE=1", script)
+        self.assertLess(
+            script.index("dnf install -y python3.12"),
+            script.index('if test "${V38_IN_SLICE:-0}" != 1; then'),
+        )
         self.assertLess(script.index("systemd-run"), script.index("aws s3 cp"))
         self.assertIn('--slice="$slice_unit"', script)
         self.assertIn("--property=RuntimeMaxSec=720", script)

@@ -2430,6 +2430,7 @@ plan_path="$scratch/plan.json"
 boot_log="$scratch/boot.log"
 boot_failure_log="$scratch/boot-failure.log"
 mkdir -p "$root"
+dnf install -y python3.12
 if test "${{V38_IN_SLICE:-0}}" != 1; then
   systemctl start "$slice_unit"
   systemctl set-property --runtime "$slice_unit" MemoryMax={memory_limit} MemorySwapMax=0 MemoryAccounting=yes
@@ -2441,7 +2442,6 @@ if test "${{V38_IN_SLICE:-0}}" != 1; then
     --property=RuntimeMaxSec={wrapper_runtime_limit} \
     env V38_IN_SLICE=1 /bin/bash "$0"
 fi
-dnf install -y python3.12
 mkdir -p "$scratch" "$source_root"
 printf '%s' {shlex.quote(encoded_plan)} | base64 -d >"$plan_path"
 exec >"$boot_log" 2>&1
