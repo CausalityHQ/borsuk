@@ -8,5 +8,8 @@ license-file = "../../LICENSE"
 repository.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+borsuk-fma = { path = "../borsuk-fma" }
+
 [lints]
 workspace = true

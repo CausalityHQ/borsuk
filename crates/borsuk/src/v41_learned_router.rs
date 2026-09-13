@@ -1,9 +1,22 @@
 use crate::error::{BorsukError, Result};
 use crate::v38_boundary_spill::v38_v40_owner_rows_from_artifacts;
+use arrow_array::{Array, FixedSizeListArray, Float32Array, RecordBatch};
+use arrow_ipc::{
+    MessageHeader, MetadataVersion,
+    convert::fb_to_schema,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
+use borsuk_fma::FusedDot64;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::Cursor,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 const V41_QUERY_DIMENSIONS: usize = 768;
@@ -767,15 +780,456 @@ pub(crate) fn validate_v41_development_partition_against(
     Ok(())
 }
 
+const V41_MODEL_WIDTH: usize = 64;
+const V41_MODEL_QUERY_DIMENSIONS: usize = 768;
+const V41_MODEL_MANIFEST_SCHEMA: &str = "borsuk-v41-model-manifest-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V41ModelIdentity {
+    role: String,
+    uri: String,
+    sha256: String,
+    blake3: String,
+    encoded_bytes: u64,
+}
+
+impl From<&V41ArtifactIdentity> for V41ModelIdentity {
+    fn from(identity: &V41ArtifactIdentity) -> Self {
+        Self {
+            role: identity.role.clone(),
+            uri: identity.uri.clone(),
+            sha256: identity.sha256.clone(),
+            blake3: identity.blake3.clone(),
+            encoded_bytes: identity.encoded_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V41ModelAuthority {
+    backend: String,
+    page_count: u32,
+    source: V41ArtifactIdentity,
+    source_archive: V41ArtifactIdentity,
+    index: V41ArtifactIdentity,
+    training_split_sha256: String,
+}
+
+impl V41ModelAuthority {
+    pub(crate) fn try_new(
+        backend: String,
+        page_count: u32,
+        source: V41ArtifactIdentity,
+        source_archive: V41ArtifactIdentity,
+        index: V41ArtifactIdentity,
+        training_split_sha256: String,
+    ) -> Result<Self> {
+        let detected = FusedDot64::detect()
+            .map_err(|_| invalid("V41 fused model backend is unavailable"))?
+            .backend()
+            .as_str();
+        if backend != detected
+            || page_count == 0
+            || source.role != "source"
+            || source_archive.role != "source-archive"
+            || index.role != "index"
+            || !valid_digest(&training_split_sha256)
+        {
+            return Err(invalid("V41 model authority differs"));
+        }
+        Ok(Self {
+            backend,
+            page_count,
+            source,
+            source_archive,
+            index,
+            training_split_sha256,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V41ModelManifest {
+    schema: String,
+    backend: String,
+    page_count: u32,
+    source: V41ModelIdentity,
+    source_archive: V41ModelIdentity,
+    index: V41ModelIdentity,
+    training_split_sha256: String,
+    tensor_shapes: BTreeMap<String, Vec<u64>>,
+    model_sha256: String,
+}
+
+pub(crate) struct V41EncodedModel {
+    arrow_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+impl V41EncodedModel {
+    pub(crate) fn arrow_bytes(&self) -> &[u8] {
+        &self.arrow_bytes
+    }
+
+    pub(crate) fn manifest_bytes(&self) -> &[u8] {
+        &self.manifest_bytes
+    }
+}
+
+fn v41_model_tensor_shapes(page_count: u32) -> BTreeMap<String, Vec<u64>> {
+    BTreeMap::from([
+        ("b".to_owned(), vec![64]),
+        ("page_bias".to_owned(), vec![u64::from(page_count)]),
+        (
+            "page_embeddings".to_owned(),
+            vec![u64::from(page_count), 64],
+        ),
+        ("w_q".to_owned(), vec![64, 768]),
+        ("w_s".to_owned(), vec![64, 64]),
+    ])
+}
+
+fn v41_model_schema(page_count: u32) -> Result<Schema> {
+    let page_count = usize::try_from(page_count)
+        .map_err(|_| invalid("V41 model page count conversion differs"))?;
+    let field = |name: &str, length: usize| -> Result<Field> {
+        let length =
+            i32::try_from(length).map_err(|_| invalid("V41 model tensor length overflows"))?;
+        Ok(Field::new(
+            name,
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                length,
+            ),
+            false,
+        ))
+    };
+    Ok(Schema::new(vec![
+        field("w_q", V41_MODEL_WIDTH * V41_MODEL_QUERY_DIMENSIONS)?,
+        field("b", V41_MODEL_WIDTH)?,
+        field("w_s", V41_MODEL_WIDTH * V41_MODEL_WIDTH)?,
+        field("page_embeddings", page_count * V41_MODEL_WIDTH)?,
+        field("page_bias", page_count)?,
+    ]))
+}
+
+fn v41_tensor_array(field: &Field, values: &[f32]) -> Result<Arc<dyn Array>> {
+    let (child, length) = match field.data_type() {
+        DataType::FixedSizeList(child, length) => (Arc::clone(child), *length),
+        _ => return Err(invalid("V41 model Arrow schema differs")),
+    };
+    Ok(Arc::new(FixedSizeListArray::try_new(
+        child,
+        length,
+        Arc::new(Float32Array::from(values.to_vec())),
+        None,
+    )?))
+}
+
+fn v41_model_manifest(authority: &V41ModelAuthority, model_sha256: String) -> V41ModelManifest {
+    V41ModelManifest {
+        schema: V41_MODEL_MANIFEST_SCHEMA.to_owned(),
+        backend: authority.backend.clone(),
+        page_count: authority.page_count,
+        source: (&authority.source).into(),
+        source_archive: (&authority.source_archive).into(),
+        index: (&authority.index).into(),
+        training_split_sha256: authority.training_split_sha256.clone(),
+        tensor_shapes: v41_model_tensor_shapes(authority.page_count),
+        model_sha256,
+    }
+}
+
+fn v41_canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    fn canonical(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(values) => {
+                let mut values = values.into_iter().collect::<Vec<_>>();
+                values.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+                serde_json::Value::Object(
+                    values
+                        .into_iter()
+                        .map(|(key, value)| (key, canonical(value)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(values) => {
+                serde_json::Value::Array(values.into_iter().map(canonical).collect())
+            }
+            value => value,
+        }
+    }
+    let value = serde_json::to_value(value)
+        .map_err(|_| invalid("V41 model manifest serialization differs"))?;
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V41 model manifest serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub(crate) fn encode_v41_model(
+    model: &borsuk_v41::V41ResidualModel,
+    authority: &V41ModelAuthority,
+) -> Result<V41EncodedModel> {
+    if model.page_count()
+        != usize::try_from(authority.page_count)
+            .map_err(|_| invalid("V41 model page count conversion differs"))?
+    {
+        return Err(invalid("V41 model page count differs"));
+    }
+    let schema = Arc::new(v41_model_schema(authority.page_count)?);
+    let tensors = model.tensors();
+    let columns = [
+        tensors.w_q,
+        tensors.bias,
+        tensors.w_s,
+        tensors.page_embeddings,
+        tensors.page_bias,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, values)| v41_tensor_array(schema.field(index), values))
+    .collect::<Result<Vec<_>>>()?;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut arrow_bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut arrow_bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    let model_sha256 = format!("{:x}", Sha256::digest(&arrow_bytes));
+    let manifest_bytes = v41_canonical_json_bytes(&v41_model_manifest(authority, model_sha256))?;
+    Ok(V41EncodedModel {
+        arrow_bytes,
+        manifest_bytes,
+    })
+}
+
+fn v41_parse_arrow_message(stored: &[u8]) -> Result<arrow_ipc::Message<'_>> {
+    let invalid_arrow = || invalid("V41 model Arrow framing differs");
+    if stored.len() < 4 {
+        return Err(invalid_arrow());
+    }
+    let continuation = stored[..4] == [255; 4];
+    let prefix = if continuation { 8 } else { 4 };
+    if stored.len() < prefix {
+        return Err(invalid_arrow());
+    }
+    let length_offset = if continuation { 4 } else { 0 };
+    let length = usize::try_from(u32::from_le_bytes(
+        stored[length_offset..length_offset + 4]
+            .try_into()
+            .map_err(|_| invalid_arrow())?,
+    ))
+    .map_err(|_| invalid_arrow())?;
+    let end = prefix.checked_add(length).ok_or_else(invalid_arrow)?;
+    if end != stored.len() {
+        return Err(invalid_arrow());
+    }
+    arrow_ipc::root_as_message(&stored[prefix..end]).map_err(|_| invalid_arrow())
+}
+
+fn validate_v41_arrow_file(
+    bytes: &[u8],
+    expected_schema: &Schema,
+    maximum_values: usize,
+) -> Result<()> {
+    let invalid_arrow = || invalid("V41 model Arrow framing differs");
+    if bytes.len() < 18 || !bytes.starts_with(b"ARROW1") || !bytes.ends_with(b"ARROW1") {
+        return Err(invalid_arrow());
+    }
+    let trailer = bytes.len() - 10;
+    let footer_length = usize::try_from(u32::from_le_bytes(
+        bytes[trailer..trailer + 4]
+            .try_into()
+            .map_err(|_| invalid_arrow())?,
+    ))
+    .map_err(|_| invalid_arrow())?;
+    let footer_start = trailer
+        .checked_sub(footer_length)
+        .ok_or_else(invalid_arrow)?;
+    let footer =
+        arrow_ipc::root_as_footer(&bytes[footer_start..trailer]).map_err(|_| invalid_arrow())?;
+    if footer
+        .dictionaries()
+        .is_some_and(|dictionaries| !dictionaries.is_empty())
+    {
+        return Err(invalid_arrow());
+    }
+    if footer.version() != MetadataVersion::V5 {
+        return Err(invalid_arrow());
+    }
+    let footer_schema = footer.schema().ok_or_else(invalid_arrow)?;
+    let decoded_footer_schema = catch_unwind(AssertUnwindSafe(|| fb_to_schema(footer_schema)))
+        .map_err(|_| invalid_arrow())?;
+    if &decoded_footer_schema != expected_schema {
+        return Err(invalid_arrow());
+    }
+    let blocks = footer.recordBatches().ok_or_else(invalid_arrow)?;
+    if blocks.len() != 1 {
+        return Err(invalid_arrow());
+    }
+    let block = blocks.get(0);
+    let offset = usize::try_from(block.offset()).map_err(|_| invalid_arrow())?;
+    let metadata = usize::try_from(block.metaDataLength()).map_err(|_| invalid_arrow())?;
+    let body = usize::try_from(block.bodyLength()).map_err(|_| invalid_arrow())?;
+    let referenced_end = offset
+        .checked_add(metadata)
+        .and_then(|value| value.checked_add(body))
+        .ok_or_else(invalid_arrow)?;
+    if offset < 16
+        || metadata < 8
+        || bytes.get(referenced_end..footer_start) != Some(&[255, 255, 255, 255, 0, 0, 0, 0])
+    {
+        return Err(invalid_arrow());
+    }
+
+    let schema_message = v41_parse_arrow_message(&bytes[8..offset])?;
+    if schema_message.header_type() != MessageHeader::Schema || schema_message.bodyLength() != 0 {
+        return Err(invalid_arrow());
+    }
+    let leading_schema = schema_message
+        .header_as_schema()
+        .ok_or_else(invalid_arrow)?;
+    let decoded_leading_schema = catch_unwind(AssertUnwindSafe(|| fb_to_schema(leading_schema)))
+        .map_err(|_| invalid_arrow())?;
+    if decoded_leading_schema != decoded_footer_schema {
+        return Err(invalid_arrow());
+    }
+
+    let metadata_end = offset.checked_add(metadata).ok_or_else(invalid_arrow)?;
+    let body_end = metadata_end.checked_add(body).ok_or_else(invalid_arrow)?;
+    if body_end != referenced_end {
+        return Err(invalid_arrow());
+    }
+    let batch_message = v41_parse_arrow_message(&bytes[offset..metadata_end])?;
+    if batch_message.header_type() != MessageHeader::RecordBatch
+        || usize::try_from(batch_message.bodyLength()).ok() != Some(body)
+    {
+        return Err(invalid_arrow());
+    }
+    let batch = batch_message
+        .header_as_record_batch()
+        .ok_or_else(invalid_arrow)?;
+    if batch.length() != 1
+        || batch.compression().is_some()
+        || batch.variadicBufferCounts().is_some()
+    {
+        return Err(invalid_arrow());
+    }
+    let nodes = batch.nodes().ok_or_else(invalid_arrow)?;
+    if nodes.len() != 10
+        || nodes.iter().any(|node| {
+            node.length() < 0
+                || node.null_count() != 0
+                || usize::try_from(node.length()).map_or(true, |length| length > maximum_values)
+        })
+    {
+        return Err(invalid_arrow());
+    }
+    let buffers = batch.buffers().ok_or_else(invalid_arrow)?;
+    if buffers.len() != 15
+        || buffers.iter().any(|buffer| {
+            buffer.offset() < 0
+                || buffer.length() < 0
+                || usize::try_from(buffer.offset())
+                    .ok()
+                    .zip(usize::try_from(buffer.length()).ok())
+                    .and_then(|(offset, length)| offset.checked_add(length))
+                    .is_none_or(|end| end > body)
+        })
+    {
+        return Err(invalid_arrow());
+    }
+    Ok(())
+}
+
+fn v41_tensor_values(batch: &RecordBatch, index: usize) -> Result<Vec<f32>> {
+    let list = batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V41 model Arrow tensor type differs"))?;
+    if list.null_count() != 0 || list.len() != 1 {
+        return Err(invalid("V41 model Arrow tensor nullability differs"));
+    }
+    let values = list.value(0);
+    let values = values
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V41 model Arrow tensor value type differs"))?;
+    if values.null_count() != 0 {
+        return Err(invalid("V41 model Arrow tensor value nullability differs"));
+    }
+    Ok(values.values().to_vec())
+}
+
+pub(crate) fn decode_v41_model(
+    arrow_bytes: &[u8],
+    manifest_bytes: &[u8],
+    authority: &V41ModelAuthority,
+) -> Result<borsuk_v41::V41ResidualModel> {
+    let raw_bytes = borsuk_v41::v41_parameter_bytes(u64::from(authority.page_count))
+        .map_err(|error| invalid(&format!("V41 model parameter bytes differ: {error}")))?;
+    let arrow_length =
+        u64::try_from(arrow_bytes.len()).map_err(|_| invalid("V41 model Arrow length differs"))?;
+    if arrow_length < raw_bytes
+        || arrow_length
+            > raw_bytes
+                .checked_add(131_072)
+                .ok_or_else(|| invalid("V41 model Arrow bound overflows"))?
+        || manifest_bytes.is_empty()
+        || manifest_bytes.len() > 8_192
+    {
+        return Err(invalid("V41 model artifact bound differs"));
+    }
+    let expected_schema = v41_model_schema(authority.page_count)?;
+    let maximum_values =
+        usize::try_from(raw_bytes / 4).map_err(|_| invalid("V41 model value bound differs"))?;
+    validate_v41_arrow_file(arrow_bytes, &expected_schema, maximum_values)?;
+    let manifest: V41ModelManifest = serde_json::from_slice(manifest_bytes)
+        .map_err(|_| invalid("V41 model manifest differs"))?;
+    if v41_canonical_json_bytes(&manifest)? != manifest_bytes
+        || manifest != v41_model_manifest(authority, format!("{:x}", Sha256::digest(arrow_bytes)))
+    {
+        return Err(invalid("V41 model manifest authority differs"));
+    }
+    let mut reader = catch_unwind(AssertUnwindSafe(|| {
+        FileReader::try_new(Cursor::new(arrow_bytes), None)
+    }))
+    .map_err(|_| invalid("V41 model Arrow reader panicked"))??;
+    if reader.schema().as_ref() != &expected_schema || reader.num_batches() != 1 {
+        return Err(invalid("V41 model Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V41 model Arrow batch differs"))?;
+    if reader.next().is_some() || batch.num_rows() != 1 || batch.num_columns() != 5 {
+        return Err(invalid("V41 model Arrow batch count differs"));
+    }
+    borsuk_v41::V41ResidualModel::try_new(
+        v41_tensor_values(&batch, 0)?,
+        v41_tensor_values(&batch, 1)?,
+        v41_tensor_values(&batch, 2)?,
+        v41_tensor_values(&batch, 3)?,
+        v41_tensor_values(&batch, 4)?,
+    )
+    .map_err(|error| invalid(&format!("V41 decoded model differs: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         V41ArtifactIdentity, V41DevelopmentPartitionChild, V41DevelopmentPartitionManifest,
-        V41LocalArtifact, V41LocalOutput, V41LocalRunMode, V41LocalRunRequest,
-        V41PartitionChildAuthority, audit_v41_holdout_query_role, audit_v41_query_roles,
-        project_v41_development_partition, split_v41_development_queries,
-        v41_marginal_targets_from_v38_artifacts, validate_v41_development_partition,
-        validate_v41_development_partition_against,
+        V41LocalArtifact, V41LocalOutput, V41LocalRunMode, V41LocalRunRequest, V41ModelAuthority,
+        V41ModelManifest, V41PartitionChildAuthority, audit_v41_holdout_query_role,
+        audit_v41_query_roles, decode_v41_model, encode_v41_model,
+        project_v41_development_partition, split_v41_development_queries, v41_canonical_json_bytes,
+        v41_marginal_targets_from_v38_artifacts, v41_parse_arrow_message,
+        validate_v41_development_partition, validate_v41_development_partition_against,
     };
     use crate::v38_boundary_spill::{
         V38SpillRecord, encode_v38_posting_summary_parquet, encode_v38_spill_relation_parquet,
@@ -814,6 +1268,107 @@ mod tests {
         values[0] = f32::from_bits(marker.max(1));
         values[1] = ordinal as f32;
         (ordinal, values)
+    }
+
+    fn replace_once(bytes: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+        assert_eq!(needle.len(), replacement.len());
+        let offset = bytes
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .expect("registered token must occur in encoded artifact");
+        let mut changed = bytes.to_vec();
+        changed[offset..offset + needle.len()].copy_from_slice(replacement);
+        changed
+    }
+
+    fn model_identity(role: &str, digest: &str) -> V41ArtifactIdentity {
+        V41ArtifactIdentity::try_new(
+            role.to_owned(),
+            format!("s3://borsuk-test/v41/{role}"),
+            digest.to_owned(),
+            digest.to_owned(),
+            64,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn v41_model_arrow_round_trips_and_rejects_physical_drift() {
+        let page_count = 24_usize;
+        let model = borsuk_v41::V41ResidualModel::try_new(
+            vec![0.25; 64 * 768],
+            vec![0.5; 64],
+            vec![0.75; 64 * 64],
+            vec![1.0; page_count * 64],
+            vec![1.25; page_count],
+        )
+        .unwrap();
+        let backend = if cfg!(target_arch = "aarch64") {
+            "aarch64-neon-fma"
+        } else {
+            "x86-avx-fma"
+        };
+        let authority = V41ModelAuthority::try_new(
+            backend.to_owned(),
+            u32::try_from(page_count).unwrap(),
+            model_identity("source", SHA_A),
+            model_identity("source-archive", SHA_B),
+            model_identity("index", SHA_C),
+            SHA_D.to_owned(),
+        )
+        .unwrap();
+        let encoded = encode_v41_model(&model, &authority).unwrap();
+        assert!(encoded.manifest_bytes().starts_with(b"{\"backend\":"));
+        assert!(encoded.manifest_bytes().ends_with(b"\n"));
+        assert_eq!(
+            decode_v41_model(encoded.arrow_bytes(), encoded.manifest_bytes(), &authority).unwrap(),
+            model
+        );
+
+        let trailer = encoded.arrow_bytes().len() - 10;
+        let footer_length = usize::try_from(u32::from_le_bytes(
+            encoded.arrow_bytes()[trailer..trailer + 4]
+                .try_into()
+                .unwrap(),
+        ))
+        .unwrap();
+        let footer =
+            arrow_ipc::root_as_footer(&encoded.arrow_bytes()[trailer - footer_length..trailer])
+                .unwrap();
+        let record_offset =
+            usize::try_from(footer.recordBatches().unwrap().get(0).offset()).unwrap();
+        let mut schema_with_premature_eos = encoded.arrow_bytes()[8..record_offset].to_vec();
+        schema_with_premature_eos.extend_from_slice(&[0; 8]);
+        assert!(v41_parse_arrow_message(&schema_with_premature_eos).is_err());
+
+        let mut trailing = encoded.arrow_bytes().to_vec();
+        trailing.push(0);
+        assert!(decode_v41_model(&trailing, encoded.manifest_bytes(), &authority).is_err());
+
+        let wrong_name = replace_once(encoded.arrow_bytes(), b"w_q", b"x_q");
+        let mut renamed_manifest: V41ModelManifest =
+            serde_json::from_slice(encoded.manifest_bytes()).unwrap();
+        renamed_manifest.model_sha256 = format!("{:x}", Sha256::digest(&wrong_name));
+        let renamed_manifest = v41_canonical_json_bytes(&renamed_manifest).unwrap();
+        assert!(decode_v41_model(&wrong_name, &renamed_manifest, &authority).is_err());
+
+        let wrong_backend = if backend == "aarch64-neon-fma" {
+            replace_once(
+                encoded.manifest_bytes(),
+                b"aarch64-neon-fma",
+                b"xarch64-neon-fma",
+            )
+        } else {
+            replace_once(encoded.manifest_bytes(), b"x86-avx-fma", b"x86-fma-fma")
+        };
+        assert!(decode_v41_model(encoded.arrow_bytes(), &wrong_backend, &authority).is_err());
+
+        let wrong_page_count = replace_once(
+            encoded.manifest_bytes(),
+            b"\"page_count\":24",
+            b"\"page_count\":25",
+        );
+        assert!(decode_v41_model(encoded.arrow_bytes(), &wrong_page_count, &authority).is_err());
     }
 
     #[test]

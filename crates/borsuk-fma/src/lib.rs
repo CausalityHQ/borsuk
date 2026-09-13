@@ -13,6 +13,16 @@ pub enum FmaBackend {
     X86AvxFma,
 }
 
+impl FmaBackend {
+    /// Stable receipt spelling for this fused backend.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Aarch64NeonFma => "aarch64-neon-fma",
+            Self::X86AvxFma => "x86-avx-fma",
+        }
+    }
+}
+
 /// Error returned when no verified fused SIMD backend is available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FmaUnavailable;
@@ -79,6 +89,101 @@ impl FusedDot8x12 {
             #[allow(unreachable_patterns)]
             _ => unreachable!("a fused kernel cannot contain a foreign backend"),
         }
+    }
+}
+
+/// Detected eight-lane fused dot product for exactly 64 elements.
+#[derive(Debug, Clone, Copy)]
+pub struct FusedDot64 {
+    backend: FmaBackend,
+}
+
+impl FusedDot64 {
+    /// Detect and freeze the available fused backend.
+    pub fn detect() -> Result<Self, FmaUnavailable> {
+        FusedDot8x12::detect().map(|kernel| Self {
+            backend: kernel.backend(),
+        })
+    }
+
+    /// The exact backend frozen by [`Self::detect`].
+    pub fn backend(self) -> FmaBackend {
+        self.backend
+    }
+
+    /// Compute the registered eight-lane by eight-step fused dot product.
+    #[inline(always)]
+    pub fn dot(self, left: &[f32; 64], right: &[f32; 64]) -> f32 {
+        fused_dot_fixed(self.backend, left, right)
+    }
+}
+
+/// Detected row-major 64-by-64 fused matrix-vector kernel.
+#[derive(Debug, Clone, Copy)]
+pub struct FusedMatVec64 {
+    dot: FusedDot64,
+}
+
+impl FusedMatVec64 {
+    /// Detect and freeze the available fused backend.
+    pub fn detect() -> Result<Self, FmaUnavailable> {
+        FusedDot64::detect().map(|dot| Self { dot })
+    }
+
+    /// Multiply one row-major 64-by-64 matrix by one 64-element vector.
+    pub fn matrix_vector_64x64(self, matrix: &[f32; 4_096], vector: &[f32; 64]) -> [f32; 64] {
+        std::array::from_fn(|row| {
+            let coefficients = matrix[row * 64..(row + 1) * 64]
+                .try_into()
+                .expect("a fixed matrix row has exactly 64 elements");
+            self.dot.dot(coefficients, vector)
+        })
+    }
+}
+
+/// Detected row-major 64-by-768 fused matrix-vector kernel.
+#[derive(Debug, Clone, Copy)]
+pub struct FusedMatVec768 {
+    backend: FmaBackend,
+}
+
+impl FusedMatVec768 {
+    /// Detect and freeze the available fused backend.
+    pub fn detect() -> Result<Self, FmaUnavailable> {
+        FusedDot8x12::detect().map(|kernel| Self {
+            backend: kernel.backend(),
+        })
+    }
+
+    /// Multiply one row-major 64-by-768 matrix by one 768-element vector.
+    pub fn matrix_vector_64x768(self, matrix: &[f32; 49_152], vector: &[f32; 768]) -> [f32; 64] {
+        std::array::from_fn(|row| {
+            let coefficients = matrix[row * 768..(row + 1) * 768]
+                .try_into()
+                .expect("a fixed matrix row has exactly 768 elements");
+            fused_dot_fixed(self.backend, coefficients, vector)
+        })
+    }
+}
+
+#[inline(always)]
+fn fused_dot_fixed<const N: usize>(backend: FmaBackend, left: &[f32; N], right: &[f32; N]) -> f32 {
+    debug_assert!(N > 0 && N.is_multiple_of(8));
+    match backend {
+        #[cfg(target_arch = "aarch64")]
+        FmaBackend::Aarch64NeonFma => {
+            // SAFETY: detection established NEON availability and fixed-size
+            // inputs make every generated lane access valid.
+            unsafe { aarch64_dot_fixed(left, right) }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        FmaBackend::X86AvxFma => {
+            // SAFETY: detection established AVX+FMA availability and fixed-size
+            // inputs make every generated lane access valid.
+            unsafe { x86_dot_fixed(left, right) }
+        }
+        #[allow(unreachable_patterns)]
+        _ => unreachable!("a fused kernel cannot contain a foreign backend"),
     }
 }
 
@@ -341,6 +446,71 @@ unsafe fn x86_pq4_block_scores(block: &[u8; 512], tables: &[[u8; 16]; 32]) -> [u
 
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
+unsafe fn aarch64_dot_fixed<const N: usize>(left: &[f32; N], right: &[f32; N]) -> f32 {
+    use std::arch::aarch64::{vfmaq_f32, vld1q_f32, vst1q_f32};
+
+    // SAFETY: the caller established NEON support. N is a nonzero multiple of
+    // eight for every public construction, so generated indices are in bounds.
+    unsafe {
+        let steps = N / 8;
+        let mut low = vld1q_f32([0.0_f32; 4].as_ptr());
+        let mut high = vld1q_f32([0.0_f32; 4].as_ptr());
+        for step in 0..steps {
+            let left_low = std::array::from_fn::<_, 4, _>(|lane| left[lane * steps + step]);
+            let right_low = std::array::from_fn::<_, 4, _>(|lane| right[lane * steps + step]);
+            let left_high = std::array::from_fn::<_, 4, _>(|lane| left[(lane + 4) * steps + step]);
+            let right_high =
+                std::array::from_fn::<_, 4, _>(|lane| right[(lane + 4) * steps + step]);
+            low = vfmaq_f32(
+                low,
+                vld1q_f32(left_low.as_ptr()),
+                vld1q_f32(right_low.as_ptr()),
+            );
+            high = vfmaq_f32(
+                high,
+                vld1q_f32(left_high.as_ptr()),
+                vld1q_f32(right_high.as_ptr()),
+            );
+        }
+        let mut lanes = [0.0_f32; 8];
+        vst1q_f32(lanes.as_mut_ptr(), low);
+        vst1q_f32(lanes.as_mut_ptr().add(4), high);
+        lanes.into_iter().fold(0.0_f32, |sum, value| sum + value)
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx,fma")]
+unsafe fn x86_dot_fixed<const N: usize>(left: &[f32; N], right: &[f32; N]) -> f32 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{_mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps};
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{
+        _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    // SAFETY: the caller established AVX+FMA support. N is a nonzero multiple
+    // of eight for every public construction, so generated indices are valid.
+    unsafe {
+        let steps = N / 8;
+        let mut accumulator = _mm256_setzero_ps();
+        for step in 0..steps {
+            let left_lanes = std::array::from_fn::<_, 8, _>(|lane| left[lane * steps + step]);
+            let right_lanes = std::array::from_fn::<_, 8, _>(|lane| right[lane * steps + step]);
+            accumulator = _mm256_fmadd_ps(
+                _mm256_loadu_ps(left_lanes.as_ptr()),
+                _mm256_loadu_ps(right_lanes.as_ptr()),
+                accumulator,
+            );
+        }
+        let mut lanes = [0.0_f32; 8];
+        _mm256_storeu_ps(lanes.as_mut_ptr(), accumulator);
+        lanes.into_iter().fold(0.0_f32, |sum, value| sum + value)
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
 unsafe fn aarch64_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
     use std::arch::aarch64::{vfmaq_f32, vld1q_f32, vst1q_f32};
 
@@ -470,8 +640,8 @@ unsafe fn x86_project4(basis: &[f32], query: &[f32], routing: usize, output: usi
 #[cfg(test)]
 mod tests {
     use super::{
-        FusedDot8x12, FusedProjection4, Pq4Backend, Pq4BlockScorer, fused_dot_8x12,
-        pq4_scalar_block_scores,
+        FusedDot8x12, FusedDot64, FusedMatVec64, FusedMatVec768, FusedProjection4, Pq4Backend,
+        Pq4BlockScorer, fused_dot_8x12, pq4_scalar_block_scores,
     };
 
     fn scalar(left: &[f32; 96], right: &[f32; 96]) -> f32 {
@@ -483,6 +653,73 @@ mod tests {
             }
         }
         lanes.into_iter().fold(0.0_f32, |sum, value| sum + value)
+    }
+
+    fn scalar_dot<const N: usize>(left: &[f32; N], right: &[f32; N]) -> f32 {
+        assert_eq!(N % 8, 0);
+        let steps = N / 8;
+        let mut lanes = [0.0_f32; 8];
+        for (lane, accumulator) in lanes.iter_mut().enumerate() {
+            for step in 0..steps {
+                let dimension = lane * steps + step;
+                *accumulator = left[dimension].mul_add(right[dimension], *accumulator);
+            }
+        }
+        lanes.into_iter().fold(0.0_f32, |sum, value| sum + value)
+    }
+
+    #[test]
+    fn v41_fma_dot64_matches_registered_scalar_bits() {
+        let kernel = FusedDot64::detect().unwrap();
+        for (left, right) in [
+            ([0.0_f32; 64], [-0.0_f32; 64]),
+            ([f32::from_bits(1); 64], [1.0_f32; 64]),
+            (
+                std::array::from_fn(|index| ((index * 37 % 101) as f32 - 50.0) / 103.0),
+                std::array::from_fn(|index| ((index * 19 % 89) as f32 - 44.0) / 97.0),
+            ),
+            (
+                std::array::from_fn(|index| (63 - index) as f32 / 67.0),
+                std::array::from_fn(|index| (index as f32 - 31.0) / 71.0),
+            ),
+            ([f32::MAX / 128.0; 64], [f32::EPSILON; 64]),
+        ] {
+            assert_eq!(
+                kernel.dot(&left, &right).to_bits(),
+                scalar_dot(&left, &right).to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn v41_fma_matvec64_and_768_match_registered_scalar_bits() {
+        let matrix64 =
+            std::array::from_fn::<_, 4096, _>(|index| ((index * 29 % 211) as f32 - 105.0) / 223.0);
+        let vector64 =
+            std::array::from_fn::<_, 64, _>(|index| ((index * 17 % 79) as f32 - 39.0) / 83.0);
+        let expected64 = std::array::from_fn::<_, 64, _>(|row| {
+            let coefficients: &[f32; 64] = matrix64[row * 64..(row + 1) * 64].try_into().unwrap();
+            scalar_dot(coefficients, &vector64)
+        });
+        let actual64 = FusedMatVec64::detect()
+            .unwrap()
+            .matrix_vector_64x64(&matrix64, &vector64);
+        assert_eq!(actual64.map(f32::to_bits), expected64.map(f32::to_bits));
+
+        let matrix768 = std::array::from_fn::<_, 49_152, _>(|index| {
+            ((index * 43 % 251) as f32 - 125.0) / 257.0
+        });
+        let vector768 =
+            std::array::from_fn::<_, 768, _>(|index| ((index * 31 % 197) as f32 - 98.0) / 199.0);
+        let expected768 = std::array::from_fn::<_, 64, _>(|row| {
+            let coefficients: &[f32; 768] =
+                matrix768[row * 768..(row + 1) * 768].try_into().unwrap();
+            scalar_dot(coefficients, &vector768)
+        });
+        let actual768 = FusedMatVec768::detect()
+            .unwrap()
+            .matrix_vector_64x768(&matrix768, &vector768);
+        assert_eq!(actual768.map(f32::to_bits), expected768.map(f32::to_bits));
     }
 
     #[test]
