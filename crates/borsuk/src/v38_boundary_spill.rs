@@ -3763,15 +3763,16 @@ where
             V38_SELECTED_POSTINGS,
         )?);
         query_owners.push(owners);
-        let completed = u32::try_from(query_ordinal + 1)
-            .map_err(|_| invalid("V38 completed query count overflows"))?;
-        if completed % 32 == 0 || query_ordinal + 1 == truth.len() {
-            report_completed_queries(completed)?;
-        }
     }
 
     let bounds = v38_finish_layout_ceiling(authority, certificates)?;
     if bounds.disposition != V38TerminalDisposition::Indeterminate {
+        let mut completed = 32;
+        while completed < V38_QUERY_COUNT {
+            report_completed_queries(completed)?;
+            completed += 32;
+        }
+        report_completed_queries(V38_QUERY_COUNT)?;
         return Ok(bounds);
     }
 
@@ -5475,6 +5476,67 @@ mod tests {
             .collect()
     }
 
+    fn indeterminate_first_query_relation() -> (V38SpillRelation, Vec<V37FeatureGroundTruth>) {
+        let mut owners = (0_u32..123)
+            .map(|posting| {
+                (
+                    10_000 + u64::from(posting),
+                    posting,
+                    (posting < 100).then_some(100 + posting % 14),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut trap = Vec::new();
+        for group in 0_u32..10 {
+            let base = group * 3;
+            trap.extend(greedy_trap().into_iter().map(|(primary, alternate)| {
+                (base + primary, alternate.map(|posting| base + posting))
+            }));
+        }
+        owners.extend(
+            trap.iter()
+                .enumerate()
+                .map(|(ordinal, (primary, alternate))| {
+                    (20_000 + ordinal as u64, *primary, *alternate)
+                }),
+        );
+        let mut primary_populations = [0_u32; 123];
+        for (_, primary, _) in &owners {
+            primary_populations[*primary as usize] += 1;
+        }
+        let mut next_primary = [0_u32; 123];
+        let mut next_alternate = primary_populations;
+        let mut records = Vec::new();
+        for (source_ordinal, (feature_row_id, primary, alternate)) in owners.into_iter().enumerate()
+        {
+            records.push(V38SpillRecord {
+                source_ordinal: source_ordinal as u64,
+                feature_row_id,
+                posting_ordinal: primary,
+                owner_role: 0,
+                posting_local_ordinal: next_primary[primary as usize],
+                alternate_violation_bits: None,
+            });
+            next_primary[primary as usize] += 1;
+            if let Some(alternate) = alternate {
+                records.push(V38SpillRecord {
+                    source_ordinal: source_ordinal as u64,
+                    feature_row_id,
+                    posting_ordinal: alternate,
+                    owner_role: 1,
+                    posting_local_ordinal: next_alternate[alternate as usize],
+                    alternate_violation_bits: Some(0.0_f32.to_bits()),
+                });
+                next_alternate[alternate as usize] += 1;
+            }
+        }
+        let postings = summarize_v38_spill_relation(&records, 123, 10_240).unwrap();
+        let relation = V38SpillRelation { records, postings };
+        let mut truth = complete_population_truth();
+        truth[0].feature_row_ids = (20_000_u64..20_100).collect();
+        (relation, truth)
+    }
+
     #[test]
     fn v38_boundary_cover_complete_bounds_short_circuit_feasible_without_dfs() {
         let result: V38LayoutCeiling = evaluate_v38_multi_owner_ceiling(
@@ -5518,6 +5580,25 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("registered progress failure"));
+    }
+
+    #[test]
+    fn v38_boundary_cover_progress_never_restarts_after_zero_visit_bounds() {
+        let (relation, truth) = indeterminate_first_query_relation();
+        let mut progress = Vec::new();
+        let result = evaluate_v38_multi_owner_ceiling_with_progress(
+            &ceiling_authority(),
+            &relation,
+            &truth,
+            |completed| {
+                progress.push(completed);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(result.total_solver_visits > 0);
+        assert_eq!(progress.last(), Some(&1_000));
+        assert!(progress.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
