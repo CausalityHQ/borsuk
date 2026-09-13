@@ -32,6 +32,8 @@ const V38_MAXIMUM_ROWS_PER_POSTING: u32 = 10_240;
 const V38_PROJECTED_RECORD_BYTES: u32 = 48;
 const V38_PROJECTED_FRAMING_ALLOWANCE_BYTES: u32 = 32_768;
 const V38_SELECTED_POSTINGS: u32 = 14;
+const V38_CEILING_POSTING_BUDGETS: [u32; 7] = [14, 16, 18, 20, 24, 28, 32];
+const V38_MAXIMUM_CEILING_POSTINGS: u32 = 32;
 const V38_AGGREGATE_GATE_PPM: u32 = 998_000;
 const V38_MINIMUM_GATE_PPM: u32 = 800_000;
 const V38_QUERY_COUNT: u32 = 1_000;
@@ -1795,7 +1797,7 @@ fn validate_ceiling_authority(authority: &V38CeilingAuthority) -> Result<()> {
         || authority.minimum_gate_ppm != V38_MINIMUM_GATE_PPM
         || authority.query_count != V38_QUERY_COUNT
         || authority.gt_neighbors != V38_GT_NEIGHBORS
-        || authority.selected_postings != V38_SELECTED_POSTINGS
+        || !V38_CEILING_POSTING_BUDGETS.contains(&authority.selected_postings)
         || authority.maximum_query_solver_nodes != V38_MAXIMUM_QUERY_SOLVER_NODES
         || authority.maximum_solver_nodes != V38_MAXIMUM_SOLVER_NODES
         || authority.maximum_certificate_bytes != V38_MAXIMUM_CERTIFICATE_BYTES
@@ -3204,7 +3206,7 @@ fn v38_frame_upper(
 ) -> u32 {
     let covered = v38_coverage_hits(frame.covered);
     let slots = (selected_postings - frame.selected_count) as usize;
-    let mut largest = [0_u32; V38_SELECTED_POSTINGS as usize];
+    let mut largest = vec![0_u32; selected_postings as usize];
     for posting in 0..posting_count {
         if !v38_mask_contains(frame.candidates, posting) {
             continue;
@@ -3251,7 +3253,7 @@ pub(crate) fn solve_v38_query_coverage(
         || posting_count > V38_POSTING_COUNT
         || selected_postings == 0
         || selected_postings > posting_count
-        || selected_postings > V38_SELECTED_POSTINGS
+        || selected_postings > V38_MAXIMUM_CEILING_POSTINGS
         || maximum_solver_nodes == 0
     {
         return Err(invalid("V38 query coverage authority differs"));
@@ -3445,7 +3447,7 @@ fn v38_zero_visit_bounds(
         || posting_count > V38_POSTING_COUNT
         || selected_postings == 0
         || selected_postings > posting_count
-        || selected_postings > V38_SELECTED_POSTINGS
+        || selected_postings > V38_MAXIMUM_CEILING_POSTINGS
     {
         return Err(invalid("V38 query coverage authority differs"));
     }
@@ -3659,7 +3661,7 @@ fn v38_finish_layout_ceiling(
         claim_eligible: false,
         authority: authority.clone(),
         gt_neighbors: V38_GT_NEIGHBORS,
-        selected_postings: V38_SELECTED_POSTINGS,
+        selected_postings: authority.selected_postings,
         aggregate_gate_ppm: V38_AGGREGATE_GATE_PPM,
         minimum_gate_ppm: V38_MINIMUM_GATE_PPM,
         exact_query_count: certificates
@@ -3760,7 +3762,7 @@ where
             query.query_ordinal,
             &owners,
             V38_POSTING_COUNT,
-            V38_SELECTED_POSTINGS,
+            authority.selected_postings,
         )?);
         query_owners.push(owners);
     }
@@ -3779,7 +3781,7 @@ where
     let certificates = solve_v38_coverage_batch_with_progress(
         &query_owners,
         V38_POSTING_COUNT,
-        V38_SELECTED_POSTINGS,
+        authority.selected_postings,
         V38_MAXIMUM_QUERY_SOLVER_NODES,
         V38_MAXIMUM_SOLVER_NODES,
         report_completed_queries,
@@ -3791,7 +3793,7 @@ fn validate_v38_layout_ceiling(result: &V38LayoutCeiling) -> Result<()> {
     if result.schema != "borsuk-v38-boundary-spill-ceiling-v1"
         || result.claim_eligible
         || result.gt_neighbors != V38_GT_NEIGHBORS
-        || result.selected_postings != V38_SELECTED_POSTINGS
+        || result.selected_postings != result.authority.selected_postings
         || result.aggregate_gate_ppm != V38_AGGREGATE_GATE_PPM
         || result.minimum_gate_ppm != V38_MINIMUM_GATE_PPM
         || result.certificates.len() != V38_QUERY_COUNT as usize
@@ -3805,7 +3807,7 @@ fn validate_v38_layout_ceiling(result: &V38LayoutCeiling) -> Result<()> {
             .copied()
             .collect::<BTreeSet<_>>();
         if certificate.query_ordinal != query_ordinal as u32
-            || certificate.selected_postings.len() != V38_SELECTED_POSTINGS as usize
+            || certificate.selected_postings.len() != result.selected_postings as usize
             || unique.len() != certificate.selected_postings.len()
             || !certificate
                 .selected_postings
@@ -4877,6 +4879,41 @@ mod tests {
         let mut changed = authority;
         changed.relation.role = "spill-postings".to_owned();
         assert!(canonical_v38_ceiling_authority_bytes(&changed).is_err());
+    }
+
+    #[test]
+    fn v39_budget_ceiling_accepts_only_the_preregistered_posting_ladder() {
+        for selected_postings in [14, 16, 18, 20, 24, 28, 32] {
+            let mut authority = ceiling_authority();
+            authority.selected_postings = selected_postings;
+            let bytes = canonical_v38_ceiling_authority_bytes(&authority).unwrap();
+            assert_eq!(validate_v38_ceiling_authority_bytes(&bytes).unwrap(), bytes);
+        }
+
+        for selected_postings in [0, 13, 15, 22, 31, 33] {
+            let mut authority = ceiling_authority();
+            authority.selected_postings = selected_postings;
+            assert!(canonical_v38_ceiling_authority_bytes(&authority).is_err());
+        }
+    }
+
+    #[test]
+    fn v39_budget_ceiling_uses_the_authenticated_posting_budget() {
+        let mut authority = ceiling_authority();
+        authority.selected_postings = 32;
+        let result = evaluate_v38_multi_owner_ceiling(
+            &authority,
+            &complete_population_relation(true),
+            &complete_population_truth(),
+        )
+        .unwrap();
+        assert_eq!(result.selected_postings, 32);
+        assert!(
+            result
+                .certificates
+                .iter()
+                .all(|certificate| certificate.selected_postings.len() == 32)
+        );
     }
 
     #[test]

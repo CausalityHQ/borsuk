@@ -506,7 +506,7 @@ class V38SpotAuthorityTests(unittest.TestCase):
             "query_count": 1_000,
             "relation": subordinate[1],
             "schema": "borsuk-v38-boundary-spill-ceiling-authority-v1",
-            "selected_postings": 14,
+            "selected_postings": 16,
         }
         authority_raw = json.dumps(
             authority, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -553,7 +553,7 @@ class V38SpotAuthorityTests(unittest.TestCase):
                     "exact": True,
                     "feasible_hits": 100,
                     "query_ordinal": query,
-                    "selected_postings": list(range(14)),
+                    "selected_postings": list(range(16)),
                     "solver_visits": 0,
                 }
                 for query in range(1_000)
@@ -573,7 +573,7 @@ class V38SpotAuthorityTests(unittest.TestCase):
                 "minimum_gate_ppm": 800_000,
                 "passed": True,
                 "schema": "borsuk-v38-boundary-spill-ceiling-v1",
-                "selected_postings": 14,
+                "selected_postings": 16,
                 "total_solver_visits": 0,
             }
 
@@ -592,7 +592,7 @@ class V38SpotAuthorityTests(unittest.TestCase):
                 lambda value: value["authority"].update(query_count=999),
                 lambda value: value["authority"]["relation"].update(sha256="f" * 64),
                 lambda value: value["certificates"][0].update(query_ordinal=1),
-                lambda value: value["certificates"][0].update(selected_postings=list(range(13))),
+                lambda value: value["certificates"][0].update(selected_postings=list(range(15))),
                 lambda value: value["certificates"][0].update(feasible_hits=99),
                 lambda value: value["certificates"][0].update(certified_upper_hits=99),
                 lambda value: value["certificates"][0].update(exact=False),

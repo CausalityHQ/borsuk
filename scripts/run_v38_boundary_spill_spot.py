@@ -36,6 +36,7 @@ BUILD_PROGRESS_TIMEOUT_SECONDS = 120
 CEILING_SCIENCE_TIMEOUT_SECONDS = 120
 CEILING_WRAPPER_TIMEOUT_SECONDS = 180
 CEILING_PROGRESS_TIMEOUT_SECONDS = 30
+V38_CEILING_POSTING_BUDGETS = (14, 16, 18, 20, 24, 28, 32)
 
 _LOWER_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _LOWER_GIT_SHA1 = re.compile(r"[0-9a-f]{40}\Z")
@@ -1437,7 +1438,7 @@ def _validate_v38_ceiling_result(
         or type(result.get("passed")) is not bool
         or any(type(result.get(key)) is not int for key in integer_fields)
         or result.get("gt_neighbors") != 100
-        or result.get("selected_postings") != 14
+        or result.get("selected_postings") not in V38_CEILING_POSTING_BUDGETS
         or result.get("aggregate_gate_ppm") != 998_000
         or result.get("minimum_gate_ppm") != 800_000
     ):
@@ -1476,7 +1477,7 @@ def _validate_v38_ceiling_result(
         or authority.get("posting_summary") != expected_inputs[3]
         or authority.get("development_ground_truth") != expected_inputs[4]
         or authority.get("gt_neighbors") != 100
-        or authority.get("selected_postings") != 14
+        or authority.get("selected_postings") != result["selected_postings"]
         or authority.get("aggregate_gate_ppm") != 998_000
         or authority.get("minimum_gate_ppm") != 800_000
         or authority.get("query_count") != 1_000
@@ -1510,7 +1511,7 @@ def _validate_v38_ceiling_result(
             type(certificate.get("query_ordinal")) is not int
             or certificate["query_ordinal"] != query_ordinal
             or type(selected) is not list
-            or len(selected) != 14
+            or len(selected) != result["selected_postings"]
             or any(type(posting) is not int for posting in selected)
             or selected != sorted(set(selected))
             or not all(0 <= posting < 123 for posting in selected)
