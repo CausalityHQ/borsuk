@@ -222,6 +222,11 @@ mod v36_prefix_dataset;
 )]
 mod v37_relation_router;
 mod v38_boundary_spill;
+#[allow(
+    dead_code,
+    reason = "V40 router components are wired incrementally by the committed plan"
+)]
+mod v40_spill_router;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]

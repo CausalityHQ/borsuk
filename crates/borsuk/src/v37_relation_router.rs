@@ -1832,6 +1832,29 @@ fn select_v37_tree_postings(
     })
 }
 
+pub(crate) fn select_v37_tree_postings_with_limit(
+    tree: &V37BalancedTree,
+    expected_backend: &str,
+    maximum_node_visits: usize,
+    posting_limit: usize,
+    query: &[f32],
+) -> Result<V37DirectSelection> {
+    validate_v37_tree_geometry(tree)?;
+    if expected_backend != tree.fma_backend
+        || posting_limit == 0
+        || posting_limit > tree.leaf_populations.len()
+        || maximum_node_visits == 0
+        || maximum_node_visits > tree.nodes.len()
+    {
+        return Err(invalid("V37 generalized tree routing authority differs"));
+    }
+    let kernel = v37_fused_kernel()?;
+    if v37_fma_backend_name(kernel) != expected_backend {
+        return Err(invalid("V37 generalized tree routing backend differs"));
+    }
+    select_v37_tree_postings(tree, kernel, maximum_node_visits, posting_limit, query)
+}
+
 fn squared_distance_with_kernel(
     left: &[f32],
     right: &[f32],
