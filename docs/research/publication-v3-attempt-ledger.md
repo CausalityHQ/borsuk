@@ -4698,3 +4698,69 @@ claim-eligible comparison remain fenced. The next 1M-only falsifier must alter
 the query-independent row-to-page relation specifically enough to close the
 remaining 17,710-ppm aggregate and 100,000-ppm worst-query gaps without
 loosening the registered quality gates.
+
+### V38 one-million-row query-blind boundary-spill ceiling
+
+V38 tested whether one bounded, query-independent alternate owner could close
+the V37 containment gap without increasing the fourteen-posting read budget.
+The frozen population remained ReLAION2B cohort A: 1,000,000 non-null
+`f32[768]` corpus vectors, the registered 1,000 development queries, and exact
+binary64 no-FMA GT@100. The build did not receive query vectors or ground
+truth. It retained every V37 primary owner, proposed one deterministic
+alternate for every row, admitted at most 250,000 alternates, and capped each
+posting at 10,240 records. The later ceiling phase received the sealed
+construction artifacts and development ground truth but no corpus or query
+vectors.
+
+The source-free preflight at source
+`ab96e6863623830f85388fb0a27e530b6f08dff7` completed on causality Spot and
+measured a 126,193,851,919-ns projected construction, a
+5,598,233,176-ns projected scoring pass, a 595,618,743-ns projected spill
+post-scoring pass, and a 2,783,657,984-byte projected peak. The fused kernel
+measured 4,184,177,268 coordinate scores/s; all 15,360 scalar/fused comparisons
+matched at zero ULP. Scientific work took 1.0007 seconds, the wrapper took
+1.0956 seconds, and the process-group monitor recorded 268,435,456 bytes peak
+memory, zero swap, and zero peak memory PSI. The 2,209-byte terminal is SHA256
+`6d174a3c9de007215688d77d61c9388be4e6f22d07a26714476aee4ff25b13cd`.
+
+The admitted 1M construction completed on causality Spot instance
+`i-07b7d4cbf8d615f18`. It proposed 1,000,000 alternates and admitted 250,000;
+750,000 rows retained one owner and 250,000 rows had two, for 1,250,000 total
+assignments. Capacity rejected 63,199 proposals and the maximum posting
+population was 10,240. Native work took 97.030152916 seconds; the wrapper took
+116.183316815 seconds. Peak process-group memory was 3,131,396,096 bytes,
+within the 3-GiB gate, with zero swap and zero peak memory PSI. The
+25,136,186-byte relation is SHA256
+`f09bbe55e855329b2fa54f547377e0bc64dba7f64f4f84d0eff9907096396a50`;
+the 3,608-byte posting summary is SHA256
+`8a76912dc1b307b5c50dee75a41368bed51965cf7fabee990a210b2230f5cd4e`.
+The 4,265-byte construction result is SHA256
+`5c27fcdf77b5766c56f69d297b599d819987676c893cc87b4d354b0a22930ad8`;
+the 2,979-byte terminal is SHA256
+`0de845a218803d4b27cc7195a78ef8cb4b9ffb2bc3c522d8c63a28304c390a33`.
+
+The exact fourteen-posting ceiling completed on causality Spot instance
+`i-007dab85b91d3735f`. All 1,000 query certificates were exact and consumed
+223,412 bounded solver visits. It measured 988,550 ppm aggregate GT@100
+containment and 760,000 ppm minimum-query containment. Feasible and certified
+upper values were identical, so additional solver work cannot change the
+decision. Both miss the preregistered 998,000/800,000-ppm gates. Scientific
+work took 2.001182361 seconds; the wrapper took 2.687465819 seconds. The
+monitor recorded 268,435,456 bytes peak memory, zero swap, and zero peak memory
+PSI. The canonical 162,442-byte result and ceiling artifact are identical and
+SHA256
+`483115df905b587885b35bd03ca9755996e5ba0e295c05ce2927f48fad2e2541`;
+the 2,580-byte terminal is SHA256
+`f8d08afdf4622430cfa690e70daf7074220e66a2d58c1f84378b55d5931da145`.
+All three successful Spot instances are confirmed terminated.
+
+Disposition: `layout-rejected`. V38 improves the V37 unique-owner ceiling from
+980,290 to 988,550 ppm aggregate and from 700,000 to 760,000 ppm minimum, but
+the exact ceiling proves that this fixed one-alternate layout cannot meet the
+quality contract at fourteen reads. The failure is a layout/containment limit,
+not a query-scoring, transport, or memory failure. No larger population,
+physical page-read benchmark, holdout, or claim-eligible comparison is opened.
+The next experiment remains one-million-row and must first falsify a materially
+different query-independent relation or a preregistered adaptive read policy;
+it must not tune on these development queries or loosen the registered quality
+gates.
