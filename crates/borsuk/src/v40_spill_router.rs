@@ -19,6 +19,7 @@ use parquet::{
     basic::Compression,
     file::properties::WriterProperties,
 };
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const V40_MAXIMUM_FRONTIER_POSTINGS: usize = 64;
@@ -482,6 +483,100 @@ fn v40_selection_receipt_bytes(
     })?;
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40SelectionReceiptArtifact {
+    blake3: String,
+    encoded_bytes: u64,
+    role: String,
+    sha256: String,
+    uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40SelectionReceiptEvidence {
+    fma_backend: String,
+    maximum_node_pops: u64,
+    query_count: u64,
+    selected_postings: u64,
+    total_node_pops: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40SelectionReceipt {
+    artifact: V40SelectionReceiptArtifact,
+    claim_eligible: bool,
+    evidence: V40SelectionReceiptEvidence,
+    inputs: Vec<V40SelectionReceiptArtifact>,
+    mode: String,
+    schema: String,
+}
+
+fn valid_v40_local_file_uri(value: &str) -> bool {
+    value
+        .strip_prefix("file://")
+        .is_some_and(|path| path.starts_with('/') && path.len() > 1 && !path.contains(['?', '#']))
+}
+
+fn parse_v40_selection_receipt_bytes(bytes: &[u8], selection: &V40LocalArtifact) -> Result<String> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 direct selection receipt authority differs".to_owned());
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let mut canonical = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(invalid());
+    }
+    let receipt: V40SelectionReceipt = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let artifact = &receipt.artifact;
+    let evidence = &receipt.evidence;
+    let input_roles = receipt
+        .inputs
+        .iter()
+        .map(|input| input.role.as_str())
+        .collect::<Vec<_>>();
+    let input_uris = receipt
+        .inputs
+        .iter()
+        .map(|input| input.uri.as_str())
+        .collect::<BTreeSet<_>>();
+    let maximum_total_node_pops = evidence
+        .query_count
+        .checked_mul(evidence.maximum_node_pops)
+        .ok_or_else(invalid)?;
+    if receipt.schema != "borsuk-v40-local-result-v1"
+        || receipt.claim_eligible
+        || receipt.mode != "select-direct"
+        || artifact.role != "direct-selection"
+        || !valid_v40_local_file_uri(&artifact.uri)
+        || artifact.sha256 != selection.sha256
+        || artifact.blake3 != selection.blake3
+        || artifact.encoded_bytes != selection.encoded_bytes
+        || evidence.query_count != V40_DIRECT_QUERY_COUNT
+        || evidence.selected_postings != V40_DIRECT_SELECTED_POSTINGS as u64
+        || evidence.maximum_node_pops != V40_MAXIMUM_NODE_POPS as u64
+        || evidence.total_node_pops < evidence.query_count
+        || evidence.total_node_pops > maximum_total_node_pops
+        || !matches!(
+            evidence.fma_backend.as_str(),
+            "aarch64-neon-fma" | "x86-avx-fma"
+        )
+        || input_roles != ["v37-authority", "ownership-tree", "development-query"]
+        || input_uris.len() != receipt.inputs.len()
+        || receipt.inputs.iter().any(|input| {
+            !valid_s3_uri(&input.uri)
+                || !valid_digest(&input.sha256)
+                || !valid_digest(&input.blake3)
+                || input.encoded_bytes == 0
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(evidence.fma_backend.clone())
 }
 
 fn publish_v40_output(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -1073,7 +1168,7 @@ mod tests {
         V40LocalRunMode, V40LocalRunRequest, authenticate_v40_local_request,
         decode_v40_direct_selections_parquet, encode_v40_direct_selections_parquet,
         evaluate_v40_direct_recall, load_v40_projected_queries, load_v40_projected_queries_file,
-        select_v40_direct_queries, select_v40_tree_frontier,
+        parse_v40_selection_receipt_bytes, select_v40_direct_queries, select_v40_tree_frontier,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
@@ -1469,6 +1564,53 @@ mod tests {
         let mut backend_drift = selections;
         backend_drift[1].fma_backend = "x86-avx-fma".to_owned();
         assert!(encode_v40_direct_selections_parquet(&backend_drift, 2).is_err());
+    }
+
+    #[test]
+    fn v40_direct_selection_receipt_binds_artifact_and_backend() {
+        let root = tempdir().unwrap();
+        let selections = (0..1_000_u32)
+            .map(|query_ordinal| V40DirectSelectionRecord {
+                query_ordinal,
+                posting_ordinals: (0..21_u32).collect(),
+                node_pops: 41,
+                scored_internal_nodes: 20,
+                fma_backend: "aarch64-neon-fma".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let selection_bytes = encode_v40_direct_selections_parquet(&selections, 21).unwrap();
+        let output_path = root.path().join("selection.parquet");
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::SelectDirect,
+            ["v37-authority", "ownership-tree", "development-query"]
+                .map(local_artifact)
+                .to_vec(),
+            vec![
+                V40LocalOutput::try_new("direct-selection".to_owned(), output_path.clone())
+                    .unwrap(),
+            ],
+            4,
+        )
+        .unwrap();
+        let receipt =
+            super::v40_selection_receipt_bytes(&request, &selections, &selection_bytes).unwrap();
+        let selection = V40LocalArtifact::try_new(
+            "direct-selection".to_owned(),
+            output_path,
+            "s3://fixture/v40/direct-selection".to_owned(),
+            format!("{:x}", Sha256::digest(&selection_bytes)),
+            blake3::hash(&selection_bytes).to_hex().to_string(),
+            u64::try_from(selection_bytes.len()).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            parse_v40_selection_receipt_bytes(&receipt, &selection).unwrap(),
+            "aarch64-neon-fma"
+        );
+        assert!(
+            parse_v40_selection_receipt_bytes(&receipt[..receipt.len() - 1], &selection).is_err()
+        );
     }
 
     #[test]
