@@ -1040,6 +1040,16 @@ pub(crate) struct V37V38ConstructionBinding {
     pub(crate) workers: u32,
 }
 
+/// Minimal validated V37 facts consumed by V40 direct selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V37V40SelectionBinding {
+    pub(crate) corpus_rows: u64,
+    pub(crate) dimensions: u64,
+    pub(crate) leaf_count: u64,
+    pub(crate) tree_seed: u64,
+    pub(crate) fma_backend: String,
+}
+
 /// Capability-minimal authority for the separate GT-only exact-K14 ceiling.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1161,6 +1171,18 @@ pub(crate) fn v37_v38_construction_binding(bytes: &[u8]) -> Result<V37V38Constru
         source_uri: manifest.source.uri,
         tree_seed: manifest.tree.seed,
         workers: manifest.numeric.worker_count,
+    })
+}
+
+pub(crate) fn v37_v40_selection_binding(bytes: &[u8]) -> Result<V37V40SelectionBinding> {
+    let manifest = parse_v37_authority_bytes(bytes)?;
+    let layout = project_v37_layout(&manifest.tree)?;
+    Ok(V37V40SelectionBinding {
+        corpus_rows: manifest.tree.corpus_rows,
+        dimensions: manifest.tree.dimensions,
+        leaf_count: layout.leaf_count,
+        tree_seed: manifest.tree.seed,
+        fma_backend: manifest.numeric.fma_backend,
     })
 }
 
@@ -4784,8 +4806,8 @@ mod tests {
         train_v37_ownership_tree_resident_coordinates,
         train_v37_ownership_tree_resident_coordinates_with_evidence,
         train_v37_ownership_tree_resident_coordinates_with_progress, v37_mass_q24,
-        validate_v37_local_build_authority, validate_v37_local_input_stability,
-        validate_v37_relation_prefixes, validate_v37_specs,
+        v37_v40_selection_binding, validate_v37_local_build_authority,
+        validate_v37_local_input_stability, validate_v37_relation_prefixes, validate_v37_specs,
     };
 
     fn local_artifact(root: &Path, role: &str) -> V37LocalArtifact {
@@ -5070,6 +5092,21 @@ mod tests {
 
         assert!(project_v37_child_quota(u64::MAX, 4).is_err());
         assert!(project_v37_child_quota(1, 1).is_err());
+    }
+
+    #[test]
+    fn v37_v40_selection_binding_exposes_only_validated_tree_facts() {
+        let bytes = canonical_v37_authority_bytes(&authority()).unwrap();
+        let binding = v37_v40_selection_binding(&bytes).unwrap();
+        assert_eq!(binding.corpus_rows, 1_000_000);
+        assert_eq!(binding.dimensions, 192);
+        assert_eq!(binding.leaf_count, 123);
+        assert_eq!(binding.tree_seed, 37);
+        assert_eq!(binding.fma_backend, "aarch64-neon-fma");
+
+        let mut drifted = bytes;
+        drifted.pop();
+        assert!(v37_v40_selection_binding(&drifted).is_err());
     }
 
     #[test]
