@@ -12075,7 +12075,7 @@ where
     ))
 }
 
-fn v36_prefix_query_rows_from_batch(
+pub(crate) fn v36_prefix_query_rows_from_batch(
     batch: &RecordBatch,
     offset: usize,
     rows: usize,

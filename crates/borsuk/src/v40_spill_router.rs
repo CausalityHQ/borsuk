@@ -327,6 +327,49 @@ fn v40_direct_selection_schema() -> Schema {
     ])
 }
 
+pub(crate) fn load_v40_projected_queries(
+    path: &Path,
+    expected_queries: u64,
+) -> Result<Vec<Vec<f32>>> {
+    if expected_queries == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "V40 direct query count differs".to_owned(),
+        ));
+    }
+    let capacity = usize::try_from(expected_queries).map_err(|_| {
+        BorsukError::InvalidStorage("V40 direct query count exceeds address space".to_owned())
+    })?;
+    let projection = crate::v36_funnel_geometry::build_v36_srht192_control()?;
+    let mut projected_queries = Vec::with_capacity(capacity);
+    crate::v36_prefix_dataset::scan_v36_prefix_query_parquet(path, expected_queries, |batch| {
+        for row in crate::v36_prefix_dataset::v36_prefix_query_rows_from_batch(
+            &batch,
+            0,
+            batch.num_rows(),
+        )? {
+            let projected =
+                crate::v35_projection::project_v35_query_simd(&projection, &row.embedding)?;
+            projected_queries.push(
+                projected
+                    .coordinates()
+                    .iter()
+                    .map(|value| {
+                        let value = *value as f32;
+                        if value == 0.0 { 0.0 } else { value }
+                    })
+                    .collect(),
+            );
+        }
+        Ok(())
+    })?;
+    if projected_queries.len() != capacity {
+        return Err(BorsukError::InvalidStorage(
+            "V40 direct projected query count differs".to_owned(),
+        ));
+    }
+    Ok(projected_queries)
+}
+
 fn validate_v40_direct_selections(
     records: &[V40DirectSelectionRecord],
     selected_postings: usize,
@@ -720,7 +763,7 @@ pub(crate) fn evaluate_v40_direct_recall(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, sync::Arc};
 
     use super::super::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, score_v37_hyperplane_fused,
@@ -729,9 +772,14 @@ mod tests {
         V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact, V40LocalOutput,
         V40LocalRunMode, V40LocalRunRequest, authenticate_v40_local_request,
         decode_v40_direct_selections_parquet, encode_v40_direct_selections_parquet,
-        evaluate_v40_direct_recall, select_v40_tree_frontier,
+        evaluate_v40_direct_recall, load_v40_projected_queries, select_v40_tree_frontier,
     };
+    use crate::v35_projection::project_v35_query_simd;
+    use crate::v36_funnel_geometry::build_v36_srht192_control;
+    use crate::v36_prefix_dataset::{v36_prefix_query_schema, write_v36_prefix_query_parquet};
     use crate::v37_relation_router::V37FeatureGroundTruth;
+    use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch, UInt32Array, UInt64Array};
+    use arrow_schema::{DataType, Field};
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
@@ -1119,5 +1167,52 @@ mod tests {
         let mut backend_drift = selections;
         backend_drift[1].fma_backend = "x86-avx-fma".to_owned();
         assert!(encode_v40_direct_selections_parquet(&backend_drift, 2).is_err());
+    }
+
+    #[test]
+    fn v40_direct_query_loader_reuses_frozen_srht_projection() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("queries.parquet");
+        let first = (0..768)
+            .map(|index| (index as f32 + 1.0) / 1_024.0)
+            .collect::<Vec<_>>();
+        let second = first.iter().map(|value| -*value).collect::<Vec<_>>();
+        let values = first.iter().chain(&second).copied().collect::<Vec<_>>();
+        let embeddings = FixedSizeListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float32, false)),
+            768,
+            Arc::new(Float32Array::from(values)),
+            None,
+        )
+        .unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(v36_prefix_query_schema()),
+            vec![
+                Arc::new(UInt32Array::from(vec![0, 1])),
+                Arc::new(UInt64Array::from(vec![10, 11])),
+                Arc::new(embeddings),
+            ],
+        )
+        .unwrap();
+        write_v36_prefix_query_parquet(&path, [batch]).unwrap();
+
+        let observed = load_v40_projected_queries(&path, 2).unwrap();
+        let projection = build_v36_srht192_control().unwrap();
+        let expected = [first, second]
+            .iter()
+            .map(|query| {
+                project_v35_query_simd(&projection, query)
+                    .unwrap()
+                    .coordinates()
+                    .iter()
+                    .map(|value| {
+                        let value = *value as f32;
+                        if value == 0.0 { 0.0 } else { value }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed, expected);
+        assert!(load_v40_projected_queries(&path, 1).is_err());
     }
 }
