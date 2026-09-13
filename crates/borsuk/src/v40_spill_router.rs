@@ -2,6 +2,7 @@ use crate::error::{BorsukError, Result};
 use crate::v37_relation_router::{
     V37BalancedTree, V37FeatureGroundTruth, select_v37_tree_postings_with_limit,
 };
+use crate::v38_boundary_spill::{v38_v40_evaluation_binding, v38_v40_owner_rows_from_artifacts};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -1102,12 +1103,10 @@ pub(crate) fn select_v40_direct_queries(
 /// Run one authenticated local V40 direct phase without any storage client.
 #[doc(hidden)]
 pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
-    if request.mode != V40LocalRunMode::SelectDirect {
-        return Err(BorsukError::InvalidStorage(
-            "V40 direct evaluation runner is not yet available".to_owned(),
-        ));
-    }
     let authenticated = authenticate_v40_local_request(&request)?;
+    if request.mode == V40LocalRunMode::EvaluateDirect {
+        return run_v40_evaluate_direct(&request, &authenticated);
+    }
     let authority_bytes = read_v40_authenticated_input(&request, &authenticated, "v37-authority")?;
     let binding = crate::v37_relation_router::v37_v40_selection_binding(&authority_bytes)?;
     if binding.workers != request.workers {
@@ -1161,6 +1160,102 @@ pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
     })?;
     publish_v40_output(&output.path, &output_bytes)?;
     v40_selection_receipt_bytes(&request, &selections, &output_bytes)
+}
+
+fn v40_local_identity_matches(
+    observed: &V40LocalArtifact,
+    uri: &str,
+    sha256: &str,
+    blake3: &str,
+    encoded_bytes: u64,
+) -> bool {
+    observed.uri == uri
+        && observed.sha256 == sha256
+        && observed.blake3 == blake3
+        && observed.encoded_bytes == encoded_bytes
+}
+
+fn run_v40_evaluate_direct(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+) -> Result<Vec<u8>> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 direct evaluation binding differs".to_owned());
+    let ceiling_bytes =
+        read_v40_authenticated_input(request, authenticated, "v38-ceiling-authority")?;
+    let construction_bytes =
+        read_v40_authenticated_input(request, authenticated, "v38-construction-result")?;
+    let binding = v38_v40_evaluation_binding(&ceiling_bytes, &construction_bytes)?;
+    for (role, uri, sha256, blake3, encoded_bytes) in [
+        (
+            "spill-relation",
+            binding.relation_uri.as_str(),
+            binding.relation_sha256.as_str(),
+            binding.relation_blake3.as_str(),
+            binding.relation_bytes,
+        ),
+        (
+            "spill-postings",
+            binding.postings_uri.as_str(),
+            binding.postings_sha256.as_str(),
+            binding.postings_blake3.as_str(),
+            binding.postings_bytes,
+        ),
+        (
+            "development-ground-truth",
+            binding.truth_uri.as_str(),
+            binding.truth_sha256.as_str(),
+            binding.truth_blake3.as_str(),
+            binding.truth_bytes,
+        ),
+    ] {
+        if !v40_local_identity_matches(
+            v40_local_input(request, role)?,
+            uri,
+            sha256,
+            blake3,
+            encoded_bytes,
+        ) {
+            return Err(invalid());
+        }
+    }
+    let relation_bytes = read_v40_authenticated_input(request, authenticated, "spill-relation")?;
+    let posting_bytes = read_v40_authenticated_input(request, authenticated, "spill-postings")?;
+    let owners = v38_v40_owner_rows_from_artifacts(
+        &relation_bytes,
+        &posting_bytes,
+        usize::try_from(binding.corpus_rows).map_err(|_| invalid())?,
+        binding.posting_count,
+        binding.maximum_rows_per_posting,
+    )?;
+    let selection = v40_local_input(request, "direct-selection")?;
+    let selection_receipt =
+        read_v40_authenticated_input(request, authenticated, "direct-selection-result")?;
+    let backend = parse_v40_selection_receipt_bytes(&selection_receipt, selection)?;
+    let selection_bytes = read_v40_authenticated_input(request, authenticated, "direct-selection")?;
+    let selections = decode_v40_direct_selections_parquet(
+        &selection_bytes,
+        binding.query_count,
+        usize::try_from(binding.selected_postings).map_err(|_| invalid())?,
+        &backend,
+    )?;
+    let truth_input = v40_local_input(request, "development-ground-truth")?;
+    let truth = crate::v37_relation_router::load_v37_feature_ground_truth_file(
+        v40_authenticated_input_file(request, authenticated, "development-ground-truth")?,
+        &truth_input.path,
+        binding.query_count,
+    )?;
+    let spec = V40EvaluationSpec {
+        selected_postings: binding.selected_postings,
+        gt_neighbors: binding.gt_neighbors,
+        aggregate_gate_ppm: binding.aggregate_gate_ppm,
+        minimum_gate_ppm: binding.minimum_gate_ppm,
+    };
+    let evaluation = evaluate_v40_direct_recall(&spec, &owners, &selections, &truth, &backend)?;
+    let result_bytes = v40_evaluation_result_bytes(request, &spec, &evaluation, &backend)?;
+    let output = request.outputs.first().ok_or_else(invalid)?;
+    publish_v40_output(&output.path, &result_bytes)?;
+    Ok(result_bytes)
 }
 
 pub(crate) fn evaluate_v40_direct_recall(

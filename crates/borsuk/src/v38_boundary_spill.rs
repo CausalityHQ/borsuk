@@ -466,6 +466,9 @@ struct V38ConstructionResult {
 /// Minimal authenticated V38 facts consumed by V40 truth evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V38V40EvaluationBinding {
+    pub(crate) corpus_rows: u64,
+    pub(crate) posting_count: u32,
+    pub(crate) maximum_rows_per_posting: u32,
     pub(crate) query_count: u32,
     pub(crate) gt_neighbors: u32,
     pub(crate) selected_postings: u32,
@@ -2003,6 +2006,9 @@ pub(crate) fn v38_v40_evaluation_binding(
         return Err(invalid("V38 V40 predecessor binding differs"));
     }
     Ok(V38V40EvaluationBinding {
+        corpus_rows: V38_CORPUS_ROWS,
+        posting_count: V38_POSTING_COUNT,
+        maximum_rows_per_posting: V38_MAXIMUM_ROWS_PER_POSTING,
         query_count: authority.query_count,
         gt_neighbors: authority.gt_neighbors,
         selected_postings: authority.selected_postings,
