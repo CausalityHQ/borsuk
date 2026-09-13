@@ -1,6 +1,7 @@
 use crate::error::{BorsukError, Result};
 use crate::v37_relation_router::{
-    V37BalancedTree, V37FeatureGroundTruth, select_v37_tree_postings_with_limit,
+    V37BalancedNode, V37BalancedTree, V37FeatureGroundTruth, score_v37_hyperplane_fused,
+    select_v37_tree_postings_with_limit,
 };
 use crate::v38_boundary_spill::{
     V38PostingSummary, V38SpillRecord, v38_v40_evaluation_binding,
@@ -12,7 +13,11 @@ use std::{
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use arrow_array::{
@@ -44,6 +49,24 @@ const V40_DEVELOPMENT_MAXIMUM_ROWS_PER_POSTING: u32 = 10_240;
 const V40_Q24_TOTAL: u32 = 1 << 24;
 const V40_MAXIMUM_ALTERNATES_PER_POSTING: usize = 32;
 const V40_MAXIMUM_OBJECTIVE_VALUE: u64 = 34_896_609_280;
+const V40_PREFLIGHT_WARMUP_ITERATIONS: u32 = 1_024;
+const V40_PREFLIGHT_TIMED_ITERATIONS: u32 = 10_000;
+const V40_PREFLIGHT_MAXIMUM_P99_NS: u64 = 5_000_000;
+const V40_PREFLIGHT_MAXIMUM_RESIDENT_BYTES: u64 = 256 * 1_024 * 1_024;
+const V40_PREFLIGHT_CANDIDATE_COUNT: u32 = 2_112;
+const V40_PREFLIGHT_MARGINAL_RECOMPUTATIONS: u64 = 44_142;
+const V40_PREFLIGHT_CATEGORY_UPDATES: u64 = 672;
+const V40_PREFLIGHT_OBJECTIVE_VALUE: u128 = 19_025_362_944;
+const V40_PREFLIGHT_SOURCE_DIMENSIONS: u32 = 768;
+const V40_PREFLIGHT_ROUTING_DIMENSIONS: u16 = 192;
+const V40_PREFLIGHT_TREE_NODE_POPS: u32 = 447;
+const V40_PREFLIGHT_SCORED_INTERNAL_NODES: u32 = 383;
+const V40_PREFLIGHT_FRONTIER: [u32; 64] = [
+    0, 1056, 528, 1584, 264, 792, 1320, 1848, 132, 396, 660, 924, 1188, 1452, 1716, 1980, 66, 198,
+    330, 462, 594, 726, 858, 990, 1122, 1254, 1386, 1518, 1650, 1782, 1914, 2046, 33, 99, 165, 231,
+    297, 363, 429, 495, 561, 627, 693, 759, 825, 891, 957, 1023, 1089, 1155, 1221, 1287, 1353,
+    1419, 1485, 1551, 1617, 1683, 1749, 1815, 1881, 1947, 2013, 2079,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V40SpillCount {
@@ -1209,6 +1232,246 @@ pub(crate) fn select_v40_accepted_spill_postings(
     })
 }
 
+pub(crate) fn v40_worst_case_preflight_fixture() -> Result<(V40TreeFrontier, V40PackedSpillSummary)>
+{
+    let invalid = || BorsukError::InvalidStorage("V40 preflight fixture differs".to_owned());
+    let posting_count = usize::try_from(V40_PREFLIGHT_CANDIDATE_COUNT).map_err(|_| invalid())?;
+    let mut counts = Vec::with_capacity(
+        posting_count
+            .checked_add(
+                V40_MAXIMUM_FRONTIER_POSTINGS
+                    .checked_mul(V40_MAXIMUM_ALTERNATES_PER_POSTING)
+                    .ok_or_else(invalid)?,
+            )
+            .ok_or_else(invalid)?,
+    );
+    let frontier_ranks = V40_PREFLIGHT_FRONTIER
+        .iter()
+        .enumerate()
+        .map(|(rank, posting)| (*posting, rank))
+        .collect::<BTreeMap<_, _>>();
+    let alternates = (0..u32::try_from(posting_count).map_err(|_| invalid())?)
+        .filter(|posting| !frontier_ranks.contains_key(posting))
+        .collect::<Vec<_>>();
+    for primary in 0..posting_count {
+        let primary_u32 = u32::try_from(primary).map_err(|_| invalid())?;
+        if let Some(rank) = frontier_ranks.get(&primary_u32).copied() {
+            let start = rank
+                .checked_mul(V40_MAXIMUM_ALTERNATES_PER_POSTING)
+                .ok_or_else(invalid)?;
+            for alternate in 0..V40_MAXIMUM_ALTERNATES_PER_POSTING {
+                counts.push(V40SpillCount {
+                    primary_posting: primary_u32,
+                    alternate_posting: Some(
+                        *alternates
+                            .get(start.checked_add(alternate).ok_or_else(invalid)?)
+                            .ok_or_else(invalid)?,
+                    ),
+                    count: 1,
+                    primary_population: u64::from(V40_DEVELOPMENT_MAXIMUM_ROWS_PER_POSTING),
+                });
+            }
+        }
+        counts.push(V40SpillCount {
+            primary_posting: primary_u32,
+            alternate_posting: None,
+            count: u64::from(V40_DEVELOPMENT_MAXIMUM_ROWS_PER_POSTING)
+                .checked_sub(if frontier_ranks.contains_key(&primary_u32) {
+                    u64::try_from(V40_MAXIMUM_ALTERNATES_PER_POSTING).map_err(|_| invalid())?
+                } else {
+                    0
+                })
+                .ok_or_else(invalid)?,
+            primary_population: u64::from(V40_DEVELOPMENT_MAXIMUM_ROWS_PER_POSTING),
+        });
+    }
+    let summary = pack_v40_spill_summary(
+        &counts,
+        u32::try_from(posting_count).map_err(|_| invalid())?,
+    )?;
+    Ok((
+        V40TreeFrontier {
+            posting_ordinals: V40_PREFLIGHT_FRONTIER.to_vec(),
+            node_pops: V40_PREFLIGHT_TREE_NODE_POPS,
+            scored_internal_nodes: V40_PREFLIGHT_SCORED_INTERNAL_NODES,
+            fma_backend: "aarch64-neon-fma".to_owned(),
+        },
+        summary,
+    ))
+}
+
+struct V40PreflightRouteFixture {
+    projection: crate::v35_projection::V35Projection,
+    tree: V37BalancedTree,
+    raw_query: Vec<f32>,
+    summary: V40PackedSpillSummary,
+}
+
+fn v40_worst_case_preflight_route_fixture() -> Result<V40PreflightRouteFixture> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight route fixture differs".to_owned());
+    fn append_subtree(
+        nodes: &mut Vec<V37BalancedNode>,
+        dimensions: usize,
+        first_posting: usize,
+        leaves: usize,
+        depth: u32,
+    ) -> Result<()> {
+        let invalid =
+            || BorsukError::InvalidStorage("V40 preflight route fixture differs".to_owned());
+        if leaves == 0 {
+            return Err(invalid());
+        }
+        let node_index = nodes.len();
+        if leaves == 1 {
+            nodes.push(V37BalancedNode {
+                normal: Vec::new(),
+                boundary_score_bits: 0.0_f32.to_bits(),
+                boundary_source_ordinal: u64::try_from(first_posting).map_err(|_| invalid())?,
+                left_node: None,
+                right_node: None,
+                posting_ordinal: Some(u32::try_from(first_posting).map_err(|_| invalid())?),
+                population: 1,
+            });
+            return Ok(());
+        }
+        nodes.push(V37BalancedNode {
+            normal: Vec::new(),
+            boundary_score_bits: 0,
+            boundary_source_ordinal: 0,
+            left_node: None,
+            right_node: None,
+            posting_ordinal: None,
+            population: 0,
+        });
+        let left_leaves = leaves / 2;
+        let right_leaves = leaves.checked_sub(left_leaves).ok_or_else(invalid)?;
+        let left_node = u32::try_from(nodes.len()).map_err(|_| invalid())?;
+        append_subtree(nodes, dimensions, first_posting, left_leaves, depth + 1)?;
+        let right_node = u32::try_from(nodes.len()).map_err(|_| invalid())?;
+        append_subtree(
+            nodes,
+            dimensions,
+            first_posting.checked_add(left_leaves).ok_or_else(invalid)?,
+            right_leaves,
+            depth + 1,
+        )?;
+        let mut normal = vec![0.0_f32; dimensions];
+        *normal.first_mut().ok_or_else(invalid)? = 1.0;
+        nodes[node_index] = V37BalancedNode {
+            normal,
+            boundary_score_bits: ((depth + 1) as f32).to_bits(),
+            boundary_source_ordinal: u64::try_from(first_posting).map_err(|_| invalid())?,
+            left_node: Some(left_node),
+            right_node: Some(right_node),
+            posting_ordinal: None,
+            population: u64::try_from(leaves).map_err(|_| invalid())?,
+        };
+        Ok(())
+    }
+
+    let projection = crate::v36_funnel_geometry::build_v36_srht192_control()?;
+    if projection.dimensions().source != V40_PREFLIGHT_SOURCE_DIMENSIONS
+        || projection.dimensions().routing != V40_PREFLIGHT_ROUTING_DIMENSIONS
+    {
+        return Err(invalid());
+    }
+    let dimensions = usize::from(projection.dimensions().routing);
+    let (_, backend) = score_v37_hyperplane_fused(&vec![0.0; dimensions], &vec![0.0; dimensions])?;
+    let leaf_count = usize::try_from(V40_PREFLIGHT_CANDIDATE_COUNT).map_err(|_| invalid())?;
+    let mut nodes = Vec::with_capacity(
+        leaf_count
+            .checked_mul(2)
+            .and_then(|n| n.checked_sub(1))
+            .ok_or_else(invalid)?,
+    );
+    append_subtree(&mut nodes, dimensions, 0, leaf_count, 0)?;
+    let (_, summary) = v40_worst_case_preflight_fixture()?;
+    Ok(V40PreflightRouteFixture {
+        raw_query: vec![
+            0.0;
+            usize::try_from(projection.dimensions().source).map_err(|_| invalid())?
+        ],
+        projection,
+        tree: V37BalancedTree {
+            dimensions,
+            seed: 40,
+            fma_backend: backend.to_owned(),
+            nodes,
+            leaf_populations: vec![1; leaf_count],
+            assignments: Vec::new(),
+        },
+        summary,
+    })
+}
+
+struct V40PreflightRouteEvidence {
+    selection: V40Selection,
+    node_pops: u32,
+    scored_internal_nodes: u32,
+}
+
+fn route_v40_worst_case_preflight(
+    fixture: &V40PreflightRouteFixture,
+) -> Result<V40PreflightRouteEvidence> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight route differs".to_owned());
+    let projected =
+        crate::v35_projection::project_v35_query_simd(&fixture.projection, &fixture.raw_query)?;
+    let query = projected
+        .coordinates()
+        .iter()
+        .map(|value| {
+            let value = *value as f32;
+            if value == 0.0 { 0.0 } else { value }
+        })
+        .collect::<Vec<_>>();
+    let frontier = select_v40_tree_frontier(
+        &fixture.tree,
+        &fixture.tree.fma_backend,
+        &query,
+        V40_MAXIMUM_FRONTIER_POSTINGS,
+        V40_MAXIMUM_NODE_POPS,
+    )?;
+    if frontier.posting_ordinals != V40_PREFLIGHT_FRONTIER
+        || frontier.node_pops != V40_PREFLIGHT_TREE_NODE_POPS
+        || frontier.scored_internal_nodes != V40_PREFLIGHT_SCORED_INTERNAL_NODES
+    {
+        return Err(invalid());
+    }
+    let selection = select_v40_accepted_spill_postings(
+        &frontier,
+        &fixture.summary,
+        V40_DIRECT_SELECTED_POSTINGS,
+    )?;
+    let materialized = V40AcceptedSelectionRecord {
+        query_ordinal: 0,
+        posting_ordinals: selection.posting_ordinals.clone(),
+        node_pops: frontier.node_pops,
+        scored_internal_nodes: frontier.scored_internal_nodes,
+        fma_backend: frontier.fma_backend,
+        objective_value: u64::try_from(selection.objective_value).map_err(|_| invalid())?,
+        candidate_count: selection.candidate_count,
+        marginal_recomputations: selection.marginal_recomputations,
+    };
+    std::hint::black_box(materialized);
+    Ok(V40PreflightRouteEvidence {
+        selection,
+        node_pops: frontier.node_pops,
+        scored_internal_nodes: frontier.scored_internal_nodes,
+    })
+}
+
+pub(crate) fn v40_worst_case_preflight_route_once() -> Result<V40Selection> {
+    Ok(route_v40_worst_case_preflight(&v40_worst_case_preflight_route_fixture()?)?.selection)
+}
+
+pub(crate) fn v40_worst_case_preflight_shape() -> Result<(usize, usize)> {
+    let fixture = v40_worst_case_preflight_route_fixture()?;
+    Ok((
+        fixture.tree.leaf_populations.len(),
+        fixture.tree.nodes.len(),
+    ))
+}
+
 fn valid_digest(value: &str) -> bool {
     value.len() == 64
         && value
@@ -1233,6 +1496,8 @@ fn valid_s3_uri(value: &str) -> bool {
 /// One capability-separated local V40 direct-router phase.
 #[doc(hidden)]
 pub enum V40LocalRunMode {
+    /// Exercise the exact worst-case selector without corpus or truth access.
+    Preflight,
     /// Select postings from query vectors without ground truth access.
     SelectDirect,
     /// Build query-independent accepted-spill counts and packed summary.
@@ -1248,6 +1513,7 @@ pub enum V40LocalRunMode {
 impl V40LocalRunMode {
     fn input_roles(self) -> &'static [&'static str] {
         match self {
+            Self::Preflight => &["preflight-authority", "source-archive"],
             Self::SelectDirect => &[
                 "cohort-authority",
                 "v37-authority",
@@ -1298,6 +1564,7 @@ impl V40LocalRunMode {
 
     fn output_roles(self) -> &'static [&'static str] {
         match self {
+            Self::Preflight => &["preflight-samples", "preflight-result"],
             Self::SelectDirect => &["direct-selection"],
             Self::BuildSpillSummary => &["spill-counts", "spill-summary", "spill-summary-result"],
             Self::SelectAcceptedSpill => &["accepted-selection", "accepted-selection-result"],
@@ -1831,6 +2098,76 @@ struct V40SelectionReceiptArtifact {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct V40PreflightAuthority {
+    binary: V40SelectionReceiptArtifact,
+    pub(crate) candidate_count: u32,
+    fma_backend: String,
+    frontier_postings: u32,
+    generator: String,
+    maximum_p99_ns: u64,
+    maximum_resident_bytes: u64,
+    schema: String,
+    seed: u64,
+    selected_postings: u32,
+    source_archive: V40SelectionReceiptArtifact,
+    pub(crate) source_commit: String,
+    pub(crate) timed_iterations: u32,
+    warmup_iterations: u32,
+    workers: u32,
+}
+
+fn valid_v40_commit(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(crate) fn parse_v40_preflight_authority_bytes(bytes: &[u8]) -> Result<V40PreflightAuthority> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight authority differs".to_owned());
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let mut canonical = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(invalid());
+    }
+    let authority: V40PreflightAuthority = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let identities = [
+        (&authority.binary, "v40-binary"),
+        (&authority.source_archive, "source-archive"),
+    ];
+    let uris = identities
+        .iter()
+        .map(|(identity, _)| identity.uri.as_str())
+        .collect::<BTreeSet<_>>();
+    if authority.schema != "borsuk-v40-preflight-authority-v1"
+        || !valid_v40_commit(&authority.source_commit)
+        || authority.generator != "borsuk-v40-preflight-worst-case-v1"
+        || authority.seed != 40
+        || !matches!(
+            authority.fma_backend.as_str(),
+            "aarch64-neon-fma" | "x86-avx-fma"
+        )
+        || authority.workers != 1
+        || authority.frontier_postings != V40_MAXIMUM_FRONTIER_POSTINGS as u32
+        || authority.candidate_count != V40_PREFLIGHT_CANDIDATE_COUNT
+        || authority.selected_postings != V40_DIRECT_SELECTED_POSTINGS as u32
+        || authority.warmup_iterations != V40_PREFLIGHT_WARMUP_ITERATIONS
+        || authority.timed_iterations != V40_PREFLIGHT_TIMED_ITERATIONS
+        || authority.maximum_p99_ns != V40_PREFLIGHT_MAXIMUM_P99_NS
+        || authority.maximum_resident_bytes != V40_PREFLIGHT_MAXIMUM_RESIDENT_BYTES
+        || uris.len() != identities.len()
+        || identities
+            .iter()
+            .any(|(identity, role)| !valid_v40_cohort_identity(identity, role))
+    {
+        return Err(invalid());
+    }
+    Ok(authority)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct V40DirectCohortAuthority {
     development_ground_truth: V40SelectionReceiptArtifact,
     development_query: V40SelectionReceiptArtifact,
@@ -1846,6 +2183,53 @@ fn valid_v40_cohort_identity(identity: &V40SelectionReceiptArtifact, role: &str)
         && valid_digest(&identity.sha256)
         && valid_digest(&identity.blake3)
         && identity.encoded_bytes > 0
+}
+
+fn validate_v40_running_binary_identity(identity: &V40SelectionReceiptArtifact) -> Result<()> {
+    const HASH_BUFFER_BYTES: usize = 1_048_576;
+    let invalid = || BorsukError::InvalidStorage("V40 running binary identity differs".to_owned());
+    if !valid_v40_cohort_identity(identity, "v40-binary") {
+        return Err(invalid());
+    }
+    let path = PathBuf::from("/proc/self/exe");
+    let file = File::open(&path).map_err(|source| BorsukError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| BorsukError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    if !metadata.is_file() || metadata.len() != identity.encoded_bytes {
+        return Err(invalid());
+    }
+    let mut reader = BufReader::with_capacity(HASH_BUFFER_BYTES, file)
+        .take(identity.encoded_bytes.saturating_add(1));
+    let mut sha256 = Sha256::new();
+    let mut blake3 = blake3::Hasher::new();
+    let mut observed_bytes = 0_u64;
+    let mut buffer = vec![0_u8; HASH_BUFFER_BYTES];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|source| BorsukError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        observed_bytes = observed_bytes
+            .checked_add(u64::try_from(read).map_err(|_| invalid())?)
+            .ok_or_else(invalid)?;
+        sha256.update(&buffer[..read]);
+        blake3.update(&buffer[..read]);
+    }
+    if observed_bytes != identity.encoded_bytes
+        || format!("{:x}", sha256.finalize()) != identity.sha256
+        || blake3.finalize().to_hex().as_str() != identity.blake3
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn parse_v40_direct_cohort_authority_bytes(bytes: &[u8]) -> Result<V40DirectCohortAuthority> {
@@ -2305,6 +2689,183 @@ fn parse_v40_phase_receipt(bytes: &[u8], expected_mode: &str) -> Result<V40Phase
         return Err(invalid());
     }
     Ok(receipt)
+}
+
+fn v40_preflight_sample_schema() -> Schema {
+    Schema::new(vec![Field::new("elapsed_ns", DataType::UInt64, false)])
+}
+
+pub(crate) fn encode_v40_preflight_samples_parquet(samples: &[u64]) -> Result<Vec<u8>> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight samples differ".to_owned());
+    if samples.len() != V40_PREFLIGHT_TIMED_ITERATIONS as usize
+        || samples.iter().any(|sample| *sample == 0)
+    {
+        return Err(invalid());
+    }
+    let schema = Arc::new(v40_preflight_sample_schema());
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(UInt64Array::from(samples.to_vec()))],
+    )?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_max_row_group_row_count(Some(4_096))
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(bytes)
+}
+
+fn decode_v40_preflight_samples_parquet(bytes: &[u8]) -> Result<Vec<u64>> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight samples differ".to_owned());
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != &v40_preflight_sample_schema() {
+        return Err(invalid());
+    }
+    let mut samples = Vec::with_capacity(V40_PREFLIGHT_TIMED_ITERATIONS as usize);
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.schema().as_ref() != &v40_preflight_sample_schema()
+            || batch.num_columns() != 1
+            || batch.column(0).null_count() != 0
+        {
+            return Err(invalid());
+        }
+        let elapsed = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        samples.extend(elapsed.values().iter().copied());
+    }
+    if samples.len() != V40_PREFLIGHT_TIMED_ITERATIONS as usize
+        || samples.iter().any(|sample| *sample == 0)
+    {
+        return Err(invalid());
+    }
+    Ok(samples)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V40PreflightResources {
+    pub(crate) memory_limit_bytes: u64,
+    pub(crate) memory_peak_bytes: u64,
+    pub(crate) swap_current_bytes: u64,
+    pub(crate) psi_full_avg10_micros: u64,
+}
+
+pub(crate) fn v40_preflight_result_bytes(
+    request: &V40LocalRunRequest,
+    authority: &V40PreflightAuthority,
+    selection: &V40Selection,
+    node_pops: u32,
+    scored_internal_nodes: u32,
+    resources: &V40PreflightResources,
+    sample_bytes: &[u8],
+) -> Result<Vec<u8>> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight result differs".to_owned());
+    if request.mode != V40LocalRunMode::Preflight
+        || request.input_roles() != ["preflight-authority", "source-archive"]
+        || request.output_roles() != ["preflight-samples", "preflight-result"]
+        || request.workers != authority.workers
+        || selection.arm != V40RouterArm::AcceptedSpill
+        || selection.posting_ordinals
+            != V40_PREFLIGHT_FRONTIER[..V40_DIRECT_SELECTED_POSTINGS].to_vec()
+        || selection.objective_value != V40_PREFLIGHT_OBJECTIVE_VALUE
+        || selection.candidate_count != V40_PREFLIGHT_CANDIDATE_COUNT
+        || selection.marginal_recomputations != V40_PREFLIGHT_MARGINAL_RECOMPUTATIONS
+        || selection.category_updates != V40_PREFLIGHT_CATEGORY_UPDATES
+        || node_pops == 0
+        || usize::try_from(node_pops).map_err(|_| invalid())? > V40_MAXIMUM_NODE_POPS
+        || scored_internal_nodes == 0
+        || scored_internal_nodes > node_pops
+        || resources.memory_limit_bytes == 0
+        || resources.memory_peak_bytes == 0
+        || resources.memory_peak_bytes > resources.memory_limit_bytes
+    {
+        return Err(invalid());
+    }
+    let samples = decode_v40_preflight_samples_parquet(sample_bytes)?;
+    let mut ordered = samples;
+    ordered.sort_unstable();
+    let rank = usize::try_from(V40_PREFLIGHT_TIMED_ITERATIONS)
+        .map_err(|_| invalid())?
+        .checked_mul(99)
+        .ok_or_else(invalid)?
+        .checked_add(99)
+        .ok_or_else(invalid)?
+        / 100;
+    let p99_ns = *ordered
+        .get(rank.checked_sub(1).ok_or_else(invalid)?)
+        .ok_or_else(invalid)?;
+    let passed = p99_ns <= authority.maximum_p99_ns
+        && resources.memory_limit_bytes <= authority.maximum_resident_bytes
+        && resources.memory_peak_bytes <= authority.maximum_resident_bytes
+        && resources.swap_current_bytes == 0
+        && resources.psi_full_avg10_micros <= 750_000;
+    let inputs = request
+        .inputs
+        .iter()
+        .map(|input| {
+            serde_json::json!({
+                "blake3": input.blake3,
+                "encoded_bytes": input.encoded_bytes,
+                "role": input.role,
+                "sha256": input.sha256,
+                "uri": input.uri,
+            })
+        })
+        .collect::<Vec<_>>();
+    let output = v40_local_output(request, "preflight-samples")?;
+    let value = serde_json::json!({
+        "artifacts": [{
+            "blake3": blake3::hash(sample_bytes).to_hex().to_string(),
+            "encoded_bytes": sample_bytes.len(),
+            "role": output.role,
+            "sha256": format!("{:x}", Sha256::digest(sample_bytes)),
+            "uri": format!("file://{}", output.path.display()),
+        }],
+        "claim_eligible": false,
+        "evidence": {
+            "candidate_count": selection.candidate_count,
+            "category_updates": selection.category_updates,
+            "fma_backend": authority.fma_backend,
+            "marginal_recomputations": selection.marginal_recomputations,
+            "memory_limit_bytes": resources.memory_limit_bytes,
+            "memory_peak_bytes": resources.memory_peak_bytes,
+            "maximum_p99_ns": authority.maximum_p99_ns,
+            "maximum_resident_bytes": authority.maximum_resident_bytes,
+            "objective_value": u64::try_from(selection.objective_value).map_err(|_| invalid())?,
+            "p99_ns": p99_ns,
+            "passed": passed,
+            "projection_fused_macs": u64::from(V40_PREFLIGHT_SOURCE_DIMENSIONS) * u64::from(V40_PREFLIGHT_ROUTING_DIMENSIONS),
+            "psi_full_avg10_micros": resources.psi_full_avg10_micros,
+            "routing_dimensions": V40_PREFLIGHT_ROUTING_DIMENSIONS,
+            "scored_internal_nodes": scored_internal_nodes,
+            "scope": "projection-tree-accepted-spill-materialization",
+            "source_dimensions": V40_PREFLIGHT_SOURCE_DIMENSIONS,
+            "swap_current_bytes": resources.swap_current_bytes,
+            "timed_iterations": authority.timed_iterations,
+            "tree_heap_pops": node_pops,
+            "tree_heap_pushes": 1_u64 + 2_u64 * u64::from(scored_internal_nodes),
+            "tree_node_pops": node_pops,
+            "warmup_iterations": authority.warmup_iterations,
+        },
+        "inputs": inputs,
+        "mode": "preflight",
+        "schema": "borsuk-v40-local-result-v1",
+    });
+    let mut bytes = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    bytes.push(b'\n');
+    let reparsed: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let mut canonical = serde_json::to_vec(&v40_canonical_json(reparsed)).map_err(|_| invalid())?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(invalid());
+    }
+    Ok(bytes)
 }
 
 fn v40_direct_selection_schema() -> Schema {
@@ -3261,6 +3822,230 @@ pub(crate) fn select_v40_direct_queries(
     Ok(records)
 }
 
+fn parse_v40_psi_decimal_micros(value: &str) -> Result<u64> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight PSI differs".to_owned());
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || fraction.len() > 6
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(invalid());
+    }
+    let whole = whole.parse::<u64>().map_err(|_| invalid())?;
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<u64>().map_err(|_| invalid())?
+            * 10_u64.pow(u32::try_from(6 - fraction.len()).map_err(|_| invalid())?)
+    };
+    whole
+        .checked_mul(1_000_000)
+        .and_then(|value| value.checked_add(fraction))
+        .ok_or_else(invalid)
+}
+
+fn v40_preflight_cgroup_path() -> Result<PathBuf> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight cgroup differs".to_owned());
+    let cgroup = fs::read_to_string("/proc/self/cgroup").map_err(|source| BorsukError::Io {
+        path: PathBuf::from("/proc/self/cgroup"),
+        source,
+    })?;
+    let relative = cgroup
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .ok_or_else(invalid)?
+        .trim_start_matches('/');
+    Ok(PathBuf::from("/sys/fs/cgroup").join(relative))
+}
+
+fn v40_preflight_cgroup_resources(base: &Path) -> Result<V40PreflightResources> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight cgroup differs".to_owned());
+    let read_u64 = |name: &str| -> Result<u64> {
+        let path = base.join(name);
+        fs::read_to_string(&path)
+            .map_err(|source| BorsukError::Io {
+                path: path.clone(),
+                source,
+            })?
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| invalid())
+    };
+    let pressure_path = base.join("memory.pressure");
+    let pressure = fs::read_to_string(&pressure_path).map_err(|source| BorsukError::Io {
+        path: pressure_path,
+        source,
+    })?;
+    let full = pressure
+        .lines()
+        .find(|line| line.starts_with("full "))
+        .ok_or_else(invalid)?;
+    let avg10 = full
+        .split_ascii_whitespace()
+        .find_map(|field| field.strip_prefix("avg10="))
+        .ok_or_else(invalid)?;
+    let resources = V40PreflightResources {
+        memory_limit_bytes: read_u64("memory.max")?,
+        memory_peak_bytes: read_u64("memory.peak")?,
+        swap_current_bytes: read_u64("memory.swap.current")?,
+        psi_full_avg10_micros: parse_v40_psi_decimal_micros(avg10)?,
+    };
+    if resources.memory_limit_bytes == 0
+        || resources.memory_peak_bytes == 0
+        || resources.memory_peak_bytes > resources.memory_limit_bytes
+    {
+        return Err(invalid());
+    }
+    Ok(resources)
+}
+
+fn run_v40_preflight(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+) -> Result<Vec<u8>> {
+    let invalid = || BorsukError::InvalidStorage("V40 preflight execution differs".to_owned());
+    let authority_bytes =
+        read_v40_authenticated_input(request, authenticated, "preflight-authority")?;
+    let authority = parse_v40_preflight_authority_bytes(&authority_bytes)?;
+    let source_archive = v40_local_input(request, "source-archive")?;
+    if request.workers != authority.workers
+        || option_env!("BORSUK_SOURCE_COMMIT") != Some(authority.source_commit.as_str())
+        || source_archive.role != authority.source_archive.role
+        || source_archive.uri != authority.source_archive.uri
+        || source_archive.sha256 != authority.source_archive.sha256
+        || source_archive.blake3 != authority.source_archive.blake3
+        || source_archive.encoded_bytes != authority.source_archive.encoded_bytes
+    {
+        return Err(invalid());
+    }
+    validate_v40_running_binary_identity(&authority.binary)?;
+    let swaps = fs::read_to_string("/proc/swaps").map_err(|source| BorsukError::Io {
+        path: PathBuf::from("/proc/swaps"),
+        source,
+    })?;
+    if swaps.lines().count() != 1 {
+        return Err(invalid());
+    }
+    let cgroup_path = v40_preflight_cgroup_path()?;
+    let initial_resources = v40_preflight_cgroup_resources(&cgroup_path)?;
+    if initial_resources.memory_limit_bytes > authority.maximum_resident_bytes
+        || initial_resources.memory_peak_bytes > authority.maximum_resident_bytes
+        || initial_resources.swap_current_bytes != 0
+        || initial_resources.psi_full_avg10_micros > 750_000
+    {
+        return Err(invalid());
+    }
+    let monitor_stop = Arc::new(AtomicBool::new(false));
+    let resource_stop = Arc::new(AtomicBool::new(false));
+    let monitor_stop_worker = Arc::clone(&monitor_stop);
+    let resource_stop_worker = Arc::clone(&resource_stop);
+    let maximum_resident_bytes = authority.maximum_resident_bytes;
+    let monitor = std::thread::spawn(move || -> Result<V40PreflightResources> {
+        let mut maximum = initial_resources;
+        while !monitor_stop_worker.load(Ordering::Acquire) {
+            let observed = match v40_preflight_cgroup_resources(&cgroup_path) {
+                Ok(observed) => observed,
+                Err(error) => {
+                    resource_stop_worker.store(true, Ordering::Release);
+                    return Err(error);
+                }
+            };
+            if observed.memory_limit_bytes != maximum.memory_limit_bytes {
+                resource_stop_worker.store(true, Ordering::Release);
+                return Err(BorsukError::InvalidStorage(
+                    "V40 preflight cgroup limit changed".to_owned(),
+                ));
+            }
+            maximum.memory_peak_bytes = maximum.memory_peak_bytes.max(observed.memory_peak_bytes);
+            maximum.swap_current_bytes =
+                maximum.swap_current_bytes.max(observed.swap_current_bytes);
+            maximum.psi_full_avg10_micros = maximum
+                .psi_full_avg10_micros
+                .max(observed.psi_full_avg10_micros);
+            if observed.memory_peak_bytes > maximum_resident_bytes
+                || observed.swap_current_bytes != 0
+                || observed.psi_full_avg10_micros > 750_000
+            {
+                resource_stop_worker.store(true, Ordering::Release);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let observed = v40_preflight_cgroup_resources(&cgroup_path)?;
+        maximum.memory_peak_bytes = maximum.memory_peak_bytes.max(observed.memory_peak_bytes);
+        maximum.swap_current_bytes = maximum.swap_current_bytes.max(observed.swap_current_bytes);
+        maximum.psi_full_avg10_micros = maximum
+            .psi_full_avg10_micros
+            .max(observed.psi_full_avg10_micros);
+        Ok(maximum)
+    });
+    let measurement = (|| -> Result<(V40PreflightRouteEvidence, Vec<u8>)> {
+        let fixture = v40_worst_case_preflight_route_fixture()?;
+        if fixture.tree.fma_backend != authority.fma_backend {
+            return Err(invalid());
+        }
+        let expected = route_v40_worst_case_preflight(&fixture)?;
+        for _ in 0..authority.warmup_iterations {
+            if resource_stop.load(Ordering::Acquire) {
+                return Err(invalid());
+            }
+            let observed = route_v40_worst_case_preflight(std::hint::black_box(&fixture))?;
+            if observed.selection != expected.selection
+                || observed.node_pops != expected.node_pops
+                || observed.scored_internal_nodes != expected.scored_internal_nodes
+            {
+                return Err(invalid());
+            }
+            std::hint::black_box(observed);
+        }
+        let mut samples = Vec::with_capacity(authority.timed_iterations as usize);
+        for _ in 0..authority.timed_iterations {
+            if resource_stop.load(Ordering::Acquire) {
+                return Err(invalid());
+            }
+            let started = Instant::now();
+            let observed = route_v40_worst_case_preflight(std::hint::black_box(&fixture))?;
+            let elapsed_ns = u64::try_from(started.elapsed().as_nanos()).map_err(|_| invalid())?;
+            if elapsed_ns == 0
+                || observed.selection != expected.selection
+                || observed.node_pops != expected.node_pops
+                || observed.scored_internal_nodes != expected.scored_internal_nodes
+            {
+                return Err(invalid());
+            }
+            samples.push(elapsed_ns);
+            std::hint::black_box(observed);
+        }
+        if resource_stop.load(Ordering::Acquire) {
+            return Err(invalid());
+        }
+        Ok((expected, encode_v40_preflight_samples_parquet(&samples)?))
+    })();
+    monitor_stop.store(true, Ordering::Release);
+    let resources = monitor
+        .join()
+        .map_err(|_| BorsukError::InvalidStorage("V40 preflight monitor failed".to_owned()))??;
+    let (expected, sample_bytes) = measurement?;
+    let result_bytes = v40_preflight_result_bytes(
+        request,
+        &authority,
+        &expected.selection,
+        expected.node_pops,
+        expected.scored_internal_nodes,
+        &resources,
+        &sample_bytes,
+    )?;
+    publish_v40_output(
+        &v40_local_output(request, "preflight-samples")?.path,
+        &sample_bytes,
+    )?;
+    publish_v40_output(
+        &v40_local_output(request, "preflight-result")?.path,
+        &result_bytes,
+    )?;
+    Ok(result_bytes)
+}
+
 /// Run one authenticated local V40 direct phase without any storage client.
 #[doc(hidden)]
 pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
@@ -3271,6 +4056,9 @@ pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
     .then_some("development-ground-truth");
     let mut authenticated = authenticate_v40_local_request_deferred(&request, deferred_role)?;
     match request.mode {
+        V40LocalRunMode::Preflight => {
+            return run_v40_preflight(&request, &authenticated);
+        }
         V40LocalRunMode::BuildSpillSummary => {
             return run_v40_build_spill_summary(&request, &authenticated);
         }
@@ -3985,19 +4773,24 @@ mod tests {
         V37BalancedNode, V37BalancedTree, score_v37_hyperplane_fused,
     };
     use super::{
+        V40_PREFLIGHT_FRONTIER, V40_PREFLIGHT_SCORED_INTERNAL_NODES, V40_PREFLIGHT_TREE_NODE_POPS,
         V40AcceptedSelectionRecord, V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact,
         V40LocalOutput, V40LocalRunMode, V40LocalRunRequest, V40PackedSpillSummary,
-        authenticate_v40_local_request, authenticate_v40_local_request_deferred,
-        build_v40_spill_counts_from_owners, decode_v40_accepted_selections_parquet,
-        decode_v40_direct_selections_parquet, decode_v40_packed_spill_summary_arrow,
-        encode_v40_accepted_selections_parquet, encode_v40_direct_selections_parquet,
-        encode_v40_packed_spill_summary_arrow, evaluate_v40_accepted_recall,
+        V40PreflightResources, authenticate_v40_local_request,
+        authenticate_v40_local_request_deferred, build_v40_spill_counts_from_owners,
+        decode_v40_accepted_selections_parquet, decode_v40_direct_selections_parquet,
+        decode_v40_packed_spill_summary_arrow, encode_v40_accepted_selections_parquet,
+        encode_v40_direct_selections_parquet, encode_v40_packed_spill_summary_arrow,
+        encode_v40_preflight_samples_parquet, evaluate_v40_accepted_recall,
         evaluate_v40_direct_recall, load_v40_projected_queries, load_v40_projected_queries_file,
         parse_v40_direct_cohort_authority_bytes, parse_v40_direct_failure_decision_bytes,
         parse_v40_direct_failure_result_bytes, parse_v40_phase_receipt,
-        parse_v40_selection_receipt_bytes, select_v40_accepted_spill_postings,
-        select_v40_direct_queries, select_v40_tree_frontier, v40_accepted_evaluation_result_bytes,
-        v40_direct_decision_bytes, v40_evaluation_result_bytes, v40_phase_receipt_bytes,
+        parse_v40_preflight_authority_bytes, parse_v40_selection_receipt_bytes,
+        select_v40_accepted_spill_postings, select_v40_direct_queries, select_v40_tree_frontier,
+        v40_accepted_evaluation_result_bytes, v40_direct_decision_bytes,
+        v40_evaluation_result_bytes, v40_phase_receipt_bytes, v40_preflight_result_bytes,
+        v40_worst_case_preflight_fixture, v40_worst_case_preflight_route_once,
+        v40_worst_case_preflight_shape, validate_v40_running_binary_identity,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
@@ -4804,6 +5597,256 @@ mod tests {
 
     fn local_output(role: &str) -> V40LocalOutput {
         V40LocalOutput::try_new(role.to_owned(), PathBuf::from(format!("/tmp/v40-{role}"))).unwrap()
+    }
+
+    fn preflight_authority_bytes() -> Vec<u8> {
+        let identity = |role: &str, digit: char| {
+            serde_json::json!({
+                "blake3": digit.to_string().repeat(64),
+                "encoded_bytes": 17,
+                "role": role,
+                "sha256": digit.to_string().repeat(64),
+                "uri": format!("s3://fixture/v40/{role}"),
+            })
+        };
+        let value = serde_json::json!({
+            "binary": identity("v40-binary", '2'),
+            "candidate_count": 2_112,
+            "fma_backend": "aarch64-neon-fma",
+            "frontier_postings": 64,
+            "generator": "borsuk-v40-preflight-worst-case-v1",
+            "maximum_p99_ns": 5_000_000,
+            "maximum_resident_bytes": 268_435_456,
+            "schema": "borsuk-v40-preflight-authority-v1",
+            "seed": 40,
+            "selected_postings": 21,
+            "source_archive": identity("source-archive", '3'),
+            "source_commit": "a".repeat(40),
+            "timed_iterations": 10_000,
+            "warmup_iterations": 1_024,
+            "workers": 1,
+        });
+        let mut bytes = serde_json::to_vec(&super::v40_canonical_json(value)).unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+
+    #[test]
+    fn v40_preflight_authority_is_source_free_exact_and_canonical() {
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::Preflight,
+            ["preflight-authority", "source-archive"]
+                .map(local_artifact)
+                .to_vec(),
+            ["preflight-samples", "preflight-result"]
+                .map(local_output)
+                .to_vec(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            request.input_roles(),
+            vec!["preflight-authority", "source-archive"]
+        );
+        assert_eq!(
+            request.output_roles(),
+            vec!["preflight-samples", "preflight-result"]
+        );
+        for forbidden in [
+            "development-query",
+            "development-ground-truth",
+            "spill-relation",
+            "spill-postings",
+        ] {
+            assert!(!request.input_roles().contains(&forbidden));
+        }
+        let authority = parse_v40_preflight_authority_bytes(&preflight_authority_bytes()).unwrap();
+        assert_eq!(authority.source_commit, "a".repeat(40));
+        assert_eq!(authority.candidate_count, 2_112);
+        assert_eq!(authority.timed_iterations, 10_000);
+
+        let mut drifted: serde_json::Value =
+            serde_json::from_slice(&preflight_authority_bytes()).unwrap();
+        drifted["timed_iterations"] = serde_json::json!(9_999);
+        let mut drifted = serde_json::to_vec(&super::v40_canonical_json(drifted)).unwrap();
+        drifted.push(b'\n');
+        assert!(parse_v40_preflight_authority_bytes(&drifted).is_err());
+    }
+
+    #[test]
+    fn v40_preflight_result_recomputes_worst_case_work_and_fail_fast_gates() {
+        let (frontier, summary) = v40_worst_case_preflight_fixture().unwrap();
+        for masses in summary
+            .masses_q24
+            .chunks_exact(super::V40_MAXIMUM_ALTERNATES_PER_POSTING)
+        {
+            assert!(masses[..13].iter().all(|mass| *mass == 1_639));
+            assert!(masses[13..].iter().all(|mass| *mass == 1_638));
+        }
+        let selection = select_v40_accepted_spill_postings(&frontier, &summary, 21).unwrap();
+        assert_eq!(selection.posting_ordinals, V40_PREFLIGHT_FRONTIER[..21]);
+        assert_eq!(selection.objective_value, 19_025_362_944);
+        assert_eq!(selection.candidate_count, 2_112);
+        assert_eq!(selection.marginal_recomputations, 44_142);
+        assert_eq!(selection.category_updates, 672);
+
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::Preflight,
+            ["preflight-authority", "source-archive"]
+                .map(local_artifact)
+                .to_vec(),
+            ["preflight-samples", "preflight-result"]
+                .map(local_output)
+                .to_vec(),
+            1,
+        )
+        .unwrap();
+        let samples =
+            encode_v40_preflight_samples_parquet(&(1_u64..=10_000).collect::<Vec<_>>()).unwrap();
+        let resources = V40PreflightResources {
+            memory_limit_bytes: 268_435_456,
+            memory_peak_bytes: 134_217_728,
+            swap_current_bytes: 0,
+            psi_full_avg10_micros: 0,
+        };
+        let bytes = v40_preflight_result_bytes(
+            &request,
+            &parse_v40_preflight_authority_bytes(&preflight_authority_bytes()).unwrap(),
+            &selection,
+            V40_PREFLIGHT_TREE_NODE_POPS,
+            V40_PREFLIGHT_SCORED_INTERNAL_NODES,
+            &resources,
+            &samples,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["mode"], "preflight");
+        assert_eq!(value["evidence"]["p99_ns"], 9_900);
+        assert_eq!(value["evidence"]["passed"], true);
+        assert_eq!(value["evidence"]["category_updates"], 672);
+        assert_eq!(value["evidence"]["fma_backend"], "aarch64-neon-fma");
+        assert_eq!(value["evidence"]["source_dimensions"], 768);
+        assert_eq!(value["evidence"]["routing_dimensions"], 192);
+        assert_eq!(value["evidence"]["projection_fused_macs"], 147_456);
+        assert_eq!(value["evidence"]["tree_node_pops"], 447);
+        assert_eq!(value["evidence"]["memory_limit_bytes"], 268_435_456);
+        assert_eq!(value["evidence"]["memory_peak_bytes"], 134_217_728);
+        assert_eq!(value["evidence"]["swap_current_bytes"], 0);
+        assert_eq!(value["evidence"]["psi_full_avg10_micros"], 0);
+        assert_eq!(value["evidence"]["tree_heap_pushes"], 767);
+        assert_eq!(value["evidence"]["tree_heap_pops"], 447);
+        assert_eq!(value["evidence"]["scored_internal_nodes"], 383);
+        assert_eq!(
+            value["evidence"]["scope"],
+            "projection-tree-accepted-spill-materialization"
+        );
+
+        let mut drifted = selection.clone();
+        drifted.category_updates += 1;
+        assert!(
+            v40_preflight_result_bytes(
+                &request,
+                &parse_v40_preflight_authority_bytes(&preflight_authority_bytes()).unwrap(),
+                &drifted,
+                V40_PREFLIGHT_TREE_NODE_POPS,
+                V40_PREFLIGHT_SCORED_INTERNAL_NODES,
+                &resources,
+                &samples,
+            )
+            .is_err()
+        );
+
+        let slow = encode_v40_preflight_samples_parquet(&vec![5_000_001; 10_000]).unwrap();
+        let bytes = v40_preflight_result_bytes(
+            &request,
+            &parse_v40_preflight_authority_bytes(&preflight_authority_bytes()).unwrap(),
+            &selection,
+            V40_PREFLIGHT_TREE_NODE_POPS,
+            V40_PREFLIGHT_SCORED_INTERNAL_NODES,
+            &resources,
+            &slow,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["evidence"]["passed"], false);
+
+        for failed_resources in [
+            V40PreflightResources {
+                swap_current_bytes: 1,
+                ..resources
+            },
+            V40PreflightResources {
+                psi_full_avg10_micros: 750_001,
+                ..resources
+            },
+            V40PreflightResources {
+                memory_limit_bytes: 268_435_457,
+                memory_peak_bytes: 134_217_728,
+                ..resources
+            },
+        ] {
+            let bytes = v40_preflight_result_bytes(
+                &request,
+                &parse_v40_preflight_authority_bytes(&preflight_authority_bytes()).unwrap(),
+                &selection,
+                V40_PREFLIGHT_TREE_NODE_POPS,
+                V40_PREFLIGHT_SCORED_INTERNAL_NODES,
+                &failed_resources,
+                &samples,
+            )
+            .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["evidence"]["passed"], false);
+        }
+    }
+
+    #[test]
+    fn v40_preflight_route_covers_projection_tree_greedy_and_materialization() {
+        assert_eq!(v40_worst_case_preflight_shape().unwrap(), (2_112, 4_223));
+        let selection = v40_worst_case_preflight_route_once().unwrap();
+        assert_eq!(selection.posting_ordinals, V40_PREFLIGHT_FRONTIER[..21]);
+        assert_eq!(selection.objective_value, 19_025_362_944);
+        assert_eq!(selection.candidate_count, 2_112);
+        assert_eq!(selection.marginal_recomputations, 44_142);
+        assert_eq!(selection.category_updates, 672);
+    }
+
+    #[test]
+    fn v40_preflight_authenticates_the_running_binary_not_descriptive_identity() {
+        use std::io::Read as _;
+
+        let path = fs::read_link("/proc/self/exe").unwrap();
+        let file = File::open(path).unwrap();
+        let encoded_bytes = file.metadata().unwrap().len();
+        let mut reader = std::io::BufReader::new(file);
+        let mut sha256 = Sha256::new();
+        let mut blake3 = blake3::Hasher::new();
+        let mut buffer = vec![0_u8; 1_048_576];
+        loop {
+            let read = reader.read(&mut buffer).unwrap();
+            if read == 0 {
+                break;
+            }
+            sha256.update(&buffer[..read]);
+            blake3.update(&buffer[..read]);
+        }
+        let mut identity = super::V40SelectionReceiptArtifact {
+            blake3: blake3.finalize().to_hex().to_string(),
+            encoded_bytes,
+            role: "v40-binary".to_owned(),
+            sha256: format!("{:x}", sha256.finalize()),
+            uri: "s3://fixture/v40/v40-binary".to_owned(),
+        };
+        validate_v40_running_binary_identity(&identity).unwrap();
+        let replacement = if identity.sha256.starts_with('f') {
+            "e"
+        } else {
+            "f"
+        };
+        identity.sha256.replace_range(..1, replacement);
+        assert!(validate_v40_running_binary_identity(&identity).is_err());
     }
 
     fn cohort_authority_bytes() -> Vec<u8> {

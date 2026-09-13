@@ -43,6 +43,7 @@ fn parse_v40_spill_router_args(
         return Err("missing required flag --execute-v40".to_owned());
     }
     let mode = match take(&mut values, "--mode")?.as_str() {
+        "preflight" => V40LocalRunMode::Preflight,
         "select-direct" => V40LocalRunMode::SelectDirect,
         "build-spill-summary" => V40LocalRunMode::BuildSpillSummary,
         "select-accepted-spill" => V40LocalRunMode::SelectAcceptedSpill,
@@ -54,6 +55,7 @@ fn parse_v40_spill_router_args(
         .parse::<u32>()
         .map_err(|_| "V40 worker count differs".to_owned())?;
     let input_roles = match mode {
+        V40LocalRunMode::Preflight => &["preflight-authority", "source-archive"][..],
         V40LocalRunMode::SelectDirect => &[
             "cohort-authority",
             "v37-authority",
@@ -101,6 +103,7 @@ fn parse_v40_spill_router_args(
         ],
     };
     let output_roles: &[&str] = match mode {
+        V40LocalRunMode::Preflight => &["preflight-samples", "preflight-result"],
         V40LocalRunMode::SelectDirect => &["direct-selection"],
         V40LocalRunMode::BuildSpillSummary => {
             &["spill-counts", "spill-summary", "spill-summary-result"]
@@ -177,6 +180,7 @@ mod tests {
         "ownership-tree",
         "development-query",
     ];
+    const PREFLIGHT_ROLES: [&str; 2] = ["preflight-authority", "source-archive"];
     const EVALUATE_ROLES: [&str; 8] = [
         "cohort-authority",
         "v38-ceiling-authority",
@@ -277,6 +281,27 @@ mod tests {
         );
         assert_eq!(evaluation.workers(), 4);
         let _runner = run_v40_local_request;
+    }
+
+    #[test]
+    fn v40_cli_preflight_is_source_free_and_has_exact_outputs() {
+        let mut values = arguments(
+            "preflight",
+            &PREFLIGHT_ROLES,
+            &["preflight-samples", "preflight-result"],
+        );
+        let workers = values
+            .iter()
+            .position(|value| value == "--workers")
+            .unwrap();
+        values[workers + 1] = "1".to_owned();
+        let request = parse_v40_spill_router_args(values).unwrap();
+        assert_eq!(request.mode(), V40LocalRunMode::Preflight);
+        assert_eq!(request.input_roles(), PREFLIGHT_ROLES);
+        assert_eq!(
+            request.output_roles(),
+            ["preflight-samples", "preflight-result"]
+        );
     }
 
     #[test]
