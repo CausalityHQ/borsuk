@@ -527,6 +527,8 @@ pub use v38_boundary_spill::{
 pub use v40_spill_router::{
     V40LocalArtifact, V40LocalOutput, V40LocalRunMode, V40LocalRunRequest, run_v40_local_request,
 };
+#[doc(hidden)]
+pub use v41_learned_router::{V41BurnedDiagnosticRequest, run_v41_burned_diagnostic};
 #[allow(
     dead_code,
     reason = "V24 pseudoquery qualification is wired incrementally by the committed plan"

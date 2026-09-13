@@ -60,6 +60,28 @@ impl V41TrainingSpec {
             gradient_clip: 1.0,
         }
     }
+
+    pub fn diagnostic_epochs(epochs: u32) -> Result<Self> {
+        if !(1..=50).contains(&epochs) {
+            return Err(invalid("V41 diagnostic epoch count differs"));
+        }
+        Ok(Self {
+            epochs,
+            ..Self::registered()
+        })
+    }
+}
+
+fn valid_training_spec(spec: &V41TrainingSpec) -> bool {
+    let registered = V41TrainingSpec::registered();
+    (1..=registered.epochs).contains(&spec.epochs)
+        && spec.batch_states == registered.batch_states
+        && spec.learning_rate == registered.learning_rate
+        && spec.beta1 == registered.beta1
+        && spec.beta2 == registered.beta2
+        && spec.epsilon == registered.epsilon
+        && spec.weight_decay == registered.weight_decay
+        && spec.gradient_clip == registered.gradient_clip
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -225,7 +247,7 @@ pub fn v41_adamw_step(
     state: &mut V41AdamWState,
     spec: &V41TrainingSpec,
 ) -> Result<V41AdamWReceipt> {
-    if *spec != V41TrainingSpec::registered()
+    if !valid_training_spec(spec)
         || parameters.is_empty()
         || parameters.len() != gradients.len()
         || parameters.len() != state.first_moment.len()
@@ -1266,7 +1288,7 @@ pub fn train_v41_model(
     worker_count: usize,
     sink: &mut impl V41TrainingSink,
 ) -> Result<V41TrainedModel> {
-    if *spec != V41TrainingSpec::registered() || worker_count == 0 {
+    if !valid_training_spec(spec) || worker_count == 0 {
         return Err(invalid("V41 training execution authority differs"));
     }
     let page_count =
@@ -1394,6 +1416,29 @@ mod tests {
         assert_eq!(result.aggregate_recall_ppm(), None);
         assert_eq!(result.minimum_recall_ppm(), None);
         assert_eq!(result.passed(), None);
+    }
+
+    #[test]
+    fn v41_training_diagnostic_epoch_ladder_is_bounded() {
+        assert_eq!(V41TrainingSpec::diagnostic_epochs(1).unwrap().epochs, 1);
+        assert_eq!(V41TrainingSpec::diagnostic_epochs(5).unwrap().epochs, 5);
+        assert_eq!(V41TrainingSpec::diagnostic_epochs(50).unwrap().epochs, 50);
+        assert!(V41TrainingSpec::diagnostic_epochs(0).is_err());
+        assert!(V41TrainingSpec::diagnostic_epochs(51).is_err());
+
+        let data = V41TrainingData::try_new(
+            vec![V41TrainingExample::try_new(0, [0.0; 768], vec![(0, None); 100]).unwrap()],
+            24,
+        )
+        .unwrap();
+        let mut sink = TrainingRecords::default();
+        train_v41_model(
+            &data,
+            &V41TrainingSpec::diagnostic_epochs(1).unwrap(),
+            1,
+            &mut sink,
+        )
+        .unwrap();
     }
 
     fn reference_targets(

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    fs,
+    fs::{self, File},
     io::Cursor,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
@@ -83,6 +83,184 @@ pub(crate) fn v41_marginal_targets_from_v38_artifacts(
     )?;
     borsuk_v41::v41_marginal_targets(&owners, gt_feature_ids, selected, posting_count)
         .map_err(|error| invalid(&error.to_string()))
+}
+
+pub(crate) fn v41_training_data_from_rows(
+    queries: &[crate::v36_prefix_dataset::V36PrefixQueryRow],
+    truth: &[crate::v37_relation_router::V37FeatureGroundTruth],
+    owners: &[(u64, u32, Option<u32>)],
+    selected_ordinals: &[u32],
+    page_count: u32,
+) -> Result<borsuk_v41::V41TrainingData> {
+    let owners_by_feature = owners
+        .iter()
+        .map(|(feature, primary, alternate)| (*feature, (*primary, *alternate)))
+        .collect::<BTreeMap<_, _>>();
+    if owners_by_feature.len() != owners.len()
+        || queries.len() != truth.len()
+        || selected_ordinals.is_empty()
+        || selected_ordinals.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(invalid("V41 training input authority differs"));
+    }
+    let selected = selected_ordinals.iter().copied().collect::<BTreeSet<_>>();
+    let mut examples = Vec::with_capacity(selected.len());
+    for (query, truth) in queries.iter().zip(truth) {
+        if query.query_ordinal != truth.query_ordinal {
+            return Err(invalid("V41 query and truth ordinals differ"));
+        }
+        if !selected.contains(&query.query_ordinal) {
+            continue;
+        }
+        let query_vector: [f32; V41_QUERY_DIMENSIONS] = query
+            .embedding
+            .as_slice()
+            .try_into()
+            .map_err(|_| invalid("V41 query dimensions differ"))?;
+        let query_owners = truth
+            .feature_row_ids
+            .iter()
+            .map(|feature| {
+                owners_by_feature
+                    .get(feature)
+                    .copied()
+                    .ok_or_else(|| invalid("V41 truth feature has no page owner"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        examples.push(
+            borsuk_v41::V41TrainingExample::try_new(
+                query.query_ordinal,
+                query_vector,
+                query_owners,
+            )
+            .map_err(|error| invalid(&error.to_string()))?,
+        );
+    }
+    if examples.len() != selected.len() {
+        return Err(invalid("V41 selected query population differs"));
+    }
+    borsuk_v41::V41TrainingData::try_new(examples, page_count)
+        .map_err(|error| invalid(&error.to_string()))
+}
+
+#[derive(Debug, Clone)]
+pub struct V41BurnedDiagnosticRequest {
+    pub development_query: PathBuf,
+    pub development_gt: PathBuf,
+    pub spill_relation: PathBuf,
+    pub spill_postings: PathBuf,
+    pub training_state: PathBuf,
+    pub epochs: u32,
+    pub workers: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct V41BurnedDiagnosticResult {
+    schema: &'static str,
+    claim_eligible: bool,
+    source_rows: u64,
+    page_count: u32,
+    selected_pages: u32,
+    epochs: u32,
+    workers: usize,
+    training_queries: usize,
+    diagnostic_queries: usize,
+    optimizer_steps: u64,
+    evaluated_queries: usize,
+    query_hits: Vec<u32>,
+    aggregate_recall_ppm: Option<u32>,
+    minimum_recall_ppm: Option<u32>,
+    passed: Option<bool>,
+    stopping_query_ordinal: Option<u32>,
+}
+
+pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<Vec<u8>> {
+    const SOURCE_ROWS: usize = 1_000_000;
+    const PAGE_COUNT: u32 = 123;
+    const MAXIMUM_ROWS_PER_PAGE: u32 = 10_240;
+
+    let mut queries = Vec::with_capacity(V41_DEVELOPMENT_QUERY_COUNT);
+    crate::v36_prefix_dataset::scan_v36_prefix_query_parquet(
+        &request.development_query,
+        V41_DEVELOPMENT_QUERY_COUNT as u64,
+        |batch| {
+            queries.extend(crate::v36_prefix_dataset::v36_prefix_query_rows_from_batch(
+                &batch,
+                0,
+                batch.num_rows(),
+            )?);
+            Ok(())
+        },
+    )?;
+    let truth_file = File::open(&request.development_gt).map_err(|source| BorsukError::Io {
+        path: request.development_gt.clone(),
+        source,
+    })?;
+    let truth = crate::v37_relation_router::load_v37_feature_ground_truth_file(
+        truth_file,
+        &request.development_gt,
+        V41_DEVELOPMENT_QUERY_COUNT as u32,
+    )?;
+    let relation_bytes = fs::read(&request.spill_relation).map_err(|source| BorsukError::Io {
+        path: request.spill_relation.clone(),
+        source,
+    })?;
+    let postings_bytes = fs::read(&request.spill_postings).map_err(|source| BorsukError::Io {
+        path: request.spill_postings.clone(),
+        source,
+    })?;
+    let owners = v38_v40_owner_rows_from_artifacts(
+        &relation_bytes,
+        &postings_bytes,
+        SOURCE_ROWS,
+        PAGE_COUNT,
+        MAXIMUM_ROWS_PER_PAGE,
+    )?;
+    let split_queries = queries
+        .iter()
+        .map(|query| (query.query_ordinal, query.embedding.clone()))
+        .collect::<Vec<_>>();
+    let split = split_v41_development_queries(&split_queries)?;
+    let training = v41_training_data_from_rows(
+        &queries,
+        &truth,
+        &owners,
+        split.training_ordinals(),
+        PAGE_COUNT,
+    )?;
+    let diagnostic = v41_training_data_from_rows(
+        &queries,
+        &truth,
+        &owners,
+        split.diagnostic_ordinals(),
+        PAGE_COUNT,
+    )?;
+    let spec = borsuk_v41::V41TrainingSpec::diagnostic_epochs(request.epochs)
+        .map_err(|error| invalid(&error.to_string()))?;
+    let mut sink = V41TrainingStateParquetSink::try_new(&request.training_state)?;
+    let trained = borsuk_v41::train_v41_model(&training, &spec, request.workers, &mut sink)
+        .map_err(|error| invalid(&error.to_string()))?;
+    sink.finish()?;
+    let evaluation = borsuk_v41::v41_evaluate_model(trained.model(), &diagnostic)
+        .map_err(|error| invalid(&error.to_string()))?;
+    v41_canonical_json_bytes(&V41BurnedDiagnosticResult {
+        schema: "borsuk-v41-burned-diagnostic-v1",
+        claim_eligible: false,
+        source_rows: SOURCE_ROWS as u64,
+        page_count: PAGE_COUNT,
+        selected_pages: 21,
+        epochs: request.epochs,
+        workers: request.workers,
+        training_queries: split.training_ordinals().len(),
+        diagnostic_queries: split.diagnostic_ordinals().len(),
+        optimizer_steps: trained.optimizer_steps(),
+        evaluated_queries: evaluation.evaluated_queries(),
+        query_hits: evaluation.query_hits().to_vec(),
+        aggregate_recall_ppm: evaluation.aggregate_recall_ppm(),
+        minimum_recall_ppm: evaluation.minimum_recall_ppm(),
+        passed: evaluation.passed(),
+        stopping_query_ordinal: evaluation.stopping_query_ordinal(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1460,7 +1638,8 @@ mod tests {
         audit_v41_holdout_query_role, audit_v41_query_roles, decode_v41_model, encode_v41_model,
         project_v41_development_partition, split_v41_development_queries, v41_canonical_json_bytes,
         v41_marginal_targets_from_v38_artifacts, v41_parse_arrow_message,
-        validate_v41_development_partition, validate_v41_development_partition_against,
+        v41_training_data_from_rows, validate_v41_development_partition,
+        validate_v41_development_partition_against,
     };
     use crate::v38_boundary_spill::{
         V38SpillRecord, encode_v38_posting_summary_parquet, encode_v38_spill_relation_parquet,
@@ -2078,6 +2257,50 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v41_training_rows_join_exact_truth_to_primary_and_alternate_owners() {
+        use crate::{
+            v36_prefix_dataset::V36PrefixQueryRow, v37_relation_router::V37FeatureGroundTruth,
+        };
+
+        let queries = vec![
+            V36PrefixQueryRow {
+                query_ordinal: 0,
+                feature_row_id: 90,
+                embedding: vec![0.0; 768],
+            },
+            V36PrefixQueryRow {
+                query_ordinal: 1,
+                feature_row_id: 91,
+                embedding: vec![1.0; 768],
+            },
+        ];
+        let truth = vec![
+            V37FeatureGroundTruth {
+                query_ordinal: 0,
+                feature_row_ids: (0..100).collect(),
+            },
+            V37FeatureGroundTruth {
+                query_ordinal: 1,
+                feature_row_ids: (100..200).collect(),
+            },
+        ];
+        let owners = (0_u64..200)
+            .map(|feature| {
+                (
+                    feature,
+                    (feature % 24) as u32,
+                    Some(((feature + 1) % 24) as u32),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(v41_training_data_from_rows(&queries, &truth, &owners, &[1], 24).is_ok());
+
+        let mut unknown = truth.clone();
+        unknown[1].feature_row_ids[99] = 999;
+        assert!(v41_training_data_from_rows(&queries, &unknown, &owners, &[1], 24).is_err());
     }
 
     #[test]
