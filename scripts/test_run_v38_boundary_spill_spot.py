@@ -44,6 +44,7 @@ from scripts.run_v38_boundary_spill_spot import (
     validate_v38_ceiling_predecessor,
     validate_v38_local_result_bytes,
     validate_v38_preflight_admission,
+    validate_v38_progress_bytes,
     validate_v38_terminal_bytes,
 )
 
@@ -1535,6 +1536,26 @@ class V38SpotAuthorityTests(unittest.TestCase):
 
 
 class V38SpotMonitorTests(unittest.TestCase):
+    def test_v38_progress_accepts_registered_zero_start_then_strict_advance(self):
+        initial = (
+            b'{"completed_rows":0,"schema":"borsuk-v38-preflight-progress-v1",'
+            b'"total_rows":65536}\n'
+        )
+        complete = (
+            b'{"completed_rows":65536,"schema":"borsuk-v38-preflight-progress-v1",'
+            b'"total_rows":65536}\n'
+        )
+        previous = validate_v38_progress_bytes(initial, "preflight-spill", None)
+        self.assertEqual(previous["completed_rows"], 0)
+        self.assertEqual(
+            validate_v38_progress_bytes(complete, "preflight-spill", previous)[
+                "completed_rows"
+            ],
+            65_536,
+        )
+        with self.assertRaises(ValueError):
+            validate_v38_progress_bytes(initial, "preflight-spill", previous)
+
     def test_v38_wrapper_monitor_covers_staging_and_publication_intervals(self):
         with tempfile.TemporaryDirectory() as directory:
             cgroup = pathlib.Path(directory)

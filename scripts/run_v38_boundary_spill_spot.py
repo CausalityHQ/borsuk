@@ -1646,7 +1646,7 @@ def validate_v38_progress_bytes(
         or value.get("schema") != schema
         or type(value.get(completed_key)) is not int
         or type(value.get(total_key)) is not int
-        or not 0 < value[completed_key] <= value[total_key]
+        or not 0 <= value[completed_key] <= value[total_key]
         or value[total_key] != expected_total
         or (
             previous is not None
