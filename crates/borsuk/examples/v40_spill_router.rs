@@ -62,14 +62,14 @@ fn parse_v40_spill_router_args(
         ][..],
         V40LocalRunMode::BuildSpillSummary => &[
             "cohort-authority",
-            "direct-result",
+            "direct-decision",
             "v38-construction-result",
             "spill-relation",
             "spill-postings",
         ],
         V40LocalRunMode::SelectAcceptedSpill => &[
             "cohort-authority",
-            "direct-result",
+            "direct-decision",
             "v37-authority",
             "ownership-tree",
             "development-query",
@@ -88,7 +88,7 @@ fn parse_v40_spill_router_args(
         ],
         V40LocalRunMode::EvaluateAcceptedSpill => &[
             "cohort-authority",
-            "direct-result",
+            "direct-decision",
             "v38-ceiling-authority",
             "v38-construction-result",
             "spill-relation",
@@ -108,7 +108,7 @@ fn parse_v40_spill_router_args(
         V40LocalRunMode::SelectAcceptedSpill => {
             &["accepted-selection", "accepted-selection-result"]
         }
-        V40LocalRunMode::EvaluateDirect => &["direct-result"],
+        V40LocalRunMode::EvaluateDirect => &["direct-result", "direct-decision"],
         V40LocalRunMode::EvaluateAcceptedSpill => &["accepted-result"],
     };
     let mut inputs = Vec::with_capacity(input_roles.len());
@@ -189,14 +189,14 @@ mod tests {
     ];
     const BUILD_SPILL_ROLES: [&str; 5] = [
         "cohort-authority",
-        "direct-result",
+        "direct-decision",
         "v38-construction-result",
         "spill-relation",
         "spill-postings",
     ];
     const SELECT_SPILL_ROLES: [&str; 7] = [
         "cohort-authority",
-        "direct-result",
+        "direct-decision",
         "v37-authority",
         "ownership-tree",
         "development-query",
@@ -205,7 +205,7 @@ mod tests {
     ];
     const EVALUATE_SPILL_ROLES: [&str; 11] = [
         "cohort-authority",
-        "direct-result",
+        "direct-decision",
         "v38-ceiling-authority",
         "v38-construction-result",
         "spill-relation",
@@ -266,12 +266,15 @@ mod tests {
         let evaluation = parse_v40_spill_router_args(arguments(
             "evaluate-direct",
             &EVALUATE_ROLES,
-            &["direct-result"],
+            &["direct-result", "direct-decision"],
         ))
         .unwrap();
         assert_eq!(evaluation.mode(), V40LocalRunMode::EvaluateDirect);
         assert_eq!(evaluation.input_roles(), EVALUATE_ROLES);
-        assert_eq!(evaluation.output_roles(), ["direct-result"]);
+        assert_eq!(
+            evaluation.output_roles(),
+            ["direct-result", "direct-decision"]
+        );
         assert_eq!(evaluation.workers(), 4);
         let _runner = run_v40_local_request;
     }

@@ -43,6 +43,7 @@ const V40_DEVELOPMENT_POSTING_COUNT: u32 = 123;
 const V40_DEVELOPMENT_MAXIMUM_ROWS_PER_POSTING: u32 = 10_240;
 const V40_Q24_TOTAL: u32 = 1 << 24;
 const V40_MAXIMUM_ALTERNATES_PER_POSTING: usize = 32;
+const V40_MAXIMUM_OBJECTIVE_VALUE: u64 = 34_896_609_280;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V40SpillCount {
@@ -1224,14 +1225,14 @@ impl V40LocalRunMode {
             ],
             Self::BuildSpillSummary => &[
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v38-construction-result",
                 "spill-relation",
                 "spill-postings",
             ],
             Self::SelectAcceptedSpill => &[
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v37-authority",
                 "ownership-tree",
                 "development-query",
@@ -1250,7 +1251,7 @@ impl V40LocalRunMode {
             ],
             Self::EvaluateAcceptedSpill => &[
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v38-ceiling-authority",
                 "v38-construction-result",
                 "spill-relation",
@@ -1269,7 +1270,7 @@ impl V40LocalRunMode {
             Self::SelectDirect => &["direct-selection"],
             Self::BuildSpillSummary => &["spill-counts", "spill-summary", "spill-summary-result"],
             Self::SelectAcceptedSpill => &["accepted-selection", "accepted-selection-result"],
-            Self::EvaluateDirect => &["direct-result"],
+            Self::EvaluateDirect => &["direct-result", "direct-decision"],
             Self::EvaluateAcceptedSpill => &["accepted-result"],
         }
     }
@@ -1787,7 +1788,7 @@ fn v40_selection_receipt_bytes(
     Ok(bytes)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct V40SelectionReceiptArtifact {
     blake3: String,
@@ -2573,9 +2574,23 @@ fn validate_v40_accepted_selections(
         .collect::<Vec<_>>();
     validate_v40_direct_selections(&direct, selected_postings, expected_backend)?;
     if records.iter().any(|record| {
+        let candidate_count = u64::from(record.candidate_count);
+        let expected_recomputations = u64::try_from(selected_postings)
+            .ok()
+            .and_then(|rounds| rounds.checked_mul(candidate_count))
+            .and_then(|total| {
+                let prior_selections = u64::try_from(selected_postings)
+                    .ok()?
+                    .checked_mul(u64::try_from(selected_postings.saturating_sub(1)).ok()?)?
+                    / 2;
+                total.checked_sub(prior_selections)
+            });
         record.objective_value == 0
+            || record.objective_value > V40_MAXIMUM_OBJECTIVE_VALUE
             || record.candidate_count < selected_postings as u32
-            || record.marginal_recomputations < u64::from(record.candidate_count)
+            || record.candidate_count as usize
+                > V40_MAXIMUM_FRONTIER_POSTINGS * (V40_MAXIMUM_ALTERNATES_PER_POSTING + 1)
+            || expected_recomputations != Some(record.marginal_recomputations)
     }) {
         return Err(BorsukError::InvalidStorage(
             "V40 accepted selection authority differs".to_owned(),
@@ -2874,10 +2889,8 @@ struct V40EvaluationResult {
     schema: String,
 }
 
-pub(crate) fn parse_v40_direct_failure_result_bytes(
-    bytes: &[u8],
-) -> Result<V40DirectFailurePrerequisite> {
-    let invalid = || BorsukError::InvalidStorage("V40 direct failure authority differs".to_owned());
+fn parse_v40_evaluation_result_bytes(bytes: &[u8]) -> Result<V40EvaluationResult> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct result authority differs".to_owned());
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
     let mut canonical = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
     canonical.push(b'\n');
@@ -2899,12 +2912,8 @@ pub(crate) fn parse_v40_direct_failure_result_bytes(
     if result.schema != "borsuk-v40-local-result-v1"
         || result.claim_eligible
         || result.mode != "evaluate-direct"
-        || evidence.passed
-        || evidence.disposition != "direct-failed"
         || evidence.aggregate_gate_ppm > 1_000_000
         || evidence.minimum_gate_ppm > 1_000_000
-        || evidence.aggregate_recall_ppm >= evidence.aggregate_gate_ppm
-            && evidence.minimum_recall_ppm >= evidence.minimum_gate_ppm
         || evidence.gt_neighbors == 0
         || evidence.selected_postings == 0
         || evidence.query_count == 0
@@ -2968,12 +2977,32 @@ pub(crate) fn parse_v40_direct_failure_result_bytes(
     if total_hits != evidence.total_hits
         || aggregate != evidence.aggregate_recall_ppm
         || minimum != evidence.minimum_recall_ppm
+        || evidence.passed
+            != (aggregate >= evidence.aggregate_gate_ppm && minimum >= evidence.minimum_gate_ppm)
+        || evidence.disposition
+            != if evidence.passed {
+                "direct-passed"
+            } else {
+                "direct-failed"
+            }
     {
         return Err(invalid());
     }
+    Ok(result)
+}
+
+pub(crate) fn parse_v40_direct_failure_result_bytes(
+    bytes: &[u8],
+) -> Result<V40DirectFailurePrerequisite> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct failure authority differs".to_owned());
+    let result = parse_v40_evaluation_result_bytes(bytes)?;
+    let evidence = &result.evidence;
+    if evidence.passed {
+        return Err(invalid());
+    }
     Ok(V40DirectFailurePrerequisite {
-        aggregate_recall_ppm: aggregate,
-        minimum_recall_ppm: minimum,
+        aggregate_recall_ppm: evidence.aggregate_recall_ppm,
+        minimum_recall_ppm: evidence.minimum_recall_ppm,
         fma_backend: evidence.fma_backend.clone(),
         query_count: evidence.query_count,
         selected_postings: evidence.selected_postings,
@@ -2981,6 +3010,125 @@ pub(crate) fn parse_v40_direct_failure_result_bytes(
         aggregate_gate_ppm: evidence.aggregate_gate_ppm,
         minimum_gate_ppm: evidence.minimum_gate_ppm,
         inputs: result.inputs,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40DirectDecisionEvidence {
+    aggregate_gate_ppm: u32,
+    disposition: String,
+    fma_backend: String,
+    gt_neighbors: u32,
+    minimum_gate_ppm: u32,
+    query_count: u64,
+    selected_postings: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40DirectDecision {
+    claim_eligible: bool,
+    evidence: V40DirectDecisionEvidence,
+    inputs: Vec<V40SelectionReceiptArtifact>,
+    mode: String,
+    result: V40SelectionReceiptArtifact,
+    schema: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct V40DirectDecisionPrerequisite {
+    fma_backend: String,
+    query_count: u64,
+    selected_postings: u32,
+    gt_neighbors: u32,
+    aggregate_gate_ppm: u32,
+    minimum_gate_ppm: u32,
+    inputs: Vec<V40SelectionReceiptArtifact>,
+}
+
+fn v40_direct_decision_bytes(request: &V40LocalRunRequest, result_bytes: &[u8]) -> Result<Vec<u8>> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct decision differs".to_owned());
+    let result = parse_v40_evaluation_result_bytes(result_bytes)?;
+    let result_output = v40_local_output(request, "direct-result")?;
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "evidence": {
+            "aggregate_gate_ppm": result.evidence.aggregate_gate_ppm,
+            "disposition": result.evidence.disposition,
+            "fma_backend": result.evidence.fma_backend,
+            "gt_neighbors": result.evidence.gt_neighbors,
+            "minimum_gate_ppm": result.evidence.minimum_gate_ppm,
+            "query_count": result.evidence.query_count,
+            "selected_postings": result.evidence.selected_postings,
+        },
+        "inputs": result.inputs,
+        "mode": "evaluate-direct-decision",
+        "result": v40_output_receipt_value(result_output, result_bytes),
+        "schema": "borsuk-v40-direct-decision-v1",
+    });
+    let mut bytes = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn parse_v40_direct_failure_decision_bytes(bytes: &[u8]) -> Result<V40DirectDecisionPrerequisite> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct failure decision differs".to_owned());
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let mut canonical = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(invalid());
+    }
+    let decision: V40DirectDecision = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let evidence = &decision.evidence;
+    let input_roles = decision
+        .inputs
+        .iter()
+        .map(|input| input.role.as_str())
+        .collect::<Vec<_>>();
+    let input_uris = decision
+        .inputs
+        .iter()
+        .map(|input| input.uri.as_str())
+        .collect::<BTreeSet<_>>();
+    if decision.schema != "borsuk-v40-direct-decision-v1"
+        || decision.claim_eligible
+        || decision.mode != "evaluate-direct-decision"
+        || evidence.disposition != "direct-failed"
+        || evidence.query_count == 0
+        || evidence.selected_postings == 0
+        || evidence.gt_neighbors == 0
+        || evidence.aggregate_gate_ppm > 1_000_000
+        || evidence.minimum_gate_ppm > 1_000_000
+        || !matches!(
+            evidence.fma_backend.as_str(),
+            "aarch64-neon-fma" | "x86-avx-fma"
+        )
+        || input_roles != V40LocalRunMode::EvaluateDirect.input_roles()
+        || input_uris.len() != decision.inputs.len()
+        || decision.inputs.iter().any(|input| {
+            !valid_s3_uri(&input.uri)
+                || !valid_digest(&input.sha256)
+                || !valid_digest(&input.blake3)
+                || input.encoded_bytes == 0
+        })
+        || decision.result.role != "direct-result"
+        || !valid_v40_local_file_uri(&decision.result.uri)
+        || !valid_digest(&decision.result.sha256)
+        || !valid_digest(&decision.result.blake3)
+        || decision.result.encoded_bytes == 0
+    {
+        return Err(invalid());
+    }
+    Ok(V40DirectDecisionPrerequisite {
+        fma_backend: evidence.fma_backend.clone(),
+        query_count: evidence.query_count,
+        selected_postings: evidence.selected_postings,
+        gt_neighbors: evidence.gt_neighbors,
+        aggregate_gate_ppm: evidence.aggregate_gate_ppm,
+        minimum_gate_ppm: evidence.minimum_gate_ppm,
+        inputs: decision.inputs,
     })
 }
 
@@ -3177,10 +3325,10 @@ pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
 fn require_v40_direct_failure_bindings(
     request: &V40LocalRunRequest,
     authenticated: &V40AuthenticatedLocalInputs,
-) -> Result<V40DirectFailurePrerequisite> {
+) -> Result<V40DirectDecisionPrerequisite> {
     let invalid = || BorsukError::InvalidStorage("V40 direct failure binding differs".to_owned());
-    let direct_bytes = read_v40_authenticated_input(request, authenticated, "direct-result")?;
-    let prerequisite = parse_v40_direct_failure_result_bytes(&direct_bytes)?;
+    let direct_bytes = read_v40_authenticated_input(request, authenticated, "direct-decision")?;
+    let prerequisite = parse_v40_direct_failure_decision_bytes(&direct_bytes)?;
     if prerequisite.query_count != V40_DIRECT_QUERY_COUNT
         || prerequisite.selected_postings != V40_DIRECT_SELECTED_POSTINGS as u32
         || prerequisite.gt_neighbors != 100
@@ -3255,8 +3403,8 @@ fn validate_v40_summary_receipt(
     let receipt_bytes =
         read_v40_authenticated_input(request, authenticated, "spill-summary-result")?;
     let receipt = parse_v40_phase_receipt(&receipt_bytes, "build-spill-summary")?;
-    let direct_bytes = read_v40_authenticated_input(request, authenticated, "direct-result")?;
-    let direct = parse_v40_direct_failure_result_bytes(&direct_bytes)?;
+    let direct_bytes = read_v40_authenticated_input(request, authenticated, "direct-decision")?;
+    let direct = parse_v40_direct_failure_decision_bytes(&direct_bytes)?;
     let summary = v40_local_input(request, "spill-summary")?;
     let summary_bytes = read_v40_authenticated_input(request, authenticated, "spill-summary")?;
     let decoded =
@@ -3284,7 +3432,7 @@ fn validate_v40_summary_receipt(
         )
         || !v40_cohort_identity_matches_local(
             receipt.inputs.get(1).ok_or_else(invalid)?,
-            v40_local_input(request, "direct-result")?,
+            v40_local_input(request, "direct-decision")?,
         )
         || receipt.inputs.get(2..5) != direct.inputs.get(2..5)
         || receipt
@@ -3445,7 +3593,7 @@ fn validate_v40_accepted_selection_receipt(
         )
         || !v40_cohort_identity_matches_local(
             receipt.inputs.get(1).ok_or_else(invalid)?,
-            v40_local_input(request, "direct-result")?,
+            v40_local_input(request, "direct-decision")?,
         )
         || receipt.inputs.get(2) != Some(&cohort.v37_authority)
         || receipt.inputs.get(3) != Some(&cohort.ownership_tree)
@@ -3669,8 +3817,13 @@ fn run_v40_evaluate_direct(
     };
     let evaluation = evaluate_v40_direct_recall(&spec, &owners, &selections, &truth, &backend)?;
     let result_bytes = v40_evaluation_result_bytes(request, &spec, &evaluation, &backend)?;
-    let output = request.outputs.first().ok_or_else(invalid)?;
+    let output = v40_local_output(request, "direct-result")?;
     publish_v40_output(&output.path, &result_bytes)?;
+    let decision_bytes = v40_direct_decision_bytes(request, &result_bytes)?;
+    publish_v40_output(
+        &v40_local_output(request, "direct-decision")?.path,
+        &decision_bytes,
+    )?;
     Ok(result_bytes)
 }
 
@@ -3809,10 +3962,11 @@ mod tests {
         encode_v40_accepted_selections_parquet, encode_v40_direct_selections_parquet,
         encode_v40_packed_spill_summary_arrow, evaluate_v40_accepted_recall,
         evaluate_v40_direct_recall, load_v40_projected_queries, load_v40_projected_queries_file,
-        parse_v40_direct_cohort_authority_bytes, parse_v40_direct_failure_result_bytes,
-        parse_v40_phase_receipt, parse_v40_selection_receipt_bytes,
-        select_v40_accepted_spill_postings, select_v40_direct_queries, select_v40_tree_frontier,
-        v40_accepted_evaluation_result_bytes, v40_evaluation_result_bytes, v40_phase_receipt_bytes,
+        parse_v40_direct_cohort_authority_bytes, parse_v40_direct_failure_decision_bytes,
+        parse_v40_direct_failure_result_bytes, parse_v40_phase_receipt,
+        parse_v40_selection_receipt_bytes, select_v40_accepted_spill_postings,
+        select_v40_direct_queries, select_v40_tree_frontier, v40_accepted_evaluation_result_bytes,
+        v40_direct_decision_bytes, v40_evaluation_result_bytes, v40_phase_receipt_bytes,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
@@ -4182,7 +4336,9 @@ mod tests {
             ]
             .map(local_artifact)
             .to_vec(),
-            vec![local_output("direct-result")],
+            ["direct-result", "direct-decision"]
+                .map(local_output)
+                .to_vec(),
             4,
         )
         .unwrap();
@@ -4202,6 +4358,66 @@ mod tests {
         assert!(
             v40_evaluation_result_bytes(&request, &spec, &drifted, "aarch64-neon-fma").is_err()
         );
+    }
+
+    #[test]
+    fn v40_challenger_receives_only_outcome_blind_direct_failure_authority() {
+        let (mut spec, owners, selections, truth) = direct_evaluation_fixture();
+        spec.aggregate_gate_ppm = 998_000;
+        spec.minimum_gate_ppm = 800_000;
+        let evaluation =
+            evaluate_v40_direct_recall(&spec, &owners, &selections, &truth, "aarch64-neon-fma")
+                .unwrap();
+        assert_eq!(evaluation.disposition, "direct-failed");
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::EvaluateDirect,
+            [
+                "cohort-authority",
+                "v38-ceiling-authority",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+                "development-ground-truth",
+                "direct-selection-result",
+                "direct-selection",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            ["direct-result", "direct-decision"]
+                .map(local_output)
+                .to_vec(),
+            1,
+        )
+        .unwrap();
+        let result =
+            v40_evaluation_result_bytes(&request, &spec, &evaluation, "aarch64-neon-fma").unwrap();
+        let decision = v40_direct_decision_bytes(&request, &result).unwrap();
+        let text = std::str::from_utf8(&decision).unwrap();
+        for forbidden in ["samples", "hits", "recall_ppm", "total_hits"] {
+            assert!(!text.contains(forbidden));
+        }
+        let prerequisite = parse_v40_direct_failure_decision_bytes(&decision).unwrap();
+        assert_eq!(prerequisite.fma_backend, "aarch64-neon-fma");
+
+        let selection = V40LocalRunRequest::try_new(
+            V40LocalRunMode::SelectAcceptedSpill,
+            [
+                "cohort-authority",
+                "direct-decision",
+                "v37-authority",
+                "ownership-tree",
+                "development-query",
+                "spill-summary-result",
+                "spill-summary",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            ["accepted-selection", "accepted-selection-result"]
+                .map(local_output)
+                .to_vec(),
+            16,
+        );
+        assert!(selection.is_ok());
     }
 
     #[test]
@@ -4236,7 +4452,7 @@ mod tests {
             V40LocalRunMode::EvaluateAcceptedSpill,
             [
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v38-ceiling-authority",
                 "v38-construction-result",
                 "spill-relation",
@@ -4280,6 +4496,32 @@ mod tests {
             evaluate_v40_accepted_recall(&spec, &owners, &drifted, &truth, "aarch64-neon-fma")
                 .is_err()
         );
+
+        let mut drifted = direct
+            .iter()
+            .enumerate()
+            .map(|(query, record)| V40AcceptedSelectionRecord {
+                query_ordinal: record.query_ordinal,
+                posting_ordinals: record.posting_ordinals.clone(),
+                node_pops: record.node_pops,
+                scored_internal_nodes: record.scored_internal_nodes,
+                fma_backend: record.fma_backend.clone(),
+                objective_value: 100 + query as u64,
+                candidate_count: 7,
+                marginal_recomputations: 13,
+            })
+            .collect::<Vec<_>>();
+        drifted[0].candidate_count = 2_113;
+        drifted[0].marginal_recomputations = 4_225;
+        assert!(encode_v40_accepted_selections_parquet(&drifted, 2).is_err());
+
+        drifted[0].candidate_count = 7;
+        drifted[0].marginal_recomputations = 14;
+        assert!(encode_v40_accepted_selections_parquet(&drifted, 2).is_err());
+
+        drifted[0].marginal_recomputations = 13;
+        drifted[0].objective_value = 34_896_609_281;
+        assert!(encode_v40_accepted_selections_parquet(&drifted, 2).is_err());
     }
 
     #[test]
@@ -4305,7 +4547,9 @@ mod tests {
             ]
             .map(local_artifact)
             .to_vec(),
-            vec![local_output("direct-result")],
+            ["direct-result", "direct-decision"]
+                .map(local_output)
+                .to_vec(),
             1,
         )
         .unwrap();
@@ -4440,7 +4684,7 @@ mod tests {
             V40LocalRunMode::BuildSpillSummary,
             [
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v38-construction-result",
                 "spill-relation",
                 "spill-postings",
@@ -4578,11 +4822,16 @@ mod tests {
         let evaluation = V40LocalRunRequest::try_new(
             V40LocalRunMode::EvaluateDirect,
             evaluation_inputs,
-            vec![local_output("direct-result")],
+            ["direct-result", "direct-decision"]
+                .map(local_output)
+                .to_vec(),
             1,
         )
         .unwrap();
-        assert_eq!(evaluation.output_roles(), vec!["direct-result"]);
+        assert_eq!(
+            evaluation.output_roles(),
+            vec!["direct-result", "direct-decision"]
+        );
         assert!(!evaluation.input_roles().contains(&"development-query"));
         assert!(
             !selection
@@ -4597,7 +4846,7 @@ mod tests {
             V40LocalRunMode::BuildSpillSummary,
             [
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v38-construction-result",
                 "spill-relation",
                 "spill-postings",
@@ -4617,7 +4866,7 @@ mod tests {
             V40LocalRunMode::SelectAcceptedSpill,
             [
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v37-authority",
                 "ownership-tree",
                 "development-query",
@@ -4642,7 +4891,7 @@ mod tests {
             V40LocalRunMode::EvaluateAcceptedSpill,
             [
                 "cohort-authority",
-                "direct-result",
+                "direct-decision",
                 "v38-ceiling-authority",
                 "v38-construction-result",
                 "spill-relation",
