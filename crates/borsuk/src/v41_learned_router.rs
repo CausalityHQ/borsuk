@@ -1,6 +1,10 @@
 use crate::error::{BorsukError, Result};
 use crate::v38_boundary_spill::v38_v40_owner_rows_from_artifacts;
-use arrow_array::{Array, FixedSizeListArray, Float32Array, RecordBatch};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, RecordBatch, UInt32Array,
+    UInt64Array,
+    builder::{ListBuilder, UInt32Builder},
+};
 use arrow_ipc::{
     MessageHeader, MetadataVersion,
     convert::fb_to_schema,
@@ -9,10 +13,16 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk_fma::FusedDot64;
+use parquet::{
+    arrow::ArrowWriter,
+    basic::Compression,
+    file::properties::{WriterProperties, WriterVersion},
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
+    fs,
     io::Cursor,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
@@ -1220,13 +1230,234 @@ pub(crate) fn decode_v41_model(
     .map_err(|error| invalid(&format!("V41 decoded model differs: {error}")))
 }
 
+const V41_TRAINING_STATE_SCHEMA: &str = "borsuk-v41-training-state-v1";
+const V41_TRAINING_STATE_ROW_GROUP_ROWS: usize = 4_096;
+
+fn v41_training_state_schema() -> Arc<Schema> {
+    let list = DataType::List(Arc::new(Field::new("element", DataType::UInt32, false)));
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("epoch", DataType::UInt32, false),
+            Field::new("state_ordinal", DataType::UInt32, false),
+            Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new("rollout_step", DataType::UInt32, false),
+            Field::new("selected_page", DataType::UInt32, false),
+            Field::new("ordered_prefix", list.clone(), false),
+            Field::new("ascending_membership", list, false),
+            Field::new("nonzero_target_pages", DataType::UInt32, false),
+            Field::new("target_sum_bits", DataType::UInt32, false),
+            Field::new("loss_present", DataType::Boolean, false),
+            Field::new("loss_bits", DataType::UInt32, false),
+            Field::new("optimizer_step_before", DataType::UInt64, false),
+            Field::new("optimizer_step_after", DataType::UInt64, false),
+            Field::new("numerical_stop_count", DataType::UInt32, false),
+        ],
+        HashMap::from([("schema".to_owned(), V41_TRAINING_STATE_SCHEMA.to_owned())]),
+    ))
+}
+
+fn v41_u32_lists<'a>(values: impl Iterator<Item = &'a [u32]>) -> ArrayRef {
+    let child = Arc::new(Field::new("element", DataType::UInt32, false));
+    let mut builder = ListBuilder::new(UInt32Builder::new()).with_field(child);
+    for value in values {
+        builder.values().append_slice(value);
+        builder.append(true);
+    }
+    Arc::new(builder.finish())
+}
+
+fn v41_training_state_batch(records: &[borsuk_v41::V41TrainingRecord]) -> Result<RecordBatch> {
+    let schema = v41_training_state_schema();
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.epoch),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.state_ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.query_ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.rollout_step),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.selected_page),
+            )),
+            v41_u32_lists(
+                records
+                    .iter()
+                    .map(|record| record.ordered_prefix.as_slice()),
+            ),
+            v41_u32_lists(
+                records
+                    .iter()
+                    .map(|record| record.ascending_membership.as_slice()),
+            ),
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.nonzero_target_pages),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.target_sum_bits),
+            )),
+            Arc::new(BooleanArray::from(
+                records
+                    .iter()
+                    .map(|record| record.loss_bits.is_some())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                records
+                    .iter()
+                    .map(|record| record.loss_bits.unwrap_or(0.0_f32.to_bits())),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                records.iter().map(|record| record.optimizer_step_before),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                records.iter().map(|record| record.optimizer_step_after),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                records.iter().map(|record| record.numerical_stop_count),
+            )),
+        ],
+    )
+    .map_err(Into::into)
+}
+
+fn v41_validate_training_record(
+    record: &borsuk_v41::V41TrainingRecord,
+    prior: Option<(u32, u32)>,
+) -> Result<()> {
+    let key_is_next = match prior {
+        None => (record.epoch, record.state_ordinal) == (0, 0),
+        Some((epoch, state)) => {
+            (record.epoch == epoch && state.checked_add(1) == Some(record.state_ordinal))
+                || (epoch.checked_add(1) == Some(record.epoch) && record.state_ordinal == 0)
+        }
+    };
+    let mut membership = record.ordered_prefix.clone();
+    membership.sort_unstable();
+    let target_sum = f32::from_bits(record.target_sum_bits);
+    let loss = record.loss_bits.map(f32::from_bits);
+    if !key_is_next
+        || record.rollout_step > 20
+        || record.ordered_prefix.len() != record.rollout_step as usize
+        || record.ordered_prefix.iter().collect::<BTreeSet<_>>().len()
+            != record.ordered_prefix.len()
+        || record.ordered_prefix.contains(&record.selected_page)
+        || record.ascending_membership != membership
+        || record
+            .ascending_membership
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || !target_sum.is_finite()
+        || target_sum.to_bits() == (-0.0_f32).to_bits()
+        || target_sum < 0.0
+        || (target_sum == 0.0) != (record.nonzero_target_pages == 0)
+        || (target_sum == 0.0) != record.loss_bits.is_none()
+        || loss.is_some_and(|value| {
+            !value.is_finite() || value.to_bits() == (-0.0_f32).to_bits() || value < 0.0
+        })
+        || record
+            .optimizer_step_after
+            .checked_sub(record.optimizer_step_before)
+            .is_none_or(|advance| advance > 1)
+        || (record.loss_bits.is_some()
+            && record.optimizer_step_before.checked_add(1) != Some(record.optimizer_step_after))
+        || record.numerical_stop_count != 0
+    {
+        return Err(invalid("V41 training-state record differs"));
+    }
+    Ok(())
+}
+
+pub(crate) struct V41TrainingStateParquetSink {
+    path: PathBuf,
+    writer: Option<ArrowWriter<fs::File>>,
+    buffered: Vec<borsuk_v41::V41TrainingRecord>,
+    prior: Option<(u32, u32)>,
+}
+
+impl V41TrainingStateParquetSink {
+    pub(crate) fn try_new(path: &Path) -> Result<Self> {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|source| BorsukError::Io {
+                path: path.to_owned(),
+                source,
+            })?;
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_dictionary_enabled(false)
+            .set_max_row_group_row_count(Some(V41_TRAINING_STATE_ROW_GROUP_ROWS))
+            .build();
+        let writer = ArrowWriter::try_new(file, v41_training_state_schema(), Some(properties))?;
+        Ok(Self {
+            path: path.to_owned(),
+            writer: Some(writer),
+            buffered: Vec::with_capacity(V41_TRAINING_STATE_ROW_GROUP_ROWS),
+            prior: None,
+        })
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if self.buffered.is_empty() {
+            return Ok(());
+        }
+        let batch = v41_training_state_batch(&self.buffered)?;
+        self.writer
+            .as_mut()
+            .ok_or_else(|| invalid("V41 training-state writer is closed"))?
+            .write(&batch)?;
+        self.buffered.clear();
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<()> {
+        self.flush()?;
+        self.writer
+            .take()
+            .ok_or_else(|| invalid("V41 training-state writer is closed"))?
+            .close()?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&self.path)
+            .and_then(|file| file.sync_all())
+            .map_err(|source| BorsukError::Io {
+                path: self.path.clone(),
+                source,
+            })?;
+        Ok(())
+    }
+}
+
+impl borsuk_v41::V41TrainingSink for V41TrainingStateParquetSink {
+    fn record(&mut self, record: borsuk_v41::V41TrainingRecord) -> borsuk_v41::Result<()> {
+        v41_validate_training_record(&record, self.prior)
+            .map_err(|error| borsuk_v41::V41Error::new(error.to_string()))?;
+        self.prior = Some((record.epoch, record.state_ordinal));
+        self.buffered.push(record);
+        if self.buffered.len() == V41_TRAINING_STATE_ROW_GROUP_ROWS {
+            self.flush()
+                .map_err(|error| borsuk_v41::V41Error::new(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         V41ArtifactIdentity, V41DevelopmentPartitionChild, V41DevelopmentPartitionManifest,
         V41LocalArtifact, V41LocalOutput, V41LocalRunMode, V41LocalRunRequest, V41ModelAuthority,
-        V41ModelManifest, V41PartitionChildAuthority, audit_v41_holdout_query_role,
-        audit_v41_query_roles, decode_v41_model, encode_v41_model,
+        V41ModelManifest, V41PartitionChildAuthority, V41TrainingStateParquetSink,
+        audit_v41_holdout_query_role, audit_v41_query_roles, decode_v41_model, encode_v41_model,
         project_v41_development_partition, split_v41_development_queries, v41_canonical_json_bytes,
         v41_marginal_targets_from_v38_artifacts, v41_parse_arrow_message,
         validate_v41_development_partition, validate_v41_development_partition_against,
@@ -1847,5 +2078,140 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v41_training_state_parquet_is_nonnull_ordered_and_row_group_bounded() {
+        use arrow_array::{Array, ListArray, UInt32Array, UInt64Array};
+        use arrow_schema::{DataType, Field, Schema};
+        use borsuk_v41::{V41TrainingRecord, V41TrainingSink};
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        use std::{collections::HashMap, fs::File, sync::Arc};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("training-state.parquet");
+        let mut sink = V41TrainingStateParquetSink::try_new(&path).unwrap();
+        fn require_training_sink(_: &mut impl V41TrainingSink) {}
+        require_training_sink(&mut sink);
+        for row in 0_u32..4_100 {
+            let epoch = row / 2_050;
+            let state_ordinal = row % 2_050;
+            let rollout_step = state_ordinal % 21;
+            let prefix = (0..rollout_step).collect::<Vec<_>>();
+            sink.record(V41TrainingRecord {
+                epoch,
+                state_ordinal,
+                query_ordinal: state_ordinal / 21,
+                rollout_step,
+                selected_page: rollout_step,
+                ordered_prefix: prefix.clone(),
+                ascending_membership: prefix,
+                nonzero_target_pages: 1,
+                target_sum_bits: 1.0_f32.to_bits(),
+                loss_bits: Some(0.5_f32.to_bits()),
+                optimizer_step_before: u64::from(row / 64),
+                optimizer_step_after: u64::from(row / 64) + 1,
+                numerical_stop_count: 0,
+            })
+            .unwrap();
+        }
+        sink.finish().unwrap();
+
+        let list = DataType::List(Arc::new(Field::new("element", DataType::UInt32, false)));
+        let expected_schema = Schema::new_with_metadata(
+            vec![
+                Field::new("epoch", DataType::UInt32, false),
+                Field::new("state_ordinal", DataType::UInt32, false),
+                Field::new("query_ordinal", DataType::UInt32, false),
+                Field::new("rollout_step", DataType::UInt32, false),
+                Field::new("selected_page", DataType::UInt32, false),
+                Field::new("ordered_prefix", list.clone(), false),
+                Field::new("ascending_membership", list, false),
+                Field::new("nonzero_target_pages", DataType::UInt32, false),
+                Field::new("target_sum_bits", DataType::UInt32, false),
+                Field::new("loss_present", DataType::Boolean, false),
+                Field::new("loss_bits", DataType::UInt32, false),
+                Field::new("optimizer_step_before", DataType::UInt64, false),
+                Field::new("optimizer_step_after", DataType::UInt64, false),
+                Field::new("numerical_stop_count", DataType::UInt32, false),
+            ],
+            HashMap::from([(
+                "schema".to_owned(),
+                "borsuk-v41-training-state-v1".to_owned(),
+            )]),
+        );
+        let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(&path).unwrap()).unwrap();
+        assert_eq!(builder.schema().as_ref(), &expected_schema);
+        assert_eq!(
+            builder
+                .metadata()
+                .row_groups()
+                .iter()
+                .map(|group| group.num_rows())
+                .collect::<Vec<_>>(),
+            vec![4_096, 4]
+        );
+        let batches = builder
+            .with_batch_size(4_096)
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            4_100
+        );
+        assert!(
+            batches
+                .iter()
+                .flat_map(|batch| batch.columns())
+                .all(|column| column.null_count() == 0)
+        );
+        let first = &batches[0];
+        assert_eq!(
+            first
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap()
+                .value(0),
+            0
+        );
+        assert_eq!(
+            first
+                .column(12)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(63),
+            1
+        );
+        let prefixes = first
+            .column(5)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(prefixes.value(20).len(), 20);
+        assert_eq!(prefixes.values().null_count(), 0);
+
+        let rejected_path = directory.path().join("rejected.parquet");
+        let mut rejected = V41TrainingStateParquetSink::try_new(&rejected_path).unwrap();
+        let record = V41TrainingRecord {
+            epoch: 0,
+            state_ordinal: 0,
+            query_ordinal: 0,
+            rollout_step: 0,
+            selected_page: 0,
+            ordered_prefix: Vec::new(),
+            ascending_membership: Vec::new(),
+            nonzero_target_pages: 0,
+            target_sum_bits: 0.0_f32.to_bits(),
+            loss_bits: None,
+            optimizer_step_before: 0,
+            optimizer_step_after: 0,
+            numerical_stop_count: 0,
+        };
+        rejected.record(record.clone()).unwrap();
+        assert!(rejected.record(record).is_err());
     }
 }

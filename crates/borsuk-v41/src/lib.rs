@@ -23,6 +23,12 @@ impl std::fmt::Display for V41Error {
 
 impl std::error::Error for V41Error {}
 
+impl V41Error {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, V41Error>;
 
 fn invalid(message: &str) -> V41Error {
