@@ -60,6 +60,7 @@ fn parse_v40_spill_router_args(
             "spill-relation",
             "spill-postings",
             "development-ground-truth",
+            "direct-selection-result",
             "direct-selection",
         ],
     };
