@@ -2642,11 +2642,12 @@ pub(crate) fn v38_v40_owner_rows_from_artifacts(
             _ => return Err(invalid("V38 V40 ownership role differs")),
         }
     }
-    let owners = owners
+    let mut owners = owners
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| invalid("V38 V40 primary ownership differs"))?;
-    if owners.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+    owners.sort_unstable_by_key(|owner| owner.0);
+    if owners.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(invalid("V38 V40 feature order differs"));
     }
     Ok(owners)
@@ -5307,6 +5308,36 @@ mod tests {
                 3,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn v38_v40_owner_decoder_sorts_randomized_feature_ids_by_identity() {
+        let primary = vec![
+            primary_record(0, 103, 0, 0),
+            primary_record(1, 100, 0, 1),
+            primary_record(2, 102, 1, 0),
+            primary_record(3, 101, 1, 1),
+        ];
+        let proposals = vec![
+            (0, proposal(1, 0.25)),
+            (1, proposal(1, 0.5)),
+            (2, proposal(0, 0.75)),
+            (3, proposal(0, 1.0)),
+        ];
+        let relation = admit_v38_spill_proposals(&primary, &proposals, 2, 2, 3).unwrap();
+        let relation_bytes = encode_v38_spill_relation_parquet(&relation).unwrap();
+        let summaries = summarize_v38_spill_relation(&relation, 2, 3).unwrap();
+        let summary_bytes = encode_v38_posting_summary_parquet(&summaries).unwrap();
+
+        assert_eq!(
+            v38_v40_owner_rows_from_artifacts(&relation_bytes, &summary_bytes, 4, 2, 3).unwrap(),
+            vec![
+                (100, 0, None),
+                (101, 1, None),
+                (102, 1, Some(0)),
+                (103, 0, Some(1)),
+            ]
         );
     }
 
