@@ -44,7 +44,10 @@ fn parse_v40_spill_router_args(
     }
     let mode = match take(&mut values, "--mode")?.as_str() {
         "select-direct" => V40LocalRunMode::SelectDirect,
+        "build-spill-summary" => V40LocalRunMode::BuildSpillSummary,
+        "select-accepted-spill" => V40LocalRunMode::SelectAcceptedSpill,
         "evaluate-direct" => V40LocalRunMode::EvaluateDirect,
+        "evaluate-accepted-spill" => V40LocalRunMode::EvaluateAcceptedSpill,
         _ => return Err("V40 local mode differs".to_owned()),
     };
     let workers = take(&mut values, "--workers")?
@@ -57,6 +60,22 @@ fn parse_v40_spill_router_args(
             "ownership-tree",
             "development-query",
         ][..],
+        V40LocalRunMode::BuildSpillSummary => &[
+            "cohort-authority",
+            "direct-result",
+            "v38-construction-result",
+            "spill-relation",
+            "spill-postings",
+        ],
+        V40LocalRunMode::SelectAcceptedSpill => &[
+            "cohort-authority",
+            "direct-result",
+            "v37-authority",
+            "ownership-tree",
+            "development-query",
+            "spill-summary-result",
+            "spill-summary",
+        ],
         V40LocalRunMode::EvaluateDirect => &[
             "cohort-authority",
             "v38-ceiling-authority",
@@ -67,10 +86,30 @@ fn parse_v40_spill_router_args(
             "direct-selection-result",
             "direct-selection",
         ],
+        V40LocalRunMode::EvaluateAcceptedSpill => &[
+            "cohort-authority",
+            "direct-result",
+            "v38-ceiling-authority",
+            "v38-construction-result",
+            "spill-relation",
+            "spill-postings",
+            "development-ground-truth",
+            "spill-summary-result",
+            "spill-summary",
+            "accepted-selection-result",
+            "accepted-selection",
+        ],
     };
-    let output_role = match mode {
-        V40LocalRunMode::SelectDirect => "direct-selection",
-        V40LocalRunMode::EvaluateDirect => "direct-result",
+    let output_roles: &[&str] = match mode {
+        V40LocalRunMode::SelectDirect => &["direct-selection"],
+        V40LocalRunMode::BuildSpillSummary => {
+            &["spill-counts", "spill-summary", "spill-summary-result"]
+        }
+        V40LocalRunMode::SelectAcceptedSpill => {
+            &["accepted-selection", "accepted-selection-result"]
+        }
+        V40LocalRunMode::EvaluateDirect => &["direct-result"],
+        V40LocalRunMode::EvaluateAcceptedSpill => &["accepted-result"],
     };
     let mut inputs = Vec::with_capacity(input_roles.len());
     for role in input_roles {
@@ -88,13 +127,16 @@ fn parse_v40_spill_router_args(
             .map_err(|error| error.to_string())?,
         );
     }
-    let outputs = vec![
-        V40LocalOutput::try_new(
-            output_role.to_owned(),
-            PathBuf::from(take(&mut values, &format!("--{output_role}-output"))?),
-        )
-        .map_err(|error| error.to_string())?,
-    ];
+    let outputs = output_roles
+        .iter()
+        .map(|role| {
+            V40LocalOutput::try_new(
+                (*role).to_owned(),
+                PathBuf::from(take(&mut values, &format!("--{role}-output"))?),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     if let Some(unknown) = values.keys().next() {
         return Err(format!("unknown flag {unknown}"));
     }
@@ -145,6 +187,35 @@ mod tests {
         "direct-selection-result",
         "direct-selection",
     ];
+    const BUILD_SPILL_ROLES: [&str; 5] = [
+        "cohort-authority",
+        "direct-result",
+        "v38-construction-result",
+        "spill-relation",
+        "spill-postings",
+    ];
+    const SELECT_SPILL_ROLES: [&str; 7] = [
+        "cohort-authority",
+        "direct-result",
+        "v37-authority",
+        "ownership-tree",
+        "development-query",
+        "spill-summary-result",
+        "spill-summary",
+    ];
+    const EVALUATE_SPILL_ROLES: [&str; 11] = [
+        "cohort-authority",
+        "direct-result",
+        "v38-ceiling-authority",
+        "v38-construction-result",
+        "spill-relation",
+        "spill-postings",
+        "development-ground-truth",
+        "spill-summary-result",
+        "spill-summary",
+        "accepted-selection-result",
+        "accepted-selection",
+    ];
 
     fn input_arguments(role: &str, marker: char) -> Vec<String> {
         vec![
@@ -161,7 +232,8 @@ mod tests {
         ]
     }
 
-    fn arguments(mode: &str, roles: &[&str], output: &str) -> Vec<String> {
+    fn arguments(mode: &str, roles: &[&str], outputs: &[&str]) -> Vec<String> {
+        const DIGEST_MARKERS: &[u8] = b"123456789abcdef";
         let mut arguments = vec![
             "v40-spill-router".to_owned(),
             "--execute-v40".to_owned(),
@@ -171,9 +243,11 @@ mod tests {
             "4".to_owned(),
         ];
         for (index, role) in roles.iter().enumerate() {
-            arguments.extend(input_arguments(role, char::from(b'1' + index as u8)));
+            arguments.extend(input_arguments(role, char::from(DIGEST_MARKERS[index])));
         }
-        arguments.extend([format!("--{output}-output"), format!("/output/{output}")]);
+        for output in outputs {
+            arguments.extend([format!("--{output}-output"), format!("/output/{output}")]);
+        }
         arguments
     }
 
@@ -182,7 +256,7 @@ mod tests {
         let selection = parse_v40_spill_router_args(arguments(
             "select-direct",
             &SELECT_ROLES,
-            "direct-selection",
+            &["direct-selection"],
         ))
         .unwrap();
         assert_eq!(selection.mode(), V40LocalRunMode::SelectDirect);
@@ -192,7 +266,7 @@ mod tests {
         let evaluation = parse_v40_spill_router_args(arguments(
             "evaluate-direct",
             &EVALUATE_ROLES,
-            "direct-result",
+            &["direct-result"],
         ))
         .unwrap();
         assert_eq!(evaluation.mode(), V40LocalRunMode::EvaluateDirect);
@@ -203,8 +277,37 @@ mod tests {
     }
 
     #[test]
+    fn v40_cli_parses_the_three_capability_separated_challenger_phases() {
+        for (mode, roles, outputs, expected_mode) in [
+            (
+                "build-spill-summary",
+                BUILD_SPILL_ROLES.as_slice(),
+                ["spill-counts", "spill-summary", "spill-summary-result"].as_slice(),
+                V40LocalRunMode::BuildSpillSummary,
+            ),
+            (
+                "select-accepted-spill",
+                SELECT_SPILL_ROLES.as_slice(),
+                ["accepted-selection", "accepted-selection-result"].as_slice(),
+                V40LocalRunMode::SelectAcceptedSpill,
+            ),
+            (
+                "evaluate-accepted-spill",
+                EVALUATE_SPILL_ROLES.as_slice(),
+                ["accepted-result"].as_slice(),
+                V40LocalRunMode::EvaluateAcceptedSpill,
+            ),
+        ] {
+            let request = parse_v40_spill_router_args(arguments(mode, roles, outputs)).unwrap();
+            assert_eq!(request.mode(), expected_mode);
+            assert_eq!(request.input_roles(), roles);
+            assert_eq!(request.output_roles(), outputs);
+        }
+    }
+
+    #[test]
     fn v40_cli_fails_closed_on_argument_and_remote_capability_drift() {
-        let baseline = arguments("select-direct", &SELECT_ROLES, "direct-selection");
+        let baseline = arguments("select-direct", &SELECT_ROLES, &["direct-selection"]);
         for forbidden in [
             "--bucket",
             "--page-prefix",

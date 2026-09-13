@@ -16,7 +16,7 @@ use std::{
 };
 
 use arrow_array::{
-    Array, ListArray, RecordBatch, StringArray, UInt8Array, UInt32Array, UInt64Array,
+    Array, Float32Array, ListArray, RecordBatch, StringArray, UInt8Array, UInt32Array, UInt64Array,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_ipc::{
@@ -38,6 +38,9 @@ const V40_MAXIMUM_FRONTIER_POSTINGS: usize = 64;
 const V40_MAXIMUM_NODE_POPS: usize = 1_024;
 const V40_DIRECT_QUERY_COUNT: u64 = 1_000;
 const V40_DIRECT_SELECTED_POSTINGS: usize = 21;
+const V40_DEVELOPMENT_CORPUS_ROWS: usize = 1_000_000;
+const V40_DEVELOPMENT_POSTING_COUNT: u32 = 123;
+const V40_DEVELOPMENT_MAXIMUM_ROWS_PER_POSTING: u32 = 10_240;
 const V40_Q24_TOTAL: u32 = 1 << 24;
 const V40_MAXIMUM_ALTERNATES_PER_POSTING: usize = 32;
 
@@ -202,6 +205,351 @@ pub(crate) fn build_v40_spill_counts(
             primary_population: summary.primary_population,
         });
     }
+    Ok(counts)
+}
+
+#[cfg(test)]
+fn build_v40_spill_counts_from_owners(
+    owners: &[(u64, u32, Option<u32>)],
+    posting_count: u32,
+) -> Result<Vec<V40SpillCount>> {
+    let invalid = || BorsukError::InvalidStorage("V40 spill owner authority differs".to_owned());
+    if owners.is_empty() || posting_count == 0 {
+        return Err(invalid());
+    }
+    let mut populations = vec![0_u64; posting_count as usize];
+    let mut alternates = vec![BTreeMap::<u32, u64>::new(); posting_count as usize];
+    let mut previous_feature = None;
+    for &(feature, primary, alternate) in owners {
+        if previous_feature.is_some_and(|previous| feature <= previous)
+            || primary >= posting_count
+            || alternate.is_some_and(|value| value >= posting_count || value == primary)
+        {
+            return Err(invalid());
+        }
+        previous_feature = Some(feature);
+        populations[primary as usize] = populations[primary as usize]
+            .checked_add(1)
+            .ok_or_else(invalid)?;
+        if let Some(alternate) = alternate {
+            let count = alternates[primary as usize].entry(alternate).or_default();
+            *count = count.checked_add(1).ok_or_else(invalid)?;
+        }
+    }
+    let mut counts = Vec::new();
+    for primary in 0..posting_count {
+        let population = populations[primary as usize];
+        if population == 0 {
+            return Err(invalid());
+        }
+        let mut rows = alternates[primary as usize]
+            .iter()
+            .map(|(&alternate, &count)| V40SpillCount {
+                primary_posting: primary,
+                alternate_posting: Some(alternate),
+                count,
+                primary_population: population,
+            })
+            .collect::<Vec<_>>();
+        rows.sort_unstable_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.alternate_posting.cmp(&right.alternate_posting))
+        });
+        let alternate_total = rows
+            .iter()
+            .try_fold(0_u64, |total, row| total.checked_add(row.count))
+            .ok_or_else(invalid)?;
+        rows.push(V40SpillCount {
+            primary_posting: primary,
+            alternate_posting: None,
+            count: population
+                .checked_sub(alternate_total)
+                .ok_or_else(invalid)?,
+            primary_population: population,
+        });
+        counts.extend(rows);
+    }
+    pack_v40_spill_summary(&counts, posting_count)?;
+    Ok(counts)
+}
+
+fn v40_source_spill_relation_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("source_ordinal", DataType::UInt64, false),
+        Field::new("feature_row_id", DataType::UInt64, false),
+        Field::new("posting_ordinal", DataType::UInt32, false),
+        Field::new("owner_role", DataType::UInt8, false),
+        Field::new("posting_local_ordinal", DataType::UInt32, false),
+        Field::new("alternate_violation", DataType::Float32, true),
+    ])
+}
+
+fn v40_source_posting_summary_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("posting_ordinal", DataType::UInt32, false),
+        Field::new("primary_population", DataType::UInt64, false),
+        Field::new("alternate_population", DataType::UInt64, false),
+        Field::new("total_population", DataType::UInt64, false),
+        Field::new("projected_payload_bytes", DataType::UInt64, false),
+        Field::new("projected_framing_allowance_bytes", DataType::UInt32, false),
+    ])
+}
+
+fn build_v40_spill_counts_from_parquet_files(
+    relation_file: File,
+    posting_file: File,
+    source_rows: usize,
+    posting_count: u32,
+    maximum_rows_per_posting: u32,
+) -> Result<Vec<V40SpillCount>> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 streaming spill count authority differs".to_owned());
+    if source_rows == 0 || posting_count == 0 || maximum_rows_per_posting == 0 {
+        return Err(invalid());
+    }
+    let relation_builder = ParquetRecordBatchReaderBuilder::try_new(relation_file)?;
+    let relation_rows = usize::try_from(relation_builder.metadata().file_metadata().num_rows())
+        .map_err(|_| invalid())?;
+    if relation_builder.schema().as_ref() != &v40_source_spill_relation_schema()
+        || relation_builder.metadata().num_row_groups() == 0
+        || relation_rows < source_rows
+        || relation_rows > source_rows.checked_mul(2).ok_or_else(invalid)?
+    {
+        return Err(invalid());
+    }
+    let postings = posting_count as usize;
+    let mut primary_populations = vec![0_u64; postings];
+    let mut alternate_populations = vec![0_u64; postings];
+    let mut next_primary_local = vec![0_u32; postings];
+    let mut first_alternate_local = vec![None; postings];
+    let mut next_alternate_local = vec![0_u32; postings];
+    let mut alternate_counts = vec![BTreeMap::<u32, u64>::new(); postings];
+    let mut expected_source = 0_u64;
+    let mut pending_primary: Option<(u64, u64, u32)> = None;
+    for batch in relation_builder.build()? {
+        let batch = batch?;
+        if batch.schema().as_ref() != &v40_source_spill_relation_schema()
+            || batch.columns()[..5]
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid());
+        }
+        let sources = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let features = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let posting_ordinals = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let roles = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(invalid)?;
+        let local_ordinals = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let violations = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(invalid)?;
+        for row in 0..batch.num_rows() {
+            let source = sources.value(row);
+            let feature = features.value(row);
+            let posting = posting_ordinals.value(row);
+            let posting_index = usize::try_from(posting).map_err(|_| invalid())?;
+            if posting_index >= postings {
+                return Err(invalid());
+            }
+            match roles.value(row) {
+                0 => {
+                    if source != expected_source
+                        || violations.is_valid(row)
+                        || local_ordinals.value(row) != next_primary_local[posting_index]
+                    {
+                        return Err(invalid());
+                    }
+                    expected_source = expected_source.checked_add(1).ok_or_else(invalid)?;
+                    next_primary_local[posting_index] = next_primary_local[posting_index]
+                        .checked_add(1)
+                        .ok_or_else(invalid)?;
+                    primary_populations[posting_index] = primary_populations[posting_index]
+                        .checked_add(1)
+                        .ok_or_else(invalid)?;
+                    pending_primary = Some((source, feature, posting));
+                }
+                1 => {
+                    let (primary_source, primary_feature, primary_posting) =
+                        pending_primary.take().ok_or_else(invalid)?;
+                    let violation = violations.value(row);
+                    let local = local_ordinals.value(row);
+                    if source != primary_source
+                        || feature != primary_feature
+                        || posting == primary_posting
+                        || !violations.is_valid(row)
+                        || !violation.is_finite()
+                        || violation.total_cmp(&0.0).is_lt()
+                    {
+                        return Err(invalid());
+                    }
+                    if let Some(expected) = first_alternate_local[posting_index] {
+                        if local != next_alternate_local[posting_index] || local < expected {
+                            return Err(invalid());
+                        }
+                    } else {
+                        first_alternate_local[posting_index] = Some(local);
+                        next_alternate_local[posting_index] = local;
+                    }
+                    next_alternate_local[posting_index] = next_alternate_local[posting_index]
+                        .checked_add(1)
+                        .ok_or_else(invalid)?;
+                    alternate_populations[posting_index] = alternate_populations[posting_index]
+                        .checked_add(1)
+                        .ok_or_else(invalid)?;
+                    let count = alternate_counts[primary_posting as usize]
+                        .entry(posting)
+                        .or_default();
+                    *count = count.checked_add(1).ok_or_else(invalid)?;
+                }
+                _ => return Err(invalid()),
+            }
+        }
+    }
+    if expected_source != source_rows as u64 {
+        return Err(invalid());
+    }
+    for posting in 0..postings {
+        if primary_populations[posting] == 0
+            || first_alternate_local[posting].is_some_and(|first| {
+                u64::from(first) != primary_populations[posting]
+                    || u64::from(next_alternate_local[posting])
+                        != primary_populations[posting] + alternate_populations[posting]
+            })
+            || first_alternate_local[posting].is_none() && alternate_populations[posting] != 0
+        {
+            return Err(invalid());
+        }
+    }
+
+    let posting_builder = ParquetRecordBatchReaderBuilder::try_new(posting_file)?;
+    if posting_builder.schema().as_ref() != &v40_source_posting_summary_schema()
+        || posting_builder.metadata().num_row_groups() == 0
+        || posting_builder.metadata().file_metadata().num_rows() != i64::from(posting_count)
+    {
+        return Err(invalid());
+    }
+    let mut observed_postings = 0_usize;
+    for batch in posting_builder.build()? {
+        let batch = batch?;
+        if batch.schema().as_ref() != &v40_source_posting_summary_schema()
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid());
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let primary = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let alternate = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let totals = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let payloads = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let framing = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        for row in 0..batch.num_rows() {
+            let posting = observed_postings.checked_add(row).ok_or_else(invalid)?;
+            let total = primary_populations[posting]
+                .checked_add(alternate_populations[posting])
+                .ok_or_else(invalid)?;
+            if ordinals.value(row) as usize != posting
+                || primary.value(row) != primary_populations[posting]
+                || alternate.value(row) != alternate_populations[posting]
+                || totals.value(row) != total
+                || total > u64::from(maximum_rows_per_posting)
+                || payloads.value(row) != total.checked_mul(48).ok_or_else(invalid)?
+                || framing.value(row) != 32_768
+            {
+                return Err(invalid());
+            }
+        }
+        observed_postings = observed_postings
+            .checked_add(batch.num_rows())
+            .ok_or_else(invalid)?;
+    }
+    if observed_postings != postings {
+        return Err(invalid());
+    }
+
+    let mut counts = Vec::new();
+    for primary in 0..posting_count {
+        let population = primary_populations[primary as usize];
+        let mut rows = alternate_counts[primary as usize]
+            .iter()
+            .map(|(&alternate, &count)| V40SpillCount {
+                primary_posting: primary,
+                alternate_posting: Some(alternate),
+                count,
+                primary_population: population,
+            })
+            .collect::<Vec<_>>();
+        rows.sort_unstable_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.alternate_posting.cmp(&right.alternate_posting))
+        });
+        let alternate_total = rows
+            .iter()
+            .try_fold(0_u64, |total, row| total.checked_add(row.count))
+            .ok_or_else(invalid)?;
+        rows.push(V40SpillCount {
+            primary_posting: primary,
+            alternate_posting: None,
+            count: population
+                .checked_sub(alternate_total)
+                .ok_or_else(invalid)?,
+            primary_population: population,
+        });
+        counts.extend(rows);
+    }
+    pack_v40_spill_summary(&counts, posting_count)?;
     Ok(counts)
 }
 
@@ -855,8 +1203,14 @@ fn valid_s3_uri(value: &str) -> bool {
 pub enum V40LocalRunMode {
     /// Select postings from query vectors without ground truth access.
     SelectDirect,
+    /// Build query-independent accepted-spill counts and packed summary.
+    BuildSpillSummary,
+    /// Select postings using queries and the sealed accepted-spill summary.
+    SelectAcceptedSpill,
     /// Evaluate sealed selections with ground truth but no query-vector access.
     EvaluateDirect,
+    /// Evaluate sealed accepted-spill selections without query-vector access.
+    EvaluateAcceptedSpill,
 }
 
 impl V40LocalRunMode {
@@ -868,6 +1222,22 @@ impl V40LocalRunMode {
                 "ownership-tree",
                 "development-query",
             ],
+            Self::BuildSpillSummary => &[
+                "cohort-authority",
+                "direct-result",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+            ],
+            Self::SelectAcceptedSpill => &[
+                "cohort-authority",
+                "direct-result",
+                "v37-authority",
+                "ownership-tree",
+                "development-query",
+                "spill-summary-result",
+                "spill-summary",
+            ],
             Self::EvaluateDirect => &[
                 "cohort-authority",
                 "v38-ceiling-authority",
@@ -878,13 +1248,29 @@ impl V40LocalRunMode {
                 "direct-selection-result",
                 "direct-selection",
             ],
+            Self::EvaluateAcceptedSpill => &[
+                "cohort-authority",
+                "direct-result",
+                "v38-ceiling-authority",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+                "development-ground-truth",
+                "spill-summary-result",
+                "spill-summary",
+                "accepted-selection-result",
+                "accepted-selection",
+            ],
         }
     }
 
     fn output_roles(self) -> &'static [&'static str] {
         match self {
             Self::SelectDirect => &["direct-selection"],
+            Self::BuildSpillSummary => &["spill-counts", "spill-summary", "spill-summary-result"],
+            Self::SelectAcceptedSpill => &["accepted-selection", "accepted-selection-result"],
             Self::EvaluateDirect => &["direct-result"],
+            Self::EvaluateAcceptedSpill => &["accepted-result"],
         }
     }
 }
@@ -1040,11 +1426,20 @@ impl V40LocalRunRequest {
 
 #[derive(Debug)]
 pub(crate) struct V40AuthenticatedLocalInputs {
-    files: Vec<File>,
+    files: Vec<Option<File>>,
+    canonical_inputs: BTreeSet<PathBuf>,
+    file_ids: BTreeSet<(u64, u64)>,
 }
 
 pub(crate) fn authenticate_v40_local_request(
     request: &V40LocalRunRequest,
+) -> Result<V40AuthenticatedLocalInputs> {
+    authenticate_v40_local_request_deferred(request, None)
+}
+
+fn authenticate_v40_local_request_deferred(
+    request: &V40LocalRunRequest,
+    deferred_role: Option<&str>,
 ) -> Result<V40AuthenticatedLocalInputs> {
     const HASH_BUFFER_BYTES: usize = 1_048_576;
     let invalid =
@@ -1053,6 +1448,10 @@ pub(crate) fn authenticate_v40_local_request(
     let mut file_ids = BTreeSet::new();
     let mut files = Vec::with_capacity(request.inputs.len());
     for input in &request.inputs {
+        if deferred_role == Some(input.role()) {
+            files.push(None);
+            continue;
+        }
         let before = fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
             path: input.path.clone(),
             source,
@@ -1120,7 +1519,7 @@ pub(crate) fn authenticate_v40_local_request(
         {
             return Err(invalid());
         }
-        files.push(reader.into_inner());
+        files.push(Some(reader.into_inner()));
     }
 
     let mut canonical_outputs = BTreeSet::new();
@@ -1154,7 +1553,101 @@ pub(crate) fn authenticate_v40_local_request(
             return Err(invalid());
         }
     }
-    Ok(V40AuthenticatedLocalInputs { files })
+    Ok(V40AuthenticatedLocalInputs {
+        files,
+        canonical_inputs,
+        file_ids,
+    })
+}
+
+fn authenticate_v40_deferred_input(
+    request: &V40LocalRunRequest,
+    authenticated: &mut V40AuthenticatedLocalInputs,
+    role: &str,
+) -> Result<()> {
+    const HASH_BUFFER_BYTES: usize = 1_048_576;
+    let invalid =
+        || BorsukError::InvalidStorage("V40 deferred input authentication differs".to_owned());
+    let index = request
+        .inputs
+        .iter()
+        .position(|input| input.role == role)
+        .ok_or_else(invalid)?;
+    if authenticated.files.get(index).is_none_or(Option::is_some) {
+        return Err(invalid());
+    }
+    let input = &request.inputs[index];
+    let before = fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
+        path: input.path.clone(),
+        source,
+    })?;
+    if before.file_type().is_symlink()
+        || !before.file_type().is_file()
+        || before.len() != input.encoded_bytes
+    {
+        return Err(invalid());
+    }
+    let file = File::open(&input.path).map_err(|source| BorsukError::Io {
+        path: input.path.clone(),
+        source,
+    })?;
+    let opened = file.metadata().map_err(|source| BorsukError::Io {
+        path: input.path.clone(),
+        source,
+    })?;
+    let canonical = fs::canonicalize(&input.path).map_err(|source| BorsukError::Io {
+        path: input.path.clone(),
+        source,
+    })?;
+    let file_id = (opened.dev(), opened.ino());
+    if opened.dev() != before.dev()
+        || opened.ino() != before.ino()
+        || authenticated.file_ids.contains(&file_id)
+        || authenticated.canonical_inputs.contains(&canonical)
+    {
+        return Err(invalid());
+    }
+    let mut reader = BufReader::with_capacity(HASH_BUFFER_BYTES, file);
+    let mut sha256 = Sha256::new();
+    let mut blake3 = blake3::Hasher::new();
+    let mut observed_bytes = 0_u64;
+    let mut buffer = vec![0_u8; HASH_BUFFER_BYTES];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|source| BorsukError::Io {
+            path: input.path.clone(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        observed_bytes = observed_bytes
+            .checked_add(read as u64)
+            .ok_or_else(invalid)?;
+        sha256.update(&buffer[..read]);
+        blake3.update(&buffer[..read]);
+    }
+    let after = fs::symlink_metadata(&input.path).map_err(|source| BorsukError::Io {
+        path: input.path.clone(),
+        source,
+    })?;
+    if observed_bytes != input.encoded_bytes
+        || format!("{:x}", sha256.finalize()) != input.sha256
+        || blake3.finalize().to_hex().as_str() != input.blake3
+        || after.file_type().is_symlink()
+        || after.dev() != before.dev()
+        || after.ino() != before.ino()
+        || after.len() != before.len()
+        || after.mtime() != before.mtime()
+        || after.mtime_nsec() != before.mtime_nsec()
+        || after.ctime() != before.ctime()
+        || after.ctime_nsec() != before.ctime_nsec()
+    {
+        return Err(invalid());
+    }
+    authenticated.file_ids.insert(file_id);
+    authenticated.canonical_inputs.insert(canonical);
+    authenticated.files[index] = Some(reader.into_inner());
+    Ok(())
 }
 
 fn v40_local_input<'a>(
@@ -1181,6 +1674,7 @@ fn v40_authenticated_input_file(
     let mut file = authenticated
         .files
         .get(index)
+        .and_then(Option::as_ref)
         .ok_or_else(|| BorsukError::InvalidStorage("V40 authenticated input differs".to_owned()))?
         .try_clone()
         .map_err(|source| BorsukError::Io {
@@ -1475,8 +1969,16 @@ fn v40_evaluation_result_bytes(
 ) -> Result<Vec<u8>> {
     let invalid =
         || BorsukError::InvalidStorage("V40 direct evaluation result authority differs".to_owned());
-    if request.mode != V40LocalRunMode::EvaluateDirect
-        || request.input_roles() != V40LocalRunMode::EvaluateDirect.input_roles()
+    let (mode, passed_disposition, failed_disposition) = match request.mode {
+        V40LocalRunMode::EvaluateDirect => ("evaluate-direct", "direct-passed", "direct-failed"),
+        V40LocalRunMode::EvaluateAcceptedSpill => (
+            "evaluate-accepted-spill",
+            "challenger-passed",
+            "router-rejected",
+        ),
+        _ => return Err(invalid()),
+    };
+    if request.input_roles() != request.mode.input_roles()
         || !matches!(expected_backend, "aarch64-neon-fma" | "x86-avx-fma")
         || evaluation.samples.is_empty()
         || spec.selected_postings == 0
@@ -1529,9 +2031,9 @@ fn v40_evaluation_result_bytes(
     let passed = aggregate_recall_ppm >= spec.aggregate_gate_ppm
         && minimum_recall_ppm >= spec.minimum_gate_ppm;
     let disposition = if passed {
-        "direct-passed"
+        passed_disposition
     } else {
-        "direct-failed"
+        failed_disposition
     };
     if evaluation.total_hits != total_hits
         || evaluation.aggregate_recall_ppm != aggregate_recall_ppm
@@ -1585,9 +2087,60 @@ fn v40_evaluation_result_bytes(
             "total_hits": total_hits,
         },
         "inputs": inputs,
-        "mode": "evaluate-direct",
+        "mode": mode,
         "schema": "borsuk-v40-local-result-v1",
     });
+    let mut bytes = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn v40_accepted_evaluation_result_bytes(
+    request: &V40LocalRunRequest,
+    spec: &V40EvaluationSpec,
+    evaluation: &V40DirectEvaluation,
+    selections: &[V40AcceptedSelectionRecord],
+    expected_backend: &str,
+) -> Result<Vec<u8>> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 accepted evaluation result differs".to_owned());
+    let selected_postings = usize::try_from(spec.selected_postings).map_err(|_| invalid())?;
+    validate_v40_accepted_selections(selections, selected_postings, Some(expected_backend))?;
+    if selections.len() != evaluation.samples.len()
+        || selections
+            .iter()
+            .zip(&evaluation.samples)
+            .any(|(selection, sample)| {
+                selection.query_ordinal != sample.query_ordinal
+                    || selection.posting_ordinals != sample.selected_postings
+                    || selection.node_pops != sample.node_pops
+                    || selection.scored_internal_nodes != sample.scored_internal_nodes
+            })
+    {
+        return Err(invalid());
+    }
+    let base = v40_evaluation_result_bytes(request, spec, evaluation, expected_backend)?;
+    let mut value: serde_json::Value = serde_json::from_slice(&base).map_err(|_| invalid())?;
+    let samples = value
+        .get_mut("evidence")
+        .and_then(|evidence| evidence.get_mut("samples"))
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(invalid)?;
+    for (sample, selection) in samples.iter_mut().zip(selections) {
+        let object = sample.as_object_mut().ok_or_else(invalid)?;
+        object.insert(
+            "candidate_count".to_owned(),
+            serde_json::json!(selection.candidate_count),
+        );
+        object.insert(
+            "marginal_recomputations".to_owned(),
+            serde_json::json!(selection.marginal_recomputations),
+        );
+        object.insert(
+            "objective_value".to_owned(),
+            serde_json::json!(selection.objective_value),
+        );
+    }
     let mut bytes = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
     bytes.push(b'\n');
     Ok(bytes)
@@ -1612,6 +2165,116 @@ fn publish_v40_output(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
+fn v40_local_output<'a>(request: &'a V40LocalRunRequest, role: &str) -> Result<&'a V40LocalOutput> {
+    request
+        .outputs
+        .iter()
+        .find(|output| output.role == role)
+        .ok_or_else(|| BorsukError::InvalidStorage("V40 local output role differs".to_owned()))
+}
+
+fn v40_input_receipt_values(request: &V40LocalRunRequest) -> Vec<serde_json::Value> {
+    request
+        .inputs
+        .iter()
+        .map(|input| {
+            serde_json::json!({
+                "blake3": input.blake3,
+                "encoded_bytes": input.encoded_bytes,
+                "role": input.role,
+                "sha256": input.sha256,
+                "uri": input.uri,
+            })
+        })
+        .collect()
+}
+
+fn v40_output_receipt_value(output: &V40LocalOutput, bytes: &[u8]) -> serde_json::Value {
+    serde_json::json!({
+        "blake3": blake3::hash(bytes).to_hex().to_string(),
+        "encoded_bytes": bytes.len(),
+        "role": output.role,
+        "sha256": format!("{:x}", Sha256::digest(bytes)),
+        "uri": format!("file://{}", output.path.display()),
+    })
+}
+
+fn v40_phase_receipt_bytes(
+    request: &V40LocalRunRequest,
+    mode: &str,
+    artifacts: &[(&V40LocalOutput, &[u8])],
+    evidence: serde_json::Value,
+) -> Result<Vec<u8>> {
+    let value = serde_json::json!({
+        "artifacts": artifacts
+            .iter()
+            .map(|(output, bytes)| v40_output_receipt_value(output, bytes))
+            .collect::<Vec<_>>(),
+        "claim_eligible": false,
+        "evidence": evidence,
+        "inputs": v40_input_receipt_values(request),
+        "mode": mode,
+        "schema": "borsuk-v40-local-result-v1",
+    });
+    let mut bytes = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| {
+        BorsukError::InvalidStorage("V40 phase receipt serialization differs".to_owned())
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40PhaseReceipt {
+    artifacts: Vec<V40SelectionReceiptArtifact>,
+    claim_eligible: bool,
+    evidence: serde_json::Value,
+    inputs: Vec<V40SelectionReceiptArtifact>,
+    mode: String,
+    schema: String,
+}
+
+fn parse_v40_phase_receipt(bytes: &[u8], expected_mode: &str) -> Result<V40PhaseReceipt> {
+    let invalid = || BorsukError::InvalidStorage("V40 phase receipt authority differs".to_owned());
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let mut canonical = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(invalid());
+    }
+    let receipt: V40PhaseReceipt = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let input_uris = receipt
+        .inputs
+        .iter()
+        .map(|identity| identity.uri.as_str())
+        .collect::<BTreeSet<_>>();
+    if receipt.schema != "borsuk-v40-local-result-v1"
+        || receipt.claim_eligible
+        || receipt.mode != expected_mode
+        || receipt.artifacts.is_empty()
+        || receipt
+            .evidence
+            .as_object()
+            .is_none_or(|value| value.is_empty())
+        || input_uris.len() != receipt.inputs.len()
+        || receipt.inputs.iter().any(|identity| {
+            !valid_s3_uri(&identity.uri)
+                || !valid_digest(&identity.sha256)
+                || !valid_digest(&identity.blake3)
+                || identity.encoded_bytes == 0
+        })
+        || receipt.artifacts.iter().any(|identity| {
+            !valid_v40_local_file_uri(&identity.uri)
+                || !valid_digest(&identity.sha256)
+                || !valid_digest(&identity.blake3)
+                || identity.encoded_bytes == 0
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(receipt)
+}
+
 fn v40_direct_selection_schema() -> Schema {
     Schema::new(vec![
         Field::new("query_ordinal", DataType::UInt32, false),
@@ -1620,6 +2283,20 @@ fn v40_direct_selection_schema() -> Schema {
         Field::new("node_pops", DataType::UInt32, false),
         Field::new("scored_internal_nodes", DataType::UInt32, false),
         Field::new("fma_backend", DataType::Utf8, false),
+    ])
+}
+
+fn v40_accepted_selection_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("selection_rank", DataType::UInt32, false),
+        Field::new("posting_ordinal", DataType::UInt32, false),
+        Field::new("node_pops", DataType::UInt32, false),
+        Field::new("scored_internal_nodes", DataType::UInt32, false),
+        Field::new("fma_backend", DataType::Utf8, false),
+        Field::new("objective_value", DataType::UInt64, false),
+        Field::new("candidate_count", DataType::UInt32, false),
+        Field::new("marginal_recomputations", DataType::UInt64, false),
     ])
 }
 
@@ -1879,6 +2556,216 @@ pub(crate) fn decode_v40_direct_selections_parquet(
     Ok(records)
 }
 
+fn validate_v40_accepted_selections(
+    records: &[V40AcceptedSelectionRecord],
+    selected_postings: usize,
+    expected_backend: Option<&str>,
+) -> Result<()> {
+    let direct = records
+        .iter()
+        .map(|record| V40DirectSelectionRecord {
+            query_ordinal: record.query_ordinal,
+            posting_ordinals: record.posting_ordinals.clone(),
+            node_pops: record.node_pops,
+            scored_internal_nodes: record.scored_internal_nodes,
+            fma_backend: record.fma_backend.clone(),
+        })
+        .collect::<Vec<_>>();
+    validate_v40_direct_selections(&direct, selected_postings, expected_backend)?;
+    if records.iter().any(|record| {
+        record.objective_value == 0
+            || record.candidate_count < selected_postings as u32
+            || record.marginal_recomputations < u64::from(record.candidate_count)
+    }) {
+        return Err(BorsukError::InvalidStorage(
+            "V40 accepted selection authority differs".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn encode_v40_accepted_selections_parquet(
+    records: &[V40AcceptedSelectionRecord],
+    selected_postings: usize,
+) -> Result<Vec<u8>> {
+    validate_v40_accepted_selections(records, selected_postings, None)?;
+    let rows = records
+        .len()
+        .checked_mul(selected_postings)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V40 accepted selection row count overflows".to_owned())
+        })?;
+    let mut queries = Vec::with_capacity(rows);
+    let mut ranks = Vec::with_capacity(rows);
+    let mut postings = Vec::with_capacity(rows);
+    let mut node_pops = Vec::with_capacity(rows);
+    let mut scores = Vec::with_capacity(rows);
+    let mut backends = Vec::with_capacity(rows);
+    let mut objectives = Vec::with_capacity(rows);
+    let mut candidate_counts = Vec::with_capacity(rows);
+    let mut recomputations = Vec::with_capacity(rows);
+    for record in records {
+        for (rank, posting) in record.posting_ordinals.iter().copied().enumerate() {
+            queries.push(record.query_ordinal);
+            ranks.push(u32::try_from(rank).map_err(|_| {
+                BorsukError::InvalidStorage("V40 accepted selection rank overflows".to_owned())
+            })?);
+            postings.push(posting);
+            node_pops.push(record.node_pops);
+            scores.push(record.scored_internal_nodes);
+            backends.push(record.fma_backend.clone());
+            objectives.push(record.objective_value);
+            candidate_counts.push(record.candidate_count);
+            recomputations.push(record.marginal_recomputations);
+        }
+    }
+    let schema = Arc::new(v40_accepted_selection_schema());
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from(queries)),
+            Arc::new(UInt32Array::from(ranks)),
+            Arc::new(UInt32Array::from(postings)),
+            Arc::new(UInt32Array::from(node_pops)),
+            Arc::new(UInt32Array::from(scores)),
+            Arc::new(StringArray::from(backends)),
+            Arc::new(UInt64Array::from(objectives)),
+            Arc::new(UInt32Array::from(candidate_counts)),
+            Arc::new(UInt64Array::from(recomputations)),
+        ],
+    )?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_max_row_group_row_count(Some(4_096))
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(bytes)
+}
+
+pub(crate) fn decode_v40_accepted_selections_parquet(
+    bytes: &[u8],
+    expected_queries: u32,
+    selected_postings: usize,
+    expected_backend: &str,
+) -> Result<Vec<V40AcceptedSelectionRecord>> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 accepted selection Parquet differs".to_owned());
+    if expected_queries == 0 || selected_postings == 0 {
+        return Err(invalid());
+    }
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != &v40_accepted_selection_schema() {
+        return Err(invalid());
+    }
+    let expected_rows = usize::try_from(expected_queries)
+        .map_err(|_| invalid())?
+        .checked_mul(selected_postings)
+        .ok_or_else(invalid)?;
+    let mut records = Vec::with_capacity(expected_queries as usize);
+    let mut observed_rows = 0_usize;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.schema().as_ref() != &v40_accepted_selection_schema()
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid());
+        }
+        let queries = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let ranks = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let postings = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let node_pops = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let scores = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let backends = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(invalid)?;
+        let objectives = batch
+            .column(6)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        let candidate_counts = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(invalid)?;
+        let recomputations = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(invalid)?;
+        for row in 0..batch.num_rows() {
+            let flat_row = observed_rows.checked_add(row).ok_or_else(invalid)?;
+            let query = flat_row / selected_postings;
+            let rank = flat_row % selected_postings;
+            if queries.value(row) as usize != query
+                || ranks.value(row) as usize != rank
+                || backends.value(row) != expected_backend
+            {
+                return Err(invalid());
+            }
+            if rank == 0 {
+                records.push(V40AcceptedSelectionRecord {
+                    query_ordinal: queries.value(row),
+                    posting_ordinals: Vec::with_capacity(selected_postings),
+                    node_pops: node_pops.value(row),
+                    scored_internal_nodes: scores.value(row),
+                    fma_backend: backends.value(row).to_owned(),
+                    objective_value: objectives.value(row),
+                    candidate_count: candidate_counts.value(row),
+                    marginal_recomputations: recomputations.value(row),
+                });
+            }
+            let record = records.get_mut(query).ok_or_else(invalid)?;
+            if record.node_pops != node_pops.value(row)
+                || record.scored_internal_nodes != scores.value(row)
+                || record.fma_backend != backends.value(row)
+                || record.objective_value != objectives.value(row)
+                || record.candidate_count != candidate_counts.value(row)
+                || record.marginal_recomputations != recomputations.value(row)
+            {
+                return Err(invalid());
+            }
+            record.posting_ordinals.push(postings.value(row));
+        }
+        observed_rows = observed_rows
+            .checked_add(batch.num_rows())
+            .ok_or_else(invalid)?;
+    }
+    if observed_rows != expected_rows || records.len() != expected_queries as usize {
+        return Err(invalid());
+    }
+    validate_v40_accepted_selections(&records, selected_postings, Some(expected_backend))?;
+    Ok(records)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V40TreeFrontier {
     pub(crate) posting_ordinals: Vec<u32>,
@@ -1905,6 +2792,18 @@ pub(crate) struct V40DirectSelectionRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V40AcceptedSelectionRecord {
+    pub(crate) query_ordinal: u32,
+    pub(crate) posting_ordinals: Vec<u32>,
+    pub(crate) node_pops: u32,
+    pub(crate) scored_internal_nodes: u32,
+    pub(crate) fma_backend: String,
+    pub(crate) objective_value: u64,
+    pub(crate) candidate_count: u32,
+    pub(crate) marginal_recomputations: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V40DirectSample {
     pub(crate) query_ordinal: u32,
     pub(crate) selected_postings: Vec<u32>,
@@ -1922,6 +2821,202 @@ pub(crate) struct V40DirectEvaluation {
     pub(crate) minimum_recall_ppm: u32,
     pub(crate) passed: bool,
     pub(crate) disposition: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V40DirectFailurePrerequisite {
+    pub(crate) aggregate_recall_ppm: u32,
+    pub(crate) minimum_recall_ppm: u32,
+    pub(crate) fma_backend: String,
+    query_count: u64,
+    selected_postings: u32,
+    gt_neighbors: u32,
+    aggregate_gate_ppm: u32,
+    minimum_gate_ppm: u32,
+    inputs: Vec<V40SelectionReceiptArtifact>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40EvaluationResultSample {
+    hits: u32,
+    node_pops: u32,
+    query_ordinal: u32,
+    recall_ppm: u32,
+    scored_internal_nodes: u32,
+    selected_postings: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40EvaluationResultEvidence {
+    aggregate_gate_ppm: u32,
+    aggregate_recall_ppm: u32,
+    disposition: String,
+    fma_backend: String,
+    gt_neighbors: u32,
+    minimum_gate_ppm: u32,
+    minimum_recall_ppm: u32,
+    passed: bool,
+    query_count: u64,
+    samples: Vec<V40EvaluationResultSample>,
+    selected_postings: u32,
+    total_hits: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V40EvaluationResult {
+    claim_eligible: bool,
+    evidence: V40EvaluationResultEvidence,
+    inputs: Vec<V40SelectionReceiptArtifact>,
+    mode: String,
+    schema: String,
+}
+
+pub(crate) fn parse_v40_direct_failure_result_bytes(
+    bytes: &[u8],
+) -> Result<V40DirectFailurePrerequisite> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct failure authority differs".to_owned());
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let mut canonical = serde_json::to_vec(&v40_canonical_json(value)).map_err(|_| invalid())?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(invalid());
+    }
+    let result: V40EvaluationResult = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let evidence = &result.evidence;
+    let input_roles = result
+        .inputs
+        .iter()
+        .map(|input| input.role.as_str())
+        .collect::<Vec<_>>();
+    let input_uris = result
+        .inputs
+        .iter()
+        .map(|input| input.uri.as_str())
+        .collect::<BTreeSet<_>>();
+    if result.schema != "borsuk-v40-local-result-v1"
+        || result.claim_eligible
+        || result.mode != "evaluate-direct"
+        || evidence.passed
+        || evidence.disposition != "direct-failed"
+        || evidence.aggregate_gate_ppm > 1_000_000
+        || evidence.minimum_gate_ppm > 1_000_000
+        || evidence.aggregate_recall_ppm >= evidence.aggregate_gate_ppm
+            && evidence.minimum_recall_ppm >= evidence.minimum_gate_ppm
+        || evidence.gt_neighbors == 0
+        || evidence.selected_postings == 0
+        || evidence.query_count == 0
+        || evidence.query_count != evidence.samples.len() as u64
+        || input_roles != V40LocalRunMode::EvaluateDirect.input_roles()
+        || input_uris.len() != result.inputs.len()
+        || !matches!(
+            evidence.fma_backend.as_str(),
+            "aarch64-neon-fma" | "x86-avx-fma"
+        )
+        || result.inputs.is_empty()
+        || result.inputs.iter().any(|input| {
+            !valid_s3_uri(&input.uri)
+                || !valid_digest(&input.sha256)
+                || !valid_digest(&input.blake3)
+                || input.encoded_bytes == 0
+        })
+    {
+        return Err(invalid());
+    }
+    let selected_postings = usize::try_from(evidence.selected_postings).map_err(|_| invalid())?;
+    let mut total_hits = 0_u64;
+    let mut minimum = 1_000_000_u32;
+    for (query, sample) in evidence.samples.iter().enumerate() {
+        let unique = sample
+            .selected_postings
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let recall = u32::try_from(
+            u64::from(sample.hits)
+                .checked_mul(1_000_000)
+                .ok_or_else(invalid)?
+                / u64::from(evidence.gt_neighbors),
+        )
+        .map_err(|_| invalid())?;
+        if sample.query_ordinal != u32::try_from(query).map_err(|_| invalid())?
+            || sample.selected_postings.len() != selected_postings
+            || unique.len() != selected_postings
+            || sample.node_pops == 0
+            || sample.node_pops as usize > V40_MAXIMUM_NODE_POPS
+            || sample.scored_internal_nodes == 0
+            || sample.scored_internal_nodes > sample.node_pops
+            || sample.hits > evidence.gt_neighbors
+            || sample.recall_ppm != recall
+        {
+            return Err(invalid());
+        }
+        total_hits = total_hits
+            .checked_add(u64::from(sample.hits))
+            .ok_or_else(invalid)?;
+        minimum = minimum.min(sample.recall_ppm);
+    }
+    let possible = evidence
+        .query_count
+        .checked_mul(u64::from(evidence.gt_neighbors))
+        .ok_or_else(invalid)?;
+    let aggregate =
+        u32::try_from(total_hits.checked_mul(1_000_000).ok_or_else(invalid)? / possible)
+            .map_err(|_| invalid())?;
+    if total_hits != evidence.total_hits
+        || aggregate != evidence.aggregate_recall_ppm
+        || minimum != evidence.minimum_recall_ppm
+    {
+        return Err(invalid());
+    }
+    Ok(V40DirectFailurePrerequisite {
+        aggregate_recall_ppm: aggregate,
+        minimum_recall_ppm: minimum,
+        fma_backend: evidence.fma_backend.clone(),
+        query_count: evidence.query_count,
+        selected_postings: evidence.selected_postings,
+        gt_neighbors: evidence.gt_neighbors,
+        aggregate_gate_ppm: evidence.aggregate_gate_ppm,
+        minimum_gate_ppm: evidence.minimum_gate_ppm,
+        inputs: result.inputs,
+    })
+}
+
+pub(crate) fn evaluate_v40_accepted_recall(
+    spec: &V40EvaluationSpec,
+    owners: &[(u64, u32, Option<u32>)],
+    selections: &[V40AcceptedSelectionRecord],
+    truth: &[V37FeatureGroundTruth],
+    expected_backend: &str,
+) -> Result<V40DirectEvaluation> {
+    validate_v40_accepted_selections(
+        selections,
+        usize::try_from(spec.selected_postings).map_err(|_| {
+            BorsukError::InvalidStorage("V40 accepted evaluation authority differs".to_owned())
+        })?,
+        Some(expected_backend),
+    )?;
+    let direct = selections
+        .iter()
+        .map(|selection| V40DirectSelectionRecord {
+            query_ordinal: selection.query_ordinal,
+            posting_ordinals: selection.posting_ordinals.clone(),
+            node_pops: selection.node_pops,
+            scored_internal_nodes: selection.scored_internal_nodes,
+            fma_backend: selection.fma_backend.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut evaluation =
+        evaluate_v40_direct_recall(spec, owners, &direct, truth, expected_backend)?;
+    evaluation.disposition = if evaluation.passed {
+        "challenger-passed"
+    } else {
+        "router-rejected"
+    }
+    .to_owned();
+    Ok(evaluation)
 }
 
 pub(crate) fn select_v40_tree_frontier(
@@ -1990,9 +3085,26 @@ pub(crate) fn select_v40_direct_queries(
 /// Run one authenticated local V40 direct phase without any storage client.
 #[doc(hidden)]
 pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
-    let authenticated = authenticate_v40_local_request(&request)?;
-    if request.mode == V40LocalRunMode::EvaluateDirect {
-        return run_v40_evaluate_direct(&request, &authenticated);
+    let deferred_role = matches!(
+        request.mode,
+        V40LocalRunMode::EvaluateDirect | V40LocalRunMode::EvaluateAcceptedSpill
+    )
+    .then_some("development-ground-truth");
+    let mut authenticated = authenticate_v40_local_request_deferred(&request, deferred_role)?;
+    match request.mode {
+        V40LocalRunMode::BuildSpillSummary => {
+            return run_v40_build_spill_summary(&request, &authenticated);
+        }
+        V40LocalRunMode::SelectAcceptedSpill => {
+            return run_v40_select_accepted_spill(&request, &authenticated);
+        }
+        V40LocalRunMode::EvaluateDirect => {
+            return run_v40_evaluate_direct(&request, &mut authenticated);
+        }
+        V40LocalRunMode::EvaluateAcceptedSpill => {
+            return run_v40_evaluate_accepted_spill(&request, &mut authenticated);
+        }
+        V40LocalRunMode::SelectDirect => {}
     }
     let cohort_bytes = read_v40_authenticated_input(&request, &authenticated, "cohort-authority")?;
     let cohort = parse_v40_direct_cohort_authority_bytes(&cohort_bytes)?;
@@ -2062,6 +3174,389 @@ pub fn run_v40_local_request(request: V40LocalRunRequest) -> Result<Vec<u8>> {
     v40_selection_receipt_bytes(&request, &selections, &output_bytes)
 }
 
+fn require_v40_direct_failure_bindings(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+) -> Result<V40DirectFailurePrerequisite> {
+    let invalid = || BorsukError::InvalidStorage("V40 direct failure binding differs".to_owned());
+    let direct_bytes = read_v40_authenticated_input(request, authenticated, "direct-result")?;
+    let prerequisite = parse_v40_direct_failure_result_bytes(&direct_bytes)?;
+    if prerequisite.query_count != V40_DIRECT_QUERY_COUNT
+        || prerequisite.selected_postings != V40_DIRECT_SELECTED_POSTINGS as u32
+        || prerequisite.gt_neighbors != 100
+        || prerequisite.aggregate_gate_ppm != 998_000
+        || prerequisite.minimum_gate_ppm != 800_000
+    {
+        return Err(invalid());
+    }
+    for (receipt_index, role) in [
+        (0, "cohort-authority"),
+        (2, "v38-construction-result"),
+        (3, "spill-relation"),
+        (4, "spill-postings"),
+    ] {
+        if let Some(observed) = request.inputs.iter().find(|input| input.role == role) {
+            let expected = prerequisite.inputs.get(receipt_index).ok_or_else(invalid)?;
+            if !v40_cohort_identity_matches_local(expected, observed) {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(prerequisite)
+}
+
+fn run_v40_build_spill_summary(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+) -> Result<Vec<u8>> {
+    let invalid = || BorsukError::InvalidStorage("V40 spill summary build differs".to_owned());
+    let _failure = require_v40_direct_failure_bindings(request, authenticated)?;
+    let counts = build_v40_spill_counts_from_parquet_files(
+        v40_authenticated_input_file(request, authenticated, "spill-relation")?,
+        v40_authenticated_input_file(request, authenticated, "spill-postings")?,
+        V40_DEVELOPMENT_CORPUS_ROWS,
+        V40_DEVELOPMENT_POSTING_COUNT,
+        V40_DEVELOPMENT_MAXIMUM_ROWS_PER_POSTING,
+    )?;
+    let summary = pack_v40_spill_summary(&counts, V40_DEVELOPMENT_POSTING_COUNT)?;
+    let counts_bytes = encode_v40_spill_counts_parquet(&counts, V40_DEVELOPMENT_POSTING_COUNT)?;
+    let summary_bytes = encode_v40_packed_spill_summary_arrow(&summary)?;
+    let counts_output = v40_local_output(request, "spill-counts")?;
+    let summary_output = v40_local_output(request, "spill-summary")?;
+    publish_v40_output(&counts_output.path, &counts_bytes)?;
+    publish_v40_output(&summary_output.path, &summary_bytes)?;
+    let receipt = v40_phase_receipt_bytes(
+        request,
+        "build-spill-summary",
+        &[
+            (counts_output, &counts_bytes),
+            (summary_output, &summary_bytes),
+        ],
+        serde_json::json!({
+            "posting_count": V40_DEVELOPMENT_POSTING_COUNT,
+            "retained_alternate_categories": summary.alternate_postings.len(),
+        }),
+    )?;
+    publish_v40_output(
+        &v40_local_output(request, "spill-summary-result")?.path,
+        &receipt,
+    )?;
+    if receipt.is_empty() {
+        return Err(invalid());
+    }
+    Ok(receipt)
+}
+
+fn validate_v40_summary_receipt(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+) -> Result<()> {
+    let invalid = || BorsukError::InvalidStorage("V40 spill summary receipt differs".to_owned());
+    let receipt_bytes =
+        read_v40_authenticated_input(request, authenticated, "spill-summary-result")?;
+    let receipt = parse_v40_phase_receipt(&receipt_bytes, "build-spill-summary")?;
+    let direct_bytes = read_v40_authenticated_input(request, authenticated, "direct-result")?;
+    let direct = parse_v40_direct_failure_result_bytes(&direct_bytes)?;
+    let summary = v40_local_input(request, "spill-summary")?;
+    let summary_bytes = read_v40_authenticated_input(request, authenticated, "spill-summary")?;
+    let decoded =
+        decode_v40_packed_spill_summary_arrow(&summary_bytes, V40_DEVELOPMENT_POSTING_COUNT)?;
+    let artifact = receipt
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.role == "spill-summary")
+        .ok_or_else(invalid)?;
+    let input_roles = receipt
+        .inputs
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    let artifact_roles = receipt
+        .artifacts
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    if input_roles != V40LocalRunMode::BuildSpillSummary.input_roles()
+        || artifact_roles != ["spill-counts", "spill-summary"]
+        || !v40_cohort_identity_matches_local(
+            receipt.inputs.first().ok_or_else(invalid)?,
+            v40_local_input(request, "cohort-authority")?,
+        )
+        || !v40_cohort_identity_matches_local(
+            receipt.inputs.get(1).ok_or_else(invalid)?,
+            v40_local_input(request, "direct-result")?,
+        )
+        || receipt.inputs.get(2..5) != direct.inputs.get(2..5)
+        || receipt
+            .evidence
+            .get("posting_count")
+            .and_then(serde_json::Value::as_u64)
+            != Some(V40_DEVELOPMENT_POSTING_COUNT as u64)
+        || receipt
+            .evidence
+            .get("retained_alternate_categories")
+            .and_then(serde_json::Value::as_u64)
+            != Some(decoded.alternate_postings.len() as u64)
+        || artifact.sha256 != summary.sha256
+        || artifact.blake3 != summary.blake3
+        || artifact.encoded_bytes != summary.encoded_bytes
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn run_v40_select_accepted_spill(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+) -> Result<Vec<u8>> {
+    let invalid = || BorsukError::InvalidStorage("V40 accepted spill selection differs".to_owned());
+    let prerequisite = require_v40_direct_failure_bindings(request, authenticated)?;
+    validate_v40_summary_receipt(request, authenticated)?;
+    let cohort_bytes = read_v40_authenticated_input(request, authenticated, "cohort-authority")?;
+    let cohort = parse_v40_direct_cohort_authority_bytes(&cohort_bytes)?;
+    for (role, expected) in [
+        ("v37-authority", &cohort.v37_authority),
+        ("ownership-tree", &cohort.ownership_tree),
+        ("development-query", &cohort.development_query),
+    ] {
+        if !v40_cohort_identity_matches_local(expected, v40_local_input(request, role)?) {
+            return Err(invalid());
+        }
+    }
+    let authority = read_v40_authenticated_input(request, authenticated, "v37-authority")?;
+    let binding = crate::v37_relation_router::v37_v40_selection_binding(&authority)?;
+    if binding.workers != request.workers || binding.fma_backend != prerequisite.fma_backend {
+        return Err(invalid());
+    }
+    let tree_input = v40_local_input(request, "ownership-tree")?;
+    let tree_bytes = read_v40_authenticated_input(request, authenticated, "ownership-tree")?;
+    let tree = crate::v37_relation_router::decode_v37_tree_arrow(
+        &tree_bytes,
+        tree_input.encoded_bytes,
+        &tree_input.sha256,
+        &tree_input.blake3,
+    )?;
+    let corpus_rows = tree
+        .leaf_populations
+        .iter()
+        .try_fold(0_u64, |total, population| total.checked_add(*population))
+        .ok_or_else(invalid)?;
+    if tree.dimensions as u64 != binding.dimensions
+        || tree.seed != binding.tree_seed
+        || tree.fma_backend != binding.fma_backend
+        || tree.leaf_populations.len() as u64 != binding.leaf_count
+        || corpus_rows != binding.corpus_rows
+    {
+        return Err(invalid());
+    }
+    let query_input = v40_local_input(request, "development-query")?;
+    let queries = load_v40_projected_queries_file(
+        v40_authenticated_input_file(request, authenticated, "development-query")?,
+        &query_input.path,
+        V40_DIRECT_QUERY_COUNT,
+    )?;
+    let summary_bytes = read_v40_authenticated_input(request, authenticated, "spill-summary")?;
+    let summary =
+        decode_v40_packed_spill_summary_arrow(&summary_bytes, V40_DEVELOPMENT_POSTING_COUNT)?;
+    let mut selections = Vec::with_capacity(queries.len());
+    for (query_ordinal, query) in queries.iter().enumerate() {
+        let frontier = select_v40_tree_frontier(
+            &tree,
+            &binding.fma_backend,
+            query,
+            V40_MAXIMUM_FRONTIER_POSTINGS.min(V40_DEVELOPMENT_POSTING_COUNT as usize),
+            V40_MAXIMUM_NODE_POPS.min(tree.nodes.len()),
+        )?;
+        let selected =
+            select_v40_accepted_spill_postings(&frontier, &summary, V40_DIRECT_SELECTED_POSTINGS)?;
+        selections.push(V40AcceptedSelectionRecord {
+            query_ordinal: u32::try_from(query_ordinal).map_err(|_| invalid())?,
+            posting_ordinals: selected.posting_ordinals,
+            node_pops: frontier.node_pops,
+            scored_internal_nodes: frontier.scored_internal_nodes,
+            fma_backend: frontier.fma_backend,
+            objective_value: u64::try_from(selected.objective_value).map_err(|_| invalid())?,
+            candidate_count: selected.candidate_count,
+            marginal_recomputations: selected.marginal_recomputations,
+        });
+    }
+    let selection_bytes =
+        encode_v40_accepted_selections_parquet(&selections, V40_DIRECT_SELECTED_POSTINGS)?;
+    let selection_output = v40_local_output(request, "accepted-selection")?;
+    publish_v40_output(&selection_output.path, &selection_bytes)?;
+    let receipt = v40_phase_receipt_bytes(
+        request,
+        "select-accepted-spill",
+        &[(selection_output, &selection_bytes)],
+        serde_json::json!({
+            "fma_backend": prerequisite.fma_backend,
+            "frontier_postings": V40_MAXIMUM_FRONTIER_POSTINGS,
+            "query_count": selections.len(),
+            "selected_postings": V40_DIRECT_SELECTED_POSTINGS,
+        }),
+    )?;
+    publish_v40_output(
+        &v40_local_output(request, "accepted-selection-result")?.path,
+        &receipt,
+    )?;
+    Ok(receipt)
+}
+
+fn validate_v40_accepted_selection_receipt(
+    request: &V40LocalRunRequest,
+    authenticated: &V40AuthenticatedLocalInputs,
+    cohort: &V40DirectCohortAuthority,
+) -> Result<String> {
+    let invalid =
+        || BorsukError::InvalidStorage("V40 accepted selection receipt differs".to_owned());
+    let bytes = read_v40_authenticated_input(request, authenticated, "accepted-selection-result")?;
+    let receipt = parse_v40_phase_receipt(&bytes, "select-accepted-spill")?;
+    let selection = v40_local_input(request, "accepted-selection")?;
+    let artifact = receipt.artifacts.first().ok_or_else(invalid)?;
+    let evidence = receipt.evidence.as_object().ok_or_else(invalid)?;
+    let backend = evidence
+        .get("fma_backend")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(invalid)?;
+    if receipt.artifacts.len() != 1
+        || artifact.role != "accepted-selection"
+        || artifact.sha256 != selection.sha256
+        || artifact.blake3 != selection.blake3
+        || artifact.encoded_bytes != selection.encoded_bytes
+        || receipt.inputs.len() != V40LocalRunMode::SelectAcceptedSpill.input_roles().len()
+        || evidence.len() != 4
+        || evidence
+            .get("frontier_postings")
+            .and_then(serde_json::Value::as_u64)
+            != Some(V40_MAXIMUM_FRONTIER_POSTINGS as u64)
+        || evidence
+            .get("query_count")
+            .and_then(serde_json::Value::as_u64)
+            != Some(V40_DIRECT_QUERY_COUNT)
+        || evidence
+            .get("selected_postings")
+            .and_then(serde_json::Value::as_u64)
+            != Some(V40_DIRECT_SELECTED_POSTINGS as u64)
+        || !matches!(backend, "aarch64-neon-fma" | "x86-avx-fma")
+        || !v40_cohort_identity_matches_local(
+            receipt.inputs.first().ok_or_else(invalid)?,
+            v40_local_input(request, "cohort-authority")?,
+        )
+        || !v40_cohort_identity_matches_local(
+            receipt.inputs.get(1).ok_or_else(invalid)?,
+            v40_local_input(request, "direct-result")?,
+        )
+        || receipt.inputs.get(2) != Some(&cohort.v37_authority)
+        || receipt.inputs.get(3) != Some(&cohort.ownership_tree)
+        || receipt.inputs.get(4) != Some(&cohort.development_query)
+        || !v40_cohort_identity_matches_local(
+            receipt.inputs.get(5).ok_or_else(invalid)?,
+            v40_local_input(request, "spill-summary-result")?,
+        )
+        || !v40_cohort_identity_matches_local(
+            receipt.inputs.get(6).ok_or_else(invalid)?,
+            v40_local_input(request, "spill-summary")?,
+        )
+    {
+        return Err(invalid());
+    }
+    Ok(backend.to_owned())
+}
+
+fn run_v40_evaluate_accepted_spill(
+    request: &V40LocalRunRequest,
+    authenticated: &mut V40AuthenticatedLocalInputs,
+) -> Result<Vec<u8>> {
+    let invalid = || BorsukError::InvalidStorage("V40 accepted evaluation differs".to_owned());
+    let prerequisite = require_v40_direct_failure_bindings(request, authenticated)?;
+    validate_v40_summary_receipt(request, authenticated)?;
+    let ceiling = read_v40_authenticated_input(request, authenticated, "v38-ceiling-authority")?;
+    let construction =
+        read_v40_authenticated_input(request, authenticated, "v38-construction-result")?;
+    let binding = v38_v40_evaluation_binding(&ceiling, &construction)?;
+    let cohort_bytes = read_v40_authenticated_input(request, authenticated, "cohort-authority")?;
+    let cohort = parse_v40_direct_cohort_authority_bytes(&cohort_bytes)?;
+    let backend = validate_v40_accepted_selection_receipt(request, authenticated, &cohort)?;
+    if backend != prerequisite.fma_backend
+        || cohort.query_count != u64::from(binding.query_count)
+        || !v40_cohort_identity_matches_local(
+            &cohort.development_ground_truth,
+            v40_local_input(request, "development-ground-truth")?,
+        )
+    {
+        return Err(invalid());
+    }
+    for (role, uri, sha256, blake3, encoded_bytes) in [
+        (
+            "spill-relation",
+            binding.relation_uri.as_str(),
+            binding.relation_sha256.as_str(),
+            binding.relation_blake3.as_str(),
+            binding.relation_bytes,
+        ),
+        (
+            "spill-postings",
+            binding.postings_uri.as_str(),
+            binding.postings_sha256.as_str(),
+            binding.postings_blake3.as_str(),
+            binding.postings_bytes,
+        ),
+        (
+            "development-ground-truth",
+            binding.truth_uri.as_str(),
+            binding.truth_sha256.as_str(),
+            binding.truth_blake3.as_str(),
+            binding.truth_bytes,
+        ),
+    ] {
+        if !v40_local_identity_matches(
+            v40_local_input(request, role)?,
+            uri,
+            sha256,
+            blake3,
+            encoded_bytes,
+        ) {
+            return Err(invalid());
+        }
+    }
+    let relation = read_v40_authenticated_input(request, authenticated, "spill-relation")?;
+    let postings = read_v40_authenticated_input(request, authenticated, "spill-postings")?;
+    let owners = v38_v40_owner_rows_from_artifacts(
+        &relation,
+        &postings,
+        usize::try_from(binding.corpus_rows).map_err(|_| invalid())?,
+        binding.posting_count,
+        binding.maximum_rows_per_posting,
+    )?;
+    let selection_bytes =
+        read_v40_authenticated_input(request, authenticated, "accepted-selection")?;
+    let selections = decode_v40_accepted_selections_parquet(
+        &selection_bytes,
+        binding.query_count,
+        usize::try_from(binding.selected_postings).map_err(|_| invalid())?,
+        &backend,
+    )?;
+    authenticate_v40_deferred_input(request, authenticated, "development-ground-truth")?;
+    let truth_input = v40_local_input(request, "development-ground-truth")?;
+    let truth = crate::v37_relation_router::load_v37_feature_ground_truth_file(
+        v40_authenticated_input_file(request, authenticated, "development-ground-truth")?,
+        &truth_input.path,
+        binding.query_count,
+    )?;
+    let spec = V40EvaluationSpec {
+        selected_postings: binding.selected_postings,
+        gt_neighbors: binding.gt_neighbors,
+        aggregate_gate_ppm: binding.aggregate_gate_ppm,
+        minimum_gate_ppm: binding.minimum_gate_ppm,
+    };
+    let evaluation = evaluate_v40_accepted_recall(&spec, &owners, &selections, &truth, &backend)?;
+    let result =
+        v40_accepted_evaluation_result_bytes(request, &spec, &evaluation, &selections, &backend)?;
+    publish_v40_output(&v40_local_output(request, "accepted-result")?.path, &result)?;
+    Ok(result)
+}
+
 fn v40_local_identity_matches(
     observed: &V40LocalArtifact,
     uri: &str,
@@ -2077,7 +3572,7 @@ fn v40_local_identity_matches(
 
 fn run_v40_evaluate_direct(
     request: &V40LocalRunRequest,
-    authenticated: &V40AuthenticatedLocalInputs,
+    authenticated: &mut V40AuthenticatedLocalInputs,
 ) -> Result<Vec<u8>> {
     let invalid =
         || BorsukError::InvalidStorage("V40 direct evaluation binding differs".to_owned());
@@ -2159,6 +3654,7 @@ fn run_v40_evaluate_direct(
         usize::try_from(binding.selected_postings).map_err(|_| invalid())?,
         &backend,
     )?;
+    authenticate_v40_deferred_input(request, authenticated, "development-ground-truth")?;
     let truth_input = v40_local_input(request, "development-ground-truth")?;
     let truth = crate::v37_relation_router::load_v37_feature_ground_truth_file(
         v40_authenticated_input_file(request, authenticated, "development-ground-truth")?,
@@ -2305,19 +3801,27 @@ mod tests {
         V37BalancedNode, V37BalancedTree, score_v37_hyperplane_fused,
     };
     use super::{
-        V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact, V40LocalOutput,
-        V40LocalRunMode, V40LocalRunRequest, V40PackedSpillSummary, authenticate_v40_local_request,
+        V40AcceptedSelectionRecord, V40DirectSelectionRecord, V40EvaluationSpec, V40LocalArtifact,
+        V40LocalOutput, V40LocalRunMode, V40LocalRunRequest, V40PackedSpillSummary,
+        authenticate_v40_local_request, authenticate_v40_local_request_deferred,
+        build_v40_spill_counts_from_owners, decode_v40_accepted_selections_parquet,
         decode_v40_direct_selections_parquet, decode_v40_packed_spill_summary_arrow,
-        encode_v40_direct_selections_parquet, encode_v40_packed_spill_summary_arrow,
+        encode_v40_accepted_selections_parquet, encode_v40_direct_selections_parquet,
+        encode_v40_packed_spill_summary_arrow, evaluate_v40_accepted_recall,
         evaluate_v40_direct_recall, load_v40_projected_queries, load_v40_projected_queries_file,
-        parse_v40_direct_cohort_authority_bytes, parse_v40_selection_receipt_bytes,
+        parse_v40_direct_cohort_authority_bytes, parse_v40_direct_failure_result_bytes,
+        parse_v40_phase_receipt, parse_v40_selection_receipt_bytes,
         select_v40_accepted_spill_postings, select_v40_direct_queries, select_v40_tree_frontier,
-        v40_evaluation_result_bytes,
+        v40_accepted_evaluation_result_bytes, v40_evaluation_result_bytes, v40_phase_receipt_bytes,
     };
     use crate::v35_projection::project_v35_query_simd;
     use crate::v36_funnel_geometry::build_v36_srht192_control;
     use crate::v36_prefix_dataset::{v36_prefix_query_schema, write_v36_prefix_query_parquet};
     use crate::v37_relation_router::V37FeatureGroundTruth;
+    use crate::v38_boundary_spill::{
+        V38SpillRecord, encode_v38_posting_summary_parquet, encode_v38_spill_relation_parquet,
+        summarize_v38_spill_relation,
+    };
     use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch, UInt32Array, UInt64Array};
     use arrow_schema::{DataType, Field};
     use sha2::{Digest, Sha256};
@@ -2700,6 +4204,278 @@ mod tests {
         );
     }
 
+    #[test]
+    fn v40_challenger_selection_codec_and_evaluation_recompute_every_claim() {
+        let (spec, owners, direct, truth) = direct_evaluation_fixture();
+        let accepted = direct
+            .iter()
+            .enumerate()
+            .map(|(query, record)| V40AcceptedSelectionRecord {
+                query_ordinal: record.query_ordinal,
+                posting_ordinals: record.posting_ordinals.clone(),
+                node_pops: record.node_pops,
+                scored_internal_nodes: record.scored_internal_nodes,
+                fma_backend: record.fma_backend.clone(),
+                objective_value: 100 + query as u64,
+                candidate_count: 7,
+                marginal_recomputations: 13,
+            })
+            .collect::<Vec<_>>();
+        let bytes = encode_v40_accepted_selections_parquet(&accepted, 2).unwrap();
+        assert_eq!(
+            decode_v40_accepted_selections_parquet(&bytes, 2, 2, "aarch64-neon-fma").unwrap(),
+            accepted
+        );
+        let evaluation =
+            evaluate_v40_accepted_recall(&spec, &owners, &accepted, &truth, "aarch64-neon-fma")
+                .unwrap();
+        assert!(evaluation.passed);
+        assert_eq!(evaluation.total_hits, 6);
+        assert_eq!(evaluation.disposition, "challenger-passed");
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::EvaluateAcceptedSpill,
+            [
+                "cohort-authority",
+                "direct-result",
+                "v38-ceiling-authority",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+                "development-ground-truth",
+                "spill-summary-result",
+                "spill-summary",
+                "accepted-selection-result",
+                "accepted-selection",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            vec![local_output("accepted-result")],
+            1,
+        )
+        .unwrap();
+        let result_bytes = v40_accepted_evaluation_result_bytes(
+            &request,
+            &spec,
+            &evaluation,
+            &accepted,
+            "aarch64-neon-fma",
+        )
+        .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&result_bytes).unwrap();
+        assert_eq!(result["mode"], "evaluate-accepted-spill");
+        assert_eq!(result["evidence"]["disposition"], "challenger-passed");
+        assert_eq!(result["evidence"]["samples"][0]["objective_value"], 100);
+        assert_eq!(result["evidence"]["samples"][0]["candidate_count"], 7);
+        assert_eq!(
+            result["evidence"]["samples"][0]["marginal_recomputations"],
+            13
+        );
+
+        let mut drifted = accepted.clone();
+        drifted[0].objective_value = 0;
+        assert!(encode_v40_accepted_selections_parquet(&drifted, 2).is_err());
+        let mut drifted = accepted;
+        drifted[1].candidate_count = 1;
+        assert!(
+            evaluate_v40_accepted_recall(&spec, &owners, &drifted, &truth, "aarch64-neon-fma")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v40_challenger_requires_authenticated_direct_failure_predecessor() {
+        let (mut spec, owners, selections, truth) = direct_evaluation_fixture();
+        spec.aggregate_gate_ppm = 800_000;
+        spec.minimum_gate_ppm = 800_000;
+        let evaluation =
+            evaluate_v40_direct_recall(&spec, &owners, &selections, &truth, "aarch64-neon-fma")
+                .unwrap();
+        assert_eq!(evaluation.disposition, "direct-failed");
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::EvaluateDirect,
+            [
+                "cohort-authority",
+                "v38-ceiling-authority",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+                "development-ground-truth",
+                "direct-selection-result",
+                "direct-selection",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            vec![local_output("direct-result")],
+            1,
+        )
+        .unwrap();
+        let bytes =
+            v40_evaluation_result_bytes(&request, &spec, &evaluation, "aarch64-neon-fma").unwrap();
+        let prerequisite = parse_v40_direct_failure_result_bytes(&bytes).unwrap();
+        assert_eq!(prerequisite.aggregate_recall_ppm, 750_000);
+        assert_eq!(prerequisite.minimum_recall_ppm, 750_000);
+        assert_eq!(prerequisite.fma_backend, "aarch64-neon-fma");
+
+        let mut passing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        passing["evidence"]["disposition"] = serde_json::json!("direct-passed");
+        passing["evidence"]["passed"] = serde_json::json!(true);
+        let mut passing = serde_json::to_vec(&super::v40_canonical_json(passing)).unwrap();
+        passing.push(b'\n');
+        assert!(parse_v40_direct_failure_result_bytes(&passing).is_err());
+
+        let mut empty: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        empty["evidence"]["query_count"] = serde_json::json!(0);
+        empty["evidence"]["samples"] = serde_json::json!([]);
+        empty["evidence"]["total_hits"] = serde_json::json!(0);
+        let mut empty = serde_json::to_vec(&super::v40_canonical_json(empty)).unwrap();
+        empty.push(b'\n');
+        assert!(parse_v40_direct_failure_result_bytes(&empty).is_err());
+    }
+
+    #[test]
+    fn v40_challenger_spill_owner_counts_are_complete_and_deterministic() {
+        let owners = vec![
+            (10, 0, Some(1)),
+            (11, 0, Some(1)),
+            (12, 0, None),
+            (13, 1, Some(0)),
+            (14, 1, None),
+        ];
+        let counts = build_v40_spill_counts_from_owners(&owners, 2).unwrap();
+        assert_eq!(counts.len(), 4);
+        assert_eq!(counts[0].primary_posting, 0);
+        assert_eq!(counts[0].alternate_posting, Some(1));
+        assert_eq!(counts[0].count, 2);
+        assert_eq!(counts[1].alternate_posting, None);
+        assert_eq!(counts[1].count, 1);
+        assert_eq!(counts[2].primary_posting, 1);
+        assert_eq!(counts[2].alternate_posting, Some(0));
+        assert_eq!(counts[3].alternate_posting, None);
+
+        let mut unordered = owners;
+        unordered.swap(0, 1);
+        assert!(build_v40_spill_counts_from_owners(&unordered, 2).is_err());
+    }
+
+    #[test]
+    fn v40_challenger_spill_counts_stream_relation_without_row_materialization() {
+        let records = vec![
+            V38SpillRecord {
+                source_ordinal: 0,
+                feature_row_id: 10,
+                posting_ordinal: 0,
+                owner_role: 0,
+                posting_local_ordinal: 0,
+                alternate_violation_bits: None,
+            },
+            V38SpillRecord {
+                source_ordinal: 0,
+                feature_row_id: 10,
+                posting_ordinal: 1,
+                owner_role: 1,
+                posting_local_ordinal: 2,
+                alternate_violation_bits: Some(0.25_f32.to_bits()),
+            },
+            V38SpillRecord {
+                source_ordinal: 1,
+                feature_row_id: 11,
+                posting_ordinal: 1,
+                owner_role: 0,
+                posting_local_ordinal: 0,
+                alternate_violation_bits: None,
+            },
+            V38SpillRecord {
+                source_ordinal: 1,
+                feature_row_id: 11,
+                posting_ordinal: 0,
+                owner_role: 1,
+                posting_local_ordinal: 2,
+                alternate_violation_bits: Some(0.5_f32.to_bits()),
+            },
+            V38SpillRecord {
+                source_ordinal: 2,
+                feature_row_id: 12,
+                posting_ordinal: 0,
+                owner_role: 0,
+                posting_local_ordinal: 1,
+                alternate_violation_bits: None,
+            },
+            V38SpillRecord {
+                source_ordinal: 3,
+                feature_row_id: 13,
+                posting_ordinal: 1,
+                owner_role: 0,
+                posting_local_ordinal: 1,
+                alternate_violation_bits: None,
+            },
+        ];
+        let summaries = summarize_v38_spill_relation(&records, 2, 3).unwrap();
+        let relation_bytes = encode_v38_spill_relation_parquet(&records).unwrap();
+        let posting_bytes = encode_v38_posting_summary_parquet(&summaries).unwrap();
+        let root = tempdir().unwrap();
+        let relation_path = root.path().join("relation.parquet");
+        let posting_path = root.path().join("postings.parquet");
+        fs::write(&relation_path, relation_bytes).unwrap();
+        fs::write(&posting_path, posting_bytes).unwrap();
+        let counts = super::build_v40_spill_counts_from_parquet_files(
+            File::open(relation_path).unwrap(),
+            File::open(posting_path).unwrap(),
+            4,
+            2,
+            3,
+        )
+        .unwrap();
+        assert_eq!(counts.len(), 4);
+        assert_eq!(counts[0].alternate_posting, Some(1));
+        assert_eq!(counts[0].count, 1);
+        assert_eq!(counts[1].alternate_posting, None);
+        assert_eq!(counts[1].count, 1);
+        assert_eq!(counts[2].alternate_posting, Some(0));
+        assert_eq!(counts[3].alternate_posting, None);
+    }
+
+    #[test]
+    fn v40_challenger_phase_receipt_binds_inputs_outputs_and_mode() {
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::BuildSpillSummary,
+            [
+                "cohort-authority",
+                "direct-result",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            ["spill-counts", "spill-summary", "spill-summary-result"]
+                .map(local_output)
+                .to_vec(),
+            1,
+        )
+        .unwrap();
+        let bytes = v40_phase_receipt_bytes(
+            &request,
+            "build-spill-summary",
+            &[
+                (&request.outputs[0], b"counts".as_slice()),
+                (&request.outputs[1], b"summary".as_slice()),
+            ],
+            serde_json::json!({"posting_count": 2}),
+        )
+        .unwrap();
+        let receipt = parse_v40_phase_receipt(&bytes, "build-spill-summary").unwrap();
+        assert_eq!(receipt.inputs.len(), 5);
+        assert_eq!(receipt.artifacts.len(), 2);
+        assert_eq!(receipt.artifacts[0].role, "spill-counts");
+        assert!(parse_v40_phase_receipt(&bytes, "select-accepted-spill").is_err());
+
+        let mut drifted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        drifted["artifacts"][0]["encoded_bytes"] = serde_json::json!(0);
+        let mut drifted = serde_json::to_vec(&super::v40_canonical_json(drifted)).unwrap();
+        drifted.push(b'\n');
+        assert!(parse_v40_phase_receipt(&drifted, "build-spill-summary").is_err());
+    }
+
     fn local_artifact(role: &str) -> V40LocalArtifact {
         V40LocalArtifact::try_new(
             role.to_owned(),
@@ -2813,6 +4589,101 @@ mod tests {
                 .input_roles()
                 .contains(&"development-ground-truth")
         );
+    }
+
+    #[test]
+    fn v40_authority_challenger_modes_separate_build_query_and_truth_capabilities() {
+        let build = V40LocalRunRequest::try_new(
+            V40LocalRunMode::BuildSpillSummary,
+            [
+                "cohort-authority",
+                "direct-result",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            ["spill-counts", "spill-summary", "spill-summary-result"]
+                .map(local_output)
+                .to_vec(),
+            1,
+        )
+        .unwrap();
+        assert!(!build.input_roles().contains(&"development-query"));
+        assert!(!build.input_roles().contains(&"development-ground-truth"));
+
+        let selection = V40LocalRunRequest::try_new(
+            V40LocalRunMode::SelectAcceptedSpill,
+            [
+                "cohort-authority",
+                "direct-result",
+                "v37-authority",
+                "ownership-tree",
+                "development-query",
+                "spill-summary-result",
+                "spill-summary",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            ["accepted-selection", "accepted-selection-result"]
+                .map(local_output)
+                .to_vec(),
+            16,
+        )
+        .unwrap();
+        assert!(
+            !selection
+                .input_roles()
+                .contains(&"development-ground-truth")
+        );
+
+        let evaluation = V40LocalRunRequest::try_new(
+            V40LocalRunMode::EvaluateAcceptedSpill,
+            [
+                "cohort-authority",
+                "direct-result",
+                "v38-ceiling-authority",
+                "v38-construction-result",
+                "spill-relation",
+                "spill-postings",
+                "development-ground-truth",
+                "spill-summary-result",
+                "spill-summary",
+                "accepted-selection-result",
+                "accepted-selection",
+            ]
+            .map(local_artifact)
+            .to_vec(),
+            vec![local_output("accepted-result")],
+            1,
+        )
+        .unwrap();
+        assert!(!evaluation.input_roles().contains(&"development-query"));
+
+        for (mode, mut inputs, outputs, workers) in [
+            (
+                V40LocalRunMode::BuildSpillSummary,
+                build.inputs.clone(),
+                build.outputs.clone(),
+                1,
+            ),
+            (
+                V40LocalRunMode::SelectAcceptedSpill,
+                selection.inputs.clone(),
+                selection.outputs.clone(),
+                16,
+            ),
+            (
+                V40LocalRunMode::EvaluateAcceptedSpill,
+                evaluation.inputs.clone(),
+                evaluation.outputs.clone(),
+                1,
+            ),
+        ] {
+            inputs.swap(0, 1);
+            assert!(V40LocalRunRequest::try_new(mode, inputs, outputs, workers).is_err());
+        }
     }
 
     #[test]
@@ -2948,6 +4819,48 @@ mod tests {
 
         fs::write(root.path().join("ownership-tree"), b"tree").unwrap();
         fs::write(root.path().join("selection.parquet"), b"occupied").unwrap();
+        assert!(authenticate_v40_local_request(&request).is_err());
+    }
+
+    #[test]
+    fn v40_challenger_evaluation_defers_ground_truth_authentication() {
+        let root = tempdir().unwrap();
+        let roles = V40LocalRunMode::EvaluateAcceptedSpill.input_roles();
+        let inputs = roles
+            .iter()
+            .map(|role| {
+                if *role == "development-ground-truth" {
+                    V40LocalArtifact::try_new(
+                        (*role).to_owned(),
+                        root.path().join(role),
+                        format!("s3://fixture/v40/{role}"),
+                        "1".repeat(64),
+                        "2".repeat(64),
+                        17,
+                    )
+                    .unwrap()
+                } else {
+                    local_artifact_bytes(root.path(), role, role.as_bytes())
+                }
+            })
+            .collect::<Vec<_>>();
+        let request = V40LocalRunRequest::try_new(
+            V40LocalRunMode::EvaluateAcceptedSpill,
+            inputs,
+            vec![
+                V40LocalOutput::try_new(
+                    "accepted-result".to_owned(),
+                    root.path().join("accepted-result"),
+                )
+                .unwrap(),
+            ],
+            1,
+        )
+        .unwrap();
+        assert!(
+            authenticate_v40_local_request_deferred(&request, Some("development-ground-truth"))
+                .is_ok()
+        );
         assert!(authenticate_v40_local_request(&request).is_err());
     }
 
