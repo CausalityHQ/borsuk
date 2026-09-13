@@ -11261,8 +11261,20 @@ where
 }
 
 /// Stream and validate a complete query Parquet artifact.
-pub fn scan_v36_prefix_query_parquet<F>(
-    path: &Path,
+pub fn scan_v36_prefix_query_parquet<F>(path: &Path, expected_rows: u64, consume: F) -> Result<()>
+where
+    F: FnMut(RecordBatch) -> Result<()>,
+{
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    scan_v36_prefix_query_parquet_file(file, path, expected_rows, consume)
+}
+
+pub(crate) fn scan_v36_prefix_query_parquet_file<F>(
+    file: File,
+    _display_path: &Path,
     expected_rows: u64,
     mut consume: F,
 ) -> Result<()>
@@ -11272,10 +11284,6 @@ where
     if expected_rows == 0 {
         return Err(invalid("V36 prefix query Parquet row count differs"));
     }
-    let file = File::open(path).map_err(|source| BorsukError::Io {
-        path: path.to_owned(),
-        source,
-    })?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     validate_parquet_descriptor(builder.parquet_schema(), &v36_prefix_query_schema())?;
     if builder.schema().as_ref() != &v36_prefix_query_schema() {
