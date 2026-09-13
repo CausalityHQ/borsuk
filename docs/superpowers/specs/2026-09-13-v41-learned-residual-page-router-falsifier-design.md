@@ -23,6 +23,14 @@ fell to 913,070/90,000 ppm. Candidate discovery was already broad; the
 query-blind population-overlap score selected the wrong pages. V41 therefore
 removes the tree frontier and scores all 123 pages at one million rows.
 
+The implementation separates evidence authority from high-churn numerical
+research. The main `borsuk` crate owns authenticated Parquet/Arrow/control
+artifacts, capability-separated phases, and the local runner. A small
+`borsuk-v41` crate owns only deterministic labels, model math, training,
+selection, and evaluation; it has no file, network, S3, page-body, controller,
+Arrow, or Parquet surface. This keeps focused mathematical RED/GREEN gates fast
+without weakening the final authenticated integration and workspace gates.
+
 ## Alternatives and decision
 
 Three alternatives are materially distinct:

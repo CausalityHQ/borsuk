@@ -4,7 +4,7 @@
 
 **Goal:** Build a claim-ineligible, artifact-only one-million-row falsifier that learns a deterministic query-conditioned residual score over the 123 frozen V38 pages and rejects weak models before validation, holdout, transport, or larger datasets.
 
-**Architecture:** A focused Rust `v41_learned_router` module owns strict authorities, the development split, exact labels, the 64-wide residual model, deterministic training, selection, evaluation, and source-free performance preflight. A thin local-files-only example exposes capability-separated phases, while a Python controller runs one authenticated phase per transient AWS Spot instance and stops the ladder at the first failed gate.
+**Architecture:** The `borsuk` crate owns strict artifact authorities, the development split, frozen codecs, and the local phase runner. A small `borsuk-v41` crate owns only dependency-light labels, model math, deterministic training, selection, and evaluation so high-churn research tests do not relink the monolithic `borsuk` test binary. A thin local-files-only example exposes capability-separated phases, while a Python controller runs one authenticated phase per transient AWS Spot instance and stops the ladder at the first failed gate.
 
 **Tech Stack:** Rust, `borsuk-fma`, Rayon, ChaCha20, Arrow IPC, Parquet, Serde canonical JSON, Python 3.12, boto3, AWS EC2 Spot/S3 with profile `causality`.
 
@@ -25,7 +25,9 @@
 
 ## File map
 
-- Create `crates/borsuk/src/v41_learned_router.rs`: authority, split, labels, model, trainer, selector, evaluator, codecs, preflight, and local phase runner.
+- Create `crates/borsuk/src/v41_learned_router.rs`: authority, split, frozen Parquet/Arrow codecs, preflight, and local phase runner/adapters.
+- Create `crates/borsuk-v41/Cargo.toml` and `crates/borsuk-v41/src/lib.rs`: dependency-light label, model, trainer, selector, and evaluator core with no file, network, Arrow, Parquet, S3, or controller surface.
+- Modify `Cargo.toml` and `crates/borsuk/Cargo.toml`: register the small crate and consume it from the authenticated adapter.
 - Modify `crates/borsuk-fma/src/lib.rs`: safe detected fused-f32 kernels for the exact 64- and 768-element accumulation orders.
 - Modify `crates/borsuk/src/lib.rs`: declare the module and export only the doc-hidden high-level local request/runner boundary.
 - Create `crates/borsuk/examples/v41_learned_router.rs`: strict local-files-only CLI with no network or page-store type.
@@ -145,6 +147,10 @@ git commit -m "feat(v41): add strict learned router authority"
 
 **Files:**
 - Modify: `crates/borsuk/src/v38_boundary_spill.rs`
+- Create: `crates/borsuk-v41/Cargo.toml`
+- Create: `crates/borsuk-v41/src/lib.rs`
+- Modify: `Cargo.toml`
+- Modify: `crates/borsuk/Cargo.toml`
 - Modify: `crates/borsuk/src/v41_learned_router.rs`
 
 **Interfaces:**
@@ -172,20 +178,20 @@ Cover duplicate owners, same primary/alternate, unknown/duplicate GT feature IDs
 
 - [ ] **Step 2: Run the RED**
 
-Run: `cargo test -p borsuk --lib v41_target_ -- --nocapture`
+Run: `cargo test -p borsuk-v41 --lib v41_target_ -- --nocapture`
 
 Expected: unresolved target function/owner access only; the filter names exactly two staged tests once the symbols exist.
 
 - [ ] **Step 3: Implement the literal relation**
 
-Reuse `v38_v40_owner_rows_from_artifacts` rather than copying a relation decoder. Its rows are sorted by feature ID; resolve every GT feature ID by exact binary search and reject an unknown or duplicate feature ID. For every resolved neighbor, test whether either owner is already selected; if not, increment each distinct unselected owner once. Divide checked `u32` gains by the literal denominator 100. Reject wrong GT cardinality, duplicate GT feature ID, invalid owner, invalid selected mask, and non-finite output.
+The `borsuk` adapter reuses `v38_v40_owner_rows_from_artifacts` rather than copying a relation decoder, then passes the authenticated sorted `(feature_id, primary, alternate)` rows into `borsuk-v41`. The pure core resolves every GT feature ID by exact binary search and rejects an unknown or duplicate feature ID. For every resolved neighbor, test whether either owner is already selected; if not, increment each distinct unselected owner once. Divide checked `u32` gains by the literal denominator 100. Reject wrong GT cardinality, duplicate GT feature ID, invalid owner, invalid selected mask, and non-finite output.
 
 - [ ] **Step 4: Run GREEN and commit**
 
-Run: `cargo test -p borsuk --lib v41_target_ -- --nocapture`
+Run: `cargo test -p borsuk-v41 --lib v41_target_ -- --nocapture`
 
 ```bash
-git add crates/borsuk/src/v38_boundary_spill.rs crates/borsuk/src/v41_learned_router.rs
+git add Cargo.toml crates/borsuk/Cargo.toml crates/borsuk-v41 crates/borsuk/src/v38_boundary_spill.rs crates/borsuk/src/v41_learned_router.rs
 git commit -m "feat(v41): derive exact residual page labels"
 ```
 
@@ -193,6 +199,7 @@ git commit -m "feat(v41): derive exact residual page labels"
 
 **Files:**
 - Modify: `crates/borsuk-fma/src/lib.rs`
+- Modify: `crates/borsuk-v41/src/lib.rs`
 - Modify: `crates/borsuk/src/v41_learned_router.rs`
 
 **Interfaces:**
@@ -201,7 +208,7 @@ git commit -m "feat(v41): derive exact residual page labels"
 
 - [ ] **Step 1: Write forward, selector, and codec REDs**
 
-In `borsuk-fma`, add `v41_fma_dot64_matches_registered_scalar_bits` and `v41_fma_matvec64_and_768_match_registered_scalar_bits`. In `borsuk`, add `v41_model_forward_matches_scalar_reference_bits`, `v41_model_selector_is_exactly_k21_masked_and_tie_stable`, `v41_model_arrow_round_trips_and_rejects_physical_drift`, and `v41_model_parameter_and_work_arithmetic_is_exact`.
+In `borsuk-fma`, add `v41_fma_dot64_matches_registered_scalar_bits` and `v41_fma_matvec64_and_768_match_registered_scalar_bits`. In `borsuk-v41`, add `v41_model_forward_matches_scalar_reference_bits`, `v41_model_selector_is_exactly_k21_masked_and_tie_stable`, and `v41_model_parameter_and_work_arithmetic_is_exact`. In `borsuk`, add `v41_model_arrow_round_trips_and_rejects_physical_drift` at the authenticated serialization boundary.
 
 ```rust
 assert_eq!(v41_parameter_count(123).unwrap(), 61_307);
@@ -220,7 +227,8 @@ Run:
 
 ```bash
 cargo test -p borsuk-fma --lib v41_fma_ -- --nocapture
-cargo test -p borsuk --lib v41_model_ -- --nocapture
+cargo test -p borsuk-v41 --lib v41_model_ -- --nocapture
+cargo test -p borsuk --lib v41_model_arrow_ -- --nocapture
 ```
 
 Expected: missing fused-kernel and V41 model/codec/selector symbols only; the filters name exactly two `borsuk-fma` and four `borsuk` tests once implemented.
@@ -239,17 +247,19 @@ Run:
 
 ```bash
 cargo test -p borsuk-fma --lib v41_fma_ -- --nocapture
-cargo test -p borsuk --lib v41_model_ -- --nocapture
+cargo test -p borsuk-v41 --lib v41_model_ -- --nocapture
+cargo test -p borsuk --lib v41_model_arrow_ -- --nocapture
 ```
 
 ```bash
-git add crates/borsuk-fma/src/lib.rs crates/borsuk/src/v41_learned_router.rs
+git add crates/borsuk-fma/src/lib.rs crates/borsuk-v41/src/lib.rs crates/borsuk/src/v41_learned_router.rs
 git commit -m "feat(v41): add residual page scorer"
 ```
 
 ### Task 4: Frozen rollout trainer
 
 **Files:**
+- Modify: `crates/borsuk-v41/src/lib.rs`
 - Modify: `crates/borsuk/src/v41_learned_router.rs`
 
 **Interfaces:**
@@ -272,7 +282,7 @@ Mutation cases cover initialization seed, zero bias/page-bias initialization, Fi
 
 - [ ] **Step 2: Run the RED**
 
-Run: `cargo test -p borsuk --lib v41_training_ -- --nocapture`
+Run: `cargo test -p borsuk-v41 --lib v41_training_ -- --nocapture`
 
 Expected: unresolved trainer/spec symbols only; the filter names exactly four staged tests once the symbols exist.
 
@@ -282,16 +292,17 @@ Use the 32-byte initialization digest directly as the ChaCha20 key. Xavier-initi
 
 - [ ] **Step 4: Run GREEN and commit**
 
-Run: `cargo test -p borsuk --lib v41_training_ -- --nocapture`
+Run: `cargo test -p borsuk-v41 --lib v41_training_ -- --nocapture`
 
 ```bash
-git add crates/borsuk/src/v41_learned_router.rs
+git add crates/borsuk-v41/src/lib.rs crates/borsuk/src/v41_learned_router.rs
 git commit -m "feat(v41): train deterministic residual router"
 ```
 
 ### Task 5: Sealed selection, fail-fast evaluation, and preflight
 
 **Files:**
+- Modify: `crates/borsuk-v41/src/lib.rs`
 - Modify: `crates/borsuk/src/v41_learned_router.rs`
 
 **Interfaces:**
@@ -300,7 +311,7 @@ git commit -m "feat(v41): train deterministic residual router"
 
 - [ ] **Step 1: Write selector/evaluator REDs**
 
-Add `v41_evaluation_selection_parquet_is_ordered_complete_and_model_bound`, `v41_evaluation_recomputes_complete_hits_and_gates`, `v41_evaluation_rejected_prefix_never_claims_full_metrics`, and `v41_evaluation_validation_and_holdout_cannot_train_or_reopen_inputs`.
+In `borsuk`, add `v41_evaluation_selection_parquet_is_ordered_complete_and_model_bound` and `v41_evaluation_validation_and_holdout_cannot_train_or_reopen_inputs`. In `borsuk-v41`, add `v41_evaluation_recomputes_complete_hits_and_gates` and `v41_evaluation_rejected_prefix_never_claims_full_metrics`.
 
 ```rust
 assert_eq!(selection_rows.len(), query_count * 21);
@@ -320,7 +331,8 @@ Add `v41_preflight_measures_complete_hot_inference_at_both_page_counts` and `v41
 Run:
 
 ```bash
-cargo test -p borsuk --lib v41_evaluation_ -- --nocapture
+cargo test -p borsuk-v41 --lib v41_evaluation_ -- --nocapture
+cargo test -p borsuk --lib v41_evaluation_parquet_ -- --nocapture
 cargo test -p borsuk --lib v41_preflight_ -- --nocapture
 ```
 
@@ -333,7 +345,8 @@ Use non-null Parquet fields `(query_ordinal u32, selection_rank u8, page_ordinal
 Run:
 
 ```bash
-cargo test -p borsuk --lib v41_evaluation_ -- --nocapture
+cargo test -p borsuk-v41 --lib v41_evaluation_ -- --nocapture
+cargo test -p borsuk --lib v41_evaluation_parquet_ -- --nocapture
 cargo test -p borsuk --lib v41_preflight_ -- --nocapture
 cargo fmt --all -- --check
 git diff --check
@@ -342,7 +355,7 @@ git diff --check
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/borsuk/src/v41_learned_router.rs
+git add crates/borsuk-v41/src/lib.rs crates/borsuk/src/v41_learned_router.rs
 git commit -m "feat(v41): seal learned router evaluation"
 ```
 
