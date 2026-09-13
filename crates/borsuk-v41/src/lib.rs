@@ -763,12 +763,19 @@ pub fn select_v41_pages_by_query_neighbors(
                 .map(move |(primary, alternate)| (weight, primary, alternate))
         })
         .collect::<Vec<_>>();
+    select_v41_pages_by_weighted_pairs(&weighted_pairs, training.page_count)
+}
+
+fn select_v41_pages_by_weighted_pairs(
+    weighted_pairs: &[(f32, u32, Option<u32>)],
+    page_count: u32,
+) -> Result<V41Selection> {
     let mut covered = vec![false; weighted_pairs.len()];
-    let mut selected = vec![false; training.page_count as usize];
+    let mut selected = vec![false; page_count as usize];
     let mut pages = Vec::with_capacity(V41_SELECTED_PAGES);
     let mut scores_bits = Vec::with_capacity(V41_SELECTED_PAGES);
     for _ in 0..V41_SELECTED_PAGES {
-        let mut gains = vec![0.0_f32; training.page_count as usize];
+        let mut gains = vec![0.0_f32; page_count as usize];
         for (index, (weight, primary, alternate)) in weighted_pairs.iter().enumerate() {
             if covered[index] {
                 continue;
@@ -796,6 +803,17 @@ pub fn select_v41_pages_by_query_neighbors(
         }
     }
     Ok(V41Selection { pages, scores_bits })
+}
+
+pub fn v41_evaluate_owner_greedy(data: &V41TrainingData) -> Result<V41EvaluationResult> {
+    v41_evaluate_with(data, false, |example| {
+        let weighted_pairs = example
+            .owners
+            .iter()
+            .map(|(primary, alternate)| (1.0_f32, *primary, *alternate))
+            .collect::<Vec<_>>();
+        select_v41_pages_by_weighted_pairs(&weighted_pairs, data.page_count)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -855,7 +873,9 @@ fn v41_evaluate_model_inner(
     if model.page_count() != data.page_count as usize {
         return Err(invalid("V41 evaluation page count differs"));
     }
-    v41_evaluate_with(data, fail_fast, |query| select_v41_pages(model, query))
+    v41_evaluate_with(data, fail_fast, |example| {
+        select_v41_pages(model, &example.query)
+    })
 }
 
 pub fn v41_evaluate_query_neighbors(
@@ -866,21 +886,21 @@ pub fn v41_evaluate_query_neighbors(
     if training.page_count != data.page_count {
         return Err(invalid("V41 query-neighbor page count differs"));
     }
-    v41_evaluate_with(data, false, |query| {
-        select_v41_pages_by_query_neighbors(training, query, neighbor_count)
+    v41_evaluate_with(data, false, |example| {
+        select_v41_pages_by_query_neighbors(training, &example.query, neighbor_count)
     })
 }
 
 fn v41_evaluate_with(
     data: &V41TrainingData,
     fail_fast: bool,
-    mut select: impl FnMut(&[f32; V41_QUERY_DIMENSIONS]) -> Result<V41Selection>,
+    mut select: impl FnMut(&V41TrainingExample) -> Result<V41Selection>,
 ) -> Result<V41EvaluationResult> {
     let allowed_misses = data.examples.len() * 100 * 2 / 1_000;
     let mut query_hits = Vec::with_capacity(data.examples.len());
     let mut total_hits = 0_usize;
     for example in &data.examples {
-        let selection = select(&example.query)?;
+        let selection = select(example)?;
         let selected = selection.pages.iter().copied().collect::<BTreeSet<_>>();
         let hits = example
             .owners
@@ -1221,15 +1241,11 @@ fn v41_state_gradient(
             exponentials[page] / exponential_sum,
             "V41 training probability is non-finite",
         )?;
-        let normalized_target = checked_number(
-            targets[page] / target_sum,
-            "V41 training normalized target is non-finite",
-        )?;
         let delta = checked_number(
-            probability - normalized_target,
+            target_sum.mul_add(probability, -targets[page]),
             "V41 training score gradient is non-finite",
         )?;
-        if normalized_target > 0.0 {
+        if targets[page] > 0.0 {
             let shifted = checked_number(
                 scores[page] - maximum,
                 "V41 training log-probability is non-finite",
@@ -1239,7 +1255,7 @@ fn v41_state_gradient(
                 "V41 training log-probability is non-finite",
             )?;
             let loss_term = checked_number(
-                -normalized_target * log_probability,
+                -targets[page] * log_probability,
                 "V41 training loss is non-finite",
             )?;
             v41_checked_accumulate(&mut loss, loss_term, "V41 training loss is non-finite")?;
@@ -1480,8 +1496,9 @@ mod tests {
         Result as V41Result, V41AdamWState, V41ResidualModel, V41TrainingData, V41TrainingExample,
         V41TrainingRecord, V41TrainingSink, V41TrainingSpec, initialize_v41_model, score_v41_pages,
         select_v41_pages, select_v41_pages_by_query_neighbors, train_v41_model, v41_adamw_step,
-        v41_evaluate_model, v41_evaluate_model_complete, v41_evaluate_query_neighbors,
-        v41_inference_macs, v41_marginal_targets, v41_parameter_bytes, v41_parameter_count,
+        v41_evaluate_model, v41_evaluate_model_complete, v41_evaluate_owner_greedy,
+        v41_evaluate_query_neighbors, v41_inference_macs, v41_marginal_targets,
+        v41_parameter_bytes, v41_parameter_count,
     };
 
     fn evaluation_model() -> V41ResidualModel {
@@ -1583,6 +1600,10 @@ mod tests {
         let result = v41_evaluate_query_neighbors(&training, &diagnostic, 1).unwrap();
         assert_eq!(result.query_hits(), &[100]);
         assert_eq!(result.aggregate_recall_ppm(), Some(1_000_000));
+
+        let oracle = v41_evaluate_owner_greedy(&diagnostic).unwrap();
+        assert_eq!(oracle.query_hits(), &[100]);
+        assert_eq!(oracle.passed(), Some(true));
     }
 
     #[test]

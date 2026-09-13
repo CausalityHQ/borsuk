@@ -172,7 +172,16 @@ struct V41BurnedDiagnosticResult {
     minimum_recall_ppm: Option<u32>,
     passed: Option<bool>,
     stopping_query_ordinal: Option<u32>,
+    owner_greedy_screen: V41OwnerGreedyScreen,
     query_neighbor_screens: Vec<V41QueryNeighborScreen>,
+}
+
+#[derive(Debug, Serialize)]
+struct V41OwnerGreedyScreen {
+    query_hits: Vec<u32>,
+    aggregate_recall_ppm: Option<u32>,
+    minimum_recall_ppm: Option<u32>,
+    passed: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +254,14 @@ pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<
         split.diagnostic_ordinals(),
         PAGE_COUNT,
     )?;
+    let owner_greedy = borsuk_v41::v41_evaluate_owner_greedy(&diagnostic)
+        .map_err(|error| invalid(&error.to_string()))?;
+    let owner_greedy_screen = V41OwnerGreedyScreen {
+        query_hits: owner_greedy.query_hits().to_vec(),
+        aggregate_recall_ppm: owner_greedy.aggregate_recall_ppm(),
+        minimum_recall_ppm: owner_greedy.minimum_recall_ppm(),
+        passed: owner_greedy.passed(),
+    };
     let query_neighbor_screens = [1, 4, 16, 64]
         .into_iter()
         .map(|neighbor_count| {
@@ -285,6 +302,7 @@ pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<
         minimum_recall_ppm: evaluation.minimum_recall_ppm(),
         passed: evaluation.passed(),
         stopping_query_ordinal: evaluation.stopping_query_ordinal(),
+        owner_greedy_screen,
         query_neighbor_screens,
     })
 }
