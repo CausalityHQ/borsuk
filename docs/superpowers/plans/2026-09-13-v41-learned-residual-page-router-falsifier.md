@@ -124,7 +124,7 @@ sha256(b"borsuk-v41-development-split-v1" || concat(query_f32_bits_le))
 
 Sort by `(digest, minimum_query_ordinal)`, place a whole group in training only when its addition remains at most 800 rows, and place every remaining group in diagnostic. Record actual counts.
 
-`PartitionDevelopment` is model-free. It opens the authenticated full development query/GT parents plus the split receipt and creates four strict Parquet children: training query/GT and diagnostic query/GT. Each child records sorted original query ordinals and binds both parent byte identities, the split-rule digest, and all three sibling identities. `TrainDiagnostic` receives only the training children; `SelectDiagnostic` receives only diagnostic query; `EvaluateDiagnostic` receives only diagnostic GT, sealed selection, and relation.
+`PartitionDevelopment` is model-free. It opens the authenticated full development query/GT parents plus the split receipt and creates four strict Parquet children: training query/GT and diagnostic query/GT. Each child records sorted original query ordinals and binds both parent byte identities, the split-rule digest, and its exact role. After all four children authenticate, one canonical partition manifest binds their four complete identities without circular child hashes. `TrainDiagnostic` receives only the training children; `SelectDiagnostic` receives only diagnostic query; `EvaluateDiagnostic` receives only diagnostic GT, sealed selection, and relation.
 
 - [ ] **Step 4: Run GREEN and commit**
 

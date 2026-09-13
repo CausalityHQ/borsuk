@@ -74,8 +74,10 @@ checkpoint. Holdout remains unopened unless validation passes.
 A trusted, model-free partition phase materializes query and GT Parquet for
 the development training and diagnostic partitions. Each child binds the
 authenticated parent byte identity, exact sorted parent ordinals, split-rule
-identity, and sibling identity. Diagnostic training receives only the training
-children; it has no descriptor, path, URI, or role for diagnostic GT.
+identity, and its exact role. One canonical partition manifest binds the four
+completed child identities together without circular child hashes. Diagnostic
+training receives only the training children; it has no descriptor, path, URI,
+or role for diagnostic GT.
 
 Training is explicitly supervised and may open only development query, GT,
 and relation artifacts. Selection may open query vectors and the frozen model,
