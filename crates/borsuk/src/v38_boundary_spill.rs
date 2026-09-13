@@ -2591,6 +2591,61 @@ pub(crate) fn decode_v38_posting_summary_parquet(
     Ok(summaries)
 }
 
+pub(crate) fn v38_v40_owner_rows_from_artifacts(
+    relation_bytes: &[u8],
+    posting_summary_bytes: &[u8],
+    source_rows: usize,
+    posting_count: u32,
+    maximum_rows_per_posting: u32,
+) -> Result<Vec<(u64, u32, Option<u32>)>> {
+    let records = decode_v38_spill_relation_parquet_unbound(
+        relation_bytes,
+        source_rows,
+        posting_count,
+        maximum_rows_per_posting,
+    )?;
+    decode_v38_posting_summary_parquet(
+        posting_summary_bytes,
+        &records,
+        posting_count,
+        maximum_rows_per_posting,
+    )?;
+    let mut owners = vec![None; source_rows];
+    for record in records {
+        let source = usize::try_from(record.source_ordinal)
+            .map_err(|_| invalid("V38 V40 ownership source differs"))?;
+        let slot = owners
+            .get_mut(source)
+            .ok_or_else(|| invalid("V38 V40 ownership source differs"))?;
+        match record.owner_role {
+            0 if slot.is_none() => {
+                *slot = Some((record.feature_row_id, record.posting_ordinal, None));
+            }
+            1 => {
+                let (feature_row_id, primary, alternate) = slot
+                    .as_mut()
+                    .ok_or_else(|| invalid("V38 V40 alternate precedes primary"))?;
+                if *feature_row_id != record.feature_row_id
+                    || *primary == record.posting_ordinal
+                    || alternate.is_some()
+                {
+                    return Err(invalid("V38 V40 alternate ownership differs"));
+                }
+                *alternate = Some(record.posting_ordinal);
+            }
+            _ => return Err(invalid("V38 V40 ownership role differs")),
+        }
+    }
+    let owners = owners
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| invalid("V38 V40 primary ownership differs"))?;
+    if owners.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+        return Err(invalid("V38 V40 feature order differs"));
+    }
+    Ok(owners)
+}
+
 pub(crate) fn build_v38_spill_relation(
     tree: &crate::v37_relation_router::V37BalancedTree,
     projected_rows: &[Vec<f32>],
@@ -3945,9 +4000,9 @@ mod tests {
         propose_v38_alternate_owner, report_v38_build_scoring_progress, run_v38_local_request,
         run_v38_local_request_with_progress, solve_v38_coverage_batch, solve_v38_query_coverage,
         summarize_v38_spill_relation, v38_v40_evaluation_binding,
-        validate_v38_ceiling_authority_bytes, validate_v38_ceiling_bytes,
-        validate_v38_construction_authority_bytes, validate_v38_spill_spec,
-        validate_v38_v37_construction_evidence,
+        v38_v40_owner_rows_from_artifacts, validate_v38_ceiling_authority_bytes,
+        validate_v38_ceiling_bytes, validate_v38_construction_authority_bytes,
+        validate_v38_spill_spec, validate_v38_v37_construction_evidence,
     };
     use crate::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, V37FeatureGroundTruth, V37OwnershipRecord,
@@ -5218,6 +5273,34 @@ mod tests {
         assert_eq!(
             decode_v38_posting_summary_parquet(&summary_bytes, &relation, 2, 3).unwrap(),
             summaries
+        );
+    }
+
+    #[test]
+    fn v38_v40_owner_decoder_reconstructs_primary_and_alternate_rows() {
+        let (_primary, relation) = codec_fixture();
+        let relation_bytes = encode_v38_spill_relation_parquet(&relation).unwrap();
+        let summaries = summarize_v38_spill_relation(&relation, 2, 3).unwrap();
+        let summary_bytes = encode_v38_posting_summary_parquet(&summaries).unwrap();
+
+        assert_eq!(
+            v38_v40_owner_rows_from_artifacts(&relation_bytes, &summary_bytes, 4, 2, 3).unwrap(),
+            vec![
+                (100, 0, Some(1)),
+                (101, 0, None),
+                (102, 1, Some(0)),
+                (103, 1, None),
+            ]
+        );
+        assert!(
+            v38_v40_owner_rows_from_artifacts(
+                &relation_bytes,
+                &summary_bytes[..summary_bytes.len() - 1],
+                4,
+                2,
+                3,
+            )
+            .is_err()
         );
     }
 
