@@ -463,6 +463,28 @@ struct V38ConstructionResult {
     schema: String,
 }
 
+/// Minimal authenticated V38 facts consumed by V40 truth evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V38V40EvaluationBinding {
+    pub(crate) query_count: u32,
+    pub(crate) gt_neighbors: u32,
+    pub(crate) selected_postings: u32,
+    pub(crate) aggregate_gate_ppm: u32,
+    pub(crate) minimum_gate_ppm: u32,
+    pub(crate) relation_uri: String,
+    pub(crate) relation_sha256: String,
+    pub(crate) relation_blake3: String,
+    pub(crate) relation_bytes: u64,
+    pub(crate) postings_uri: String,
+    pub(crate) postings_sha256: String,
+    pub(crate) postings_blake3: String,
+    pub(crate) postings_bytes: u64,
+    pub(crate) truth_uri: String,
+    pub(crate) truth_sha256: String,
+    pub(crate) truth_blake3: String,
+    pub(crate) truth_bytes: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct V38AdmissionResult {
     capacity_rejected: u64,
@@ -1963,6 +1985,42 @@ fn parse_v38_construction_result_bytes(bytes: &[u8]) -> Result<V38ConstructionRe
         return Err(invalid("V38 construction result bytes are not canonical"));
     }
     Ok(result)
+}
+
+pub(crate) fn v38_v40_evaluation_binding(
+    ceiling_authority_bytes: &[u8],
+    construction_result_bytes: &[u8],
+) -> Result<V38V40EvaluationBinding> {
+    let authority = parse_v38_ceiling_authority(ceiling_authority_bytes)?;
+    let result = parse_v38_construction_result_bytes(construction_result_bytes)?;
+    if !bytes_match_identity(construction_result_bytes, &authority.construction_result)
+        || result.artifacts
+            != [
+                authority.relation.clone(),
+                authority.posting_summary.clone(),
+            ]
+    {
+        return Err(invalid("V38 V40 predecessor binding differs"));
+    }
+    Ok(V38V40EvaluationBinding {
+        query_count: authority.query_count,
+        gt_neighbors: authority.gt_neighbors,
+        selected_postings: authority.selected_postings,
+        aggregate_gate_ppm: authority.aggregate_gate_ppm,
+        minimum_gate_ppm: authority.minimum_gate_ppm,
+        relation_uri: authority.relation.uri,
+        relation_sha256: authority.relation.sha256,
+        relation_blake3: authority.relation.blake3,
+        relation_bytes: authority.relation.encoded_bytes,
+        postings_uri: authority.posting_summary.uri,
+        postings_sha256: authority.posting_summary.sha256,
+        postings_blake3: authority.posting_summary.blake3,
+        postings_bytes: authority.posting_summary.encoded_bytes,
+        truth_uri: authority.development_ground_truth.uri,
+        truth_sha256: authority.development_ground_truth.sha256,
+        truth_blake3: authority.development_ground_truth.blake3,
+        truth_bytes: authority.development_ground_truth.encoded_bytes,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3886,9 +3944,10 @@ mod tests {
         project_v38_admission_auxiliary_bytes, project_v38_spill_capacity,
         propose_v38_alternate_owner, report_v38_build_scoring_progress, run_v38_local_request,
         run_v38_local_request_with_progress, solve_v38_coverage_batch, solve_v38_query_coverage,
-        summarize_v38_spill_relation, validate_v38_ceiling_authority_bytes,
-        validate_v38_ceiling_bytes, validate_v38_construction_authority_bytes,
-        validate_v38_spill_spec, validate_v38_v37_construction_evidence,
+        summarize_v38_spill_relation, v38_v40_evaluation_binding,
+        validate_v38_ceiling_authority_bytes, validate_v38_ceiling_bytes,
+        validate_v38_construction_authority_bytes, validate_v38_spill_spec,
+        validate_v38_v37_construction_evidence,
     };
     use crate::v37_relation_router::{
         V37BalancedNode, V37BalancedTree, V37FeatureGroundTruth, V37OwnershipRecord,
@@ -4707,6 +4766,54 @@ mod tests {
             schema: "borsuk-v38-boundary-spill-ceiling-authority-v1".to_owned(),
             selected_postings: 14,
         }
+    }
+
+    #[test]
+    fn v38_v40_evaluation_binding_authenticates_truth_and_relation_roles() {
+        let mut authority = ceiling_authority();
+        authority.selected_postings = 21;
+        let result = V38ConstructionResult {
+            artifacts: vec![
+                authority.relation.clone(),
+                authority.posting_summary.clone(),
+            ],
+            claim_eligible: false,
+            construction_evidence: V38ConstructionEvidence {
+                accepted_alternates: 250_000,
+                capacity_rejected: 17,
+                exhausted: false,
+                maximum_posting_population: 10_240,
+                owners_one: 750_000,
+                owners_two: 250_000,
+                proposed_alternates: 1_000_000,
+                total_assignments: 1_250_000,
+            },
+            inputs: std::iter::once(artifact("v38-authority", 39))
+                .chain(construction_authority().inputs)
+                .collect(),
+            mode: "build-spill".to_owned(),
+            schema: "borsuk-v38-local-result-v1".to_owned(),
+        };
+        let result_bytes = canonical_v38_construction_result_bytes(&result).unwrap();
+        replace_artifact_bytes(&mut authority.construction_result, &result_bytes);
+        let authority_bytes = canonical_v38_ceiling_authority_bytes(&authority).unwrap();
+
+        let binding = v38_v40_evaluation_binding(&authority_bytes, &result_bytes).unwrap();
+        assert_eq!(binding.query_count, 1_000);
+        assert_eq!(binding.gt_neighbors, 100);
+        assert_eq!(binding.selected_postings, 21);
+        assert_eq!(binding.aggregate_gate_ppm, 998_000);
+        assert_eq!(binding.minimum_gate_ppm, 800_000);
+        assert_eq!(binding.relation_sha256, authority.relation.sha256);
+        assert_eq!(binding.postings_sha256, authority.posting_summary.sha256);
+        assert_eq!(
+            binding.truth_sha256,
+            authority.development_ground_truth.sha256
+        );
+
+        let mut drifted = result_bytes;
+        drifted[0] ^= 1;
+        assert!(v38_v40_evaluation_binding(&authority_bytes, &drifted).is_err());
     }
 
     fn three_leaf_tree(root_normal: [f32; 2]) -> V37BalancedTree {
