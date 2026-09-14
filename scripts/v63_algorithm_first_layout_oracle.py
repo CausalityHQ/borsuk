@@ -139,6 +139,32 @@ def centroid_chain(centroids: np.ndarray) -> np.ndarray:
     return chain
 
 
+class PostingLayout:
+    """One materialised posting-page layout for a fixed replication factor."""
+
+    __slots__ = (
+        "row_pages",
+        "total_pages",
+        "padded_slots",
+        "pages_by_cluster",
+        "start_by_cluster",
+    )
+
+    def __init__(
+        self,
+        row_pages: np.ndarray,
+        total_pages: int,
+        padded_slots: int,
+        pages_by_cluster: np.ndarray,
+        start_by_cluster: np.ndarray,
+    ) -> None:
+        self.row_pages = row_pages
+        self.total_pages = total_pages
+        self.padded_slots = padded_slots
+        self.pages_by_cluster = pages_by_cluster
+        self.start_by_cluster = start_by_cluster
+
+
 class CoarsePartition:
     """Corpus-only geometric partition. Never sees a query or the ground truth."""
 
@@ -167,6 +193,7 @@ class CoarsePartition:
         self.chain = centroid_chain(centroids)
         self.chain_rank = np.empty(clusters, dtype=np.int64)
         self.chain_rank[self.chain] = np.arange(clusters, dtype=np.int64)
+        self._probe_order = None
         sizes = np.bincount(self.assignment[:, 0], minlength=clusters)
         self.telemetry = {
             "clusters": clusters,
@@ -177,6 +204,25 @@ class CoarsePartition:
             "median_primary_cluster_rows": int(np.median(sizes)),
             "maximum_primary_cluster_rows": int(sizes.max()),
         }
+
+    def probe_order(self, queries: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Rank every cluster by centroid distance for every query.
+
+        This is the whole router: a query reads posting pages in ascending
+        centroid distance. It is a fixed rule with no query-side training and
+        no access to the ground truth.
+        """
+        if self._probe_order is None:
+            centroid_norms = np.einsum(
+                "ij,ij->i", self.centroids, self.centroids
+            ).astype(np.float32)
+            distances = centroid_norms[None, :] - 2.0 * (queries @ self.centroids.T)
+            order = np.argsort(distances, axis=1, kind="stable").astype(np.int32)
+            rank = np.empty_like(order)
+            rows = np.arange(order.shape[0], dtype=np.int32)[:, None]
+            rank[rows, order] = np.arange(self.clusters, dtype=np.int32)[None, :]
+            self._probe_order = (order, rank)
+        return self._probe_order
 
     def contiguous_order(self) -> np.ndarray:
         """One row per page slot, clusters laid out along the centroid chain."""
@@ -222,7 +268,17 @@ class CoarsePartition:
         row_pages = np.empty((ROWS, replication), dtype=np.int64)
         row_pages[flat_row[entry_order], flat_slot[entry_order]] = page_of_entry
         total_pages = int(cluster_pages.sum())
-        return row_pages, total_pages, total_pages * page_rows - int(counts.sum())
+        pages_by_cluster = np.zeros(self.clusters, dtype=np.int64)
+        start_by_cluster = np.zeros(self.clusters, dtype=np.int64)
+        pages_by_cluster[self.chain] = cluster_pages
+        start_by_cluster[self.chain] = page_base
+        return PostingLayout(
+            row_pages=row_pages,
+            total_pages=total_pages,
+            padded_slots=total_pages * page_rows - int(counts.sum()),
+            pages_by_cluster=pages_by_cluster,
+            start_by_cluster=start_by_cluster,
+        )
 
 
 def nearest_rank(ordered: np.ndarray, numerator: int, denominator: int) -> int:
@@ -311,14 +367,14 @@ def evaluate_linear(
 
 def evaluate_replicated(
     layout: str,
-    partition: CoarsePartition,
+    posting: PostingLayout,
     truth_rows: np.ndarray,
     replication: int,
     page_rows: int,
 ) -> dict:
-    row_pages, total_pages, padded_slots = partition.replicated_pages(
-        replication, page_rows
-    )
+    row_pages = posting.row_pages
+    total_pages = posting.total_pages
+    padded_slots = posting.padded_slots
     maximum_budget = PAGE_BUDGET_LADDER[-1]
     hits = np.zeros((len(PAGE_BUDGET_LADDER), QUERIES), dtype=np.int32)
     distinct = np.zeros(QUERIES, dtype=np.int32)
@@ -379,6 +435,79 @@ def evaluate_replicated(
             "maximum": int(sorted_distinct[-1]),
             "mean_x1000": int(round(float(distinct.mean()) * 1000)),
         },
+        "gate_passing_pages": gate_pages(curve),
+    }
+
+
+def evaluate_routed(
+    layout: str,
+    partition: CoarsePartition,
+    posting: PostingLayout,
+    queries: np.ndarray,
+    truth_rows: np.ndarray,
+    replication: int,
+    page_rows: int,
+) -> dict:
+    """Measured containment for the fixed nearest-centroid page router.
+
+    Pages are read in ascending centroid distance, whole posting list at a
+    time, with the budget's final list truncated to its closest-first page
+    prefix. Because every fetched row is exactly rescored, a ground-truth row
+    that lands in a fetched page is returned, so this containment equals
+    Recall@100 for an exact-rerank serving path.
+    """
+    order, rank = partition.probe_order(queries)
+    pages_along_order = posting.pages_by_cluster[order]
+    cumulative = np.cumsum(pages_along_order, axis=1)
+
+    truth_clusters = partition.assignment[truth_rows][:, :, :replication]
+    truth_pages = posting.row_pages[truth_rows]
+    truth_ranks = np.take_along_axis(
+        rank[:, None, :], truth_clusters.astype(np.int64), axis=2
+    )
+
+    query_rows = np.arange(QUERIES, dtype=np.int64)
+    hits = np.zeros((len(PAGE_BUDGET_LADDER), QUERIES), dtype=np.int32)
+    fetched_pages = np.zeros((len(PAGE_BUDGET_LADDER), QUERIES), dtype=np.int32)
+    for index, budget in enumerate(PAGE_BUDGET_LADDER):
+        whole = (cumulative <= budget).sum(axis=1)
+        consumed = np.where(
+            whole > 0, cumulative[query_rows, np.maximum(whole - 1, 0)], 0
+        )
+        partial_index = np.minimum(whole, partition.clusters - 1)
+        partial_cluster = order[query_rows, partial_index]
+        partial_pages = np.where(whole < partition.clusters, budget - consumed, 0)
+        partial_pages = np.minimum(
+            partial_pages, posting.pages_by_cluster[partial_cluster]
+        )
+        partial_limit = posting.start_by_cluster[partial_cluster] + partial_pages
+        found = truth_ranks < whole[:, None, None]
+        found |= (truth_ranks == whole[:, None, None]) & (
+            truth_pages < partial_limit[:, None, None]
+        )
+        hits[index] = found.any(axis=2).sum(axis=1)
+        fetched_pages[index] = np.minimum(consumed + partial_pages, budget)
+
+    page_bytes = page_byte_models(page_rows)
+    curve = build_curve(hits, page_bytes, page_rows)
+    for index, entry in enumerate(curve):
+        entry["p50_fetched_pages"] = nearest_rank(np.sort(fetched_pages[index]), 50, 100)
+        entry["p95_fetched_pages"] = nearest_rank(np.sort(fetched_pages[index]), 95, 100)
+        entry["exact_scores_at_p95"] = entry["p95_fetched_pages"] * page_rows
+    baseline_pages = (ROWS + page_rows - 1) // page_rows
+    return {
+        "family": "routed",
+        "layout": layout,
+        "replication": replication,
+        "page_rows": page_rows,
+        "stored_pages": posting.total_pages,
+        "storage_multiplier_x1000": int(
+            round(posting.total_pages * 1000 / baseline_pages)
+        ),
+        "oracle_kind": "measured-nearest-centroid-router-equals-exact-rerank-recall",
+        "page_bytes": page_bytes,
+        "curve": curve,
+        "distinct_gt_pages": {"p50": 0, "p90": 0, "p99": 0, "maximum": 0, "mean_x1000": 0},
         "gate_passing_pages": gate_pages(curve),
     }
 
@@ -445,40 +574,66 @@ def self_test() -> None:
 
     partition = CoarsePartition(vectors, KMEANS_CLUSTERS[0], seed=7)
     validate_permutation(partition.contiguous_order(), "self-test contiguous")
+    layout = f"kmeans_{KMEANS_CLUSTERS[0]}"
     for replication in REPLICATION_FACTORS:
         for page_rows in PAGE_ROWS:
-            row_pages, total_pages, padded = partition.replicated_pages(
-                replication, page_rows
-            )
+            posting = partition.replicated_pages(replication, page_rows)
+            row_pages = posting.row_pages
             if row_pages.shape != (ROWS, replication):
                 raise AssertionError("posting page map shape differs")
-            if row_pages.min() < 0 or row_pages.max() >= total_pages:
+            if row_pages.min() < 0 or row_pages.max() >= posting.total_pages:
                 raise AssertionError("posting page id out of range")
-            occupancy = np.bincount(row_pages.reshape(-1), minlength=total_pages)
+            occupancy = np.bincount(
+                row_pages.reshape(-1), minlength=posting.total_pages
+            )
             if occupancy.max() > page_rows:
                 raise AssertionError("a posting page holds more rows than it can")
             if int(occupancy.sum()) != ROWS * replication:
                 raise AssertionError("posting entry count differs from replication")
-            if padded != total_pages * page_rows - ROWS * replication:
+            if posting.padded_slots != (
+                posting.total_pages * page_rows - ROWS * replication
+            ):
                 raise AssertionError("padded slot accounting differs")
+            if int(posting.pages_by_cluster.sum()) != posting.total_pages:
+                raise AssertionError("per-cluster page counts differ from the total")
             for row in range(0, ROWS, 257):
                 if len(set(row_pages[row].tolist())) != replication:
                     raise AssertionError("a row shares one page with itself")
-            cell = evaluate_replicated(
-                f"kmeans_{KMEANS_CLUSTERS[0]}",
-                partition,
-                truth_rows,
-                replication,
-                page_rows,
+            for cluster in range(partition.clusters):
+                count = int(posting.pages_by_cluster[cluster])
+                if count == 0:
+                    continue
+                start = int(posting.start_by_cluster[cluster])
+                owned = row_pages[
+                    np.any(
+                        partition.assignment[:, :replication] == cluster, axis=1
+                    )
+                ]
+                inside = (owned >= start) & (owned < start + count)
+                if int(inside.sum()) != int(
+                    np.any(
+                        partition.assignment[:, :replication] == cluster, axis=1
+                    ).sum()
+                ):
+                    raise AssertionError("cluster page range does not own its rows")
+            oracle = evaluate_replicated(
+                layout, posting, truth_rows, replication, page_rows
             )
-            aggregates = [
-                entry["aggregate_oracle_recall_ppm"] for entry in cell["curve"]
-            ]
-            if aggregates != sorted(aggregates):
-                raise AssertionError("replicated oracle recall is not monotone")
-            if aggregates[-1] != 1_000_000:
-                raise AssertionError("replicated oracle never reaches containment")
-            if cell["storage_multiplier_x1000"] < replication * 1_000:
+            routed = evaluate_routed(
+                layout, partition, posting, queries, truth_rows, replication, page_rows
+            )
+            for cell, kind in ((oracle, "oracle"), (routed, "routed")):
+                aggregates = [
+                    entry["aggregate_oracle_recall_ppm"] for entry in cell["curve"]
+                ]
+                if aggregates != sorted(aggregates):
+                    raise AssertionError(f"{kind} recall is not monotone in pages")
+                if aggregates[-1] != 1_000_000:
+                    raise AssertionError(f"{kind} never reaches full containment")
+            for entry in routed["curve"]:
+                if entry["p95_fetched_pages"] > entry["pages"]:
+                    raise AssertionError("the router fetched more pages than its budget")
+            if oracle["storage_multiplier_x1000"] < replication * 1_000:
                 raise AssertionError("replicated storage multiplier is below its floor")
     print(json.dumps({"self_test": "passed"}, sort_keys=True), flush=True)
 
@@ -487,6 +642,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--development-query", type=Path)
     parser.add_argument("--ground-truth", type=Path)
     parser.add_argument("--bfs-order", type=Path)
     parser.add_argument("--random-order", type=Path)
@@ -500,6 +656,7 @@ def main() -> None:
         name
         for name in (
             "source",
+            "development_query",
             "ground_truth",
             "bfs_order",
             "random_order",
@@ -513,6 +670,10 @@ def main() -> None:
 
     started = time.perf_counter()
     vectors, truth_rows = load_inputs(args.source, args.ground_truth)
+    query_table = pq.read_table(args.development_query)
+    if query_table.num_rows != QUERIES:
+        raise ValueError("development query row count differs")
+    queries = fixed_list(query_table, "embedding", DIMENSIONS, QUERIES)
     args.artifact_directory.mkdir(parents=True, exist_ok=True)
 
     cells: list[dict] = []
@@ -546,11 +707,23 @@ def main() -> None:
     for name, partition in partitions.items():
         for replication in REPLICATION_FACTORS:
             for page_rows in PAGE_ROWS:
-                cell = evaluate_replicated(
-                    name, partition, truth_rows, replication, page_rows
-                )
-                cells.append(cell)
-                print(json.dumps(summarize(cell), sort_keys=True), flush=True)
+                posting = partition.replicated_pages(replication, page_rows)
+                for cell in (
+                    evaluate_replicated(
+                        name, posting, truth_rows, replication, page_rows
+                    ),
+                    evaluate_routed(
+                        name,
+                        partition,
+                        posting,
+                        queries,
+                        truth_rows,
+                        replication,
+                        page_rows,
+                    ),
+                ):
+                    cells.append(cell)
+                    print(json.dumps(summarize(cell), sort_keys=True), flush=True)
 
     promoted = [cell for cell in cells if cell["gate_passing_pages"] is not None]
     best = max(
