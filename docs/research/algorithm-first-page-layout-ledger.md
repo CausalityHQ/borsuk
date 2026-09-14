@@ -146,3 +146,72 @@ router spends its budget in the wrong units.
 
 Next: a page-granular router over the preserved
 `kmeans_8192-order.npy` layout, scored against this exact 100%/64-page ceiling.
+
+## V64 — can a page-granular router close V63's gap?
+
+`scripts/v64_algorithm_first_page_router.py`, result
+`research/v64-algorithm-first/page-router-0850cde9d3be9a51/a0001/`,
+result SHA-256 `6b7c87b7…0bf9398e4f`, 102.5 s.
+
+Same layout artifact as V63 (`kmeans_8192-order.npy`, no re-clustering). Each
+page carries resident summaries built from the corpus alone — the mean and
+squared radius of the page, or of 4 or 8 contiguous sub-blocks inside it — and
+the oracle is recomputed in-run rather than quoted from V63.
+
+### Radius lower-bound pruning fails outright
+
+| Scorer (256 rows/page) | 32 pages | 64 pages | 128 pages |
+|---|---:|---:|---:|
+| mean distance, 8 sub-blocks | 94.74% | 97.66% | 99.09% |
+| **admissible lower bound**, 8 sub-blocks | **14.31%** | **28.02%** | **47.24%** |
+
+The bound is correct — the self-test requires it never to exceed the true
+distance to any member of the block it summarises — and it is still useless.
+In 768 dimensions a block's radius dwarfs the spread between block centres, so
+subtracting it collapses almost every page to a score near zero and the ranking
+that survives is essentially "largest radius first". Branch-and-bound sphere
+pruning does not transfer to this regime. Score by plain centre distance.
+
+### Page-granular routing beats list-granular routing, and still plateaus
+
+256 rows/page, against the same layout's exact ceiling:
+
+| Router | resident B/row | 32 pages | 64 pages | 128 pages | p95 pages for 100% |
+|---|---:|---:|---:|---:|---:|
+| oracle (ceiling) | 0 | 99.48% / 72% | **100.00% / 100%** | 100.00% / 100% | **35** |
+| page mean | 12 | 93.17% / 31% | 96.68% / 58% | 98.44% / 65% | 719 |
+| 4 sub-block means | 48 | 94.53% / 32% | 97.53% / 63% | 98.99% / 73% | 502 |
+| 8 sub-block means | 96 | 94.74% / 36% | 97.66% / 64% | 99.09% / 76% | 454 |
+
+V63's list-granular router reached 96.71% / 48% at 64 pages; page granularity
+lifts that to 97.66% / 64% for 96 resident bytes per row. Real, and not enough.
+
+Three things this pins down:
+
+1. **Finer summaries buy less and less.** Going from one mean per page to eight
+   costs 8x the resident RAM and buys 0.98 points at 64 pages. Extrapolating
+   toward one summary per row converges on brute force, because the resident
+   cost is `4 * dimensions / block_rows` bytes per row by construction.
+2. **The tail is the binding constraint, not the average.** At 64 pages the
+   best router holds 97.66% in aggregate but 64% of the hardest query's
+   neighbours, and needs 454 pages where the oracle needs 35 to cover 95% of
+   queries completely. That is a 13x ranking gap, not a containment gap.
+3. **RAM is what actually limits this design.** 96 B/row is 96 MB at 1M rows
+   but 9.6 GB at 100M; even one mean per page is 1.2 GB at 100M. A single
+   resident router over a static layout cannot be both sharp and bounded.
+
+### Where this leaves the quality bar
+
+Read against the market rather than the internal bar, one round trip of 64
+GETs and 12.25 MiB already returns 97.66% Recall@100, and 128 GETs returns
+99.09% — above turbopuffer's documented ~90% recall@10 example and AWS's
+">90% average" for S3 Vectors (see
+[market benchmark matrix](market-benchmark-matrix.md)). The 99.5% aggregate
+with 80% worst-query bar used here is stricter than anything either competitor
+publishes.
+
+Closing the remaining gap with a *single* resident router is the thing the
+evidence says not to attempt. The next falsifier is a two-stage read: one
+round trip for compact per-row codes over a wide candidate region, then a
+second for exact rows — which is also how turbopuffer spends its 3-4 cold
+roundtrips.
