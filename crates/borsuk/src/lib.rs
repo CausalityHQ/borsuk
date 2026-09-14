@@ -227,11 +227,16 @@ mod v38_boundary_spill;
     reason = "V40 router components are wired incrementally by the committed plan"
 )]
 mod v40_spill_router;
+mod v41_forest_probe;
 #[allow(
     dead_code,
     reason = "V41 learned router phases are wired incrementally by the committed plan"
 )]
 mod v41_learned_router;
+mod v42_pq4_relaion_probe;
+mod v45_lsh_probe;
+mod v50_exact_original_control;
+mod v51_tree_row_probe;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -528,7 +533,22 @@ pub use v40_spill_router::{
     V40LocalArtifact, V40LocalOutput, V40LocalRunMode, V40LocalRunRequest, run_v40_local_request,
 };
 #[doc(hidden)]
+pub use v41_forest_probe::{
+    V41ForestProbeRequest, V43SharedDictionaryProbeRequest, V44PageKernelProbeRequest,
+    run_v41_forest_probe, run_v43_shared_dictionary_probe, run_v44_page_kernel_probe,
+};
+#[doc(hidden)]
 pub use v41_learned_router::{V41BurnedDiagnosticRequest, run_v41_burned_diagnostic};
+#[doc(hidden)]
+pub use v42_pq4_relaion_probe::{V42Pq4RelaionProbeRequest, run_v42_pq4_relaion_probe};
+#[doc(hidden)]
+pub use v45_lsh_probe::{V45LshProbeRequest, run_v45_lsh_probe};
+#[doc(hidden)]
+pub use v50_exact_original_control::{
+    V50ExactOriginalControlRequest, run_v50_exact_original_control,
+};
+#[doc(hidden)]
+pub use v51_tree_row_probe::{V51TreeRowProbeRequest, run_v51_tree_row_probe};
 #[allow(
     dead_code,
     reason = "V24 pseudoquery qualification is wired incrementally by the committed plan"
