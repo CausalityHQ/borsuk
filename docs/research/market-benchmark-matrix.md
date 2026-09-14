@@ -175,3 +175,75 @@ Dataset-specific best settings are evidence, not user defaults. Production
 defaults must come from persisted heuristics over metric, dimensions, declared
 element type, corpus size, measured density/token statistics, available RAM,
 storage backend, and observed filter/tenant distribution.
+
+## Blob-native competitor context (vendor-reported)
+
+Amazon S3 Vectors and turbopuffer are the two competitors whose durable
+authority is object storage, which makes them the right architectural
+comparison for BORSUK. Everything in this section is **evidence class 5**:
+first-party vendor documentation read on 2026-09-14, never a paired run on our
+data, and never merged into a ranking with our measured rows. No 1M ingestion
+was performed into either service.
+
+### Amazon S3 Vectors
+
+Source: [Limitations and restrictions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-limitations.html).
+
+| Published limit | Value |
+|---|---:|
+| Vectors per vector index | Up to 2 billion |
+| Dimension value per vector | 1 to 4,096 |
+| Combined PutVectors and DeleteVectors requests per second per index | Up to 1,000 |
+| Combined vectors inserted and deleted per second per index | Up to 2,500 |
+| Top-K results per QueryVectors request | Up to 10,000 |
+| Results per page in a QueryVectors response | Up to 100 |
+| Request payload size | Up to 20 MiB |
+
+AWS publishes no reproducible recall guarantee on a named public corpus, so
+S3 Vectors contributes a scale and write-rate baseline, not a quality baseline.
+
+### turbopuffer
+
+Sources: [Architecture](https://turbopuffer.com/docs/architecture),
+[Recall](https://turbopuffer.com/docs/recall).
+
+| Published figure | Value |
+|---|---:|
+| Cold query, 1M documents | p50 874 ms |
+| Warm/cached query, 1M documents | p50 14 ms |
+| Cold-query roundtrips to object storage | 3-4, "as little as ~400ms" |
+| Write throughput | ~10,000+ vectors/sec |
+| Write latency | p50 165 ms for 500 kB |
+| WAL rate limit | 1 WAL entry per second per namespace |
+
+turbopuffer's index is SPFresh, a centroid-based ANN index: it downloads the
+centroid index first, then fetches cluster data in "one, massive roundtrip",
+backed by a WAL on object storage with NVMe and RAM caches on query nodes.
+That is the same shape as BORSUK's intended path, which is why it is the
+closest comparison.
+
+On recall, turbopuffer documents a measurement endpoint that compares an ANN
+search against an exhaustive ground-truth search over randomly selected
+inserted vectors, and uses "90% recall@10" as its worked example. It states no
+service-level recall guarantee.
+
+Two cautions this table exists to enforce:
+
+1. Only the p50 figures above were verified at source. Percentile spreads
+   (p90/p99) quoted elsewhere in earlier working notes were not confirmed on
+   the vendor pages and must not be cited as vendor-reported.
+2. turbopuffer's cold p50 is a managed service's first request to a namespace.
+   It is not equivalent to a provably cold BORSUK process, and the two must
+   not be placed in the same column without saying so.
+
+### What this implies for BORSUK's target
+
+turbopuffer openly accepts roughly 400-900 ms cold latency and relies on
+caching for ~14 ms warm. BORSUK therefore does not need an implausible
+cold-S3 latency to be competitive. The defensible target is: returned
+Recall@100 at or above the quality bar in
+[the algorithm-first ledger](algorithm-first-page-layout-ledger.md), warm p50
+in the low tens of milliseconds, cold p50 well under a second, write
+throughput above ~10k vectors/s, RAM bounded independently of corpus payload,
+and a small number of large parallel object reads per query rather than a
+corpus download.
