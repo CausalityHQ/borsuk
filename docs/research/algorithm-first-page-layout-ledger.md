@@ -67,3 +67,82 @@ Two facts matter more than the pass/fail:
    find it".
 
 Separating those two is what V63 exists to do.
+
+## V63 — containment or discovery?
+
+`scripts/v63_algorithm_first_layout_oracle.py`, result
+`research/v63-algorithm-first/layout-oracle-e2f6c2bad99c720b/a0001/`,
+result SHA-256 `608ceff4…4598de9a`, 6:40 wall, 10.5 GiB peak RSS.
+
+V63 screens the two halves of V61's failure separately. Layouts are built from
+the corpus alone — no query, no ground truth — and then evaluated three ways:
+
+- **linear** — one contiguous row permutation cut into fixed pages. Each row
+  appears once, so the best-K-pages oracle is **exact**.
+- **replicated** — SPANN-style postings, each row written into its `r` nearest
+  centroids' lists, pages never straddling a list. Its oracle is greedy
+  max-coverage, a **lower bound** on the true ceiling (measured shortfall
+  <= 1.25 pp, `scripts/verify_v63_greedy_gap.py`), so a pass is conclusive and
+  a failure is not.
+- **routed** — the same postings read by a fixed untrained rule: lists in
+  ascending centroid distance. Every fetched row is exactly rescored, so this
+  containment **is** Recall@100 for an exact-rerank serving path.
+
+The vectorised router is checked against a naive reference implementation on
+every replication/page-size cell (`scripts/verify_v63_router.py`).
+
+### Geometric order beats graph order, decisively
+
+At 256 rows/page and a 32-page budget, aggregate oracle containment:
+
+| Linear layout | Aggregate | Worst query |
+|---|---:|---:|
+| k-means 8192, centroid-chain order | **99.479%** | 72.0% |
+| k-means 1024, centroid-chain order | 97.869% | 57.0% |
+| DiskANN BFS order (from V61) | 82.762% | 48.0% |
+| source order | 33.306% | 32.0% |
+| random order | 33.247% | 32.0% |
+
+This settles V61: its BFS packing was not merely under-routed, it was the
+wrong layout. A corpus-only k-means order is worth ~17 points over it.
+
+### Containment is solved at 1.00x storage
+
+Linear k-means 8192, no replication, storage multiplier exactly 1.00:
+
+| rows/page | 32 pages | 48 pages | 64 pages | 96 pages |
+|---|---:|---:|---:|---:|
+| 128 | 98.47% / 64% | 99.83% / 80% | 99.99% / 96% | **100.00% / 100%** |
+| 256 | 99.48% / 72% | 99.96% / 88% | **100.00% / 100%** | 100.00% / 100% |
+
+At 256 rows/page, 64 pages is 16,384 rows and 12.25 MiB under the sq8 cost
+model, and it contains **every** ground-truth neighbour of **every** query.
+
+Replication is not worth buying. It moves full containment from 64 pages to 48
+and costs 3-9x storage; and because inflating posting lists means a fixed page
+budget reaches fewer distinct lists, it barely helps the actual router.
+
+### Discovery is the entire remaining gap
+
+The same layout, read by the untrained nearest-centroid posting router:
+
+| Budget | Oracle (linear, x1.00) | Router (r=1, 256 rows) | Router worst query |
+|---|---:|---:|---:|
+| 32 pages | 99.48% | 93.13% | 26% |
+| 64 pages | 100.00% | 96.71% | 48% |
+| 128 pages | 100.00% | 98.57% | 69% |
+
+The router never reaches the ceiling, and the shortfall is far worse on the
+worst query than in aggregate: where the oracle holds 100% of every query's
+neighbours in 64 pages, the router finds 48% of the hardest query's.
+
+**Verdict: the layout question is closed and the routing question is open.**
+Static page layout can hold a 100%-Recall@100 answer set inside 64 pages and
+12.25 MiB at 1.00x storage. What does not yet exist is a page selector good
+enough to find those pages. Two structural reasons the current one cannot:
+it routes at posting-list granularity while the oracle selects pages, and with
+8,192 clusters over 1M rows the median list is 118 rows, so a list-granular
+router spends its budget in the wrong units.
+
+Next: a page-granular router over the preserved
+`kmeans_8192-order.npy` layout, scored against this exact 100%/64-page ceiling.
