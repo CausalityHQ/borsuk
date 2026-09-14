@@ -292,3 +292,61 @@ shortlist, and it still does not reach the bar.
   the router's resident summaries are 96 bytes per row, which is 9.6 GB at
   100M.
 - **Development split only.** The sealed holdout is not opened.
+
+## V66 — the router's resident footprint collapses for free
+
+`scripts/v66_algorithm_first_router_ram.py`, result
+`research/v66-algorithm-first/router-ram-14361edac84d3007/a0001/`,
+result SHA-256 `282c67f0…8d76d1bb30`, 122.7 s.
+
+V65's remaining blocker was the router's 96 bytes per row — 9.6 GB at 100M
+rows. This sweeps both axes that shrink it: summaries per page, and lossy
+encodings of each summary. Recall is page containment, which V65 showed a
+PQ192 code layer plus exact rescoring recovers intact.
+
+Selected cells at M=256 pages, the V65 operating point:
+
+| Encoding | blocks/page | resident B/row | GiB at 100M | Recall@100 / worst |
+|---|---:|---:|---:|---:|
+| f32 (control) | 8 | 96.00 | 8.94 | 99.71% / 86% |
+| SQ8 | 8 | 24.00 | 2.24 | 99.71% / 86% |
+| **PQ 192x8** | **8** | **6.00** | **0.56** | **99.71% / 84%** |
+| PQ 192x8 | 4 | 3.00 | 0.28 | 99.68% / 81% |
+| **PQ 192x8** | **2** | **1.50** | **0.14** | **99.61% / 82%** |
+| PQ 192x8 | 1 | 0.75 | 0.07 | 99.43% / 76% |
+| PCA-128 SQ8 | 8 | 4.00 | 0.37 | 99.58% / 82% |
+| 768-bit signs | 1 | 0.38 | 0.03 | 99.04% / 69% |
+
+**PQ192 summaries match the f32 control at one sixteenth of its footprint**,
+and the gate still holds two further halvings down: two summaries per page at
+1.50 bytes per row — **143 MiB resident at 100M rows** — returns 99.61%
+aggregate with 82% on the worst query. The blocker is gone.
+
+PCA to rank 128 is consistently *worse* than PQ at comparable size: 4.00 B/row
+of PCA-SQ8 buys 99.58%/82% where 3.00 B/row of PQ buys 99.68%/81%. Sign codes
+are cheapest of all but need M=512 to clear the bar.
+
+### The unifying finding
+
+Across V65 and V66 the same thing is true at both levels: **quantisation is
+free and candidate count is everything.** A 208-byte row code reproduces an
+exact f32 control digit for digit; a 192-byte page summary reproduces a
+3,072-byte one. What moves recall is how many pages the router is allowed to
+consider, and the entire purpose of quantisation here is to make considering
+more of them affordable — 16x more resident summaries, 15x more candidate rows
+per byte of stage one.
+
+### Projected full stack, 1M measured
+
+| Component | Cost |
+|---|---|
+| Layout | contiguous k-means order, **1.00x** storage |
+| Resident router | PQ192 summaries, 2 per 256-row page: **1.5 B/row** (143 MiB at 100M) |
+| Stage 1 per query | 256 pages x 256 rows x 208 B = **13.0 MiB** |
+| Stage 2 per query | 512 rows x 3,088 B = **1.5 MiB** |
+| Round trips | **2** |
+| Recall@100 | **99.61% aggregate, 82% worst query** |
+
+Unchanged caveats: I/O is simulated and no GET was issued; stage two assumes
+row-addressable exact storage; every figure is 1M on the development split,
+and 100M scale transfer is projected arithmetic, not measurement.
