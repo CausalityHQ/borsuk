@@ -166,31 +166,60 @@ class PostingLayout:
 
 
 class CoarsePartition:
-    """Corpus-only geometric partition. Never sees a query or the ground truth."""
+    """Corpus-only geometric partition. Never sees a query or the ground truth.
+
+    Lloyd's algorithm on NumPy BLAS rather than faiss: the pip faiss-cpu wheel
+    on this instance family delivers 2.4 effective cores for a flat search even
+    with 48 OpenMP threads configured and no cgroup quota, while OpenBLAS sgemm
+    reaches 48 cores and over 1.2 TFLOP/s on the same box. The distance kernel
+    here is one sgemm, so it gets the fast path.
+    """
+
+    ITERATIONS = 12
+    TRAINING_POINTS_PER_CLUSTER = 64
+    CHUNK_ROWS = 8_192
 
     def __init__(self, vectors: np.ndarray, clusters: int, seed: int) -> None:
-        import faiss
-
         started = time.perf_counter()
-        kmeans = faiss.Kmeans(
-            DIMENSIONS,
-            clusters,
-            niter=15,
-            verbose=False,
-            seed=seed,
-            max_points_per_centroid=128,
-        )
-        kmeans.train(vectors)
-        centroids = np.asarray(kmeans.centroids, dtype=np.float32)
-        index = faiss.IndexFlatL2(DIMENSIONS)
-        index.add(centroids)
-        distances, assignment = index.search(vectors, MAXIMUM_REPLICATION)
+        generator = np.random.default_rng(seed)
+        row_norms = np.einsum("ij,ij->i", vectors, vectors).astype(np.float32)
+
+        training_rows = min(ROWS, clusters * self.TRAINING_POINTS_PER_CLUSTER)
+        if training_rows < ROWS:
+            training_index = generator.choice(ROWS, training_rows, replace=False)
+            training = np.ascontiguousarray(vectors[training_index])
+            training_norms = row_norms[training_index]
+        else:
+            training = vectors
+            training_norms = row_norms
+        seeds = generator.choice(training.shape[0], clusters, replace=False)
+        self.centroids = np.ascontiguousarray(training[seeds], dtype=np.float32)
         self.clusters = clusters
         self.seed = seed
-        self.centroids = centroids
-        self.assignment = assignment.astype(np.int32, copy=False)
-        self.distances = distances.astype(np.float32, copy=False)
-        self.chain = centroid_chain(centroids)
+
+        reseeded = 0
+        for _ in range(self.ITERATIONS):
+            assignment, radius = self._nearest(training, training_norms, 1)
+            assignment = assignment[:, 0]
+            radius = radius[:, 0]
+            order = np.argsort(assignment, kind="stable")
+            counts = np.bincount(assignment, minlength=clusters)
+            starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+            occupied = counts > 0
+            sums = np.add.reduceat(training[order], starts[occupied], axis=0)
+            self.centroids[occupied] = sums / counts[occupied][:, None]
+            empty = np.flatnonzero(~occupied)
+            if empty.size:
+                # Reseed a starved centroid onto the worst-served training rows
+                # so the partition keeps its full resolution.
+                farthest = np.argsort(radius)[::-1][: empty.size]
+                self.centroids[empty] = training[farthest]
+                reseeded += int(empty.size)
+
+        self.assignment, self.distances = self._nearest(
+            vectors, row_norms, MAXIMUM_REPLICATION
+        )
+        self.chain = centroid_chain(self.centroids)
         self.chain_rank = np.empty(clusters, dtype=np.int64)
         self.chain_rank[self.chain] = np.arange(clusters, dtype=np.int64)
         self._probe_order = None
@@ -198,12 +227,44 @@ class CoarsePartition:
         self.telemetry = {
             "clusters": clusters,
             "seed": seed,
+            "iterations": self.ITERATIONS,
+            "training_rows": int(training.shape[0]),
+            "reseeded_empty_centroids": reseeded,
             "train_and_assign_seconds": round(time.perf_counter() - started, 3),
             "empty_clusters": int((sizes == 0).sum()),
             "minimum_primary_cluster_rows": int(sizes.min()),
             "median_primary_cluster_rows": int(np.median(sizes)),
             "maximum_primary_cluster_rows": int(sizes.max()),
         }
+
+    def _nearest(
+        self, data: np.ndarray, data_norms: np.ndarray, neighbours: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Chunked exact top-`neighbours` centroid search, squared L2."""
+        rows = data.shape[0]
+        indices = np.empty((rows, neighbours), dtype=np.int32)
+        squared = np.empty((rows, neighbours), dtype=np.float32)
+        centroid_norms = np.einsum(
+            "ij,ij->i", self.centroids, self.centroids
+        ).astype(np.float32)
+        for start in range(0, rows, self.CHUNK_ROWS):
+            stop = min(start + self.CHUNK_ROWS, rows)
+            scores = centroid_norms[None, :] - 2.0 * (data[start:stop] @ self.centroids.T)
+            if neighbours == 1:
+                best = np.argmin(scores, axis=1)
+                chosen = best[:, None]
+                values = np.take_along_axis(scores, chosen, axis=1)
+            else:
+                chosen = np.argpartition(scores, neighbours - 1, axis=1)[:, :neighbours]
+                values = np.take_along_axis(scores, chosen, axis=1)
+                ranking = np.argsort(values, axis=1, kind="stable")
+                chosen = np.take_along_axis(chosen, ranking, axis=1)
+                values = np.take_along_axis(values, ranking, axis=1)
+            indices[start:stop] = chosen
+            squared[start:stop] = np.maximum(
+                values + data_norms[start:stop, None], 0.0
+            )
+        return indices, squared
 
     def probe_order(self, queries: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Rank every cluster by centroid distance for every query.

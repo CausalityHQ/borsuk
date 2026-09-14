@@ -1,8 +1,8 @@
 #!/bin/bash
 set -u
-digest=5b585b807cf745c1c8162151c2df193e9cd8274a1a4e1670c778ce7d16d1a8e6
-root=/mnt/v63-layout-oracle-5b585b80
-prefix=s3://borsuk-bench-453182569524-euc1/research/v63-algorithm-first/layout-oracle-5b585b807cf745c1
+digest=e2f6c2bad99c720b9278d9811fa5174d7fc49b935138afd1a53b0de68eb8dd57
+root=/mnt/v63-layout-oracle-e2f6c2ba
+prefix=s3://borsuk-bench-453182569524-euc1/research/v63-algorithm-first/layout-oracle-e2f6c2bad99c720b
 output_uri="$prefix/a0001"
 terminal_file=/tmp/v63-layout-oracle-terminal.json
 phase=bootstrap
@@ -32,14 +32,12 @@ phase=dependency-install
 python3 -m venv .venv > dependency.log 2>&1 || exit 91
 .venv/bin/python -m pip install --disable-pip-version-check --quiet --upgrade pip >> dependency.log 2>&1 || exit 91
 .venv/bin/python -m pip install --disable-pip-version-check --quiet \
-  'numpy==1.26.4' 'pyarrow==17.0.0' 'faiss-cpu==1.8.0.post1' >> dependency.log 2>&1 || exit 91
+  'numpy==1.26.4' 'pyarrow==17.0.0' >> dependency.log 2>&1 || exit 91
 if ! .venv/bin/python - >> dependency.log 2>&1 <<'PY'
-import faiss
 import numpy
 import pyarrow
 print("numpy", numpy.__version__)
 print("pyarrow", pyarrow.__version__)
-print("faiss", faiss.__version__)
 PY
 then
   exit 91
@@ -65,7 +63,7 @@ HASHES
 if [ "$?" -ne 0 ]; then
   exit 99
 fi
-export OMP_NUM_THREADS=48 MKL_NUM_THREADS=48 OPENBLAS_NUM_THREADS=48
+export OMP_NUM_THREADS=48 MKL_NUM_THREADS=48 OPENBLAS_NUM_THREADS=48 OPENBLAS64_NUM_THREADS=48
 phase=scientific-execution
 set +e
 /usr/bin/time -v .venv/bin/python probe.py \
