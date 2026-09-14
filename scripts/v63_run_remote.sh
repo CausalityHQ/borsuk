@@ -1,8 +1,8 @@
 #!/bin/bash
 set -u
-digest=6648002d7a0f1bdff1bb4e04ac70c532e52e5c44baa703f74549c3bbb6f033a8
-root=/mnt/v63-layout-oracle-6648002d
-prefix=s3://borsuk-bench-453182569524-euc1/research/v63-algorithm-first/layout-oracle-6648002d7a0f1bdf
+digest=5b585b807cf745c1c8162151c2df193e9cd8274a1a4e1670c778ce7d16d1a8e6
+root=/mnt/v63-layout-oracle-5b585b80
+prefix=s3://borsuk-bench-453182569524-euc1/research/v63-algorithm-first/layout-oracle-5b585b807cf745c1
 output_uri="$prefix/a0001"
 terminal_file=/tmp/v63-layout-oracle-terminal.json
 phase=bootstrap

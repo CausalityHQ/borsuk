@@ -628,8 +628,29 @@ def self_test() -> None:
                 ]
                 if aggregates != sorted(aggregates):
                     raise AssertionError(f"{kind} recall is not monotone in pages")
-                if aggregates[-1] != 1_000_000:
-                    raise AssertionError(f"{kind} never reaches full containment")
+                if aggregates[-1] > 1_000_000 or aggregates[0] < 0:
+                    raise AssertionError(f"{kind} recall left its valid range")
+            if oracle["curve"][-1]["aggregate_oracle_recall_ppm"] != 1_000_000:
+                raise AssertionError("oracle never reaches full containment")
+            # The router only has to find everything once its budget covers the
+            # whole layout; at a small budget it legitimately reads a few
+            # posting lists and misses the rest.
+            saved_ladder = PAGE_BUDGET_LADDER
+            globals()["PAGE_BUDGET_LADDER"] = (posting.total_pages,)
+            try:
+                exhaustive = evaluate_routed(
+                    layout,
+                    partition,
+                    posting,
+                    queries,
+                    truth_rows,
+                    replication,
+                    page_rows,
+                )
+            finally:
+                globals()["PAGE_BUDGET_LADDER"] = saved_ladder
+            if exhaustive["curve"][0]["aggregate_oracle_recall_ppm"] != 1_000_000:
+                raise AssertionError("the router misses rows while reading every page")
             for entry in routed["curve"]:
                 if entry["p95_fetched_pages"] > entry["pages"]:
                     raise AssertionError("the router fetched more pages than its budget")
