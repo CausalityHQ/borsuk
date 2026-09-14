@@ -215,3 +215,80 @@ evidence says not to attempt. The next falsifier is a two-stage read: one
 round trip for compact per-row codes over a wide candidate region, then a
 second for exact rows — which is also how turbopuffer spends its 3-4 cold
 roundtrips.
+
+## V65 — the two-stage read clears the quality bar
+
+`scripts/v65_algorithm_first_two_stage.py`, result
+`research/v65-algorithm-first/two-stage-85e79e65e32c3ea8/a0001/`,
+result SHA-256 `a210ffa5…6b6adc`, 360.5 s, 16.2 GiB peak RSS.
+
+Same V63 layout artifact, same V64 router (8 sub-block means, 256-row pages).
+Stage one reads compact per-row codes for the rows in the router's best M
+pages; stage two reads exact vectors for the best N of those rows. Codebooks
+are corpus-only. Shortlist containment is Recall@100 after exact rescoring.
+
+### A first correction to how V63 and V64 priced their bytes
+
+V63 and V64 quote page bytes under an `sq8_plain` model of 784 bytes per row.
+That is the right price for a *code* page, but both measure a path that ends in
+exact rescoring, which needs the exact vector — 3,088 bytes per row. Their byte
+columns are therefore code-layer prices attached to an exact-data path, and
+they understate it by about 3.9x. The recall figures are unaffected. Everything
+below prices each stage at what that stage actually reads.
+
+### The codec is nearly free; the router's page budget is the whole constraint
+
+Recall at 512-row shortlist, by router page budget M:
+
+| Codec | bytes/row | M=64 | M=128 | M=256 | M=512 |
+|---|---:|---:|---:|---:|---:|
+| exact f32 (control) | 3,088 | 97.66/64 | 99.09/76 | 99.71/86 | 99.94/94 |
+| SQ8 | 784 | 97.66/64 | 99.09/76 | 99.71/86 | 99.94/94 |
+| **PQ 192x8** | **208** | 97.66/64 | 99.09/76 | **99.71/86** | 99.94/94 |
+| 768-bit signs | 112 | 97.43/64 | 98.72/75 | 99.24/81 | 99.38/84 |
+| PQ 64x8 | 80 | 95.54/55 | 96.47/59 | 96.77/62 | 96.85/61 |
+
+SQ8 and PQ192 reproduce the exact-f32 control *digit for digit* at every
+budget. A 208-byte code — 15x smaller than the exact row — costs nothing in
+recall here. Below that it starts to bite: 64-subspace PQ saturates near 96.8%
+however many pages it is given, because its own ranking noise, not the router,
+becomes the limit.
+
+Ranking all 1M rows with each codec confirms where each one's ceiling is: SQ8
+reaches 100.00%/100% inside a 256-row shortlist, PQ192 100.00%/99% inside 512,
+768-bit signs 99.90%/91% inside 1,024, PQ64 99.14%/75%.
+
+### The operating point
+
+PQ192 codes, 256-row pages, 512-row shortlist, priced per stage:
+
+| M | Recall@100 / worst | stage 1 (codes) | stage 2 (exact) | total | single-stage equivalent |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 97.66% / 64% | 3.25 MiB | 1.51 MiB | 4.76 MiB | 48.25 MiB |
+| 128 | 99.09% / 76% | 6.50 MiB | 1.51 MiB | 8.01 MiB | 96.50 MiB |
+| **256** | **99.71% / 86%** | **13.00 MiB** | **1.51 MiB** | **14.51 MiB** | 193.00 MiB |
+| 512 | 99.94% / 94% | 26.00 MiB | 1.51 MiB | 27.51 MiB | 386.00 MiB |
+
+**M=256 clears the bar: 99.71% aggregate Recall@100 with 86% on the worst
+query, inside 14.51 MiB and two round trips.** The same recall through a
+single-stage exact read costs 193 MiB, so splitting the read is worth 13.3x in
+bytes — the first stage buys 15x more candidate rows per byte, and the second
+touches only the 512 rows that survive.
+
+The shortlist is not binding: for every codec at or above PQ192, N=512 and
+N=2048 give identical recall, because exact rescoring puts true neighbours at
+the very top of whatever the code layer shortlists. Only PQ64 needs a deeper
+shortlist, and it still does not reach the bar.
+
+### What this is not
+
+- **Simulated I/O, not measured latency.** No GET was issued. Request counts,
+  coalescing of adjacent selected pages, and S3 tail latency are unmeasured.
+- **Stage two assumes row-addressable exact storage.** 512 rows x 3,088 bytes
+  is a lower bound; fetching whole exact pages instead would cost the p95 99
+  distinct pages those rows fall in, roughly 74 MiB. Row addressability is
+  therefore a load-bearing design requirement, not an optimisation.
+- **1M only.** Scale transfer to 100M is unproven and is the next real risk:
+  the router's resident summaries are 96 bytes per row, which is 9.6 GB at
+  100M.
+- **Development split only.** The sealed holdout is not opened.
