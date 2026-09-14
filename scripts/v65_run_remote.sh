@@ -1,8 +1,8 @@
 #!/bin/bash
 set -u
-digest=590682b459848d93d619c73105b0687502ffe918f1978027a1790535b5777c73
-root=/mnt/v65-two-stage-590682b4
-prefix=s3://borsuk-bench-453182569524-euc1/research/v65-algorithm-first/two-stage-590682b459848d93
+digest=85e79e65e32c3ea8ebf348f991a29ba886a505116bfb77f79837d4e9eae177b3
+root=/mnt/v65-two-stage-85e79e65
+prefix=s3://borsuk-bench-453182569524-euc1/research/v65-algorithm-first/two-stage-85e79e65e32c3ea8
 output_uri="$prefix/a0001"
 terminal_file=/tmp/v65-two-stage-terminal.json
 phase=bootstrap

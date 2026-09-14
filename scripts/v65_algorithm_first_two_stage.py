@@ -162,6 +162,19 @@ def block_summaries(ordered: np.ndarray, block_rows: int) -> np.ndarray:
     return (np.add.reduceat(ordered, starts, axis=0) / counts[:, None]).astype(np.float32)
 
 
+def plain(value):
+    """Convert NumPy scalars for JSON, refusing anything genuinely unknown.
+
+    A run that survives every measurement and then dies serialising one
+    np.int64 has thrown the whole machine away for nothing.
+    """
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    raise TypeError(f"unserialisable value of type {type(value).__name__}")
+
+
 def nearest_rank(ordered: np.ndarray, numerator: int, denominator: int) -> int:
     index = max(0, min(len(ordered) - 1, (len(ordered) * numerator - 1) // denominator))
     return int(ordered[index])
@@ -328,9 +341,10 @@ def main() -> None:
                 {
                     "codec": codec.name,
                     "row_bytes": codec.row_bytes,
-                    "global_2048_ppm": global_counts[2048].sum() * 10_000 // QUERIES,
+                    "global_2048_ppm": int(global_counts[2048].sum()) * 10_000 // QUERIES,
                 },
                 sort_keys=True,
+                default=plain,
             ),
             flush=True,
         )
@@ -353,7 +367,9 @@ def main() -> None:
         "elapsed_seconds": round(time.perf_counter() - started, 3),
         "validation_opened": False,
     }
-    payload = (json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    payload = (
+        json.dumps(result, sort_keys=True, separators=(",", ":"), default=plain) + "\n"
+    ).encode()
     args.output.write_bytes(payload)
     print(
         json.dumps({"result_sha256": hashlib.sha256(payload).hexdigest()}, sort_keys=True),
