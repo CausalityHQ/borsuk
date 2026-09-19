@@ -1419,3 +1419,58 @@ current dense physical-planner traceback still projects to 8,791,406,250 bytes
 per query, and serving CPU and latency remain unqualified. The exact V90
 residual-minimum configuration is rejected without a sweep; it does not close
 other query-dependent row-to-page reductions.
+
+## V91 — soft occupancy mass is selection-equivalent to residual row minimum
+
+The first attempt used source `3d28c97775fcbbf65e5f79c0096eec49acf3f136`
+on c7i.8xlarge Spot instance `i-03e7d7909448cf58b` in `eu-central-1a`.
+All input hashes passed and the scientific calculation reached its evidence
+validator, but the registered Amazon Linux Python 3.9 runtime rejected two
+Python-3.10-only `zip(..., strict=True)` calls. It published terminal SHA-256
+`6a4928534bf63d490885f2cd8405df07e8b2eb7cac74713d604fed3b6a43914f`
+with exit 96 and no result. A focused regression reproduced the boundary
+before the two calls were replaced with indexing over already-validated equal
+shapes. The repair passed 15 focused tests, Ruff, pycompile, and diff-check.
+
+The sole clean attempt used source
+`be09210505e1030e38cabe8ea9341bb40bbdc2df` on c7i.8xlarge Spot instance
+`i-0f6292eadca977649` in `eu-central-1a`. The instance published a successful
+terminal and terminated immediately. Immutable evidence is under
+`research/v91-soft-occupancy/be09210505e1030e38cabe8ea9341bb40bbdc2df/runs/v91-soft-occupancy-20260919T225043Z-be092105/a0001/`.
+The canonical result SHA-256 is
+`472fb74da59808bdc346354e124bf6ddf233604650f23485148fca22acde12d3`;
+the terminal SHA-256 is
+`9e00cbda6b658c60036d81c712c76f94188b6236a64061a12f93d9630efe302a`.
+
+V91 kept V90's authenticated PQ16 residual row codes, top-1,024 candidate
+fence, exact reciprocal-rank fallback, resident SQ8 delta, reranker, and both
+physical budgets unchanged. It changed only wave-one page utility. For each
+query it converted the 100 closest residual-row estimates into fixed-point
+soft occupancy mass using a temperature fixed by distances 100 and 200. One
+mass quantum dominated the maximum feasible reciprocal-rank sum, so rank was
+only a deterministic lower-order fallback. The row-min score matrix, raw mass,
+compound weights, candidate fence, and their dependency graph are digest-bound.
+
+| arm | page utility | page-SQ8 Recall@100 | base-only recall | query 15 | worst | planner misses |
+|---|---|---:|---:|---:|---:|---:|
+| V90 control | residual-row minimum rank | **98.9688%** (3,167/3,200) | **98.8538%** (2,846/2,879) | 90 | 90 | 26 |
+| V91 challenger | soft top-100 occupancy, reciprocal-rank fallback | **98.9688%** (3,167/3,200) | **98.8538%** (2,846/2,879) | 90 | 90 | 26 |
+
+The arms selected identical physical pages for every one of the 32 burned
+development queries. V91 therefore failed the unchanged 3,176-hit,
+2,854-base-hit, and query-15=90 gate by nine total and eight base hits. The
+candidate-fence oracle remained perfect at 3,200/3,200 total and 2,879/2,879
+base, with a 100-hit worst query. This equality rejects this fixed soft
+occupancy reduction as a planner repair: multiplicity among its closest 100
+rows adds no effective choice under the registered range/page constraint. It
+does not reject other page assignments, representations, or query-dependent
+reducers. Reserved confirmation queries 328--455 remain unread.
+
+Wave one remained capped at 340 pages, 32 ranges, and 16,733,440 bytes; wave
+two remained capped at 81 pages, 32 ranges, and 16,676,928 bytes. The offline
+screen made zero S3 query requests. Scientific wall time was 4:50.54, peak RSS
+was 10,319,428 KiB, CPU utilization was 1,169%, and swaps were zero. The 100M
+representation projection remains 2,057,023,104 bytes (1.916 GiB), while the
+current dense traceback is still 8,791,406,250 bytes per query and is neither
+memory-, CPU-, nor latency-qualified for serving. No larger-scale or
+confirmation run is authorized by this result.
