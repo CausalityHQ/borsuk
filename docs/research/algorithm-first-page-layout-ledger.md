@@ -1106,3 +1106,55 @@ at every load. It is rejected, Rayon remains the selected path, and no longer
 open-loop qualification is justified for this change. The next binding work is
 the query-visible delta/generation/compaction path, not another CPU scheduler
 hypothesis.
+
+## V85 — exact row evidence isolates the remaining quality loss
+
+The query-visible-delta work also supplied a fixed 900,000-base +
+100,000-resident-delta quality screen on ReLAION 1M x 768. All cells used the
+same query-independent K-means-8192 physical page order, 256-row pages, and
+hard limits of 81 padded pages, 32 ranges, and 16 MiB per query. These are
+development diagnostics and remain claim-ineligible.
+
+The best PQ64 reciprocal-rank exact planner used the top 1,024 encoded rows
+and reached 98.5938% page-SQ8 Recall@100 and 98.6562% after exact reranking.
+At a matched top-2,048 evidence width it reached 98.4375% page-SQ8. A
+base-only conditional page-posterior fitted on 256 hashed self-queries retained
+a 100% candidate-set physical oracle, but reached only 98.3750% page-SQ8 and
+98.4062% exact. Its controlled loss against the matched top-2,048 arm was two
+of 3,200 hits; the larger comparison against top-1,024 is a performance
+comparison, not an isolated calibration ablation.
+
+Before testing another page representation, attempt `exact-row-control-a0015`
+replaced PQ ADC row scores with exact float32 row distances and left the
+top-2,048 reciprocal-rank aggregation and exact physical planner unchanged.
+It ran once from source
+`486335f46829bfee313182fe00e8176be4d69ad1` on c7i.8xlarge Spot instance
+`i-00948ce1f8a168460`, then the instance terminated.
+
+| metric | exact-row control |
+|---|---:|
+| page-SQ8 Recall@100 | **99.5625%** (3,186 / 3,200) |
+| exact rerank Recall@100 | **99.7188%** (3,191 / 3,200) |
+| query 15 page-SQ8 hits | **93 / 100** |
+| query 28 page-SQ8 hits | **98 / 100** |
+| physical oracle | **100.0000%** |
+| maximum requests | 32 |
+| maximum bytes | 16,676,928 |
+| scientific wall | 33.57 s |
+| peak RSS | 9,972,240 KiB |
+| swaps | 0 |
+
+The immutable result is under
+`s3://borsuk-bench-453182569524-euc1/research/v85-shared-overlay/486335f46829bfee313182fe00e8176be4d69ad1/exact-row-control-a0015/attempt/`.
+The result SHA-256 is
+`10526c02beaa0df3a160b8e58e9e6b47d526a1378127acb62b7d76dbabc3c8ef` and
+the terminal SHA-256 is
+`78308fdcd9629f93b5e8a4c52fc4526def8adf0bb2a15b45b04f149e78160136`.
+
+This is a causal ceiling, not a serving result: its 9.51 GiB peak RSS and
+exhaustive float32 scoring violate the 100M memory and throughput target. It
+does establish that PQ64 row-code resolution is the dominant source of the
+quality gap. Page aggregation and page SQ8 still account for the remaining 14
+page-SQ8 misses, so the next fixed 1M falsifier must recover most of the exact
+row ordering with a compact hierarchical router rather than tune another
+single page centroid.
