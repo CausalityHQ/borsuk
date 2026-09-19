@@ -1174,10 +1174,11 @@ V86 trained one base-only PQ192x8 codebook set, encoded all 900,000 base rows
 and two half-page means per physical page with those books, fetched at most
 340 header-bearing code pages in 32 ranges, ranked only the fetched codes,
 then fetched at most 81 page-SQ8 pages in 32 ranges after a 512-row shortlist.
-The exact 100,000-row resident delta was included in every final rerank. The
-burned queries 0--31 remained the development gate; queries 200--327 were an
-untouched confirmation range. The result is claim-ineligible and qualifies
-neither 100M CPU nor serving latency.
+The 100,000-row resident delta was included in every final rerank: the
+page-SQ8 arm used its production SQ8 codes, while the exact diagnostic used
+float32 vectors. The burned queries 0--31 remained the development gate;
+queries 200--327 were an untouched confirmation range. The result is
+claim-ineligible and qualifies neither 100M CPU nor serving latency.
 
 | split | page-SQ8 Recall@100 | exact Recall@100 | base-only recall | worst |
 |---|---:|---:|---:|---:|
