@@ -353,13 +353,22 @@ def main() -> None:
     del vectors
     pages = (ROWS + PAGE_ROWS - 1) // PAGE_ROWS
 
-    position = np.empty(ROWS, dtype=np.int64)
-    position[np.argsort(ordered_ids, kind="stable")] = np.arange(ROWS)
-    sorted_ids = np.sort(ordered_ids)
-    truth_positions = np.searchsorted(sorted_ids, truth_ids.astype(np.int64))
-    if not np.array_equal(sorted_ids[truth_positions], truth_ids.astype(np.int64)):
+    # Identifier -> original row -> layout position. Indexing the inverse
+    # permutation by a sorted-array offset instead of by a row silently yields
+    # a random mapping, which reads as chance-level recall rather than as an
+    # error, so the round trip is checked rather than assumed.
+    ranking = np.argsort(feature_ids, kind="stable")
+    located = np.searchsorted(feature_ids[ranking], truth_ids)
+    if np.any(located == ROWS) or not np.array_equal(
+        feature_ids[ranking][located], truth_ids
+    ):
         raise ValueError("ground truth references an unknown identifier")
-    truth_rows = position[truth_positions]
+    original_rows = ranking[located]
+    position = np.empty(ROWS, dtype=np.int64)
+    position[order] = np.arange(ROWS, dtype=np.int64)
+    truth_rows = position[original_rows]
+    if not np.array_equal(ordered_ids[truth_rows], truth_ids.astype(np.int64)):
+        raise ValueError("identifier round trip through the layout differs")
     truth_pages = truth_rows // PAGE_ROWS
 
     cells = []

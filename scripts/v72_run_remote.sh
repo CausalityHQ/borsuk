@@ -1,8 +1,8 @@
 #!/bin/bash
 set -u
-digest=8113d4e83a433d9f79fea3dc2d78f6f65d086069ab8131fb4a6b284f82b35016
-root=/mnt/v72-resident-8113d4e8
-prefix=s3://borsuk-bench-453182569524-euc1/research/v72-algorithm-first/resident-router-8113d4e83a433d9f
+digest=ca1c136d54e8fc413b2807eedb43805715dc19340f850adfc7a21798525885ac
+root=/mnt/v72-resident-ca1c136d
+prefix=s3://borsuk-bench-453182569524-euc1/research/v72-algorithm-first/resident-router-ca1c136d54e8fc41
 output_uri="$prefix/a0001"
 terminal_file=/tmp/v72-terminal.json
 phase=bootstrap

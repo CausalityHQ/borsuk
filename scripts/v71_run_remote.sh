@@ -15,15 +15,18 @@ publish_terminal() {
   for name in result-*.json; do
     [ -f "$name" ] && aws s3 cp "$name" "$output_uri/$name" --only-show-errors
   done
-  printf '{"exit_code":%d,"phase":"%s","main_sha256":"%s","exporter_sha256":"%s"}\n'     "$code" "$phase" "835dc00620442b34fe7de23382a2bbf36718f947a7b3e00448a16164221e2691" "dcc256e0e8305efdffa2c8ea108dfee13d007bc518c8740f8a6a75cba46acd26" > /tmp/v71-terminal.json
+  printf '{"exit_code":%d,"phase":"%s","main_sha256":"%s","exporter_sha256":"%s"}\n'     "$code" "$phase" "e45b38ec8e21911969c0f5f3a2888eaca46309447f6b8eb71548f3bbecbd2901" "45e4a226a68fe754ee7966097d4cf27969d298b1168a6e233b467cea485f4b17" > /tmp/v71-terminal.json
   aws s3 cp /tmp/v71-terminal.json "$output_uri/terminal.json" --only-show-errors
   exit "$code"
 }
 trap publish_terminal EXIT
 mkdir -p "$root/reader/src" && cd "$root" || exit 90
 phase=toolchain
+# SSM runs commands without HOME, and AL2023 ships no C linker for rustc.
+export HOME=${HOME:-/root}
+dnf install -y -q gcc > build.log 2>&1 || exit 88
 if ! command -v cargo >/dev/null 2>&1; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable > build.log 2>&1 || exit 89
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable >> build.log 2>&1 || exit 89
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
 phase=source-download
@@ -31,9 +34,9 @@ aws s3 cp "$prefix/main.rs" reader/src/main.rs --only-show-errors || exit 91
 aws s3 cp "$prefix/Cargo.toml" reader/Cargo.toml --only-show-errors || exit 91
 aws s3 cp "$prefix/v71_export_manifest.py" export.py --only-show-errors || exit 91
 sha256sum -c > hashes.log 2>&1 <<HASHES
-835dc00620442b34fe7de23382a2bbf36718f947a7b3e00448a16164221e2691  reader/src/main.rs
-ebe64158a21bc6cd108a8d31c425a5be3487428a5087c7f9470d9fcef0c4eaee  reader/Cargo.toml
-dcc256e0e8305efdffa2c8ea108dfee13d007bc518c8740f8a6a75cba46acd26  export.py
+e45b38ec8e21911969c0f5f3a2888eaca46309447f6b8eb71548f3bbecbd2901  reader/src/main.rs
+0e647c73507c432d18a8c069fafe509ef9a280b9fa4f698833d8debb55de3077  reader/Cargo.toml
+45e4a226a68fe754ee7966097d4cf27969d298b1168a6e233b467cea485f4b17  export.py
 HASHES
 [ "$?" -ne 0 ] && exit 92
 phase=build
@@ -56,7 +59,7 @@ phase=measure
 export AWS_DEFAULT_REGION=eu-central-1 BORSUK_V71_REGION=eu-central-1
 export BORSUK_V71_URI="$sq8" BORSUK_V71_MANIFEST="$root/manifest.bin" BORSUK_V71_QUERIES=200
 : > run.log
-for point in "128 8 64" "128 8 128" "256 8 128" "128 16 128" "256 16 128" "64 8 64" "512 8 128"; do
+for point in "128 8 128" "128 4 128" "128 2 128" "256 8 128" "256 4 128" "64 8 128" "512 8 128" "384 4 128"; do
   set -- $point
   BORSUK_V71_PAGES=$1 BORSUK_V71_GAP=$2 BORSUK_V71_CONCURRENCY=$3     BORSUK_V71_OUTPUT="$root/result-m$1-g$2-c$3.json"     ./reader/target/release/v71_native_reader >> run.log 2>&1 || exit 98
 done

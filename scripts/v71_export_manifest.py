@@ -325,8 +325,20 @@ def main() -> None:
         encode_pq(block_means(ordered, PAGE_ROWS // ROUTER_BLOCKS_PER_PAGE), books), books
     )
     del ordered
-    if summaries.shape[0] != pages * ROUTER_BLOCKS_PER_PAGE:
-        raise ValueError("summary count differs from pages times blocks per page")
+    # The corpus tail leaves the last page owning fewer blocks than the rest.
+    # Repeating its final block pads the table to a clean pages x blocks shape
+    # without changing any page's score, since a page scores as the minimum
+    # over its blocks and the repeat is already that minimum's candidate.
+    wanted = pages * ROUTER_BLOCKS_PER_PAGE
+    if summaries.shape[0] > wanted:
+        raise ValueError("summary count exceeds pages times blocks per page")
+    if summaries.shape[0] < wanted:
+        padding = np.repeat(
+            summaries[-1:], wanted - summaries.shape[0], axis=0
+        )
+        summaries = np.concatenate([summaries, padding], axis=0)
+    if summaries.shape[0] != wanted:
+        raise ValueError("summary padding did not reach the page table shape")
 
     with args.output.open("wb") as handle:
         handle.write(MAGIC)
