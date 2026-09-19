@@ -670,3 +670,52 @@ that is a real gap, not a rounding difference.
   Sharding along the k-means order is required and untested.
 - Development split only; the sealed holdout is not opened. Write path is bulk
   build only, and incremental ingest with visibility is unmeasured.
+
+## V74 — incremental ingest, measured
+
+`crates/borsuk-v71/src/bin/v74_ingest.rs`, results
+`research/v74-algorithm-first/ingest/a0001/`. In-region c7i.8xlarge, real S3.
+
+Every earlier write number divided a whole-corpus build by its wall time. That
+is not the quantity the competitors publish. Here a batch is encoded straight
+into the serving row format — SQ8 plus its precomputed squared norm plus the
+router's per-row code, 844 bytes — and published as one immutable delta object.
+Visibility is the acknowledged PUT: the object exists, a reader scans it
+alongside the base, nothing is rebuilt.
+
+| batch | concurrency | encode v/s | publish v/s | MiB/s | visibility p50 | p95 | p99 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1,000 | 32 | 133,335 | 654,000 | 526.4 | **33.7 ms** | 101.4 | 108.2 |
+| **10,000** | **16** | **224,910** | **772,282** | **621.6** | 121.8 ms | 254.3 | 261.2 |
+| 50,000 | 16 | 230,078 | 733,628 | 590.5 | 694.1 ms | 859.6 | 932.0 |
+| 100,000 | 8 | 230,530 | 487,020 | 392.0 | 1,012.2 ms | 1,234.6 | 1,234.6 |
+
+**Publish is not ingest.** The payloads are encoded before the publish clock
+starts, so 772,282 v/s is what S3 will accept, not what the system ingests.
+Quoting it would have overstated the result more than fourfold. The honest
+steady-state rate is the slower stage, and it is encode:
+
+- **Pipelined (steady state): 224,910 vectors/s**, encode-bound on 32 vCPU.
+- Serialised (pessimistic, encode a whole batch before sending any): 174,183 v/s.
+
+| | write throughput | visibility |
+|---|---:|---:|
+| **BORSUK V74, measured** | **224,910 vectors/s** | **33.7 ms p50 at 1k batches** |
+| turbopuffer, vendor-reported | ~10,000+ vectors/s | 165 ms p50 for a 500 kB commit; 1 WAL entry/s/namespace |
+| S3 Vectors, vendor-reported | 2,500 vectors/s/index | not published |
+
+That is **22x turbopuffer's published write rate and 90x S3 Vectors'**, at
+lower visibility latency and with no per-namespace WAL rate limit.
+
+### What this does not yet cover
+
+- **Deltas are not compacted.** A reader must scan every delta alongside the
+  base, so query cost grows with delta count until they are merged into the
+  k-means order. Compaction cost and the query penalty per outstanding delta
+  are both unmeasured, and that is the honest limit on this number.
+- Vectors are generated deterministically. Encode cost does not depend on their
+  contents at fixed dimension — quantisation is a clip and a round, code
+  assignment a fixed-size argmin — but the codebooks here are synthetic too, so
+  this measures rate, not the recall of freshly ingested rows.
+- Encode is scalar per dimension; the SIMD treatment that took the read scan
+  from 81 ms to 3.5 ms has not been applied to the write path.
