@@ -257,15 +257,16 @@ def build_residual_row_sketch(
     return result
 
 
-def residual_page_rank_scores(
+def _residual_candidate_row_estimates(
     query: np.ndarray,
     control_page_scores: np.ndarray,
     control_artifact: CoarseToFineArtifact,
     artifact: ResidualRowSketchArtifact,
     *,
     rank_limit: int,
-) -> np.ndarray:
-    """Rerank only registered summary candidates by their best residual row."""
+    validated_control_sha256: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Score every valid row inside the registered control-page fence."""
 
     query = np.asarray(query, dtype=np.float32)
     control_page_scores = np.asarray(control_page_scores, dtype=np.float32)
@@ -273,7 +274,8 @@ def residual_page_rank_scores(
     dimensions = sum(book.shape[1] for book in artifact.books)
     _validate_sketch(artifact, rows=artifact.training_rows, dimensions=dimensions)
     if (
-        artifact.control_artifact_sha256 != control_artifact.digest()
+        not _valid_sha256(validated_control_sha256)
+        or artifact.control_artifact_sha256 != validated_control_sha256
         or artifact.page_rows != control_artifact.page_rows
         or query.shape != (dimensions,)
         or control_page_scores.shape != (page_count,)
@@ -312,7 +314,35 @@ def residual_page_rank_scores(
         codes = artifact.row_codes[safe_positions, subspace]
         estimates += np.take_along_axis(table, codes, axis=1)
     estimates[~valid] = np.float32(np.inf)
-    if artifact.page_rows == 1:
+    return candidates, estimates, valid
+
+
+def _rank_scores_from_candidate_estimates(
+    candidates: np.ndarray,
+    estimates: np.ndarray,
+    control_page_scores: np.ndarray,
+    *,
+    page_rows: int,
+) -> np.ndarray:
+    """Apply the registered V90 row-min/second-min page ordering."""
+
+    candidates = np.asarray(candidates, dtype=np.int64)
+    estimates = np.asarray(estimates, dtype=np.float32)
+    control_page_scores = np.asarray(control_page_scores, dtype=np.float32)
+    page_count = control_page_scores.size
+    if (
+        candidates.ndim != 1
+        or estimates.shape != (candidates.size, page_rows)
+        or np.any(candidates < 0)
+        or np.any(candidates >= page_count)
+        or np.unique(candidates).size != candidates.size
+        or not np.isfinite(control_page_scores).all()
+        or page_rows <= 0
+    ):
+        raise ValueError("V90 residual rank evidence differs")
+    physical_pages = np.arange(page_count, dtype=np.int64)
+    control_order = np.lexsort((physical_pages, control_page_scores))
+    if page_rows == 1:
         minima = estimates[:, 0]
         seconds = minima
     else:
@@ -327,6 +357,53 @@ def residual_page_rank_scores(
     result = np.empty(page_count, dtype=np.float32)
     result[full_order] = np.arange(page_count, dtype=np.float32)
     return result
+
+
+def _residual_page_rank_scores_validated(
+    query: np.ndarray,
+    control_page_scores: np.ndarray,
+    control_artifact: CoarseToFineArtifact,
+    artifact: ResidualRowSketchArtifact,
+    *,
+    rank_limit: int,
+    validated_control_sha256: str,
+) -> np.ndarray:
+    """Rerank only registered summary candidates by their best residual row."""
+
+    candidates, estimates, _ = _residual_candidate_row_estimates(
+        query,
+        control_page_scores,
+        control_artifact,
+        artifact,
+        rank_limit=rank_limit,
+        validated_control_sha256=validated_control_sha256,
+    )
+    return _rank_scores_from_candidate_estimates(
+        candidates,
+        estimates,
+        control_page_scores,
+        page_rows=artifact.page_rows,
+    )
+
+
+def residual_page_rank_scores(
+    query: np.ndarray,
+    control_page_scores: np.ndarray,
+    control_artifact: CoarseToFineArtifact,
+    artifact: ResidualRowSketchArtifact,
+    *,
+    rank_limit: int,
+) -> np.ndarray:
+    """Authenticate, then rerank registered summary candidates by residual row."""
+
+    return _residual_page_rank_scores_validated(
+        query,
+        control_page_scores,
+        control_artifact,
+        artifact,
+        rank_limit=rank_limit,
+        validated_control_sha256=control_artifact.digest(),
+    )
 
 
 def _control_page_scores(
@@ -446,22 +523,24 @@ def evaluate_residual_sketch_pair(
     _validate_sketch(
         sketch_artifact, rows=base.shape[0], dimensions=base.shape[1]
     )
+    control_sha256 = control_artifact.digest()
     if (
         sketch_artifact.base_vectors_sha256
         != _array_sha256(base, np.dtype(np.float32))
-        or sketch_artifact.control_artifact_sha256 != control_artifact.digest()
+        or sketch_artifact.control_artifact_sha256 != control_sha256
         or sketch_artifact.page_rows != page_rows
     ):
         raise ValueError("V90 sketch binding differs")
     page_count = (base.shape[0] + page_rows - 1) // page_rows
     challenger_scores = np.vstack(
         [
-            residual_page_rank_scores(
+            _residual_page_rank_scores_validated(
                 query,
                 _control_page_scores(query, control_artifact, page_count),
                 control_artifact,
                 sketch_artifact,
                 rank_limit=wave1_rank_pages,
+                validated_control_sha256=control_sha256,
             )
             for query in queries
         ]
@@ -504,7 +583,7 @@ def evaluate_residual_sketch_pair(
             **common,
         )
         arms[name] = {
-            "artifact_sha256": control_artifact.digest(),
+            "artifact_sha256": control_sha256,
             "budgets": validate_result_budgets(
                 result,
                 wave1_page_bytes=code_page_bytes,

@@ -1378,6 +1378,8 @@ The canonical result SHA-256 is
 `71054c0d79a5ccaa371972caa0790469a668e5b76ec3ed62b1181ce594d15430`;
 the terminal SHA-256 is
 `08dd444bd1eccec4beb75d556bbdcc8e9ddb89e8dc8c18544abb0267284b727d`.
+That authenticated canonical result records residual-sketch SHA-256
+`21aae14867749ac8dfed26043f8cb225024d4928bb81db32d488dd0c23a5a3bd`.
 
 V90 kept the registered two-summary PQ192 control, its top-1,024 candidate
 fence, the reciprocal-rank physical planner, resident SQ8 delta, exact rerank,

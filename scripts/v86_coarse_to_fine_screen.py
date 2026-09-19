@@ -475,6 +475,7 @@ def evaluate_coarse_to_fine(
     code_page_bytes: int | None = None,
     data_page_bytes: int | None = None,
     wave1_page_scores_by_query: np.ndarray | None = None,
+    wave1_page_weights_by_query: np.ndarray | None = None,
     wave1_page_evidence_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one fixed two-wave routing design with a resident delta."""
@@ -544,8 +545,22 @@ def evaluate_coarse_to_fine(
             or not np.isfinite(wave1_page_scores_by_query).all()
         ):
             raise ValueError("coarse-to-fine page evidence differs")
-    if (wave1_page_scores_by_query is None) != (
-        wave1_page_evidence_sha256 is None
+    if wave1_page_weights_by_query is not None:
+        raw_weights = np.asarray(wave1_page_weights_by_query)
+        if (
+            raw_weights.shape != (queries.shape[0], page_count)
+            or raw_weights.dtype.kind not in "iu"
+            or (raw_weights.dtype.kind == "i" and np.any(raw_weights < 0))
+            or np.any(raw_weights.astype(np.float64).sum(axis=1) > 2**53)
+        ):
+            raise ValueError("coarse-to-fine page evidence differs")
+        wave1_page_weights_by_query = raw_weights.astype(np.uint64, copy=False)
+    has_injected_evidence = (
+        wave1_page_scores_by_query is not None
+        or wave1_page_weights_by_query is not None
+    )
+    if has_injected_evidence != (
+        wave1_page_evidence_sha256 is not None
     ) or (
         wave1_page_evidence_sha256 is not None
         and (
@@ -576,7 +591,7 @@ def evaluate_coarse_to_fine(
     base_truth_hits = 0
     delta_truth_hits = 0
     for query_index, query in enumerate(queries):
-        if wave1_page_scores_by_query is None:
+        if wave1_page_scores_by_query is None and wave1_page_weights_by_query is None:
             summary_scores = _adc_scores(
                 query, artifact.summary_codes, list(artifact.books)
             )
@@ -584,18 +599,42 @@ def evaluate_coarse_to_fine(
                 page_count, summaries_per_page
             ).min(axis=1)
         else:
-            page_scores = wave1_page_scores_by_query[query_index]
-        page_order = np.lexsort((np.arange(page_count), page_scores))
+            if wave1_page_scores_by_query is not None:
+                page_scores = wave1_page_scores_by_query[query_index]
+            else:
+                page_scores = np.zeros(page_count, dtype=np.float32)
+        if wave1_page_weights_by_query is not None:
+            page_weights = wave1_page_weights_by_query[query_index]
+        if wave1_page_scores_by_query is not None:
+            page_order = np.lexsort((np.arange(page_count), page_scores))
+        elif wave1_page_weights_by_query is None:
+            page_order = np.lexsort((np.arange(page_count), page_scores))
+        else:
+            page_order = np.lexsort(
+                (
+                    np.arange(page_count),
+                    np.iinfo(np.uint64).max - page_weights,
+                )
+            )
         page_ranks = np.empty(page_count, dtype=np.int64)
         page_ranks[page_order] = np.arange(page_count, dtype=np.int64)
-        wave1_pages, wave1_ranges = plan_ranked_pages(
-            page_scores,
-            rank_limit=wave1_rank_pages,
-            max_span_pages=wave1_max_span_pages,
-            max_ranges=wave1_max_ranges,
-            objective=wave1_objective,
-            calibrated_rank_weights=wave1_rank_weights,
-        )
+        if wave1_page_weights_by_query is None:
+            wave1_pages, wave1_ranges = plan_ranked_pages(
+                page_scores,
+                rank_limit=wave1_rank_pages,
+                max_span_pages=wave1_max_span_pages,
+                max_ranges=wave1_max_ranges,
+                objective=wave1_objective,
+                calibrated_rank_weights=wave1_rank_weights,
+            )
+        else:
+            if wave1_rank_weights is not None:
+                raise ValueError("coarse-to-fine page evidence differs")
+            wave1_pages, wave1_ranges = _select_optimal_weighted_pages(
+                page_weights,
+                max_span_pages=min(wave1_max_span_pages, page_count),
+                max_ranges=wave1_max_ranges,
+            )
         selected_page_ranks = page_ranks[wave1_pages]
         selected_ranked_page_ranks = selected_page_ranks[
             selected_page_ranks < wave1_rank_pages
@@ -738,7 +777,11 @@ def evaluate_coarse_to_fine(
         "page_sq8_recall_ppm": round(page_sq8_hits * 1_000_000 / denominator),
         "samples": samples,
         "schema": "borsuk-v86-coarse-to-fine-screen-v1",
-        "wave1_objective": wave1_objective,
+        "wave1_objective": (
+            "direct-page-weight"
+            if wave1_page_weights_by_query is not None
+            else wave1_objective
+        ),
     }
     if wave1_page_evidence_sha256 is not None:
         result["wave1_page_evidence_sha256"] = wave1_page_evidence_sha256
