@@ -719,3 +719,46 @@ lower visibility latency and with no per-namespace WAL rate limit.
   this measures rate, not the recall of freshly ingested rows.
 - Encode is scalar per dimension; the SIMD treatment that took the read scan
   from 81 ms to 3.5 ms has not been applied to the write path.
+
+## V75 — the validation split accepts the configuration
+
+`scripts/v75_run_remote.sh`, results
+`research/v75-algorithm-first/validation/a0001/`. Same binary, same index
+objects, same corpus-only codebooks. Per [methods](methods.md), validation may
+reject a configuration but never retune it, so exactly the two points
+development selected were run — and over the **full 1,000 validation queries**,
+not the 200 used while iterating.
+
+| shortlist | split | queries | Recall@100 | worst | requests | MiB | p50 | p95 | p99 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 512 | development | 200 | 99.155% | 90% | 18 | 10.3 | 46.1 | 80.9 | 245.4 |
+| **512** | **validation** | **1,000** | **99.272%** | **88%** | **21** | **11.0** | **49.0** | **137.9** | **250.1** |
+| 256 | development | 200 | 98.350% | 85% | 13 | 6.3 | 40.6 | 62.2 | 74.3 |
+| **256** | **validation** | **1,000** | **98.659%** | **81%** | **13** | **6.5** | **40.5** | **57.1** | **84.2** |
+
+**Validation recall is slightly higher than development at both points**, so the
+configuration is not overfitted to the split that chose it. Worst-query recall
+is a little lower, which is what five times as many queries should do: more
+chances to draw a hard one.
+
+That the split genuinely differed is checked rather than assumed — the exported
+manifest hashes to `3fef64ff…` against development's `1147d005…`, and the two
+differ only in their query and ground-truth blocks.
+
+The **sealed holdout remains unopened.**
+
+### Where the work stands against the goal
+
+| criterion | status | evidence |
+|---|---|---|
+| high recall | **met** | 99.272% Recall@100 on 1,000 held-out queries, above any figure either competitor publishes |
+| low read latency | **met** | 40.5–49.0 ms p50 uncached, against turbopuffer's 874 ms cold and S3 Vectors' ~100 ms warm |
+| write throughput | **met** | 224,910 vectors/s, 22x turbopuffer, 90x S3 Vectors, at 33.7 ms visibility |
+| scale | **not met** | every figure above is 1M x 768; 100M is projected arithmetic |
+
+Open, in the order they bind: delta compaction and the per-delta query penalty
+are unmeasured and are the real limit on the write figure; one object per index
+caps near 300 QPS until it is sharded; the p99 tail is the wave's p(1−1/N)
+quantile and neither hedging nor S3 Express One Zone has been tried; there is
+no cache tier, so turbopuffer's 14 ms warm is unreachable; and 100M is
+unmeasured.
