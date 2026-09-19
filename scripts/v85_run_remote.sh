@@ -120,13 +120,18 @@ artifact_args() {
   variant=$1
   prefix=$2
   for spec in \
-    "generation generation.json" "router router.arrow" "mutations mutations.arrow" \
-    "base-run base-000.arrow" "delta-run delta-000.arrow"; do
+    "generation generation.json" "router router.arrow" "mutations mutations.arrow"; do
     set -- $spec
     role=$1
     name=$2
     printf -- '--%s %q %q %s %s ' "$role" "$root/$variant/$name" "$prefix/$name" \
       "$(sha256sum "$variant/$name" | cut -d' ' -f1)" "$(stat -c %s "$variant/$name")"
+  done
+  for path in "$variant"/base-*.arrow "$variant"/delta-*.arrow; do
+    [ -f "$path" ] || continue
+    name=$(basename "$path")
+    printf -- '--run %q %q %s %s ' "$root/$path" "$prefix/$name" \
+      "$(sha256sum "$path" | cut -d' ' -f1)" "$(stat -c %s "$path")"
   done
   printf -- '--queries %q %q %s %s ' "$root/queries.parquet" "$V85_OUTPUT_URI/inputs/queries.parquet" \
     "$(sha256sum queries.parquet | cut -d' ' -f1)" "$(stat -c %s queries.parquet)"

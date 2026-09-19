@@ -48,30 +48,25 @@ struct LocalArtifactIdentity {
     bytes: u64,
 }
 
-/// The seven explicit files required by the one-run V85 screen.
+/// Explicit authority plus every immutable run required by one V85 screen.
 #[derive(Clone, Debug)]
 struct LocalArtifactRequest {
     generation: LocalArtifactIdentity,
     router: LocalArtifactIdentity,
     mutations: LocalArtifactIdentity,
-    base_run: LocalArtifactIdentity,
-    delta_run: LocalArtifactIdentity,
+    runs: Vec<LocalArtifactIdentity>,
     queries: LocalArtifactIdentity,
     truth: LocalArtifactIdentity,
     page_budget: usize,
 }
 
 impl LocalArtifactRequest {
-    fn identities(&self) -> [&LocalArtifactIdentity; 7] {
-        [
-            &self.generation,
-            &self.router,
-            &self.mutations,
-            &self.base_run,
-            &self.delta_run,
-            &self.queries,
-            &self.truth,
-        ]
+    fn identities(&self) -> Vec<&LocalArtifactIdentity> {
+        let mut identities = Vec::with_capacity(5 + self.runs.len());
+        identities.extend([&self.generation, &self.router, &self.mutations]);
+        identities.extend(self.runs.iter());
+        identities.extend([&self.queries, &self.truth]);
+        identities
     }
 
     #[cfg(test)]
@@ -80,29 +75,33 @@ impl LocalArtifactRequest {
             0 => &mut self.generation,
             1 => &mut self.router,
             2 => &mut self.mutations,
-            3 => &mut self.base_run,
-            4 => &mut self.delta_run,
-            5 => &mut self.queries,
-            6 => &mut self.truth,
+            index if index < 3 + self.runs.len() => &mut self.runs[index - 3],
+            index if index == 3 + self.runs.len() => &mut self.queries,
+            index if index == 4 + self.runs.len() => &mut self.truth,
             _ => panic!("artifact identity index differs"),
         }
     }
 }
 
 fn authenticate_local_artifacts(request: &LocalArtifactRequest) -> ReaderResult<Vec<Vec<u8>>> {
-    const ROLES: [&str; 7] = [
-        "generation",
-        "router",
-        "mutations",
-        "base-run",
-        "delta-run",
-        "queries",
-        "truth",
-    ];
-    let mut bodies = Vec::with_capacity(ROLES.len());
-    for (identity, expected_role) in request.identities().into_iter().zip(ROLES) {
+    if request.runs.is_empty() {
+        return Err(ReaderError::authority("artifact runs are empty"));
+    }
+    let identities = request.identities();
+    let mut bodies = Vec::with_capacity(identities.len());
+    let mut uris = std::collections::BTreeSet::new();
+    for (index, identity) in identities.into_iter().enumerate() {
+        let expected_role = match index {
+            0 => "generation",
+            1 => "router",
+            2 => "mutations",
+            index if index < 3 + request.runs.len() => "run",
+            index if index == 3 + request.runs.len() => "queries",
+            _ => "truth",
+        };
         if identity.role != expected_role
             || !identity.uri.starts_with("s3://")
+            || !uris.insert(identity.uri.as_str())
             || identity.sha256.len() != 64
             || !identity
                 .sha256
@@ -266,6 +265,7 @@ struct QuerySample {
     requests: u32,
     bytes: u64,
     latency_ns: u64,
+    result_ids: Vec<i64>,
 }
 
 #[derive(Serialize)]
@@ -277,6 +277,7 @@ struct CanonicalSample {
     query: u32,
     recall_ppm: u64,
     requests: u32,
+    result_ids: Vec<i64>,
 }
 
 #[derive(Serialize)]
@@ -303,6 +304,13 @@ fn canonical_result_bytes(samples: &[QuerySample], generation: u64) -> ReaderRes
         if usize::try_from(sample.query).ok() != Some(index)
             || sample.neighbors == 0
             || sample.hits > sample.neighbors
+            || sample.result_ids.len() != usize::try_from(sample.neighbors).unwrap_or(usize::MAX)
+            || sample
+                .result_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != sample.result_ids.len()
             || sample.requests == 0
             || sample.latency_ns == 0
         {
@@ -324,6 +332,7 @@ fn canonical_result_bytes(samples: &[QuerySample], generation: u64) -> ReaderRes
             query: sample.query,
             recall_ppm: recall,
             requests: sample.requests,
+            result_ids: sample.result_ids.clone(),
         });
     }
     let result = CanonicalResult {
@@ -652,21 +661,29 @@ async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> 
         .map_err(|error| ReaderError::authority(format!("generation differs: {error}")))?;
     if !artifact_matches(generation.router_identity(), &request.router)
         || !artifact_matches(generation.mutation_directory_identity(), &request.mutations)
-        || generation.runs().len() != 2
-        || generation.runs()[0].kind() != "base"
-        || generation.runs()[1].kind() != "delta"
-        || !artifact_matches(generation.runs()[0].object_identity(), &request.base_run)
-        || !artifact_matches(generation.runs()[1].object_identity(), &request.delta_run)
+        || generation.runs().len() != request.runs.len()
     {
         return Err(ReaderError::authority("generation object binding differs"));
+    }
+    for run in generation.runs() {
+        let matches = request
+            .runs
+            .iter()
+            .filter(|identity| artifact_matches(run.object_identity(), identity))
+            .count();
+        if matches != 1 {
+            return Err(ReaderError::authority("generation run binding differs"));
+        }
     }
     let dimensions = i32::try_from(generation.dimensions())
         .map_err(|_| ReaderError::authority("generation dimensions are not addressable"))?;
     let router = read_router(&bodies[1], dimensions)?;
     let mutations = read_mutations(&bodies[2])?;
-    let queries = read_queries(&bodies[5], dimensions)?;
+    let queries_index = 3 + request.runs.len();
+    let truth_index = queries_index + 1;
+    let queries = read_queries(&bodies[queries_index], dimensions)?;
     let truth = read_truth(
-        &bodies[6],
+        &bodies[truth_index],
         i32::try_from(generation.neighbors())
             .map_err(|_| ReaderError::authority("neighbor count is not addressable"))?,
     )?;
@@ -675,20 +692,15 @@ async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> 
     }
 
     let store = object_store::memory::InMemory::new();
-    store
-        .put(
-            &object_path(&request.base_run.uri)?,
-            bytes::Bytes::copy_from_slice(&bodies[3]).into(),
-        )
-        .await
-        .map_err(|error| ReaderError::authority(format!("base local store failed: {error}")))?;
-    store
-        .put(
-            &object_path(&request.delta_run.uri)?,
-            bytes::Bytes::copy_from_slice(&bodies[4]).into(),
-        )
-        .await
-        .map_err(|error| ReaderError::authority(format!("delta local store failed: {error}")))?;
+    for (index, run) in request.runs.iter().enumerate() {
+        store
+            .put(
+                &object_path(&run.uri)?,
+                bytes::Bytes::copy_from_slice(&bodies[3 + index]).into(),
+            )
+            .await
+            .map_err(|error| ReaderError::authority(format!("run local store failed: {error}")))?;
+    }
 
     let run_kinds = generation
         .runs()
@@ -765,6 +777,7 @@ async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> 
                 .map_err(|_| ReaderError::authority("request count is not addressable"))?,
             bytes: reads.iter().map(|read| read.bytes).sum(),
             latency_ns: u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            result_ids: merged.iter().map(|candidate| candidate.id).collect(),
         });
     }
     canonical_result_bytes(&samples, generation.generation())
@@ -774,6 +787,7 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<LocalArtifactRequest> {
     let mut iterator = arguments.into_iter();
     let _program = iterator.next();
     let mut identities = BTreeMap::<String, LocalArtifactIdentity>::new();
+    let mut runs = Vec::<LocalArtifactIdentity>::new();
     let mut page_budget = None;
     while let Some(flag) = iterator.next() {
         if flag == "--page-budget" {
@@ -792,9 +806,35 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<LocalArtifactRequest> {
         let role = flag
             .strip_prefix("--")
             .ok_or_else(|| ReaderError::authority("CLI flag differs"))?;
+        if role == "run" {
+            let path = PathBuf::from(
+                iterator
+                    .next()
+                    .ok_or_else(|| ReaderError::authority("artifact path is missing"))?,
+            );
+            let uri = iterator
+                .next()
+                .ok_or_else(|| ReaderError::authority("artifact URI is missing"))?;
+            let sha256 = iterator
+                .next()
+                .ok_or_else(|| ReaderError::authority("artifact SHA-256 is missing"))?;
+            let bytes = iterator
+                .next()
+                .ok_or_else(|| ReaderError::authority("artifact length is missing"))?
+                .parse::<u64>()
+                .map_err(|_| ReaderError::authority("artifact length differs"))?;
+            runs.push(LocalArtifactIdentity {
+                role: role.to_string(),
+                path,
+                uri,
+                sha256,
+                bytes,
+            });
+            continue;
+        }
         if !matches!(
             role,
-            "generation" | "router" | "mutations" | "base-run" | "delta-run" | "queries" | "truth"
+            "generation" | "router" | "mutations" | "queries" | "truth"
         ) || identities.contains_key(role)
         {
             return Err(ReaderError::authority("artifact CLI role differs"));
@@ -835,8 +875,7 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<LocalArtifactRequest> {
         generation: take("generation")?,
         router: take("router")?,
         mutations: take("mutations")?,
-        base_run: take("base-run")?,
-        delta_run: take("delta-run")?,
+        runs,
         queries: take("queries")?,
         truth: take("truth")?,
         page_budget: page_budget.ok_or_else(|| ReaderError::authority("page budget is missing"))?,
@@ -895,12 +934,15 @@ mod tests {
     }
 
     fn request(root: &TempDir) -> LocalArtifactRequest {
+        let mut base_run = identity(root, "base-run", b"base");
+        base_run.role = "run".into();
+        let mut delta_run = identity(root, "delta-run", b"delta");
+        delta_run.role = "run".into();
         LocalArtifactRequest {
             generation: identity(root, "generation", b"generation\n"),
             router: identity(root, "router", b"router"),
             mutations: identity(root, "mutations", b"mutations"),
-            base_run: identity(root, "base-run", b"base"),
-            delta_run: identity(root, "delta-run", b"delta"),
+            runs: vec![base_run, delta_run],
             queries: identity(root, "queries", b"queries"),
             truth: identity(root, "truth", b"truth"),
             page_budget: 2,
@@ -914,7 +956,7 @@ mod tests {
         let authenticated = authenticate_local_artifacts(&baseline).unwrap();
         assert_eq!(authenticated.len(), 7);
 
-        for role in 0..7 {
+        for role in 0..baseline.identities().len() {
             let mut drift = baseline.clone();
             drift.identity_mut(role).sha256 = "0".repeat(64);
             assert!(authenticate_local_artifacts(&drift).is_err(), "role {role}");
@@ -1041,6 +1083,7 @@ mod tests {
                 requests: 3,
                 bytes: 120,
                 latency_ns: 11,
+                result_ids: vec![1, 2],
             },
             QuerySample {
                 query: 1,
@@ -1049,11 +1092,14 @@ mod tests {
                 requests: 4,
                 bytes: 160,
                 latency_ns: 17,
+                result_ids: vec![3, 4],
             },
         ];
         let bytes = canonical_result_bytes(&samples, 7).unwrap();
         assert!(bytes.ends_with(b"\n"));
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["samples"][0]["result_ids"], serde_json::json!([1, 2]));
+        assert_eq!(value["samples"][1]["result_ids"], serde_json::json!([3, 4]));
         assert_eq!(value["aggregate_recall_ppm"], 750_000);
         assert_eq!(value["worst_recall_ppm"], 500_000);
         assert_eq!(value["total_requests"], 7);
@@ -1103,8 +1149,6 @@ mod tests {
         base.extend_from_slice(&base_one);
         let delta_zero = page_stream(&[5], &[2], &[0], &[0.95, 0.0], 2);
         let delta_one = page_stream(&[6], &[2], &[0], &[0.0, 0.95], 2);
-        let mut delta = delta_zero.clone();
-        delta.extend_from_slice(&delta_one);
 
         let router_schema = Arc::new(Schema::new(vec![
             Field::new("cell", DataType::UInt32, false),
@@ -1145,8 +1189,8 @@ mod tests {
                     Arc::new(Int64Array::from(vec![5, 6])),
                     Arc::new(UInt64Array::from(vec![2, 2])),
                     Arc::new(UInt8Array::from(vec![0, 0])),
-                    Arc::new(UInt32Array::from(vec![1, 1])),
-                    Arc::new(UInt32Array::from(vec![0, 1])),
+                    Arc::new(UInt32Array::from(vec![1, 2])),
+                    Arc::new(UInt32Array::from(vec![0, 0])),
                 ],
             )
             .unwrap(),
@@ -1201,7 +1245,8 @@ mod tests {
         let router_identity = identity(root, "router", &router);
         let mutations_identity = identity(root, "mutations", &mutations);
         let base_identity = identity(root, "base-run", &base);
-        let delta_identity = identity(root, "delta-run", &delta);
+        let delta_zero_identity = identity(root, "delta-run-0", &delta_zero);
+        let delta_one_identity = identity(root, "delta-run-1", &delta_one);
         let queries_identity = identity(root, "queries", &queries);
         let truth_identity = identity(root, "truth", &truth);
         let object = |artifact: &LocalArtifactIdentity| serde_json::json!({"bytes": artifact.bytes, "sha256": artifact.sha256, "uri": artifact.uri});
@@ -1219,22 +1264,29 @@ mod tests {
                     {"bytes": base_zero.len(), "offset": 0, "page": 0, "rows": 2},
                     {"bytes": base_one.len(), "offset": base_zero.len(), "page": 1, "rows": 2}
                 ], "run_id": 0},
-                {"generation": 1, "kind": "delta", "object": object(&delta_identity), "pages": [
-                    {"bytes": delta_zero.len(), "offset": 0, "page": 0, "rows": 1},
-                    {"bytes": delta_one.len(), "offset": delta_zero.len(), "page": 1, "rows": 1}
-                ], "run_id": 1}
+                {"generation": 1, "kind": "delta", "object": object(&delta_zero_identity), "pages": [
+                    {"bytes": delta_zero.len(), "offset": 0, "page": 0, "rows": 1}
+                ], "run_id": 1},
+                {"generation": 1, "kind": "delta", "object": object(&delta_one_identity), "pages": [
+                    {"bytes": delta_one.len(), "offset": 0, "page": 1, "rows": 1}
+                ], "run_id": 2}
             ],
             "schema": "borsuk-v85-generation-v1",
             "source_split": "synthetic-4-base-2-delta"
         });
         let mut manifest_body = serde_json::to_vec(&manifest).unwrap();
         manifest_body.push(b'\n');
+        let mut base_identity = base_identity;
+        base_identity.role = "run".into();
+        let mut delta_zero_identity = delta_zero_identity;
+        delta_zero_identity.role = "run".into();
+        let mut delta_one_identity = delta_one_identity;
+        delta_one_identity.role = "run".into();
         LocalArtifactRequest {
             generation: identity(root, "generation", &manifest_body),
             router: router_identity,
             mutations: mutations_identity,
-            base_run: base_identity,
-            delta_run: delta_identity,
+            runs: vec![base_identity, delta_zero_identity, delta_one_identity],
             queries: queries_identity,
             truth: truth_identity,
             page_budget: 2,
@@ -1256,19 +1308,20 @@ mod tests {
     #[test]
     fn cli_requires_seven_explicit_artifact_identities_and_no_storage_flags() {
         let mut arguments = vec!["v85_delta_reader".to_string()];
-        for role in [
-            "generation",
-            "router",
-            "mutations",
-            "base-run",
-            "delta-run",
-            "queries",
-            "truth",
-        ] {
+        for role in ["generation", "router", "mutations", "queries", "truth"] {
             arguments.extend([
                 format!("--{role}"),
                 format!("/tmp/{role}"),
                 format!("s3://fixture/{role}"),
+                "1".repeat(64),
+                "10".to_string(),
+            ]);
+        }
+        for run in ["base-run", "delta-run"] {
+            arguments.extend([
+                "--run".to_string(),
+                format!("/tmp/{run}"),
+                format!("s3://fixture/{run}"),
                 "1".repeat(64),
                 "10".to_string(),
             ]);
@@ -1280,5 +1333,35 @@ mod tests {
 
         arguments.extend(["--bucket".into(), "forbidden".into()]);
         assert!(parse_args(arguments).is_err());
+    }
+
+    #[test]
+    fn cli_accepts_repeated_explicit_runs_for_fragmented_and_compacted_generations() {
+        // Break caught: the reader hard-codes one base plus one delta object and
+        // therefore cannot measure 10/100-run snapshots before compaction.
+        let mut arguments = vec!["v85_delta_reader".to_string()];
+        for role in ["generation", "router", "mutations", "queries", "truth"] {
+            arguments.extend([
+                format!("--{role}"),
+                format!("/tmp/{role}"),
+                format!("s3://fixture/{role}"),
+                "1".repeat(64),
+                "10".to_string(),
+            ]);
+        }
+        for run in ["base-000", "delta-000", "delta-001"] {
+            arguments.extend([
+                "--run".to_string(),
+                format!("/tmp/{run}.arrow"),
+                format!("s3://fixture/{run}.arrow"),
+                "2".repeat(64),
+                "20".to_string(),
+            ]);
+        }
+        arguments.extend(["--page-budget".into(), "2".into()]);
+
+        let request = parse_args(arguments).unwrap();
+        assert_eq!(request.runs.len(), 3);
+        assert_eq!(request.identities().len(), 8);
     }
 }

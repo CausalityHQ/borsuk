@@ -7,6 +7,7 @@ use object_store::{
     ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion, path::Path as ObjectPath,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const SCHEMA: &str = "borsuk-v85-generation-v1";
 
@@ -397,6 +398,157 @@ pub async fn publish_head(
         .map_err(|error| DeltaError::authority(format!("generation head publish failed: {error}")))
 }
 
+/// One create-only object written before a compacted generation becomes visible.
+#[derive(Clone, Debug)]
+pub struct PublicationObject {
+    /// Exact immutable object URI registered by the generation.
+    pub uri: String,
+    /// Object-store path of the immutable payload.
+    pub path: ObjectPath,
+    /// Complete authenticated payload bytes.
+    pub bytes: Bytes,
+}
+
+/// Atomic publication plan for one already-validated compacted generation.
+#[derive(Clone, Debug)]
+pub struct CompactedPublication {
+    /// Immutable run, directory, router, and receipt objects.
+    pub immutable: Vec<PublicationObject>,
+    /// Canonical generation document written after all immutable objects.
+    pub generation: PublicationObject,
+    /// SHA-256 of the generation that the new generation declares as prior.
+    pub previous_generation_sha256: String,
+    /// Conditional mutable head path.
+    pub head_path: ObjectPath,
+    /// Head payload binding the new generation.
+    pub head_bytes: Bytes,
+}
+
+/// Testable crash boundary in the publication state machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicationStop {
+    /// Stop after every immutable payload is durable.
+    AfterImmutable,
+    /// Stop after the generation document is durable.
+    AfterGeneration,
+    /// Stop immediately before the conditional head update.
+    BeforeHead,
+    /// Stop after the conditional head update has committed.
+    AfterHead,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GenerationHead {
+    generation: u64,
+    generation_path: String,
+    generation_sha256: String,
+    schema: String,
+}
+
+/// Publishes immutable compaction outputs before one conditional HEAD update.
+pub async fn publish_compacted_generation(
+    store: &dyn ObjectStore,
+    publication: &CompactedPublication,
+    expected_head: UpdateVersion,
+    stop: Option<PublicationStop>,
+) -> Result<UpdateVersion, DeltaError> {
+    validate_publication(publication)?;
+    for object in &publication.immutable {
+        put_create_only(store, object).await?;
+    }
+    if stop == Some(PublicationStop::AfterImmutable) {
+        return Err(DeltaError::authority("injected stop after immutable PUT"));
+    }
+
+    put_create_only(store, &publication.generation).await?;
+    if stop == Some(PublicationStop::AfterGeneration) {
+        return Err(DeltaError::authority("injected stop after generation PUT"));
+    }
+    if stop == Some(PublicationStop::BeforeHead) {
+        return Err(DeltaError::authority("injected stop before head CAS"));
+    }
+
+    let version = publish_head(
+        store,
+        &publication.head_path,
+        publication.head_bytes.clone(),
+        Some(expected_head),
+    )
+    .await?;
+    if stop == Some(PublicationStop::AfterHead) {
+        return Err(DeltaError::authority("injected stop after head CAS"));
+    }
+    Ok(version)
+}
+
+fn validate_publication(publication: &CompactedPublication) -> Result<(), DeltaError> {
+    let manifest = GenerationManifest::from_canonical_bytes(&publication.generation.bytes)?;
+    if manifest.authority.previous_generation_sha256 != publication.previous_generation_sha256 {
+        return Err(DeltaError::authority(
+            "publication previous generation binding differs",
+        ));
+    }
+    let generation_sha256 = format!("{:x}", Sha256::digest(&publication.generation.bytes));
+    let head = GenerationHead {
+        generation: manifest.generation(),
+        generation_path: publication.generation.path.to_string(),
+        generation_sha256,
+        schema: "borsuk-v85-head-v1".into(),
+    };
+    let mut expected_head = serde_json::to_vec(&head)
+        .map_err(|error| DeltaError::authority(format!("head serialization failed: {error}")))?;
+    expected_head.push(b'\n');
+    if publication.head_bytes.as_ref() != expected_head {
+        return Err(DeltaError::authority("publication head binding differs"));
+    }
+
+    let mut required = std::collections::BTreeSet::<(&str, &str, u64)>::new();
+    let mutation = &manifest.authority.mutation_directory;
+    required.insert((&mutation.uri, &mutation.sha256, mutation.bytes));
+    for run in &manifest.authority.runs {
+        if run.generation == manifest.generation() {
+            required.insert((&run.object.uri, &run.object.sha256, run.object.bytes));
+        }
+    }
+    let mut supplied = std::collections::BTreeSet::new();
+    for object in &publication.immutable {
+        let sha256 = format!("{:x}", Sha256::digest(&object.bytes));
+        let bytes = u64::try_from(object.bytes.len())
+            .map_err(|_| DeltaError::authority("publication object length differs"))?;
+        if !supplied.insert((object.uri.as_str(), sha256, bytes)) {
+            return Err(DeltaError::authority("publication object is duplicated"));
+        }
+    }
+    if supplied
+        != required
+            .into_iter()
+            .map(|(uri, sha256, bytes)| (uri, sha256.to_string(), bytes))
+            .collect()
+    {
+        return Err(DeltaError::authority("publication object binding differs"));
+    }
+    Ok(())
+}
+
+async fn put_create_only(
+    store: &dyn ObjectStore,
+    object: &PublicationObject,
+) -> Result<(), DeltaError> {
+    store
+        .put_opts(
+            &object.path,
+            PutPayload::from(object.bytes.clone()),
+            PutOptions {
+                mode: PutMode::Create,
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| DeltaError::authority(format!("immutable publish failed: {error}")))
+}
+
 /// One exact byte range required from an immutable run for a selected page.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageRead {
@@ -563,15 +715,77 @@ fn retain_best_physical_copy(visible: &mut BTreeMap<i64, Candidate>, candidate: 
 mod tests {
     use bytes::Bytes;
     use object_store::{ObjectStoreExt, UpdateVersion, memory::InMemory, path::Path};
+    use sha2::Digest as _;
 
     use super::{
-        Candidate, GenerationManifest, MutationDirectory, MutationRecord, MutationState, PageRead,
-        SCHEMA, Visibility, merge_candidates, plan_page_reads, publish_head, resolve_visibility,
+        Candidate, CompactedPublication, GenerationManifest, MutationDirectory, MutationRecord,
+        MutationState, PageRead, PublicationObject, PublicationStop, SCHEMA, Visibility,
+        merge_candidates, plan_page_reads, publish_compacted_generation, publish_head,
+        resolve_visibility,
     };
 
     const ONE_DIGEST: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const TWO_DIGEST: &str = "2222222222222222222222222222222222222222222222222222222222222222";
     const A_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn digest(bytes: &[u8]) -> String {
+        format!("{:x}", sha2::Sha256::digest(bytes))
+    }
+
+    fn compacted_publication(head_path: Path) -> CompactedPublication {
+        let mutation = Bytes::from_static(b"mutations");
+        let delta = Bytes::from_static(b"delta");
+        let generation_path = Path::from("index/g8/generation.json");
+        let value = serde_json::json!({
+            "base_horizon": 900_000,
+            "dimensions": 2,
+            "generation": 8,
+            "mutation_directory": {"bytes": mutation.len(), "sha256": digest(&mutation), "uri": "s3://bucket/index/g8/mutations.arrow"},
+            "neighbors": 1,
+            "page_rows": 256,
+            "previous_generation_sha256": ONE_DIGEST,
+            "router": {"bytes": 10, "sha256": TWO_DIGEST, "uri": "s3://bucket/index/g0/router.arrow"},
+            "runs": [
+                {"generation": 0, "kind": "base", "object": {"bytes": 10, "sha256": ONE_DIGEST, "uri": "s3://bucket/index/g0/base.arrow"}, "pages": [{"bytes": 10, "offset": 0, "page": 0, "rows": 1}], "run_id": 0},
+                {"generation": 8, "kind": "delta", "object": {"bytes": delta.len(), "sha256": digest(&delta), "uri": "s3://bucket/index/g8/delta-l1.arrow"}, "pages": [{"bytes": delta.len(), "offset": 0, "page": 0, "rows": 1}], "run_id": 1}
+            ],
+            "schema": SCHEMA,
+            "source_split": "fixture"
+        });
+        let mut generation = serde_json::to_vec(&value).unwrap();
+        generation.push(b'\n');
+        let generation_sha256 = digest(&generation);
+        let mut head = serde_json::to_vec(&serde_json::json!({
+            "generation": 8,
+            "generation_path": generation_path.to_string(),
+            "generation_sha256": generation_sha256,
+            "schema": "borsuk-v85-head-v1"
+        }))
+        .unwrap();
+        head.push(b'\n');
+        CompactedPublication {
+            immutable: vec![
+                PublicationObject {
+                    uri: "s3://bucket/index/g8/mutations.arrow".into(),
+                    path: Path::from("index/g8/mutations.arrow"),
+                    bytes: mutation,
+                },
+                PublicationObject {
+                    uri: "s3://bucket/index/g8/delta-l1.arrow".into(),
+                    path: Path::from("index/g8/delta-l1.arrow"),
+                    bytes: delta,
+                },
+            ],
+            generation: PublicationObject {
+                uri: "s3://bucket/index/g8/generation.json".into(),
+                path: generation_path,
+                bytes: Bytes::from(generation),
+            },
+            previous_generation_sha256: ONE_DIGEST.into(),
+            head_path,
+            head_bytes: Bytes::from(head),
+        }
+    }
 
     fn canonical_manifest() -> Vec<u8> {
         format!(
@@ -745,6 +959,97 @@ mod tests {
         assert_eq!(
             store.get(&path).await.unwrap().bytes().await.unwrap(),
             "second\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn compacted_generation_crash_boundaries_reopen_one_complete_snapshot() {
+        // Break caught: publication advances HEAD before every immutable object and
+        // generation document are durable, exposing a mixture after a crash.
+        for (stop, head_advanced) in [
+            (PublicationStop::AfterImmutable, false),
+            (PublicationStop::AfterGeneration, false),
+            (PublicationStop::BeforeHead, false),
+            (PublicationStop::AfterHead, true),
+        ] {
+            let store = InMemory::new();
+            let head = Path::from("index/HEAD.json");
+            let prior = publish_head(&store, &head, Bytes::from_static(b"old\n"), None)
+                .await
+                .unwrap();
+            let publication = compacted_publication(head.clone());
+
+            assert!(
+                publish_compacted_generation(&store, &publication, prior, Some(stop))
+                    .await
+                    .is_err()
+            );
+            let expected_head = if head_advanced {
+                publication.head_bytes.as_ref()
+            } else {
+                b"old\n".as_slice()
+            };
+            assert_eq!(
+                store.get(&head).await.unwrap().bytes().await.unwrap(),
+                expected_head
+            );
+            if head_advanced {
+                assert_eq!(
+                    store
+                        .get(&Path::from("index/g8/delta-l1.arrow"))
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap(),
+                    "delta"
+                );
+                assert_eq!(
+                    store
+                        .get(&Path::from("index/g8/generation.json"))
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap(),
+                    publication.generation.bytes
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn compacted_publication_rejects_unbound_generation_and_head() {
+        // Break caught: callers can CAS HEAD to arbitrary bytes unrelated to the
+        // generation document or immutable objects they just uploaded.
+        let store = InMemory::new();
+        let head = Path::from("index/HEAD.json");
+        let prior = publish_head(&store, &head, Bytes::from_static(b"old\n"), None)
+            .await
+            .unwrap();
+        let publication = CompactedPublication {
+            immutable: vec![PublicationObject {
+                uri: "s3://bucket/index/g8/delta-l1.arrow".into(),
+                path: Path::from("index/g8/delta-l1.arrow"),
+                bytes: Bytes::from_static(b"delta"),
+            }],
+            generation: PublicationObject {
+                uri: "s3://bucket/index/g8/generation.json".into(),
+                path: Path::from("index/g8/generation.json"),
+                bytes: Bytes::from_static(b"not-a-generation\n"),
+            },
+            previous_generation_sha256: ONE_DIGEST.into(),
+            head_path: head.clone(),
+            head_bytes: Bytes::from_static(b"unbound-head\n"),
+        };
+        assert!(
+            publish_compacted_generation(&store, &publication, prior, None)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store.get(&head).await.unwrap().bytes().await.unwrap(),
+            "old\n"
         );
     }
 

@@ -18,6 +18,7 @@ import pyarrow.parquet as pq
 
 SCHEMA = "borsuk-v85-generation-v1"
 RECEIPT_SCHEMA = "borsuk-v85-build-receipt-v1"
+COMPACTION_RECEIPT_SCHEMA = "borsuk-v85-compaction-receipt-v1"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -37,6 +38,16 @@ class BuildRequest:
     seed: int
 
 
+@dataclasses.dataclass(frozen=True)
+class CompactionRequest:
+    """Local authenticated level-0-to-level-1 compaction request."""
+
+    generation: pathlib.Path
+    output: pathlib.Path
+    uri_prefix: str
+    delta_run_ids: tuple[int, ...]
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
@@ -45,8 +56,20 @@ def _sha256(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+def _sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _identity(uri: str, body: bytes) -> dict[str, Any]:
     return {"bytes": len(body), "sha256": _sha256(body), "uri": uri}
+
+
+def _identity_from_path(uri: str, path: pathlib.Path) -> dict[str, Any]:
+    return {"bytes": path.stat().st_size, "sha256": _sha256_file(path), "uri": uri}
 
 
 def _vector_type(dimensions: int) -> pa.DataType:
@@ -62,7 +85,9 @@ def _read_source(request: BuildRequest) -> tuple[np.ndarray, np.ndarray, str]:
     expected = pa.schema(
         [
             pa.field("feature_row_id", pa.uint64(), nullable=False),
-            pa.field("embedding", _source_vector_type(request.dimensions), nullable=False),
+            pa.field(
+                "embedding", _source_vector_type(request.dimensions), nullable=False
+            ),
         ]
     )
     if table.schema != expected:
@@ -160,7 +185,9 @@ def canonicalize_evaluation(
                 pa.field("query", pa.uint32(), nullable=False),
                 pa.field(
                     "neighbors",
-                    pa.list_(pa.field("element", pa.int64(), nullable=False), neighbors),
+                    pa.list_(
+                        pa.field("element", pa.int64(), nullable=False), neighbors
+                    ),
                     nullable=False,
                 ),
             ]
@@ -213,7 +240,8 @@ def compute_exact_truth(
     ):
         raise ValueError("truth input authority differs")
     source_ids_u64 = np.asarray(
-        source_table.column("feature_row_id").combine_chunks().to_numpy(), dtype=np.uint64
+        source_table.column("feature_row_id").combine_chunks().to_numpy(),
+        dtype=np.uint64,
     )[:corpus_rows]
     if np.any(source_ids_u64 > np.iinfo(np.int64).max):
         raise ValueError("truth source ID is not representable")
@@ -261,7 +289,9 @@ def compute_exact_truth(
                 pa.field("query", pa.uint32(), nullable=False),
                 pa.field(
                     "neighbors",
-                    pa.list_(pa.field("element", pa.int64(), nullable=False), neighbors),
+                    pa.list_(
+                        pa.field("element", pa.int64(), nullable=False), neighbors
+                    ),
                     nullable=False,
                 ),
             ]
@@ -270,7 +300,9 @@ def compute_exact_truth(
     pq.write_table(truth, truth_output)
 
 
-def _fit_router(base: np.ndarray, cells: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+def _fit_router(
+    base: np.ndarray, cells: int, seed: int
+) -> tuple[np.ndarray, np.ndarray]:
     if cells <= 0 or cells > len(base):
         raise ValueError("router cell count differs")
     generator = np.random.default_rng(seed)
@@ -282,7 +314,9 @@ def _fit_router(base: np.ndarray, cells: int, seed: int) -> tuple[np.ndarray, np
         for cell in range(cells):
             members = base[assignments == cell]
             if len(members):
-                centroids[cell] = members.mean(axis=0, dtype=np.float64).astype(np.float32)
+                centroids[cell] = members.mean(axis=0, dtype=np.float64).astype(
+                    np.float32
+                )
     return centroids, assignments
 
 
@@ -313,16 +347,31 @@ def _page_schema(dimensions: int) -> pa.Schema:
 
 
 def _page_stream(ids: np.ndarray, sequence: int, vectors: np.ndarray) -> bytes:
+    return _page_stream_rows(
+        ids,
+        np.full(len(ids), sequence, dtype=np.uint64),
+        np.zeros(len(ids), dtype=np.uint8),
+        vectors,
+    )
+
+
+def _page_stream_rows(
+    ids: np.ndarray,
+    sequences: np.ndarray,
+    states: np.ndarray,
+    vectors: np.ndarray,
+) -> bytes:
     dimensions = vectors.shape[1]
     schema = _page_schema(dimensions)
     vector_array = pa.FixedSizeListArray.from_arrays(
-        pa.array(np.ascontiguousarray(vectors).reshape(-1), type=pa.float32()), dimensions
+        pa.array(np.ascontiguousarray(vectors).reshape(-1), type=pa.float32()),
+        dimensions,
     )
     table = pa.Table.from_arrays(
         [
             pa.array(ids, type=pa.int64()),
-            pa.array(np.full(len(ids), sequence, dtype=np.uint64), type=pa.uint64()),
-            pa.array(np.zeros(len(ids), dtype=np.uint8), type=pa.uint8()),
+            pa.array(sequences, type=pa.uint64()),
+            pa.array(states, type=pa.uint8()),
             vector_array,
         ],
         schema=schema,
@@ -331,6 +380,374 @@ def _page_stream(ids: np.ndarray, sequence: int, vectors: np.ndarray) -> bytes:
     with ipc.new_stream(sink, schema) as writer:
         writer.write_table(table)
     return sink.getvalue().to_pybytes()
+
+
+def _read_page_stream(body: bytes, dimensions: int) -> pa.Table:
+    table = ipc.open_stream(pa.py_buffer(body)).read_all()
+    if table.schema != _page_schema(dimensions):
+        raise ValueError("compaction page schema differs")
+    return table
+
+
+def _load_mutation_rows(
+    path: pathlib.Path,
+) -> dict[int, tuple[int, int, int | None, int | None]]:
+    table = ipc.open_file(path).read_all()
+    expected = pa.schema(
+        [
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("sequence", pa.uint64(), nullable=False),
+            pa.field("state", pa.uint8(), nullable=False),
+            pa.field("run_id", pa.uint32(), nullable=True),
+            pa.field("row", pa.uint32(), nullable=True),
+        ]
+    )
+    if table.schema != expected:
+        raise ValueError("compaction mutation schema differs")
+    rows: dict[int, tuple[int, int, int | None, int | None]] = {}
+    prior_id: int | None = None
+    for row_id, sequence, state, run_id, row in zip(
+        table.column("id").to_pylist(),
+        table.column("sequence").to_pylist(),
+        table.column("state").to_pylist(),
+        table.column("run_id").to_pylist(),
+        table.column("row").to_pylist(),
+        strict=True,
+    ):
+        if (
+            row_id in rows
+            or (prior_id is not None and row_id <= prior_id)
+            or sequence <= 0
+            or state not in (0, 1)
+        ):
+            raise ValueError("compaction mutation authority differs")
+        if (state == 0) != (run_id is not None and row is not None):
+            raise ValueError("compaction mutation location differs")
+        rows[int(row_id)] = (int(sequence), int(state), run_id, row)
+        prior_id = int(row_id)
+    return rows
+
+
+def _validate_compaction_manifest(manifest: Any) -> None:
+    expected_keys = {
+        "base_horizon",
+        "dimensions",
+        "generation",
+        "mutation_directory",
+        "neighbors",
+        "page_rows",
+        "previous_generation_sha256",
+        "router",
+        "runs",
+        "schema",
+        "source_split",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected_keys:
+        raise ValueError("compaction generation authority differs")
+    for field in ("base_horizon", "dimensions", "generation", "neighbors", "page_rows"):
+        if type(manifest[field]) is not int or manifest[field] <= 0:
+            raise ValueError("compaction generation authority differs")
+    if (
+        manifest["schema"] != SCHEMA
+        or not isinstance(manifest["source_split"], str)
+        or not manifest["source_split"]
+        or not isinstance(manifest["previous_generation_sha256"], str)
+        or len(manifest["previous_generation_sha256"]) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in manifest["previous_generation_sha256"]
+        )
+        or not isinstance(manifest["runs"], list)
+        or not manifest["runs"]
+    ):
+        raise ValueError("compaction generation authority differs")
+
+    uris: set[str] = set()
+
+    def validate_identity(identity: Any) -> None:
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != {"bytes", "sha256", "uri"}
+            or type(identity["bytes"]) is not int
+            or identity["bytes"] <= 0
+            or not isinstance(identity["sha256"], str)
+            or len(identity["sha256"]) != 64
+            or any(
+                character not in "0123456789abcdef" for character in identity["sha256"]
+            )
+            or not isinstance(identity["uri"], str)
+            or not identity["uri"].startswith("s3://")
+            or identity["uri"] in uris
+        ):
+            raise ValueError("compaction generation authority differs")
+        uris.add(identity["uri"])
+
+    validate_identity(manifest["mutation_directory"])
+    validate_identity(manifest["router"])
+    prior_run = -1
+    for run in manifest["runs"]:
+        if (
+            not isinstance(run, dict)
+            or set(run) != {"generation", "kind", "object", "pages", "run_id"}
+            or type(run["generation"]) is not int
+            or run["generation"] < 0
+            or run["generation"] > manifest["generation"]
+            or run["kind"] not in ("base", "delta")
+            or type(run["run_id"]) is not int
+            or run["run_id"] <= prior_run
+            or not isinstance(run["pages"], list)
+            or not run["pages"]
+        ):
+            raise ValueError("compaction generation authority differs")
+        prior_run = run["run_id"]
+        validate_identity(run["object"])
+        prior_page = -1
+        prior_end = 0
+        for page in run["pages"]:
+            if (
+                not isinstance(page, dict)
+                or set(page) != {"bytes", "offset", "page", "rows"}
+                or any(type(page[field]) is not int for field in page)
+                or page["bytes"] <= 0
+                or page["offset"] < prior_end
+                or page["page"] <= prior_page
+                or page["rows"] <= 0
+                or page["rows"] > manifest["page_rows"]
+                or page["offset"] + page["bytes"] > run["object"]["bytes"]
+            ):
+                raise ValueError("compaction generation authority differs")
+            prior_page = page["page"]
+            prior_end = page["offset"] + page["bytes"]
+
+
+def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
+    """Compact every registered level-0 delta run into one deterministic run."""
+
+    if (
+        not request.generation.is_file()
+        or not request.uri_prefix.startswith("s3://")
+        or not request.delta_run_ids
+        or len(set(request.delta_run_ids)) != len(request.delta_run_ids)
+        or (request.output.exists() and any(request.output.iterdir()))
+    ):
+        raise ValueError("compaction request differs")
+    generation_body = request.generation.read_bytes()
+    manifest = json.loads(generation_body)
+    if (
+        _canonical_bytes(manifest) != generation_body
+        or manifest.get("schema") != SCHEMA
+    ):
+        raise ValueError("compaction generation authority differs")
+    _validate_compaction_manifest(manifest)
+    dimensions = manifest["dimensions"]
+    root = request.generation.parent
+    delta_runs = {
+        run["run_id"]: run for run in manifest["runs"] if run["kind"] == "delta"
+    }
+    if set(request.delta_run_ids) != set(delta_runs):
+        raise ValueError("compaction run set differs")
+
+    mutation_identity = manifest["mutation_directory"]
+    mutation_path = root / pathlib.PurePosixPath(mutation_identity["uri"]).name
+    mutation_body = mutation_path.read_bytes()
+    if _identity(mutation_identity["uri"], mutation_body) != mutation_identity:
+        raise ValueError("compaction mutation identity differs")
+    mutations = _load_mutation_rows(mutation_path)
+    read_bytes = len(generation_body) + 2 * len(mutation_body)
+    read_operations = 3
+    page_inputs: dict[int, list[tuple[int, pathlib.Path, dict[str, Any], int]]] = (
+        defaultdict(list)
+    )
+    for run_id in sorted(delta_runs):
+        run = delta_runs[run_id]
+        path = root / pathlib.PurePosixPath(run["object"]["uri"]).name
+        if _identity_from_path(run["object"]["uri"], path) != run["object"]:
+            raise ValueError("compaction run identity differs")
+        read_bytes += path.stat().st_size + sum(page["bytes"] for page in run["pages"])
+        read_operations += 1 + len(run["pages"])
+        run_row = 0
+        for page in run["pages"]:
+            if page["offset"] + page["bytes"] > path.stat().st_size:
+                raise ValueError("compaction page range differs")
+            page_inputs[int(page["page"])].append((run_id, path, page, run_row))
+            run_row += page["rows"]
+
+    request.output.mkdir(parents=True, exist_ok=True)
+    output_run_id = max(run["run_id"] for run in manifest["runs"]) + 1
+    output_generation = manifest["generation"] + 1
+    output_run_path = request.output / "delta-l1.arrow"
+    pages = []
+    locations: dict[int, tuple[int, int]] = {}
+    represented: set[int] = set()
+    output_row = 0
+    output_offset = 0
+    with output_run_path.open("wb") as output_handle:
+        for routed_page in sorted(page_inputs):
+            live_page: dict[int, tuple[int, np.ndarray]] = {}
+            for run_id, path, page, run_row in page_inputs[routed_page]:
+                with path.open("rb") as input_handle:
+                    input_handle.seek(page["offset"])
+                    body = input_handle.read(page["bytes"])
+                if len(body) != page["bytes"]:
+                    raise ValueError("compaction page range differs")
+                table = _read_page_stream(body, dimensions)
+                if table.num_rows != page["rows"]:
+                    raise ValueError("compaction page row count differs")
+                vectors = np.asarray(
+                    table.column("vector").combine_chunks().values.to_numpy(),
+                    dtype=np.float32,
+                ).reshape(-1, dimensions)
+                if not np.isfinite(vectors).all():
+                    raise ValueError("compaction vector is non-finite")
+                ids = table.column("id").to_pylist()
+                sequences = table.column("sequence").to_pylist()
+                states = table.column("state").to_pylist()
+                for index, (row_id, sequence, state) in enumerate(
+                    zip(ids, sequences, states, strict=True)
+                ):
+                    directory = mutations.get(int(row_id))
+                    if directory is None or state != 0 or sequence > directory[0]:
+                        raise ValueError("compaction live mutation binding differs")
+                    if sequence < directory[0]:
+                        continue
+                    if directory[1] != 0 or directory[2:] != (run_id, run_row + index):
+                        raise ValueError("compaction live mutation binding differs")
+                    if int(row_id) in live_page or int(row_id) in represented:
+                        raise ValueError("compaction mutation sequence tie")
+                    live_page[int(row_id)] = (int(sequence), vectors[index].copy())
+                    if len(live_page) > manifest["page_rows"]:
+                        raise ValueError("compaction page exceeds registered row cap")
+
+            if not live_page:
+                continue
+            page_ids = sorted(live_page)
+            ids_array = np.asarray(page_ids, dtype=np.int64)
+            sequence_array = np.asarray(
+                [live_page[row_id][0] for row_id in page_ids], dtype=np.uint64
+            )
+            state_array = np.zeros(len(page_ids), dtype=np.uint8)
+            vector_array = np.stack(
+                [live_page[row_id][1] for row_id in page_ids]
+            ).astype(np.float32)
+            stream = _page_stream_rows(
+                ids_array, sequence_array, state_array, vector_array
+            )
+            output_handle.write(stream)
+            pages.append(
+                {
+                    "bytes": len(stream),
+                    "offset": output_offset,
+                    "page": routed_page,
+                    "rows": len(page_ids),
+                }
+            )
+            for index, row_id in enumerate(page_ids):
+                locations[row_id] = (output_run_id, output_row + index)
+            represented.update(page_ids)
+            output_row += len(page_ids)
+            output_offset += len(stream)
+
+    for row_id, (_sequence, state, _, _) in mutations.items():
+        if state == 0 and (row_id not in represented or row_id not in locations):
+            raise ValueError("compaction directory is not represented by selected runs")
+    if not pages:
+        output_run_path.unlink()
+
+    mutation_ids = sorted(mutations)
+    mutation_table = pa.Table.from_arrays(
+        [
+            pa.array(mutation_ids, type=pa.int64()),
+            pa.array(
+                [mutations[row_id][0] for row_id in mutation_ids], type=pa.uint64()
+            ),
+            pa.array(
+                [mutations[row_id][1] for row_id in mutation_ids], type=pa.uint8()
+            ),
+            pa.array(
+                [
+                    locations[row_id][0] if row_id in locations else None
+                    for row_id in mutation_ids
+                ],
+                type=pa.uint32(),
+            ),
+            pa.array(
+                [
+                    locations[row_id][1] if row_id in locations else None
+                    for row_id in mutation_ids
+                ],
+                type=pa.uint32(),
+            ),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("id", pa.int64(), nullable=False),
+                pa.field("sequence", pa.uint64(), nullable=False),
+                pa.field("state", pa.uint8(), nullable=False),
+                pa.field("run_id", pa.uint32(), nullable=True),
+                pa.field("row", pa.uint32(), nullable=True),
+            ]
+        ),
+    )
+    output_mutation_body = _write_ipc_file(
+        request.output / "mutations.arrow", mutation_table
+    )
+    output_run_uri = f"{request.uri_prefix.rstrip('/')}/delta-l1.arrow"
+    output_mutation_uri = f"{request.uri_prefix.rstrip('/')}/mutations.arrow"
+    output_manifest = dict(manifest)
+    output_manifest["generation"] = output_generation
+    output_manifest["mutation_directory"] = _identity(
+        output_mutation_uri, output_mutation_body
+    )
+    output_manifest["previous_generation_sha256"] = _sha256(generation_body)
+    output_manifest["runs"] = [run for run in manifest["runs"] if run["kind"] == "base"]
+    if pages:
+        output_manifest["runs"].append(
+            {
+                "generation": output_generation,
+                "kind": "delta",
+                "object": _identity_from_path(output_run_uri, output_run_path),
+                "pages": pages,
+                "run_id": output_run_id,
+            }
+        )
+        read_bytes += output_run_path.stat().st_size
+        read_operations += 1
+    output_generation_body = _canonical_bytes(output_manifest)
+    (request.output / "generation.json").write_bytes(output_generation_body)
+
+    logical_live_bytes = len(represented) * (8 + 8 + 1 + 4 * dimensions)
+    payload_write_bytes = len(output_mutation_body) + len(output_generation_body)
+    if pages:
+        payload_write_bytes += output_run_path.stat().st_size
+    receipt = {
+        "amplification_ppm": 0,
+        "generation_sha256": _sha256(output_generation_body),
+        "input_runs": len(delta_runs),
+        "logical_live_bytes": logical_live_bytes,
+        "output_runs": int(bool(pages)),
+        "read_bytes": read_bytes,
+        "read_operations": read_operations,
+        "schema": COMPACTION_RECEIPT_SCHEMA,
+        "write_bytes": 0,
+        "write_operations": 4 if pages else 3,
+    }
+    while True:
+        receipt_body = _canonical_bytes(receipt)
+        write_bytes = payload_write_bytes + len(receipt_body)
+        amplification_ppm = (
+            (read_bytes + write_bytes) * 1_000_000 // logical_live_bytes
+            if logical_live_bytes
+            else None
+        )
+        if (
+            receipt["write_bytes"] == write_bytes
+            and receipt["amplification_ppm"] == amplification_ppm
+        ):
+            break
+        receipt["write_bytes"] = write_bytes
+        receipt["amplification_ppm"] = amplification_ppm
+    (request.output / "compaction-receipt.json").write_bytes(receipt_body)
+    return receipt
 
 
 def _write_ipc_file(path: pathlib.Path, table: pa.Table) -> bytes:
@@ -359,7 +776,9 @@ def _emit_run(
     row_locations: dict[int, tuple[int, int]] = {}
     next_row = 0
     for page in sorted(pages):
-        indices = np.asarray(sorted(pages[page], key=lambda index: int(ids[index])), dtype=np.int64)
+        indices = np.asarray(
+            sorted(pages[page], key=lambda index: int(ids[index])), dtype=np.int64
+        )
         stream = _page_stream(ids[indices], sequence, vectors[indices])
         offset = len(body)
         body.extend(stream)
@@ -409,14 +828,18 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
     ids, vectors, source_sha256 = _read_source(request)
     base_vectors = np.ascontiguousarray(vectors[: request.base_rows])
     training_sha256 = _sha256(base_vectors.tobytes())
-    centroids, base_cells = _fit_router(base_vectors, request.router_cells, request.seed)
+    centroids, base_cells = _fit_router(
+        base_vectors, request.router_cells, request.seed
+    )
 
     cell_pages: list[list[int]] = []
     base_page_members: dict[int, list[int]] = {}
     next_page = 0
     for cell in range(request.router_cells):
         members = np.flatnonzero(base_cells == cell)
-        ordered = sorted((int(index) for index in members), key=lambda index: int(ids[index]))
+        ordered = sorted(
+            (int(index) for index in members), key=lambda index: int(ids[index])
+        )
         pages = []
         for start in range(0, len(ordered), request.page_rows):
             page = next_page
@@ -515,8 +938,14 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
             pa.array(mutation_ids, type=pa.int64()),
             pa.array([2] * len(mutation_ids), type=pa.uint64()),
             pa.array([0] * len(mutation_ids), type=pa.uint8()),
-            pa.array([mutation_locations[row_id][0] for row_id in mutation_ids], type=pa.uint32()),
-            pa.array([mutation_locations[row_id][1] for row_id in mutation_ids], type=pa.uint32()),
+            pa.array(
+                [mutation_locations[row_id][0] for row_id in mutation_ids],
+                type=pa.uint32(),
+            ),
+            pa.array(
+                [mutation_locations[row_id][1] for row_id in mutation_ids],
+                type=pa.uint32(),
+            ),
         ],
         schema=mutation_schema,
     )
@@ -532,7 +961,9 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
         "neighbors": 100,
         "page_rows": request.page_rows,
         "previous_generation_sha256": "0" * 64,
-        "router": _identity(f"{request.uri_prefix.rstrip('/')}/router.arrow", router_body),
+        "router": _identity(
+            f"{request.uri_prefix.rstrip('/')}/router.arrow", router_body
+        ),
         "runs": runs,
         "schema": SCHEMA,
         "source_split": f"relaion-{request.base_rows + request.delta_rows}-base{request.base_rows}-delta{request.delta_rows}",
@@ -542,7 +973,9 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
 
     receipt = {
         "artifacts": [
-            _identity(f"{request.uri_prefix.rstrip('/')}/{path.name}", path.read_bytes())
+            _identity(
+                f"{request.uri_prefix.rstrip('/')}/{path.name}", path.read_bytes()
+            )
             for path in sorted(request.output.iterdir())
             if path.is_file()
         ],
@@ -575,4 +1008,8 @@ def _parse_args() -> BuildRequest:
 
 
 if __name__ == "__main__":
-    print(json.dumps(build_delta_artifacts(_parse_args()), separators=(",", ":"), sort_keys=True))
+    print(
+        json.dumps(
+            build_delta_artifacts(_parse_args()), separators=(",", ":"), sort_keys=True
+        )
+    )
