@@ -594,3 +594,79 @@ wave instead of two. The gain is structural, not tuning.
   persists its codebooks, `low`/`span`, or router alongside the rows they
   interpret. V69 regenerates them from the corpus and a seed. That is a release
   gap, not a recall gap.
+
+## V72 — the router was the byte problem all along
+
+`scripts/v72_resident_row_router.py`, result
+`research/v72-algorithm-first/resident-router-ca1c136d54e8fc41/a0001/`,
+result SHA-256 `7e39e483…5f40dfa14e`, 173.3 s.
+
+V63 showed the layout holds every query's top-100 inside 64 pages, p95 of 35.
+V71's page-summary router needed 256 pages for 99.2%. That four-to-sevenfold
+inefficiency, not the page size or the gap merge, is why a query read tens of
+MiB. V64 and V66 only ever summarised *pages*; this summarises *rows*.
+
+Page containment for a resident per-row product-quantised code, selecting rows
+and reading whatever pages they land in:
+
+| code | bytes/row | GiB at 100M | shortlist | Recall@100 | worst | requests p50 |
+|---|---:|---:|---:|---:|---:|---:|
+| PQ16 | 16 | 1.49 | 2,048 | 99.248% | 80% | 36 |
+| PQ32 | 32 | 2.98 | 512 | 98.623% | 83% | 18 |
+| **PQ64** | **64** | **5.96** | **512** | **99.676%** | **90%** | **21** |
+| PQ64 | 64 | 5.96 | 2,048 | 99.987% | 98% | 51 |
+
+Against the page-summary router at its best comparable point — 99.185% for 69
+requests and 63 MiB — a 64-byte row code reaches **higher recall in a third of
+the requests and under half the bytes**. Routing, not layout and not coalescing,
+was the binding constraint from V64 onward.
+
+A first run of this probe returned 1.3% recall. That was an inverted
+permutation, not a finding: 32,768 rows touching 889 pages covers 22.7% of the
+corpus and returned 24%, which is chance. The identifier round trip through the
+layout is now asserted rather than assumed.
+
+## V73 — the serving result
+
+`crates/borsuk-v71/` with the row-code router, results
+`research/v73-algorithm-first/row-router/a0001/`. 200 development queries per
+cell, real S3 ranged GETs, no local cache, in-region c7i.8xlarge, one round
+trip.
+
+| shortlist | gap | Recall@100 | worst | requests | MiB | route | I/O | scan | **total p50** | p95 | p99 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 2 | 98.350% | 85% | 13 | 6.3 | 4.3 | 34.2 | 1.8 | **40.6 ms** | 62.2 | 74.3 |
+| **512** | **2** | **99.155%** | **90%** | **18** | **10.3** | 4.4 | 39.2 | 2.2 | **46.1 ms** | 80.9 | 245.4 |
+| 2,048 | 0 | 99.445% | 97% | 60 | 25.3 | 4.4 | 81.9 | 3.1 | 90.0 ms | 269.0 | 286.8 |
+
+Against V71's page-summary router at matched recall — 99.185% in 69 requests,
+63 MiB and 120.4 ms — the row-code router delivers **99.155% in 18 requests,
+10.3 MiB and 46.1 ms**: 2.6x faster, 3.8x fewer requests, 6.1x fewer bytes.
+
+### Where this stands against the blob-native competitors
+
+| | Recall | latency | cache |
+|---|---|---|---|
+| **BORSUK V73, measured** | **99.155% Recall@100** | **46.1 ms p50, 80.9 p95** | **none — every query reads S3** |
+| turbopuffer, vendor-reported | "90% recall@10" example | 874 ms cold p50, 14 ms warm | NVMe + RAM on query nodes |
+| S3 Vectors, vendor-reported | ">90% average" claimed | ~100 ms warm | opaque managed |
+
+The uncached path is **19x faster than turbopuffer's published cold p50** and
+faster than S3 Vectors' warm figure, at a recall neither publishes. It has no
+cache tier at all, so their warm numbers remain out of reach until one exists —
+that is a real gap, not a rounding difference.
+
+### Honest limits
+
+- **The router is 64 bytes per row resident: 64 MiB at 1M, 6.4 GiB at 100M.**
+  V72's PQ16 row gives 99.248% at 16 B/row and 36 requests, so the frontier
+  trades RAM against requests; 100M scale is still projected arithmetic.
+- **The p99 tail is not solved.** 245 ms at the 512-row point against 80.9 ms
+  p95. A wave of N parallel GETs pays about the p(1−1/N) quantile, so the tail
+  is S3's, not the design's — hedging and S3 Express One Zone are the untested
+  levers.
+- Single object per index. S3 request-rate scaling is per prefix, so one key
+  caps near 5,500 GET/s: about **300 QPS per index** at 18 requests per query.
+  Sharding along the k-means order is required and untested.
+- Development split only; the sealed holdout is not opened. Write path is bulk
+  build only, and incremental ingest with visibility is unmeasured.
