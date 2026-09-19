@@ -1,3 +1,4 @@
+import dataclasses
 import subprocess
 import sys
 import unittest
@@ -5,6 +6,7 @@ import unittest
 import numpy as np
 
 from scripts.v86_coarse_to_fine_screen import (
+    _means_per_page,
     build_coarse_to_fine_artifact,
     build_run_metadata,
     evaluate_coarse_to_fine,
@@ -17,6 +19,13 @@ from scripts.v86_coarse_to_fine_screen import (
 
 
 class V86CoarseToFineTests(unittest.TestCase):
+    def test_page_summaries_keep_fixed_physical_blocks_on_partial_tail(self) -> None:
+        rows = np.arange(6, dtype=np.float32).reshape(6, 1)
+
+        summaries = _means_per_page(rows, page_rows=4, summaries_per_page=2)
+
+        self.assertEqual(summaries[:, 0].tolist(), [0.5, 2.5, 4.5, 4.5])
+
     def test_evaluation_rows_use_burned_development_and_untouched_confirmation(
         self,
     ) -> None:
@@ -161,6 +170,98 @@ class V86CoarseToFineTests(unittest.TestCase):
         self.assertTrue(np.array_equal(first.summary_codes, second.summary_codes))
         self.assertEqual(first.training_rows, 8)
 
+        eight_summary = build_coarse_to_fine_artifact(
+            base,
+            page_rows=4,
+            subspaces=2,
+            clusters=4,
+            sample_rows=8,
+            seed=86,
+            iterations=3,
+            summaries_per_page=4,
+        )
+        self.assertEqual(first.routing_digest(), eight_summary.routing_digest())
+        self.assertNotEqual(first.digest(), eight_summary.digest())
+        self.assertEqual(eight_summary.summary_codes.shape, (8, 2))
+
+    def test_evaluator_uses_one_supplied_artifact_without_retraining(self) -> None:
+        base = np.asarray(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [0.1, 0.0, 0.0, 0.0],
+                [0.2, 0.0, 0.0, 0.0],
+                [0.3, 0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0, 0.0],
+                [10.1, 0.0, 0.0, 0.0],
+                [10.2, 0.0, 0.0, 0.0],
+                [10.3, 0.0, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        artifact = build_coarse_to_fine_artifact(
+            base,
+            page_rows=4,
+            subspaces=2,
+            clusters=4,
+            sample_rows=8,
+            seed=86,
+            iterations=3,
+        )
+
+        result = evaluate_coarse_to_fine(
+            base,
+            np.asarray([[30.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+            np.asarray([[10.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+            base_ids=np.arange(100, 108, dtype=np.int64),
+            delta_ids=np.asarray([999], dtype=np.int64),
+            truth_ids=np.asarray([[104, 105]], dtype=np.int64),
+            query_ordinals=np.asarray([0], dtype=np.int64),
+            artifact=artifact,
+            page_rows=4,
+            neighbors=2,
+            subspaces=2,
+            clusters=4,
+            sample_rows=8,
+            seed=87,
+            iterations=3,
+            wave1_rank_pages=1,
+            wave1_max_span_pages=1,
+            wave1_max_ranges=1,
+            wave2_top_rows=2,
+            wave2_max_span_pages=1,
+            wave2_max_ranges=1,
+            code_page_bytes=8,
+            data_page_bytes=32,
+        )
+
+        self.assertEqual(result["artifact_sha256"], artifact.digest())
+        self.assertEqual(result["page_sq8_recall_ppm"], 1_000_000)
+
+        with self.assertRaisesRegex(
+            ValueError, "coarse-to-fine artifact authority differs"
+        ):
+            evaluate_coarse_to_fine(
+                base,
+                np.asarray([[30.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+                np.asarray([[10.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+                base_ids=np.arange(100, 108, dtype=np.int64),
+                delta_ids=np.asarray([999], dtype=np.int64),
+                truth_ids=np.asarray([[104, 105]], dtype=np.int64),
+                query_ordinals=np.asarray([0], dtype=np.int64),
+                artifact=dataclasses.replace(artifact, page_rows=8),
+                page_rows=4,
+                neighbors=2,
+                subspaces=2,
+                wave1_rank_pages=1,
+                wave1_max_span_pages=1,
+                wave1_max_ranges=1,
+                wave2_top_rows=2,
+                wave2_max_span_pages=1,
+                wave2_max_ranges=1,
+                code_page_bytes=8,
+                data_page_bytes=32,
+            )
+
     def test_ranked_page_plan_charges_intervening_gap_pages(self) -> None:
         pages, ranges = plan_ranked_pages(
             np.asarray([0.01, 9.0, 0.02, 9.0, 0.03], dtype=np.float32),
@@ -235,8 +336,12 @@ class V86CoarseToFineTests(unittest.TestCase):
                     "truth_page_ranks": [0, 0],
                     "wave1_base_truth_hits": 2,
                     "wave1_bytes": 8,
+                    "wave1_gap_only_base_truth_hits": 0,
                     "wave1_gets": 1,
                     "wave1_pages": [1],
+                    "wave1_planner_missed_base_truth_hits": 0,
+                    "wave1_rank_visible_base_truth_hits": 2,
+                    "wave1_rank_visible_selected_base_truth_hits": 2,
                     "wave1_ranges": [[1, 1]],
                     "wave2_base_truth_page_hits": 2,
                     "wave2_bytes": 32,

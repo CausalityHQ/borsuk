@@ -229,6 +229,14 @@ class CoarseToFineArtifact:
     page_rows: int
     training_rows: int
 
+    def routing_digest(self) -> str:
+        digest = hashlib.sha256()
+        digest.update(struct.pack("<QQ", self.page_rows, self.training_rows))
+        for book in self.books:
+            digest.update(np.ascontiguousarray(book).tobytes())
+        digest.update(np.ascontiguousarray(self.row_codes).tobytes())
+        return digest.hexdigest()
+
     def digest(self) -> str:
         digest = hashlib.sha256()
         digest.update(struct.pack("<QQ", self.page_rows, self.training_rows))
@@ -239,19 +247,22 @@ class CoarseToFineArtifact:
         return digest.hexdigest()
 
 
-def _two_means_per_page(base: np.ndarray, page_rows: int) -> np.ndarray:
+def _means_per_page(
+    base: np.ndarray, page_rows: int, summaries_per_page: int
+) -> np.ndarray:
     summaries = []
-    split = max(1, page_rows // 2)
     for start in range(0, base.shape[0], page_rows):
         page = base[start : start + page_rows]
-        first = page[:split]
-        second = page[split:]
-        summaries.append(np.mean(first, axis=0, dtype=np.float32))
-        summaries.append(
-            np.mean(second, axis=0, dtype=np.float32)
-            if second.size
-            else summaries[-1].copy()
-        )
+        for summary in range(summaries_per_page):
+            first = summary * page_rows // summaries_per_page
+            stop = (summary + 1) * page_rows // summaries_per_page
+            block = page[first:stop]
+            if block.size == 0:
+                summaries.append(summaries[-1].copy())
+            else:
+                summaries.append(
+                    np.mean(block, axis=0, dtype=np.float32)
+                )
     return np.ascontiguousarray(np.asarray(summaries, dtype=np.float32))
 
 
@@ -264,8 +275,9 @@ def build_coarse_to_fine_artifact(
     sample_rows: int,
     seed: int,
     iterations: int,
+    summaries_per_page: int = 2,
 ) -> CoarseToFineArtifact:
-    """Build query-independent PQ row codes and two page summaries."""
+    """Build query-independent PQ row codes and fixed block summaries."""
 
     base = np.asarray(base, dtype=np.float32)
     if (
@@ -274,6 +286,7 @@ def build_coarse_to_fine_artifact(
         or base.shape[1] == 0
         or not np.isfinite(base).all()
         or page_rows <= 1
+        or not 0 < summaries_per_page <= page_rows
         or subspaces <= 0
         or base.shape[1] % subspaces
         or clusters <= 0
@@ -285,7 +298,7 @@ def build_coarse_to_fine_artifact(
     books = tuple(
         _train_pq(base, subspaces, clusters, seed, sample_rows, iterations)
     )
-    summaries = _two_means_per_page(base, page_rows)
+    summaries = _means_per_page(base, page_rows, summaries_per_page)
     return CoarseToFineArtifact(
         books=books,
         row_codes=_encode_pq(base, list(books), max(page_rows, 1_024)),
@@ -293,6 +306,39 @@ def build_coarse_to_fine_artifact(
         page_rows=page_rows,
         training_rows=base.shape[0],
     )
+
+
+def _validate_coarse_to_fine_artifact(
+    artifact: CoarseToFineArtifact,
+    *,
+    rows: int,
+    dimensions: int,
+    page_rows: int,
+    subspaces: int,
+    clusters: int,
+) -> None:
+    page_count = (rows + page_rows - 1) // page_rows
+    width = dimensions // subspaces if subspaces > 0 else 0
+    if (
+        artifact.page_rows != page_rows
+        or artifact.training_rows != rows
+        or len(artifact.books) != subspaces
+        or artifact.row_codes.dtype != np.uint8
+        or artifact.row_codes.shape != (rows, subspaces)
+        or artifact.summary_codes.dtype != np.uint8
+        or artifact.summary_codes.ndim != 2
+        or artifact.summary_codes.shape[0] < page_count
+        or artifact.summary_codes.shape[0] % page_count
+        or artifact.summary_codes.shape[0] // page_count > page_rows
+        or artifact.summary_codes.shape[1] != subspaces
+        or any(
+            book.dtype != np.float32
+            or book.shape != (clusters, width)
+            or not np.isfinite(book).all()
+            for book in artifact.books
+        )
+    ):
+        raise ValueError("coarse-to-fine artifact authority differs")
 
 
 def plan_ranked_pages(
@@ -381,6 +427,7 @@ def evaluate_coarse_to_fine(
     delta_ids: np.ndarray,
     truth_ids: np.ndarray,
     query_ordinals: np.ndarray,
+    artifact: CoarseToFineArtifact | None = None,
     page_rows: int = _PAGE_ROWS,
     neighbors: int = 100,
     subspaces: int = _PQ_SUBSPACES,
@@ -435,16 +482,26 @@ def evaluate_coarse_to_fine(
     base = np.ascontiguousarray(base)
     delta = np.ascontiguousarray(delta)
     queries = np.ascontiguousarray(queries)
-    artifact = build_coarse_to_fine_artifact(
-        base,
+    if artifact is None:
+        artifact = build_coarse_to_fine_artifact(
+            base,
+            page_rows=page_rows,
+            subspaces=subspaces,
+            clusters=clusters,
+            sample_rows=sample_rows,
+            seed=seed,
+            iterations=iterations,
+        )
+    _validate_coarse_to_fine_artifact(
+        artifact,
+        rows=base.shape[0],
+        dimensions=base.shape[1],
         page_rows=page_rows,
         subspaces=subspaces,
         clusters=clusters,
-        sample_rows=sample_rows,
-        seed=seed,
-        iterations=iterations,
     )
     page_count = (base.shape[0] + page_rows - 1) // page_rows
+    summaries_per_page = artifact.summary_codes.shape[0] // page_count
     base_page_sq8 = _page_sq8(base, page_rows)
     delta_sq8 = _sq8(delta)
     if code_page_bytes is None:
@@ -465,7 +522,7 @@ def evaluate_coarse_to_fine(
     delta_truth_hits = 0
     for query_index, query in enumerate(queries):
         summary_scores = _adc_scores(query, artifact.summary_codes, list(artifact.books))
-        page_scores = summary_scores.reshape(page_count, 2).min(axis=1)
+        page_scores = summary_scores.reshape(page_count, summaries_per_page).min(axis=1)
         page_order = np.lexsort((np.arange(page_count), page_scores))
         page_ranks = np.empty(page_count, dtype=np.int64)
         page_ranks[page_order] = np.arange(page_count, dtype=np.int64)
@@ -523,6 +580,19 @@ def evaluate_coarse_to_fine(
         query_wave1_truth = int(
             np.count_nonzero(np.isin(expected_base_positions, wave1_positions))
         )
+        expected_base_page_ranks = page_ranks[
+            expected_base_positions // page_rows
+        ]
+        rank_visible = expected_base_page_ranks < wave1_rank_pages
+        selected = np.isin(expected_base_positions // page_rows, wave1_pages)
+        query_rank_visible_truth = int(np.count_nonzero(rank_visible))
+        query_rank_visible_selected_truth = int(
+            np.count_nonzero(rank_visible & selected)
+        )
+        query_planner_missed_truth = (
+            query_rank_visible_truth - query_rank_visible_selected_truth
+        )
+        query_gap_only_truth = query_wave1_truth - query_rank_visible_selected_truth
         query_pq_shortlist_truth = int(
             np.count_nonzero(
                 np.isin(expected_base_positions, pq_shortlist_positions)
@@ -558,8 +628,14 @@ def evaluate_coarse_to_fine(
                 ],
                 "wave1_base_truth_hits": query_wave1_truth,
                 "wave1_bytes": int(wave1_pages.size * code_page_bytes),
+                "wave1_gap_only_base_truth_hits": query_gap_only_truth,
                 "wave1_gets": len(wave1_ranges),
                 "wave1_pages": [int(page) for page in wave1_pages],
+                "wave1_planner_missed_base_truth_hits": query_planner_missed_truth,
+                "wave1_rank_visible_base_truth_hits": query_rank_visible_truth,
+                "wave1_rank_visible_selected_base_truth_hits": (
+                    query_rank_visible_selected_truth
+                ),
                 "wave1_ranges": [list(pair) for pair in wave1_ranges],
                 "wave2_base_truth_page_hits": query_wave2_page_truth,
                 "wave2_bytes": int(wave2_pages.size * data_page_bytes),
