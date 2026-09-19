@@ -921,6 +921,150 @@ def evaluate_physical_oracle(
     }
 
 
+def evaluate_exact_row_control(
+    base: np.ndarray,
+    delta: np.ndarray,
+    queries: np.ndarray,
+    *,
+    base_ids: np.ndarray,
+    delta_ids: np.ndarray,
+    truth_ids: np.ndarray,
+    page_rows: int = 256,
+    neighbors: int = 100,
+    top_rows: int = 2_048,
+    page_cap: int = 81,
+    max_base_bytes: int = 16 * 1024 * 1024,
+    max_base_gets: int = 32,
+) -> dict[str, Any]:
+    """Measure the page aggregator with exact row distances and no PQ work."""
+
+    base = np.asarray(base, dtype=np.float32)
+    delta = np.asarray(delta, dtype=np.float32)
+    queries = np.asarray(queries, dtype=np.float32)
+    base_ids = np.asarray(base_ids, dtype=np.int64)
+    delta_ids = np.asarray(delta_ids, dtype=np.int64)
+    truth_ids = np.asarray(truth_ids, dtype=np.int64)
+    if (
+        base.ndim != 2
+        or delta.ndim != 2
+        or queries.ndim != 2
+        or base.shape[0] == 0
+        or delta.shape[0] == 0
+        or queries.shape[0] == 0
+        or base.shape[1] != delta.shape[1]
+        or base.shape[1] != queries.shape[1]
+        or base_ids.shape != (base.shape[0],)
+        or delta_ids.shape != (delta.shape[0],)
+        or truth_ids.shape != (queries.shape[0], neighbors)
+        or np.unique(np.concatenate((base_ids, delta_ids))).size
+        != base.shape[0] + delta.shape[0]
+        or page_rows <= 0
+        or neighbors <= 0
+        or top_rows <= 0
+        or page_cap <= 0
+        or max_base_bytes <= 0
+        or max_base_gets <= 0
+        or not all(np.isfinite(value).all() for value in (base, delta, queries))
+    ):
+        raise ValueError("exact row control authority differs")
+
+    base = np.ascontiguousarray(base)
+    delta = np.ascontiguousarray(delta)
+    queries = np.ascontiguousarray(queries)
+    base_page_sq8 = _page_sq8(base, page_rows)
+    delta_sq8 = _sq8(delta)
+    oracle_result = evaluate_physical_oracle(
+        base_ids=base_ids,
+        delta_ids=delta_ids,
+        truth_ids=truth_ids,
+        dimensions=base.shape[1],
+        page_rows=page_rows,
+        max_base_bytes=max_base_bytes,
+        max_base_gets=max_base_gets,
+    )
+    page_payload_bytes = oracle_result["page_payload_bytes"]
+    max_base_pages = oracle_result["physical_oracle"]["max_base_pages"]
+    base_norms = np.einsum("ij,ij->i", base, base)
+    samples = []
+    exact_hits = 0
+    page_sq8_hits = 0
+    for query_index, query in enumerate(queries):
+        exact_row_scores = (
+            base_norms
+            - np.float32(2.0) * (base @ query)
+            + np.float32(np.dot(query, query))
+        )
+        _, ranges = _select_rank_weighted_pages(
+            exact_row_scores,
+            page_rows=page_rows,
+            top_rows=top_rows,
+            max_span_pages=min(page_cap, max_base_pages),
+            max_ranges=max_base_gets,
+            gap=2,
+            planner="exact",
+        )
+        base_candidates = np.concatenate(
+            [
+                np.arange(
+                    start * page_rows,
+                    min((end + 1) * page_rows, base.shape[0]),
+                    dtype=np.int64,
+                )
+                for start, end in ranges
+            ]
+        )
+        candidate_ids = np.concatenate((base_ids[base_candidates], delta_ids))
+        exact_vectors = np.concatenate((base[base_candidates], delta), axis=0)
+        page_sq8_vectors = np.concatenate(
+            (base_page_sq8[base_candidates], delta_sq8), axis=0
+        )
+        exact_result = _top_ids(query, exact_vectors, candidate_ids, neighbors)
+        page_sq8_result = _top_ids(
+            query, page_sq8_vectors, candidate_ids, neighbors
+        )
+        expected = set(int(value) for value in truth_ids[query_index])
+        query_exact_hits = len(expected.intersection(exact_result))
+        query_page_sq8_hits = len(expected.intersection(page_sq8_result))
+        exact_hits += query_exact_hits
+        page_sq8_hits += query_page_sq8_hits
+        samples.append(
+            {
+                "base_bytes": int(
+                    sum(end - start + 1 for start, end in ranges)
+                    * page_payload_bytes
+                ),
+                "base_gets": len(ranges),
+                "exact_hits": query_exact_hits,
+                "page_sq8_hits": query_page_sq8_hits,
+                "query": query_index,
+            }
+        )
+    denominator = queries.shape[0] * neighbors
+    base_bytes = [sample["base_bytes"] for sample in samples]
+    base_gets = [sample["base_gets"] for sample in samples]
+    cell = {
+        "base_bytes_max": max(base_bytes),
+        "base_bytes_p50": _nearest_percentile(base_bytes, 0.50),
+        "base_bytes_p95": _nearest_percentile(base_bytes, 0.95),
+        "base_gets_max": max(base_gets),
+        "base_gets_p50": _nearest_percentile(base_gets, 0.50),
+        "base_gets_p95": _nearest_percentile(base_gets, 0.95),
+        "exact_recall_ppm": round(exact_hits * 1_000_000 / denominator),
+        "page_cap": page_cap,
+        "page_sq8_recall_ppm": round(page_sq8_hits * 1_000_000 / denominator),
+        "planner": "exact",
+        "samples": samples,
+        "top_rows": top_rows,
+    }
+    return {
+        "claim_eligible": False,
+        "cpu_parallelism": "sequential-query-loop;blas-thread-count-external",
+        "exact_row_control_cells": [cell],
+        "physical_oracle": oracle_result["physical_oracle"],
+        "schema": "borsuk-v85-exact-row-control-v1",
+    }
+
+
 def evaluate_overlay(
     base: np.ndarray,
     delta: np.ndarray,
@@ -1571,6 +1715,7 @@ def main() -> None:
     parser.add_argument("--oracle-only", action="store_true")
     parser.add_argument("--landmark-incidence", action="store_true")
     parser.add_argument("--page-posterior", action="store_true")
+    parser.add_argument("--exact-row-control", action="store_true")
     args = parser.parse_args()
     if not 0 < args.base_rows < args.rows:
         parser.error("base rows must be inside the corpus")
@@ -1583,6 +1728,8 @@ def main() -> None:
     base_order = order[order < args.base_rows]
     if base_order.size != args.base_rows or np.unique(base_order).size != args.base_rows:
         raise ValueError("base layout order differs")
+    if args.exact_row_control and (args.oracle_only or args.landmark_incidence or args.page_posterior):
+        parser.error("exact row control must run alone")
     if args.oracle_only:
         result = evaluate_physical_oracle(
             base_ids=source_ids[base_order],
@@ -1593,15 +1740,22 @@ def main() -> None:
     else:
         source = _fixed_list(args.source, "embedding", args.rows)
         queries = _fixed_list(args.queries, "embedding", args.query_count)
-        result = evaluate_overlay(
+        evaluation = evaluate_exact_row_control if args.exact_row_control else evaluate_overlay
+        evaluation_args = {
+            "base_ids": source_ids[base_order],
+            "delta_ids": source_ids[args.base_rows : args.rows],
+            "truth_ids": truth_ids,
+        }
+        if not args.exact_row_control:
+            evaluation_args.update(
+                landmark_count=1_024 if args.landmark_incidence else 0,
+                posterior_training_queries=256 if args.page_posterior else 0,
+            )
+        result = evaluation(
             source[base_order],
             source[args.base_rows : args.rows],
             queries,
-            base_ids=source_ids[base_order],
-            delta_ids=source_ids[args.base_rows : args.rows],
-            truth_ids=truth_ids,
-            landmark_count=1_024 if args.landmark_incidence else 0,
-            posterior_training_queries=256 if args.page_posterior else 0,
+            **evaluation_args,
         )
     body = json.dumps(result, separators=(",", ":"), sort_keys=True) + "\n"
     args.output.write_text(body)

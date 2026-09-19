@@ -20,6 +20,7 @@ from scripts.v85_shared_overlay_screen import (
     _score_page_posterior,
     _select_optimal_weighted_pages,
     _select_rank_weighted_pages,
+    evaluate_exact_row_control,
     evaluate_overlay,
     evaluate_physical_oracle,
 )
@@ -39,6 +40,20 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         )
 
         self.assertIn("--page-posterior", completed.stdout)
+
+    def test_cli_exposes_exact_row_evidence_control(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(pathlib.Path(__file__).with_name("v85_shared_overlay_screen.py")),
+                "--help",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertIn("--exact-row-control", completed.stdout)
 
     def test_grouped_page_posterior_learns_neighbor_share_not_raw_page_count(
         self,
@@ -362,6 +377,70 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             ],
         )
         self.assertTrue(result["page_posterior_gate"]["passed"])
+
+    def test_exact_row_control_isolates_pq_evidence_from_page_aggregation(
+        self,
+    ) -> None:
+        # One PQ centroid makes every encoded row indistinguishable.  Exact
+        # row evidence must still route to the last page containing both
+        # literal ground-truth rows.  Replacing exact scores with ADC scores
+        # therefore breaks this diagnostic rather than merely changing a
+        # private implementation detail.
+        base = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.1, 0.0],
+                [1.0, 0.0],
+                [1.1, 0.0],
+                [2.0, 0.0],
+                [2.1, 0.0],
+                [9.9, 0.0],
+                [10.0, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        result = evaluate_exact_row_control(
+            base,
+            np.asarray([[30.0, 0.0]], dtype=np.float32),
+            np.asarray([[10.0, 0.0]], dtype=np.float32),
+            base_ids=np.arange(100, 108, dtype=np.int64),
+            delta_ids=np.asarray([999], dtype=np.int64),
+            truth_ids=np.asarray([[107, 106]], dtype=np.int64),
+            page_rows=2,
+            neighbors=2,
+            max_base_bytes=108,
+            max_base_gets=1,
+            top_rows=2,
+            page_cap=1,
+        )
+
+        self.assertEqual(
+            result["exact_row_control_cells"],
+            [
+                {
+                    "base_bytes_max": 108,
+                    "base_bytes_p50": 108,
+                    "base_bytes_p95": 108,
+                    "base_gets_max": 1,
+                    "base_gets_p50": 1,
+                    "base_gets_p95": 1,
+                    "exact_recall_ppm": 1_000_000,
+                    "page_cap": 1,
+                    "page_sq8_recall_ppm": 1_000_000,
+                    "planner": "exact",
+                    "samples": [
+                        {
+                            "base_bytes": 108,
+                            "base_gets": 1,
+                            "exact_hits": 2,
+                            "page_sq8_hits": 2,
+                            "query": 0,
+                        }
+                    ],
+                    "top_rows": 2,
+                }
+            ],
+        )
 
     def test_physical_oracle_charges_gaps_and_maximizes_hits_exactly(self) -> None:
         page_hits = {0: 3, 3: 2, 4: 5, 8: 4}
