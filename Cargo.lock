@@ -506,6 +506,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "borsuk-v71"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "object_store 0.14.1",
+ "rayon",
+ "serde_json",
+ "tokio",
+ "url",
+ "wide",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
