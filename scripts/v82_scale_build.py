@@ -154,7 +154,18 @@ def main() -> None:
 
     overall = time.perf_counter()
     if not args.source.exists():
-        urllib.request.urlretrieve(SOURCE_URL, args.source)
+        # The host rejects urllib's default User-Agent with 403; the
+        # repository's own fetcher already sends a curl agent for this reason.
+        request = urllib.request.Request(  # noqa: S310
+            SOURCE_URL, headers={"User-Agent": "curl/8"}
+        )
+        with urllib.request.urlopen(request) as response:  # noqa: S310
+            with args.source.open("wb") as handle:
+                while True:
+                    block = response.read(1 << 22)
+                    if not block:
+                        break
+                    handle.write(block)
     with h5py.File(args.source, "r") as handle:
         train = np.asarray(handle["train"], dtype=np.float32)
         test = np.asarray(handle["test"], dtype=np.float32)[: args.queries]

@@ -970,3 +970,51 @@ concurrent queries to 384. The 2.5x headroom the core-ms arithmetic suggests is
 real, but nothing tried here reaches it, and the honest position is that the
 remaining gap is not yet understood. A profile — not another hypothesis — is
 what it needs.
+
+## V82 — 10M rows, measured
+
+`scripts/v82_scale_build.py` with the unchanged native reader, results
+`research/v82-algorithm-first/scale-10m/a0001/`. **deep-image-96-angular:
+9,990,000 real vectors with shipped ground truth**, already part of this
+repository's standard-dataset matrix. Angular, so vectors and queries are
+unit-normalised, which makes squared-L2 rank identically to cosine and leaves
+the shipped truth correct for what the serving path computes.
+
+| | 1M x 768 (ReLAION) | **10M x 96 (deep-image)** |
+|---|---:|---:|
+| rows | 1,000,000 | **9,990,000** |
+| pages | 3,907 | 39,024 |
+| Recall@100 | 99.155% | **98.430%** |
+| worst query | 90% | **95%** |
+| requests | 18 | **45** |
+| bytes/query | 10.3 MiB | **4.2 MiB** |
+| **total p50** | **40.4 ms** | **41.6 ms** |
+| p95 | 63.1 ms | 69.5 ms |
+| QPS/node | 137 | 84 |
+| resident router | 64 B/row | 48 B/row |
+
+**Latency is flat across a tenfold increase in rows** — 40.4 ms to 41.6 ms —
+and requests grew 2.5x for 10x the corpus, which is the sublinear behaviour the
+layout was supposed to give. Recall holds at 98.4% with a *better* worst query
+than at 1M.
+
+The coarse level behaves exactly as V77 predicted it would. It is the remaining
+O(N) term, and at 10M it shows: routing costs 6.62 ms at 4,096 regions and
+**31.40 ms at 16,384**, where at 1M it cost 1.28–2.19 ms. Region budget is now
+a real tuning knob rather than a free parameter, and at 4,096 regions — a tenth
+of the pages — recall is unchanged from scanning four times as many.
+
+### What this establishes, and what it does not
+
+It establishes that the design **works on a real 10M corpus against real ground
+truth**, at flat latency, sublinear request growth, and with the build, memory
+and serving path unchanged from 1M. Scale is no longer projected arithmetic.
+
+It is **not** a clean row-count-only comparison: the dimension differs, 96
+against 768, which is why bytes per query fell rather than rose. And it is
+still not 100M — the coarse level's O(N) term is the thing that would bind
+there, and V77's third-level remedy remains unbuilt.
+
+Build at 10M took 1,274.8 s, or **7,836 vectors/s** end to end including
+k-means over 16,384 clusters. That is a bulk-build figure and is not comparable
+to V74's 224,910 vectors/s incremental ingest, which does not recluster.
