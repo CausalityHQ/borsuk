@@ -14,11 +14,13 @@ import pyarrow.parquet as pq
 _PAGE_HEADER_BYTES = 64
 
 
-def _lloyd(data: np.ndarray, clusters: int, seed: int) -> np.ndarray:
+def _lloyd(
+    data: np.ndarray, clusters: int, seed: int, iterations: int
+) -> np.ndarray:
     count = min(clusters, data.shape[0])
     generator = np.random.default_rng(seed)
     centers = data[generator.choice(data.shape[0], count, replace=False)].copy()
-    for _ in range(5):
+    for _ in range(iterations):
         center_norms = np.einsum("ij,ij->i", centers, centers)
         assignment = np.argmin(
             center_norms[None, :] - np.float32(2.0) * (data @ centers.T), axis=1
@@ -40,6 +42,7 @@ def _train_pq(
     clusters: int,
     seed: int,
     sample_rows: int,
+    iterations: int,
 ) -> list[np.ndarray]:
     generator = np.random.default_rng(seed)
     sample_count = min(base.shape[0], sample_rows)
@@ -52,6 +55,7 @@ def _train_pq(
             np.ascontiguousarray(sample[:, index * width : (index + 1) * width]),
             clusters,
             seed + index,
+            iterations,
         )
         for index in range(subspaces)
     ]
@@ -600,6 +604,7 @@ def evaluate_overlay(
     pages_per_landmark: int = 256,
     query_landmarks: int = 8,
     landmark_chunk_rows: int = 8_192,
+    pq_lloyd_iterations: int = 10,
 ) -> dict[str, Any]:
     """Evaluate one shared base router with a fully resident delta tier."""
 
@@ -623,6 +628,7 @@ def evaluate_overlay(
         or encode_chunk_rows <= 0
         or max_base_bytes <= 0
         or max_base_gets <= 0
+        or pq_lloyd_iterations <= 0
         or landmark_count < 0
         or (
             landmark_count > 0
@@ -663,7 +669,14 @@ def evaluate_overlay(
             raise ValueError("overlay truth differs")
 
     sample_count = min(base.shape[0], training_sample_rows)
-    books = _train_pq(base, subspaces, clusters, seed, sample_count)
+    books = _train_pq(
+        base,
+        subspaces,
+        clusters,
+        seed,
+        sample_count,
+        pq_lloyd_iterations,
+    )
     base_codes = _encode_pq(base, books, encode_chunk_rows)
     base_sq8 = _sq8(base)
     base_page_sq8 = _page_sq8(base, page_rows)
@@ -992,7 +1005,8 @@ def evaluate_overlay(
             "passed": bool(passing_shortlists),
             "passing_shortlists": passing_shortlists,
         },
-        "schema": "borsuk-v85-shared-overlay-screen-v5",
+        "pq_lloyd_iterations": pq_lloyd_iterations,
+        "schema": "borsuk-v85-shared-overlay-screen-v6",
         "training_sample_rows": sample_count,
         "training_rows": int(base.shape[0]),
     }

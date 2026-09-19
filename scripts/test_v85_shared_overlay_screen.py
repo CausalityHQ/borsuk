@@ -217,7 +217,8 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             seed=85,
         )
 
-        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v5")
+        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v6")
+        self.assertEqual(result["pq_lloyd_iterations"], 10)
         self.assertEqual(result["training_rows"], 8)
         self.assertEqual(result["delta_rows"], 1)
         self.assertEqual(result["cpu_parallelism"], "sequential-per-query")
