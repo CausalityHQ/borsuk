@@ -460,3 +460,67 @@ it is well inside their 874 ms cold. Three separable causes, in order of size:
    flattens from 8 workers onward, which is the pool saturating, not S3.
 
 Only the first is a real design problem. It is what V69 sweeps.
+
+## V69 — requests, not bytes, set the latency
+
+`scripts/v69_algorithm_first_serving_sweep.py`, result
+`research/v69-algorithm-first/serving-sweep-dafe02e403d6bde2/a0001/`,
+result SHA-256 `7b93f347…9fec2c50`, 382.2 s, 60 queries per cell.
+
+The four serving knobs swept against the index V68 already published, so nothing
+was rebuilt; codebooks regenerate from the same seed and reproduce the published
+codes exactly.
+
+| M | gap1 | gap2 | N | Recall@100 | worst | requests | MiB | I/O p50 | total p50 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 8 | 32 | 512 | 99.550% | 95% | 137 | 27.26 | 291.3 ms | 400.5 ms |
+| 256 | 2 | 8 | 512 | 99.417% | 93% | 243 | 16.98 | **448.6 ms** | 522.8 ms |
+| 256 | 8 | 32 | 256 | 99.400% | 92% | 102 | 24.15 | 238.3 ms | 338.9 ms |
+| 128 | 8 | 32 | 256 | 98.400% | 81% | 83 | 13.57 | 182.6 ms | 233.2 ms |
+| 64 | 8 | 32 | 256 | 96.433% | 65% | 64 | 8.59 | 142.5 ms | 164.7 ms |
+
+**This overturns the V68 diagnosis.** 243 requests carrying 17 MiB take 448.6 ms
+of I/O; 137 requests carrying 27 MiB take 291.3 ms. Reading 60% more bytes in
+44% fewer requests is 35% faster. Latency tracks the request count, and merging
+harder is the cheaper side of the trade — the opposite of what V68 concluded
+from bytes alone.
+
+## V70 — one round trip of SQ8
+
+`scripts/v70_algorithm_first_single_stage_sq8.py`, result
+`research/v70-algorithm-first/single-stage-a4a695d66f508edf/a0001/`,
+result SHA-256 `8ec7273f…b14484ed`.
+
+If requests are what cost, then deleting stage two — its extra round trip, its
+scattered shortlist and about a third of the requests — should win. SQ8 rows at
+780 bytes (id, precomputed squared norm, one byte per dimension) are returned
+with no rescoring at all.
+
+| M | gap | Recall@100 | worst | requests | MiB | I/O p50 | total p50 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 8 | 98.183% | 82% | **39** | 39.32 | **123.8 ms** | **140.2 ms** |
+| 256 | 8 | 99.133% | 95% | 58 | 82.79 | 194.2 ms | 230.2 ms |
+| 512 | 8 | 99.450% | 98% | 75 | 164.94 | 304.9 ms | 386.0 ms |
+
+Build is 6,681 vectors/s — faster than PQ's 4,007 because there is no codebook
+to train.
+
+### The two designs, at matched recall
+
+| | Recall@100 | requests | bytes | total p50 |
+|---|---:|---:|---:|---:|
+| single-stage SQ8, M=128 | 98.183% / 82% | 39 | 39.32 MiB | 140.2 ms |
+| two-stage PQ192, M=128 | 98.400% / 81% | 83 | 13.57 MiB | 233.2 ms |
+
+SQ8 is 1.7x faster for 2.9x the bytes.
+
+**This measurement cannot be trusted to decide between them.** The Python and
+boto3 per-request overhead — TLS, HTTP parsing, and the GIL — is far larger
+than a native client's, which inflates exactly the quantity the trade turns on
+and biases the result toward the fewer-request design. The measured 4.85 QPS,
+flat from eight workers, is the same artifact: one shared thread pool and a GIL
+serialising the scan, not an S3 limit.
+
+The crate already has an object-store client and SIMD PQ4 kernels. The decision
+belongs to a native reader over the same published objects, not to another
+Python sweep.
