@@ -465,6 +465,28 @@ def _plan_candidate_rows(
     )
 
 
+def _contiguous_page_ranges(pages: np.ndarray) -> list[tuple[int, int]]:
+    ordered = np.asarray(pages, dtype=np.int64)
+    if (
+        ordered.ndim != 1
+        or ordered.size == 0
+        or np.any(ordered < 0)
+        or not np.array_equal(ordered, np.unique(ordered))
+    ):
+        raise ValueError("page-exact ranges differ")
+    ranges: list[tuple[int, int]] = []
+    start = int(ordered[0])
+    previous = start
+    for value in ordered[1:]:
+        page = int(value)
+        if page != previous + 1:
+            ranges.append((start, previous))
+            start = page
+        previous = page
+    ranges.append((start, previous))
+    return ranges
+
+
 def evaluate_coarse_to_fine(
     base: np.ndarray,
     delta: np.ndarray,
@@ -497,6 +519,8 @@ def evaluate_coarse_to_fine(
     wave1_page_evidence_sha256: str | None = None,
     wave2_nominated_positions_by_query: np.ndarray | None = None,
     wave2_nomination_sha256: str | None = None,
+    wave2_rescue_pages_by_query: np.ndarray | None = None,
+    wave2_rescue_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one fixed two-wave routing design with a resident delta."""
 
@@ -619,6 +643,41 @@ def evaluate_coarse_to_fine(
         )
     ):
         raise ValueError("wave-two nomination differs")
+    if wave2_rescue_pages_by_query is not None:
+        rescue_pages = np.asarray(wave2_rescue_pages_by_query)
+        if (
+            rescue_pages.ndim != 2
+            or rescue_pages.shape[0] != queries.shape[0]
+            or rescue_pages.shape[1] == 0
+            or rescue_pages.dtype.kind not in "iu"
+            or np.any(rescue_pages < -1)
+            or np.any(rescue_pages >= page_count)
+            or any(
+                np.unique(row[row >= 0]).size != np.count_nonzero(row >= 0)
+                or not np.array_equal(
+                    row < 0,
+                    np.arange(row.size) >= np.count_nonzero(row >= 0),
+                )
+                for row in rescue_pages
+            )
+        ):
+            raise ValueError("wave-two rescue differs")
+        wave2_rescue_pages_by_query = rescue_pages.astype(np.int64, copy=False)
+    has_wave2_rescues = wave2_rescue_pages_by_query is not None
+    expected_rescue_sha256 = (
+        hashlib.sha256(
+            np.ascontiguousarray(
+                wave2_rescue_pages_by_query, dtype="<i8"
+            ).tobytes()
+        ).hexdigest()
+        if has_wave2_rescues
+        else None
+    )
+    if has_wave2_rescues != (wave2_rescue_sha256 is not None) or (
+        wave2_rescue_sha256 is not None
+        and wave2_rescue_sha256 != expected_rescue_sha256
+    ):
+        raise ValueError("wave-two rescue differs")
     base_page_sq8 = _page_sq8(base, page_rows)
     delta_sq8 = _sq8(delta)
     if code_page_bytes is None:
@@ -715,6 +774,13 @@ def evaluate_coarse_to_fine(
                 else wave2_nominated_positions_by_query[query_index]
             ),
         )
+        if wave2_rescue_pages_by_query is not None:
+            requested_rescues = wave2_rescue_pages_by_query[query_index]
+            requested_rescues = requested_rescues[requested_rescues >= 0]
+            wave2_pages = np.union1d(wave2_pages, requested_rescues).astype(
+                np.int64, copy=False
+            )
+            wave2_ranges = _contiguous_page_ranges(wave2_pages)
         wave2_positions = _page_rows(
             wave2_pages, rows=base.shape[0], page_rows=page_rows
         )
@@ -823,6 +889,12 @@ def evaluate_coarse_to_fine(
                 int(position)
                 for position in wave2_nominated_positions_by_query[query_index]
             ]
+        if wave2_rescue_pages_by_query is not None:
+            samples[-1]["wave2_rescue_pages"] = [
+                int(page)
+                for page in wave2_rescue_pages_by_query[query_index]
+                if page >= 0
+            ]
 
     denominator = queries.shape[0] * neighbors
     result = {
@@ -844,6 +916,8 @@ def evaluate_coarse_to_fine(
         result["wave1_page_evidence_sha256"] = wave1_page_evidence_sha256
     if wave2_nomination_sha256 is not None:
         result["wave2_nomination_sha256"] = wave2_nomination_sha256
+    if wave2_rescue_sha256 is not None:
+        result["wave2_rescue_sha256"] = wave2_rescue_sha256
     return result
 
 

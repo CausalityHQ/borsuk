@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import subprocess
 import sys
 import unittest
@@ -168,6 +169,40 @@ class V86CoarseToFineTests(unittest.TestCase):
         )
         self.assertEqual(nominated["wave2_nomination_sha256"], "b" * 64)
         self.assertEqual(nominated["samples"][0]["wave2_nominated_rows"], [0])
+
+        baseline_pages = result["samples"][0]["wave2_pages"]
+        rescue_page = next(page for page in range(2) if page not in baseline_pages)
+        rescue_pages = np.asarray([[rescue_page, -1]], dtype=np.int64)
+        rescue_sha256 = hashlib.sha256(
+            np.ascontiguousarray(rescue_pages, dtype="<i8").tobytes()
+        ).hexdigest()
+        rescued = evaluate_coarse_to_fine(
+            base,
+            np.asarray([[20.0]], dtype=np.float32),
+            np.asarray([[10.0]], dtype=np.float32),
+            wave1_page_evidence_sha256="a" * 64,
+            wave2_rescue_pages_by_query=rescue_pages,
+            wave2_rescue_sha256=rescue_sha256,
+            **common,
+        )
+        self.assertTrue(
+            set(baseline_pages).issubset(rescued["samples"][0]["wave2_pages"])
+        )
+        self.assertEqual(
+            rescued["samples"][0]["wave2_rescue_pages"], [rescue_page]
+        )
+        self.assertEqual(rescued["wave2_rescue_sha256"], rescue_sha256)
+
+        with self.assertRaisesRegex(ValueError, "wave-two rescue differs"):
+            evaluate_coarse_to_fine(
+                base,
+                np.asarray([[20.0]], dtype=np.float32),
+                np.asarray([[10.0]], dtype=np.float32),
+                wave1_page_evidence_sha256="a" * 64,
+                wave2_rescue_pages_by_query=rescue_pages,
+                wave2_rescue_sha256="0" * 64,
+                **common,
+            )
 
         with self.assertRaisesRegex(ValueError, "wave-two nomination differs"):
             evaluate_coarse_to_fine(
