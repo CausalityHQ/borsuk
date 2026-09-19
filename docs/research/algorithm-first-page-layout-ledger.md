@@ -1314,3 +1314,55 @@ does not consume reserved confirmation queries 328--455. Pure coverage-first
 planning is closed; the next bounded falsifier must interpolate between count
 and harmonic rank using a fixed monotone hit-probability calibration derived
 without touching the reserved confirmation split.
+
+## V89 — corpus-calibrated rank utility is only marginally better
+
+Source `0710b2db3556faa52b22dcc68cf986eff95ee6e2` ran once on c7i.8xlarge
+Spot instance `i-0b974f632e2c3793e` in `eu-central-1a`. The instance published
+a successful terminal and shut down immediately; it is verified terminated.
+Immutable evidence is under
+`research/v89-calibrated-planner/0710b2db3556faa52b22dcc68cf986eff95ee6e2/runs/v89-calibrated-planner-20260919T205953Z-0710b2db/a0001/`.
+The canonical result SHA-256 is
+`132940bdf1b20f0277a41e602eaca173cd5d4df77119e7cd6f4831f3de0de9fb`;
+the terminal SHA-256 is
+`997996b5cc25ac9951e147dfe00f62bd43a0b7c57833a37d6fccb7245cc9d6aa`.
+
+V89 kept the registered two-summary PQ192 artifact, row codes, burned
+development queries 0--31, resident SQ8 delta, and both physical budgets
+unchanged. It changed only wave-one page utility. The challenger fitted a
+fixed monotone expected-truth-rows curve from 128 SHA-selected resident-delta
+vectors, using exact float32 L2 against the 900,000-row base. These corpus
+vectors are not development, confirmation, or truth inputs. The selected
+calibration pool, base vectors and IDs, full artifact, rank limit, and
+neighbour count are all digest-bound. Ranks 0--31 are singleton bins, ranks
+32--255 use width-eight bins, ranks 256--1023 use width-32 bins, and all later
+ranks share a fixed overflow bin. The calibration SHA-256 is
+`73fcbc873a987a0fbf46901922fa91e45abb67b85ee8b1750c53db433ef9a041`.
+
+| arm | objective | page-SQ8 Recall@100 | base-only recall | query 15 | worst | wave-one base truth |
+|---|---|---:|---:|---:|---:|---:|
+| registered control | reciprocal rank | **98.6875%** (3,158/3,200) | **98.5412%** | 88 | 88 | 2,843/2,879 |
+| challenger | calibrated rank utility | **98.7500%** (3,160/3,200) | **98.6106%** | 87 | 87 | 2,846/2,879 |
+
+Both arms had identical rank evidence: 2,793 base-truth hits inside rank 100,
+2,855 inside 256, 2,864 inside 340, 2,875 inside 512, and all 2,879 inside
+1,024. The calibrated objective reduced planner misses from 36 to 33 but
+recovered only two final hits and regressed the worst query. It therefore
+failed the unchanged 3,176-hit, query-15=90, and 991,000-ppm base gate. The
+reserved confirmation queries 328--455 remain unused.
+
+Each arm stayed within 340 wave-one pages, 32 wave-one ranges and 16,733,440
+wave-one bytes, followed by 81 wave-two pages, 32 wave-two ranges and
+16,676,928 wave-two bytes. This offline screen made zero S3 query requests;
+64 requests per query remains a planned maximum, not measured latency.
+Scientific wall time was 6:44.84, peak RSS was 10,287,080 KiB, CPU utilization
+reported by `time` was 806%, and swaps were zero. The dense 100M traceback
+remains 8,791,406,250 bytes per query and is explicitly unqualified.
+
+This result closes global rank-only utility calibration at the registered
+physical budget. It does not close query-dependent page evidence. The next
+smallest 1M falsifier should change the page representation rather than tune
+another rank curve: deterministic diverse page witnesses or an equivalent
+query-dependent page sketch must first demonstrate quality under the same
+340-page/32-range ceiling. Any passing representation still needs a sparse
+hierarchical router before a 100M serving claim.
