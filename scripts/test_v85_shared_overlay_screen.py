@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from scripts.v85_shared_overlay_screen import evaluate_overlay
+from scripts.v85_shared_overlay_screen import _select_voted_pages, evaluate_overlay
 
 
 class V85SharedOverlayScreenTests(unittest.TestCase):
@@ -80,6 +80,8 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             subspaces=2,
             clusters=2,
             shortlists=(1,),
+            vote_top_rows=(1,),
+            vote_page_caps=(1,),
             training_sample_rows=2,
             encode_chunk_rows=2,
         )
@@ -94,6 +96,10 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         self.assertEqual(result["cells"][0]["base_bytes_p50"], 32)
         self.assertEqual(result["cells"][0]["base_bytes_p95"], 32)
         self.assertEqual(set(result["cells"][0]["result_ids"]), {401, 901})
+        self.assertEqual(result["page_vote_cells"][0]["page_sq8_recall_ppm"], 1_000_000)
+        self.assertEqual(result["page_vote_cells"][0]["base_gets_max"], 1)
+        self.assertEqual(result["page_vote_cells"][0]["base_bytes_max"], 32)
+        self.assertTrue(result["page_vote_gate"]["passed"])
         self.assertEqual(
             result["promotion_gate"],
             {
@@ -137,6 +143,24 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         self.assertEqual(cell["result_ids"], [20])
         self.assertEqual(result["base_quantizer"], "per-page-sq8")
         self.assertEqual(result["base_quantizer_resident_bytes"], 32)
+
+    def test_page_votes_prefer_repeated_evidence_under_hard_budget(self) -> None:
+        scores = np.asarray(
+            [0.01, 9.0, 0.02, 9.0, 0.03, 9.0, 0.04, 0.05],
+            dtype=np.float32,
+        )
+
+        pages, ranges = _select_voted_pages(
+            scores,
+            page_rows=2,
+            top_rows=5,
+            max_span_pages=1,
+            max_ranges=1,
+            gap=0,
+        )
+
+        self.assertEqual(pages.tolist(), [3])
+        self.assertEqual(ranges, [(3, 3)])
 
 
 if __name__ == "__main__":

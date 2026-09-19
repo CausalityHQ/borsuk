@@ -110,6 +110,45 @@ def _coalesce(pages: np.ndarray, gap: int = 2) -> list[tuple[int, int]]:
     return [(int(starts[index]), int(ends[index])) for index in range(starts.size)]
 
 
+def _select_voted_pages(
+    scores: np.ndarray,
+    *,
+    page_rows: int,
+    top_rows: int,
+    max_span_pages: int,
+    max_ranges: int,
+    gap: int,
+) -> tuple[np.ndarray, list[tuple[int, int]]]:
+    take = min(top_rows, scores.size)
+    head = np.argpartition(scores, take - 1)[:take]
+    cutoff = np.max(scores[head])
+    below = np.flatnonzero(scores < cutoff)
+    remaining = take - below.size
+    equal = np.flatnonzero(scores == cutoff)[:remaining]
+    head = np.concatenate((below, equal))
+
+    pages = head // page_rows
+    page_count = (scores.size + page_rows - 1) // page_rows
+    counts = np.bincount(pages, minlength=page_count)
+    minimum = np.full(page_count, np.inf, dtype=np.float32)
+    np.minimum.at(minimum, pages, scores[head])
+    candidates = np.flatnonzero(counts)
+    candidates = candidates[
+        np.lexsort((candidates, minimum[candidates], -counts[candidates]))
+    ]
+
+    selected = np.empty(0, dtype=np.int64)
+    ranges: list[tuple[int, int]] = []
+    for page in candidates:
+        proposed = np.sort(np.append(selected, page))
+        proposed_ranges = _coalesce(proposed, gap)
+        span_pages = sum(end - start + 1 for start, end in proposed_ranges)
+        if len(proposed_ranges) <= max_ranges and span_pages <= max_span_pages:
+            selected = proposed
+            ranges = proposed_ranges
+    return selected, ranges
+
+
 def _top_ids(
     query: np.ndarray, vectors: np.ndarray, ids: np.ndarray, neighbors: int
 ) -> list[int]:
@@ -134,6 +173,8 @@ def evaluate_overlay(
     subspaces: int = 64,
     clusters: int = 256,
     shortlists: tuple[int, ...] = (256, 512, 1024),
+    vote_top_rows: tuple[int, ...] = (1024, 2048, 4096),
+    vote_page_caps: tuple[int, ...] = (64, 84),
     logical_run_counts: tuple[int, ...] = (1, 10, 100),
     seed: int = 85,
     base_ids: np.ndarray | None = None,
@@ -156,6 +197,10 @@ def evaluate_overlay(
         or base.shape[1] % subspaces != 0
         or page_rows <= 0
         or neighbors <= 0
+        or not vote_top_rows
+        or not vote_page_caps
+        or min(vote_top_rows) <= 0
+        or min(vote_page_caps) <= 0
         or training_sample_rows <= 0
         or encode_chunk_rows <= 0
     ):
@@ -284,6 +329,78 @@ def evaluate_overlay(
         and cell["base_gets_max"] <= 32
         and cell["base_bytes_max"] <= 16 * 1024 * 1024
     ]
+    vote_cells = []
+    for top_rows in vote_top_rows:
+        for page_cap in vote_page_caps:
+            samples = []
+            exact_hits = 0
+            page_sq8_hits = 0
+            for query_index, query in enumerate(queries):
+                _, ranges = _select_voted_pages(
+                    router_scores[query_index],
+                    page_rows=page_rows,
+                    top_rows=top_rows,
+                    max_span_pages=page_cap,
+                    max_ranges=32,
+                    gap=2,
+                )
+                base_candidates = np.concatenate(
+                    [
+                        np.arange(
+                            start * page_rows,
+                            min((end + 1) * page_rows, base.shape[0]),
+                            dtype=np.int64,
+                        )
+                        for start, end in ranges
+                    ]
+                )
+                candidate_ids = np.concatenate((base_ids[base_candidates], delta_ids))
+                exact_vectors = np.concatenate((base[base_candidates], delta), axis=0)
+                page_sq8_vectors = np.concatenate(
+                    (base_page_sq8[base_candidates], delta_sq8), axis=0
+                )
+                exact_result = _top_ids(query, exact_vectors, candidate_ids, neighbors)
+                page_sq8_result = _top_ids(
+                    query, page_sq8_vectors, candidate_ids, neighbors
+                )
+                expected = set(truth[query_index])
+                exact_hits += len(expected.intersection(exact_result))
+                page_sq8_hits += len(expected.intersection(page_sq8_result))
+                samples.append(
+                    {
+                        "base_bytes": int(
+                            base_candidates.size * (12 + base.shape[1])
+                        ),
+                        "base_gets": len(ranges),
+                    }
+                )
+            base_bytes = [sample["base_bytes"] for sample in samples]
+            base_gets = [sample["base_gets"] for sample in samples]
+            vote_cells.append(
+                {
+                    "base_bytes_max": max(base_bytes),
+                    "base_bytes_p50": _nearest_percentile(base_bytes, 0.50),
+                    "base_bytes_p95": _nearest_percentile(base_bytes, 0.95),
+                    "base_gets_max": max(base_gets),
+                    "base_gets_p50": _nearest_percentile(base_gets, 0.50),
+                    "base_gets_p95": _nearest_percentile(base_gets, 0.95),
+                    "exact_recall_ppm": round(
+                        exact_hits * 1_000_000 / denominator
+                    ),
+                    "page_cap": page_cap,
+                    "page_sq8_recall_ppm": round(
+                        page_sq8_hits * 1_000_000 / denominator
+                    ),
+                    "top_rows": top_rows,
+                }
+            )
+    passing_vote_cells = [
+        {"page_cap": cell["page_cap"], "top_rows": cell["top_rows"]}
+        for cell in vote_cells
+        if cell["page_sq8_recall_ppm"] >= 990_000
+        and cell["base_gets_max"] <= 32
+        and cell["base_bytes_max"] <= 16 * 1024 * 1024
+    ]
     return {
         "cells": cells,
         "base_quantizer": "per-page-sq8",
@@ -303,6 +420,14 @@ def evaluate_overlay(
         ),
         "delta_rows": int(delta.shape[0]),
         "logical_run_counts": list(logical_run_counts),
+        "page_vote_cells": vote_cells,
+        "page_vote_gate": {
+            "max_base_bytes": 16 * 1024 * 1024,
+            "max_base_gets": 32,
+            "min_page_sq8_recall_ppm": 990_000,
+            "passed": bool(passing_vote_cells),
+            "passing_cells": passing_vote_cells,
+        },
         "promotion_gate": {
             "max_base_bytes": 16 * 1024 * 1024,
             "max_base_gets": 32,
