@@ -13,6 +13,7 @@ use std::{
 use arrow_array::{Array, FixedSizeListArray, Float32Array, Int64Array, UInt8Array, UInt64Array};
 use arrow_ipc::reader::{FileReader, StreamReader};
 use arrow_schema::{DataType, Field, Schema};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt, path::Path as ObjectPath};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Serialize;
@@ -58,6 +59,31 @@ struct LocalArtifactRequest {
     queries: LocalArtifactIdentity,
     truth: LocalArtifactIdentity,
     page_budget: usize,
+}
+
+#[derive(Clone, Debug)]
+struct RemoteArtifactIdentity {
+    uri: String,
+    sha256: String,
+    bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RemoteArtifactRequest {
+    generation: LocalArtifactIdentity,
+    router: LocalArtifactIdentity,
+    mutations: LocalArtifactIdentity,
+    runs: Vec<RemoteArtifactIdentity>,
+    queries: LocalArtifactIdentity,
+    truth: LocalArtifactIdentity,
+    page_budget: usize,
+    range_concurrency: usize,
+}
+
+#[derive(Clone, Debug)]
+enum ExecutionRequest {
+    Local(LocalArtifactRequest),
+    Remote(RemoteArtifactRequest),
 }
 
 impl LocalArtifactRequest {
@@ -123,6 +149,35 @@ fn authenticate_local_artifacts(request: &LocalArtifactRequest) -> ReaderResult<
     Ok(bodies)
 }
 
+fn authenticate_local_identities(
+    identities: &[&LocalArtifactIdentity],
+) -> ReaderResult<Vec<Vec<u8>>> {
+    let mut bodies = Vec::with_capacity(identities.len());
+    let mut uris = std::collections::BTreeSet::new();
+    for identity in identities {
+        if !identity.uri.starts_with("s3://")
+            || !uris.insert(identity.uri.as_str())
+            || identity.sha256.len() != 64
+            || !identity
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || identity.bytes == 0
+        {
+            return Err(ReaderError::authority("artifact identity differs"));
+        }
+        let body = fs::read(&identity.path)
+            .map_err(|error| ReaderError::authority(format!("artifact read failed: {error}")))?;
+        if u64::try_from(body.len()).ok() != Some(identity.bytes)
+            || format!("{:x}", Sha256::digest(&body)) != identity.sha256
+        {
+            return Err(ReaderError::authority("artifact payload identity differs"));
+        }
+        bodies.push(body);
+    }
+    Ok(bodies)
+}
+
 #[derive(Clone, Debug)]
 struct DecodedRow {
     id: i64,
@@ -148,35 +203,44 @@ async fn read_planned_page_streams(
     store: &dyn ObjectStore,
     reads: &[borsuk_v71::delta::PageRead],
     dimensions: i32,
+    range_concurrency: usize,
 ) -> ReaderResult<Vec<DecodedRow>> {
-    if dimensions <= 0 {
-        return Err(ReaderError::authority("page dimensions differ"));
+    if dimensions <= 0 || range_concurrency == 0 {
+        return Err(ReaderError::authority("page read shape differs"));
     }
     let expected_schema = page_schema(dimensions);
     let mut decoded = Vec::new();
-    for read in reads {
-        let url = Url::parse(&read.uri)
-            .map_err(|error| ReaderError::authority(format!("page URI differs: {error}")))?;
-        let path = ObjectPath::from(url.path().trim_start_matches('/'));
-        let end = read
-            .offset
-            .checked_add(read.bytes)
-            .ok_or_else(|| ReaderError::authority("page range overflows"))?;
+    let mut bodies = stream::iter(reads.iter().cloned())
+        .map(|read| async move {
+            let url = Url::parse(&read.uri)
+                .map_err(|error| ReaderError::authority(format!("page URI differs: {error}")))?;
+            let path = ObjectPath::from(url.path().trim_start_matches('/'));
+            let end = read
+                .offset
+                .checked_add(read.bytes)
+                .ok_or_else(|| ReaderError::authority("page range overflows"))?;
+            let body = store
+                .get_opts(
+                    &path,
+                    GetOptions {
+                        range: Some(GetRange::Bounded(read.offset..end)),
+                        ..GetOptions::default()
+                    },
+                )
+                .await
+                .map_err(|error| ReaderError::authority(format!("page range GET failed: {error}")))?
+                .bytes()
+                .await
+                .map_err(|error| ReaderError::authority(format!("page body failed: {error}")))?;
+            Ok::<_, ReaderError>((read, body))
+        })
+        .buffer_unordered(range_concurrency)
+        .try_collect::<Vec<_>>()
+        .await?;
+    bodies.sort_by_key(|(read, _)| (read.run_id, read.page, read.offset));
+    for (read, body) in bodies {
         let expected_bytes = usize::try_from(read.bytes)
             .map_err(|_| ReaderError::authority("page length is not addressable"))?;
-        let body = store
-            .get_opts(
-                &path,
-                GetOptions {
-                    range: Some(GetRange::Bounded(read.offset..end)),
-                    ..GetOptions::default()
-                },
-            )
-            .await
-            .map_err(|error| ReaderError::authority(format!("page range GET failed: {error}")))?
-            .bytes()
-            .await
-            .map_err(|error| ReaderError::authority(format!("page body failed: {error}")))?;
         if body.len() != expected_bytes {
             return Err(ReaderError::authority("page range length differs"));
         }
@@ -349,7 +413,7 @@ fn canonical_result_bytes(samples: &[QuerySample], generation: u64) -> ReaderRes
     Ok(bytes)
 }
 
-fn artifact_matches(expected: (&str, &str, u64), actual: &LocalArtifactIdentity) -> bool {
+fn remote_artifact_matches(expected: (&str, &str, u64), actual: &RemoteArtifactIdentity) -> bool {
     expected == (actual.uri.as_str(), actual.sha256.as_str(), actual.bytes)
 }
 
@@ -650,26 +714,44 @@ fn squared_distance(left: &[f32], right: &[f32]) -> f32 {
         .sum()
 }
 
-async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> {
+async fn execute_with_store(
+    authority_bodies: &[Vec<u8>],
+    router_authority: &LocalArtifactIdentity,
+    mutation_authority: &LocalArtifactIdentity,
+    runs: &[RemoteArtifactIdentity],
+    page_budget: usize,
+    range_concurrency: usize,
+    store: &dyn ObjectStore,
+) -> ReaderResult<Vec<u8>> {
     use borsuk_v71::delta::{Candidate, GenerationManifest, merge_candidates, plan_page_reads};
 
-    if request.page_budget == 0 {
-        return Err(ReaderError::authority("page budget is zero"));
+    if page_budget == 0 || range_concurrency == 0 || authority_bodies.len() != 5 {
+        return Err(ReaderError::authority("execution shape differs"));
     }
-    let bodies = authenticate_local_artifacts(request)?;
-    let generation = GenerationManifest::from_canonical_bytes(&bodies[0])
+    let generation = GenerationManifest::from_canonical_bytes(&authority_bodies[0])
         .map_err(|error| ReaderError::authority(format!("generation differs: {error}")))?;
-    if !artifact_matches(generation.router_identity(), &request.router)
-        || !artifact_matches(generation.mutation_directory_identity(), &request.mutations)
-        || generation.runs().len() != request.runs.len()
+    if !remote_artifact_matches(
+        generation.router_identity(),
+        &RemoteArtifactIdentity {
+            uri: router_authority.uri.clone(),
+            sha256: router_authority.sha256.clone(),
+            bytes: router_authority.bytes,
+        },
+    ) || !remote_artifact_matches(
+        generation.mutation_directory_identity(),
+        &RemoteArtifactIdentity {
+            uri: mutation_authority.uri.clone(),
+            sha256: mutation_authority.sha256.clone(),
+            bytes: mutation_authority.bytes,
+        },
+    ) || generation.runs().len() != runs.len()
     {
         return Err(ReaderError::authority("generation object binding differs"));
     }
     for run in generation.runs() {
-        let matches = request
-            .runs
+        let matches = runs
             .iter()
-            .filter(|identity| artifact_matches(run.object_identity(), identity))
+            .filter(|identity| remote_artifact_matches(run.object_identity(), identity))
             .count();
         if matches != 1 {
             return Err(ReaderError::authority("generation run binding differs"));
@@ -677,31 +759,17 @@ async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> 
     }
     let dimensions = i32::try_from(generation.dimensions())
         .map_err(|_| ReaderError::authority("generation dimensions are not addressable"))?;
-    let router = read_router(&bodies[1], dimensions)?;
-    let mutations = read_mutations(&bodies[2])?;
-    let queries_index = 3 + request.runs.len();
-    let truth_index = queries_index + 1;
-    let queries = read_queries(&bodies[queries_index], dimensions)?;
+    let router = read_router(&authority_bodies[1], dimensions)?;
+    let mutations = read_mutations(&authority_bodies[2])?;
+    let queries = read_queries(&authority_bodies[3], dimensions)?;
     let truth = read_truth(
-        &bodies[truth_index],
+        &authority_bodies[4],
         i32::try_from(generation.neighbors())
             .map_err(|_| ReaderError::authority("neighbor count is not addressable"))?,
     )?;
     if queries.len() != truth.len() {
         return Err(ReaderError::authority("query and truth counts differ"));
     }
-
-    let store = object_store::memory::InMemory::new();
-    for (index, run) in request.runs.iter().enumerate() {
-        store
-            .put(
-                &object_path(&run.uri)?,
-                bytes::Bytes::copy_from_slice(&bodies[3 + index]).into(),
-            )
-            .await
-            .map_err(|error| ReaderError::authority(format!("run local store failed: {error}")))?;
-    }
-
     let run_kinds = generation
         .runs()
         .iter()
@@ -725,14 +793,14 @@ async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> 
         scored_pages.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
         let mut selected = scored_pages
             .into_iter()
-            .take(request.page_budget)
+            .take(page_budget)
             .map(|(_, page)| page)
             .collect::<Vec<_>>();
         selected.sort_unstable();
         selected.dedup();
         let reads = plan_page_reads(&selected, &generation)
             .map_err(|error| ReaderError::authority(format!("page plan differs: {error}")))?;
-        let rows = read_planned_page_streams(&store, &reads, dimensions).await?;
+        let rows = read_planned_page_streams(store, &reads, dimensions, range_concurrency).await?;
         let decoded_bytes = rows.iter().map(|row| row.bytes).sum::<u64>();
         if decoded_bytes != reads.iter().map(|read| read.bytes).sum::<u64>()
             || rows.iter().any(|row| !selected.contains(&row.page))
@@ -783,12 +851,110 @@ async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> 
     canonical_result_bytes(&samples, generation.generation())
 }
 
-fn parse_args(arguments: Vec<String>) -> ReaderResult<LocalArtifactRequest> {
+async fn execute_local(request: &LocalArtifactRequest) -> ReaderResult<Vec<u8>> {
+    let bodies = authenticate_local_artifacts(request)?;
+    let queries_index = 3 + request.runs.len();
+    let authority_bodies = vec![
+        bodies[0].clone(),
+        bodies[1].clone(),
+        bodies[2].clone(),
+        bodies[queries_index].clone(),
+        bodies[queries_index + 1].clone(),
+    ];
+    let store = object_store::memory::InMemory::new();
+    let runs = request
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(index, run)| {
+            let body = &bodies[3 + index];
+            (run, body)
+        })
+        .map(|(run, body)| async {
+            store
+                .put(
+                    &object_path(&run.uri)?,
+                    bytes::Bytes::copy_from_slice(body).into(),
+                )
+                .await
+                .map_err(|error| {
+                    ReaderError::authority(format!("run local store failed: {error}"))
+                })?;
+            Ok::<_, ReaderError>(RemoteArtifactIdentity {
+                uri: run.uri.clone(),
+                sha256: run.sha256.clone(),
+                bytes: run.bytes,
+            })
+        });
+    let mut remote_runs = Vec::with_capacity(request.runs.len());
+    for run in runs {
+        remote_runs.push(run.await?);
+    }
+    execute_with_store(
+        &authority_bodies,
+        &request.router,
+        &request.mutations,
+        &remote_runs,
+        request.page_budget,
+        1,
+        &store,
+    )
+    .await
+}
+
+async fn execute_remote_with_store(
+    request: &RemoteArtifactRequest,
+    store: &dyn ObjectStore,
+) -> ReaderResult<Vec<u8>> {
+    if request.runs.is_empty() || request.range_concurrency == 0 {
+        return Err(ReaderError::authority("remote execution shape differs"));
+    }
+    let authority_bodies = authenticate_local_identities(&[
+        &request.generation,
+        &request.router,
+        &request.mutations,
+        &request.queries,
+        &request.truth,
+    ])?;
+    for run in &request.runs {
+        if !run.uri.starts_with("s3://")
+            || run.sha256.len() != 64
+            || !run
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || run.bytes == 0
+        {
+            return Err(ReaderError::authority("remote run identity differs"));
+        }
+        let metadata = store
+            .head(&object_path(&run.uri)?)
+            .await
+            .map_err(|error| ReaderError::authority(format!("remote run HEAD failed: {error}")))?;
+        if metadata.size != run.bytes {
+            return Err(ReaderError::authority("remote run length differs"));
+        }
+    }
+    execute_with_store(
+        &authority_bodies,
+        &request.router,
+        &request.mutations,
+        &request.runs,
+        request.page_budget,
+        request.range_concurrency,
+        store,
+    )
+    .await
+}
+
+fn parse_args(arguments: Vec<String>) -> ReaderResult<ExecutionRequest> {
     let mut iterator = arguments.into_iter();
     let _program = iterator.next();
     let mut identities = BTreeMap::<String, LocalArtifactIdentity>::new();
     let mut runs = Vec::<LocalArtifactIdentity>::new();
+    let mut remote_runs = Vec::<RemoteArtifactIdentity>::new();
     let mut page_budget = None;
+    let mut range_concurrency = None;
     while let Some(flag) = iterator.next() {
         if flag == "--page-budget" {
             if page_budget.is_some() {
@@ -800,6 +966,19 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<LocalArtifactRequest> {
                     .ok_or_else(|| ReaderError::authority("page budget is missing"))?
                     .parse::<usize>()
                     .map_err(|_| ReaderError::authority("page budget differs"))?,
+            );
+            continue;
+        }
+        if flag == "--range-concurrency" {
+            if range_concurrency.is_some() {
+                return Err(ReaderError::authority("range concurrency is duplicated"));
+            }
+            range_concurrency = Some(
+                iterator
+                    .next()
+                    .ok_or_else(|| ReaderError::authority("range concurrency is missing"))?
+                    .parse::<usize>()
+                    .map_err(|_| ReaderError::authority("range concurrency differs"))?,
             );
             continue;
         }
@@ -830,6 +1009,21 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<LocalArtifactRequest> {
                 sha256,
                 bytes,
             });
+            continue;
+        }
+        if role == "run-s3" {
+            let uri = iterator
+                .next()
+                .ok_or_else(|| ReaderError::authority("artifact URI is missing"))?;
+            let sha256 = iterator
+                .next()
+                .ok_or_else(|| ReaderError::authority("artifact SHA-256 is missing"))?;
+            let bytes = iterator
+                .next()
+                .ok_or_else(|| ReaderError::authority("artifact length is missing"))?
+                .parse::<u64>()
+                .map_err(|_| ReaderError::authority("artifact length differs"))?;
+            remote_runs.push(RemoteArtifactIdentity { uri, sha256, bytes });
             continue;
         }
         if !matches!(
@@ -871,25 +1065,62 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<LocalArtifactRequest> {
             .remove(role)
             .ok_or_else(|| ReaderError::authority(format!("{role} artifact is missing")))
     };
-    let request = LocalArtifactRequest {
-        generation: take("generation")?,
-        router: take("router")?,
-        mutations: take("mutations")?,
-        runs,
-        queries: take("queries")?,
-        truth: take("truth")?,
-        page_budget: page_budget.ok_or_else(|| ReaderError::authority("page budget is missing"))?,
-    };
-    if !identities.is_empty() || request.page_budget == 0 {
+    let generation = take("generation")?;
+    let router = take("router")?;
+    let mutations = take("mutations")?;
+    let queries = take("queries")?;
+    let truth = take("truth")?;
+    let page_budget =
+        page_budget.ok_or_else(|| ReaderError::authority("page budget is missing"))?;
+    if !identities.is_empty()
+        || page_budget == 0
+        || (!runs.is_empty() && !remote_runs.is_empty())
+        || (remote_runs.is_empty() && range_concurrency.is_some())
+        || (!remote_runs.is_empty() && range_concurrency.is_none())
+        || range_concurrency == Some(0)
+    {
         return Err(ReaderError::authority("CLI authority differs"));
     }
-    Ok(request)
+    if remote_runs.is_empty() {
+        Ok(ExecutionRequest::Local(LocalArtifactRequest {
+            generation,
+            router,
+            mutations,
+            runs,
+            queries,
+            truth,
+            page_budget,
+        }))
+    } else {
+        Ok(ExecutionRequest::Remote(RemoteArtifactRequest {
+            generation,
+            router,
+            mutations,
+            runs: remote_runs,
+            queries,
+            truth,
+            page_budget,
+            range_concurrency: range_concurrency.expect("validated"),
+        }))
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let request = parse_args(env::args().collect())?;
-    let result = execute_local(&request).await?;
+    let result = match request {
+        ExecutionRequest::Local(request) => execute_local(&request).await?,
+        ExecutionRequest::Remote(request) => {
+            let first = request
+                .runs
+                .first()
+                .ok_or_else(|| ReaderError::authority("remote runs are empty"))?;
+            let store = object_store::aws::AmazonS3Builder::from_env()
+                .with_url(&first.uri)
+                .build()?;
+            execute_remote_with_store(&request, &store).await?
+        }
+    };
     std::io::stdout().write_all(&result)?;
     Ok(())
 }
@@ -912,8 +1143,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        LocalArtifactIdentity, LocalArtifactRequest, QuerySample, authenticate_local_artifacts,
-        canonical_result_bytes, execute_local, parse_args, read_planned_page_streams,
+        ExecutionRequest, LocalArtifactIdentity, LocalArtifactRequest, QuerySample,
+        RemoteArtifactIdentity, RemoteArtifactRequest, authenticate_local_artifacts,
+        canonical_result_bytes, execute_local, execute_remote_with_store, parse_args,
+        read_planned_page_streams,
     };
     use borsuk_v71::delta::PageRead;
 
@@ -1038,7 +1271,9 @@ mod tests {
                 rows: 1,
             },
         ];
-        let decoded = read_planned_page_streams(&store, &reads, 2).await.unwrap();
+        let decoded = read_planned_page_streams(&store, &reads, 2, 2)
+            .await
+            .unwrap();
         assert_eq!(decoded.iter().map(|row| row.id).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(
             decoded.iter().map(|row| row.page).collect::<Vec<_>>(),
@@ -1067,7 +1302,7 @@ mod tests {
             rows: 1,
         }];
         assert!(
-            read_planned_page_streams(&store, &wrong_read, 2)
+            read_planned_page_streams(&store, &wrong_read, 2, 2)
                 .await
                 .is_err()
         );
@@ -1293,6 +1528,117 @@ mod tests {
         }
     }
 
+    #[test]
+    fn remote_cli_requires_explicit_s3_runs_and_bounded_io_concurrency() {
+        // Break caught: a purported S3 qualification silently accepts local run
+        // paths, mixes local and remote runs, or permits unbounded I/O fan-out.
+        let root = TempDir::new().unwrap();
+        let local = exact_local_request(&root);
+        let mut arguments = vec!["v85_delta_reader".to_string()];
+        for (flag, identity) in [
+            ("--generation", &local.generation),
+            ("--router", &local.router),
+            ("--mutations", &local.mutations),
+            ("--queries", &local.queries),
+            ("--truth", &local.truth),
+        ] {
+            arguments.extend([
+                flag.to_string(),
+                identity.path.display().to_string(),
+                identity.uri.clone(),
+                identity.sha256.clone(),
+                identity.bytes.to_string(),
+            ]);
+        }
+        for run in &local.runs {
+            arguments.extend([
+                "--run-s3".to_string(),
+                run.uri.clone(),
+                run.sha256.clone(),
+                run.bytes.to_string(),
+            ]);
+        }
+        arguments.extend([
+            "--page-budget".to_string(),
+            "2".to_string(),
+            "--range-concurrency".to_string(),
+            "8".to_string(),
+        ]);
+
+        let parsed = parse_args(arguments.clone()).unwrap();
+        let ExecutionRequest::Remote(remote) = parsed else {
+            panic!("remote CLI selected a local execution path")
+        };
+        assert_eq!(remote.range_concurrency, 8);
+        assert_eq!(remote.runs.len(), 3);
+
+        let mut mixed = arguments;
+        mixed.extend([
+            "--run".to_string(),
+            local.runs[0].path.display().to_string(),
+            local.runs[0].uri.clone(),
+            local.runs[0].sha256.clone(),
+            local.runs[0].bytes.to_string(),
+        ]);
+        assert!(parse_args(mixed).is_err());
+
+        let mut unbounded = vec!["v85_delta_reader".to_string()];
+        unbounded.extend(["--range-concurrency".to_string(), "0".to_string()]);
+        assert!(parse_args(unbounded).is_err());
+    }
+
+    #[tokio::test]
+    async fn remote_reader_uses_registered_ranges_without_local_run_files() {
+        // Break caught: remote execution authenticates by downloading or opening
+        // complete run files locally instead of issuing only registered ranges.
+        let root = TempDir::new().unwrap();
+        let local = exact_local_request(&root);
+        let store = InMemory::new();
+        let mut runs = Vec::new();
+        for run in &local.runs {
+            let body = fs::read(&run.path).unwrap();
+            let uri = url::Url::parse(&run.uri).unwrap();
+            store
+                .put(
+                    &Path::from(uri.path().trim_start_matches('/')),
+                    Bytes::from(body).into(),
+                )
+                .await
+                .unwrap();
+            runs.push(RemoteArtifactIdentity {
+                uri: run.uri.clone(),
+                sha256: run.sha256.clone(),
+                bytes: run.bytes,
+            });
+            fs::remove_file(&run.path).unwrap();
+        }
+        let request = RemoteArtifactRequest {
+            generation: local.generation,
+            router: local.router,
+            mutations: local.mutations,
+            runs,
+            queries: local.queries,
+            truth: local.truth,
+            page_budget: local.page_budget,
+            range_concurrency: 2,
+        };
+
+        let body = execute_remote_with_store(&request, &store).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["aggregate_recall_ppm"], 1_000_000);
+        assert_eq!(value["total_requests"], 8);
+        assert_eq!(value["samples"][0]["result_ids"], serde_json::json!([1, 5]));
+        assert_eq!(value["samples"][1]["result_ids"], serde_json::json!([3, 6]));
+
+        let mut authority_drift = request;
+        authority_drift.router.uri = "s3://fixture/unbound-router".into();
+        assert!(
+            execute_remote_with_store(&authority_drift, &store)
+                .await
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn local_runner_recomputes_perfect_recall_from_authenticated_sparse_ranges() {
         let root = TempDir::new().unwrap();
@@ -1327,7 +1673,9 @@ mod tests {
             ]);
         }
         arguments.extend(["--page-budget".into(), "2".into()]);
-        let request = parse_args(arguments.clone()).unwrap();
+        let ExecutionRequest::Local(request) = parse_args(arguments.clone()).unwrap() else {
+            panic!("local CLI selected a remote execution path")
+        };
         assert_eq!(request.identities().len(), 7);
         assert_eq!(request.page_budget, 2);
 
@@ -1360,7 +1708,9 @@ mod tests {
         }
         arguments.extend(["--page-budget".into(), "2".into()]);
 
-        let request = parse_args(arguments).unwrap();
+        let ExecutionRequest::Local(request) = parse_args(arguments).unwrap() else {
+            panic!("local CLI selected a remote execution path")
+        };
         assert_eq!(request.runs.len(), 3);
         assert_eq!(request.identities().len(), 8);
     }
