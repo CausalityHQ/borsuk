@@ -348,6 +348,7 @@ def plan_ranked_pages(
     max_span_pages: int,
     max_ranges: int,
     objective: str = "reciprocal-rank",
+    calibrated_rank_weights: np.ndarray | None = None,
 ) -> tuple[np.ndarray, list[tuple[int, int]]]:
     """Plan physical ranges from ranked page evidence, charging all gaps."""
 
@@ -361,7 +362,7 @@ def plan_ranked_pages(
         or max_ranges <= 0
     ):
         raise ValueError("ranked page plan differs")
-    if objective not in {"coverage-first", "reciprocal-rank"}:
+    if objective not in {"calibrated", "coverage-first", "reciprocal-rank"}:
         raise ValueError("ranked page objective differs")
     take = min(rank_limit, page_scores.size)
     order = np.lexsort((np.arange(page_scores.size), page_scores))[:take]
@@ -371,11 +372,26 @@ def plan_ranked_pages(
         dtype=np.uint64,
     )
     total_rank_mass = sum(int(value) for value in rank_mass)
-    if objective == "coverage-first":
+    if objective == "calibrated":
+        calibrated = np.asarray(calibrated_rank_weights)
+        if (
+            calibrated.ndim != 1
+            or calibrated.size < take
+            or calibrated.dtype.kind not in "iu"
+            or np.any(calibrated < 0)
+        ):
+            raise ValueError("ranked page objective differs")
+        weights[order] = calibrated[:take].astype(np.uint64, copy=False)
+        maximum_objective = sum(int(value) for value in calibrated[:take])
+    elif objective == "coverage-first":
+        if calibrated_rank_weights is not None:
+            raise ValueError("ranked page objective differs")
         dominance = total_rank_mass + 1
         weights[order] = np.uint64(dominance) + rank_mass
         maximum_objective = take * dominance + total_rank_mass
     else:
+        if calibrated_rank_weights is not None:
+            raise ValueError("ranked page objective differs")
         weights[order] = rank_mass
         maximum_objective = total_rank_mass
     if maximum_objective > 2**53:
@@ -452,6 +468,7 @@ def evaluate_coarse_to_fine(
     wave1_max_span_pages: int = _WAVE1_MAX_SPAN_PAGES,
     wave1_max_ranges: int = 32,
     wave1_objective: str = "reciprocal-rank",
+    wave1_rank_weights: np.ndarray | None = None,
     wave2_top_rows: int = 512,
     wave2_max_span_pages: int = _WAVE2_MAX_SPAN_PAGES,
     wave2_max_ranges: int = 32,
@@ -546,6 +563,7 @@ def evaluate_coarse_to_fine(
             max_span_pages=wave1_max_span_pages,
             max_ranges=wave1_max_ranges,
             objective=wave1_objective,
+            calibrated_rank_weights=wave1_rank_weights,
         )
         selected_page_ranks = page_ranks[wave1_pages]
         selected_ranked_page_ranks = selected_page_ranks[
