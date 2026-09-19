@@ -810,3 +810,46 @@ Restricting the row scan to 512 pages cuts the per-query work from 64M lookups
 to roughly 5.7M, and a third level would remove the remaining O(N) term. This
 is the next change, and until it is made the design serves 1M well and does not
 scale.
+
+## V77 — hierarchical routing
+
+`crates/borsuk-v71/` with a coarse level, results
+`research/v77-algorithm-first/hierarchical/a0001/`. 200 development queries,
+shortlist 512, gap 2, real S3.
+
+| coarse regions | Recall@100 | worst | requests | MiB | route | I/O | scan | total p50 | p99 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 98.865% | 90% | 18 | 10.1 | 1.28 ms | 36.4 | 2.5 | 40.2 ms | 93.9 |
+| **1,024** | **99.155%** | **90%** | 18 | 10.3 | **2.19 ms** | 37.0 | 2.5 | **41.8 ms** | 76.2 |
+| 3,907 (all) | 99.155% | 90% | 18 | 10.3 | 5.97 ms | 37.2 | 2.5 | 45.9 ms | 84.0 |
+| *flat router (V73)* | *99.155%* | *90%* | *18* | *10.3* | *4.40 ms* | *—* | *—* | *46.1 ms* | *245.4* |
+
+**Recall is identical to the flat router at 1,024 regions**, for half the router
+CPU. Scanning all 3,907 regions reproduces the flat result exactly, which is
+the correctness check: the coarse level is a filter, not a different algorithm.
+
+The scaling property is the point. The row-code scan is now **O(regions), not
+O(N)** — 1,024 regions is 262k rows scanned whether the corpus holds 1M rows or
+100M. The coarse level remains O(N) but over summaries rather than rows, at one
+dense dot product per 128 rows.
+
+### Throughput improved, but less than the CPU saving predicts
+
+| router | core-ms/query | ceiling | measured QPS | efficiency |
+|---|---:|---:|---:|---:|
+| flat | 331 | 145 | 107.0 | 74% |
+| regions=1,024 | 225 | 213 | 105.5 | 49% |
+| regions=256 | 181 | 265 | 124.6 | 47% |
+
+Halving the router did not double QPS, so the router was not the whole cost.
+Attributing what is left: the SQ8 scan moves 10.3 MiB to do 20 MFLOP, which at
+2.5 ms across 48 cores is **0.16 GFLOP/s per core**. It is nowhere near compute
+bound. The eight-lane accumulation fixed the scalar loop but the u8-to-f32
+widening is still built one element at a time, and the remaining cost is that
+conversion and the memory traffic behind it. A widening load is the next fix,
+and it is a bigger lever on throughput than any further routing work.
+
+**Per-node QPS is ~125 and readers are stateless**, since the index is immutable
+in object storage and nothing is cached between queries. Horizontal scaling is
+therefore available by construction — but that is an argument, not a
+measurement, and no multi-node run has been made.
