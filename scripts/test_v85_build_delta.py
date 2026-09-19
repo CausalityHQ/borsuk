@@ -14,6 +14,7 @@ from scripts.v85_build_delta import (
     BuildRequest,
     build_delta_artifacts,
     canonicalize_evaluation,
+    compute_exact_truth,
 )
 
 DIMENSIONS = 8
@@ -271,6 +272,41 @@ class V85BuildDeltaTests(unittest.TestCase):
                 pq.read_table(truth_output).column("neighbors").to_pylist(),
                 [[0, 1], [2, 3], [4, 5]],
             )
+
+    def test_exact_truth_is_recomputed_for_the_screen_subset(self) -> None:
+        # Break caught: the 1M GT is reused for a 100k subset even though many
+        # registered neighbours are outside that subset.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "source.parquet"
+            vectors = _write_source(source)[:20]
+            query_vectors = np.stack([vectors[3], vectors[11]]).astype(np.float32)
+            query_source = root / "queries-source.parquet"
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [pa.FixedSizeListArray.from_arrays(pa.array(query_vectors.reshape(-1)), DIMENSIONS)],
+                    schema=pa.schema(
+                        [pa.field("embedding", _vector_type(DIMENSIONS), nullable=False)]
+                    ),
+                ),
+                query_source,
+            )
+            truth_output = root / "truth.parquet"
+            compute_exact_truth(
+                source,
+                query_source,
+                truth_output,
+                dimensions=DIMENSIONS,
+                corpus_rows=20,
+                neighbors=3,
+                query_limit=2,
+            )
+            actual = pq.read_table(truth_output).column("neighbors").to_pylist()
+            expected = []
+            for query in query_vectors:
+                distance = np.sum((vectors - query) ** 2, axis=1)
+                expected.append(sorted(range(20), key=lambda row: (distance[row], row))[:3])
+            self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

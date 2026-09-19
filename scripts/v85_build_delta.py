@@ -151,6 +151,85 @@ def canonicalize_evaluation(
     pq.write_table(canonical_truth, truth_output)
 
 
+def compute_exact_truth(
+    source: pathlib.Path,
+    query_source: pathlib.Path,
+    truth_output: pathlib.Path,
+    *,
+    dimensions: int,
+    corpus_rows: int,
+    neighbors: int,
+    query_limit: int,
+) -> None:
+    """Compute exact squared-L2 neighbours for a bounded corpus prefix."""
+
+    if (
+        dimensions <= 0
+        or corpus_rows <= 0
+        or neighbors <= 0
+        or neighbors > corpus_rows
+        or query_limit <= 0
+    ):
+        raise ValueError("truth shape differs")
+    source_table = pq.read_table(source)
+    query_table = pq.read_table(query_source)
+    expected = pa.schema(
+        [pa.field("embedding", _vector_type(dimensions), nullable=False)]
+    )
+    if (
+        source_table.schema != expected
+        or query_table.schema != expected
+        or source_table.num_rows < corpus_rows
+        or query_table.num_rows < query_limit
+    ):
+        raise ValueError("truth input authority differs")
+    corpus = np.asarray(
+        source_table.column("embedding").combine_chunks().values.to_numpy(),
+        dtype=np.float32,
+    ).reshape(-1, dimensions)[:corpus_rows]
+    queries = np.asarray(
+        query_table.column("embedding").combine_chunks().values.to_numpy(),
+        dtype=np.float32,
+    ).reshape(-1, dimensions)[:query_limit]
+    if not np.isfinite(corpus).all() or not np.isfinite(queries).all():
+        raise ValueError("truth input is non-finite")
+
+    best_distance = np.full((query_limit, neighbors), np.inf, dtype=np.float32)
+    best_ids = np.full((query_limit, neighbors), np.iinfo(np.int64).max, dtype=np.int64)
+    for start in range(0, corpus_rows, 8_192):
+        stop = min(start + 8_192, corpus_rows)
+        block = corpus[start:stop]
+        block_ids = np.arange(start, stop, dtype=np.int64)
+        for query in range(query_limit):
+            delta = block - queries[query]
+            distances = np.einsum("ij,ij->i", delta, delta, optimize=True)
+            candidate_distance = np.concatenate([best_distance[query], distances])
+            candidate_ids = np.concatenate([best_ids[query], block_ids])
+            order = np.lexsort((candidate_ids, candidate_distance))[:neighbors]
+            best_distance[query] = candidate_distance[order]
+            best_ids[query] = candidate_ids[order]
+
+    truth = pa.Table.from_arrays(
+        [
+            pa.array(np.arange(query_limit, dtype=np.uint32), type=pa.uint32()),
+            pa.FixedSizeListArray.from_arrays(
+                pa.array(best_ids.reshape(-1), type=pa.int64()), neighbors
+            ),
+        ],
+        schema=pa.schema(
+            [
+                pa.field("query", pa.uint32(), nullable=False),
+                pa.field(
+                    "neighbors",
+                    pa.list_(pa.field("element", pa.int64(), nullable=False), neighbors),
+                    nullable=False,
+                ),
+            ]
+        ),
+    )
+    pq.write_table(truth, truth_output)
+
+
 def _fit_router(base: np.ndarray, cells: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
     if cells <= 0 or cells > len(base):
         raise ValueError("router cell count differs")
