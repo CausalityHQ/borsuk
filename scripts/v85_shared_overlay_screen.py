@@ -11,6 +11,8 @@ from typing import Any
 import numpy as np
 import pyarrow.parquet as pq
 
+_PAGE_HEADER_BYTES = 64
+
 
 def _lloyd(data: np.ndarray, clusters: int, seed: int) -> np.ndarray:
     count = min(clusters, data.shape[0])
@@ -110,6 +112,58 @@ def _coalesce(pages: np.ndarray, gap: int = 2) -> list[tuple[int, int]]:
     return [(int(starts[index]), int(ends[index])) for index in range(starts.size)]
 
 
+def _page_payload_bytes(*, dimensions: int, page_rows: int) -> int:
+    if dimensions <= 0 or page_rows <= 0:
+        raise ValueError("page shape differs")
+    quantizer_bytes = 2 * dimensions * np.dtype(np.float32).itemsize
+    record_bytes = 12 + dimensions
+    return _PAGE_HEADER_BYTES + quantizer_bytes + page_rows * record_bytes
+
+
+def _maximum_physical_oracle_hits(
+    page_hits: dict[int, int],
+    *,
+    page_count: int,
+    max_pages: int,
+    max_ranges: int,
+) -> int:
+    """Return exact maximum hit weight under contiguous physical-read budgets."""
+
+    if page_count <= 0 or max_pages <= 0 or max_ranges <= 0:
+        raise ValueError("physical oracle budget differs")
+    if any(
+        not 0 <= page < page_count or hits <= 0
+        for page, hits in page_hits.items()
+    ):
+        raise ValueError("physical oracle pages differ")
+    if not page_hits:
+        return 0
+
+    unreachable = np.int32(-1_000_000_000)
+    shape = (max_ranges + 1, max_pages + 1)
+    off = np.full(shape, unreachable, dtype=np.int32)
+    on = np.full(shape, unreachable, dtype=np.int32)
+    off[0, 0] = 0
+    previous = -1
+    for page, hits in sorted(page_hits.items()):
+        skipped = np.maximum(off, on)
+        selected = np.full(shape, unreachable, dtype=np.int32)
+
+        bridge_cost = page - previous
+        if bridge_cost <= max_pages:
+            selected[:, bridge_cost:] = np.maximum(
+                selected[:, bridge_cost:], on[:, : max_pages + 1 - bridge_cost]
+            )
+        selected[1:, 1:] = np.maximum(selected[1:, 1:], skipped[:-1, :-1])
+        selected[selected != unreachable] += np.int32(hits)
+
+        off = skipped
+        on = selected
+        previous = page
+
+    return int(max(np.max(off), np.max(on)))
+
+
 def _select_rank_weighted_pages(
     scores: np.ndarray,
     *,
@@ -175,6 +229,108 @@ def _nearest_percentile(values: list[int], quantile: float) -> int:
     return ordered[round((len(ordered) - 1) * quantile)]
 
 
+def evaluate_physical_oracle(
+    *,
+    base_ids: np.ndarray,
+    delta_ids: np.ndarray,
+    truth_ids: np.ndarray,
+    dimensions: int,
+    page_rows: int = 256,
+    max_base_bytes: int = 16 * 1024 * 1024,
+    max_base_gets: int = 32,
+) -> dict[str, Any]:
+    """Compute exact attainable GT coverage under physical page/range budgets."""
+
+    base_ids = np.asarray(base_ids, dtype=np.int64)
+    delta_ids = np.asarray(delta_ids, dtype=np.int64)
+    truth_ids = np.asarray(truth_ids, dtype=np.int64)
+    if (
+        base_ids.ndim != 1
+        or delta_ids.ndim != 1
+        or truth_ids.ndim != 2
+        or base_ids.size == 0
+        or delta_ids.size == 0
+        or truth_ids.shape[0] == 0
+        or truth_ids.shape[1] == 0
+        or dimensions <= 0
+        or page_rows <= 0
+        or max_base_bytes <= 0
+        or max_base_gets <= 0
+        or np.unique(np.concatenate((base_ids, delta_ids))).size
+        != base_ids.size + delta_ids.size
+    ):
+        raise ValueError("physical oracle authority differs")
+
+    page_payload_bytes = _page_payload_bytes(
+        dimensions=dimensions, page_rows=page_rows
+    )
+    max_base_pages = max_base_bytes // page_payload_bytes
+    if max_base_pages == 0:
+        raise ValueError("physical oracle budget differs")
+
+    base_order = np.argsort(base_ids, kind="stable")
+    sorted_base_ids = base_ids[base_order]
+    delta_order = np.argsort(delta_ids, kind="stable")
+    sorted_delta_ids = delta_ids[delta_order]
+    oracle_hits = 0
+    base_truth_hits = 0
+    delta_truth_hits = 0
+    query_recall = []
+    page_count = (base_ids.size + page_rows - 1) // page_rows
+    truth_width = truth_ids.shape[1]
+    for expected_ids in truth_ids:
+        base_offsets = np.searchsorted(sorted_base_ids, expected_ids)
+        base_present = base_offsets < sorted_base_ids.size
+        base_present[base_present] &= (
+            sorted_base_ids[base_offsets[base_present]] == expected_ids[base_present]
+        )
+        delta_offsets = np.searchsorted(sorted_delta_ids, expected_ids)
+        delta_present = delta_offsets < sorted_delta_ids.size
+        delta_present[delta_present] &= (
+            sorted_delta_ids[delta_offsets[delta_present]]
+            == expected_ids[delta_present]
+        )
+        if np.any(base_present == delta_present):
+            raise ValueError("physical oracle truth identifiers differ")
+
+        base_positions = base_order[base_offsets[base_present]]
+        pages, counts = np.unique(base_positions // page_rows, return_counts=True)
+        page_hits = {
+            int(page): int(count) for page, count in zip(pages, counts, strict=True)
+        }
+        resident_hits = int(np.count_nonzero(delta_present))
+        query_hits = resident_hits + _maximum_physical_oracle_hits(
+            page_hits,
+            page_count=page_count,
+            max_pages=max_base_pages,
+            max_ranges=max_base_gets,
+        )
+        oracle_hits += query_hits
+        base_truth_hits += int(np.count_nonzero(base_present))
+        delta_truth_hits += resident_hits
+        query_recall.append(round(query_hits * 1_000_000 / truth_width))
+
+    denominator = truth_ids.shape[0] * truth_width
+    recall_ppm = round(oracle_hits * 1_000_000 / denominator)
+    return {
+        "claim_eligible": False,
+        "page_payload_bytes": page_payload_bytes,
+        "physical_oracle": {
+            "base_truth_hits": base_truth_hits,
+            "delta_truth_hits": delta_truth_hits,
+            "hits": oracle_hits,
+            "max_base_bytes": max_base_bytes,
+            "max_base_gets": max_base_gets,
+            "max_base_pages": max_base_pages,
+            "min_recall_ppm": 995_000,
+            "passed": recall_ppm >= 995_000,
+            "recall_ppm": recall_ppm,
+            "worst_query_recall_ppm": min(query_recall),
+        },
+        "schema": "borsuk-v85-physical-oracle-v1",
+    }
+
+
 def evaluate_overlay(
     base: np.ndarray,
     delta: np.ndarray,
@@ -186,7 +342,7 @@ def evaluate_overlay(
     clusters: int = 256,
     shortlists: tuple[int, ...] = (256, 512, 1024),
     rank_top_rows: tuple[int, ...] = (512, 1024, 2048),
-    rank_page_caps: tuple[int, ...] = (64, 84),
+    rank_page_caps: tuple[int, ...] = (64, 81),
     logical_run_counts: tuple[int, ...] = (1, 10, 100),
     seed: int = 85,
     base_ids: np.ndarray | None = None,
@@ -194,6 +350,8 @@ def evaluate_overlay(
     truth_ids: np.ndarray | None = None,
     training_sample_rows: int = 100_000,
     encode_chunk_rows: int = 16_384,
+    max_base_bytes: int = 16 * 1024 * 1024,
+    max_base_gets: int = 32,
 ) -> dict[str, Any]:
     """Evaluate one shared base router with a fully resident delta tier."""
 
@@ -215,6 +373,8 @@ def evaluate_overlay(
         or min(rank_page_caps) <= 0
         or training_sample_rows <= 0
         or encode_chunk_rows <= 0
+        or max_base_bytes <= 0
+        or max_base_gets <= 0
     ):
         raise ValueError("overlay shape differs")
     if not all(np.isfinite(value).all() for value in (base, delta, queries)):
@@ -257,6 +417,18 @@ def evaluate_overlay(
     else:
         truth = [row.tolist() for row in truth_ids]
         truth_width = neighbors
+
+    oracle_result = evaluate_physical_oracle(
+        base_ids=base_ids,
+        delta_ids=delta_ids,
+        truth_ids=np.asarray(truth, dtype=np.int64),
+        dimensions=base.shape[1],
+        page_rows=page_rows,
+        max_base_bytes=max_base_bytes,
+        max_base_gets=max_base_gets,
+    )
+    page_payload_bytes = oracle_result["page_payload_bytes"]
+    max_base_pages = oracle_result["physical_oracle"]["max_base_pages"]
 
     router_scores = [_adc_scores(query, base_codes, books) for query in queries]
     cells = []
@@ -304,7 +476,10 @@ def evaluate_overlay(
             sq8_hits += len(expected.intersection(sq8_result))
             samples.append(
                 {
-                    "base_bytes": int(base_candidates.size * (12 + base.shape[1])),
+                    "base_bytes": int(
+                        sum(end - start + 1 for start, end in ranges)
+                        * page_payload_bytes
+                    ),
                     "base_gets": len(ranges),
                     "exact_result_ids": exact_result,
                     "query": query_index,
@@ -338,8 +513,8 @@ def evaluate_overlay(
         cell["shortlist_rows"]
         for cell in cells
         if cell["page_sq8_recall_ppm"] >= 990_000
-        and cell["base_gets_max"] <= 32
-        and cell["base_bytes_max"] <= 16 * 1024 * 1024
+        and cell["base_gets_max"] <= max_base_gets
+        and cell["base_bytes_max"] <= max_base_bytes
     ]
     rank_weighted_cells = []
     for top_rows in rank_top_rows:
@@ -352,8 +527,8 @@ def evaluate_overlay(
                     router_scores[query_index],
                     page_rows=page_rows,
                     top_rows=top_rows,
-                    max_span_pages=page_cap,
-                    max_ranges=32,
+                    max_span_pages=min(page_cap, max_base_pages),
+                    max_ranges=max_base_gets,
                     gap=2,
                 )
                 base_candidates = np.concatenate(
@@ -381,7 +556,8 @@ def evaluate_overlay(
                 samples.append(
                     {
                         "base_bytes": int(
-                            base_candidates.size * (12 + base.shape[1])
+                            sum(end - start + 1 for start, end in ranges)
+                            * page_payload_bytes
                         ),
                         "base_gets": len(ranges),
                     }
@@ -410,18 +586,14 @@ def evaluate_overlay(
         {"page_cap": cell["page_cap"], "top_rows": cell["top_rows"]}
         for cell in rank_weighted_cells
         if cell["page_sq8_recall_ppm"] >= 990_000
-        and cell["base_gets_max"] <= 32
-        and cell["base_bytes_max"] <= 16 * 1024 * 1024
+        and cell["base_gets_max"] <= max_base_gets
+        and cell["base_bytes_max"] <= max_base_bytes
     ]
     return {
         "cells": cells,
         "base_quantizer": "per-page-sq8",
-        "base_quantizer_resident_bytes": int(
-            ((base.shape[0] + page_rows - 1) // page_rows)
-            * 2
-            * base.shape[1]
-            * 4
-        ),
+        "base_quantizer_location": "page-payload",
+        "base_quantizer_resident_bytes": 0,
         "claim_eligible": False,
         "cpu_parallelism": "sequential-per-query",
         "delta_resident_bytes": int(
@@ -432,22 +604,24 @@ def evaluate_overlay(
         ),
         "delta_rows": int(delta.shape[0]),
         "logical_run_counts": list(logical_run_counts),
+        "page_payload_bytes": page_payload_bytes,
+        "physical_oracle": oracle_result["physical_oracle"],
         "rank_weighted_cells": rank_weighted_cells,
         "rank_weighted_gate": {
-            "max_base_bytes": 16 * 1024 * 1024,
-            "max_base_gets": 32,
+            "max_base_bytes": max_base_bytes,
+            "max_base_gets": max_base_gets,
             "min_page_sq8_recall_ppm": 990_000,
             "passed": bool(passing_rank_weighted_cells),
             "passing_cells": passing_rank_weighted_cells,
         },
         "promotion_gate": {
-            "max_base_bytes": 16 * 1024 * 1024,
-            "max_base_gets": 32,
+            "max_base_bytes": max_base_bytes,
+            "max_base_gets": max_base_gets,
             "min_sq8_recall_ppm": 990_000,
             "passed": bool(passing_shortlists),
             "passing_shortlists": passing_shortlists,
         },
-        "schema": "borsuk-v85-shared-overlay-screen-v2",
+        "schema": "borsuk-v85-shared-overlay-screen-v3",
         "training_sample_rows": sample_count,
         "training_rows": int(base.shape[0]),
     }
@@ -493,13 +667,13 @@ def main() -> None:
     parser.add_argument("--rows", type=int, default=10_000)
     parser.add_argument("--base-rows", type=int, default=9_000)
     parser.add_argument("--query-count", type=int, default=32)
+    parser.add_argument("--dimensions", type=int, default=768)
+    parser.add_argument("--oracle-only", action="store_true")
     args = parser.parse_args()
     if not 0 < args.base_rows < args.rows:
         parser.error("base rows must be inside the corpus")
 
-    source = _fixed_list(args.source, "embedding", args.rows)
     source_ids = _scalar(args.source, "feature_row_id", args.rows)
-    queries = _fixed_list(args.queries, "embedding", args.query_count)
     truth_ids = _scalar(
         args.ground_truth, "feature_row_id", args.query_count * 100
     ).reshape(args.query_count, 100)
@@ -507,14 +681,24 @@ def main() -> None:
     base_order = order[order < args.base_rows]
     if base_order.size != args.base_rows or np.unique(base_order).size != args.base_rows:
         raise ValueError("base layout order differs")
-    result = evaluate_overlay(
-        source[base_order],
-        source[args.base_rows : args.rows],
-        queries,
-        base_ids=source_ids[base_order],
-        delta_ids=source_ids[args.base_rows : args.rows],
-        truth_ids=truth_ids,
-    )
+    if args.oracle_only:
+        result = evaluate_physical_oracle(
+            base_ids=source_ids[base_order],
+            delta_ids=source_ids[args.base_rows : args.rows],
+            truth_ids=truth_ids,
+            dimensions=args.dimensions,
+        )
+    else:
+        source = _fixed_list(args.source, "embedding", args.rows)
+        queries = _fixed_list(args.queries, "embedding", args.query_count)
+        result = evaluate_overlay(
+            source[base_order],
+            source[args.base_rows : args.rows],
+            queries,
+            base_ids=source_ids[base_order],
+            delta_ids=source_ids[args.base_rows : args.rows],
+            truth_ids=truth_ids,
+        )
     body = json.dumps(result, separators=(",", ":"), sort_keys=True) + "\n"
     args.output.write_text(body)
     print(body, end="")

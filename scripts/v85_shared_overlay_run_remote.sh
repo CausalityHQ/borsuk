@@ -8,6 +8,7 @@ set -u
 : "${V85_ROWS:=1000000}"
 : "${V85_BASE_ROWS:=900000}"
 : "${V85_QUERY_COUNT:=32}"
+: "${V85_ORACLE_ONLY:=0}"
 
 root=/mnt/v85-shared-overlay
 phase=bootstrap
@@ -51,11 +52,17 @@ fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11  truth.parquet
 HASHES
 
 phase=screen
-export OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+screen_args=(
+  --source source.parquet --queries queries.parquet --ground-truth truth.parquet
+  --layout-order layout.npy --rows "$V85_ROWS" --base-rows "$V85_BASE_ROWS"
+  --query-count "$V85_QUERY_COUNT" --output result.json
+)
+if [ "$V85_ORACLE_ONLY" = 1 ]; then
+  screen_args+=(--oracle-only)
+fi
 /usr/bin/time -v -o time.log .venv/bin/python screen.py \
-  --source source.parquet --queries queries.parquet --ground-truth truth.parquet \
-  --layout-order layout.npy --rows "$V85_ROWS" --base-rows "$V85_BASE_ROWS" \
-  --query-count "$V85_QUERY_COUNT" --output result.json \
+  "${screen_args[@]}" \
   >run.log 2>&1 || exit 96
 test -s result.json || exit 97
 phase=complete

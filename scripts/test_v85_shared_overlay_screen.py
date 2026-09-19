@@ -1,14 +1,63 @@
+import itertools
 import unittest
 
 import numpy as np
 
 from scripts.v85_shared_overlay_screen import (
+    _maximum_physical_oracle_hits,
+    _page_payload_bytes,
     _select_rank_weighted_pages,
     evaluate_overlay,
+    evaluate_physical_oracle,
 )
 
 
 class V85SharedOverlayScreenTests(unittest.TestCase):
+    def test_physical_oracle_charges_gaps_and_maximizes_hits_exactly(self) -> None:
+        page_hits = {0: 3, 3: 2, 4: 5, 8: 4}
+
+        self.assertEqual(
+            _maximum_physical_oracle_hits(
+                page_hits, page_count=10, max_pages=3, max_ranges=2
+            ),
+            11,
+        )
+        self.assertEqual(
+            _maximum_physical_oracle_hits(
+                page_hits, page_count=10, max_pages=2, max_ranges=1
+            ),
+            7,
+        )
+
+        for max_pages, max_ranges in ((2, 1), (3, 1), (3, 2), (5, 2)):
+            exhaustive = 0
+            for mask in itertools.product((False, True), repeat=6):
+                selected = [index for index, take in enumerate(mask) if take]
+                if len(selected) > max_pages:
+                    continue
+                ranges = sum(
+                    index == 0 or not mask[index - 1]
+                    for index, take in enumerate(mask)
+                    if take
+                )
+                if ranges <= max_ranges:
+                    exhaustive = max(
+                        exhaustive,
+                        sum({0: 3, 2: 5, 5: 4}.get(page, 0) for page in selected),
+                    )
+            self.assertEqual(
+                _maximum_physical_oracle_hits(
+                    {0: 3, 2: 5, 5: 4},
+                    page_count=6,
+                    max_pages=max_pages,
+                    max_ranges=max_ranges,
+                ),
+                exhaustive,
+            )
+
+    def test_page_payload_prices_header_bounds_and_padded_records(self) -> None:
+        self.assertEqual(_page_payload_bytes(dimensions=768, page_rows=256), 205_888)
+
     def test_resident_delta_closes_base_shortlist_and_run_count_is_invariant(self) -> None:
         base = np.asarray(
             [
@@ -38,6 +87,7 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             seed=85,
         )
 
+        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v3")
         self.assertEqual(result["training_rows"], 8)
         self.assertEqual(result["delta_rows"], 1)
         self.assertEqual(result["cpu_parallelism"], "sequential-per-query")
@@ -96,14 +146,14 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         self.assertEqual(result["cells"][0]["hybrid_recall_ppm"], 1_000_000)
         self.assertEqual(result["cells"][0]["base_gets_p50"], 1)
         self.assertEqual(result["cells"][0]["base_gets_p95"], 1)
-        self.assertEqual(result["cells"][0]["base_bytes_p50"], 32)
-        self.assertEqual(result["cells"][0]["base_bytes_p95"], 32)
+        self.assertEqual(result["cells"][0]["base_bytes_p50"], 128)
+        self.assertEqual(result["cells"][0]["base_bytes_p95"], 128)
         self.assertEqual(set(result["cells"][0]["result_ids"]), {401, 901})
         self.assertEqual(
             result["rank_weighted_cells"][0]["page_sq8_recall_ppm"], 1_000_000
         )
         self.assertEqual(result["rank_weighted_cells"][0]["base_gets_max"], 1)
-        self.assertEqual(result["rank_weighted_cells"][0]["base_bytes_max"], 32)
+        self.assertEqual(result["rank_weighted_cells"][0]["base_bytes_max"], 128)
         self.assertTrue(result["rank_weighted_gate"]["passed"])
         self.assertEqual(
             result["promotion_gate"],
@@ -147,7 +197,64 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         self.assertEqual(cell["page_sq8_recall_ppm"], 1_000_000)
         self.assertEqual(cell["result_ids"], [20])
         self.assertEqual(result["base_quantizer"], "per-page-sq8")
-        self.assertEqual(result["base_quantizer_resident_bytes"], 32)
+        self.assertEqual(result["base_quantizer_resident_bytes"], 0)
+        self.assertEqual(result["base_quantizer_location"], "page-payload")
+
+    def test_overlay_reports_exact_joint_physical_budget_oracle(self) -> None:
+        base = np.eye(4, dtype=np.float32)
+        delta = np.asarray([[0.5, 0.5, 0.5, 0.5]], dtype=np.float32)
+        result = evaluate_overlay(
+            base,
+            delta,
+            np.asarray([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+            base_ids=np.asarray([10, 20, 30, 40], dtype=np.int64),
+            delta_ids=np.asarray([50], dtype=np.int64),
+            truth_ids=np.asarray([[10, 30, 40, 50]], dtype=np.int64),
+            page_rows=1,
+            neighbors=4,
+            subspaces=2,
+            clusters=2,
+            shortlists=(1,),
+            rank_top_rows=(1,),
+            rank_page_caps=(2,),
+            training_sample_rows=4,
+            encode_chunk_rows=2,
+            max_base_bytes=224,
+            max_base_gets=1,
+        )
+
+        self.assertEqual(result["page_payload_bytes"], 112)
+        self.assertEqual(
+            result["physical_oracle"],
+            {
+                "base_truth_hits": 3,
+                "delta_truth_hits": 1,
+                "hits": 3,
+                "max_base_bytes": 224,
+                "max_base_gets": 1,
+                "max_base_pages": 2,
+                "min_recall_ppm": 995_000,
+                "passed": False,
+                "recall_ppm": 750_000,
+                "worst_query_recall_ppm": 750_000,
+            },
+        )
+
+    def test_physical_oracle_runs_without_vectors_or_router_training(self) -> None:
+        result = evaluate_physical_oracle(
+            base_ids=np.asarray([10, 20, 30, 40], dtype=np.int64),
+            delta_ids=np.asarray([50], dtype=np.int64),
+            truth_ids=np.asarray([[10, 30, 40, 50]], dtype=np.int64),
+            dimensions=4,
+            page_rows=1,
+            max_base_bytes=224,
+            max_base_gets=1,
+        )
+
+        self.assertEqual(result["schema"], "borsuk-v85-physical-oracle-v1")
+        self.assertFalse(result["claim_eligible"])
+        self.assertEqual(result["page_payload_bytes"], 112)
+        self.assertEqual(result["physical_oracle"]["recall_ppm"], 750_000)
 
     def test_rank_weighted_pages_preserve_nearest_evidence_under_hard_budget(
         self,
