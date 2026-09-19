@@ -12,9 +12,11 @@ rust-version.workspace = true
 bytes = "1.11"
 futures-util = "0.3"
 object_store = { version = "0.14", features = ["aws"] }
+rayon = "1.11"
 serde_json = "1.0"
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
 url = "2.5"
+wide = "0.7"
 
 [lints]
 workspace = true

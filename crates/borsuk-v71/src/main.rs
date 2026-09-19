@@ -23,6 +23,8 @@ use std::{
 };
 
 use futures_util::stream::{self, StreamExt};
+use rayon::prelude::*;
+use wide::f32x8;
 use object_store::{GetOptions, GetRange, ObjectStore, parse_url_opts, path::Path as ObjectPath};
 use url::Url;
 
@@ -157,6 +159,45 @@ fn route(manifest: &Manifest, query: &[f32], budget: usize) -> Vec<usize> {
     ordered
 }
 
+
+/// One row's code-against-weight dot product, eight lanes at a time.
+///
+/// The scalar form of this loop cost 81 ms per query at M=128 - more than the
+/// object-store I/O it was waiting on - because widening a byte to a float one
+/// element at a time does not vectorise.
+fn fused_inner(codes: &[u8], weights: &[f32]) -> f32 {
+    let lanes = codes.len() / 8 * 8;
+    let mut accumulator = f32x8::ZERO;
+    for offset in (0..lanes).step_by(8) {
+        let widened = f32x8::new([
+            f32::from(codes[offset]),
+            f32::from(codes[offset + 1]),
+            f32::from(codes[offset + 2]),
+            f32::from(codes[offset + 3]),
+            f32::from(codes[offset + 4]),
+            f32::from(codes[offset + 5]),
+            f32::from(codes[offset + 6]),
+            f32::from(codes[offset + 7]),
+        ]);
+        let scale = f32x8::new([
+            weights[offset],
+            weights[offset + 1],
+            weights[offset + 2],
+            weights[offset + 3],
+            weights[offset + 4],
+            weights[offset + 5],
+            weights[offset + 6],
+            weights[offset + 7],
+        ]);
+        accumulator = widened.mul_add(scale, accumulator);
+    }
+    let mut total = accumulator.reduce_add();
+    for offset in lanes..codes.len() {
+        total += f32::from(codes[offset]) * weights[offset];
+    }
+    total
+}
+
 struct QueryOutcome {
     returned: Vec<i64>,
     requests: usize,
@@ -224,22 +265,24 @@ async fn search(
     }
     shift -= query_norm / 2.0;
 
-    let mut best: Vec<(f32, i64)> = Vec::new();
-    for (_, body) in &blobs {
-        let count = body.len() / row_bytes;
-        for row in 0..count {
-            let base = row * row_bytes;
-            let identifier =
-                i64::from_le_bytes(body[base..base + 8].try_into().expect("8 bytes"));
-            let norm = f32::from_le_bytes(body[base + 8..base + 12].try_into().expect("4 bytes"));
-            let codes = &body[base + 12..base + row_bytes];
-            let mut inner = 0.0f32;
-            for index in 0..manifest.dimensions {
-                inner += f32::from(codes[index]) * weights[index];
-            }
-            best.push((norm - 2.0 * (inner + shift), identifier));
-        }
-    }
+    let mut best: Vec<(f32, i64)> = blobs
+        .par_iter()
+        .flat_map_iter(|(_, body)| {
+            let count = body.len() / row_bytes;
+            (0..count).map(move |row| {
+                let base = row * row_bytes;
+                let identifier =
+                    i64::from_le_bytes(body[base..base + 8].try_into().expect("8 bytes"));
+                let norm =
+                    f32::from_le_bytes(body[base + 8..base + 12].try_into().expect("4 bytes"));
+                let codes = &body[base + 12..base + row_bytes];
+                (norm, identifier, codes)
+            })
+        })
+        .map(|(norm, identifier, codes)| {
+            (norm - 2.0 * (fused_inner(codes, &weights) + shift), identifier)
+        })
+        .collect();
     let take = manifest.neighbors.min(best.len());
     if take > 0 {
         best.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
@@ -297,6 +340,31 @@ fn self_test() -> BenchResult<()> {
         for page in selected {
             if !ranges.iter().any(|range| range.contains(&page)) {
                 return Err(format!("page {page} lost at gap {gap}").into());
+            }
+        }
+    }
+    // The vectorised dot product must agree with the scalar form it replaced,
+    // or every score is quietly wrong.
+    let mut codes = Vec::new();
+    let mut weights = Vec::new();
+    let mut state = 12_345u64;
+    for index in 0..775usize {
+        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        codes.push((state >> 33) as u8);
+        weights.push(((state >> 20) as u32 % 2_000) as f32 / 1_000.0 - 1.0);
+        if index >= 768 {
+            let scalar: f32 = codes
+                .iter()
+                .zip(weights.iter())
+                .map(|(code, weight)| f32::from(*code) * weight)
+                .sum();
+            let vectorised = fused_inner(&codes, &weights);
+            if (scalar - vectorised).abs() > scalar.abs().max(1.0) * 1e-4 {
+                return Err(format!(
+                    "vectorised inner product {vectorised} differs from scalar {scalar} at width {}",
+                    codes.len()
+                )
+                .into());
             }
         }
     }
