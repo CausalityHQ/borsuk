@@ -111,6 +111,11 @@ def _top_ids(
     return [int(ids[index]) for index in ordered]
 
 
+def _nearest_percentile(values: list[int], quantile: float) -> int:
+    ordered = sorted(values)
+    return ordered[round((len(ordered) - 1) * quantile)]
+
+
 def evaluate_overlay(
     base: np.ndarray,
     delta: np.ndarray,
@@ -192,6 +197,7 @@ def evaluate_overlay(
     for shortlist in shortlists:
         samples = []
         exact_hits = 0
+        hybrid_hits = 0
         sq8_hits = 0
         for query_index, query in enumerate(queries):
             scores = router_scores[query_index]
@@ -211,11 +217,16 @@ def evaluate_overlay(
             )
             candidate_ids = np.concatenate((base_ids[base_candidates], delta_ids))
             exact_vectors = np.concatenate((base[base_candidates], delta), axis=0)
+            hybrid_vectors = np.concatenate(
+                (base_sq8[base_candidates], delta), axis=0
+            )
             sq8_vectors = np.concatenate((base_sq8[base_candidates], delta_sq8), axis=0)
             exact_result = _top_ids(query, exact_vectors, candidate_ids, neighbors)
+            hybrid_result = _top_ids(query, hybrid_vectors, candidate_ids, neighbors)
             sq8_result = _top_ids(query, sq8_vectors, candidate_ids, neighbors)
             expected = set(truth[query_index])
             exact_hits += len(expected.intersection(exact_result))
+            hybrid_hits += len(expected.intersection(hybrid_result))
             sq8_hits += len(expected.intersection(sq8_result))
             samples.append(
                 {
@@ -228,11 +239,18 @@ def evaluate_overlay(
             )
         denominator = len(queries) * truth_width
         first_result = samples[0]["result_ids"]
+        base_bytes = [sample["base_bytes"] for sample in samples]
+        base_gets = [sample["base_gets"] for sample in samples]
         cells.append(
             {
-                "base_bytes_max": max(sample["base_bytes"] for sample in samples),
-                "base_gets_max": max(sample["base_gets"] for sample in samples),
+                "base_bytes_max": max(base_bytes),
+                "base_bytes_p50": _nearest_percentile(base_bytes, 0.50),
+                "base_bytes_p95": _nearest_percentile(base_bytes, 0.95),
+                "base_gets_max": max(base_gets),
+                "base_gets_p50": _nearest_percentile(base_gets, 0.50),
+                "base_gets_p95": _nearest_percentile(base_gets, 0.95),
                 "exact_recall_ppm": round(exact_hits * 1_000_000 / denominator),
+                "hybrid_recall_ppm": round(hybrid_hits * 1_000_000 / denominator),
                 "logical_run_results": [first_result] * len(logical_run_counts),
                 "result_ids": first_result,
                 "shortlist_rows": shortlist,
@@ -252,6 +270,9 @@ def evaluate_overlay(
         "cpu_parallelism": "sequential-per-query",
         "delta_resident_bytes": int(
             delta.shape[0] * (12 + delta.shape[1]) + 2 * delta.shape[1] * 4
+        ),
+        "delta_exact_resident_bytes": int(
+            delta.shape[0] * (8 + delta.shape[1] * 4)
         ),
         "delta_rows": int(delta.shape[0]),
         "logical_run_counts": list(logical_run_counts),

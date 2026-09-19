@@ -86,7 +86,13 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
 
         self.assertEqual(result["training_sample_rows"], 2)
         self.assertEqual(result["delta_resident_bytes"], 48)
+        self.assertEqual(result["delta_exact_resident_bytes"], 24)
         self.assertEqual(result["cells"][0]["exact_recall_ppm"], 1_000_000)
+        self.assertEqual(result["cells"][0]["hybrid_recall_ppm"], 1_000_000)
+        self.assertEqual(result["cells"][0]["base_gets_p50"], 1)
+        self.assertEqual(result["cells"][0]["base_gets_p95"], 1)
+        self.assertEqual(result["cells"][0]["base_bytes_p50"], 32)
+        self.assertEqual(result["cells"][0]["base_bytes_p95"], 32)
         self.assertEqual(set(result["cells"][0]["result_ids"]), {401, 901})
         self.assertEqual(
             result["promotion_gate"],
