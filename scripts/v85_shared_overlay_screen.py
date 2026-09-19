@@ -86,7 +86,7 @@ def _coalesce(pages: np.ndarray, gap: int = 2) -> list[tuple[int, int]]:
     breaks = np.flatnonzero(np.diff(pages) > gap + 1)
     starts = np.concatenate(([pages[0]], pages[breaks + 1]))
     ends = np.concatenate((pages[breaks], [pages[-1]]))
-    return list(zip(starts.tolist(), ends.tolist(), strict=True))
+    return [(int(starts[index]), int(ends[index])) for index in range(starts.size)]
 
 
 def _top_ids(
