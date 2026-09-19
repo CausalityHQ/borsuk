@@ -7,6 +7,7 @@ import numpy as np
 
 from scripts.v86_coarse_to_fine_screen import (
     _means_per_page,
+    _plan_candidate_rows,
     build_coarse_to_fine_artifact,
     build_run_metadata,
     evaluate_coarse_to_fine,
@@ -19,6 +20,31 @@ from scripts.v86_coarse_to_fine_screen import (
 
 
 class V86CoarseToFineTests(unittest.TestCase):
+    def test_wave2_nominations_add_independent_reciprocal_rank_mass(self) -> None:
+        control_pages, _ = _plan_candidate_rows(
+            np.asarray([0, 1], dtype=np.int64),
+            np.asarray([0.0, 1.0], dtype=np.float32),
+            page_count=3,
+            page_rows=2,
+            top_rows=1,
+            max_span_pages=1,
+            max_ranges=1,
+        )
+        nominated_pages, nominated_ranges = _plan_candidate_rows(
+            np.asarray([0, 1], dtype=np.int64),
+            np.asarray([0.0, 1.0], dtype=np.float32),
+            page_count=3,
+            page_rows=2,
+            top_rows=1,
+            max_span_pages=1,
+            max_ranges=1,
+            nominated_positions=np.asarray([4, 5], dtype=np.int64),
+        )
+
+        self.assertEqual(control_pages.tolist(), [0])
+        self.assertEqual(nominated_pages.tolist(), [2])
+        self.assertEqual(nominated_ranges, [(2, 2)])
+
     def test_page_summaries_keep_fixed_physical_blocks_on_partial_tail(self) -> None:
         rows = np.arange(6, dtype=np.float32).reshape(6, 1)
 
@@ -130,6 +156,30 @@ class V86CoarseToFineTests(unittest.TestCase):
             **common,
         )
         self.assertEqual(result["wave1_page_evidence_sha256"], "a" * 64)
+
+        nominated = evaluate_coarse_to_fine(
+            base,
+            np.asarray([[20.0]], dtype=np.float32),
+            np.asarray([[10.0]], dtype=np.float32),
+            wave1_page_evidence_sha256="a" * 64,
+            wave2_nominated_positions_by_query=np.asarray([[0]], dtype=np.int64),
+            wave2_nomination_sha256="b" * 64,
+            **common,
+        )
+        self.assertEqual(nominated["wave2_nomination_sha256"], "b" * 64)
+        self.assertEqual(nominated["samples"][0]["wave2_nominated_rows"], [0])
+
+        with self.assertRaisesRegex(ValueError, "wave-two nomination differs"):
+            evaluate_coarse_to_fine(
+                base,
+                np.asarray([[20.0]], dtype=np.float32),
+                np.asarray([[10.0]], dtype=np.float32),
+                wave1_page_evidence_sha256="a" * 64,
+                wave2_nominated_positions_by_query=np.asarray(
+                    [[0]], dtype=np.int64
+                ),
+                **common,
+            )
 
         with self.assertRaisesRegex(ValueError, "page evidence differs"):
             evaluate_coarse_to_fine(
