@@ -336,14 +336,164 @@ pub async fn publish_head(
         .map_err(|error| DeltaError::authority(format!("generation head publish failed: {error}")))
 }
 
+/// One exact byte range required from an immutable run for a selected page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageRead {
+    /// Immutable run containing the page.
+    pub run_id: u32,
+    /// Global routed page ordinal.
+    pub page: u32,
+    /// Authenticated parent-object URI.
+    pub uri: String,
+    /// Byte offset within the parent object.
+    pub offset: u64,
+    /// Exact byte length of the self-contained page stream.
+    pub bytes: u64,
+    /// Number of rows declared for the page stream.
+    pub rows: u32,
+}
+
+/// Plans deterministic sparse range reads without falling back to whole runs.
+pub fn plan_page_reads(
+    selected: &[u32],
+    generation: &GenerationManifest,
+) -> Result<Vec<PageRead>, DeltaError> {
+    if selected.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(DeltaError::authority(
+            "selected pages are not strictly ordered",
+        ));
+    }
+
+    let mut reads = Vec::new();
+    for run in generation.runs() {
+        let mut selected_index = 0usize;
+        let mut page_index = 0usize;
+        while selected_index < selected.len() && page_index < run.pages.len() {
+            let selected_page = selected[selected_index];
+            let page = &run.pages[page_index];
+            match page.page.cmp(&selected_page) {
+                std::cmp::Ordering::Less => page_index += 1,
+                std::cmp::Ordering::Greater => selected_index += 1,
+                std::cmp::Ordering::Equal => {
+                    reads.push(PageRead {
+                        run_id: run.run_id,
+                        page: page.page,
+                        uri: run.object.uri.clone(),
+                        offset: page.offset,
+                        bytes: page.bytes,
+                        rows: page.rows,
+                    });
+                    selected_index += 1;
+                    page_index += 1;
+                }
+            }
+        }
+    }
+    Ok(reads)
+}
+
+/// One scored physical row before snapshot visibility and ID de-duplication.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Candidate {
+    /// Stable record identity.
+    pub id: i64,
+    /// Row mutation sequence.
+    pub sequence: u64,
+    /// Smaller-is-better distance.
+    pub distance: f32,
+    /// Immutable run containing the physical row.
+    pub run_id: u32,
+    /// Row ordinal within the immutable run.
+    pub row: u32,
+}
+
+/// Resolves snapshot visibility before deterministic `(distance, id)` top-k.
+pub fn merge_candidates(
+    base: impl Iterator<Item = Candidate>,
+    delta: impl Iterator<Item = Candidate>,
+    directory: &MutationDirectory,
+    k: usize,
+) -> Result<Vec<Candidate>, DeltaError> {
+    let mut visible = BTreeMap::<i64, Candidate>::new();
+
+    for candidate in base {
+        validate_candidate(&candidate)?;
+        if matches!(
+            resolve_visibility(candidate.sequence, candidate.id, directory)?,
+            Visibility::Base { .. }
+        ) {
+            retain_best_physical_copy(&mut visible, candidate);
+        }
+    }
+
+    for candidate in delta {
+        validate_candidate(&candidate)?;
+        let mutation = directory.entries.get(&candidate.id).ok_or_else(|| {
+            DeltaError::authority("delta candidate is absent from mutation directory")
+        })?;
+        if candidate.sequence < mutation.sequence {
+            continue;
+        }
+        if candidate.sequence > mutation.sequence {
+            return Err(DeltaError::authority(
+                "delta candidate is newer than mutation directory",
+            ));
+        }
+        match mutation.state {
+            MutationState::Live { run_id, row }
+                if run_id == candidate.run_id && row == candidate.row =>
+            {
+                retain_best_physical_copy(&mut visible, candidate);
+            }
+            MutationState::Live { .. } => {
+                return Err(DeltaError::authority(
+                    "delta candidate location differs from mutation directory",
+                ));
+            }
+            MutationState::Tombstone => {
+                return Err(DeltaError::authority(
+                    "tombstone has a physical delta candidate",
+                ));
+            }
+        }
+    }
+
+    let mut ordered = visible.into_values().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.distance
+            .total_cmp(&right.distance)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    ordered.truncate(k);
+    Ok(ordered)
+}
+
+fn validate_candidate(candidate: &Candidate) -> Result<(), DeltaError> {
+    if candidate.sequence == 0 || !candidate.distance.is_finite() {
+        return Err(DeltaError::authority("candidate authority differs"));
+    }
+    Ok(())
+}
+
+fn retain_best_physical_copy(visible: &mut BTreeMap<i64, Candidate>, candidate: Candidate) {
+    match visible.get(&candidate.id) {
+        Some(prior)
+            if (prior.distance, prior.run_id, prior.row)
+                <= (candidate.distance, candidate.run_id, candidate.row) => {}
+        _ => {
+            visible.insert(candidate.id, candidate);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
     use object_store::{ObjectStoreExt, UpdateVersion, memory::InMemory, path::Path};
 
     use super::{
-        GenerationManifest, MutationDirectory, MutationRecord, MutationState, Visibility,
-        publish_head, resolve_visibility,
+        Candidate, GenerationManifest, MutationDirectory, MutationRecord, MutationState, PageRead,
+        SCHEMA, Visibility, merge_candidates, plan_page_reads, publish_head, resolve_visibility,
     };
 
     const ONE_DIGEST: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -502,6 +652,220 @@ mod tests {
         assert_eq!(
             store.get(&path).await.unwrap().bytes().await.unwrap(),
             "second\n"
+        );
+    }
+
+    fn sparse_generation() -> GenerationManifest {
+        let object = |uri: &str, digest: &str, bytes: u64| serde_json::json!({"bytes": bytes, "sha256": digest, "uri": uri});
+        let run = |generation: u64,
+                   kind: &str,
+                   run_id: u32,
+                   uri: &str,
+                   digest: &str,
+                   pages: Vec<(u64, u64, u32, u32)>| {
+            serde_json::json!({
+                "generation": generation,
+                "kind": kind,
+                "object": object(uri, digest, 10_000),
+                "pages": pages.into_iter().map(|(bytes, offset, page, rows)| {
+                    serde_json::json!({"bytes": bytes, "offset": offset, "page": page, "rows": rows})
+                }).collect::<Vec<_>>(),
+                "run_id": run_id,
+            })
+        };
+        let value = serde_json::json!({
+            "base_horizon": 900_000,
+            "dimensions": 768,
+            "generation": 7,
+            "mutation_directory": object("s3://bucket/g7/mutations.arrow", A_DIGEST, 4096),
+            "neighbors": 100,
+            "page_rows": 256,
+            "previous_generation_sha256": ONE_DIGEST,
+            "router": object("s3://bucket/g7/router.arrow", TWO_DIGEST, 8192),
+            "runs": [
+                run(0, "base", 0, "s3://bucket/g0/base-0.arrow", ONE_DIGEST,
+                    vec![(100, 0, 0, 256), (110, 100, 1, 256)]),
+                run(0, "base", 1, "s3://bucket/g0/base-1.arrow", TWO_DIGEST,
+                    vec![(120, 0, 2, 256), (130, 120, 3, 256)]),
+                run(7, "delta", 2, "s3://bucket/g7/delta-0.arrow", A_DIGEST,
+                    vec![(40, 8, 1, 9), (50, 48, 4, 11)]),
+                run(7, "delta", 3, "s3://bucket/g7/delta-1.arrow", ONE_DIGEST,
+                    vec![(60, 16, 3, 13)]),
+                run(7, "delta", 4, "s3://bucket/g7/delta-2.arrow", TWO_DIGEST,
+                    vec![(70, 24, 1, 17), (80, 94, 3, 19)]),
+            ],
+            "schema": SCHEMA,
+            "source_split": "relaion-1m-base900000-delta100000",
+        });
+        let mut bytes = serde_json::to_vec(&value).unwrap();
+        bytes.push(b'\n');
+        GenerationManifest::from_canonical_bytes(&bytes).unwrap()
+    }
+
+    #[test]
+    fn page_plan_reads_only_selected_pages_present_in_each_pinned_run() {
+        let generation = sparse_generation();
+        let reads = plan_page_reads(&[1, 3], &generation).unwrap();
+        assert_eq!(
+            reads,
+            vec![
+                PageRead {
+                    run_id: 0,
+                    page: 1,
+                    uri: "s3://bucket/g0/base-0.arrow".into(),
+                    offset: 100,
+                    bytes: 110,
+                    rows: 256
+                },
+                PageRead {
+                    run_id: 1,
+                    page: 3,
+                    uri: "s3://bucket/g0/base-1.arrow".into(),
+                    offset: 120,
+                    bytes: 130,
+                    rows: 256
+                },
+                PageRead {
+                    run_id: 2,
+                    page: 1,
+                    uri: "s3://bucket/g7/delta-0.arrow".into(),
+                    offset: 8,
+                    bytes: 40,
+                    rows: 9
+                },
+                PageRead {
+                    run_id: 3,
+                    page: 3,
+                    uri: "s3://bucket/g7/delta-1.arrow".into(),
+                    offset: 16,
+                    bytes: 60,
+                    rows: 13
+                },
+                PageRead {
+                    run_id: 4,
+                    page: 1,
+                    uri: "s3://bucket/g7/delta-2.arrow".into(),
+                    offset: 24,
+                    bytes: 70,
+                    rows: 17
+                },
+                PageRead {
+                    run_id: 4,
+                    page: 3,
+                    uri: "s3://bucket/g7/delta-2.arrow".into(),
+                    offset: 94,
+                    bytes: 80,
+                    rows: 19
+                },
+            ]
+        );
+        assert!(reads.iter().all(|read| read.bytes < 10_000));
+        assert!(plan_page_reads(&[3, 1], &generation).is_err());
+        assert!(plan_page_reads(&[1, 1], &generation).is_err());
+    }
+
+    fn candidate(id: i64, sequence: u64, distance: f32, run_id: u32, row: u32) -> Candidate {
+        Candidate {
+            id,
+            sequence,
+            distance,
+            run_id,
+            row,
+        }
+    }
+
+    #[test]
+    fn merge_suppresses_replaced_and_tombstoned_base_before_top_k() {
+        let directory = MutationDirectory::try_from_entries(vec![
+            MutationRecord {
+                id: 2,
+                sequence: 5,
+                state: MutationState::Live { run_id: 9, row: 4 },
+            },
+            MutationRecord {
+                id: 3,
+                sequence: 6,
+                state: MutationState::Tombstone,
+            },
+        ])
+        .unwrap();
+        let base = vec![
+            candidate(1, 1, 0.40, 0, 0),
+            candidate(2, 1, 0.01, 0, 1),
+            candidate(3, 1, 0.02, 0, 2),
+            candidate(4, 1, 0.50, 0, 3),
+        ];
+        let merged =
+            merge_candidates(base.into_iter(), Vec::new().into_iter(), &directory, 2).unwrap();
+        assert_eq!(merged.iter().map(|row| row.id).collect::<Vec<_>>(), [1, 4]);
+    }
+
+    #[test]
+    fn merge_admits_only_directory_bound_live_delta_and_orders_ties_by_id() {
+        let directory = MutationDirectory::try_from_entries(vec![
+            MutationRecord {
+                id: 5,
+                sequence: 8,
+                state: MutationState::Live { run_id: 2, row: 7 },
+            },
+            MutationRecord {
+                id: 6,
+                sequence: 9,
+                state: MutationState::Live { run_id: 3, row: 1 },
+            },
+        ])
+        .unwrap();
+        let base = vec![candidate(1, 1, 0.2, 0, 0), candidate(9, 1, 0.4, 0, 1)];
+        let delta = vec![
+            candidate(6, 7, 0.01, 1, 1),
+            candidate(5, 8, 0.1, 2, 7),
+            candidate(5, 8, 0.1, 2, 7),
+            candidate(6, 9, 0.1, 3, 1),
+        ];
+        let merged = merge_candidates(base.into_iter(), delta.into_iter(), &directory, 3).unwrap();
+        assert_eq!(
+            merged.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [5, 6, 1]
+        );
+    }
+
+    #[test]
+    fn merge_rejects_nonfinite_ties_and_mutation_directory_omissions() {
+        let empty = MutationDirectory::try_from_entries(Vec::new()).unwrap();
+        assert!(
+            merge_candidates(
+                vec![candidate(1, 1, f32::NAN, 0, 0)].into_iter(),
+                Vec::new().into_iter(),
+                &empty,
+                1
+            )
+            .is_err()
+        );
+
+        let tied = MutationDirectory::try_from_entries(vec![MutationRecord {
+            id: 2,
+            sequence: 4,
+            state: MutationState::Tombstone,
+        }])
+        .unwrap();
+        assert!(
+            merge_candidates(
+                vec![candidate(2, 4, 0.2, 0, 0)].into_iter(),
+                Vec::new().into_iter(),
+                &tied,
+                1
+            )
+            .is_err()
+        );
+
+        assert!(
+            merge_candidates(
+                Vec::new().into_iter(),
+                vec![candidate(7, 5, 0.2, 3, 0)].into_iter(),
+                &empty,
+                1
+            )
+            .is_err()
         );
     }
 }
