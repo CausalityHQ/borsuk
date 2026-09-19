@@ -182,11 +182,11 @@ def _select_optimal_weighted_pages(
         or np.any(page_weights < 0)
     ):
         raise ValueError("weighted page planner input differs")
-    weights = page_weights.astype(np.int64, copy=False)
-    unreachable = np.int64(-(1 << 60))
+    weights = page_weights.astype(np.float64, copy=False)
+    unreachable = np.float64(-np.inf)
     shape = (max_ranges + 1, max_span_pages + 1)
-    off = np.full(shape, unreachable, dtype=np.int64)
-    on = np.full(shape, unreachable, dtype=np.int64)
+    off = np.full(shape, unreachable, dtype=np.float64)
+    on = np.full(shape, unreachable, dtype=np.float64)
     off[0, 0] = 0
     off_choices = np.zeros((weights.size, *shape), dtype=np.uint8)
     on_choices = np.zeros((weights.size, *shape), dtype=np.uint8)
@@ -195,7 +195,7 @@ def _select_optimal_weighted_pages(
         next_off = np.maximum(off, on)
         off_choices[page] = on > off
 
-        next_on = np.full(shape, unreachable, dtype=np.int64)
+        next_on = np.full(shape, unreachable, dtype=np.float64)
         continuing = on[:, :-1]
         next_on[:, 1:] = continuing
         on_choices[page, :, 1:][continuing != unreachable] = 1
@@ -239,6 +239,163 @@ def _select_optimal_weighted_pages(
 
     selected_pages = np.flatnonzero(selected)
     return selected_pages, _coalesce(selected_pages, gap=0)
+
+
+def _stable_landmark_positions(
+    base_ids: np.ndarray, landmark_count: int, seed: int
+) -> np.ndarray:
+    values = base_ids.astype(np.uint64, copy=True)
+    values += np.uint64(seed) + np.uint64(0x9E3779B97F4A7C15)
+    values = (values ^ (values >> np.uint64(30))) * np.uint64(
+        0xBF58476D1CE4E5B9
+    )
+    values = (values ^ (values >> np.uint64(27))) * np.uint64(
+        0x94D049BB133111EB
+    )
+    values ^= values >> np.uint64(31)
+    order = np.lexsort((base_ids, values))
+    return np.sort(order[:landmark_count])
+
+
+def _build_landmark_incidence(
+    base: np.ndarray,
+    base_ids: np.ndarray,
+    *,
+    page_rows: int,
+    landmark_count: int,
+    neighbor_count: int,
+    pages_per_landmark: int,
+    seed: int,
+    chunk_rows: int,
+) -> dict[str, np.ndarray | int]:
+    """Build query-independent exact-neighborhood landmark page incidence."""
+
+    base = np.ascontiguousarray(base, dtype=np.float32)
+    base_ids = np.asarray(base_ids, dtype=np.int64)
+    if (
+        base.ndim != 2
+        or base.shape[0] < 2
+        or base_ids.shape != (base.shape[0],)
+        or np.unique(base_ids).size != base_ids.size
+        or not np.isfinite(base).all()
+        or page_rows <= 0
+        or not 0 < landmark_count <= base.shape[0]
+        or not 0 < neighbor_count < base.shape[0]
+        or pages_per_landmark <= 0
+        or chunk_rows <= 0
+    ):
+        raise ValueError("landmark incidence authority differs")
+
+    landmark_positions = _stable_landmark_positions(base_ids, landmark_count, seed)
+    landmarks = np.ascontiguousarray(base[landmark_positions])
+    keep = neighbor_count + 1
+    best_distances = np.full((landmark_count, keep), np.inf, dtype=np.float32)
+    best_positions = np.full((landmark_count, keep), -1, dtype=np.int64)
+    base_norms = np.einsum("ij,ij->i", base, base)
+    landmark_norms = np.einsum("ij,ij->i", landmarks, landmarks)
+    landmark_t = landmarks.T
+    for start in range(0, base.shape[0], chunk_rows):
+        stop = min(start + chunk_rows, base.shape[0])
+        distances = (
+            base_norms[start:stop, None]
+            + landmark_norms[None, :]
+            - np.float32(2.0) * (base[start:stop] @ landmark_t)
+        )
+        np.maximum(distances, np.float32(0.0), out=distances)
+        distances = distances.T
+        local_keep = min(keep, stop - start)
+        local_columns = np.argpartition(distances, local_keep - 1, axis=1)[
+            :, :local_keep
+        ]
+        local_distances = np.take_along_axis(distances, local_columns, axis=1)
+        local_positions = local_columns.astype(np.int64) + start
+        merged_distances = np.concatenate((best_distances, local_distances), axis=1)
+        merged_positions = np.concatenate((best_positions, local_positions), axis=1)
+        chosen = np.argpartition(merged_distances, keep - 1, axis=1)[:, :keep]
+        best_distances = np.take_along_axis(merged_distances, chosen, axis=1)
+        best_positions = np.take_along_axis(merged_positions, chosen, axis=1)
+
+    page_ordinals = np.full(
+        (landmark_count, pages_per_landmark), -1, dtype=np.int64
+    )
+    incidence_weights = np.zeros(
+        (landmark_count, pages_per_landmark), dtype=np.float32
+    )
+    discarded_mass = np.empty(landmark_count, dtype=np.float32)
+    for landmark in range(landmark_count):
+        positions = best_positions[landmark]
+        distances = best_distances[landmark]
+        eligible = (positions >= 0) & (positions != landmark_positions[landmark])
+        positions = positions[eligible]
+        distances = distances[eligible]
+        order = np.lexsort((base_ids[positions], distances))[:neighbor_count]
+        positions = positions[order]
+        distances = distances[order]
+        if positions.size != neighbor_count:
+            raise AssertionError("landmark neighborhood differs")
+        tau_index = min(99, neighbor_count - 1)
+        tau = max(float(distances[tau_index] - distances[0]), 1.0e-12)
+        weights = np.exp(-(distances - distances[0]) / tau).astype(np.float64)
+        pages, inverse = np.unique(positions // page_rows, return_inverse=True)
+        page_weights = np.zeros(pages.size, dtype=np.float64)
+        np.add.at(page_weights, inverse, weights)
+        total = float(np.sum(page_weights))
+        page_order = np.lexsort((pages, -page_weights))[:pages_per_landmark]
+        retained = page_order.size
+        page_ordinals[landmark, :retained] = pages[page_order]
+        incidence_weights[landmark, :retained] = (
+            page_weights[page_order] / total
+        ).astype(np.float32)
+        discarded_mass[landmark] = np.float32(
+            1.0 - float(np.sum(page_weights[page_order])) / total
+        )
+
+    return {
+        "discarded_mass": discarded_mass,
+        "incidence_weights": incidence_weights,
+        "landmark_ids": base_ids[landmark_positions].copy(),
+        "landmarks": landmarks,
+        "page_count": (base.shape[0] + page_rows - 1) // page_rows,
+        "page_ordinals": page_ordinals,
+    }
+
+
+def _landmark_page_scores(
+    query: np.ndarray,
+    artifact: dict[str, np.ndarray | int],
+    *,
+    query_landmarks: int,
+) -> np.ndarray:
+    landmarks = np.asarray(artifact["landmarks"], dtype=np.float32)
+    landmark_ids = np.asarray(artifact["landmark_ids"], dtype=np.int64)
+    page_ordinals = np.asarray(artifact["page_ordinals"], dtype=np.int64)
+    incidence_weights = np.asarray(artifact["incidence_weights"], dtype=np.float32)
+    query = np.asarray(query, dtype=np.float32)
+    page_count = int(artifact["page_count"])
+    if (
+        query.shape != (landmarks.shape[1],)
+        or not np.isfinite(query).all()
+        or not 0 < query_landmarks <= landmarks.shape[0]
+    ):
+        raise ValueError("landmark query differs")
+
+    delta = landmarks - query[None, :]
+    distances = np.einsum("ij,ij->i", delta, delta)
+    order = np.lexsort((landmark_ids, distances))[:query_landmarks]
+    selected_distances = distances[order]
+    tau = max(float(selected_distances[-1] - selected_distances[0]), 1.0e-12)
+    alpha = np.exp(-(selected_distances - selected_distances[0]) / tau)
+    alpha /= np.sum(alpha)
+    scores = np.zeros(page_count, dtype=np.float64)
+    for query_rank, landmark in enumerate(order):
+        pages = page_ordinals[landmark]
+        present = pages >= 0
+        np.add.at(
+            scores,
+            pages[present],
+            float(alpha[query_rank]) * incidence_weights[landmark, present],
+        )
+    return scores
 
 
 def _select_rank_weighted_pages(
@@ -438,6 +595,11 @@ def evaluate_overlay(
     encode_chunk_rows: int = 16_384,
     max_base_bytes: int = 16 * 1024 * 1024,
     max_base_gets: int = 32,
+    landmark_count: int = 0,
+    landmark_neighbors: int = 1_024,
+    pages_per_landmark: int = 256,
+    query_landmarks: int = 8,
+    landmark_chunk_rows: int = 8_192,
 ) -> dict[str, Any]:
     """Evaluate one shared base router with a fully resident delta tier."""
 
@@ -461,6 +623,17 @@ def evaluate_overlay(
         or encode_chunk_rows <= 0
         or max_base_bytes <= 0
         or max_base_gets <= 0
+        or landmark_count < 0
+        or (
+            landmark_count > 0
+            and (
+                landmark_count > base.shape[0]
+                or not 0 < landmark_neighbors < base.shape[0]
+                or pages_per_landmark <= 0
+                or not 0 < query_landmarks <= landmark_count
+                or landmark_chunk_rows <= 0
+            )
+        )
     ):
         raise ValueError("overlay shape differs")
     if not all(np.isfinite(value).all() for value in (base, delta, queries)):
@@ -685,6 +858,100 @@ def evaluate_overlay(
         and cell["base_gets_max"] <= max_base_gets
         and cell["base_bytes_max"] <= max_base_bytes
     ]
+    landmark_incidence_cells = []
+    if landmark_count > 0:
+        landmark_artifact = _build_landmark_incidence(
+            base,
+            base_ids,
+            page_rows=page_rows,
+            landmark_count=landmark_count,
+            neighbor_count=landmark_neighbors,
+            pages_per_landmark=pages_per_landmark,
+            seed=seed,
+            chunk_rows=landmark_chunk_rows,
+        )
+        samples = []
+        exact_hits = 0
+        page_sq8_hits = 0
+        for query_index, query in enumerate(queries):
+            page_scores = _landmark_page_scores(
+                query, landmark_artifact, query_landmarks=query_landmarks
+            )
+            _, ranges = _select_optimal_weighted_pages(
+                page_scores,
+                max_span_pages=max_base_pages,
+                max_ranges=max_base_gets,
+            )
+            base_candidates = np.concatenate(
+                [
+                    np.arange(
+                        start * page_rows,
+                        min((end + 1) * page_rows, base.shape[0]),
+                        dtype=np.int64,
+                    )
+                    for start, end in ranges
+                ]
+            )
+            candidate_ids = np.concatenate((base_ids[base_candidates], delta_ids))
+            exact_vectors = np.concatenate((base[base_candidates], delta), axis=0)
+            page_sq8_vectors = np.concatenate(
+                (base_page_sq8[base_candidates], delta_sq8), axis=0
+            )
+            exact_result = _top_ids(query, exact_vectors, candidate_ids, neighbors)
+            page_sq8_result = _top_ids(
+                query, page_sq8_vectors, candidate_ids, neighbors
+            )
+            expected = set(truth[query_index])
+            exact_hits += len(expected.intersection(exact_result))
+            page_sq8_hits += len(expected.intersection(page_sq8_result))
+            samples.append(
+                {
+                    "base_bytes": int(
+                        sum(end - start + 1 for start, end in ranges)
+                        * page_payload_bytes
+                    ),
+                    "base_gets": len(ranges),
+                }
+            )
+        base_bytes = [sample["base_bytes"] for sample in samples]
+        base_gets = [sample["base_gets"] for sample in samples]
+        discarded_mass = np.asarray(landmark_artifact["discarded_mass"])
+        artifact_bytes = (
+            landmark_count * base.shape[1] * 4
+            + landmark_count * pages_per_landmark * 8
+            + (landmark_count + 1) * 4
+        )
+        landmark_incidence_cells.append(
+            {
+                "artifact_bytes": artifact_bytes,
+                "base_bytes_max": max(base_bytes),
+                "base_bytes_p50": _nearest_percentile(base_bytes, 0.50),
+                "base_bytes_p95": _nearest_percentile(base_bytes, 0.95),
+                "base_gets_max": max(base_gets),
+                "base_gets_p50": _nearest_percentile(base_gets, 0.50),
+                "base_gets_p95": _nearest_percentile(base_gets, 0.95),
+                "discarded_mass_max_ppm": round(
+                    float(np.max(discarded_mass)) * 1_000_000
+                ),
+                "exact_recall_ppm": round(
+                    exact_hits * 1_000_000 / denominator
+                ),
+                "landmark_count": landmark_count,
+                "landmark_neighbors": landmark_neighbors,
+                "page_sq8_recall_ppm": round(
+                    page_sq8_hits * 1_000_000 / denominator
+                ),
+                "pages_per_landmark": pages_per_landmark,
+                "query_landmarks": query_landmarks,
+            }
+        )
+    passing_landmark_cells = [
+        cell["landmark_count"]
+        for cell in landmark_incidence_cells
+        if cell["page_sq8_recall_ppm"] >= 990_000
+        and cell["base_gets_max"] <= max_base_gets
+        and cell["base_bytes_max"] <= max_base_bytes
+    ]
     return {
         "cells": cells,
         "base_quantizer": "per-page-sq8",
@@ -700,6 +967,14 @@ def evaluate_overlay(
         ),
         "delta_rows": int(delta.shape[0]),
         "logical_run_counts": list(logical_run_counts),
+        "landmark_incidence_cells": landmark_incidence_cells,
+        "landmark_incidence_gate": {
+            "max_base_bytes": max_base_bytes,
+            "max_base_gets": max_base_gets,
+            "min_page_sq8_recall_ppm": 990_000,
+            "passed": bool(passing_landmark_cells),
+            "passing_landmark_counts": passing_landmark_cells,
+        },
         "page_payload_bytes": page_payload_bytes,
         "physical_oracle": oracle_result["physical_oracle"],
         "rank_weighted_cells": rank_weighted_cells,
@@ -717,7 +992,7 @@ def evaluate_overlay(
             "passed": bool(passing_shortlists),
             "passing_shortlists": passing_shortlists,
         },
-        "schema": "borsuk-v85-shared-overlay-screen-v4",
+        "schema": "borsuk-v85-shared-overlay-screen-v5",
         "training_sample_rows": sample_count,
         "training_rows": int(base.shape[0]),
     }
@@ -765,6 +1040,7 @@ def main() -> None:
     parser.add_argument("--query-count", type=int, default=32)
     parser.add_argument("--dimensions", type=int, default=768)
     parser.add_argument("--oracle-only", action="store_true")
+    parser.add_argument("--landmark-incidence", action="store_true")
     args = parser.parse_args()
     if not 0 < args.base_rows < args.rows:
         parser.error("base rows must be inside the corpus")
@@ -794,6 +1070,7 @@ def main() -> None:
             base_ids=source_ids[base_order],
             delta_ids=source_ids[args.base_rows : args.rows],
             truth_ids=truth_ids,
+            landmark_count=1_024 if args.landmark_incidence else 0,
         )
     body = json.dumps(result, separators=(",", ":"), sort_keys=True) + "\n"
     args.output.write_text(body)

@@ -5,6 +5,8 @@ from unittest import mock
 import numpy as np
 
 from scripts.v85_shared_overlay_screen import (
+    _build_landmark_incidence,
+    _landmark_page_scores,
     _maximum_physical_oracle_hits,
     _page_payload_bytes,
     _select_optimal_weighted_pages,
@@ -15,6 +17,91 @@ from scripts.v85_shared_overlay_screen import (
 
 
 class V85SharedOverlayScreenTests(unittest.TestCase):
+    def test_landmark_incidence_routes_by_base_neighborhood_without_queries(
+        self,
+    ) -> None:
+        base = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.1, 0.0],
+                [10.0, 0.0],
+                [10.1, 0.0],
+                [0.0, 10.0],
+                [0.0, 10.1],
+                [10.0, 10.0],
+                [10.1, 10.0],
+            ],
+            dtype=np.float32,
+        )
+
+        artifact = _build_landmark_incidence(
+            base,
+            np.arange(10, 90, 10, dtype=np.int64),
+            page_rows=2,
+            landmark_count=8,
+            neighbor_count=1,
+            pages_per_landmark=1,
+            seed=85,
+            chunk_rows=3,
+        )
+        scores = _landmark_page_scores(
+            np.asarray([0.0, 0.0], dtype=np.float32),
+            artifact,
+            query_landmarks=2,
+        )
+
+        self.assertEqual(artifact["landmarks"].shape, (8, 2))
+        self.assertEqual(artifact["page_ordinals"].shape, (8, 1))
+        self.assertTrue(np.all(artifact["discarded_mass"] >= 0.0))
+        self.assertEqual(int(np.argmax(scores)), 0)
+        self.assertGreater(scores[0], 0.99)
+
+    def test_overlay_evaluates_landmark_incidence_under_physical_budget(self) -> None:
+        base = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.1, 0.0],
+                [10.0, 0.0],
+                [10.1, 0.0],
+                [0.0, 10.0],
+                [0.0, 10.1],
+                [10.0, 10.0],
+                [10.1, 10.0],
+            ],
+            dtype=np.float32,
+        )
+        result = evaluate_overlay(
+            base,
+            np.asarray([[20.0, 20.0]], dtype=np.float32),
+            np.asarray([[0.0, 0.0]], dtype=np.float32),
+            base_ids=np.arange(10, 90, 10, dtype=np.int64),
+            delta_ids=np.asarray([90], dtype=np.int64),
+            truth_ids=np.asarray([[10, 20]], dtype=np.int64),
+            page_rows=2,
+            neighbors=2,
+            subspaces=2,
+            clusters=2,
+            shortlists=(1,),
+            rank_top_rows=(1,),
+            rank_page_caps=(1,),
+            training_sample_rows=8,
+            encode_chunk_rows=4,
+            max_base_bytes=108,
+            max_base_gets=1,
+            landmark_count=8,
+            landmark_neighbors=1,
+            pages_per_landmark=1,
+            query_landmarks=2,
+            landmark_chunk_rows=3,
+        )
+
+        self.assertEqual(len(result["landmark_incidence_cells"]), 1)
+        self.assertEqual(
+            result["landmark_incidence_cells"][0]["page_sq8_recall_ppm"],
+            1_000_000,
+        )
+        self.assertTrue(result["landmark_incidence_gate"]["passed"])
+
     def test_physical_oracle_charges_gaps_and_maximizes_hits_exactly(self) -> None:
         page_hits = {0: 3, 3: 2, 4: 5, 8: 4}
 
@@ -73,6 +160,14 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         self.assertEqual(ranges, [(0, 0), (5, 5)])
         self.assertEqual(int(np.sum(weights[pages])), 11)
 
+        pages, ranges = _select_optimal_weighted_pages(
+            np.asarray([0.6, 0.0, 0.5], dtype=np.float64),
+            max_span_pages=1,
+            max_ranges=1,
+        )
+        self.assertEqual(pages.tolist(), [0])
+        self.assertEqual(ranges, [(0, 0)])
+
         for max_pages, max_ranges in ((2, 1), (3, 1), (3, 2), (5, 2)):
             exhaustive = 0
             for mask in itertools.product((False, True), repeat=weights.size):
@@ -122,7 +217,7 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             seed=85,
         )
 
-        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v4")
+        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v5")
         self.assertEqual(result["training_rows"], 8)
         self.assertEqual(result["delta_rows"], 1)
         self.assertEqual(result["cpu_parallelism"], "sequential-per-query")

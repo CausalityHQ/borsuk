@@ -9,6 +9,7 @@ set -u
 : "${V85_BASE_ROWS:=900000}"
 : "${V85_QUERY_COUNT:=32}"
 : "${V85_ORACLE_ONLY:=0}"
+: "${V85_LANDMARK_INCIDENCE:=0}"
 
 root=/mnt/v85-shared-overlay
 phase=bootstrap
@@ -64,6 +65,9 @@ screen_args=(
 )
 if [ "$V85_ORACLE_ONLY" = 1 ]; then
   screen_args+=(--oracle-only)
+fi
+if [ "$V85_LANDMARK_INCIDENCE" = 1 ]; then
+  screen_args+=(--landmark-incidence)
 fi
 /usr/bin/time -v -o time.log .venv/bin/python screen.py \
   "${screen_args[@]}" \
