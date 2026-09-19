@@ -762,3 +762,51 @@ caps near 300 QPS until it is sharded; the p99 tail is the wave's p(1−1/N)
 quantile and neither hedging nor S3 Express One Zone has been tried; there is
 no cache tier, so turbopuffer's 14 ms warm is unreachable; and 100M is
 unmeasured.
+
+## V76 — the query-rate ceiling is the router, not S3
+
+`crates/borsuk-v71/` throughput pass, results
+`research/v76-algorithm-first/throughput/a0001/`. Queries driven concurrently
+against the same index object on c7i.12xlarge, 48 vCPU, in-region.
+
+| shortlist | workers | QPS | GET/s | errors | p50 | p99 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 8 | 107.0 | 1,390 | 0 | 60.5 ms | 125.3 ms |
+| 256 | 32 | 103.7 | 1,348 | 0 | 208.8 ms | 902.1 ms |
+| 256 | 128 | 110.9 | 1,442 | 0 | 850.2 ms | 2,852.7 ms |
+| 256 | 384 | 108.6 | 1,412 | 0 | 2,730.2 ms | 7,727.1 ms |
+| 512 | 32 | 84.9 | 1,783 | 0 | 266.7 ms | 1,131.8 ms |
+| 512 | 384 | 80.0 | 1,680 | 0 | 3,676.1 ms | 8,444.6 ms |
+
+**The ledger's "one object per index caps near 300 QPS" claim is withdrawn.**
+It was arithmetic from S3's documented per-prefix request rate, and the
+measurement does not support it: throughput plateaus at ~107 QPS with **zero
+errors**, at ~1,400 GET/s — a quarter of the 5,500/s the prefix limit would
+allow. Nothing is being throttled.
+
+QPS flat while latency grows in proportion to workers is a closed system
+sitting at its service rate. The resource is CPU, and it is the router:
+
+- The router scores **every row on every query** — 1,000,000 rows x 64
+  subspaces = **64M table lookups**, measured at 4.3 ms wall on 48 cores, so
+  about **206 core-ms per query**.
+- 48 cores divided by 0.206 core-seconds gives ~233 QPS as a ceiling, and 107
+  measured once the SQ8 scan and I/O threads take their share. The arithmetic
+  and the measurement agree.
+
+### This is the scale wall, and it is not RAM
+
+Earlier entries treated the router's resident footprint as the scaling risk. It
+is not. **The router is O(N) per query.** At 100M rows the same scan is 100x the
+work — roughly 430 ms of wall time on 48 cores before a single byte is fetched,
+or about 1 QPS per node. Resident RAM at 6.4 GiB would have been affordable;
+the scan is not.
+
+The fix is hierarchy, and the layout already supports it: rows are in k-means
+chain order, so contiguous regions are geometrically coherent. A first level
+over page summaries — which V66 showed survive PQ compression intact — selects
+candidate regions, and the row codes are then scanned only inside them.
+Restricting the row scan to 512 pages cuts the per-query work from 64M lookups
+to roughly 5.7M, and a third level would remove the remaining O(N) term. This
+is the next change, and until it is made the design serves 1M well and does not
+scale.
