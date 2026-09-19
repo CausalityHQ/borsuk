@@ -419,7 +419,7 @@ async fn main() -> BenchResult<()> {
     let concurrency = optional_usize("BORSUK_V71_CONCURRENCY", 64)?;
     let measured = optional_usize("BORSUK_V71_QUERIES", 200)?;
 
-    let manifest = load_manifest(&manifest_path)?;
+    let manifest = Arc::new(load_manifest(&manifest_path)?);
     let url = Url::parse(&uri)?;
     let (store, key) = parse_url_opts(&url, [("region".to_string(), region.clone())])?;
     let store: Arc<dyn ObjectStore> = Arc::from(store);
@@ -464,8 +464,52 @@ async fn main() -> BenchResult<()> {
         bytes_seen.push(outcome.bytes as f64);
     }
 
+    // Throughput pass: the per-index ceiling has been asserted from S3's
+    // documented per-prefix request rate but never measured. Driving many
+    // queries concurrently against the same object settles it.
+    let mut throughput = Vec::new();
+    if optional_usize("BORSUK_V71_THROUGHPUT", 0)? == 1 {
+        for workers in [8usize, 32, 128, 384] {
+            let started = Instant::now();
+            let mut errors = 0usize;
+            let outcomes = stream::iter((0..workers * 8).map(|slot| {
+                let store = Arc::clone(&store);
+                let key = key.clone();
+                let manifest = Arc::clone(&manifest);
+                async move {
+                    let index = slot % manifest.queries;
+                    let offset = index * manifest.dimensions;
+                    let query = manifest.query_vectors[offset..offset + manifest.dimensions]
+                        .to_vec();
+                    search(&store, &key, &manifest, &query, budget, gap, concurrency).await
+                }
+            }))
+            .buffer_unordered(workers)
+            .collect::<Vec<_>>()
+            .await;
+            let elapsed = started.elapsed().as_secs_f64();
+            let mut latencies = Vec::new();
+            for outcome in outcomes {
+                match outcome {
+                    Ok(value) => latencies.push(value.route_ms + value.io_ms + value.scan_ms),
+                    Err(_) => errors += 1,
+                }
+            }
+            throughput.push(serde_json::json!({
+                "workers": workers,
+                "queries": workers * 8,
+                "errors": errors,
+                "elapsed_seconds": elapsed,
+                "qps": (workers * 8) as f64 / elapsed,
+                "latency_p50_ms": if latencies.is_empty() { 0.0 } else { percentile(&latencies, 0.50) },
+                "latency_p99_ms": if latencies.is_empty() { 0.0 } else { percentile(&latencies, 0.99) },
+            }));
+            println!("{}", throughput.last().expect("just pushed"));
+        }
+    }
     let report = serde_json::json!({
         "schema": "borsuk-v73-row-router-reader-result-v1",
+        "throughput": throughput,
         "claim_eligible": false,
         "evidence_kind": "measured-native-single-round-trip-sq8-with-resident-row-router",
         "storage": "real-object-store-ranged-gets-no-local-cache",
