@@ -440,6 +440,60 @@ def _arm_hits(result: dict[str, Any]) -> tuple[int, int, int, int]:
     return total, base, query_15, worst
 
 
+def _finalize_registered_decision(result: dict[str, Any]) -> dict[str, Any]:
+    """Apply the frozen quality gate without invalidating an L0 rejection."""
+
+    result["registered_gate"] = {
+        "base_hits": 2_854,
+        "minimum_reachable_missed_truth": _MINIMUM_REACHABLE_MISSED_TRUTH,
+        "query_15_hits": 90,
+        "total_hits": 3_176,
+        "worst_query_hits": 90,
+    }
+    arms = result.get("arms")
+    if not isinstance(arms, dict):
+        raise ValueError("V92 arm evidence differs")
+    if not arms:
+        if (
+            result.get("decision")
+            != {"accepted": None, "reason": "reachability-floor-failed"}
+            or result.get("reachability", {}).get("passed") is not False
+        ):
+            raise ValueError("V92 fail-fast result differs")
+        return result
+    for arm in arms.values():
+        arm["gate"] = summarize_development_arm(
+            arm["result"], neighbors=_NEIGHBORS
+        )
+    control_hits = _arm_hits(arms["control"]["result"])
+    if control_hits != (3_167, 2_846, 90, 90):
+        raise ValueError("V92 registered V90 control differs")
+    if "challenger" not in arms:
+        raise ValueError("V92 challenger evidence differs")
+    challenger_hits = _arm_hits(arms["challenger"]["result"])
+    control_samples = arms["control"]["result"]["samples"]
+    challenger_samples = arms["challenger"]["result"]["samples"]
+    if len(control_samples) != len(challenger_samples):
+        raise ValueError("V92 challenger samples differ")
+    no_large_regression = all(
+        int(challenger_samples[index]["page_sq8_hits"])
+        >= int(control_samples[index]["page_sq8_hits"]) - 1
+        for index in range(len(control_samples))
+    )
+    passed = (
+        challenger_hits[0] >= 3_176
+        and challenger_hits[1] >= 2_854
+        and challenger_hits[2] >= 90
+        and challenger_hits[3] >= 90
+        and no_large_regression
+    )
+    result["decision"] = {
+        "accepted": "challenger" if passed else None,
+        "reason": "registered-gate-passed" if passed else "registered-gate-failed",
+    }
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the fixed V92 wave-two row-nomination falsifier."
@@ -533,42 +587,7 @@ def main() -> None:
         nomination_rows=_NOMINATION_ROWS,
         minimum_reachable_missed_truth=_MINIMUM_REACHABLE_MISSED_TRUTH,
     )
-    for arm in result["arms"].values():
-        arm["gate"] = summarize_development_arm(
-            arm["result"], neighbors=_NEIGHBORS
-        )
-    control_hits = _arm_hits(result["arms"]["control"]["result"])
-    if control_hits != (3_167, 2_846, 90, 90):
-        raise ValueError("V92 registered V90 control differs")
-    if "challenger" in result["arms"]:
-        challenger_hits = _arm_hits(result["arms"]["challenger"]["result"])
-        control_samples = result["arms"]["control"]["result"]["samples"]
-        challenger_samples = result["arms"]["challenger"]["result"]["samples"]
-        if len(control_samples) != len(challenger_samples):
-            raise ValueError("V92 challenger samples differ")
-        no_large_regression = all(
-            int(challenger_samples[index]["page_sq8_hits"])
-            >= int(control_samples[index]["page_sq8_hits"]) - 1
-            for index in range(len(control_samples))
-        )
-        passed = (
-            challenger_hits[0] >= 3_176
-            and challenger_hits[1] >= 2_854
-            and challenger_hits[2] >= 90
-            and challenger_hits[3] >= 90
-            and no_large_regression
-        )
-        result["decision"] = {
-            "accepted": "challenger" if passed else None,
-            "reason": "registered-gate-passed" if passed else "registered-gate-failed",
-        }
-    result["registered_gate"] = {
-        "base_hits": 2_854,
-        "minimum_reachable_missed_truth": _MINIMUM_REACHABLE_MISSED_TRUTH,
-        "query_15_hits": 90,
-        "total_hits": 3_176,
-        "worst_query_hits": 90,
-    }
+    _finalize_registered_decision(result)
     result.update(build_run_metadata())
     body = json.dumps(result, separators=(",", ":"), sort_keys=True) + "\n"
     args.output.write_text(body)

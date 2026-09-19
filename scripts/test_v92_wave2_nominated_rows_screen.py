@@ -10,6 +10,7 @@ import scripts.v92_wave2_nominated_rows_screen as v92
 from scripts.v86_coarse_to_fine_screen import build_coarse_to_fine_artifact
 from scripts.v90_residual_row_sketch_screen import build_residual_row_sketch
 from scripts.v92_wave2_nominated_rows_screen import (
+    _finalize_registered_decision,
     build_run_metadata,
     evaluate_wave2_nominated_pair,
     nominate_unselected_rows,
@@ -141,6 +142,13 @@ class V92WaveTwoNominatedRowsTests(unittest.TestCase):
         self.assertEqual(pair["arms"], {})
         self.assertEqual(pair["decision"]["reason"], "reachability-floor-failed")
         self.assertFalse(pair["reachability"]["passed"])
+
+        finalized = _finalize_registered_decision(pair)
+        self.assertEqual(finalized["arms"], {})
+        self.assertEqual(
+            finalized["decision"]["reason"], "reachability-floor-failed"
+        )
+        self.assertEqual(finalized["registered_gate"]["total_hits"], 3_176)
 
     def test_metadata_and_cli_freeze_one_serial_fail_fast_cell(self) -> None:
         metadata = build_run_metadata()
