@@ -209,10 +209,19 @@ def evaluate_overlay(
 
 
 def _fixed_list(path: pathlib.Path, column: str, rows: int) -> np.ndarray:
-    values = pq.read_table(path, columns=[column])[column]
-    matrix = np.asarray(values.combine_chunks().values.to_numpy(), dtype=np.float32)
-    width = matrix.size // len(values)
-    return np.ascontiguousarray(matrix.reshape(len(values), width)[:rows])
+    chunks = []
+    seen = 0
+    for batch in pq.ParquetFile(path).iter_batches(columns=[column], batch_size=rows):
+        take = min(batch.num_rows, rows - seen)
+        values = batch.column(0).slice(0, take)
+        chunks.append(np.asarray(values.values.to_numpy(), dtype=np.float32))
+        seen += take
+        if seen == rows:
+            break
+    if seen != rows:
+        raise ValueError("Parquet row count differs")
+    width = chunks[0].size // min(rows, len(chunks[0]))
+    return np.ascontiguousarray(np.concatenate(chunks).reshape(rows, width))
 
 
 def main() -> None:
