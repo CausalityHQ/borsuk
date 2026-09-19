@@ -522,11 +522,23 @@ fn self_test() -> BenchResult<()> {
     Ok(())
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> BenchResult<()> {
+fn main() -> BenchResult<()> {
     if env::args().any(|argument| argument == "--self-test") {
         return self_test();
     }
+    // The blocking pool defaults to 512 threads. V80 measured throughput
+    // collapsing past 32 concurrent queries because each spawns two CPU tasks,
+    // so a few hundred runnable threads end up fighting over the cores. Bound
+    // it to the core count: queries then queue instead of thrashing.
+    let cores = std::thread::available_parallelism()?.get();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .max_blocking_threads(cores)
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> BenchResult<()> {
     let uri = required("BORSUK_V71_URI")?;
     let region = required("BORSUK_V71_REGION")?;
     let manifest_path = PathBuf::from(required("BORSUK_V71_MANIFEST")?);
