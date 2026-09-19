@@ -168,22 +168,38 @@ fn coalesce(sorted: &[usize], gap: usize) -> Vec<Range<usize>> {
 /// Dense and small - two 768-dimensional summaries per 256-row page is one
 /// dot product per 128 rows - so this stays affordable where scanning every
 /// row does not.
-fn coarse_regions(manifest: &Manifest, query: &[f32], regions: usize) -> Vec<usize> {
+fn summary_score(summary: &[f32], query: &[f32]) -> f32 {
+    let mut squared = 0.0f32;
+    let mut inner = 0.0f32;
+    for index in 0..summary.len() {
+        squared += summary[index] * summary[index];
+        inner += summary[index] * query[index];
+    }
+    squared - 2.0 * inner
+}
+
+fn coarse_regions(
+    manifest: &Manifest,
+    query: &[f32],
+    regions: usize,
+    spread: bool,
+) -> Vec<usize> {
     let dimensions = manifest.dimensions;
     let blocks = manifest.pages * manifest.blocks_per_page;
-    let mut page_scores: Vec<f32> = (0..blocks)
-        .into_par_iter()
-        .map(|block| {
-            let summary = &manifest.summaries[block * dimensions..(block + 1) * dimensions];
-            let mut squared = 0.0f32;
-            let mut inner = 0.0f32;
-            for index in 0..dimensions {
-                squared += summary[index] * summary[index];
-                inner += summary[index] * query[index];
-            }
-            squared - 2.0 * inner
-        })
-        .collect();
+    let score = |block: usize| {
+        summary_score(
+            &manifest.summaries[block * dimensions..(block + 1) * dimensions],
+            query,
+        )
+    };
+    // Under concurrent load every query spreading itself across all cores just
+    // makes queries contend for one pool. Sequential here lets query-level
+    // concurrency use the machine instead.
+    let mut page_scores: Vec<f32> = if spread {
+        (0..blocks).into_par_iter().map(score).collect()
+    } else {
+        (0..blocks).map(score).collect()
+    };
     // A page scores as the best of its blocks.
     let mut best = vec![f32::INFINITY; manifest.pages];
     for block in 0..blocks {
@@ -205,6 +221,7 @@ fn route(
     query: &[f32],
     shortlist: usize,
     regions: usize,
+    spread: bool,
 ) -> Vec<usize> {
     let subspaces = manifest.subspaces;
     let width = manifest.width;
@@ -224,23 +241,25 @@ fn route(
     }
 
     // Second level: score only the rows inside the regions the first level kept.
-    let candidates = coarse_regions(manifest, query, regions);
+    let candidates = coarse_regions(manifest, query, regions, spread);
     let table = &table;
-    let mut scored: Vec<(f32, u32)> = candidates
-        .par_iter()
-        .flat_map_iter(move |page| {
-            let first = page * manifest.page_rows;
-            let last = ((page + 1) * manifest.page_rows).min(manifest.rows);
-            (first..last).map(move |row| {
-                let codes = &manifest.row_codes[row * subspaces..(row + 1) * subspaces];
-                let mut total = 0.0f32;
-                for subspace in 0..subspaces {
-                    total += table[subspace * 256 + usize::from(codes[subspace])];
-                }
-                (total, row as u32)
-            })
+    let rows_of = move |page: &usize| {
+        let first = page * manifest.page_rows;
+        let last = ((page + 1) * manifest.page_rows).min(manifest.rows);
+        (first..last).map(move |row| {
+            let codes = &manifest.row_codes[row * subspaces..(row + 1) * subspaces];
+            let mut total = 0.0f32;
+            for subspace in 0..subspaces {
+                total += table[subspace * 256 + usize::from(codes[subspace])];
+            }
+            (total, row as u32)
         })
-        .collect();
+    };
+    let mut scored: Vec<(f32, u32)> = if spread {
+        candidates.par_iter().flat_map_iter(rows_of).collect()
+    } else {
+        candidates.iter().flat_map(rows_of).collect()
+    };
     let take = shortlist.min(scored.len());
     scored.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
     scored.truncate(take);
@@ -314,10 +333,11 @@ async fn search(
     regions: usize,
     gap: usize,
     concurrency: usize,
+    spread: bool,
 ) -> BenchResult<QueryOutcome> {
     let row_bytes = 8 + 4 + manifest.dimensions;
     let started = Instant::now();
-    let chosen = route(manifest, query, budget, regions);
+    let chosen = route(manifest, query, budget, regions, spread);
     let ranges = coalesce(&chosen, gap);
     let route_ms = started.elapsed().as_secs_f64() * 1000.0;
 
@@ -364,24 +384,36 @@ async fn search(
     }
     shift -= query_norm / 2.0;
 
-    let mut best: Vec<(f32, i64)> = blobs
-        .par_iter()
-        .flat_map_iter(|(_, body)| {
-            let count = body.len() / row_bytes;
-            (0..count).map(move |row| {
-                let base = row * row_bytes;
-                let identifier =
-                    i64::from_le_bytes(body[base..base + 8].try_into().expect("8 bytes"));
-                let norm =
-                    f32::from_le_bytes(body[base + 8..base + 12].try_into().expect("4 bytes"));
-                let codes = &body[base + 12..base + row_bytes];
-                (norm, identifier, codes)
-            })
+    fn rows_of_blob(
+        entry: &(usize, bytes::Bytes),
+        row_bytes: usize,
+    ) -> impl Iterator<Item = (f32, i64, &[u8])> + '_ {
+        let body = &entry.1;
+        let count = body.len() / row_bytes;
+        (0..count).map(move |row| {
+            let base = row * row_bytes;
+            let identifier = i64::from_le_bytes(body[base..base + 8].try_into().expect("8 bytes"));
+            let norm = f32::from_le_bytes(body[base + 8..base + 12].try_into().expect("4 bytes"));
+            let codes = &body[base + 12..base + row_bytes];
+            (norm, identifier, codes)
         })
-        .map(|(norm, identifier, codes)| {
-            (norm - 2.0 * (fused_inner(codes, &weights) + shift), identifier)
-        })
-        .collect();
+    }
+    let rescore = |(norm, identifier, codes): (f32, i64, &[u8])| {
+        (norm - 2.0 * (fused_inner(codes, &weights) + shift), identifier)
+    };
+    let mut best: Vec<(f32, i64)> = if spread {
+        blobs
+            .par_iter()
+            .flat_map_iter(|entry| rows_of_blob(entry, row_bytes))
+            .map(rescore)
+            .collect()
+    } else {
+        blobs
+            .iter()
+            .flat_map(|entry| rows_of_blob(entry, row_bytes))
+            .map(rescore)
+            .collect()
+    };
     let take = manifest.neighbors.min(best.len());
     if take > 0 {
         best.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
@@ -505,7 +537,8 @@ async fn main() -> BenchResult<()> {
         let offset = index * manifest.dimensions;
         let query = &manifest.query_vectors[offset..offset + manifest.dimensions];
         let outcome =
-            search(&store, &key, &manifest, query, budget, regions, gap, concurrency).await?;
+            search(&store, &key, &manifest, query, budget, regions, gap, concurrency, true)
+                .await?;
         let truth_offset = index * manifest.neighbors;
         let truth = &manifest.truth[truth_offset..truth_offset + manifest.neighbors];
         let found = outcome
@@ -540,7 +573,8 @@ async fn main() -> BenchResult<()> {
                     let offset = index * manifest.dimensions;
                     let query = manifest.query_vectors[offset..offset + manifest.dimensions]
                         .to_vec();
-                    search(&store, &key, &manifest, &query, budget, regions, gap, concurrency).await
+                    search(&store, &key, &manifest, &query, budget, regions, gap, concurrency, false)
+                        .await
                 }
             }))
             .buffer_unordered(workers)
@@ -578,6 +612,8 @@ async fn main() -> BenchResult<()> {
         "page_rows": manifest.page_rows,
         "shortlist_rows": budget,
         "coarse_regions": regions,
+        "in_query_parallel_latency_pass": true,
+        "in_query_parallel_throughput_pass": false,
         "gap_pages": gap,
         "concurrency": concurrency,
         "queries": measured,
