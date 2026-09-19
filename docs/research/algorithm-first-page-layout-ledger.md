@@ -853,3 +853,54 @@ and it is a bigger lever on throughput than any further routing work.
 in object storage and nothing is cached between queries. Horizontal scaling is
 therefore available by construction — but that is an argument, not a
 measurement, and no multi-node run has been made.
+
+## V78 — the widening load
+
+`crates/borsuk-v71/`, results
+`research/v78-algorithm-first/widening/a0001/`. Same index, same queries.
+
+| | scan p50 | total p50 | QPS (regions=256) | Recall@100 |
+|---|---:|---:|---:|---:|
+| V77 | 2.50 ms | 41.8 ms | 124.6 | 99.155% |
+| **V78** | **1.59 ms** | **40.4 ms** | **137.3** | 99.160% |
+
+Taking fixed-size arrays out of the slices removed the per-element bounds
+checks and cut the scan 36%. Recall is unchanged, as it must be — the self-test
+requires the vectorised inner product to match the scalar form at every width.
+
+### What still limits throughput
+
+Per-query CPU is now 1.25 ms route plus 1.61 ms scan, about 137 core-ms across
+48 cores, which puts the ceiling near 350 QPS against **137 measured — 39%
+efficiency**. The gap is not the kernel any more. Each query spreads its own
+scan across every core with rayon, so under concurrent load the queries contend
+for the same pool instead of running beside one another.
+
+The fix is to stop parallelising inside a query once load is high and let
+query-level concurrency do the work: the same core-ms then buys close to the
+full ceiling. That trades single-query latency for throughput and should be a
+runtime choice, not a build-time one. It is the next throughput change, and it
+is worth more than further kernel tuning.
+
+## Where the work stands
+
+Measured on real S3, in-region, no cache, 1M x 768 ReLAION:
+
+| | BORSUK, measured | turbopuffer, vendor | S3 Vectors, vendor |
+|---|---|---|---|
+| recall | **99.272% Recall@100** (held-out validation, 1,000 queries) | "90% recall@10" example | ">90% average" claimed |
+| read latency | **39.4–49.0 ms p50**, uncached | 874 ms cold p50, 14 ms warm | ~100 ms warm |
+| write | **224,910 vectors/s**, 33.7 ms visibility | ~10,000+ vectors/s, 165 ms commit p50 | 2,500 vectors/s/index |
+| per-node QPS | **137**, stateless readers | not published | ~hundreds/index claimed |
+
+Open, in the order they bind:
+
+1. **Throughput leaves 2.5x on the table** to in-query rayon contention.
+2. **100M is unmeasured.** The row scan is now O(regions); the coarse level is
+   still O(N) over summaries and needs SIMD or a third level.
+3. **Delta compaction and the per-delta query penalty are unmeasured** — the
+   real limit on the write figure, not the rate.
+4. **No cache tier**, so turbopuffer's 14 ms warm is unreachable by design.
+5. **Multi-node scaling follows by construction** from stateless readers over an
+   immutable index, but no multi-node run has been made.
+6. The **sealed holdout remains unopened.**
