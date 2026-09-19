@@ -110,7 +110,7 @@ def _coalesce(pages: np.ndarray, gap: int = 2) -> list[tuple[int, int]]:
     return [(int(starts[index]), int(ends[index])) for index in range(starts.size)]
 
 
-def _select_voted_pages(
+def _select_rank_weighted_pages(
     scores: np.ndarray,
     *,
     page_rows: int,
@@ -127,14 +127,26 @@ def _select_voted_pages(
     equal = np.flatnonzero(scores == cutoff)[:remaining]
     head = np.concatenate((below, equal))
 
+    head = head[np.lexsort((head, scores[head]))]
     pages = head // page_rows
     page_count = (scores.size + page_rows - 1) // page_rows
-    counts = np.bincount(pages, minlength=page_count)
+    weights = np.asarray(
+        [1_000_000_000 // (rank + 1) for rank in range(head.size)],
+        dtype=np.uint64,
+    )
+    page_weights = np.zeros(page_count, dtype=np.uint64)
+    np.add.at(page_weights, pages, weights)
     minimum = np.full(page_count, np.inf, dtype=np.float32)
     np.minimum.at(minimum, pages, scores[head])
-    candidates = np.flatnonzero(counts)
+    candidates = np.flatnonzero(page_weights)
     candidates = candidates[
-        np.lexsort((candidates, minimum[candidates], -counts[candidates]))
+        np.lexsort(
+            (
+                candidates,
+                minimum[candidates],
+                -page_weights[candidates].astype(np.int64),
+            )
+        )
     ]
 
     selected = np.empty(0, dtype=np.int64)
@@ -173,8 +185,8 @@ def evaluate_overlay(
     subspaces: int = 64,
     clusters: int = 256,
     shortlists: tuple[int, ...] = (256, 512, 1024),
-    vote_top_rows: tuple[int, ...] = (1024, 2048, 4096),
-    vote_page_caps: tuple[int, ...] = (64, 84),
+    rank_top_rows: tuple[int, ...] = (512, 1024, 2048),
+    rank_page_caps: tuple[int, ...] = (64, 84),
     logical_run_counts: tuple[int, ...] = (1, 10, 100),
     seed: int = 85,
     base_ids: np.ndarray | None = None,
@@ -197,10 +209,10 @@ def evaluate_overlay(
         or base.shape[1] % subspaces != 0
         or page_rows <= 0
         or neighbors <= 0
-        or not vote_top_rows
-        or not vote_page_caps
-        or min(vote_top_rows) <= 0
-        or min(vote_page_caps) <= 0
+        or not rank_top_rows
+        or not rank_page_caps
+        or min(rank_top_rows) <= 0
+        or min(rank_page_caps) <= 0
         or training_sample_rows <= 0
         or encode_chunk_rows <= 0
     ):
@@ -329,14 +341,14 @@ def evaluate_overlay(
         and cell["base_gets_max"] <= 32
         and cell["base_bytes_max"] <= 16 * 1024 * 1024
     ]
-    vote_cells = []
-    for top_rows in vote_top_rows:
-        for page_cap in vote_page_caps:
+    rank_weighted_cells = []
+    for top_rows in rank_top_rows:
+        for page_cap in rank_page_caps:
             samples = []
             exact_hits = 0
             page_sq8_hits = 0
             for query_index, query in enumerate(queries):
-                _, ranges = _select_voted_pages(
+                _, ranges = _select_rank_weighted_pages(
                     router_scores[query_index],
                     page_rows=page_rows,
                     top_rows=top_rows,
@@ -376,7 +388,7 @@ def evaluate_overlay(
                 )
             base_bytes = [sample["base_bytes"] for sample in samples]
             base_gets = [sample["base_gets"] for sample in samples]
-            vote_cells.append(
+            rank_weighted_cells.append(
                 {
                     "base_bytes_max": max(base_bytes),
                     "base_bytes_p50": _nearest_percentile(base_bytes, 0.50),
@@ -394,9 +406,9 @@ def evaluate_overlay(
                     "top_rows": top_rows,
                 }
             )
-    passing_vote_cells = [
+    passing_rank_weighted_cells = [
         {"page_cap": cell["page_cap"], "top_rows": cell["top_rows"]}
-        for cell in vote_cells
+        for cell in rank_weighted_cells
         if cell["page_sq8_recall_ppm"] >= 990_000
         and cell["base_gets_max"] <= 32
         and cell["base_bytes_max"] <= 16 * 1024 * 1024
@@ -420,13 +432,13 @@ def evaluate_overlay(
         ),
         "delta_rows": int(delta.shape[0]),
         "logical_run_counts": list(logical_run_counts),
-        "page_vote_cells": vote_cells,
-        "page_vote_gate": {
+        "rank_weighted_cells": rank_weighted_cells,
+        "rank_weighted_gate": {
             "max_base_bytes": 16 * 1024 * 1024,
             "max_base_gets": 32,
             "min_page_sq8_recall_ppm": 990_000,
-            "passed": bool(passing_vote_cells),
-            "passing_cells": passing_vote_cells,
+            "passed": bool(passing_rank_weighted_cells),
+            "passing_cells": passing_rank_weighted_cells,
         },
         "promotion_gate": {
             "max_base_bytes": 16 * 1024 * 1024,
@@ -435,7 +447,7 @@ def evaluate_overlay(
             "passed": bool(passing_shortlists),
             "passing_shortlists": passing_shortlists,
         },
-        "schema": "borsuk-v85-shared-overlay-screen-v1",
+        "schema": "borsuk-v85-shared-overlay-screen-v2",
         "training_sample_rows": sample_count,
         "training_rows": int(base.shape[0]),
     }
