@@ -1,0 +1,24 @@
+[package]
+name = "borsuk-v71"
+version = "0.0.0"
+description = "Dependency-light native object-store reader for the BORSUK V71 serving measurement"
+edition.workspace = true
+publish = false
+license-file = "../../LICENSE"
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bytes = "1.11"
+futures-util = "0.3"
+object_store = { version = "0.14", features = ["aws"] }
+serde_json = "1.0"
+tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
+url = "2.5"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "v71_native_reader"
+path = "src/main.rs"
