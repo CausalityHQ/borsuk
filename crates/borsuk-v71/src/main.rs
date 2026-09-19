@@ -192,10 +192,11 @@ fn coarse_regions(
             query,
         )
     };
-    // The sequential path is kept and measured, not used: V79 showed it halves
-    // throughput rather than raising it, because running a query's CPU inline
-    // blocks the tokio worker it is on and starves the I/O futures sharing that
-    // runtime. Separating CPU onto its own pool is the fix, not serialising it.
+    // One query spreading across every core is right when it is the only query;
+    // under load it makes queries fight for one pool. V79 showed that going
+    // sequential alone made things worse, because the CPU still ran inline on a
+    // tokio worker and starved the I/O futures behind it. Sequential is only
+    // correct now that the work has moved to the blocking pool.
     let mut page_scores: Vec<f32> = if spread {
         (0..blocks).into_par_iter().map(score).collect()
     } else {
@@ -316,6 +317,22 @@ fn fused_inner(codes: &[u8], weights: &[f32]) -> f32 {
     total
 }
 
+/// The rows of one fetched range, with their identifier, stored norm and codes.
+fn rows_of_blob(
+    entry: &(usize, bytes::Bytes),
+    row_bytes: usize,
+) -> impl Iterator<Item = (f32, i64, &[u8])> + '_ {
+    let body = &entry.1;
+    let count = body.len() / row_bytes;
+    (0..count).map(move |row| {
+        let base = row * row_bytes;
+        let identifier = i64::from_le_bytes(body[base..base + 8].try_into().expect("8 bytes"));
+        let norm = f32::from_le_bytes(body[base + 8..base + 12].try_into().expect("4 bytes"));
+        let codes = &body[base + 12..base + row_bytes];
+        (norm, identifier, codes)
+    })
+}
+
 struct QueryOutcome {
     returned: Vec<i64>,
     requests: usize,
@@ -328,7 +345,7 @@ struct QueryOutcome {
 async fn search(
     store: &Arc<dyn ObjectStore>,
     key: &ObjectPath,
-    manifest: &Manifest,
+    manifest: &Arc<Manifest>,
     query: &[f32],
     budget: usize,
     regions: usize,
@@ -338,7 +355,15 @@ async fn search(
 ) -> BenchResult<QueryOutcome> {
     let row_bytes = 8 + 4 + manifest.dimensions;
     let started = Instant::now();
-    let chosen = route(manifest, query, budget, regions, spread);
+    // Routing is pure CPU. Run it on the blocking pool, never inline on a tokio
+    // worker: V79 measured that holding a worker for the scan starves the I/O
+    // futures sharing that runtime and halves throughput.
+    let routing_manifest = Arc::clone(manifest);
+    let routing_query = query.to_vec();
+    let chosen = tokio::task::spawn_blocking(move || {
+        route(&routing_manifest, &routing_query, budget, regions, spread)
+    })
+    .await?;
     let ranges = coalesce(&chosen, gap);
     let route_ms = started.elapsed().as_secs_f64() * 1000.0;
 
@@ -370,57 +395,50 @@ async fn search(
     .into_iter()
     .collect::<Result<Vec<_>, _>>()?;
     let io_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let bytes_read: usize = blobs.iter().map(|(_, body)| body.len()).sum();
 
     let started = Instant::now();
-    // ||q-x||^2 = ||x||^2 - 2(code . weights + shift), with the per-dimension
-    // scale folded into the query once so no row is ever reconstructed.
-    let mut weights = vec![0.0f32; manifest.dimensions];
-    let mut shift = 0.0f32;
-    let mut query_norm = 0.0f32;
-    for index in 0..manifest.dimensions {
-        weights[index] = query[index] * manifest.span_step[index];
-        shift += query[index] * manifest.low[index];
-        query_norm += query[index] * query[index];
-    }
-    shift -= query_norm / 2.0;
-
-    fn rows_of_blob(
-        entry: &(usize, bytes::Bytes),
-        row_bytes: usize,
-    ) -> impl Iterator<Item = (f32, i64, &[u8])> + '_ {
-        let body = &entry.1;
-        let count = body.len() / row_bytes;
-        (0..count).map(move |row| {
-            let base = row * row_bytes;
-            let identifier = i64::from_le_bytes(body[base..base + 8].try_into().expect("8 bytes"));
-            let norm = f32::from_le_bytes(body[base + 8..base + 12].try_into().expect("4 bytes"));
-            let codes = &body[base + 12..base + row_bytes];
-            (norm, identifier, codes)
-        })
-    }
-    let rescore = |(norm, identifier, codes): (f32, i64, &[u8])| {
-        (norm - 2.0 * (fused_inner(codes, &weights) + shift), identifier)
-    };
-    let mut best: Vec<(f32, i64)> = if spread {
-        blobs
-            .par_iter()
-            .flat_map_iter(|entry| rows_of_blob(entry, row_bytes))
-            .map(rescore)
-            .collect()
-    } else {
-        blobs
-            .iter()
-            .flat_map(|entry| rows_of_blob(entry, row_bytes))
-            .map(rescore)
-            .collect()
-    };
-    let take = manifest.neighbors.min(best.len());
-    if take > 0 {
-        best.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
-        best.truncate(take);
-    }
-    let returned = best.into_iter().map(|(_, id)| id).collect();
+    let wanted = manifest.neighbors;
+    let scan_query = query.to_vec();
+    let scan_dimensions = manifest.dimensions;
+    let scan_low = Arc::clone(manifest);
+    let (returned, bytes_read) = tokio::task::spawn_blocking(move || {
+        // ||q-x||^2 = ||x||^2 - 2(code . weights + shift), with the per-dimension
+        // scale folded into the query once so no row is ever reconstructed.
+        let mut weights = vec![0.0f32; scan_dimensions];
+        let mut shift = 0.0f32;
+        let mut query_norm = 0.0f32;
+        for index in 0..scan_dimensions {
+            weights[index] = scan_query[index] * scan_low.span_step[index];
+            shift += scan_query[index] * scan_low.low[index];
+            query_norm += scan_query[index] * scan_query[index];
+        }
+        shift -= query_norm / 2.0;
+        let fetched: usize = blobs.iter().map(|(_, body)| body.len()).sum();
+        let rescore = |(norm, identifier, codes): (f32, i64, &[u8])| {
+            (norm - 2.0 * (fused_inner(codes, &weights) + shift), identifier)
+        };
+        let mut best: Vec<(f32, i64)> = if spread {
+            blobs
+                .par_iter()
+                .flat_map_iter(|entry| rows_of_blob(entry, row_bytes))
+                .map(rescore)
+                .collect()
+        } else {
+            blobs
+                .iter()
+                .flat_map(|entry| rows_of_blob(entry, row_bytes))
+                .map(rescore)
+                .collect()
+        };
+        let take = wanted.min(best.len());
+        if take > 0 {
+            best.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
+            best.truncate(take);
+        }
+        let returned: Vec<i64> = best.into_iter().map(|(_, id)| id).collect();
+        (returned, fetched)
+    })
+    .await?;
     let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
 
     Ok(QueryOutcome {
@@ -574,7 +592,7 @@ async fn main() -> BenchResult<()> {
                     let offset = index * manifest.dimensions;
                     let query = manifest.query_vectors[offset..offset + manifest.dimensions]
                         .to_vec();
-                    search(&store, &key, &manifest, &query, budget, regions, gap, concurrency, true)
+                    search(&store, &key, &manifest, &query, budget, regions, gap, concurrency, false)
                         .await
                 }
             }))
@@ -614,7 +632,7 @@ async fn main() -> BenchResult<()> {
         "shortlist_rows": budget,
         "coarse_regions": regions,
         "in_query_parallel_latency_pass": true,
-        "in_query_parallel_throughput_pass": true,
+        "in_query_parallel_throughput_pass": false,
         "gap_pages": gap,
         "concurrency": concurrency,
         "queries": measured,
