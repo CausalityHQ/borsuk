@@ -1209,3 +1209,56 @@ query and is explicitly unqualified. No 100M scale or latency claim follows.
 The next experiment must use only the already burned development queries to
 repair wave-one selection, then consume a new untouched confirmation range.
 It must not retune against queries 200--327 or weaken the failed gate.
+
+## V87 — more fixed-block page summaries do not repair wave one
+
+Source `c22de65341f8e39ac8df121be95956e8e284baa2`, immutable evidence under
+`research/v87-summary-capacity/c22de65341f8e39ac8df121be95956e8e284baa2/`.
+Attempt `a0001` stopped before science because its Spot instance had no AWS
+credentials; instance `i-052d3f1f41f395d90` was terminated after the
+cloud-init failure was classified. Attempt `a0002` attached the existing
+benchmark instance profile and changed no scientific code or configuration.
+It ran once on c7i.8xlarge Spot instance `i-0c2ba11d52af0ab75` in
+`eu-central-1a`; the runner shut the instance down after its successful
+terminal marker, and the instance is verified terminated.
+
+V87 compared the registered two-summary V86 control with eight fixed
+contiguous block means per physical page. Both arms reused exactly one PQ192
+book and row-code artifact, the same burned development queries 0--31, the
+same production-SQ8 resident delta, and the same wave-one/wave-two limits:
+32 ranges and 16,733,440 bytes for wave one, then 32 ranges and 16,676,928
+bytes for wave two. No S3 query requests were issued by this offline screen;
+64 requests per query is a planned serving maximum, not a latency
+measurement.
+
+| arm | summaries/page | page-SQ8 Recall@100 | exact Recall@100 | base-only recall | query 15 | worst | wave-one base truth |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| registered control | 2 | **98.6875%** (3,158/3,200) | **98.7500%** | **98.5412%** | 88 | 88 | 2,843/2,879 |
+| fixed-block challenger | 8 | **98.6875%** (3,158/3,200) | **98.7500%** | **98.5412%** | 90 | 90 | 2,844/2,879 |
+
+The control reproduced V86 exactly, including artifact digest
+`649c739a81fcb930afdbd15b3692357a45a3106cdb7385aa37e8ed48badd1c56`.
+The challenger improved the burned worst query but did not improve aggregate
+or base-only recall, so it failed the unchanged 3,176-hit, query-15=90, and
+991,000-ppm base gate. Attribution also stayed planner-bound: the control had
+all 2,879 base truth hits inside its top-1,024 page ranks and lost 36 to the
+physical range planner; the challenger had 2,878 rank-visible hits and lost
+34 to the planner. Neither arm selected truth only through intervening gap
+pages.
+
+The eight-summary 100M projection is 600,000,000 resident bytes and
+600,000,000 summary ADC lookups per query before hierarchical qualification.
+It is not a serving candidate. This result rejects only fixed contiguous
+block means at the registered request/byte limits; it does not reject richer
+page representations. More fixed-block summaries and a wider flat rank scan
+are closed. The next burned-development falsifier must change the scoring or
+physical-selection objective while keeping the request and byte ceiling, not
+add nested query-level parallelism.
+
+The canonical result SHA-256 is
+`5ad0e56180b7fe9627fb9b058817b48807bba5d45e5052a59743434351669293`;
+the terminal SHA-256 is
+`6fca57de91ef6df004d84fe268695cbb2d3853ce5436392d72c16506d1e35255`.
+Scientific wall time was 4:34.43, peak RSS was 10,305,976 KiB, and swaps were
+zero. The result remains claim-ineligible and does not consume the reserved
+confirmation queries 328--455.
