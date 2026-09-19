@@ -168,7 +168,7 @@ grep -Eq 'PreconditionFailed|412' cas-conflict.log || exit 105
 
 phase=preflight-query
 args=$(artifact_args)
-eval "/usr/bin/time -v -o reader.time \"$binary\" $args --page-budget 8 --range-concurrency 16" \
+eval "/usr/bin/time -v -o reader.time \"$binary\" $args --page-budget 8 --range-concurrency 16 --region eu-central-1" \
   >preflight-result.json || exit 106
 
 phase=preflight-validate

@@ -78,6 +78,7 @@ struct RemoteArtifactRequest {
     truth: LocalArtifactIdentity,
     page_budget: usize,
     range_concurrency: usize,
+    region: String,
 }
 
 #[derive(Clone, Debug)]
@@ -955,6 +956,7 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<ExecutionRequest> {
     let mut remote_runs = Vec::<RemoteArtifactIdentity>::new();
     let mut page_budget = None;
     let mut range_concurrency = None;
+    let mut region = None;
     while let Some(flag) = iterator.next() {
         if flag == "--page-budget" {
             if page_budget.is_some() {
@@ -979,6 +981,17 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<ExecutionRequest> {
                     .ok_or_else(|| ReaderError::authority("range concurrency is missing"))?
                     .parse::<usize>()
                     .map_err(|_| ReaderError::authority("range concurrency differs"))?,
+            );
+            continue;
+        }
+        if flag == "--region" {
+            if region.is_some() {
+                return Err(ReaderError::authority("region is duplicated"));
+            }
+            region = Some(
+                iterator
+                    .next()
+                    .ok_or_else(|| ReaderError::authority("region is missing"))?,
             );
             continue;
         }
@@ -1075,9 +1088,10 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<ExecutionRequest> {
     if !identities.is_empty()
         || page_budget == 0
         || (!runs.is_empty() && !remote_runs.is_empty())
-        || (remote_runs.is_empty() && range_concurrency.is_some())
-        || (!remote_runs.is_empty() && range_concurrency.is_none())
+        || (remote_runs.is_empty() && (range_concurrency.is_some() || region.is_some()))
+        || (!remote_runs.is_empty() && (range_concurrency.is_none() || region.is_none()))
         || range_concurrency == Some(0)
+        || region.as_ref().is_some_and(String::is_empty)
     {
         return Err(ReaderError::authority("CLI authority differs"));
     }
@@ -1101,6 +1115,7 @@ fn parse_args(arguments: Vec<String>) -> ReaderResult<ExecutionRequest> {
             truth,
             page_budget,
             range_concurrency: range_concurrency.expect("validated"),
+            region: region.expect("validated"),
         }))
     }
 }
@@ -1117,6 +1132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .ok_or_else(|| ReaderError::authority("remote runs are empty"))?;
             let store = object_store::aws::AmazonS3Builder::from_env()
                 .with_url(&first.uri)
+                .with_region(&request.region)
                 .build()?;
             execute_remote_with_store(&request, &store).await?
         }
@@ -1563,6 +1579,8 @@ mod tests {
             "2".to_string(),
             "--range-concurrency".to_string(),
             "8".to_string(),
+            "--region".to_string(),
+            "eu-central-1".to_string(),
         ]);
 
         let parsed = parse_args(arguments.clone()).unwrap();
@@ -1570,6 +1588,7 @@ mod tests {
             panic!("remote CLI selected a local execution path")
         };
         assert_eq!(remote.range_concurrency, 8);
+        assert_eq!(remote.region, "eu-central-1");
         assert_eq!(remote.runs.len(), 3);
 
         let mut mixed = arguments;
@@ -1621,6 +1640,7 @@ mod tests {
             truth: local.truth,
             page_budget: local.page_budget,
             range_concurrency: 2,
+            region: "eu-central-1".into(),
         };
 
         let body = execute_remote_with_store(&request, &store).await.unwrap();
