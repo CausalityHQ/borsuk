@@ -296,7 +296,7 @@ def evaluate_physical_oracle(
         base_positions = base_order[base_offsets[base_present]]
         pages, counts = np.unique(base_positions // page_rows, return_counts=True)
         page_hits = {
-            int(page): int(count) for page, count in zip(pages, counts, strict=True)
+            int(pages[index]): int(counts[index]) for index in range(pages.size)
         }
         resident_hits = int(np.count_nonzero(delta_present))
         query_hits = resident_hits + _maximum_physical_oracle_hits(

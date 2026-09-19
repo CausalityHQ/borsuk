@@ -1,5 +1,6 @@
 import itertools
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -255,6 +256,27 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         self.assertFalse(result["claim_eligible"])
         self.assertEqual(result["page_payload_bytes"], 112)
         self.assertEqual(result["physical_oracle"]["recall_ppm"], 750_000)
+
+    def test_physical_oracle_does_not_require_keyword_aware_zip(self) -> None:
+        builtin_zip = zip
+
+        def legacy_zip(*iterables: object, **keywords: object) -> object:
+            if keywords:
+                raise TypeError("zip() takes no keyword arguments")
+            return builtin_zip(*iterables)
+
+        with mock.patch("builtins.zip", side_effect=legacy_zip):
+            result = evaluate_physical_oracle(
+                base_ids=np.asarray([10, 20], dtype=np.int64),
+                delta_ids=np.asarray([30], dtype=np.int64),
+                truth_ids=np.asarray([[10, 30]], dtype=np.int64),
+                dimensions=2,
+                page_rows=1,
+                max_base_bytes=96,
+                max_base_gets=1,
+            )
+
+        self.assertEqual(result["physical_oracle"]["recall_ppm"], 1_000_000)
 
     def test_rank_weighted_pages_preserve_nearest_evidence_under_hard_budget(
         self,
