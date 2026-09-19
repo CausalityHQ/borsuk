@@ -868,6 +868,7 @@ mod tests {
     use bytes::Bytes;
     use object_store::{ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
+    use parquet::{basic::Compression, file::properties::WriterProperties};
     use sha2::{Digest, Sha256};
     use tempfile::TempDir;
 
@@ -1074,7 +1075,11 @@ mod tests {
     }
 
     fn parquet_file(batch: &RecordBatch) -> Vec<u8> {
-        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), None).unwrap();
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(Vec::new(), batch.schema(), Some(properties)).unwrap();
         writer.write(batch).unwrap();
         writer.into_inner().unwrap()
     }
