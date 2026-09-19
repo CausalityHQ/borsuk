@@ -136,8 +136,8 @@ def _truth_oracle(result: dict[str, Any], *, page_count: int) -> dict[str, int]:
         unique, counts = np.unique(pages, return_counts=True)
         hits = _maximum_physical_oracle_hits(
             {
-                int(page): int(count)
-                for page, count in zip(unique, counts, strict=True)
+                int(page): int(counts[index])
+                for index, page in enumerate(unique)
             },
             page_count=page_count,
             max_pages=_WAVE1_MAX_SPAN_PAGES,
