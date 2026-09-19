@@ -509,12 +509,18 @@ dependencies = [
 name = "borsuk-v71"
 version = "0.0.0"
 dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
  "bytes",
  "futures-util",
  "object_store 0.14.1",
+ "parquet",
  "rayon",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tokio",
  "url",
  "wide",

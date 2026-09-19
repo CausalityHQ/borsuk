@@ -56,6 +56,35 @@ pub struct RunAuthority {
     run_id: u32,
 }
 
+impl RunAuthority {
+    /// Returns the generation-local immutable run ID.
+    pub fn run_id(&self) -> u32 {
+        self.run_id
+    }
+
+    /// Returns `base` or `delta`.
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// Returns the exact URI, SHA-256, and byte length of the parent object.
+    pub fn object_identity(&self) -> (&str, &str, u64) {
+        (&self.object.uri, &self.object.sha256, self.object.bytes)
+    }
+
+    /// Returns the run-relative row offset of a registered page.
+    pub fn page_row_offset(&self, target: u32) -> Option<u32> {
+        let mut offset = 0u32;
+        for page in &self.pages {
+            if page.page == target {
+                return Some(offset);
+            }
+            offset = offset.checked_add(page.rows)?;
+        }
+        None
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct GenerationAuthority {
@@ -112,6 +141,38 @@ impl GenerationManifest {
     /// Returns the monotonically increasing generation number.
     pub fn generation(&self) -> u64 {
         self.authority.generation
+    }
+
+    /// Returns the last stable base-row ordinal excluded from the delta.
+    pub fn base_horizon(&self) -> u64 {
+        self.authority.base_horizon
+    }
+
+    /// Returns the exact vector dimensionality.
+    pub fn dimensions(&self) -> u32 {
+        self.authority.dimensions
+    }
+
+    /// Returns the requested result cardinality.
+    pub fn neighbors(&self) -> u32 {
+        self.authority.neighbors
+    }
+
+    /// Returns the registered maximum rows per page.
+    pub fn page_rows(&self) -> u32 {
+        self.authority.page_rows
+    }
+
+    /// Returns the exact URI, SHA-256, and byte length of the router.
+    pub fn router_identity(&self) -> (&str, &str, u64) {
+        let object = &self.authority.router;
+        (&object.uri, &object.sha256, object.bytes)
+    }
+
+    /// Returns the exact URI, SHA-256, and byte length of the mutation directory.
+    pub fn mutation_directory_identity(&self) -> (&str, &str, u64) {
+        let object = &self.authority.mutation_directory;
+        (&object.uri, &object.sha256, object.bytes)
     }
 
     /// Returns the ordered immutable runs pinned by this generation.
@@ -343,6 +404,8 @@ pub struct PageRead {
     pub run_id: u32,
     /// Global routed page ordinal.
     pub page: u32,
+    /// Run-relative row offset of the first row in this page.
+    pub row_offset: u32,
     /// Authenticated parent-object URI.
     pub uri: String,
     /// Byte offset within the parent object.
@@ -368,22 +431,32 @@ pub fn plan_page_reads(
     for run in generation.runs() {
         let mut selected_index = 0usize;
         let mut page_index = 0usize;
+        let mut row_offset = 0u32;
         while selected_index < selected.len() && page_index < run.pages.len() {
             let selected_page = selected[selected_index];
             let page = &run.pages[page_index];
             match page.page.cmp(&selected_page) {
-                std::cmp::Ordering::Less => page_index += 1,
+                std::cmp::Ordering::Less => {
+                    row_offset = row_offset
+                        .checked_add(page.rows)
+                        .ok_or_else(|| DeltaError::authority("run row offset overflows"))?;
+                    page_index += 1;
+                }
                 std::cmp::Ordering::Greater => selected_index += 1,
                 std::cmp::Ordering::Equal => {
                     reads.push(PageRead {
                         run_id: run.run_id,
                         page: page.page,
+                        row_offset,
                         uri: run.object.uri.clone(),
                         offset: page.offset,
                         bytes: page.bytes,
                         rows: page.rows,
                     });
                     selected_index += 1;
+                    row_offset = row_offset
+                        .checked_add(page.rows)
+                        .ok_or_else(|| DeltaError::authority("run row offset overflows"))?;
                     page_index += 1;
                 }
             }
@@ -512,7 +585,27 @@ mod tests {
         let bytes = canonical_manifest();
         let manifest = GenerationManifest::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(manifest.generation(), 7);
+        assert_eq!(manifest.base_horizon(), 900_000);
+        assert_eq!(manifest.dimensions(), 768);
+        assert_eq!(manifest.neighbors(), 100);
+        assert_eq!(manifest.page_rows(), 256);
+        assert_eq!(
+            manifest.router_identity(),
+            ("s3://bucket/index/g0007/router.arrow", TWO_DIGEST, 8192)
+        );
+        assert_eq!(
+            manifest.mutation_directory_identity(),
+            ("s3://bucket/index/g0007/mutations.arrow", A_DIGEST, 4096)
+        );
         assert_eq!(manifest.runs().len(), 2);
+        assert_eq!(manifest.runs()[1].run_id(), 1);
+        assert_eq!(manifest.runs()[1].kind(), "delta");
+        assert_eq!(
+            manifest.runs()[1].object_identity(),
+            ("s3://bucket/index/g0007/delta-000.arrow", TWO_DIGEST, 9000)
+        );
+        assert_eq!(manifest.runs()[1].page_row_offset(3), Some(12));
+        assert_eq!(manifest.runs()[1].page_row_offset(2), None);
         assert_eq!(manifest.canonical_bytes().unwrap(), bytes);
     }
 
@@ -712,6 +805,7 @@ mod tests {
                 PageRead {
                     run_id: 0,
                     page: 1,
+                    row_offset: 256,
                     uri: "s3://bucket/g0/base-0.arrow".into(),
                     offset: 100,
                     bytes: 110,
@@ -720,6 +814,7 @@ mod tests {
                 PageRead {
                     run_id: 1,
                     page: 3,
+                    row_offset: 256,
                     uri: "s3://bucket/g0/base-1.arrow".into(),
                     offset: 120,
                     bytes: 130,
@@ -728,6 +823,7 @@ mod tests {
                 PageRead {
                     run_id: 2,
                     page: 1,
+                    row_offset: 0,
                     uri: "s3://bucket/g7/delta-0.arrow".into(),
                     offset: 8,
                     bytes: 40,
@@ -736,6 +832,7 @@ mod tests {
                 PageRead {
                     run_id: 3,
                     page: 3,
+                    row_offset: 0,
                     uri: "s3://bucket/g7/delta-1.arrow".into(),
                     offset: 16,
                     bytes: 60,
@@ -744,6 +841,7 @@ mod tests {
                 PageRead {
                     run_id: 4,
                     page: 1,
+                    row_offset: 0,
                     uri: "s3://bucket/g7/delta-2.arrow".into(),
                     offset: 24,
                     bytes: 70,
@@ -752,6 +850,7 @@ mod tests {
                 PageRead {
                     run_id: 4,
                     page: 3,
+                    row_offset: 17,
                     uri: "s3://bucket/g7/delta-2.arrow".into(),
                     offset: 94,
                     bytes: 80,
