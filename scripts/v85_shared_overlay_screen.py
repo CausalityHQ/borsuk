@@ -93,6 +93,14 @@ def _sq8(vectors: np.ndarray) -> np.ndarray:
     return low[None, :] + code.astype(np.float32) * step[None, :]
 
 
+def _page_sq8(vectors: np.ndarray, page_rows: int) -> np.ndarray:
+    decoded = np.empty_like(vectors)
+    for start in range(0, vectors.shape[0], page_rows):
+        stop = min(start + page_rows, vectors.shape[0])
+        decoded[start:stop] = _sq8(vectors[start:stop])
+    return decoded
+
+
 def _coalesce(pages: np.ndarray, gap: int = 2) -> list[tuple[int, int]]:
     if pages.size == 0:
         return []
@@ -182,6 +190,7 @@ def evaluate_overlay(
     books = _train_pq(base, subspaces, clusters, seed, sample_count)
     base_codes = _encode_pq(base, books, encode_chunk_rows)
     base_sq8 = _sq8(base)
+    base_page_sq8 = _page_sq8(base, page_rows)
     delta_sq8 = _sq8(delta)
     if truth_ids is None:
         all_ids = np.concatenate((base_ids, delta_ids))
@@ -198,6 +207,7 @@ def evaluate_overlay(
         samples = []
         exact_hits = 0
         hybrid_hits = 0
+        page_sq8_hits = 0
         sq8_hits = 0
         for query_index, query in enumerate(queries):
             scores = router_scores[query_index]
@@ -220,13 +230,20 @@ def evaluate_overlay(
             hybrid_vectors = np.concatenate(
                 (base_sq8[base_candidates], delta), axis=0
             )
+            page_sq8_vectors = np.concatenate(
+                (base_page_sq8[base_candidates], delta_sq8), axis=0
+            )
             sq8_vectors = np.concatenate((base_sq8[base_candidates], delta_sq8), axis=0)
             exact_result = _top_ids(query, exact_vectors, candidate_ids, neighbors)
             hybrid_result = _top_ids(query, hybrid_vectors, candidate_ids, neighbors)
+            page_sq8_result = _top_ids(
+                query, page_sq8_vectors, candidate_ids, neighbors
+            )
             sq8_result = _top_ids(query, sq8_vectors, candidate_ids, neighbors)
             expected = set(truth[query_index])
             exact_hits += len(expected.intersection(exact_result))
             hybrid_hits += len(expected.intersection(hybrid_result))
+            page_sq8_hits += len(expected.intersection(page_sq8_result))
             sq8_hits += len(expected.intersection(sq8_result))
             samples.append(
                 {
@@ -234,7 +251,7 @@ def evaluate_overlay(
                     "base_gets": len(ranges),
                     "exact_result_ids": exact_result,
                     "query": query_index,
-                    "result_ids": sq8_result,
+                    "result_ids": page_sq8_result,
                 }
             )
         denominator = len(queries) * truth_width
@@ -254,18 +271,28 @@ def evaluate_overlay(
                 "logical_run_results": [first_result] * len(logical_run_counts),
                 "result_ids": first_result,
                 "shortlist_rows": shortlist,
+                "page_sq8_recall_ppm": round(
+                    page_sq8_hits * 1_000_000 / denominator
+                ),
                 "sq8_recall_ppm": round(sq8_hits * 1_000_000 / denominator),
             }
         )
     passing_shortlists = [
         cell["shortlist_rows"]
         for cell in cells
-        if cell["sq8_recall_ppm"] >= 990_000
+        if cell["page_sq8_recall_ppm"] >= 990_000
         and cell["base_gets_max"] <= 32
         and cell["base_bytes_max"] <= 16 * 1024 * 1024
     ]
     return {
         "cells": cells,
+        "base_quantizer": "per-page-sq8",
+        "base_quantizer_resident_bytes": int(
+            ((base.shape[0] + page_rows - 1) // page_rows)
+            * 2
+            * base.shape[1]
+            * 4
+        ),
         "claim_eligible": False,
         "cpu_parallelism": "sequential-per-query",
         "delta_resident_bytes": int(

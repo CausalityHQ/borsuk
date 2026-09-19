@@ -105,6 +105,39 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             },
         )
 
+    def test_per_page_sq8_preserves_local_resolution_lost_by_global_sq8(self) -> None:
+        base = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.001, 0.0],
+                [1_000.0, 1_000.0],
+                [1_000.001, 1_000.0],
+            ],
+            dtype=np.float32,
+        )
+        result = evaluate_overlay(
+            base,
+            np.asarray([[2_000.0, 2_000.0]], dtype=np.float32),
+            np.asarray([[0.001, 0.0]], dtype=np.float32),
+            base_ids=np.asarray([10, 20, 30, 40], dtype=np.int64),
+            delta_ids=np.asarray([50], dtype=np.int64),
+            truth_ids=np.asarray([[20]], dtype=np.int64),
+            page_rows=2,
+            neighbors=1,
+            subspaces=2,
+            clusters=2,
+            shortlists=(1,),
+            training_sample_rows=4,
+            encode_chunk_rows=2,
+        )
+
+        cell = result["cells"][0]
+        self.assertEqual(cell["sq8_recall_ppm"], 0)
+        self.assertEqual(cell["page_sq8_recall_ppm"], 1_000_000)
+        self.assertEqual(cell["result_ids"], [20])
+        self.assertEqual(result["base_quantizer"], "per-page-sq8")
+        self.assertEqual(result["base_quantizer_resident_bytes"], 32)
+
 
 if __name__ == "__main__":
     unittest.main()
