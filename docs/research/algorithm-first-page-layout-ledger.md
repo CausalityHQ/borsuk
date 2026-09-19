@@ -350,3 +350,55 @@ per byte of stage one.
 Unchanged caveats: I/O is simulated and no GET was issued; stage two assumes
 row-addressable exact storage; every figure is 1M on the development split,
 and 100M scale transfer is projected arithmetic, not measurement.
+
+## V67 — what the design actually costs in object-store requests
+
+`scripts/v67_algorithm_first_request_profile.py`, result
+`research/v67-algorithm-first/request-profile-0c5394ddd0a2beb6/a0001/`,
+result SHA-256 `dff6aec4…5594ab83`, 228.2 s.
+
+Every result through V66 counted bytes, pages and rows. An object store charges
+per *request*, and a request is a contiguous range, so none of those numbers
+say what a query costs to serve. Pages are contiguous in the k-means layout, so
+adjacent selections merge into one GET at the price of reading the gap between
+them.
+
+Stage one, M=256 pages of PQ192 codes:
+
+| gap (pages) | requests p50 | requests p95 | bytes read | MiB p95 |
+|---:|---:|---:|---:|---:|
+| 0 | 103 | 139 | 1.00x | 13.00 |
+| 2 | 79 | 110 | 1.13x | 15.39 |
+| 4 | 67 | 95 | 1.28x | 18.23 |
+| **8** | **54** | **77** | **1.59x** | **24.58** |
+| 16 | 41 | 57 | 2.22x | 38.09 |
+
+256 scattered pages collapse to 54 requests for a 1.59x byte premium. That is
+the shape of the trade: requests fall roughly as the gap grows, bytes rise
+faster, and there is no setting that gives both.
+
+Stage two, the 512-row shortlist, is far more scattered — 345 requests if only
+touching rows merge, but 28 at a one-page gap and 18 at eight.
+
+**A realistic query is therefore roughly 54 + 28 = 82 requests, not 2.** That
+is the number a serving design has to absorb, and it is why the next result
+had to be measured against real S3 rather than modelled.
+
+### Stage two may not be needed at all
+
+Taking the top-100 straight from code scores, with no exact rescoring:
+
+| Codec | bytes/row | returned Recall@100 | worst query |
+|---|---:|---:|---:|
+| PQ 192x8 | 208 | 88.280% | 65% |
+| **SQ8** | **784** | **99.182%** | **81%** |
+
+SQ8 returns 99.182% with **no second round trip and no exact data read at
+all**. PQ192 cannot — at 208 bytes it ranks a shortlist perfectly but cannot
+resolve the final 100, which is the first place in this whole series where the
+cheaper code actually loses something.
+
+That makes two candidate designs rather than one: two round trips with PQ192
+codes plus exact rescoring at 99.603% containment, or one round trip of SQ8
+codes at 99.182% returned. The second trades 3.8x the stage-one bytes for
+halving the round trips and deleting stage two's scatter entirely.
