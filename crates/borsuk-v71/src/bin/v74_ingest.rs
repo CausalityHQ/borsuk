@@ -191,6 +191,12 @@ async fn main() -> BenchResult<()> {
     visibility.sort_by(f64::total_cmp);
 
     let vectors = batch * batches;
+    let encode_rate = batch as f64 / encode_seconds;
+    let publish_rate = vectors as f64 / publish_seconds;
+    // Overlapped, the slower stage sets the rate; serialised is the
+    // pessimistic bound where a batch is encoded before any of it is sent.
+    let pipelined = encode_rate.min(publish_rate);
+    let serialised = 1.0 / (1.0 / encode_rate + 1.0 / publish_rate);
     let report = serde_json::json!({
         "schema": "borsuk-v74-ingest-result-v1",
         "claim_eligible": false,
@@ -202,9 +208,13 @@ async fn main() -> BenchResult<()> {
         "batches": batches,
         "concurrency": concurrency,
         "total_vectors": vectors,
-        "encode_only_vectors_per_second": (batch as f64 / encode_seconds).round() as u64,
+        "encode_only_vectors_per_second": encode_rate.round() as u64,
         "publish_seconds": publish_seconds,
-        "sustained_vectors_per_second": (vectors as f64 / publish_seconds).round() as u64,
+        // Publish alone is a storage ceiling, never ingest throughput: the
+        // payloads were encoded before its clock started.
+        "publish_only_vectors_per_second": publish_rate.round() as u64,
+        "pipelined_vectors_per_second": pipelined.round() as u64,
+        "serialised_vectors_per_second": serialised.round() as u64,
         "published_mib_per_second":
             (vectors * ROW_BYTES) as f64 / publish_seconds / (1024.0 * 1024.0),
         "visibility_ms": {
