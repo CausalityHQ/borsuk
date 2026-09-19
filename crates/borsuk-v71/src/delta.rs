@@ -9,7 +9,7 @@ use object_store::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const SCHEMA: &str = "borsuk-v85-generation-v1";
+const SCHEMA: &str = "borsuk-v85-generation-v2-sq8";
 
 /// A fail-closed V85 authority or visibility error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -789,7 +789,7 @@ mod tests {
 
     fn canonical_manifest() -> Vec<u8> {
         format!(
-            "{{\"base_horizon\":900000,\"dimensions\":768,\"generation\":7,\"mutation_directory\":{{\"bytes\":4096,\"sha256\":\"{A_DIGEST}\",\"uri\":\"s3://bucket/index/g0007/mutations.arrow\"}},\"neighbors\":100,\"page_rows\":256,\"previous_generation_sha256\":\"{ONE_DIGEST}\",\"router\":{{\"bytes\":8192,\"sha256\":\"{TWO_DIGEST}\",\"uri\":\"s3://bucket/index/g0007/router.arrow\"}},\"runs\":[{{\"generation\":0,\"kind\":\"base\",\"object\":{{\"bytes\":10000,\"sha256\":\"{ONE_DIGEST}\",\"uri\":\"s3://bucket/index/g0000/base-000.arrow\"}},\"pages\":[{{\"bytes\":400,\"offset\":0,\"page\":0,\"rows\":256}},{{\"bytes\":300,\"offset\":400,\"page\":1,\"rows\":128}}],\"run_id\":0}},{{\"generation\":7,\"kind\":\"delta\",\"object\":{{\"bytes\":9000,\"sha256\":\"{TWO_DIGEST}\",\"uri\":\"s3://bucket/index/g0007/delta-000.arrow\"}},\"pages\":[{{\"bytes\":200,\"offset\":64,\"page\":1,\"rows\":12}},{{\"bytes\":240,\"offset\":264,\"page\":3,\"rows\":16}}],\"run_id\":1}}],\"schema\":\"borsuk-v85-generation-v1\",\"source_split\":\"relaion-1m-base900000-delta100000\"}}\n"
+            "{{\"base_horizon\":900000,\"dimensions\":768,\"generation\":7,\"mutation_directory\":{{\"bytes\":4096,\"sha256\":\"{A_DIGEST}\",\"uri\":\"s3://bucket/index/g0007/mutations.arrow\"}},\"neighbors\":100,\"page_rows\":256,\"previous_generation_sha256\":\"{ONE_DIGEST}\",\"router\":{{\"bytes\":8192,\"sha256\":\"{TWO_DIGEST}\",\"uri\":\"s3://bucket/index/g0007/router.arrow\"}},\"runs\":[{{\"generation\":0,\"kind\":\"base\",\"object\":{{\"bytes\":10000,\"sha256\":\"{ONE_DIGEST}\",\"uri\":\"s3://bucket/index/g0000/base-000.arrow\"}},\"pages\":[{{\"bytes\":400,\"offset\":0,\"page\":0,\"rows\":256}},{{\"bytes\":300,\"offset\":400,\"page\":1,\"rows\":128}}],\"run_id\":0}},{{\"generation\":7,\"kind\":\"delta\",\"object\":{{\"bytes\":9000,\"sha256\":\"{TWO_DIGEST}\",\"uri\":\"s3://bucket/index/g0007/delta-000.arrow\"}},\"pages\":[{{\"bytes\":200,\"offset\":64,\"page\":1,\"rows\":12}},{{\"bytes\":240,\"offset\":264,\"page\":3,\"rows\":16}}],\"run_id\":1}}],\"schema\":\"borsuk-v85-generation-v2-sq8\",\"source_split\":\"relaion-1m-base900000-delta100000\"}}\n"
         )
         .into_bytes()
     }
@@ -830,8 +830,8 @@ mod tests {
             (
                 "unknown-key",
                 baseline.replace(
-                    "\"schema\":\"borsuk-v85-generation-v1\"",
-                    "\"extra\":0,\"schema\":\"borsuk-v85-generation-v1\"",
+                    "\"schema\":\"borsuk-v85-generation-v2-sq8\"",
+                    "\"extra\":0,\"schema\":\"borsuk-v85-generation-v2-sq8\"",
                 ),
             ),
             (

@@ -190,23 +190,53 @@ struct DecodedRow {
     bytes: u64,
 }
 
+#[derive(Clone, Debug)]
+struct Sq8Codec {
+    low: Vec<f32>,
+    step: Vec<f32>,
+}
+
+impl Sq8Codec {
+    fn dimensions(&self) -> ReaderResult<i32> {
+        if self.low.is_empty()
+            || self.low.len() != self.step.len()
+            || !self.low.iter().all(|value| value.is_finite())
+            || !self
+                .step
+                .iter()
+                .all(|value| value.is_finite() && *value > 0.0)
+        {
+            return Err(ReaderError::authority("SQ8 codec authority differs"));
+        }
+        i32::try_from(self.low.len())
+            .map_err(|_| ReaderError::authority("SQ8 dimensions are not addressable"))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RouterAuthority {
+    rows: Vec<(Vec<f32>, u32, u32)>,
+    codec: Sq8Codec,
+}
+
 fn page_schema(dimensions: i32) -> Schema {
-    let child = Arc::new(Field::new("element", DataType::Float32, false));
+    let child = Arc::new(Field::new("element", DataType::UInt8, false));
     Schema::new(vec![
         Field::new("id", DataType::Int64, false),
         Field::new("sequence", DataType::UInt64, false),
         Field::new("state", DataType::UInt8, false),
-        Field::new("vector", DataType::FixedSizeList(child, dimensions), false),
+        Field::new("code", DataType::FixedSizeList(child, dimensions), false),
     ])
 }
 
 async fn read_planned_page_streams(
     store: &dyn ObjectStore,
     reads: &[borsuk_v71::delta::PageRead],
-    dimensions: i32,
+    codec: &Sq8Codec,
     range_concurrency: usize,
 ) -> ReaderResult<Vec<DecodedRow>> {
-    if dimensions <= 0 || range_concurrency == 0 {
+    let dimensions = codec.dimensions()?;
+    if range_concurrency == 0 {
         return Err(ReaderError::authority("page read shape differs"));
     }
     let expected_schema = page_schema(dimensions);
@@ -269,16 +299,16 @@ async fn read_planned_page_streams(
                 .as_any()
                 .downcast_ref::<UInt8Array>()
                 .ok_or_else(|| ReaderError::authority("page state type differs"))?;
-            let vectors = batch
+            let codes = batch
                 .column(3)
                 .as_any()
                 .downcast_ref::<FixedSizeListArray>()
-                .ok_or_else(|| ReaderError::authority("page vector type differs"))?;
-            let values = vectors
+                .ok_or_else(|| ReaderError::authority("page code type differs"))?;
+            let values = codes
                 .values()
                 .as_any()
-                .downcast_ref::<Float32Array>()
-                .ok_or_else(|| ReaderError::authority("page vector value type differs"))?;
+                .downcast_ref::<UInt8Array>()
+                .ok_or_else(|| ReaderError::authority("page code value type differs"))?;
             if batch
                 .columns()
                 .iter()
@@ -289,9 +319,14 @@ async fn read_planned_page_streams(
             }
             for row in 0..batch.num_rows() {
                 let begin = row * usize::try_from(dimensions).unwrap();
-                let vector =
-                    values.values()[begin..begin + usize::try_from(dimensions).unwrap()].to_vec();
-                if !vector.iter().all(|value| value.is_finite()) || states.value(row) != 0 {
+                let vector = values.values()[begin..begin + usize::try_from(dimensions).unwrap()]
+                    .iter()
+                    .enumerate()
+                    .map(|(dimension, code)| {
+                        f32::from(*code).mul_add(codec.step[dimension], codec.low[dimension])
+                    })
+                    .collect();
+                if states.value(row) != 0 {
                     return Err(ReaderError::authority("page row authority differs"));
                 }
                 decoded.push(DecodedRow {
@@ -425,28 +460,30 @@ fn object_path(uri: &str) -> ReaderResult<ObjectPath> {
 }
 
 fn router_schema(dimensions: i32) -> Schema {
+    let vector = || {
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            dimensions,
+        )
+    };
     Schema::new(vec![
         Field::new("cell", DataType::UInt32, false),
-        Field::new(
-            "centroid",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("element", DataType::Float32, false)),
-                dimensions,
-            ),
-            false,
-        ),
+        Field::new("centroid", vector(), false),
         Field::new("first_page", DataType::UInt32, false),
         Field::new("page_count", DataType::UInt32, false),
+        Field::new("low", vector(), false),
+        Field::new("step", vector(), false),
     ])
 }
 
-fn read_router(body: &[u8], dimensions: i32) -> ReaderResult<Vec<(Vec<f32>, u32, u32)>> {
+fn read_router(body: &[u8], dimensions: i32) -> ReaderResult<RouterAuthority> {
     let mut reader = FileReader::try_new(Cursor::new(body), None)
         .map_err(|error| ReaderError::authority(format!("router IPC differs: {error}")))?;
     if reader.schema().as_ref() != &router_schema(dimensions) {
         return Err(ReaderError::authority("router Arrow schema differs"));
     }
     let mut rows = Vec::new();
+    let mut codec = None;
     for batch in &mut reader {
         let batch = batch
             .map_err(|error| ReaderError::authority(format!("router batch differs: {error}")))?;
@@ -482,6 +519,30 @@ fn read_router(body: &[u8], dimensions: i32) -> ReaderResult<Vec<(Vec<f32>, u32,
             .as_any()
             .downcast_ref::<arrow_array::UInt32Array>()
             .ok_or_else(|| ReaderError::authority("router page-count type differs"))?;
+        let lows = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| ReaderError::authority("router SQ8 low type differs"))?;
+        let low_values = lows
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| ReaderError::authority("router SQ8 low value type differs"))?;
+        let steps = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| ReaderError::authority("router SQ8 step type differs"))?;
+        let step_values = steps
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| ReaderError::authority("router SQ8 step value type differs"))?;
+        if values.null_count() != 0 || low_values.null_count() != 0 || step_values.null_count() != 0
+        {
+            return Err(ReaderError::authority("router contains nulls"));
+        }
         let width = usize::try_from(dimensions)
             .map_err(|_| ReaderError::authority("router dimensions differ"))?;
         for row in 0..batch.num_rows() {
@@ -492,13 +553,27 @@ fn read_router(body: &[u8], dimensions: i32) -> ReaderResult<Vec<(Vec<f32>, u32,
             if !centroid.iter().all(|value| value.is_finite()) || page_counts.value(row) == 0 {
                 return Err(ReaderError::authority("router row authority differs"));
             }
+            let row_codec = Sq8Codec {
+                low: low_values.values()[row * width..(row + 1) * width].to_vec(),
+                step: step_values.values()[row * width..(row + 1) * width].to_vec(),
+            };
+            row_codec.dimensions()?;
+            if codec.as_ref().is_some_and(|codec: &Sq8Codec| {
+                codec.low != row_codec.low || codec.step != row_codec.step
+            }) {
+                return Err(ReaderError::authority("router SQ8 codec differs by cell"));
+            }
+            codec.get_or_insert(row_codec);
             rows.push((centroid, first_pages.value(row), page_counts.value(row)));
         }
     }
     if rows.is_empty() {
         return Err(ReaderError::authority("router is empty"));
     }
-    Ok(rows)
+    Ok(RouterAuthority {
+        rows,
+        codec: codec.ok_or_else(|| ReaderError::authority("router SQ8 codec is empty"))?,
+    })
 }
 
 fn mutation_schema() -> Schema {
@@ -780,7 +855,7 @@ async fn execute_with_store(
     for (query_index, query) in queries.iter().enumerate() {
         let started = std::time::Instant::now();
         let mut scored_pages = Vec::<(f32, u32)>::new();
-        for (centroid, first_page, page_count) in &router {
+        for (centroid, first_page, page_count) in &router.rows {
             let score = squared_distance(query, centroid);
             for offset in 0..*page_count {
                 scored_pages.push((
@@ -801,7 +876,8 @@ async fn execute_with_store(
         selected.dedup();
         let reads = plan_page_reads(&selected, &generation)
             .map_err(|error| ReaderError::authority(format!("page plan differs: {error}")))?;
-        let rows = read_planned_page_streams(store, &reads, dimensions, range_concurrency).await?;
+        let rows =
+            read_planned_page_streams(store, &reads, &router.codec, range_concurrency).await?;
         let decoded_bytes = rows.iter().map(|row| row.bytes).sum::<u64>();
         if decoded_bytes != reads.iter().map(|read| read.bytes).sum::<u64>()
             || rows.iter().any(|row| !selected.contains(&row.page))
@@ -1160,7 +1236,7 @@ mod tests {
 
     use super::{
         ExecutionRequest, LocalArtifactIdentity, LocalArtifactRequest, QuerySample,
-        RemoteArtifactIdentity, RemoteArtifactRequest, authenticate_local_artifacts,
+        RemoteArtifactIdentity, RemoteArtifactRequest, Sq8Codec, authenticate_local_artifacts,
         canonical_result_bytes, execute_local, execute_remote_with_store, parse_args,
         read_planned_page_streams,
     };
@@ -1216,14 +1292,14 @@ mod tests {
         ids: &[i64],
         sequences: &[u64],
         states: &[u8],
-        vectors: &[f32],
+        codes: &[u8],
         dimensions: i32,
     ) -> Vec<u8> {
-        let child = Arc::new(Field::new("element", DataType::Float32, false));
-        let vector = FixedSizeListArray::try_new(
+        let child = Arc::new(Field::new("element", DataType::UInt8, false));
+        let code = FixedSizeListArray::try_new(
             child.clone(),
             dimensions,
-            Arc::new(Float32Array::from(vectors.to_vec())),
+            Arc::new(UInt8Array::from(codes.to_vec())),
             None,
         )
         .unwrap();
@@ -1231,7 +1307,7 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new("sequence", DataType::UInt64, false),
             Field::new("state", DataType::UInt8, false),
-            Field::new("vector", DataType::FixedSizeList(child, dimensions), false),
+            Field::new("code", DataType::FixedSizeList(child, dimensions), false),
         ]));
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -1239,7 +1315,7 @@ mod tests {
                 Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
                 Arc::new(UInt64Array::from(sequences.to_vec())),
                 Arc::new(UInt8Array::from(states.to_vec())),
-                Arc::new(vector),
+                Arc::new(code),
             ],
         )
         .unwrap();
@@ -1254,8 +1330,12 @@ mod tests {
     #[tokio::test]
     async fn page_reader_uses_only_registered_ranges_and_rejects_schema_drift() {
         let store = InMemory::new();
-        let first = page_stream(&[1], &[1], &[0], &[1.0, 0.0], 2);
-        let second = page_stream(&[2], &[2], &[0], &[0.0, 1.0], 2);
+        let codec = Sq8Codec {
+            low: vec![0.0, 0.0],
+            step: vec![0.01, 0.01],
+        };
+        let first = page_stream(&[1], &[1], &[0], &[100, 0], 2);
+        let second = page_stream(&[2], &[2], &[0], &[0, 100], 2);
         let mut parent = vec![0x55; 13];
         let first_offset = parent.len();
         parent.extend_from_slice(&first);
@@ -1287,7 +1367,7 @@ mod tests {
                 rows: 1,
             },
         ];
-        let decoded = read_planned_page_streams(&store, &reads, 2, 2)
+        let decoded = read_planned_page_streams(&store, &reads, &codec, 2)
             .await
             .unwrap();
         assert_eq!(decoded.iter().map(|row| row.id).collect::<Vec<_>>(), [1, 2]);
@@ -1299,8 +1379,10 @@ mod tests {
             decoded.iter().map(|row| row.bytes).sum::<u64>(),
             u64::try_from(first.len() + second.len()).unwrap()
         );
+        assert_eq!(decoded[0].vector, vec![1.0, 0.0]);
+        assert_eq!(decoded[1].vector, vec![0.0, 1.0]);
 
-        let wrong = page_stream(&[3], &[3], &[0], &[1.0, 2.0, 3.0, 4.0], 4);
+        let wrong = page_stream(&[3], &[3], &[0], &[1, 2, 3, 4], 4);
         store
             .put(
                 &Path::from("runs/wrong.arrow"),
@@ -1318,7 +1400,7 @@ mod tests {
             rows: 1,
         }];
         assert!(
-            read_planned_page_streams(&store, &wrong_read, 2, 2)
+            read_planned_page_streams(&store, &wrong_read, &codec, 2)
                 .await
                 .is_err()
         );
@@ -1394,12 +1476,12 @@ mod tests {
     }
 
     fn exact_local_request(root: &TempDir) -> LocalArtifactRequest {
-        let base_zero = page_stream(&[1, 2], &[1, 1], &[0, 0], &[1.0, 0.0, 0.9, 0.0], 2);
-        let base_one = page_stream(&[3, 4], &[1, 1], &[0, 0], &[0.0, 1.0, 0.0, 0.9], 2);
+        let base_zero = page_stream(&[1, 2], &[1, 1], &[0, 0], &[100, 0, 90, 0], 2);
+        let base_one = page_stream(&[3, 4], &[1, 1], &[0, 0], &[0, 100, 0, 90], 2);
         let mut base = base_zero.clone();
         base.extend_from_slice(&base_one);
-        let delta_zero = page_stream(&[5], &[2], &[0], &[0.95, 0.0], 2);
-        let delta_one = page_stream(&[6], &[2], &[0], &[0.0, 0.95], 2);
+        let delta_zero = page_stream(&[5], &[2], &[0], &[95, 0], 2);
+        let delta_one = page_stream(&[6], &[2], &[0], &[0, 95], 2);
 
         let router_schema = Arc::new(Schema::new(vec![
             Field::new("cell", DataType::UInt32, false),
@@ -1413,6 +1495,22 @@ mod tests {
             ),
             Field::new("first_page", DataType::UInt32, false),
             Field::new("page_count", DataType::UInt32, false),
+            Field::new(
+                "low",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    2,
+                ),
+                false,
+            ),
+            Field::new(
+                "step",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    2,
+                ),
+                false,
+            ),
         ]));
         let router = ipc_file(
             &RecordBatch::try_new(
@@ -1422,6 +1520,8 @@ mod tests {
                     list_f32(&[1.0, 0.0, 0.0, 1.0], 2),
                     Arc::new(UInt32Array::from(vec![0, 1])),
                     Arc::new(UInt32Array::from(vec![1, 1])),
+                    list_f32(&[0.0, 0.0, 0.0, 0.0], 2),
+                    list_f32(&[0.01, 0.01, 0.01, 0.01], 2),
                 ],
             )
             .unwrap(),
@@ -1522,7 +1622,7 @@ mod tests {
                     {"bytes": delta_one.len(), "offset": 0, "page": 1, "rows": 1}
                 ], "run_id": 2}
             ],
-            "schema": "borsuk-v85-generation-v1",
+            "schema": "borsuk-v85-generation-v2-sq8",
             "source_split": "synthetic-4-base-2-delta"
         });
         let mut manifest_body = serde_json::to_vec(&manifest).unwrap();

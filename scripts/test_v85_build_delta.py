@@ -26,6 +26,10 @@ def _vector_type(dimensions: int) -> pa.DataType:
     return pa.list_(pa.field("element", pa.float32(), nullable=False), dimensions)
 
 
+def _code_type(dimensions: int) -> pa.DataType:
+    return pa.list_(pa.field("element", pa.uint8(), nullable=False), dimensions)
+
+
 def _source_vector_type(dimensions: int) -> pa.DataType:
     return pa.list_(pa.field("item", pa.float32(), nullable=False), dimensions)
 
@@ -76,15 +80,15 @@ def _read_page(path: pathlib.Path, offset: int, length: int) -> pa.Table:
     return ipc.open_stream(pa.py_buffer(body)).read_all()
 
 
-def _all_rows(output: pathlib.Path) -> list[tuple[int, int, int, tuple[float, ...]]]:
+def _all_rows(output: pathlib.Path) -> list[tuple[int, int, int, tuple[int, ...]]]:
     manifest = json.loads((output / "generation.json").read_bytes())
     rows = []
     for run in manifest["runs"]:
         path = output / pathlib.PurePosixPath(run["object"]["uri"]).name
         for page in run["pages"]:
             table = _read_page(path, page["offset"], page["bytes"])
-            vectors = (
-                table.column("vector")
+            codes = (
+                table.column("code")
                 .combine_chunks()
                 .values.to_numpy()
                 .reshape(-1, DIMENSIONS)
@@ -95,13 +99,13 @@ def _all_rows(output: pathlib.Path) -> list[tuple[int, int, int, tuple[float, ..
                         row_id,
                         table.column("sequence")[index].as_py(),
                         table.column("state")[index].as_py(),
-                        tuple(float(value) for value in vectors[index]),
+                        tuple(int(value) for value in codes[index]),
                     )
                 )
     return sorted(rows)
 
 
-def _delta_rows(output: pathlib.Path) -> list[tuple[int, int, int, tuple[float, ...]]]:
+def _delta_rows(output: pathlib.Path) -> list[tuple[int, int, int, tuple[int, ...]]]:
     manifest = json.loads((output / "generation.json").read_bytes())
     rows = []
     for run in manifest["runs"]:
@@ -110,8 +114,8 @@ def _delta_rows(output: pathlib.Path) -> list[tuple[int, int, int, tuple[float, 
         path = output / pathlib.PurePosixPath(run["object"]["uri"]).name
         for page in run["pages"]:
             table = _read_page(path, page["offset"], page["bytes"])
-            vectors = (
-                table.column("vector")
+            codes = (
+                table.column("code")
                 .combine_chunks()
                 .values.to_numpy()
                 .reshape(-1, DIMENSIONS)
@@ -122,7 +126,7 @@ def _delta_rows(output: pathlib.Path) -> list[tuple[int, int, int, tuple[float, 
                         row_id,
                         table.column("sequence")[index].as_py(),
                         table.column("state")[index].as_py(),
-                        tuple(float(value) for value in vectors[index]),
+                        tuple(int(value) for value in codes[index]),
                     )
                 )
     return sorted(rows)
@@ -172,11 +176,25 @@ class V85BuildDeltaTests(unittest.TestCase):
                         pa.field("centroid", _vector_type(DIMENSIONS), nullable=False),
                         pa.field("first_page", pa.uint32(), nullable=False),
                         pa.field("page_count", pa.uint32(), nullable=False),
+                        pa.field("low", _vector_type(DIMENSIONS), nullable=False),
+                        pa.field("step", _vector_type(DIMENSIONS), nullable=False),
                     ]
                 ),
             )
             centroids = router.column("centroid").combine_chunks().values.to_numpy()
             self.assertLess(float(np.max(np.abs(centroids))), 10.0)
+            lows = (
+                router.column("low").combine_chunks().values.to_numpy().reshape(-1, DIMENSIONS)
+            )
+            steps = (
+                router.column("step").combine_chunks().values.to_numpy().reshape(-1, DIMENSIONS)
+            )
+            self.assertTrue(np.all(lows == lows[0]))
+            self.assertTrue(np.all(steps == steps[0]))
+            self.assertTrue(np.all(np.isfinite(lows)))
+            self.assertTrue(np.all(np.isfinite(steps)))
+            self.assertTrue(np.all(steps > 0))
+            self.assertLess(float(np.max(lows)), 10.0)
 
             directory_table = ipc.open_file(output / "mutations.arrow").read_all()
             self.assertEqual(
@@ -206,7 +224,7 @@ class V85BuildDeltaTests(unittest.TestCase):
                     pa.field("id", pa.int64(), nullable=False),
                     pa.field("sequence", pa.uint64(), nullable=False),
                     pa.field("state", pa.uint8(), nullable=False),
-                    pa.field("vector", _vector_type(DIMENSIONS), nullable=False),
+                    pa.field("code", _code_type(DIMENSIONS), nullable=False),
                 ]
             )
             for run in manifest["runs"]:
@@ -222,6 +240,8 @@ class V85BuildDeltaTests(unittest.TestCase):
                     table = _read_page(parent, page["offset"], page["bytes"])
                     self.assertEqual(table.schema, page_schema)
                     self.assertEqual(table.num_rows, page["rows"])
+                    codes = table.column("code").combine_chunks().values.to_numpy()
+                    self.assertEqual(codes.dtype, np.uint8)
                     previous_end = page["offset"] + page["bytes"]
 
     def test_one_and_ten_delta_runs_are_semantically_equivalent_and_deterministic(
@@ -366,14 +386,14 @@ class V85BuildDeltaTests(unittest.TestCase):
             replacement_path = (
                 level0 / pathlib.PurePosixPath(replacement_run["object"]["uri"]).name
             )
-            replacement_vector = np.full((1, DIMENSIONS), np.float32(42.0))
+            replacement_code = np.full((1, DIMENSIONS), np.uint8(42))
             replacement_table = pa.Table.from_arrays(
                 [
                     pa.array([90], type=pa.int64()),
                     pa.array([3], type=pa.uint64()),
                     pa.array([0], type=pa.uint8()),
                     pa.FixedSizeListArray.from_arrays(
-                        pa.array(replacement_vector.reshape(-1), type=pa.float32()),
+                        pa.array(replacement_code.reshape(-1), type=pa.uint8()),
                         DIMENSIONS,
                     ),
                 ],
@@ -382,7 +402,7 @@ class V85BuildDeltaTests(unittest.TestCase):
                         pa.field("id", pa.int64(), nullable=False),
                         pa.field("sequence", pa.uint64(), nullable=False),
                         pa.field("state", pa.uint8(), nullable=False),
-                        pa.field("vector", _vector_type(DIMENSIONS), nullable=False),
+                        pa.field("code", _code_type(DIMENSIONS), nullable=False),
                     ]
                 ),
             )
@@ -454,7 +474,7 @@ class V85BuildDeltaTests(unittest.TestCase):
             )
             replacement = next(row for row in rows if row[0] == 90)
             self.assertEqual(replacement[1:3], (3, 0))
-            self.assertEqual(replacement[3], (42.0,) * DIMENSIONS)
+            self.assertEqual(replacement[3], (42,) * DIMENSIONS)
 
     def test_compaction_preserves_an_all_tombstone_generation(self) -> None:
         # Break caught: deleting every delta row makes compaction fail or invent a
@@ -516,7 +536,7 @@ class V85BuildDeltaTests(unittest.TestCase):
             self.assertIsNone(receipt["amplification_ppm"])
             self.assertEqual(receipt["output_runs"], 0)
 
-    def test_compaction_rejects_nonfinite_vectors_and_invalid_page_authority(
+    def test_compaction_rejects_invalid_sq8_schema_and_page_authority(
         self,
     ) -> None:
         # Break caught: compaction turns an input rejected by the Rust reader into a
@@ -535,17 +555,31 @@ class V85BuildDeltaTests(unittest.TestCase):
             page = first_delta["pages"][0]
             run_path = level0 / pathlib.PurePosixPath(first_delta["object"]["uri"]).name
             table = _read_page(run_path, page["offset"], page["bytes"])
-            vector = np.full((1, DIMENSIONS), np.float32(np.nan))
+            codes = np.zeros((table.num_rows, DIMENSIONS), dtype=np.int8)
             rewritten = pa.Table.from_arrays(
                 [
                     table.column("id"),
                     table.column("sequence"),
                     table.column("state"),
                     pa.FixedSizeListArray.from_arrays(
-                        pa.array(vector.reshape(-1), type=pa.float32()), DIMENSIONS
+                        pa.array(codes.reshape(-1), type=pa.int8()), DIMENSIONS
                     ),
                 ],
-                schema=table.schema,
+                schema=pa.schema(
+                    [
+                        pa.field("id", pa.int64(), nullable=False),
+                        pa.field("sequence", pa.uint64(), nullable=False),
+                        pa.field("state", pa.uint8(), nullable=False),
+                        pa.field(
+                            "code",
+                            pa.list_(
+                                pa.field("element", pa.int8(), nullable=False),
+                                DIMENSIONS,
+                            ),
+                            nullable=False,
+                        ),
+                    ]
+                ),
             )
             sink = pa.BufferOutputStream()
             with ipc.new_stream(sink, rewritten.schema) as writer:
@@ -560,11 +594,11 @@ class V85BuildDeltaTests(unittest.TestCase):
                 json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode()
                 + b"\n"
             )
-            with self.assertRaisesRegex(ValueError, "non-finite"):
+            with self.assertRaisesRegex(ValueError, "page schema differs"):
                 compact_delta_artifacts(
                     CompactionRequest(
                         generation=manifest_path,
-                        output=root / "nonfinite",
+                        output=root / "invalid-sq8",
                         uri_prefix="s3://fixture/v85-compacted",
                         delta_run_ids=tuple(
                             run["run_id"]

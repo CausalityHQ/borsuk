@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 
-SCHEMA = "borsuk-v85-generation-v1"
+SCHEMA = "borsuk-v85-generation-v2-sq8"
 RECEIPT_SCHEMA = "borsuk-v85-build-receipt-v1"
 COMPACTION_RECEIPT_SCHEMA = "borsuk-v85-compaction-receipt-v1"
 
@@ -74,6 +74,10 @@ def _identity_from_path(uri: str, path: pathlib.Path) -> dict[str, Any]:
 
 def _vector_type(dimensions: int) -> pa.DataType:
     return pa.list_(pa.field("element", pa.float32(), nullable=False), dimensions)
+
+
+def _code_type(dimensions: int) -> pa.DataType:
+    return pa.list_(pa.field("element", pa.uint8(), nullable=False), dimensions)
 
 
 def _source_vector_type(dimensions: int) -> pa.DataType:
@@ -341,17 +345,17 @@ def _page_schema(dimensions: int) -> pa.Schema:
             pa.field("id", pa.int64(), nullable=False),
             pa.field("sequence", pa.uint64(), nullable=False),
             pa.field("state", pa.uint8(), nullable=False),
-            pa.field("vector", _vector_type(dimensions), nullable=False),
+            pa.field("code", _code_type(dimensions), nullable=False),
         ]
     )
 
 
-def _page_stream(ids: np.ndarray, sequence: int, vectors: np.ndarray) -> bytes:
+def _page_stream(ids: np.ndarray, sequence: int, codes: np.ndarray) -> bytes:
     return _page_stream_rows(
         ids,
         np.full(len(ids), sequence, dtype=np.uint64),
         np.zeros(len(ids), dtype=np.uint8),
-        vectors,
+        codes,
     )
 
 
@@ -359,12 +363,12 @@ def _page_stream_rows(
     ids: np.ndarray,
     sequences: np.ndarray,
     states: np.ndarray,
-    vectors: np.ndarray,
+    codes: np.ndarray,
 ) -> bytes:
-    dimensions = vectors.shape[1]
+    dimensions = codes.shape[1]
     schema = _page_schema(dimensions)
-    vector_array = pa.FixedSizeListArray.from_arrays(
-        pa.array(np.ascontiguousarray(vectors).reshape(-1), type=pa.float32()),
+    code_array = pa.FixedSizeListArray.from_arrays(
+        pa.array(np.ascontiguousarray(codes).reshape(-1), type=pa.uint8()),
         dimensions,
     )
     table = pa.Table.from_arrays(
@@ -372,7 +376,7 @@ def _page_stream_rows(
             pa.array(ids, type=pa.int64()),
             pa.array(sequences, type=pa.uint64()),
             pa.array(states, type=pa.uint8()),
-            vector_array,
+            code_array,
         ],
         schema=schema,
     )
@@ -593,12 +597,10 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
                 table = _read_page_stream(body, dimensions)
                 if table.num_rows != page["rows"]:
                     raise ValueError("compaction page row count differs")
-                vectors = np.asarray(
-                    table.column("vector").combine_chunks().values.to_numpy(),
-                    dtype=np.float32,
+                codes = np.asarray(
+                    table.column("code").combine_chunks().values.to_numpy(),
+                    dtype=np.uint8,
                 ).reshape(-1, dimensions)
-                if not np.isfinite(vectors).all():
-                    raise ValueError("compaction vector is non-finite")
                 ids = table.column("id").to_pylist()
                 sequences = table.column("sequence").to_pylist()
                 states = table.column("state").to_pylist()
@@ -614,7 +616,7 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
                         raise ValueError("compaction live mutation binding differs")
                     if int(row_id) in live_page or int(row_id) in represented:
                         raise ValueError("compaction mutation sequence tie")
-                    live_page[int(row_id)] = (int(sequence), vectors[index].copy())
+                    live_page[int(row_id)] = (int(sequence), codes[index].copy())
                     if len(live_page) > manifest["page_rows"]:
                         raise ValueError("compaction page exceeds registered row cap")
 
@@ -626,11 +628,11 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
                 [live_page[row_id][0] for row_id in page_ids], dtype=np.uint64
             )
             state_array = np.zeros(len(page_ids), dtype=np.uint8)
-            vector_array = np.stack(
+            code_array = np.stack(
                 [live_page[row_id][1] for row_id in page_ids]
-            ).astype(np.float32)
+            ).astype(np.uint8)
             stream = _page_stream_rows(
-                ids_array, sequence_array, state_array, vector_array
+                ids_array, sequence_array, state_array, code_array
             )
             output_handle.write(stream)
             pages.append(
@@ -715,7 +717,7 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
     output_generation_body = _canonical_bytes(output_manifest)
     (request.output / "generation.json").write_bytes(output_generation_body)
 
-    logical_live_bytes = len(represented) * (8 + 8 + 1 + 4 * dimensions)
+    logical_live_bytes = len(represented) * (8 + 8 + 1 + dimensions)
     payload_write_bytes = len(output_mutation_body) + len(output_generation_body)
     if pages:
         payload_write_bytes += output_run_path.stat().st_size
@@ -768,7 +770,7 @@ def _emit_run(
     kind: str,
     pages: dict[int, list[int]],
     ids: np.ndarray,
-    vectors: np.ndarray,
+    codes: np.ndarray,
     sequence: int,
 ) -> tuple[dict[str, Any], dict[int, tuple[int, int]]]:
     body = bytearray()
@@ -779,7 +781,7 @@ def _emit_run(
         indices = np.asarray(
             sorted(pages[page], key=lambda index: int(ids[index])), dtype=np.int64
         )
-        stream = _page_stream(ids[indices], sequence, vectors[indices])
+        stream = _page_stream(ids[indices], sequence, codes[indices])
         offset = len(body)
         body.extend(stream)
         page_authorities.append(
@@ -828,6 +830,13 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
     ids, vectors, source_sha256 = _read_source(request)
     base_vectors = np.ascontiguousarray(vectors[: request.base_rows])
     training_sha256 = _sha256(base_vectors.tobytes())
+    low = np.min(base_vectors, axis=0).astype(np.float32)
+    high = np.max(base_vectors, axis=0).astype(np.float32)
+    step = ((high - low) / np.float32(255.0)).astype(np.float32)
+    step[step == 0] = np.float32(1.0)
+    codes = np.clip(
+        np.rint((vectors - low[None, :]) / step[None, :]), 0, 255
+    ).astype(np.uint8)
     centroids, base_cells = _fit_router(
         base_vectors, request.router_cells, request.seed
     )
@@ -856,6 +865,8 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
             pa.field("centroid", _vector_type(request.dimensions), nullable=False),
             pa.field("first_page", pa.uint32(), nullable=False),
             pa.field("page_count", pa.uint32(), nullable=False),
+            pa.field("low", _vector_type(request.dimensions), nullable=False),
+            pa.field("step", _vector_type(request.dimensions), nullable=False),
         ]
     )
     router_table = pa.Table.from_arrays(
@@ -866,6 +877,14 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
             ),
             pa.array([pages[0] for pages in cell_pages], type=pa.uint32()),
             pa.array([len(pages) for pages in cell_pages], type=pa.uint32()),
+            pa.FixedSizeListArray.from_arrays(
+                pa.array(np.tile(low, request.router_cells), type=pa.float32()),
+                request.dimensions,
+            ),
+            pa.FixedSizeListArray.from_arrays(
+                pa.array(np.tile(step, request.router_cells), type=pa.float32()),
+                request.dimensions,
+            ),
         ],
         schema=router_schema,
     )
@@ -889,7 +908,7 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
             "base",
             pages,
             ids,
-            vectors,
+            codes,
             1,
         )
         runs.append(run)
@@ -917,7 +936,7 @@ def build_delta_artifacts(request: BuildRequest) -> dict[str, Any]:
             "delta",
             dict(pages),
             ids,
-            vectors,
+            codes,
             2,
         )
         runs.append(run)

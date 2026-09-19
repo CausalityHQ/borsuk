@@ -18,6 +18,7 @@ def frozen_matrix() -> dict[str, Any]:
         "max_bytes_per_query": 16 * 1024 * 1024,
         "max_gets_per_query": 32,
         "max_peak_rss_bytes": 3 * 1024**3,
+        "min_aggregate_recall_ppm": 990_000,
         "offered_load_ppm": 700_000,
         "preflight_page_budgets": [8, 16],
         "range_concurrency": 16,
@@ -110,8 +111,8 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
         or receipt["query_count"] != 1
         or receipt["failed_queries"] != 0
         or receipt["selected_page_budget"] not in matrix["preflight_page_budgets"]
-        or receipt["aggregate_recall_ppm"] < 990_000
-        or receipt["worst_recall_ppm"] < 990_000
+        or receipt["aggregate_recall_ppm"] < matrix["min_aggregate_recall_ppm"]
+        or receipt["worst_recall_ppm"] < matrix["min_aggregate_recall_ppm"]
         or not _positive_int(receipt["max_gets_per_query"])
         or receipt["max_gets_per_query"] > matrix["max_gets_per_query"]
         or not _positive_int(receipt["max_bytes_per_query"])
@@ -169,6 +170,7 @@ def validate_qualification_receipt(receipt: Any, matrix: Any) -> None:
         != receipt["base_capacity_qps_milli"] * matrix["offered_load_ppm"] // 1_000_000
         or receipt["visibility_p95_ns"] > 1_000_000_000
         or receipt["compaction_amplification_ppm"] > 5_000_000
+        or receipt["fresh_recall_ppm"] < matrix["min_aggregate_recall_ppm"]
     ):
         raise ValueError("qualification gate failed")
 
@@ -181,6 +183,7 @@ def validate_qualification_receipt(receipt: Any, matrix: Any) -> None:
             or cell["gets_per_query"] > matrix["max_gets_per_query"]
             or cell["bytes_per_query"] > matrix["max_bytes_per_query"]
             or cell["peak_rss_bytes"] > matrix["max_peak_rss_bytes"]
+            or cell["recall_ppm"] < matrix["min_aggregate_recall_ppm"]
             or abs(cell["recall_ppm"] - receipt["fresh_recall_ppm"]) > 2_000
             or not isinstance(cell["result_ids"], list)
             or len(cell["result_ids"]) != 100

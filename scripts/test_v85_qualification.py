@@ -47,6 +47,7 @@ class V85QualificationTests(unittest.TestCase):
         self.assertEqual(matrix["max_gets_per_query"], 32)
         self.assertEqual(matrix["max_bytes_per_query"], 16 * 1024 * 1024)
         self.assertEqual(matrix["max_peak_rss_bytes"], 3 * 1024**3)
+        self.assertEqual(matrix["min_aggregate_recall_ppm"], 990_000)
         self.assertEqual(matrix["range_concurrency"], 16)
         self.assertEqual(matrix["cpu_parallelism"], "sequential-per-query")
         self.assertEqual(matrix["spot_interruption"], "discard-cell-and-restart")
@@ -141,6 +142,13 @@ class V85QualificationTests(unittest.TestCase):
         changed["post_compaction_result_ids"] = list(reversed(result_ids))
         with self.assertRaisesRegex(ValueError, "qualification"):
             validate_qualification_receipt(changed, frozen_matrix())
+
+        zero_quality = copy.deepcopy(receipt)
+        zero_quality["fresh_recall_ppm"] = 0
+        for candidate in zero_quality["cells"]:
+            candidate["recall_ppm"] = 0
+        with self.assertRaisesRegex(ValueError, "qualification"):
+            validate_qualification_receipt(zero_quality, frozen_matrix())
 
 
 if __name__ == "__main__":
