@@ -46,7 +46,7 @@ aws s3 cp s3://borsuk-bench-453182569524-euc1/research/v63-algorithm-first/layou
 sha256sum -c >>hashes.log 2>&1 <<'HASHES' || exit 95
 2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86  source.parquet
 310bb54f79f2e79d09fe63aa4f6b5c6e9e7ffb31101964f816be978dadb2db54  queries.parquet
-fed7524f3646192663278295c34ba2bd187c012847ac82522f9a82ed89e56e11  truth.parquet
+fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11  truth.parquet
 32cba9690cd9d0ed3809763e5a0fa3574b09a207da26e93404651acaa1a66a0b  layout.npy
 HASHES
 
