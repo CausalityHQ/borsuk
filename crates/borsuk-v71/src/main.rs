@@ -256,38 +256,42 @@ fn route(
 
 /// One row's code-against-weight dot product, eight lanes at a time.
 ///
-/// The scalar form of this loop cost 81 ms per query at M=128 - more than the
-/// object-store I/O it was waiting on - because widening a byte to a float one
-/// element at a time does not vectorise.
+/// The scalar form cost 81 ms per query at M=128 - more than the object-store
+/// I/O it was waiting on - because widening a byte to a float one element at a
+/// time does not vectorise. Eight-lane accumulation took that to 2.5 ms, and
+/// V77 then showed the scan still moving 10.3 MiB to do 20 MFLOP at 0.16
+/// GFLOP/s per core, so it was not compute bound either: the lanes were being
+/// assembled by eight bounds-checked loads apiece.
+///
+/// Taking fixed-size arrays out of the slices removes those checks and lets the
+/// widening compile to a single load-and-convert.
 fn fused_inner(codes: &[u8], weights: &[f32]) -> f32 {
-    let lanes = codes.len() / 8 * 8;
     let mut accumulator = f32x8::ZERO;
-    for offset in (0..lanes).step_by(8) {
-        let widened = f32x8::new([
-            f32::from(codes[offset]),
-            f32::from(codes[offset + 1]),
-            f32::from(codes[offset + 2]),
-            f32::from(codes[offset + 3]),
-            f32::from(codes[offset + 4]),
-            f32::from(codes[offset + 5]),
-            f32::from(codes[offset + 6]),
-            f32::from(codes[offset + 7]),
-        ]);
-        let scale = f32x8::new([
-            weights[offset],
-            weights[offset + 1],
-            weights[offset + 2],
-            weights[offset + 3],
-            weights[offset + 4],
-            weights[offset + 5],
-            weights[offset + 6],
-            weights[offset + 7],
-        ]);
-        accumulator = widened.mul_add(scale, accumulator);
+    let mut second = f32x8::ZERO;
+    let mut offset = 0;
+    while offset + 16 <= codes.len() {
+        let low: [u8; 8] = codes[offset..offset + 8].try_into().expect("8 bytes");
+        let high: [u8; 8] = codes[offset + 8..offset + 16].try_into().expect("8 bytes");
+        let low_weights: [f32; 8] =
+            weights[offset..offset + 8].try_into().expect("8 floats");
+        let high_weights: [f32; 8] =
+            weights[offset + 8..offset + 16].try_into().expect("8 floats");
+        accumulator =
+            f32x8::from(low.map(f32::from)).mul_add(f32x8::from(low_weights), accumulator);
+        second =
+            f32x8::from(high.map(f32::from)).mul_add(f32x8::from(high_weights), second);
+        offset += 16;
     }
-    let mut total = accumulator.reduce_add();
-    for offset in lanes..codes.len() {
-        total += f32::from(codes[offset]) * weights[offset];
+    while offset + 8 <= codes.len() {
+        let lane: [u8; 8] = codes[offset..offset + 8].try_into().expect("8 bytes");
+        let scale: [f32; 8] = weights[offset..offset + 8].try_into().expect("8 floats");
+        accumulator =
+            f32x8::from(lane.map(f32::from)).mul_add(f32x8::from(scale), accumulator);
+        offset += 8;
+    }
+    let mut total = (accumulator + second).reduce_add();
+    for index in offset..codes.len() {
+        total += f32::from(codes[index]) * weights[index];
     }
     total
 }
