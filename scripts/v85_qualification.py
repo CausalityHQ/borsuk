@@ -19,6 +19,7 @@ def frozen_matrix() -> dict[str, Any]:
         "max_gets_per_query": 32,
         "max_peak_rss_bytes": 3 * 1024**3,
         "offered_load_ppm": 700_000,
+        "preflight_page_budgets": [8, 16],
         "range_concurrency": 16,
         "replacement_rows": 500,
         "run_counts": [1, 10, 100],
@@ -64,6 +65,7 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
         receipt,
         {
             "authenticated_inputs",
+            "aggregate_recall_ppm",
             "binary_authenticated",
             "binary_sha256",
             "built_rows",
@@ -76,8 +78,10 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
             "query_count",
             "result_sha256",
             "schema",
+            "selected_page_budget",
             "source_archive_sha256",
             "source_commit",
+            "worst_recall_ppm",
         },
         "preflight",
     )
@@ -105,6 +109,9 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
         or receipt["built_rows"] != 10_000
         or receipt["query_count"] != 1
         or receipt["failed_queries"] != 0
+        or receipt["selected_page_budget"] not in matrix["preflight_page_budgets"]
+        or receipt["aggregate_recall_ppm"] < 990_000
+        or receipt["worst_recall_ppm"] < 990_000
         or not _positive_int(receipt["max_gets_per_query"])
         or receipt["max_gets_per_query"] > matrix["max_gets_per_query"]
         or not _positive_int(receipt["max_bytes_per_query"])

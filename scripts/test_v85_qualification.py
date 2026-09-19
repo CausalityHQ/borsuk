@@ -43,6 +43,7 @@ class V85QualificationTests(unittest.TestCase):
         self.assertEqual(matrix["replacement_rows"], 500)
         self.assertEqual(matrix["tombstone_rows"], 500)
         self.assertEqual(matrix["offered_load_ppm"], 700_000)
+        self.assertEqual(matrix["preflight_page_budgets"], [8, 16])
         self.assertEqual(matrix["max_gets_per_query"], 32)
         self.assertEqual(matrix["max_bytes_per_query"], 16 * 1024 * 1024)
         self.assertEqual(matrix["max_peak_rss_bytes"], 3 * 1024**3)
@@ -56,6 +57,7 @@ class V85QualificationTests(unittest.TestCase):
         # remote ranges/bytes, missing CAS conflict, or manifest drift.
         receipt = {
             "authenticated_inputs": 4,
+            "aggregate_recall_ppm": 990_000,
             "binary_authenticated": True,
             "binary_sha256": "1" * 64,
             "built_rows": 10_000,
@@ -68,8 +70,10 @@ class V85QualificationTests(unittest.TestCase):
             "query_count": 1,
             "result_sha256": "2" * 64,
             "schema": "borsuk-v85-preflight-receipt-v1",
+            "selected_page_budget": 16,
             "source_archive_sha256": "3" * 64,
             "source_commit": "4" * 40,
+            "worst_recall_ppm": 990_000,
         }
         validate_preflight_receipt(receipt, frozen_matrix())
         for field, value in (
@@ -78,6 +82,9 @@ class V85QualificationTests(unittest.TestCase):
             ("max_gets_per_query", 33),
             ("max_bytes_per_query", 16 * 1024 * 1024 + 1),
             ("peak_rss_bytes", 3 * 1024**3 + 1),
+            ("aggregate_recall_ppm", 989_999),
+            ("worst_recall_ppm", 989_999),
+            ("selected_page_budget", 32),
         ):
             drift = copy.deepcopy(receipt)
             drift[field] = value

@@ -37,6 +37,9 @@ publish_terminal() {
   for name in result-*.json; do
     [ -f "$name" ] && aws s3 cp "$name" "$V85_OUTPUT_URI/evidence/$name" --only-show-errors
   done
+  for name in preflight-result-p*.json reader-p*.time; do
+    [ -f "$name" ] && aws s3 cp "$name" "$V85_OUTPUT_URI/evidence/$name" --only-show-errors
+  done
   for variant in incremental fresh; do
     if [ -d "$variant" ]; then
       for name in generation.json receipt.json router.arrow mutations.arrow base-000.arrow delta-000.arrow; do
@@ -168,8 +171,10 @@ grep -Eq 'PreconditionFailed|412' cas-conflict.log || exit 105
 
 phase=preflight-query
 args=$(artifact_args)
-eval "/usr/bin/time -v -o reader.time \"$binary\" $args --page-budget 8 --range-concurrency 16 --region eu-central-1" \
-  >preflight-result.json || exit 106
+for budget in 8 16; do
+  eval "/usr/bin/time -v -o reader-p$budget.time \"$binary\" $args --page-budget $budget --range-concurrency 16 --region eu-central-1" \
+    >"preflight-result-p$budget.json" || exit 106
+done
 
 phase=preflight-validate
 export V85_SOURCE_ARCHIVE_SHA256 V85_SOURCE_COMMIT
@@ -180,16 +185,33 @@ import os
 from pathlib import Path
 from scripts.v85_qualification import frozen_matrix, validate_preflight_receipt
 
-result_body = Path("preflight-result.json").read_bytes()
-result = json.loads(result_body)
-time_fields = {}
-for line in Path("reader.time").read_text().splitlines():
-    if ":" in line:
-        key, value = line.rsplit(":", 1)
-        time_fields[key.strip()] = value.strip()
-peak_rss_bytes = int(time_fields["Maximum resident set size (kbytes)"]) * 1024
+matrix = frozen_matrix()
+candidates = []
+for budget in matrix["preflight_page_budgets"]:
+    body = Path(f"preflight-result-p{budget}.json").read_bytes()
+    result = json.loads(body)
+    time_fields = {}
+    for line in Path(f"reader-p{budget}.time").read_text().splitlines():
+        if ":" in line:
+            key, value = line.rsplit(":", 1)
+            time_fields[key.strip()] = value.strip()
+    peak = int(time_fields["Maximum resident set size (kbytes)"]) * 1024
+    sample = result["samples"][0]
+    if (
+        result["aggregate_recall_ppm"] >= 990_000
+        and result["worst_recall_ppm"] >= 990_000
+        and sample["requests"] <= matrix["max_gets_per_query"]
+        and sample["bytes"] <= matrix["max_bytes_per_query"]
+        and peak <= matrix["max_peak_rss_bytes"]
+    ):
+        candidates.append((budget, body, result, peak))
+if not candidates:
+    raise ValueError("preflight has no page budget satisfying quality and S3 work gates")
+budget, result_body, result, peak_rss_bytes = candidates[0]
+Path("preflight-result.json").write_bytes(result_body)
 receipt = {
     "authenticated_inputs": 4,
+    "aggregate_recall_ppm": result["aggregate_recall_ppm"],
     "binary_authenticated": True,
     "binary_sha256": hashlib.sha256(Path("repo/target/release/v85_delta_reader").read_bytes()).hexdigest(),
     "built_rows": 10_000,
@@ -202,10 +224,12 @@ receipt = {
     "query_count": len(result["samples"]),
     "result_sha256": hashlib.sha256(result_body).hexdigest(),
     "schema": "borsuk-v85-preflight-receipt-v1",
+    "selected_page_budget": budget,
     "source_archive_sha256": os.environ["V85_SOURCE_ARCHIVE_SHA256"],
     "source_commit": os.environ["V85_SOURCE_COMMIT"],
+    "worst_recall_ppm": result["worst_recall_ppm"],
 }
-validate_preflight_receipt(receipt, frozen_matrix())
+validate_preflight_receipt(receipt, matrix)
 Path("preflight-receipt.json").write_text(
     json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n"
 )
