@@ -88,6 +88,58 @@ class V86CoarseToFineTests(unittest.TestCase):
         self.assertNotIn("--subspaces", completed.stdout)
         self.assertNotIn("--page-cap", completed.stdout)
 
+    def test_injected_page_evidence_is_digest_bound(self) -> None:
+        base = np.asarray([[0.0], [1.0], [10.0], [11.0]], dtype=np.float32)
+        artifact = build_coarse_to_fine_artifact(
+            base,
+            page_rows=2,
+            subspaces=1,
+            clusters=4,
+            sample_rows=4,
+            seed=86,
+            iterations=1,
+        )
+        common = {
+            "artifact": artifact,
+            "base_ids": np.arange(4, dtype=np.int64),
+            "delta_ids": np.asarray([4], dtype=np.int64),
+            "truth_ids": np.asarray([[2]], dtype=np.int64),
+            "query_ordinals": np.asarray([0], dtype=np.int64),
+            "page_rows": 2,
+            "neighbors": 1,
+            "subspaces": 1,
+            "clusters": 4,
+            "wave1_rank_pages": 2,
+            "wave1_max_span_pages": 1,
+            "wave1_max_ranges": 1,
+            "wave2_top_rows": 1,
+            "wave2_max_span_pages": 1,
+            "wave2_max_ranges": 1,
+            "code_page_bytes": 2,
+            "data_page_bytes": 8,
+            "wave1_page_scores_by_query": np.asarray(
+                [[1.0, 0.0]], dtype=np.float32
+            ),
+        }
+
+        result = evaluate_coarse_to_fine(
+            base,
+            np.asarray([[20.0]], dtype=np.float32),
+            np.asarray([[10.0]], dtype=np.float32),
+            wave1_page_evidence_sha256="a" * 64,
+            **common,
+        )
+        self.assertEqual(result["wave1_page_evidence_sha256"], "a" * 64)
+
+        with self.assertRaisesRegex(ValueError, "page evidence differs"):
+            evaluate_coarse_to_fine(
+                base,
+                np.asarray([[20.0]], dtype=np.float32),
+                np.asarray([[10.0]], dtype=np.float32),
+                wave1_page_evidence_sha256="not-a-digest",
+                **common,
+            )
+
     def test_truth_authority_requires_exact_query_rank_order_and_unique_ids(
         self,
     ) -> None:
@@ -361,6 +413,7 @@ class V86CoarseToFineTests(unittest.TestCase):
             [
                 {
                     "base_truth_hits": 2,
+                    "delta_truth_hits": 0,
                     "exact_base_hits": 2,
                     "exact_hits": 2,
                     "page_sq8_base_hits": 2,

@@ -474,6 +474,8 @@ def evaluate_coarse_to_fine(
     wave2_max_ranges: int = 32,
     code_page_bytes: int | None = None,
     data_page_bytes: int | None = None,
+    wave1_page_scores_by_query: np.ndarray | None = None,
+    wave1_page_evidence_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one fixed two-wave routing design with a resident delta."""
 
@@ -533,6 +535,28 @@ def evaluate_coarse_to_fine(
     )
     page_count = (base.shape[0] + page_rows - 1) // page_rows
     summaries_per_page = artifact.summary_codes.shape[0] // page_count
+    if wave1_page_scores_by_query is not None:
+        wave1_page_scores_by_query = np.asarray(
+            wave1_page_scores_by_query, dtype=np.float32
+        )
+        if (
+            wave1_page_scores_by_query.shape != (queries.shape[0], page_count)
+            or not np.isfinite(wave1_page_scores_by_query).all()
+        ):
+            raise ValueError("coarse-to-fine page evidence differs")
+    if (wave1_page_scores_by_query is None) != (
+        wave1_page_evidence_sha256 is None
+    ) or (
+        wave1_page_evidence_sha256 is not None
+        and (
+            len(wave1_page_evidence_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in wave1_page_evidence_sha256
+            )
+        )
+    ):
+        raise ValueError("coarse-to-fine page evidence differs")
     base_page_sq8 = _page_sq8(base, page_rows)
     delta_sq8 = _sq8(delta)
     if code_page_bytes is None:
@@ -552,8 +576,15 @@ def evaluate_coarse_to_fine(
     base_truth_hits = 0
     delta_truth_hits = 0
     for query_index, query in enumerate(queries):
-        summary_scores = _adc_scores(query, artifact.summary_codes, list(artifact.books))
-        page_scores = summary_scores.reshape(page_count, summaries_per_page).min(axis=1)
+        if wave1_page_scores_by_query is None:
+            summary_scores = _adc_scores(
+                query, artifact.summary_codes, list(artifact.books)
+            )
+            page_scores = summary_scores.reshape(
+                page_count, summaries_per_page
+            ).min(axis=1)
+        else:
+            page_scores = wave1_page_scores_by_query[query_index]
         page_order = np.lexsort((np.arange(page_count), page_scores))
         page_ranks = np.empty(page_count, dtype=np.int64)
         page_ranks[page_order] = np.arange(page_count, dtype=np.int64)
@@ -657,6 +688,7 @@ def evaluate_coarse_to_fine(
         samples.append(
             {
                 "base_truth_hits": int(query_base_truth),
+                "delta_truth_hits": int(query_delta_truth),
                 "exact_base_hits": query_exact_base_hits,
                 "exact_hits": query_exact_hits,
                 "page_sq8_base_hits": query_page_sq8_base_hits,
@@ -697,7 +729,7 @@ def evaluate_coarse_to_fine(
         )
 
     denominator = queries.shape[0] * neighbors
-    return {
+    result = {
         "artifact_sha256": artifact.digest(),
         "base_truth_hits": base_truth_hits,
         "claim_eligible": False,
@@ -708,6 +740,9 @@ def evaluate_coarse_to_fine(
         "schema": "borsuk-v86-coarse-to-fine-screen-v1",
         "wave1_objective": wave1_objective,
     }
+    if wave1_page_evidence_sha256 is not None:
+        result["wave1_page_evidence_sha256"] = wave1_page_evidence_sha256
+    return result
 
 
 def main() -> None:
