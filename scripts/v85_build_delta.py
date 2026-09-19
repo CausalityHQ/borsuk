@@ -53,18 +53,28 @@ def _vector_type(dimensions: int) -> pa.DataType:
     return pa.list_(pa.field("element", pa.float32(), nullable=False), dimensions)
 
 
+def _source_vector_type(dimensions: int) -> pa.DataType:
+    return pa.list_(pa.field("item", pa.float32(), nullable=False), dimensions)
+
+
 def _read_source(request: BuildRequest) -> tuple[np.ndarray, np.ndarray, str]:
     table = pq.read_table(request.source)
     expected = pa.schema(
         [
-            pa.field("embedding", _vector_type(request.dimensions), nullable=False),
+            pa.field("feature_row_id", pa.uint64(), nullable=False),
+            pa.field("embedding", _source_vector_type(request.dimensions), nullable=False),
         ]
     )
     if table.schema != expected:
         raise ValueError("source Parquet schema differs")
     if table.num_rows != request.base_rows + request.delta_rows:
         raise ValueError("source row count differs")
-    ids = np.arange(table.num_rows, dtype=np.int64)
+    source_ids = np.asarray(
+        table.column("feature_row_id").combine_chunks().to_numpy(), dtype=np.uint64
+    )
+    if np.any(source_ids > np.iinfo(np.int64).max):
+        raise ValueError("source ID is not representable")
+    ids = source_ids.astype(np.int64, copy=False)
     vectors = np.asarray(
         table.column("embedding").combine_chunks().values.to_numpy(), dtype=np.float32
     ).reshape(-1, request.dimensions)
@@ -91,7 +101,11 @@ def canonicalize_evaluation(
         raise ValueError("evaluation shape differs")
     query_table = pq.read_table(query_source)
     expected_query = pa.schema(
-        [pa.field("embedding", _vector_type(dimensions), nullable=False)]
+        [
+            pa.field("query_ordinal", pa.uint32(), nullable=False),
+            pa.field("feature_row_id", pa.uint64(), nullable=False),
+            pa.field("embedding", _source_vector_type(dimensions), nullable=False),
+        ]
     )
     if query_table.schema != expected_query or query_table.num_rows < query_limit:
         raise ValueError("query source authority differs")
@@ -101,9 +115,14 @@ def canonicalize_evaluation(
     ).reshape(-1, dimensions)[:query_limit]
     if not np.isfinite(query_values).all():
         raise ValueError("query source is non-finite")
+    query_ordinals = np.asarray(
+        query_table.column("query_ordinal").combine_chunks().to_numpy(), dtype=np.uint32
+    )[:query_limit]
+    if not np.array_equal(query_ordinals, np.arange(query_limit, dtype=np.uint32)):
+        raise ValueError("query ordinals differ")
     canonical_queries = pa.Table.from_arrays(
         [
-            pa.array(np.arange(query_limit, dtype=np.uint32), type=pa.uint32()),
+            pa.array(query_ordinals, type=pa.uint32()),
             pa.FixedSizeListArray.from_arrays(
                 pa.array(query_values.reshape(-1), type=pa.float32()), dimensions
             ),
@@ -173,16 +192,37 @@ def compute_exact_truth(
         raise ValueError("truth shape differs")
     source_table = pq.read_table(source)
     query_table = pq.read_table(query_source)
-    expected = pa.schema(
-        [pa.field("embedding", _vector_type(dimensions), nullable=False)]
+    expected_source = pa.schema(
+        [
+            pa.field("feature_row_id", pa.uint64(), nullable=False),
+            pa.field("embedding", _source_vector_type(dimensions), nullable=False),
+        ]
+    )
+    expected_query = pa.schema(
+        [
+            pa.field("query_ordinal", pa.uint32(), nullable=False),
+            pa.field("feature_row_id", pa.uint64(), nullable=False),
+            pa.field("embedding", _source_vector_type(dimensions), nullable=False),
+        ]
     )
     if (
-        source_table.schema != expected
-        or query_table.schema != expected
+        source_table.schema != expected_source
+        or query_table.schema != expected_query
         or source_table.num_rows < corpus_rows
         or query_table.num_rows < query_limit
     ):
         raise ValueError("truth input authority differs")
+    source_ids_u64 = np.asarray(
+        source_table.column("feature_row_id").combine_chunks().to_numpy(), dtype=np.uint64
+    )[:corpus_rows]
+    if np.any(source_ids_u64 > np.iinfo(np.int64).max):
+        raise ValueError("truth source ID is not representable")
+    source_ids = source_ids_u64.astype(np.int64, copy=False)
+    query_ordinals = np.asarray(
+        query_table.column("query_ordinal").combine_chunks().to_numpy(), dtype=np.uint32
+    )[:query_limit]
+    if not np.array_equal(query_ordinals, np.arange(query_limit, dtype=np.uint32)):
+        raise ValueError("truth query ordinals differ")
     corpus = np.asarray(
         source_table.column("embedding").combine_chunks().values.to_numpy(),
         dtype=np.float32,
@@ -199,7 +239,7 @@ def compute_exact_truth(
     for start in range(0, corpus_rows, 8_192):
         stop = min(start + 8_192, corpus_rows)
         block = corpus[start:stop]
-        block_ids = np.arange(start, stop, dtype=np.int64)
+        block_ids = source_ids[start:stop]
         for query in range(query_limit):
             delta = block - queries[query]
             distances = np.einsum("ij,ij->i", delta, delta, optimize=True)

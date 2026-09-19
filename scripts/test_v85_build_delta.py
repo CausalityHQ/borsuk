@@ -24,6 +24,10 @@ def _vector_type(dimensions: int) -> pa.DataType:
     return pa.list_(pa.field("element", pa.float32(), nullable=False), dimensions)
 
 
+def _source_vector_type(dimensions: int) -> pa.DataType:
+    return pa.list_(pa.field("item", pa.float32(), nullable=False), dimensions)
+
+
 def _write_source(path: pathlib.Path) -> np.ndarray:
     vectors = np.zeros((100, DIMENSIONS), dtype=np.float32)
     for row in range(90):
@@ -31,13 +35,15 @@ def _write_source(path: pathlib.Path) -> np.ndarray:
     vectors[90:] = np.float32(1_000_000.0)
     table = pa.Table.from_arrays(
         [
+            pa.array(np.arange(100, dtype=np.uint64), type=pa.uint64()),
             pa.FixedSizeListArray.from_arrays(
                 pa.array(vectors.reshape(-1), type=pa.float32()), DIMENSIONS
             ),
         ],
         schema=pa.schema(
             [
-                pa.field("embedding", _vector_type(DIMENSIONS), nullable=False),
+                pa.field("feature_row_id", pa.uint64(), nullable=False),
+                pa.field("embedding", _source_vector_type(DIMENSIONS), nullable=False),
             ]
         ),
     )
@@ -221,9 +227,17 @@ class V85BuildDeltaTests(unittest.TestCase):
             root = pathlib.Path(directory)
             query_vectors = np.eye(DIMENSIONS, dtype=np.float32)[:3]
             query_table = pa.Table.from_arrays(
-                [pa.FixedSizeListArray.from_arrays(pa.array(query_vectors.reshape(-1)), DIMENSIONS)],
+                [
+                    pa.array(np.arange(3, dtype=np.uint32), type=pa.uint32()),
+                    pa.array(np.arange(10, 13, dtype=np.uint64), type=pa.uint64()),
+                    pa.FixedSizeListArray.from_arrays(pa.array(query_vectors.reshape(-1)), DIMENSIONS),
+                ],
                 schema=pa.schema(
-                    [pa.field("embedding", _vector_type(DIMENSIONS), nullable=False)]
+                    [
+                        pa.field("query_ordinal", pa.uint32(), nullable=False),
+                        pa.field("feature_row_id", pa.uint64(), nullable=False),
+                        pa.field("embedding", _source_vector_type(DIMENSIONS), nullable=False),
+                    ]
                 ),
             )
             query_source = root / "development-query.parquet"
@@ -284,9 +298,17 @@ class V85BuildDeltaTests(unittest.TestCase):
             query_source = root / "queries-source.parquet"
             pq.write_table(
                 pa.Table.from_arrays(
-                    [pa.FixedSizeListArray.from_arrays(pa.array(query_vectors.reshape(-1)), DIMENSIONS)],
+                    [
+                        pa.array(np.arange(2, dtype=np.uint32), type=pa.uint32()),
+                        pa.array(np.arange(100, 102, dtype=np.uint64), type=pa.uint64()),
+                        pa.FixedSizeListArray.from_arrays(pa.array(query_vectors.reshape(-1)), DIMENSIONS),
+                    ],
                     schema=pa.schema(
-                        [pa.field("embedding", _vector_type(DIMENSIONS), nullable=False)]
+                        [
+                            pa.field("query_ordinal", pa.uint32(), nullable=False),
+                            pa.field("feature_row_id", pa.uint64(), nullable=False),
+                            pa.field("embedding", _source_vector_type(DIMENSIONS), nullable=False),
+                        ]
                     ),
                 ),
                 query_source,
