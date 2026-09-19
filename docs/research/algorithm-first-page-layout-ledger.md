@@ -1474,3 +1474,76 @@ representation projection remains 2,057,023,104 bytes (1.916 GiB), while the
 current dense traceback is still 8,791,406,250 bytes per query and is neither
 memory-, CPU-, nor latency-qualified for serving. No larger-scale or
 confirmation run is authorized by this result.
+
+## V92 — independent wave-two row nominations displace stronger evidence
+
+V92 tested the cheapest causal follow-up to V91 without changing wave one,
+the authenticated PQ16 residual codes, the PQ192 shortlist, the resident SQ8
+delta, or either physical page budget. For each query it ranked residual-row
+estimates only on pages omitted by the frozen wave-one plan. The closest 512
+rows contributed an independent reciprocal-rank page objective to the existing
+PQ192 wave-two objective. Query and truth labels were not inputs to nomination.
+After nominations were frozen, a truth-only L0 diagnostic required at least 8
+of V90's 26 wave-one planner misses to occur among the 512 nominated rows; a
+failure would terminate before either scientific arm.
+
+The source slice passed seven focused tests in 0.164 seconds, scoped Ruff,
+pycompile, shell syntax validation, and diff-check before it was committed as
+`54e16b5d06585050c586abaef7e9906ab1cf1094`. The first Spot instance,
+`i-00caf6da03e774ced`, was terminated by the controller before usable science:
+the generated bootstrap emitted a literal `\\n` in its checksum line and did
+not enable shell fail-fast behavior. The controller published a bounded
+bootstrap-failure receipt. The generated bootstrap was then syntax-checked
+with `set -euo pipefail` and a real newline before the sole clean replacement.
+
+The clean attempt ran on c7i.8xlarge Spot instance
+`i-07da2f1387e1da1f4` in `eu-central-1a`. Every source and dataset hash passed,
+the instance published a successful terminal, and it terminated immediately.
+Immutable evidence is under
+`research/v92-wave2-nominated-rows/54e16b5d06585050c586abaef7e9906ab1cf1094/runs/v92-wave2-nominated-20260919T232608Z-54e16b5d/a0001/`.
+The canonical result SHA-256 is
+`85eca542754d43f3029b0812770dce4fa3776aa4c1d7de9604e2fa1252e1a115`;
+the terminal SHA-256 is
+`b299ee44aa40869550d1751b55be7279ece299a81068121dfea3097b05d074b6`.
+The row-min score SHA-256 remained exactly V91's
+`09dc6af46edbf7adfe3edc091996e38602327e05737206aa46c4869211b3345e`;
+the frozen nomination authority SHA-256 is
+`4667b6265fdbd7cc4ea87a992a3777006eacbb7ce840c12565b649ebbbb48309`.
+
+L0 passed: 14 of the 26 missed truth rows occurred in the label-blind top-512
+nominations. The two-arm result nevertheless rejected the merge policy:
+
+| arm | wave-two evidence | page-SQ8 Recall@100 | base-only recall | query 15 | worst |
+|---|---|---:|---:|---:|---:|
+| V90 control | PQ192 top-512 rows | **98.9688%** (3,167/3,200) | **98.8538%** (2,846/2,879) | 90 | 90 |
+| V92 challenger | PQ192 plus independent PQ16 nominations | **97.1875%** (3,110/3,200) | **96.8739%** (2,789/2,879) | 83 | 83 |
+
+Only one query improved, 13 were unchanged, and 18 regressed. The challenger
+selected about 39 nominated pages per query on average and displaced 30--50
+control pages on many queries. Page-level truth coverage fell by 58 and exact
+reranking fell by 58 before SQ8 lost one further hit. The failure is therefore
+not an SQ8-only artifact: assigning the two rank lists equal independent mass
+made low-resolution PQ16 evidence replace substantially stronger PQ192 pages.
+It rejects this replacement merge, not the residual representation or a
+protected additive rescue path.
+
+Both arms retained the same maxima: 340 wave-one pages, 32 wave-one ranges,
+16,733,440 wave-one bytes, 81 wave-two pages, 32 wave-two ranges, and
+16,676,928 wave-two bytes. The offline screen made zero S3 query requests.
+Scientific wall time was 4:35.12, peak RSS was 10,456,180 KiB, CPU utilization
+was 1,079%, and swaps were zero. The 100M representation projection remains
+2,057,023,104 bytes and remains explicitly unqualified for serving latency,
+CPU, and memory because the dense planner traceback is still projected at
+8,791,406,250 bytes per query.
+
+A read-only counterfactual over the immutable result established the next
+bounded hypothesis without another dataset pass. Keeping all 81 control pages
+and adding, rather than substituting, rescue pages is monotonic for page-level
+and exact candidate coverage. Aggregating reciprocal-rank support over the
+top 256 nominations and adding at most the best 24 rescue pages would raise
+the observed candidate truth ceiling from 3,169 to 3,183 hits while adding at
+most 24 pages (4,941,312 bytes) and 24 uncoalesced requests. This is only a
+preregistered feasibility calculation: final SQ8 Recall@100 remains unmeasured,
+and the old 81-page/32-range boundary would be deliberately relaxed rather
+than silently reinterpreted. Reserved confirmation queries and larger-scale
+data remain unread.
