@@ -479,11 +479,20 @@ codes exactly.
 | 128 | 8 | 32 | 256 | 98.400% | 81% | 83 | 13.57 | 182.6 ms | 233.2 ms |
 | 64 | 8 | 32 | 256 | 96.433% | 65% | 64 | 8.59 | 142.5 ms | 164.7 ms |
 
-**This overturns the V68 diagnosis.** 243 requests carrying 17 MiB take 448.6 ms
-of I/O; 137 requests carrying 27 MiB take 291.3 ms. Reading 60% more bytes in
-44% fewer requests is 35% faster. Latency tracks the request count, and merging
-harder is the cheaper side of the trade — the opposite of what V68 concluded
-from bytes alone.
+243 requests carrying 17 MiB take 448.6 ms of I/O; 137 requests carrying 27 MiB
+take 291.3 ms. Within this harness, reading 60% more bytes in 44% fewer requests
+is 35% faster.
+
+> **Withdrawn by V71.** This cell originally concluded "latency tracks the
+> request count, not bytes". That conclusion was a harness artifact and it is
+> wrong. Regressing I/O p50 on requests and bytes across all twelve cells gives
+> a linear **1.64 ms per request** term at R²=0.997 — and a linear term is the
+> signature of a serialised resource, not of a concurrent wave against S3,
+> which would grow like the tail of a max-of-N. That 1.64 ms is botocore CPU
+> for signing, event dispatch and response parsing, held under the GIL. It also
+> independently predicts the QPS plateau: 115 ms of ADC plus 81 requests times
+> 1.64 ms is 245 ms of GIL time per query, or 4.1 QPS against the 4.85
+> measured. The native reader in V71 reverses the ordering outright.
 
 ## V70 — one round trip of SQ8
 
@@ -524,3 +533,64 @@ serialising the scan, not an S3 limit.
 The crate already has an object-store client and SIMD PQ4 kernels. The decision
 belongs to a native reader over the same published objects, not to another
 Python sweep.
+
+## V71 — a native reader, and the reversal it forced
+
+`crates/borsuk-v71/`, results
+`research/v71-algorithm-first/native-reader/a0001/`. 200 development queries
+per cell against V70's published `sq8.bin`, in-region on c7i.8xlarge, no local
+cache, `object_store` 0.14 — the same client the crate already uses.
+
+| M | gap | Recall@100 | worst | requests | MiB | I/O p50 | scan p50 | total p50 | p95 | p99 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 8 | 97.190% | 65% | 22 | 17.9 | 47.4 | 3.6 | 54.3 | 98.1 | 126.1 |
+| **128** | **2** | **98.440%** | **79%** | **48** | **27.2** | **46.7** | **3.5** | **54.1** | **87.9** | **110.2** |
+| 128 | 8 | 98.615% | 82% | 37 | 37.9 | 67.4 | 5.3 | 77.1 | 150.7 | 254.4 |
+| 256 | 4 | 99.185% | 94% | 69 | 63.0 | 109.6 | 6.3 | 120.4 | 265.2 | 274.4 |
+| 512 | 8 | 99.415% | 97% | 74 | 162.9 | 259.9 | 14.9 | 280.0 | 354.8 | 442.9 |
+
+### The ordering reverses
+
+In Python, a wider gap merge always won: fewer requests, more bytes, faster. In
+the native client the opposite holds. At M=128, gap=2 costs **48 requests and
+27.2 MiB at 54.1 ms**, while gap=8 costs **37 requests and 37.9 MiB at
+77.1 ms**. More requests and fewer bytes is now 30% faster. Every conclusion
+drawn from the Python request-versus-byte trade is withdrawn.
+
+The physics that survives is per *wave*, not per request. A wave of N parallel
+GETs pays roughly the p(1−1/N) quantile of first-byte latency, so going from 37
+to 48 requests moves which tail quantile you land on by very little, while 10
+MiB of gap waste is paid in full.
+
+### The scan was the other half
+
+The first native run spent **81 ms** in the scan against 69 ms of I/O — waiting
+on nothing and still dominating, because widening a byte to a float one element
+at a time does not vectorise. Eight-lane accumulation across cores took it to
+**3.5 ms**, a 23x cut, and only then did the I/O ordering above become visible.
+
+### Against the crate's own prior cold path
+
+`docs/research/cold-read-latency-design.md` records the existing two-wave Rust
+path at **58.6 GETs, 27.16 MiB, 205–229 ms p50** over three repetitions. V71
+reads **48 GETs and 27.2 MiB — the same I/O — in 54.1 ms**, because it is one
+wave instead of two. The gain is structural, not tuning.
+
+### Corrections this run forces on earlier entries
+
+- **The 1.5 bytes/row resident router is a representation claim, not a serving
+  measurement.** Every reader measured here decodes PQ summaries to float32 and
+  holds them: two 768-dimensional float32 summaries per 256-row page is
+  **24 B/row, about 2.24 GiB at 100M rows**. V66 showed the compressed form
+  loses no recall; no run has yet served from it.
+- **V70's build rate is not comparable to V68's as published.** V70 excludes
+  upload where V68 includes it, and V70 *does* train PQ — for the router — so
+  "no codebook to train" was wrong. On V68's boundary V70 is about
+  **6,622 vectors/s**. Both exclude building the global k-means order.
+- **60-query cells cannot carry p99 or worst-query claims.** V69 and V70 use the
+  first 60 development queries, where nearest-rank p99 is just the maximum. V71
+  uses 200.
+- The uploaded objects are **not yet an independently reopenable index**: no run
+  persists its codebooks, `low`/`span`, or router alongside the rows they
+  interpret. V69 regenerates them from the corpus and a seed. That is a release
+  gap, not a recall gap.
