@@ -52,7 +52,11 @@ fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11  truth.parquet
 HASHES
 
 phase=screen
-export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+if [ "$V85_ORACLE_ONLY" = 1 ]; then
+  export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+else
+  export OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16
+fi
 screen_args=(
   --source source.parquet --queries queries.parquet --ground-truth truth.parquet
   --layout-order layout.npy --rows "$V85_ROWS" --base-rows "$V85_BASE_ROWS"
