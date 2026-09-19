@@ -7,6 +7,7 @@ import numpy as np
 from scripts.v85_shared_overlay_screen import (
     _maximum_physical_oracle_hits,
     _page_payload_bytes,
+    _select_optimal_weighted_pages,
     _select_rank_weighted_pages,
     evaluate_overlay,
     evaluate_physical_oracle,
@@ -59,6 +60,39 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
     def test_page_payload_prices_header_bounds_and_padded_records(self) -> None:
         self.assertEqual(_page_payload_bytes(dimensions=768, page_rows=256), 205_888)
 
+    def test_optimal_weighted_pages_matches_exhaustive_physical_planner(
+        self,
+    ) -> None:
+        weights = np.asarray([5, 0, 4, 0, 0, 6], dtype=np.uint64)
+
+        pages, ranges = _select_optimal_weighted_pages(
+            weights, max_span_pages=3, max_ranges=2
+        )
+
+        self.assertEqual(pages.tolist(), [0, 5])
+        self.assertEqual(ranges, [(0, 0), (5, 5)])
+        self.assertEqual(int(np.sum(weights[pages])), 11)
+
+        for max_pages, max_ranges in ((2, 1), (3, 1), (3, 2), (5, 2)):
+            exhaustive = 0
+            for mask in itertools.product((False, True), repeat=weights.size):
+                selected = [index for index, take in enumerate(mask) if take]
+                if len(selected) > max_pages:
+                    continue
+                range_count = sum(
+                    index == 0 or not mask[index - 1]
+                    for index, take in enumerate(mask)
+                    if take
+                )
+                if range_count <= max_ranges:
+                    exhaustive = max(exhaustive, int(np.sum(weights[selected])))
+            pages, ranges = _select_optimal_weighted_pages(
+                weights, max_span_pages=max_pages, max_ranges=max_ranges
+            )
+            self.assertEqual(int(np.sum(weights[pages])), exhaustive)
+            self.assertLessEqual(pages.size, max_pages)
+            self.assertLessEqual(len(ranges), max_ranges)
+
     def test_resident_delta_closes_base_shortlist_and_run_count_is_invariant(self) -> None:
         base = np.asarray(
             [
@@ -88,7 +122,7 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             seed=85,
         )
 
-        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v3")
+        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v4")
         self.assertEqual(result["training_rows"], 8)
         self.assertEqual(result["delta_rows"], 1)
         self.assertEqual(result["cpu_parallelism"], "sequential-per-query")
@@ -152,6 +186,10 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         self.assertEqual(set(result["cells"][0]["result_ids"]), {401, 901})
         self.assertEqual(
             result["rank_weighted_cells"][0]["page_sq8_recall_ppm"], 1_000_000
+        )
+        self.assertEqual(
+            {cell["planner"] for cell in result["rank_weighted_cells"]},
+            {"exact", "greedy"},
         )
         self.assertEqual(result["rank_weighted_cells"][0]["base_gets_max"], 1)
         self.assertEqual(result["rank_weighted_cells"][0]["base_bytes_max"], 128)

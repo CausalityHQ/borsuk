@@ -164,6 +164,83 @@ def _maximum_physical_oracle_hits(
     return int(max(np.max(off), np.max(on)))
 
 
+def _select_optimal_weighted_pages(
+    page_weights: np.ndarray,
+    *,
+    max_span_pages: int,
+    max_ranges: int,
+) -> tuple[np.ndarray, list[tuple[int, int]]]:
+    """Select the exact maximum-weight dense page set for the screen."""
+
+    page_weights = np.asarray(page_weights)
+    if (
+        page_weights.ndim != 1
+        or page_weights.size == 0
+        or max_span_pages <= 0
+        or max_ranges <= 0
+        or not np.all(np.isfinite(page_weights))
+        or np.any(page_weights < 0)
+    ):
+        raise ValueError("weighted page planner input differs")
+    weights = page_weights.astype(np.int64, copy=False)
+    unreachable = np.int64(-(1 << 60))
+    shape = (max_ranges + 1, max_span_pages + 1)
+    off = np.full(shape, unreachable, dtype=np.int64)
+    on = np.full(shape, unreachable, dtype=np.int64)
+    off[0, 0] = 0
+    off_choices = np.zeros((weights.size, *shape), dtype=np.uint8)
+    on_choices = np.zeros((weights.size, *shape), dtype=np.uint8)
+
+    for page, weight in enumerate(weights):
+        next_off = np.maximum(off, on)
+        off_choices[page] = on > off
+
+        next_on = np.full(shape, unreachable, dtype=np.int64)
+        continuing = on[:, :-1]
+        next_on[:, 1:] = continuing
+        on_choices[page, :, 1:][continuing != unreachable] = 1
+
+        starting = off[:-1, :-1]
+        replace = starting > next_on[1:, 1:]
+        next_on[1:, 1:][replace] = starting[replace]
+        on_choices[page, 1:, 1:][replace] = 2
+        reachable = next_on != unreachable
+        next_on[reachable] += weight
+
+        off = next_off
+        on = next_on
+
+    best_value = unreachable
+    best = (0, 0, 0)
+    for pages in range(max_span_pages + 1):
+        for ranges in range(max_ranges + 1):
+            for state, values in enumerate((off, on)):
+                value = values[ranges, pages]
+                if value > best_value:
+                    best_value = value
+                    best = (ranges, pages, state)
+
+    ranges, pages, state = best
+    selected = np.zeros(weights.size, dtype=np.bool_)
+    for page in range(weights.size - 1, -1, -1):
+        if state == 0:
+            state = int(off_choices[page, ranges, pages])
+            continue
+        selected[page] = True
+        choice = int(on_choices[page, ranges, pages])
+        pages -= 1
+        if choice == 2:
+            ranges -= 1
+            state = 0
+        elif choice == 1:
+            state = 1
+        else:
+            raise AssertionError("weighted page planner backtrack differs")
+
+    selected_pages = np.flatnonzero(selected)
+    return selected_pages, _coalesce(selected_pages, gap=0)
+
+
 def _select_rank_weighted_pages(
     scores: np.ndarray,
     *,
@@ -172,6 +249,7 @@ def _select_rank_weighted_pages(
     max_span_pages: int,
     max_ranges: int,
     gap: int,
+    planner: str = "greedy",
 ) -> tuple[np.ndarray, list[tuple[int, int]]]:
     take = min(top_rows, scores.size)
     head = np.argpartition(scores, take - 1)[:take]
@@ -192,6 +270,14 @@ def _select_rank_weighted_pages(
     np.add.at(page_weights, pages, weights)
     minimum = np.full(page_count, np.inf, dtype=np.float32)
     np.minimum.at(minimum, pages, scores[head])
+    if planner == "exact":
+        return _select_optimal_weighted_pages(
+            page_weights,
+            max_span_pages=max_span_pages,
+            max_ranges=max_ranges,
+        )
+    if planner != "greedy":
+        raise ValueError("rank-weighted planner differs")
     candidates = np.flatnonzero(page_weights)
     candidates = candidates[
         np.lexsort(
@@ -517,8 +603,12 @@ def evaluate_overlay(
         and cell["base_bytes_max"] <= max_base_bytes
     ]
     rank_weighted_cells = []
-    for top_rows in rank_top_rows:
-        for page_cap in rank_page_caps:
+    for top_rows, page_cap, planner in (
+        (top_rows, page_cap, planner)
+        for top_rows in rank_top_rows
+        for page_cap in rank_page_caps
+        for planner in ("greedy", "exact")
+    ):
             samples = []
             exact_hits = 0
             page_sq8_hits = 0
@@ -530,6 +620,7 @@ def evaluate_overlay(
                     max_span_pages=min(page_cap, max_base_pages),
                     max_ranges=max_base_gets,
                     gap=2,
+                    planner=planner,
                 )
                 base_candidates = np.concatenate(
                     [
@@ -576,6 +667,7 @@ def evaluate_overlay(
                         exact_hits * 1_000_000 / denominator
                     ),
                     "page_cap": page_cap,
+                    "planner": planner,
                     "page_sq8_recall_ppm": round(
                         page_sq8_hits * 1_000_000 / denominator
                     ),
@@ -583,7 +675,11 @@ def evaluate_overlay(
                 }
             )
     passing_rank_weighted_cells = [
-        {"page_cap": cell["page_cap"], "top_rows": cell["top_rows"]}
+        {
+            "page_cap": cell["page_cap"],
+            "planner": cell["planner"],
+            "top_rows": cell["top_rows"],
+        }
         for cell in rank_weighted_cells
         if cell["page_sq8_recall_ppm"] >= 990_000
         and cell["base_gets_max"] <= max_base_gets
@@ -621,7 +717,7 @@ def evaluate_overlay(
             "passed": bool(passing_shortlists),
             "passing_shortlists": passing_shortlists,
         },
-        "schema": "borsuk-v85-shared-overlay-screen-v3",
+        "schema": "borsuk-v85-shared-overlay-screen-v4",
         "training_sample_rows": sample_count,
         "training_rows": int(base.shape[0]),
     }
