@@ -1158,3 +1158,53 @@ quality gap. Page aggregation and page SQ8 still account for the remaining 14
 page-SQ8 misses, so the next fixed 1M falsifier must recover most of the exact
 row ordering with a compact hierarchical router rather than tune another
 single page centroid.
+
+## V86 — PQ192 clears the untouched slice but the bounded wave-one planner fails
+
+Source `cfccee9bf19467173451bbf1019f482b0ad940e3`, one c7i.8xlarge Spot
+instance `i-0e0892ff65676b0ca`, and immutable evidence under
+`research/v86-coarse-to-fine/cfccee9bf19467173451bbf1019f482b0ad940e3/a0001/attempt/`.
+The instance terminated immediately after its successful terminal marker.
+The result SHA-256 is
+`761bc6715e604b24028127b0886079c1a1cde4b3272dff0090db6fa92695a231`;
+the terminal SHA-256 is
+`fc65a94cdbbf54af5ed570c3bae0a2cc5120e5ba16784239208ca53fae71e9e4`.
+
+V86 trained one base-only PQ192x8 codebook set, encoded all 900,000 base rows
+and two half-page means per physical page with those books, fetched at most
+340 header-bearing code pages in 32 ranges, ranked only the fetched codes,
+then fetched at most 81 page-SQ8 pages in 32 ranges after a 512-row shortlist.
+The exact 100,000-row resident delta was included in every final rerank. The
+burned queries 0--31 remained the development gate; queries 200--327 were an
+untouched confirmation range. The result is claim-ineligible and qualifies
+neither 100M CPU nor serving latency.
+
+| split | page-SQ8 Recall@100 | exact Recall@100 | base-only recall | worst |
+|---|---:|---:|---:|---:|
+| development 0--31 | **98.6875%** (3,158/3,200) | **98.7500%** (3,160/3,200) | **98.5412%** | **88** |
+| confirmation 200--327 | **99.4219%** (12,726/12,800) | **99.6094%** (12,750/12,800) | **99.4097%** | **92** |
+| combined diagnostic | **99.2750%** | **99.4375%** | — | **88** |
+
+The preregistered development gate required at least 99.25%, query 15 at
+least 90 hits, and base-only recall at least 99.1%. It failed: query 15
+returned 88 hits and development base-only recall was 98.5412%. The untouched
+confirmation gate passed, but cannot override the development failure.
+
+The failure is sharply attributed. Across development base truth, the stages
+retain `2,879 -> 2,843 -> 2,843 -> 2,839 -> 2,839 -> 2,837` hits for wave-one
+page selection, the PQ192 top-512 shortlist, the wave-two physical pages,
+exact rerank, and page-SQ8 respectively. Across confirmation the corresponding
+sequence is `11,519 -> 11,470 -> 11,470 -> 11,469 -> 11,469 -> 11,451`.
+PQ192 adds no shortlist loss after wave one. The primary loss is therefore the
+two-summary, 32-range wave-one physical selection, not row-code resolution.
+
+Wave one used at most 16,733,440 bytes and 32 requests; wave two used at most
+16,676,928 bytes and 32 requests. Scientific wall time was 6:00.31, peak RSS
+10,289,948 KiB, and swaps zero. The 100M representation arithmetic is 150 MB
+resident page-summary codes, 786,432 bytes of codebooks, and 19.181 GB of S3
+row codes, but a flat 100M scan would perform 150,000,000 ADC table lookups per
+query and is explicitly unqualified. No 100M scale or latency claim follows.
+
+The next experiment must use only the already burned development queries to
+repair wave-one selection, then consume a new untouched confirmation range.
+It must not retune against queries 200--327 or weaken the failed gate.
