@@ -11,6 +11,12 @@
 //! client so the request-versus-bytes trade is measured where it will actually
 //! be paid. Scoring never reconstructs a vector: each row carries its squared
 //! norm, and the per-dimension scale folds into the query once.
+//!
+//! Routing is by resident per-row product-quantised codes rather than by page
+//! summaries. V72 measured the difference offline: at 512 shortlisted rows a
+//! 64-byte row code reaches 99.676% page containment in 21 requests and 27 MiB
+//! where page summaries needed 69 requests and 63 MiB for 99.185%. The router
+//! picks rows and their pages follow, instead of picking pages and hoping.
 
 use std::{
     env,
@@ -30,19 +36,21 @@ use url::Url;
 
 type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-const MAGIC: &[u8; 8] = b"BRSKV71\0";
+const MAGIC: &[u8; 8] = b"BRSKV73\0";
 
 struct Manifest {
     rows: usize,
     dimensions: usize,
     page_rows: usize,
-    blocks_per_page: usize,
     pages: usize,
     queries: usize,
     neighbors: usize,
+    subspaces: usize,
+    width: usize,
     low: Vec<f32>,
     span_step: Vec<f32>,
-    summaries: Vec<f32>,
+    codebooks: Vec<f32>,
+    row_codes: Vec<u8>,
     query_vectors: Vec<f32>,
     truth: Vec<i64>,
 }
@@ -82,13 +90,19 @@ fn load_manifest(path: &PathBuf) -> BenchResult<Manifest> {
     let rows = read_u64(&bytes, &mut cursor) as usize;
     let dimensions = read_u64(&bytes, &mut cursor) as usize;
     let page_rows = read_u64(&bytes, &mut cursor) as usize;
-    let blocks_per_page = read_u64(&bytes, &mut cursor) as usize;
     let pages = read_u64(&bytes, &mut cursor) as usize;
     let queries = read_u64(&bytes, &mut cursor) as usize;
     let neighbors = read_u64(&bytes, &mut cursor) as usize;
+    let subspaces = read_u64(&bytes, &mut cursor) as usize;
+    let width = read_u64(&bytes, &mut cursor) as usize;
+    if subspaces * width != dimensions {
+        return Err("codebook subspaces times width differs from the dimension".into());
+    }
     let low = read_f32_vec(&bytes, &mut cursor, dimensions);
     let span_step = read_f32_vec(&bytes, &mut cursor, dimensions);
-    let summaries = read_f32_vec(&bytes, &mut cursor, pages * blocks_per_page * dimensions);
+    let codebooks = read_f32_vec(&bytes, &mut cursor, subspaces * 256 * width);
+    let row_codes = bytes[cursor..cursor + rows * subspaces].to_vec();
+    cursor += rows * subspaces;
     let query_vectors = read_f32_vec(&bytes, &mut cursor, queries * dimensions);
     let truth = read_i64_vec(&bytes, &mut cursor, queries * neighbors);
     if cursor != bytes.len() {
@@ -98,13 +112,15 @@ fn load_manifest(path: &PathBuf) -> BenchResult<Manifest> {
         rows,
         dimensions,
         page_rows,
-        blocks_per_page,
         pages,
         queries,
         neighbors,
+        subspaces,
+        width,
         low,
         span_step,
-        summaries,
+        codebooks,
+        row_codes,
         query_vectors,
         truth,
     })
@@ -132,33 +148,50 @@ fn coalesce(sorted: &[usize], gap: usize) -> Vec<Range<usize>> {
     ranges
 }
 
-fn route(manifest: &Manifest, query: &[f32], budget: usize) -> Vec<usize> {
-    let dimensions = manifest.dimensions;
-    let blocks = manifest.pages * manifest.blocks_per_page;
-    let mut page_scores = vec![f32::INFINITY; manifest.pages];
-    for block in 0..blocks {
-        let offset = block * dimensions;
-        let summary = &manifest.summaries[offset..offset + dimensions];
-        let mut squared = 0.0f32;
-        let mut inner = 0.0f32;
-        for index in 0..dimensions {
-            squared += summary[index] * summary[index];
-            inner += summary[index] * query[index];
-        }
-        let score = squared - 2.0 * inner;
-        let page = block / manifest.blocks_per_page;
-        if score < page_scores[page] {
-            page_scores[page] = score;
+fn route(manifest: &Manifest, query: &[f32], shortlist: usize) -> Vec<usize> {
+    // Asymmetric distance table: one squared distance per subspace codeword,
+    // 64 KiB for a 64-subspace codebook, so the whole scan runs out of L2.
+    let subspaces = manifest.subspaces;
+    let width = manifest.width;
+    let mut table = vec![0.0f32; subspaces * 256];
+    for subspace in 0..subspaces {
+        let slice = &query[subspace * width..(subspace + 1) * width];
+        for codeword in 0..256 {
+            let base = (subspace * 256 + codeword) * width;
+            let centre = &manifest.codebooks[base..base + width];
+            let mut squared = 0.0f32;
+            for index in 0..width {
+                let delta = centre[index] - slice[index];
+                squared += delta * delta;
+            }
+            table[subspace * 256 + codeword] = squared;
         }
     }
-    let mut ordered: Vec<usize> = (0..manifest.pages).collect();
-    let take = budget.min(ordered.len());
-    ordered.select_nth_unstable_by(take - 1, |a, b| page_scores[*a].total_cmp(&page_scores[*b]));
-    ordered.truncate(take);
-    ordered.sort_unstable();
-    ordered
-}
 
+    let mut scored: Vec<(f32, u32)> = manifest
+        .row_codes
+        .par_chunks_exact(subspaces)
+        .enumerate()
+        .map(|(row, codes)| {
+            let mut total = 0.0f32;
+            for subspace in 0..subspaces {
+                total += table[subspace * 256 + usize::from(codes[subspace])];
+            }
+            (total, row as u32)
+        })
+        .collect();
+    let take = shortlist.min(scored.len());
+    scored.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
+    scored.truncate(take);
+
+    let mut pages: Vec<usize> = scored
+        .into_iter()
+        .map(|(_, row)| row as usize / manifest.page_rows)
+        .collect();
+    pages.sort_unstable();
+    pages.dedup();
+    pages
+}
 
 /// One row's code-against-weight dot product, eight lanes at a time.
 ///
@@ -381,7 +414,7 @@ async fn main() -> BenchResult<()> {
     let region = required("BORSUK_V71_REGION")?;
     let manifest_path = PathBuf::from(required("BORSUK_V71_MANIFEST")?);
     let output = PathBuf::from(required("BORSUK_V71_OUTPUT")?);
-    let budget = optional_usize("BORSUK_V71_PAGES", 128)?;
+    let budget = optional_usize("BORSUK_V71_SHORTLIST", 512)?;
     let gap = optional_usize("BORSUK_V71_GAP", 8)?;
     let concurrency = optional_usize("BORSUK_V71_CONCURRENCY", 64)?;
     let measured = optional_usize("BORSUK_V71_QUERIES", 200)?;
@@ -432,15 +465,15 @@ async fn main() -> BenchResult<()> {
     }
 
     let report = serde_json::json!({
-        "schema": "borsuk-v71-native-reader-result-v1",
+        "schema": "borsuk-v73-row-router-reader-result-v1",
         "claim_eligible": false,
-        "evidence_kind": "measured-native-object-store-single-round-trip-sq8",
+        "evidence_kind": "measured-native-single-round-trip-sq8-with-resident-row-router",
         "storage": "real-object-store-ranged-gets-no-local-cache",
-        "cpu_path": "safe-rust-scalar-scan",
+        "cpu_path": "safe-rust-simd-scan-and-adc-router",
         "rows": manifest.rows,
         "dimensions": manifest.dimensions,
         "page_rows": manifest.page_rows,
-        "router_pages": budget,
+        "shortlist_rows": budget,
         "gap_pages": gap,
         "concurrency": concurrency,
         "queries": measured,
