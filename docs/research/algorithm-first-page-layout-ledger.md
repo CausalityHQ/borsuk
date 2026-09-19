@@ -904,3 +904,35 @@ Open, in the order they bind:
 5. **Multi-node scaling follows by construction** from stateless readers over an
    immutable index, but no multi-node run has been made.
 6. The **sealed holdout remains unopened.**
+
+## V79 — a throughput hypothesis that failed
+
+`crates/borsuk-v71/`, results
+`research/v79-algorithm-first/concurrency/a0001/`.
+
+V78 left per-query CPU at ~137 core-ms with a 350 QPS ceiling against 137
+measured, and the stated explanation was that every query spreads its own scan
+across all cores, so queries contend for one rayon pool. The predicted fix was
+to run each query's CPU on one thread and let query-level concurrency use the
+machine. **It made throughput worse.**
+
+| regions | V78 (in-query parallel) | V79 (in-query sequential) |
+|---:|---:|---:|
+| 1,024 | 117.0 QPS | **46.9 QPS** |
+| 256 | 137.3 QPS | **73.7 QPS** |
+
+Halved, not doubled. The diagnosis was wrong in an instructive way: the CPU
+work runs inline on a tokio worker thread, so making it sequential does not
+free a core — it **blocks that worker for the whole scan**, and the I/O futures
+sharing the same runtime are starved behind it. Spreading the work across rayon
+at least got it off the worker quickly.
+
+So contention was real but misattributed. The fix is not to serialise the CPU;
+it is to keep it off the I/O runtime altogether — `spawn_blocking` or a
+dedicated CPU pool, with tokio doing only I/O. That is the next change.
+
+The sequential path stays in the code, unused, because it is the thing a future
+attempt will want to compare against.
+
+**The configuration measured best remains V78's**: 99.16% Recall@100 at 40.4 ms
+p50 and 137 QPS per node.

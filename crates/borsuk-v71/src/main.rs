@@ -192,9 +192,10 @@ fn coarse_regions(
             query,
         )
     };
-    // Under concurrent load every query spreading itself across all cores just
-    // makes queries contend for one pool. Sequential here lets query-level
-    // concurrency use the machine instead.
+    // The sequential path is kept and measured, not used: V79 showed it halves
+    // throughput rather than raising it, because running a query's CPU inline
+    // blocks the tokio worker it is on and starves the I/O futures sharing that
+    // runtime. Separating CPU onto its own pool is the fix, not serialising it.
     let mut page_scores: Vec<f32> = if spread {
         (0..blocks).into_par_iter().map(score).collect()
     } else {
@@ -573,7 +574,7 @@ async fn main() -> BenchResult<()> {
                     let offset = index * manifest.dimensions;
                     let query = manifest.query_vectors[offset..offset + manifest.dimensions]
                         .to_vec();
-                    search(&store, &key, &manifest, &query, budget, regions, gap, concurrency, false)
+                    search(&store, &key, &manifest, &query, budget, regions, gap, concurrency, true)
                         .await
                 }
             }))
@@ -613,7 +614,7 @@ async fn main() -> BenchResult<()> {
         "shortlist_rows": budget,
         "coarse_regions": regions,
         "in_query_parallel_latency_pass": true,
-        "in_query_parallel_throughput_pass": false,
+        "in_query_parallel_throughput_pass": true,
         "gap_pages": gap,
         "concurrency": concurrency,
         "queries": measured,
