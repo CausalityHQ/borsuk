@@ -274,6 +274,39 @@ class V86CoarseToFineTests(unittest.TestCase):
         self.assertEqual(ranges, [(0, 2)])
         self.assertEqual(pages.size, 3)
 
+    def test_coverage_first_planner_prefers_more_ranked_pages_before_rank_mass(
+        self,
+    ) -> None:
+        scores = np.asarray([0.0, 9.0, 9.0, 1.0, 2.0], dtype=np.float32)
+
+        reciprocal_pages, reciprocal_ranges = plan_ranked_pages(
+            scores,
+            rank_limit=3,
+            max_span_pages=2,
+            max_ranges=1,
+        )
+        coverage_pages, coverage_ranges = plan_ranked_pages(
+            scores,
+            rank_limit=3,
+            max_span_pages=2,
+            max_ranges=1,
+            objective="coverage-first",
+        )
+
+        self.assertEqual(reciprocal_pages.tolist(), [0])
+        self.assertEqual(reciprocal_ranges, [(0, 0)])
+        self.assertEqual(coverage_pages.tolist(), [3, 4])
+        self.assertEqual(coverage_ranges, [(3, 4)])
+
+        with self.assertRaisesRegex(ValueError, "ranked page objective differs"):
+            plan_ranked_pages(
+                scores,
+                rank_limit=3,
+                max_span_pages=2,
+                max_ranges=1,
+                objective="unknown",
+            )
+
     def test_two_wave_screen_scores_only_fetched_codes_and_recomputes_accounting(
         self,
     ) -> None:
@@ -322,6 +355,7 @@ class V86CoarseToFineTests(unittest.TestCase):
         self.assertEqual(result["exact_recall_ppm"], 1_000_000)
         self.assertEqual(result["base_truth_hits"], 2)
         self.assertEqual(result["delta_truth_hits"], 0)
+        self.assertEqual(result["wave1_objective"], "reciprocal-rank")
         self.assertEqual(
             result["samples"],
             [
@@ -333,6 +367,7 @@ class V86CoarseToFineTests(unittest.TestCase):
                     "page_sq8_hits": 2,
                     "pq_shortlist_base_truth_hits": 2,
                     "query": 200,
+                    "truth_base_pages": [1, 1],
                     "truth_page_ranks": [0, 0],
                     "wave1_base_truth_hits": 2,
                     "wave1_bytes": 8,
@@ -342,6 +377,8 @@ class V86CoarseToFineTests(unittest.TestCase):
                     "wave1_planner_missed_base_truth_hits": 0,
                     "wave1_rank_visible_base_truth_hits": 2,
                     "wave1_rank_visible_selected_base_truth_hits": 2,
+                    "wave1_ranked_pages_selected": 1,
+                    "wave1_reciprocal_rank_utility": 1_000_000_000,
                     "wave1_ranges": [[1, 1]],
                     "wave2_base_truth_page_hits": 2,
                     "wave2_bytes": 32,

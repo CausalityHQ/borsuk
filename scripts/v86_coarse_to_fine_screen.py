@@ -347,6 +347,7 @@ def plan_ranked_pages(
     rank_limit: int,
     max_span_pages: int,
     max_ranges: int,
+    objective: str = "reciprocal-rank",
 ) -> tuple[np.ndarray, list[tuple[int, int]]]:
     """Plan physical ranges from ranked page evidence, charging all gaps."""
 
@@ -360,13 +361,25 @@ def plan_ranked_pages(
         or max_ranges <= 0
     ):
         raise ValueError("ranked page plan differs")
+    if objective not in {"coverage-first", "reciprocal-rank"}:
+        raise ValueError("ranked page objective differs")
     take = min(rank_limit, page_scores.size)
     order = np.lexsort((np.arange(page_scores.size), page_scores))[:take]
     weights = np.zeros(page_scores.size, dtype=np.uint64)
-    weights[order] = np.asarray(
+    rank_mass = np.asarray(
         [1_000_000_000 // (rank + 1) for rank in range(take)],
         dtype=np.uint64,
     )
+    total_rank_mass = sum(int(value) for value in rank_mass)
+    if objective == "coverage-first":
+        dominance = total_rank_mass + 1
+        weights[order] = np.uint64(dominance) + rank_mass
+        maximum_objective = take * dominance + total_rank_mass
+    else:
+        weights[order] = rank_mass
+        maximum_objective = total_rank_mass
+    if maximum_objective > 2**53:
+        raise ValueError("ranked page objective differs")
     return _select_optimal_weighted_pages(
         weights,
         max_span_pages=min(max_span_pages, page_scores.size),
@@ -438,6 +451,7 @@ def evaluate_coarse_to_fine(
     wave1_rank_pages: int = 1_024,
     wave1_max_span_pages: int = _WAVE1_MAX_SPAN_PAGES,
     wave1_max_ranges: int = 32,
+    wave1_objective: str = "reciprocal-rank",
     wave2_top_rows: int = 512,
     wave2_max_span_pages: int = _WAVE2_MAX_SPAN_PAGES,
     wave2_max_ranges: int = 32,
@@ -531,6 +545,15 @@ def evaluate_coarse_to_fine(
             rank_limit=wave1_rank_pages,
             max_span_pages=wave1_max_span_pages,
             max_ranges=wave1_max_ranges,
+            objective=wave1_objective,
+        )
+        selected_page_ranks = page_ranks[wave1_pages]
+        selected_ranked_page_ranks = selected_page_ranks[
+            selected_page_ranks < wave1_rank_pages
+        ]
+        wave1_reciprocal_rank_utility = sum(
+            1_000_000_000 // (int(rank) + 1)
+            for rank in selected_ranked_page_ranks
         )
         wave1_positions = _page_rows(
             wave1_pages, rows=base.shape[0], page_rows=page_rows
@@ -622,6 +645,10 @@ def evaluate_coarse_to_fine(
                 "page_sq8_hits": query_page_sq8_hits,
                 "pq_shortlist_base_truth_hits": query_pq_shortlist_truth,
                 "query": int(query_ordinals[query_index]),
+                "truth_base_pages": [
+                    int(position // page_rows)
+                    for position in expected_base_positions
+                ],
                 "truth_page_ranks": [
                     int(page_ranks[position // page_rows])
                     for position in expected_base_positions
@@ -636,7 +663,13 @@ def evaluate_coarse_to_fine(
                 "wave1_rank_visible_selected_base_truth_hits": (
                     query_rank_visible_selected_truth
                 ),
+                "wave1_ranked_pages_selected": int(
+                    selected_ranked_page_ranks.size
+                ),
                 "wave1_ranges": [list(pair) for pair in wave1_ranges],
+                "wave1_reciprocal_rank_utility": int(
+                    wave1_reciprocal_rank_utility
+                ),
                 "wave2_base_truth_page_hits": query_wave2_page_truth,
                 "wave2_bytes": int(wave2_pages.size * data_page_bytes),
                 "wave2_gets": len(wave2_ranges),
@@ -655,6 +688,7 @@ def evaluate_coarse_to_fine(
         "page_sq8_recall_ppm": round(page_sq8_hits * 1_000_000 / denominator),
         "samples": samples,
         "schema": "borsuk-v86-coarse-to-fine-screen-v1",
+        "wave1_objective": wave1_objective,
     }
 
 
