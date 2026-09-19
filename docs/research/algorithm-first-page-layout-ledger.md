@@ -1262,3 +1262,55 @@ the terminal SHA-256 is
 Scientific wall time was 4:34.43, peak RSS was 10,305,976 KiB, and swaps were
 zero. The result remains claim-ineligible and does not consume the reserved
 confirmation queries 328--455.
+
+## V88 — pure coverage-first planning is worse than reciprocal rank
+
+Source `4b7bf08b8b0a3aa2c58e1d7b2a45fb2b859cbf48`, immutable evidence under
+`research/v88-planner-objective/4b7bf08b8b0a3aa2c58e1d7b2a45fb2b859cbf48/`.
+Attempt `a0001` at source `3dca126c95a3730da836c2e1604ac2993104f225`
+completed the computation but failed before result serialization because the
+remote Python 3.9 runtime does not support `zip(..., strict=True)`. Its terminal
+SHA-256 is `a4945a01d0c3d1a49a75aba4093cbe22ad65a6f0c8b1e7f0032b07c2bcca1167`.
+The minimal runtime repair was verified locally before the sole clean rerun.
+
+Attempt `a0002` ran once on c7i.8xlarge Spot instance
+`i-0591e1c9ca5bf4595` in `eu-central-1a` with the benchmark instance profile.
+It compared the registered reciprocal-rank control against a coverage-first
+objective on the same two-summary artifact and burned development queries
+0--31. Coverage-first assigned every ranked page a dominance weight greater
+than the total reciprocal-rank mass, then used reciprocal rank only as the
+tie-break. All codebooks, row codes, page summaries, query inputs, SQ8 delta,
+and physical limits were identical between arms.
+
+| arm | objective | page-SQ8 Recall@100 | base-only recall | query 15 | worst | wave-one base truth |
+|---|---|---:|---:|---:|---:|---:|
+| registered control | reciprocal rank | **98.6875%** (3,158/3,200) | **98.5412%** | 88 | 88 | 2,843/2,879 |
+| challenger | coverage first | **96.5000%** (3,088/3,200) | **96.1098%** | 89 | 73 | 2,771/2,879 |
+
+Both arms had the same rank evidence: 2,793 base-truth hits inside rank 100,
+2,855 inside 256, 2,864 inside 340, 2,875 inside 512, and all 2,879 inside
+1,024. The control lost 36 rank-visible hits to physical planning; the
+challenger lost 108. Pure coverage therefore overvalues low-ranked pages and
+discards substantially more high-value pages. It failed the unchanged
+3,176-hit, query-15=90, and 991,000-ppm base gate. The independently computed
+physical oracle was 2,879 aggregate base hits with an 84-hit worst query for
+both arms, so physical contiguity is not the limiting ceiling.
+
+Each arm stayed within 340 wave-one pages, 32 wave-one ranges and 16,733,440
+wave-one bytes, followed by 81 wave-two pages, 32 wave-two ranges and
+16,676,928 wave-two bytes. These are planned serving budgets: the screen made
+zero S3 query requests and provides no latency measurement. The current dense
+100M traceback projects to 8,791,406,250 bytes per query and is explicitly not
+serving-qualified; a successful objective would still require a sparse bounded
+planner before promotion.
+
+The canonical result SHA-256 is
+`bb8b3f530e51ed29219898bdb15e0e3d41a094a1c24fc5f0f91b7b2b78afa8fb`;
+the successful terminal SHA-256 is
+`c5657a0b23678bced45acca3ab961aaab75c9a42694825b89501a7df729e1314`.
+Scientific wall time was 4:31.71, peak RSS was 10,287,276 KiB, and swaps were
+zero. The instance is verified terminated. The result is claim-ineligible and
+does not consume reserved confirmation queries 328--455. Pure coverage-first
+planning is closed; the next bounded falsifier must interpolate between count
+and harmonic rank using a fixed monotone hit-probability calibration derived
+without touching the reserved confirmation split.
