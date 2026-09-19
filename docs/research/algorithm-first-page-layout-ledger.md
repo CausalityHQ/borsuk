@@ -402,3 +402,61 @@ That makes two candidate designs rather than one: two round trips with PQ192
 codes plus exact rescoring at 99.603% containment, or one round trip of SQ8
 codes at 99.182% returned. The second trades 3.8x the stage-one bytes for
 halving the round trips and deleting stage two's scatter entirely.
+
+## V68 — measured against real S3
+
+`scripts/v68_algorithm_first_real_s3.py`, result
+`research/v68-algorithm-first/real-s3-78125af7894dccc4/a0001/`,
+result SHA-256 `56ba161b…4da7e19017`, 582.8 s.
+
+The first result in this series that issued a GET. The index is built as real
+S3 objects — `codes.bin` (PQ192, row-major in layout order) and `exact.bin`
+(id + f32) — and 200 development queries are served against them with real
+ranged GETs, no local cache, in-region on one c7i.8xlarge.
+
+### Recall is real
+
+**99.700% returned Recall@100, 94% on the worst query**, measured against the
+exact ground truth after a real fetch and a real rescore. The simulated
+99.71%/86% from V65 held; the worst query came out better than modelled.
+
+### Latency and cost
+
+| | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| total | 336.33 ms | 471.71 ms | 513.28 ms |
+| stage-one I/O | 138.08 ms | 197.24 ms | 232.14 ms |
+| stage-two I/O | 80.25 ms | 158.28 ms | 220.89 ms |
+| NumPy ADC compute | 115.36 ms | 139.54 ms | 145.72 ms |
+
+81 requests and 36.03 MiB at p50. Repeated-pass latency is within 2% of
+first-pass, which is expected: nothing is cached, so there is no warm path to
+speak of yet.
+
+V67 predicted 54 + 28 = 82 requests. The measurement came in at 81. The request
+model is sound.
+
+### Build throughput
+
+1M vectors trained, encoded and uploaded in 249.6 s — **4,007 vectors/second
+end to end**, of which 127.8 s is PQ training and 101.3 s encoding, both pure
+NumPy. Upload of 3.27 GB took 4.9 s at 633.8 MiB/s.
+
+### What this says, plainly
+
+Recall is settled and better than either competitor publishes. Latency is not
+yet competitive: 336 ms p50 against turbopuffer's documented 14 ms warm, though
+it is well inside their 874 ms cold. Three separable causes, in order of size:
+
+1. **36 MiB per query**, against the 14.51 MiB the V65 model assumed. Gap
+   merging is the difference — stage one pays 1.59x for coalescing, and stage
+   two fetches roughly 5,200 rows to deliver a 512-row shortlist, a 10x
+   overshoot from a 256-row gap that is far too loose.
+2. **115 ms of NumPy ADC.** The crate has SIMD PQ4 kernels; this is a harness
+   artifact, not a property of the design, and should be read as an upper
+   bound.
+3. **4.85 QPS.** Also a harness artifact: one shared 64-thread pool serves
+   every concurrent query, and Python's GIL serialises the ADC scoring. QPS
+   flattens from 8 workers onward, which is the pool saturating, not S3.
+
+Only the first is a real design problem. It is what V69 sweeps.

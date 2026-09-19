@@ -1,26 +1,22 @@
 #!/usr/bin/env python3
-"""End-to-end measurement against real S3: build throughput, then read latency.
+"""Serving-parameter sweep against the index V68 already published to S3.
 
-Every result through V67 counted bytes, pages and requests. None of them issued
-a GET. This builds the V65/V66 index as real S3 objects and serves real queries
-against them, so the latency and throughput numbers are measured rather than
-modelled.
+V68 measured one operating point end to end: 99.700% returned Recall@100 with
+94% on the worst query, but 336 ms p50, 81 requests and 36 MiB per query. The
+breakdown said where it goes - stage one 138 ms over 54 requests, stage two
+80 ms over 28, and 115 ms of NumPy ADC that the crate's SIMD path would not
+spend.
 
-Layout is the preserved V63 k-means order. Three objects:
+The index objects are already in S3, so the four serving knobs can be swept
+without rebuilding anything: how many pages the router picks, how far apart
+two page runs may be before they merge into one GET, the same for the exact
+shortlist, and how deep that shortlist goes. Codebooks are rebuilt from the
+same seed, which is deterministic and reproduces V68's codes exactly.
 
-  codes.bin    PQ192 code per row, row-major in layout order
-  exact.bin    id + f32 vector per row, row-major in layout order
-  (router)     PQ192 page summaries, resident in the reader
-
-A query scores the resident router, coalesces its chosen pages into ranges,
-issues concurrent ranged GETs against codes.bin, scores those rows by
-asymmetric distance, coalesces the surviving shortlist into ranges, issues
-concurrent ranged GETs against exact.bin, and rescores exactly.
-
-Latency is wall-clock in-region. CPU-side scoring here is NumPy, not the
-crate's SIMD path, so the split between I/O and compute is reported separately
-and the compute half is an upper bound rather than a product number.
+Reports measured recall, requests, bytes and latency per cell so the knee of
+the curve is chosen from evidence rather than argued.
 """
+
 
 from __future__ import annotations
 
@@ -289,6 +285,17 @@ class Index:
         return returned, timing
 
 
+
+
+SWEEP = [
+    {"router_pages": pages, "stage_one_gap": one, "stage_two_gap": two, "shortlist": short}
+    for pages in (64, 128, 256)
+    for one, two in ((2, 8), (8, 32))
+    for short in (256, 512)
+]
+SWEEP_QUERIES = 60
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
@@ -313,139 +320,91 @@ def main() -> None:
 
     overall = time.perf_counter()
     source = pq.read_table(args.source)
-    feature_ids = scalar(source, "feature_row_id", np.uint64)
     vectors = fixed_list(source, "embedding", DIMENSIONS, ROWS)
     del source
-    truth = pq.read_table(args.ground_truth, columns=["feature_row_id"])
-    truth_ids = scalar(truth, "feature_row_id", np.uint64).reshape(QUERIES, NEIGHBORS)
+    truth_ids = scalar(
+        pq.read_table(args.ground_truth, columns=["feature_row_id"]),
+        "feature_row_id", np.uint64,
+    ).reshape(QUERIES, NEIGHBORS)
     queries = fixed_list(
         pq.read_table(args.development_query), "embedding", DIMENSIONS, QUERIES
     )
     order = np.asarray(np.load(args.layout_order), dtype=np.int32)
-    if not np.array_equal(np.sort(order), np.arange(ROWS, dtype=np.int32)):
-        raise ValueError("layout order is not a row permutation")
     ordered = np.ascontiguousarray(vectors[order])
-    ordered_ids = feature_ids[order].astype(np.int64)
     del vectors
     pages = (ROWS + PAGE_ROWS - 1) // PAGE_ROWS
 
-    # ---- build ----
-    build_started = time.perf_counter()
+    # Same seed as V68, so the codebooks reproduce the published codes exactly.
     books = train_pq(ordered, 6801)
-    train_seconds = time.perf_counter() - build_started
-    encode_started = time.perf_counter()
-    codes = encode_pq(ordered, books)
-    encode_seconds = time.perf_counter() - encode_started
     summaries = decode_pq(
         encode_pq(block_means(ordered, PAGE_ROWS // ROUTER_BLOCKS_PER_PAGE), books), books
     )
-    exact_blob = np.empty((ROWS, EXACT_ROW_BYTES), dtype=np.uint8)
-    exact_blob[:, :8] = ordered_ids.view(np.uint8).reshape(ROWS, 8)
-    exact_blob[:, 8:] = ordered.view(np.uint8).reshape(ROWS, DIMENSIONS * 4)
-    build_seconds = time.perf_counter() - build_started
+    del ordered
+    print(json.dumps({"phase": "codebooks rebuilt"}), flush=True)
 
     client = boto3.client(
         "s3",
-        config=Config(max_pool_connections=READ_THREADS * 2, retries={"max_attempts": 3}),
+        config=Config(max_pool_connections=512, retries={"max_attempts": 3}),
     )
-    upload_started = time.perf_counter()
-    for key, blob in (("codes.bin", codes), ("exact.bin", exact_blob)):
-        path = Path(f"/mnt/{key}")
-        blob.tofile(path)
-        client.upload_file(str(path), args.bucket, f"{args.prefix}/{key}")
-        path.unlink()
-    upload_seconds = time.perf_counter() - upload_started
-    uploaded_bytes = codes.nbytes + exact_blob.nbytes
-    del exact_blob, codes, ordered
-    print(json.dumps({"phase": "built and uploaded",
-                      "build_seconds": round(build_seconds, 2),
-                      "upload_seconds": round(upload_seconds, 2)}), flush=True)
-
-    # ---- read ----
     index = Index(
-        ObjectReader(client, args.bucket, f"{args.prefix}/codes.bin", READ_THREADS),
-        ObjectReader(client, args.bucket, f"{args.prefix}/exact.bin", READ_THREADS),
-        books,
-        summaries,
-        pages,
+        ObjectReader(client, args.bucket, f"{args.prefix}/codes.bin", 256),
+        ObjectReader(client, args.bucket, f"{args.prefix}/exact.bin", 256),
+        books, summaries, pages,
     )
     truth_sets = [set(truth_ids[i].astype(np.int64).tolist()) for i in range(QUERIES)]
 
-    cold, recalls = [], []
-    for query in range(MEASURED_QUERIES):
-        returned, timing = index.search(queries[query])
-        cold.append(timing)
-        recalls.append(len(truth_sets[query] & set(returned.tolist())))
-    recall = np.asarray(recalls, dtype=np.int32)
-
-    warm = []
-    for query in range(MEASURED_QUERIES):
-        _, timing = index.search(queries[query])
-        warm.append(timing)
-
-    def summarise(samples, label):
-        return {
-            "pass": label,
-            "queries": len(samples),
-            "total": latency_stats([s["total_ms"] for s in samples]),
-            "stage_one_io": latency_stats([s["stage_one_io_ms"] for s in samples]),
-            "stage_two_io": latency_stats([s["stage_two_io_ms"] for s in samples]),
-            "cpu_numpy": latency_stats(
-                [s["stage_one_cpu_ms"] + s["stage_two_cpu_ms"] + s["route_ms"]
-                 for s in samples]
-            ),
-            "requests_p50": int(np.median([s["requests"] for s in samples])),
-            "requests_p95": int(
-                nearest_rank(np.sort([s["requests"] for s in samples]), 95, 100)
-            ),
-            "bytes_p50": int(np.median([s["bytes"] for s in samples])),
-            "bytes_p95": int(nearest_rank(np.sort([s["bytes"] for s in samples]), 95, 100)),
-        }
-
-    throughput = []
-    for workers in CONCURRENCY_LADDER:
-        started = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            list(pool.map(lambda q: index.search(queries[q])[1],
-                          range(MEASURED_QUERIES)))
-        elapsed = time.perf_counter() - started
-        throughput.append(
-            {"workers": workers, "queries": MEASURED_QUERIES,
-             "elapsed_seconds": round(elapsed, 3),
-             "qps": round(MEASURED_QUERIES / elapsed, 2)}
+    global ROUTER_PAGES, STAGE_ONE_GAP_PAGES, STAGE_TWO_GAP_ROWS, SHORTLIST
+    cells = []
+    for point in SWEEP:
+        ROUTER_PAGES = point["router_pages"]
+        STAGE_ONE_GAP_PAGES = point["stage_one_gap"]
+        STAGE_TWO_GAP_ROWS = point["stage_two_gap"]
+        SHORTLIST = point["shortlist"]
+        samples, hits = [], []
+        for query in range(SWEEP_QUERIES):
+            returned, timing = index.search(queries[query])
+            samples.append(timing)
+            hits.append(len(truth_sets[query] & set(returned.tolist())))
+        recall = np.asarray(hits, dtype=np.int32)
+        io = [s["stage_one_io_ms"] + s["stage_two_io_ms"] for s in samples]
+        cells.append(
+            {
+                **point,
+                "queries": SWEEP_QUERIES,
+                "aggregate_recall_ppm": int(
+                    round(float(recall.sum()) * 1_000_000 / (recall.size * NEIGHBORS))
+                ),
+                "worst_recall_ppm": int(recall.min()) * 10_000,
+                "total": latency_stats([s["total_ms"] for s in samples]),
+                "io_only": latency_stats(io),
+                "cpu_numpy": latency_stats(
+                    [s["route_ms"] + s["stage_one_cpu_ms"] + s["stage_two_cpu_ms"]
+                     for s in samples]
+                ),
+                "requests_p50": int(np.median([s["requests"] for s in samples])),
+                "requests_p95": int(
+                    nearest_rank(np.sort([s["requests"] for s in samples]), 95, 100)
+                ),
+                "bytes_p50": int(np.median([s["bytes"] for s in samples])),
+            }
         )
-        print(json.dumps(throughput[-1]), flush=True)
+        print(json.dumps({k: cells[-1][k] for k in
+                          ("router_pages", "stage_one_gap", "stage_two_gap", "shortlist",
+                           "aggregate_recall_ppm", "worst_recall_ppm", "requests_p50")},
+                         default=int), flush=True)
 
     result = {
-        "schema": "borsuk-v68-algorithm-first-real-s3-result-v1",
+        "schema": "borsuk-v69-algorithm-first-serving-sweep-result-v1",
         "claim_eligible": False,
-        "evidence_kind": "measured-in-region-s3-latency-and-build-throughput",
+        "evidence_kind": "measured-in-region-s3-serving-parameter-sweep",
         "storage": "real-s3-ranged-gets-no-local-cache",
         "cpu_path": "numpy-adc-not-the-crate-simd-path",
+        "index_prefix": args.prefix,
         "source_rows": ROWS,
-        "dimensions": DIMENSIONS,
         "neighbors": NEIGHBORS,
         "page_rows": PAGE_ROWS,
-        "router_pages": ROUTER_PAGES,
-        "shortlist": SHORTLIST,
-        "read_threads": READ_THREADS,
-        "build": {
-            "pq_train_seconds": round(train_seconds, 3),
-            "pq_encode_seconds": round(encode_seconds, 3),
-            "build_seconds": round(build_seconds, 3),
-            "build_vectors_per_second": int(ROWS / build_seconds),
-            "upload_seconds": round(upload_seconds, 3),
-            "upload_bytes": int(uploaded_bytes),
-            "upload_mib_per_second": round(uploaded_bytes / upload_seconds / 2**20, 2),
-            "end_to_end_vectors_per_second": int(ROWS / (build_seconds + upload_seconds)),
-        },
-        "recall": {
-            "queries": int(recall.size),
-            "aggregate_ppm": int(round(float(recall.sum()) * 1_000_000 / (recall.size * NEIGHBORS))),
-            "worst_ppm": int(recall.min()) * 10_000,
-        },
-        "latency": [summarise(cold, "first_pass"), summarise(warm, "repeated_pass")],
-        "throughput": throughput,
+        "sweep_queries": SWEEP_QUERIES,
+        "cells": cells,
         "elapsed_seconds": round(time.perf_counter() - overall, 3),
         "validation_opened": False,
     }
