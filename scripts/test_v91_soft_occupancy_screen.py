@@ -1,3 +1,4 @@
+import ast
 import dataclasses
 import hashlib
 import subprocess
@@ -28,6 +29,19 @@ from scripts.v91_soft_occupancy_screen import (
 
 
 class V91SoftOccupancyTests(unittest.TestCase):
+    def test_registered_python39_runtime_does_not_use_zip_strict(self) -> None:
+        tree = ast.parse(Path(v91.__file__).read_text(encoding="utf-8"))
+        unsupported_calls = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "zip"
+            and any(keyword.arg == "strict" for keyword in node.keywords)
+        ]
+
+        self.assertEqual(unsupported_calls, [])
+
     def test_soft_mass_uses_registered_rank_as_strictly_lower_order_fallback(
         self,
     ) -> None:

@@ -170,7 +170,9 @@ def _validate_soft_evidence(
     page_ids = np.arange(scores.shape[1], dtype=np.int64)
     minimum_mass = _SOFT_TARGET_ROWS * _SOFT_MASS_SCALE - scores.shape[1]
     maximum_mass = _SOFT_TARGET_ROWS * _SOFT_MASS_SCALE
-    for score_row, mass_row in zip(scores, mass, strict=True):
+    for row_index in range(scores.shape[0]):
+        score_row = scores[row_index]
+        mass_row = mass[row_index]
         total = int(np.sum(mass_row.astype(object)))
         members = np.zeros(scores.shape[1], dtype=bool)
         members[np.lexsort((page_ids, score_row))[:take]] = True
@@ -388,12 +390,12 @@ def evaluate_soft_occupancy_pair(
     soft_weights = np.vstack(
         [
             _compound_soft_page_weights(
-                mass,
-                scores,
+                soft_page_mass[row_index],
+                row_min_scores[row_index],
                 rank_limit=wave1_rank_pages,
                 max_span_pages=wave1_max_span_pages,
             )
-            for mass, scores in zip(soft_page_mass, row_min_scores, strict=True)
+            for row_index in range(soft_page_mass.shape[0])
         ]
     )
     scores_sha256 = _array_sha256(row_min_scores, np.dtype(np.float32))
