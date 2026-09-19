@@ -14,6 +14,307 @@ import pyarrow.parquet as pq
 _PAGE_HEADER_BYTES = 64
 
 
+def _fit_grouped_page_posterior(
+    groups: list[tuple[np.ndarray, np.ndarray]],
+    *,
+    ridge: float,
+    iterations: int,
+) -> dict[str, Any]:
+    """Fit one deterministic conditional page-share model."""
+
+    if not groups or not np.isfinite(ridge) or ridge <= 0.0 or iterations <= 0:
+        raise ValueError("posterior training groups differ")
+    dimensions = np.asarray(groups[0][0]).shape[1]
+    prepared = []
+    for features, targets in groups:
+        features = np.asarray(features, dtype=np.float64)
+        targets = np.asarray(targets, dtype=np.float64)
+        if (
+            features.ndim != 2
+            or features.shape[0] < 2
+            or features.shape[1] != dimensions
+            or targets.shape != (features.shape[0],)
+            or not np.all(np.isfinite(features))
+            or not np.all(np.isfinite(targets))
+            or np.any(targets < 0.0)
+            or not np.isclose(float(np.sum(targets)), 1.0, atol=1e-12)
+        ):
+            raise ValueError("posterior training groups differ")
+        prepared.append((features, targets))
+
+    weights = np.zeros(dimensions, dtype=np.float64)
+    regularizer = np.eye(dimensions, dtype=np.float64) * ridge
+    regularizer[0, 0] = ridge * 1e-6
+
+    def fit_state(
+        candidate: np.ndarray,
+    ) -> tuple[float, np.ndarray, np.ndarray]:
+        objective = float(0.5 * candidate @ regularizer @ candidate)
+        gradient = regularizer @ candidate
+        hessian = regularizer.copy()
+        for features, targets in prepared:
+            logits = features @ candidate
+            maximum = float(np.max(logits))
+            exponentials = np.exp(logits - maximum)
+            objective += maximum + float(np.log(np.sum(exponentials)))
+            objective -= float(targets @ logits)
+            probabilities = exponentials
+            probabilities /= float(np.sum(probabilities))
+            gradient += features.T @ (probabilities - targets)
+            mean = features.T @ probabilities
+            hessian += features.T @ (probabilities[:, None] * features)
+            hessian -= np.outer(mean, mean)
+        return objective, gradient, hessian
+
+    used_iterations = 0
+    stop_reason = "iterations"
+    for iteration in range(1, iterations + 1):
+        used_iterations = iteration
+        objective, gradient, hessian = fit_state(weights)
+        gradient_max_abs = float(np.max(np.abs(gradient)))
+        if gradient_max_abs <= 1e-8:
+            stop_reason = "gradient"
+            break
+        step = np.linalg.solve(hessian, gradient)
+        descent = float(gradient @ step)
+        scale = 1.0
+        accepted = False
+        for _ in range(24):
+            candidate = weights - scale * step
+            candidate_objective, _, _ = fit_state(candidate)
+            if candidate_objective <= objective - 1e-4 * scale * descent:
+                weights = candidate
+                accepted = True
+                break
+            scale *= 0.5
+        if not accepted:
+            stop_reason = "line-search"
+            break
+        if float(np.max(np.abs(scale * step))) <= 1e-10:
+            stop_reason = "step"
+            break
+    objective, gradient, _ = fit_state(weights)
+    gradient_max_abs = float(np.max(np.abs(gradient)))
+    if not np.all(np.isfinite(weights)):
+        raise ValueError("posterior training groups differ")
+    converged = gradient_max_abs <= 1e-6
+    return {
+        "converged": converged,
+        "gradient_max_abs": gradient_max_abs,
+        "iterations": used_iterations,
+        "objective": objective,
+        "stop_reason": "gradient" if converged else stop_reason,
+        "weights": weights,
+    }
+
+
+def _page_posterior_features(
+    query: np.ndarray,
+    row_scores: np.ndarray,
+    *,
+    projection: np.ndarray,
+    page_summaries: np.ndarray,
+    page_rows: int,
+    top_rows: int,
+    centroid_candidates: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    page_count = page_summaries.shape[0]
+    take = min(top_rows, row_scores.size)
+    head = np.argpartition(row_scores, take - 1)[:take]
+    head = head[np.lexsort((head, row_scores[head]))]
+    head_pages = head // page_rows
+    counts = np.bincount(head_pages, minlength=page_count)
+    minimum = np.full(page_count, np.inf, dtype=np.float64)
+    np.minimum.at(minimum, head_pages, row_scores[head].astype(np.float64))
+    reciprocal = np.zeros(page_count, dtype=np.float64)
+    np.add.at(
+        reciprocal,
+        head_pages,
+        np.reciprocal(np.arange(1, take + 1, dtype=np.float64)),
+    )
+
+    projected_query = query.astype(np.float32, copy=False) @ projection
+    summary_delta = page_summaries - projected_query[None, :]
+    summary_distance = np.einsum("ij,ij->i", summary_delta, summary_delta)
+    summary_take = min(centroid_candidates, page_count)
+    summary_head = np.argpartition(summary_distance, summary_take - 1)[:summary_take]
+    candidates = np.union1d(np.unique(head_pages), summary_head)
+    if candidates.size < 2:
+        raise ValueError("posterior candidates differ")
+
+    row_low = float(row_scores[head[0]])
+    row_high = float(row_scores[head[-1]])
+    row_scale = max(row_high - row_low, 1e-12)
+    row_feature = np.full(candidates.size, -16.0, dtype=np.float64)
+    present = np.isfinite(minimum[candidates])
+    row_feature[present] = -np.clip(
+        (minimum[candidates[present]] - row_low) / row_scale, 0.0, 16.0
+    )
+    summary_low = float(np.min(summary_distance))
+    summary_high = float(np.max(summary_distance[summary_head]))
+    summary_scale = max(summary_high - summary_low, 1e-12)
+    features = np.column_stack(
+        (
+            np.ones(candidates.size, dtype=np.float64),
+            row_feature,
+            np.log1p(counts[candidates].astype(np.float64)),
+            np.log1p(reciprocal[candidates] * float(take)),
+            -np.clip(
+                (summary_distance[candidates] - summary_low) / summary_scale,
+                0.0,
+                16.0,
+            ),
+        )
+    )
+    return candidates.astype(np.int64, copy=False), features
+
+
+def _build_page_posterior(
+    base: np.ndarray,
+    base_ids: np.ndarray,
+    base_codes: np.ndarray,
+    books: list[np.ndarray],
+    *,
+    page_rows: int,
+    training_queries: int,
+    training_neighbors: int,
+    top_rows: int,
+    projection_dimensions: int,
+    centroid_candidates: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Fit a base-only page-neighbor-share posterior."""
+
+    if (
+        base.ndim != 2
+        or base.shape[0] < 3
+        or base_ids.shape != (base.shape[0],)
+        or base_codes.shape[0] != base.shape[0]
+        or not np.all(np.isfinite(base))
+        or page_rows <= 0
+        or not 0 < training_queries <= base.shape[0]
+        or not 0 < training_neighbors < base.shape[0]
+        or top_rows <= 0
+        or not 0 < projection_dimensions <= base.shape[1]
+        or centroid_candidates <= 0
+    ):
+        raise ValueError("page posterior training differs")
+    generator = np.random.default_rng(seed)
+    projection = generator.choice(
+        np.asarray([-1.0, 1.0], dtype=np.float32),
+        size=(base.shape[1], projection_dimensions),
+    ) / np.float32(np.sqrt(projection_dimensions))
+    page_count = (base.shape[0] + page_rows - 1) // page_rows
+    page_centers = np.empty((page_count, base.shape[1]), dtype=np.float32)
+    for page in range(page_count):
+        start = page * page_rows
+        stop = min(start + page_rows, base.shape[0])
+        page_centers[page] = np.mean(base[start:stop], axis=0, dtype=np.float32)
+    page_summaries = page_centers @ projection
+    base_norms = np.einsum("ij,ij->i", base, base)
+
+    identifiers = base_ids.astype(np.uint64, copy=False)
+    keys = identifiers ^ np.uint64(seed)
+    keys ^= keys >> np.uint64(30)
+    keys *= np.uint64(0xBF58476D1CE4E5B9)
+    keys ^= keys >> np.uint64(27)
+    keys *= np.uint64(0x94D049BB133111EB)
+    keys ^= keys >> np.uint64(31)
+    training_indices = np.lexsort((base_ids, keys))[:training_queries]
+    groups = []
+    covered_truth = 0
+    for row in training_indices:
+        query = base[row]
+        exact_distance = (
+            base_norms
+            - np.float32(2.0) * (base @ query)
+            + np.float32(np.dot(query, query))
+        )
+        exact_distance[row] = np.inf
+        truth = np.argpartition(exact_distance, training_neighbors - 1)[
+            :training_neighbors
+        ]
+        truth_pages, truth_counts = np.unique(
+            truth // page_rows, return_counts=True
+        )
+        row_scores = _adc_scores(query, base_codes, books)
+        row_scores[row] = np.inf
+        candidates, features = _page_posterior_features(
+            query,
+            row_scores,
+            projection=projection,
+            page_summaries=page_summaries,
+            page_rows=page_rows,
+            top_rows=top_rows,
+            centroid_candidates=centroid_candidates,
+        )
+        target_by_page = {
+            int(truth_pages[index]): int(truth_counts[index])
+            for index in range(truth_pages.size)
+        }
+        targets = np.asarray(
+            [target_by_page.get(int(page), 0) for page in candidates],
+            dtype=np.float64,
+        )
+        covered = int(np.sum(targets))
+        covered_truth += covered
+        if covered == 0:
+            continue
+        targets /= float(covered)
+        groups.append((features, targets))
+    fit = _fit_grouped_page_posterior(groups, ridge=0.05, iterations=24)
+    weights = np.asarray(fit["weights"], dtype=np.float64)
+    artifact = {
+        "centroid_candidates": centroid_candidates,
+        "fit": {
+            "converged": bool(fit["converged"]),
+            "gradient_max_abs": float(fit["gradient_max_abs"]),
+            "iterations": int(fit["iterations"]),
+            "objective": float(fit["objective"]),
+            "stop_reason": str(fit["stop_reason"]),
+        },
+        "page_rows": page_rows,
+        "page_summaries": page_summaries,
+        "projection": projection,
+        "top_rows": top_rows,
+        "training_neighbors": training_neighbors,
+        "training_candidate_recall_ppm": round(
+            covered_truth
+            * 1_000_000
+            / (training_queries * training_neighbors)
+        ),
+        "training_queries": training_queries,
+        "weights": weights,
+    }
+    artifact["artifact_bytes"] = int(
+        projection.nbytes + page_summaries.nbytes + weights.nbytes
+    )
+    return artifact
+
+
+def _score_page_posterior(
+    query: np.ndarray,
+    row_scores: np.ndarray,
+    artifact: dict[str, Any],
+) -> np.ndarray:
+    page_summaries = np.asarray(artifact["page_summaries"], dtype=np.float32)
+    candidates, features = _page_posterior_features(
+        np.asarray(query, dtype=np.float32),
+        np.asarray(row_scores, dtype=np.float32),
+        projection=np.asarray(artifact["projection"], dtype=np.float32),
+        page_summaries=page_summaries,
+        page_rows=int(artifact["page_rows"]),
+        top_rows=int(artifact["top_rows"]),
+        centroid_candidates=int(artifact["centroid_candidates"]),
+    )
+    logits = features @ np.asarray(artifact["weights"], dtype=np.float64)
+    probabilities = np.exp(logits - float(np.max(logits)))
+    probabilities /= float(np.sum(probabilities))
+    scores = np.zeros(page_summaries.shape[0], dtype=np.float64)
+    scores[candidates] = probabilities
+    return scores
+
+
 def _lloyd(
     data: np.ndarray, clusters: int, seed: int, iterations: int
 ) -> np.ndarray:
@@ -166,6 +467,48 @@ def _maximum_physical_oracle_hits(
         previous = page
 
     return int(max(np.max(off), np.max(on)))
+
+
+def _candidate_physical_oracle_hits(
+    candidate_pages: np.ndarray,
+    truth_base_positions: np.ndarray,
+    *,
+    delta_hits: int,
+    page_rows: int,
+    page_count: int,
+    max_pages: int,
+    max_ranges: int,
+) -> int:
+    """Return attainable truth hits after candidate generation."""
+
+    candidate_pages = np.asarray(candidate_pages, dtype=np.int64)
+    truth_base_positions = np.asarray(truth_base_positions, dtype=np.int64)
+    if (
+        candidate_pages.ndim != 1
+        or truth_base_positions.ndim != 1
+        or delta_hits < 0
+        or page_rows <= 0
+        or np.any(candidate_pages < 0)
+        or np.any(candidate_pages >= page_count)
+        or np.any(truth_base_positions < 0)
+        or np.any(truth_base_positions >= page_count * page_rows)
+    ):
+        raise ValueError("posterior candidate oracle differs")
+    truth_pages, truth_counts = np.unique(
+        truth_base_positions // page_rows, return_counts=True
+    )
+    permitted = np.isin(truth_pages, candidate_pages)
+    page_hits = {
+        int(truth_pages[index]): int(truth_counts[index])
+        for index in range(truth_pages.size)
+        if permitted[index]
+    }
+    return delta_hits + _maximum_physical_oracle_hits(
+        page_hits,
+        page_count=page_count,
+        max_pages=max_pages,
+        max_ranges=max_ranges,
+    )
 
 
 def _select_optimal_weighted_pages(
@@ -605,6 +948,11 @@ def evaluate_overlay(
     query_landmarks: int = 8,
     landmark_chunk_rows: int = 8_192,
     pq_lloyd_iterations: int = 10,
+    posterior_training_queries: int = 0,
+    posterior_training_neighbors: int = 100,
+    posterior_top_rows: int = 2_048,
+    posterior_projection_dimensions: int = 64,
+    posterior_centroid_candidates: int = 256,
 ) -> dict[str, Any]:
     """Evaluate one shared base router with a fully resident delta tier."""
 
@@ -630,6 +978,17 @@ def evaluate_overlay(
         or max_base_gets <= 0
         or pq_lloyd_iterations <= 0
         or landmark_count < 0
+        or posterior_training_queries < 0
+        or (
+            posterior_training_queries > 0
+            and (
+                posterior_training_queries > base.shape[0]
+                or not 0 < posterior_training_neighbors < base.shape[0]
+                or posterior_top_rows <= 0
+                or not 0 < posterior_projection_dimensions <= base.shape[1]
+                or posterior_centroid_candidates <= 0
+            )
+        )
         or (
             landmark_count > 0
             and (
@@ -828,8 +1187,12 @@ def evaluate_overlay(
                     query, page_sq8_vectors, candidate_ids, neighbors
                 )
                 expected = set(truth[query_index])
-                exact_hits += len(expected.intersection(exact_result))
-                page_sq8_hits += len(expected.intersection(page_sq8_result))
+                query_exact_hits = len(expected.intersection(exact_result))
+                query_page_sq8_hits = len(
+                    expected.intersection(page_sq8_result)
+                )
+                exact_hits += query_exact_hits
+                page_sq8_hits += query_page_sq8_hits
                 samples.append(
                     {
                         "base_bytes": int(
@@ -837,6 +1200,9 @@ def evaluate_overlay(
                             * page_payload_bytes
                         ),
                         "base_gets": len(ranges),
+                        "exact_hits": query_exact_hits,
+                        "page_sq8_hits": query_page_sq8_hits,
+                        "query": query_index,
                     }
                 )
             base_bytes = [sample["base_bytes"] for sample in samples]
@@ -857,6 +1223,7 @@ def evaluate_overlay(
                     "page_sq8_recall_ppm": round(
                         page_sq8_hits * 1_000_000 / denominator
                     ),
+                    "samples": samples,
                     "top_rows": top_rows,
                 }
             )
@@ -965,6 +1332,146 @@ def evaluate_overlay(
         and cell["base_gets_max"] <= max_base_gets
         and cell["base_bytes_max"] <= max_base_bytes
     ]
+    page_posterior_cells = []
+    if posterior_training_queries > 0:
+        posterior_artifact = _build_page_posterior(
+            base,
+            base_ids,
+            base_codes,
+            books,
+            page_rows=page_rows,
+            training_queries=posterior_training_queries,
+            training_neighbors=posterior_training_neighbors,
+            top_rows=posterior_top_rows,
+            projection_dimensions=posterior_projection_dimensions,
+            centroid_candidates=posterior_centroid_candidates,
+            seed=seed,
+        )
+        samples = []
+        exact_hits = 0
+        page_sq8_hits = 0
+        candidate_oracle_hits = 0
+        candidate_oracle_query_hits = []
+        base_id_order = np.argsort(base_ids, kind="stable")
+        sorted_base_ids = base_ids[base_id_order]
+        sorted_delta_ids = np.sort(delta_ids, kind="stable")
+        for query_index, query in enumerate(queries):
+            page_scores = _score_page_posterior(
+                query, router_scores[query_index], posterior_artifact
+            )
+            candidate_pages = np.flatnonzero(page_scores > 0.0)
+            query_truth = np.asarray(truth[query_index], dtype=np.int64)
+            base_lookup = np.searchsorted(sorted_base_ids, query_truth)
+            base_matches = base_lookup < sorted_base_ids.size
+            base_matches[base_matches] &= (
+                sorted_base_ids[base_lookup[base_matches]]
+                == query_truth[base_matches]
+            )
+            delta_lookup = np.searchsorted(sorted_delta_ids, query_truth)
+            delta_matches = delta_lookup < sorted_delta_ids.size
+            delta_matches[delta_matches] &= (
+                sorted_delta_ids[delta_lookup[delta_matches]]
+                == query_truth[delta_matches]
+            )
+            if not np.all(base_matches | delta_matches):
+                raise ValueError("overlay truth identifiers differ")
+            base_positions = base_id_order[base_lookup[base_matches]]
+            query_candidate_oracle_hits = _candidate_physical_oracle_hits(
+                candidate_pages,
+                base_positions,
+                delta_hits=int(np.sum(delta_matches)),
+                page_rows=page_rows,
+                page_count=page_scores.size,
+                max_pages=max_base_pages,
+                max_ranges=max_base_gets,
+            )
+            candidate_oracle_hits += query_candidate_oracle_hits
+            candidate_oracle_query_hits.append(query_candidate_oracle_hits)
+            _, ranges = _select_optimal_weighted_pages(
+                page_scores,
+                max_span_pages=max_base_pages,
+                max_ranges=max_base_gets,
+            )
+            base_candidates = np.concatenate(
+                [
+                    np.arange(
+                        start * page_rows,
+                        min((end + 1) * page_rows, base.shape[0]),
+                        dtype=np.int64,
+                    )
+                    for start, end in ranges
+                ]
+            )
+            candidate_ids = np.concatenate((base_ids[base_candidates], delta_ids))
+            exact_vectors = np.concatenate((base[base_candidates], delta), axis=0)
+            page_sq8_vectors = np.concatenate(
+                (base_page_sq8[base_candidates], delta_sq8), axis=0
+            )
+            exact_result = _top_ids(query, exact_vectors, candidate_ids, neighbors)
+            page_sq8_result = _top_ids(
+                query, page_sq8_vectors, candidate_ids, neighbors
+            )
+            expected = set(truth[query_index])
+            query_exact_hits = len(expected.intersection(exact_result))
+            query_page_sq8_hits = len(expected.intersection(page_sq8_result))
+            exact_hits += query_exact_hits
+            page_sq8_hits += query_page_sq8_hits
+            samples.append(
+                {
+                    "base_bytes": int(
+                        sum(end - start + 1 for start, end in ranges)
+                        * page_payload_bytes
+                    ),
+                    "base_gets": len(ranges),
+                    "candidate_oracle_hits": query_candidate_oracle_hits,
+                    "exact_hits": query_exact_hits,
+                    "page_sq8_hits": query_page_sq8_hits,
+                    "query": query_index,
+                }
+            )
+        base_bytes = [sample["base_bytes"] for sample in samples]
+        base_gets = [sample["base_gets"] for sample in samples]
+        artifact_bytes = int(posterior_artifact["artifact_bytes"])
+        page_posterior_cells.append(
+            {
+                "artifact_bytes": artifact_bytes,
+                "base_bytes_max": max(base_bytes),
+                "base_bytes_p50": _nearest_percentile(base_bytes, 0.50),
+                "base_bytes_p95": _nearest_percentile(base_bytes, 0.95),
+                "base_gets_max": max(base_gets),
+                "base_gets_p50": _nearest_percentile(base_gets, 0.50),
+                "base_gets_p95": _nearest_percentile(base_gets, 0.95),
+                "centroid_candidates": posterior_centroid_candidates,
+                "candidate_oracle_recall_ppm": round(
+                    candidate_oracle_hits * 1_000_000 / denominator
+                ),
+                "candidate_oracle_worst_query_recall_ppm": round(
+                    min(candidate_oracle_query_hits)
+                    * 1_000_000
+                    / truth_width
+                ),
+                "exact_recall_ppm": round(
+                    exact_hits * 1_000_000 / denominator
+                ),
+                "fit": posterior_artifact["fit"],
+                "page_sq8_recall_ppm": round(
+                    page_sq8_hits * 1_000_000 / denominator
+                ),
+                "projection_dimensions": posterior_projection_dimensions,
+                "samples": samples,
+                "top_rows": posterior_top_rows,
+                "training_neighbors": posterior_training_neighbors,
+                "training_queries": posterior_training_queries,
+            }
+        )
+    passing_page_posterior_cells = [
+        cell["training_queries"]
+        for cell in page_posterior_cells
+        if cell["fit"]["converged"]
+        and cell["page_sq8_recall_ppm"] >= 990_000
+        and cell["base_gets_max"] <= max_base_gets
+        and cell["base_bytes_max"] <= max_base_bytes
+    ]
     return {
         "cells": cells,
         "base_quantizer": "per-page-sq8",
@@ -989,6 +1496,14 @@ def evaluate_overlay(
             "passing_landmark_counts": passing_landmark_cells,
         },
         "page_payload_bytes": page_payload_bytes,
+        "page_posterior_cells": page_posterior_cells,
+        "page_posterior_gate": {
+            "max_base_bytes": max_base_bytes,
+            "max_base_gets": max_base_gets,
+            "min_page_sq8_recall_ppm": 990_000,
+            "passed": bool(passing_page_posterior_cells),
+            "passing_training_query_counts": passing_page_posterior_cells,
+        },
         "physical_oracle": oracle_result["physical_oracle"],
         "rank_weighted_cells": rank_weighted_cells,
         "rank_weighted_gate": {
@@ -1006,7 +1521,7 @@ def evaluate_overlay(
             "passing_shortlists": passing_shortlists,
         },
         "pq_lloyd_iterations": pq_lloyd_iterations,
-        "schema": "borsuk-v85-shared-overlay-screen-v6",
+        "schema": "borsuk-v85-shared-overlay-screen-v7",
         "training_sample_rows": sample_count,
         "training_rows": int(base.shape[0]),
     }
@@ -1055,6 +1570,7 @@ def main() -> None:
     parser.add_argument("--dimensions", type=int, default=768)
     parser.add_argument("--oracle-only", action="store_true")
     parser.add_argument("--landmark-incidence", action="store_true")
+    parser.add_argument("--page-posterior", action="store_true")
     args = parser.parse_args()
     if not 0 < args.base_rows < args.rows:
         parser.error("base rows must be inside the corpus")
@@ -1085,6 +1601,7 @@ def main() -> None:
             delta_ids=source_ids[args.base_rows : args.rows],
             truth_ids=truth_ids,
             landmark_count=1_024 if args.landmark_incidence else 0,
+            posterior_training_queries=256 if args.page_posterior else 0,
         )
     body = json.dumps(result, separators=(",", ":"), sort_keys=True) + "\n"
     args.output.write_text(body)

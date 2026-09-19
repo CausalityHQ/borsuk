@@ -1,14 +1,23 @@
 import itertools
+import pathlib
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
 import numpy as np
 
 from scripts.v85_shared_overlay_screen import (
+    _adc_scores,
     _build_landmark_incidence,
+    _build_page_posterior,
+    _candidate_physical_oracle_hits,
+    _fit_grouped_page_posterior,
     _landmark_page_scores,
     _maximum_physical_oracle_hits,
     _page_payload_bytes,
+    _page_posterior_features,
+    _score_page_posterior,
     _select_optimal_weighted_pages,
     _select_rank_weighted_pages,
     evaluate_overlay,
@@ -17,6 +26,185 @@ from scripts.v85_shared_overlay_screen import (
 
 
 class V85SharedOverlayScreenTests(unittest.TestCase):
+    def test_cli_exposes_one_fixed_page_posterior_screen(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(pathlib.Path(__file__).with_name("v85_shared_overlay_screen.py")),
+                "--help",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertIn("--page-posterior", completed.stdout)
+
+    def test_grouped_page_posterior_learns_neighbor_share_not_raw_page_count(
+        self,
+    ) -> None:
+        # Each group is one training query.  The literal target is the share
+        # of that query's exact top-neighbor set contained by each page.
+        groups = [
+            (
+                np.asarray(
+                    [[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]], dtype=np.float64
+                ),
+                np.asarray([0.9, 0.1], dtype=np.float64),
+            ),
+            (
+                np.asarray(
+                    [[1.0, 0.8, 0.2], [1.0, 0.1, 0.9]], dtype=np.float64
+                ),
+                np.asarray([0.8, 0.2], dtype=np.float64),
+            ),
+        ]
+
+        fit = _fit_grouped_page_posterior(groups, ridge=0.01, iterations=12)
+        weights = fit["weights"]
+        held_out = np.asarray(
+            [[1.0, 0.9, 0.1], [1.0, 0.2, 0.8]], dtype=np.float64
+        )
+        logits = held_out @ weights
+
+        self.assertGreater(float(logits[0]), float(logits[1]))
+        self.assertTrue(np.all(np.isfinite(weights)))
+        self.assertTrue(fit["converged"])
+
+    def test_grouped_page_posterior_rejects_non_distribution_targets(self) -> None:
+        with self.assertRaisesRegex(ValueError, "posterior training groups differ"):
+            _fit_grouped_page_posterior(
+                [
+                    (
+                        np.asarray([[1.0, 1.0], [1.0, 0.0]]),
+                        np.asarray([0.6, 0.6]),
+                    )
+                ],
+                ridge=0.01,
+                iterations=12,
+            )
+
+    def test_grouped_page_posterior_damps_imbalanced_many_candidate_fit(
+        self,
+    ) -> None:
+        features = np.ones((100, 2), dtype=np.float64)
+        features[1:, 1] = 0.0
+        targets = np.full(100, 0.1 / 99.0, dtype=np.float64)
+        targets[0] = 0.9
+
+        fit = _fit_grouped_page_posterior(
+            [(features, targets)] * 256, ridge=0.05, iterations=24
+        )
+        weights = fit["weights"]
+        logits = features @ weights
+
+        self.assertGreater(float(logits[0]), float(logits[1]))
+        self.assertTrue(fit["converged"])
+
+        exhausted = _fit_grouped_page_posterior(
+            [(features, targets)] * 256, ridge=0.05, iterations=1
+        )
+        self.assertFalse(exhausted["converged"])
+
+    def test_page_posterior_training_candidates_match_serving_candidates(
+        self,
+    ) -> None:
+        candidates, _ = _page_posterior_features(
+            np.asarray([0.0, 0.0], dtype=np.float32),
+            np.asarray([0.0, 0.1, 9.0, 9.0, 20.0, 20.0], dtype=np.float32),
+            projection=np.eye(2, dtype=np.float32),
+            page_summaries=np.asarray(
+                [[0.0, 0.0], [1.0, 1.0], [20.0, 20.0]], dtype=np.float32
+            ),
+            page_rows=2,
+            top_rows=2,
+            centroid_candidates=2,
+        )
+
+        self.assertEqual(candidates.tolist(), [0, 1])
+
+    def test_page_posterior_candidate_ceiling_excludes_unscored_truth_page(
+        self,
+    ) -> None:
+        hits = _candidate_physical_oracle_hits(
+            np.asarray([0], dtype=np.int64),
+            np.asarray([0, 4], dtype=np.int64),
+            delta_hits=0,
+            page_rows=2,
+            page_count=3,
+            max_pages=3,
+            max_ranges=3,
+        )
+
+        self.assertEqual(hits, 1)
+
+    def test_page_posterior_uses_base_only_neighbor_share_and_page_shape(
+        self,
+    ) -> None:
+        base = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.1, 0.0],
+                [0.0, 0.1],
+                [0.1, 0.1],
+                [5.0, 0.0],
+                [5.1, 0.0],
+                [5.0, 0.1],
+                [5.1, 0.1],
+                [0.0, 5.0],
+                [0.1, 5.0],
+                [0.0, 5.1],
+                [0.1, 5.1],
+                [5.0, 5.0],
+                [5.1, 5.0],
+                [5.0, 5.1],
+                [5.1, 5.1],
+            ],
+            dtype=np.float32,
+        )
+        books = [
+            np.asarray([[0.0], [5.0]], dtype=np.float32),
+            np.asarray([[0.0], [5.0]], dtype=np.float32),
+        ]
+        codes = np.asarray(
+            [[0, 0]] * 4 + [[1, 0]] * 4 + [[0, 1]] * 4 + [[1, 1]] * 4,
+            dtype=np.uint8,
+        )
+
+        artifact = _build_page_posterior(
+            base,
+            np.arange(100, 116, dtype=np.int64),
+            codes,
+            books,
+            page_rows=4,
+            training_queries=8,
+            training_neighbors=3,
+            top_rows=8,
+            projection_dimensions=2,
+            centroid_candidates=2,
+            seed=85,
+        )
+        scores = _score_page_posterior(
+            np.asarray([0.02, 0.03], dtype=np.float32),
+            _adc_scores(
+                np.asarray([0.02, 0.03], dtype=np.float32), codes, books
+            ),
+            artifact,
+        )
+
+        self.assertEqual(scores.shape, (4,))
+        self.assertAlmostEqual(float(np.sum(scores)), 1.0, places=12)
+        self.assertEqual(int(np.argmax(scores)), 0)
+        self.assertEqual(artifact["training_queries"], 8)
+        self.assertEqual(artifact["training_neighbors"], 3)
+        self.assertGreater(artifact["training_candidate_recall_ppm"], 0)
+        self.assertEqual(
+            artifact["artifact_bytes"],
+            artifact["projection"].nbytes
+            + artifact["page_summaries"].nbytes
+            + artifact["weights"].nbytes,
+        )
+
     def test_landmark_incidence_routes_by_base_neighborhood_without_queries(
         self,
     ) -> None:
@@ -101,6 +289,79 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             1_000_000,
         )
         self.assertTrue(result["landmark_incidence_gate"]["passed"])
+
+    def test_overlay_evaluates_one_base_only_page_posterior_under_budget(
+        self,
+    ) -> None:
+        base = np.asarray(
+            [
+                [0.0, 0.0],
+                [0.1, 0.0],
+                [0.0, 0.1],
+                [0.1, 0.1],
+                [5.0, 0.0],
+                [5.1, 0.0],
+                [5.0, 0.1],
+                [5.1, 0.1],
+                [0.0, 5.0],
+                [0.1, 5.0],
+                [0.0, 5.1],
+                [0.1, 5.1],
+                [5.0, 5.0],
+                [5.1, 5.0],
+                [5.0, 5.1],
+                [5.1, 5.1],
+            ],
+            dtype=np.float32,
+        )
+        result = evaluate_overlay(
+            base,
+            np.asarray([[20.0, 20.0]], dtype=np.float32),
+            np.asarray([[0.02, 0.03]], dtype=np.float32),
+            base_ids=np.arange(100, 116, dtype=np.int64),
+            delta_ids=np.asarray([999], dtype=np.int64),
+            truth_ids=np.asarray([[100, 101, 102]], dtype=np.int64),
+            page_rows=4,
+            neighbors=3,
+            subspaces=2,
+            clusters=2,
+            shortlists=(1,),
+            rank_top_rows=(1,),
+            rank_page_caps=(1,),
+            training_sample_rows=16,
+            encode_chunk_rows=8,
+            max_base_bytes=136,
+            max_base_gets=1,
+            posterior_training_queries=8,
+            posterior_training_neighbors=3,
+            posterior_top_rows=8,
+            posterior_projection_dimensions=2,
+            posterior_centroid_candidates=2,
+        )
+
+        self.assertEqual(len(result["page_posterior_cells"]), 1)
+        self.assertEqual(
+            result["page_posterior_cells"][0]["page_sq8_recall_ppm"],
+            1_000_000,
+        )
+        self.assertEqual(
+            result["page_posterior_cells"][0]["candidate_oracle_recall_ppm"],
+            1_000_000,
+        )
+        self.assertEqual(
+            result["page_posterior_cells"][0]["samples"],
+            [
+                {
+                    "base_bytes": 136,
+                    "base_gets": 1,
+                    "candidate_oracle_hits": 3,
+                    "exact_hits": 3,
+                    "page_sq8_hits": 3,
+                    "query": 0,
+                }
+            ],
+        )
+        self.assertTrue(result["page_posterior_gate"]["passed"])
 
     def test_physical_oracle_charges_gaps_and_maximizes_hits_exactly(self) -> None:
         page_hits = {0: 3, 3: 2, 4: 5, 8: 4}
@@ -217,7 +478,7 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             seed=85,
         )
 
-        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v6")
+        self.assertEqual(result["schema"], "borsuk-v85-shared-overlay-screen-v7")
         self.assertEqual(result["pq_lloyd_iterations"], 10)
         self.assertEqual(result["training_rows"], 8)
         self.assertEqual(result["delta_rows"], 1)
@@ -289,6 +550,16 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
         )
         self.assertEqual(result["rank_weighted_cells"][0]["base_gets_max"], 1)
         self.assertEqual(result["rank_weighted_cells"][0]["base_bytes_max"], 128)
+        self.assertEqual(
+            result["rank_weighted_cells"][0]["samples"][0],
+            {
+                "base_bytes": 128,
+                "base_gets": 1,
+                "exact_hits": 2,
+                "page_sq8_hits": 2,
+                "query": 0,
+            },
+        )
         self.assertTrue(result["rank_weighted_gate"]["passed"])
         self.assertEqual(
             result["promotion_gate"],
