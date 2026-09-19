@@ -1366,3 +1366,54 @@ another rank curve: deterministic diverse page witnesses or an equivalent
 query-dependent page sketch must first demonstrate quality under the same
 340-page/32-range ceiling. Any passing representation still needs a sparse
 hierarchical router before a 100M serving claim.
+
+## V90 — residual per-row page evidence improves routing but misses the gate
+
+Source `f72e5413d51e76f484101836c31a56a79df398e7` ran once on c7i.8xlarge
+Spot instance `i-0f4c43443c0cfc53f` in `eu-central-1a`. The instance published
+a successful terminal and shut down immediately; it is verified terminated.
+Immutable evidence is under
+`research/v90-residual-row-sketch/f72e5413d51e76f484101836c31a56a79df398e7/runs/v90-residual-row-sketch-20260919T214945Z-f72e5413/a0001/`.
+The canonical result SHA-256 is
+`71054c0d79a5ccaa371972caa0790469a668e5b76ec3ed62b1181ce594d15430`;
+the terminal SHA-256 is
+`08dd444bd1eccec4beb75d556bbdcc8e9ddb89e8dc8c18544abb0267284b727d`.
+
+V90 kept the registered two-summary PQ192 control, its top-1,024 candidate
+fence, the reciprocal-rank physical planner, resident SQ8 delta, exact rerank,
+and both physical budgets unchanged. The challenger added a query- and
+truth-blind 16-byte residual PQ code per base row. A page residual was defined
+relative to the decoded mean of its two registered control summaries. For each
+query the challenger decoded means for only the 1,024 control candidates and
+ranked them by minimum residual-row ADC, second minimum ADC, then page ID. The
+sketch, complete base, control artifact, fixed training configuration, and
+injected page evidence were digest-bound. Reserved confirmation queries
+328--455 were not read because the burned-development gate failed.
+
+| arm | page evidence | page-SQ8 Recall@100 | base-only recall | query 15 | worst | planner misses |
+|---|---|---:|---:|---:|---:|---:|
+| registered control | two PQ192 summaries/page | **98.6875%** (3,158/3,200) | **98.5412%** | 88 | 88 | 36 |
+| residual challenger | PQ16 residual code/row | **98.9688%** (3,167/3,200) | **98.8538%** | 90 | 90 | 26 |
+
+The challenger recovered nine final hits and ten wave-one base-truth hits, but
+failed the unchanged 3,176-hit and 991,000-ppm base-only gates by nine hits and
+2,462 ppm respectively. Its exact-rerank recall was 99.0312%. Both arms had all
+2,879 base-truth hits inside rank 1,024. The candidate-fenced physical oracle
+was 3,200/3,200 overall and 2,879/2,879 base, with query 15 and the worst query
+both at 100 hits. The candidate fence is therefore not the causal limit; the
+fixed residual-minimum evidence still orders some relevant pages too late.
+
+Each arm stayed within 340 wave-one pages, 32 wave-one ranges and 16,733,440
+wave-one bytes, followed by 81 wave-two pages, 32 wave-two ranges and
+16,676,928 wave-two bytes. The offline screen made zero S3 query requests and
+provides no serving-latency measurement. Scientific wall time was 4:33.48,
+peak RSS was 10,317,988 KiB, CPU utilization was 1,122%, and swaps were zero.
+
+At 100M rows the representation plus resident float32 delta projects to
+2,057,023,104 bytes (1.916 GiB), including 1,598,400,000 bytes of residual row
+codes. Candidate mean scratch is 3,145,728 bytes and no complete decoded
+page-mean table is resident. This is not a serving-memory qualification: the
+current dense physical-planner traceback still projects to 8,791,406,250 bytes
+per query, and serving CPU and latency remain unqualified. The exact V90
+residual-minimum configuration is rejected without a sweep; it does not close
+other query-dependent row-to-page reductions.
