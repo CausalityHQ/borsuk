@@ -936,3 +936,37 @@ attempt will want to compare against.
 
 **The configuration measured best remains V78's**: 99.16% Recall@100 at 40.4 ms
 p50 and 137 QPS per node.
+
+## V79–V81 — three throughput hypotheses, all wrong
+
+V78 reached 137.3 QPS per node against a 350 QPS ceiling implied by its
+137 core-ms of per-query CPU. Three attempts to close that gap each made
+throughput worse, and the record is kept because the negative result is the
+useful part.
+
+| attempt | change | QPS (regions=256) |
+|---|---|---:|
+| **V78** | in-query rayon, CPU inline on tokio workers | **137.3, stable to 384 workers** |
+| V79 | sequential CPU per query | 73.7 |
+| V80 | CPU moved to the blocking pool | 139.9 at 32 workers, **59.2 at 128** |
+| V81 | blocking pool bounded to the core count | 39.7 |
+
+Each step was a reasonable inference from the previous measurement and each was
+refuted by the next:
+
+- **V79** assumed queries were contending for one rayon pool. Serialising them
+  did not free cores — it held a tokio worker for the whole scan and starved the
+  I/O futures behind it.
+- **V80** moved the CPU off that runtime, which fixed the starvation and lifted
+  the peak slightly, but the blocking pool defaults to 512 threads so a few
+  hundred runnable threads then fought over 48 cores past 32 concurrent queries.
+- **V81** bounded that pool to the core count, and throughput fell furthest of
+  all: long CPU tasks now queue behind a hard limit while their I/O has already
+  completed.
+
+**The configuration that measures best is the simplest one**, and it is
+restored: rayon inside the query, CPU inline, 137.3 QPS holding flat from 8
+concurrent queries to 384. The 2.5x headroom the core-ms arithmetic suggests is
+real, but nothing tried here reaches it, and the honest position is that the
+remaining gap is not yet understood. A profile — not another hypothesis — is
+what it needs.
