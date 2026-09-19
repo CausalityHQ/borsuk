@@ -1,10 +1,27 @@
 #!/bin/bash
 set -u
 
+case "${1:-}" in
+  --describe)
+    exec python3 "$(dirname "$0")/v85_qualification.py" --print-matrix
+    ;;
+  "") ;;
+  *)
+    echo "usage: $0 [--describe]" >&2
+    exit 2
+    ;;
+esac
+
 : "${V85_SOURCE_ARCHIVE_URI:?}"
 : "${V85_SOURCE_ARCHIVE_SHA256:?}"
 : "${V85_SOURCE_COMMIT:?}"
 : "${V85_OUTPUT_URI:?}"
+: "${V85_MODE:?}"
+
+if [ "$V85_MODE" != preflight ]; then
+  echo "V85_MODE must be preflight until the fail-fast gate passes" >&2
+  exit 2
+fi
 
 root=/mnt/v85-delta-screen
 phase=bootstrap
@@ -14,7 +31,7 @@ publish_terminal() {
   trap - EXIT
   set +e
   cd "$root" 2>/dev/null || true
-  for name in build.log hashes.log prepare.log truth.time incremental.time fresh.time summary.json; do
+  for name in build.log hashes.log prepare.log truth.time incremental.time fresh.time summary.json preflight.time preflight-receipt.json preflight-result.json; do
     [ -f "$name" ] && aws s3 cp "$name" "$V85_OUTPUT_URI/evidence/$name" --only-show-errors
   done
   for name in result-*.json; do
@@ -67,6 +84,136 @@ sha256sum -c >>hashes.log 2>&1 <<'HASHES' || exit 99
 310bb54f79f2e79d09fe63aa4f6b5c6e9e7ffb31101964f816be978dadb2db54  query-source.parquet
 fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11  gt-source.parquet
 HASHES
+
+phase=preflight-prepare
+export PYTHONPATH="$root/repo" OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16
+.venv/bin/python - <<'PY' >prepare.log 2>&1 || exit 100
+from pathlib import Path
+import pyarrow as pa
+import pyarrow.parquet as pq
+from scripts.v85_build_delta import canonicalize_evaluation, compute_exact_truth
+
+source = pq.ParquetFile("source.parquet")
+batches = []
+rows = 0
+for batch in source.iter_batches(batch_size=10_000):
+    take = min(batch.num_rows, 10_000 - rows)
+    batches.append(batch.slice(0, take))
+    rows += take
+    if rows == 10_000:
+        break
+if rows != 10_000:
+    raise ValueError("preflight source prefix row count differs")
+pq.write_table(pa.Table.from_batches(batches), "source-10k.parquet")
+canonicalize_evaluation(
+    Path("query-source.parquet"), Path("gt-source.parquet"),
+    Path("queries.parquet"), Path("truth-placeholder.parquet"),
+    dimensions=768, neighbors=100, query_limit=1,
+)
+compute_exact_truth(
+    Path("source-10k.parquet"), Path("query-source.parquet"), Path("truth.parquet"),
+    dimensions=768, corpus_rows=10_000, neighbors=100, query_limit=1,
+)
+print("prepared", rows)
+PY
+
+phase=preflight-build
+artifact_prefix="$V85_OUTPUT_URI/preflight/artifacts"
+/usr/bin/time -v -o preflight.time .venv/bin/python repo/scripts/v85_build_delta.py \
+  --source source-10k.parquet --output preflight --uri-prefix "$artifact_prefix" \
+  --base-rows 9000 --delta-rows 1000 --dimensions 768 --page-rows 256 \
+  --router-cells 256 --base-runs 1 --delta-runs 1 --seed 85 >>build.log 2>&1 || exit 101
+
+for path in preflight/generation.json preflight/router.arrow preflight/mutations.arrow preflight/base-*.arrow preflight/delta-*.arrow; do
+  [ -f "$path" ] || exit 102
+  aws s3 cp "$path" "$artifact_prefix/$(basename "$path")" --only-show-errors || exit 102
+done
+aws s3 cp queries.parquet "$V85_OUTPUT_URI/preflight/queries.parquet" --only-show-errors || exit 102
+aws s3 cp truth.parquet "$V85_OUTPUT_URI/preflight/truth.parquet" --only-show-errors || exit 102
+aws s3 cp "$artifact_prefix/generation.json" generation-remote.json --only-show-errors || exit 102
+cmp preflight/generation.json generation-remote.json || exit 103
+
+artifact_args() {
+  for spec in \
+    "generation generation.json" "router router.arrow" "mutations mutations.arrow"; do
+    set -- $spec
+    role=$1
+    name=$2
+    printf -- '--%s %q %q %s %s ' "$role" "$root/preflight/$name" "$artifact_prefix/$name" \
+      "$(sha256sum "preflight/$name" | cut -d' ' -f1)" "$(stat -c %s "preflight/$name")"
+  done
+  for path in preflight/base-*.arrow preflight/delta-*.arrow; do
+    name=$(basename "$path")
+    printf -- '--run-s3 %q %s %s ' "$artifact_prefix/$name" \
+      "$(sha256sum "$path" | cut -d' ' -f1)" "$(stat -c %s "$path")"
+  done
+  printf -- '--queries %q %q %s %s ' "$root/queries.parquet" "$V85_OUTPUT_URI/preflight/queries.parquet" \
+    "$(sha256sum queries.parquet | cut -d' ' -f1)" "$(stat -c %s queries.parquet)"
+  printf -- '--truth %q %q %s %s ' "$root/truth.parquet" "$V85_OUTPUT_URI/preflight/truth.parquet" \
+    "$(sha256sum truth.parquet | cut -d' ' -f1)" "$(stat -c %s truth.parquet)"
+}
+
+phase=preflight-cas
+bucket_and_prefix=${V85_OUTPUT_URI#s3://}
+bucket=${bucket_and_prefix%%/*}
+prefix=${bucket_and_prefix#*/}
+printf '{"schema":"borsuk-v85-preflight-cas-v1"}\n' >cas-head.json
+aws s3api put-object --bucket "$bucket" --key "$prefix/preflight/cas-head.json" \
+  --body cas-head.json --if-none-match '*' --no-cli-pager >/dev/null || exit 104
+if aws s3api put-object --bucket "$bucket" --key "$prefix/preflight/cas-head.json" \
+  --body cas-head.json --if-none-match '*' --no-cli-pager >cas-conflict.log 2>&1; then
+  exit 105
+fi
+grep -Eq 'PreconditionFailed|412' cas-conflict.log || exit 105
+
+phase=preflight-query
+args=$(artifact_args)
+eval "/usr/bin/time -v -o reader.time \"$binary\" $args --page-budget 8 --range-concurrency 16" \
+  >preflight-result.json || exit 106
+
+phase=preflight-validate
+export V85_SOURCE_ARCHIVE_SHA256 V85_SOURCE_COMMIT
+.venv/bin/python - <<'PY' || exit 107
+import hashlib
+import json
+import os
+from pathlib import Path
+from scripts.v85_qualification import frozen_matrix, validate_preflight_receipt
+
+result_body = Path("preflight-result.json").read_bytes()
+result = json.loads(result_body)
+time_fields = {}
+for line in Path("reader.time").read_text().splitlines():
+    if ":" in line:
+        key, value = line.rsplit(":", 1)
+        time_fields[key.strip()] = value.strip()
+peak_rss_bytes = int(time_fields["Maximum resident set size (kbytes)"]) * 1024
+receipt = {
+    "authenticated_inputs": 4,
+    "binary_authenticated": True,
+    "binary_sha256": hashlib.sha256(Path("repo/target/release/v85_delta_reader").read_bytes()).hexdigest(),
+    "built_rows": 10_000,
+    "cas_conflict_observed": True,
+    "failed_queries": 0,
+    "manifest_drift": False,
+    "max_bytes_per_query": max(sample["bytes"] for sample in result["samples"]),
+    "max_gets_per_query": max(sample["requests"] for sample in result["samples"]),
+    "peak_rss_bytes": peak_rss_bytes,
+    "query_count": len(result["samples"]),
+    "result_sha256": hashlib.sha256(result_body).hexdigest(),
+    "schema": "borsuk-v85-preflight-receipt-v1",
+    "source_archive_sha256": os.environ["V85_SOURCE_ARCHIVE_SHA256"],
+    "source_commit": os.environ["V85_SOURCE_COMMIT"],
+}
+validate_preflight_receipt(receipt, frozen_matrix())
+Path("preflight-receipt.json").write_text(
+    json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n"
+)
+PY
+aws s3 cp preflight-result.json "$V85_OUTPUT_URI/preflight/result.json" --only-show-errors || exit 108
+aws s3 cp preflight-receipt.json "$V85_OUTPUT_URI/preflight/receipt.json" --only-show-errors || exit 108
+phase=complete
+exit 0
 
 phase=prepare
 export PYTHONPATH="$root/repo" OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16
