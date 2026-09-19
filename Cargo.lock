@@ -513,6 +513,7 @@ dependencies = [
  "futures-util",
  "object_store 0.14.1",
  "rayon",
+ "serde",
  "serde_json",
  "tokio",
  "url",
