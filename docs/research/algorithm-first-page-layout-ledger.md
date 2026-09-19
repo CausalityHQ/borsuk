@@ -648,13 +648,15 @@ Against V71's page-summary router at matched recall — 99.185% in 69 requests,
 | | Recall | latency | cache |
 |---|---|---|---|
 | **BORSUK V73, measured** | **99.155% Recall@100** | **46.1 ms p50, 80.9 p95** | **none — every query reads S3** |
-| turbopuffer, vendor-reported | "90% recall@10" example | 874 ms cold p50, 14 ms warm | NVMe + RAM on query nodes |
+| turbopuffer, vendor-reported | aims for >90--95% Recall@10 across live queries | 874 ms cold p50, 14 ms warm on its 10M x 1,024 website workload | NVMe + RAM on query nodes |
 | S3 Vectors, vendor-reported | ">90% average" claimed | ~100 ms warm | opaque managed |
 
-The uncached path is **19x faster than turbopuffer's published cold p50** and
-faster than S3 Vectors' warm figure, at a recall neither publishes. It has no
-cache tier at all, so their warm numbers remain out of reach until one exists —
-that is a real gap, not a rounding difference.
+These are context rows, not a paired benchmark: the datasets, recall cutoffs,
+hardware, service caches, and request semantics differ. BORSUK's measured
+uncached tuple is promising, but the vendor rows cannot support a speedup or
+quality-superiority ratio. BORSUK has no cache tier, so turbopuffer's published
+warm number remains a separate operating point rather than a target already
+met.
 
 ### Honest limits
 
@@ -671,48 +673,50 @@ that is a real gap, not a rounding difference.
 - Development split only; the sealed holdout is not opened. Write path is bulk
   build only, and incremental ingest with visibility is unmeasured.
 
-## V74 — incremental ingest, measured
+## V74 — encode and object-publication screen, measured
 
 `crates/borsuk-v71/src/bin/v74_ingest.rs`, results
 `research/v74-algorithm-first/ingest/a0001/`. In-region c7i.8xlarge, real S3.
 
-Every earlier write number divided a whole-corpus build by its wall time. That
-is not the quantity the competitors publish. Here a batch is encoded straight
-into the serving row format — SQ8 plus its precomputed squared norm plus the
-router's per-row code, 844 bytes — and published as one immutable delta object.
-Visibility is the acknowledged PUT: the object exists, a reader scans it
-alongside the base, nothing is rebuilt.
+Every earlier write number divided a whole-corpus build by its wall time. V74
+measures two narrower stages: encoding a deterministic synthetic batch into an
+844-byte experimental row, and PUT acknowledgement for one immutable object.
+The production reader has no delta reader or generation manifest, so an
+acknowledged object is **not query-visible** and this is not sustained ingest.
+Its combined SQ8-plus-router-code row also differs from the reader's split S3
+row and resident-manifest code layout.
 
-| batch | concurrency | encode v/s | publish v/s | MiB/s | visibility p50 | p95 | p99 |
+| batch | concurrency | encode v/s | publish v/s | MiB/s | PUT ack p50 | p95 | p99 |
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 1,000 | 32 | 133,335 | 654,000 | 526.4 | **33.7 ms** | 101.4 | 108.2 |
 | **10,000** | **16** | **224,910** | **772,282** | **621.6** | 121.8 ms | 254.3 | 261.2 |
 | 50,000 | 16 | 230,078 | 733,628 | 590.5 | 694.1 ms | 859.6 | 932.0 |
 | 100,000 | 8 | 230,530 | 487,020 | 392.0 | 1,012.2 ms | 1,234.6 | 1,234.6 |
 
-**Publish is not ingest.** The payloads are encoded before the publish clock
-starts, so 772,282 v/s is what S3 will accept, not what the system ingests.
-Quoting it would have overstated the result more than fourfold. The honest
-steady-state rate is the slower stage, and it is encode:
+**Neither stage is query-visible ingest.** The payloads are encoded before the
+publish clock starts, so 772,282 v/s is only what S3 accepted for these object
+sizes. The slower-stage arithmetic below is a pipeline projection, not an
+end-to-end measurement:
 
-- **Pipelined (steady state): 224,910 vectors/s**, encode-bound on 32 vCPU.
+- Pipelined stage projection: **224,910 vectors/s**, encode-bound on 32 vCPU.
 - Serialised (pessimistic, encode a whole batch before sending any): 174,183 v/s.
 
 | | write throughput | visibility |
 |---|---:|---:|
-| **BORSUK V74, measured** | **224,910 vectors/s** | **33.7 ms p50 at 1k batches** |
+| BORSUK V74 stages | 224,910 vectors/s projected from measured stages | 33.7 ms PUT acknowledgement at 1k batches |
 | turbopuffer, vendor-reported | ~10,000+ vectors/s | 165 ms p50 for a 500 kB commit; 1 WAL entry/s/namespace |
 | S3 Vectors, vendor-reported | 2,500 vectors/s/index | not published |
 
-That is **22x turbopuffer's published write rate and 90x S3 Vectors'**, at
-lower visibility latency and with no per-namespace WAL rate limit.
+The vendor rows are context only. V74 does not include reader visibility,
+durability metadata, deduplication, or compaction and therefore cannot support
+a throughput or visibility comparison with either managed service.
 
 ### What this does not yet cover
 
-- **Deltas are not compacted.** A reader must scan every delta alongside the
-  base, so query cost grows with delta count until they are merged into the
-  k-means order. Compaction cost and the query penalty per outstanding delta
-  are both unmeasured, and that is the honest limit on this number.
+- **There is no delta read path.** The benchmark's objects are not referenced
+  by the reader. A generation manifest, query merge, deduplication, tombstones,
+  crash recovery, and compaction must be built and measured before any
+  query-visible ingest claim exists.
 - Vectors are generated deterministically. Encode cost does not depend on their
   contents at fixed dimension — quantisation is a clip and a round, code
   assignment a fixed-size argmin — but the codebooks here are synthetic too, so
@@ -751,13 +755,13 @@ The **sealed holdout remains unopened.**
 
 | criterion | status | evidence |
 |---|---|---|
-| high recall | **met** | 99.272% Recall@100 on 1,000 held-out queries, above any figure either competitor publishes |
-| low read latency | **met** | 40.5–49.0 ms p50 uncached, against turbopuffer's 874 ms cold and S3 Vectors' ~100 ms warm |
-| write throughput | **met** | 224,910 vectors/s, 22x turbopuffer, 90x S3 Vectors, at 33.7 ms visibility |
+| high recall | **met on this validation split** | 99.272% Recall@100 on 1,000 held-out ReLAION queries; vendor metrics use different data and cutoffs |
+| low read latency | **met on this workload** | 40.5–49.0 ms p50 with real uncached S3 GETs; vendor rows are different operating points, not paired baselines |
+| write throughput | **not measured end to end** | V74 measured synthetic encode and PUT stages only; no query-visible delta path exists |
 | scale | **not met** | every figure above is 1M x 768; 100M is projected arithmetic |
 
-Open, in the order they bind: delta compaction and the per-delta query penalty
-are unmeasured and are the real limit on the write figure; one object per index
+Open, in the order they bind: the query-visible delta path, generation commit,
+and compaction do not exist; one object per index
 caps near 300 QPS until it is sharded; the p99 tail is the wave's p(1−1/N)
 quantile and neither hedging nor S3 Express One Zone has been tried; there is
 no cache tier, so turbopuffer's 14 ms warm is unreachable; and 100M is
@@ -888,9 +892,9 @@ Measured on real S3, in-region, no cache, 1M x 768 ReLAION:
 
 | | BORSUK, measured | turbopuffer, vendor | S3 Vectors, vendor |
 |---|---|---|---|
-| recall | **99.272% Recall@100** (held-out validation, 1,000 queries) | "90% recall@10" example | ">90% average" claimed |
+| recall | **99.272% Recall@100** (held-out validation, 1,000 queries) | aims for >90--95% Recall@10 across live queries | ">90% average" claimed |
 | read latency | **39.4–49.0 ms p50**, uncached | 874 ms cold p50, 14 ms warm | ~100 ms warm |
-| write | **224,910 vectors/s**, 33.7 ms visibility | ~10,000+ vectors/s, 165 ms commit p50 | 2,500 vectors/s/index |
+| write | V74 stage screen only: 224,910 vectors/s projected pipeline, 33.7 ms PUT ack | ~10,000+ vectors/s, 165 ms commit p50 | 2,500 vectors/s/index |
 | per-node QPS | **137**, stateless readers | not published | ~hundreds/index claimed |
 
 Open, in the order they bind:
@@ -898,8 +902,8 @@ Open, in the order they bind:
 1. **Throughput leaves 2.5x on the table** to in-query rayon contention.
 2. **100M is unmeasured.** The row scan is now O(regions); the coarse level is
    still O(N) over summaries and needs SIMD or a third level.
-3. **Delta compaction and the per-delta query penalty are unmeasured** — the
-   real limit on the write figure, not the rate.
+3. **Query-visible deltas and compaction do not exist yet** — V74 is an encode
+   and object-PUT stage screen, not a write-throughput result.
 4. **No cache tier**, so turbopuffer's 14 ms warm is unreachable by design.
 5. **Multi-node scaling follows by construction** from stateless readers over an
    immutable index, but no multi-node run has been made.
@@ -1004,11 +1008,20 @@ O(N) term, and at 10M it shows: routing costs 6.62 ms at 4,096 regions and
 a real tuning knob rather than a free parameter, and at 4,096 regions — a tenth
 of the pages — recall is unchanged from scanning four times as many.
 
+The 4,096-region throughput sweep completed without errors and peaked at
+84.10 QPS (128 workers). The 16,384-region control did **not** remain healthy:
+its 384-worker cell recorded 177 failed queries, 18.17 successful QPS,
+10.47 s p50, and 62.53 s p99. It is a failed saturation cell, not evidence for
+the selected 4,096-region operating point, and must not be omitted when
+describing the campaign.
+
 ### What this establishes, and what it does not
 
-It establishes that the design **works on a real 10M corpus against real ground
-truth**, at flat latency, sublinear request growth, and with the build, memory
-and serving path unchanged from 1M. Scale is no longer projected arithmetic.
+It establishes that the selected 4,096-region design **works on a real 10M
+corpus against real ground truth**, at flat unloaded latency, sublinear request
+growth, and with the build, memory and serving path unchanged from 1M. The
+high-concurrency 16,384-region control failed, so the campaign does not prove
+that every routing budget remains reliable under saturation.
 
 It is **not** a clean row-count-only comparison: the dimension differs, 96
 against 768, which is why bytes per query fell rather than rose. And it is
@@ -1017,4 +1030,79 @@ there, and V77's third-level remedy remains unbuilt.
 
 Build at 10M took 1,274.8 s, or **7,836 vectors/s** end to end including
 k-means over 16,384 clusters. That is a bulk-build figure and is not comparable
-to V74's 224,910 vectors/s incremental ingest, which does not recluster.
+to V74's 224,910 vectors/s synthetic encode/PUT pipeline projection, which
+neither reclusters nor makes the objects query-visible.
+
+## V83 — corrected query admission and native profile
+
+`crates/borsuk-v71/` and `scripts/v83_run_remote.sh`, immutable evidence under
+`research/v83-algorithm-first/reader-profile/a0002/`. The earlier throughput
+harness placed ordinary query futures in `buffer_unordered`; synchronous
+routing and scan work before each await therefore ran in the parent task. V83
+spawns each admitted query as its own Tokio task and counts only successful
+queries in QPS. This is a measurement-harness correction, not a serving
+algorithm speedup, so it makes the V79--V81 causal conclusions stale.
+
+On the same ReLAION 1M x 768 development artifacts and selected
+regions=256/shortlist=512 point, the corrected sweep reported:
+
+| workers | successful QPS | errors | p50 | p99 |
+|---:|---:|---:|---:|---:|
+| 8 | 101.32 | 0 | 52.45 ms | 256.47 ms |
+| 32 | 137.07 | 0 | 159.73 ms | 734.81 ms |
+| 128 | 154.86 | 0 | 567.57 ms | 2,206.52 ms |
+| 384 | **176.98** | 0 | 1,618.97 ms | 7,266.49 ms |
+
+The historical V78 harness reported 137.33 QPS at 128 workers and 136.09 at
+384. Those rows are useful only as evidence of the harness defect; they are not
+a paired production speed comparison. V83's 16-query quality pass is also too
+small for a recall claim. The 384-worker point maximises completed work while
+having unusable tail latency, so **176.98 QPS is a saturation ceiling, not a
+release operating point**.
+
+The native `perf` pass ran for 31.19 s and used only 12.262 of 48 CPUs on
+average, with 2,301,634 context switches and 353,231 CPU migrations. Flat
+cycles were dominated by Rayon/crossbeam scheduling and epoch work (including
+19.55% in epoch pin/steal and 7.43% in epoch advancement), while actual coarse
+routing, fused scan, and candidate materialisation were smaller individual
+terms. The next falsifier therefore keeps independent query tasks but removes
+nested Rayon from each query, comparing both modes in one same-host ABBA run.
+
+## V84 — removing nested Rayon does not improve the operating point
+
+`scripts/v84_run_remote.sh`, successful evidence under
+`research/v84-algorithm-first/query-level-cpu/a0003/`. Attempts a0001 and
+a0002 stopped before compilation or science at immutable-source and manifest
+magic checks; their terminal receipts are retained. The successful attempt ran
+Rayon A, sequential A, sequential B, Rayon B in one c7i.12xlarge Spot process
+environment. Query admission remained independent Tokio tasks in both arms;
+only CPU work within each query changed.
+
+| admitted workers | Rayon mean QPS | sequential mean QPS | QPS delta | Rayon p50 | sequential p50 | sequential p99 delta |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 91.25 | 93.13 | +2.06% | 51.51 ms | 54.13 ms | -0.73% |
+| 32 | 149.39 | 144.83 | -3.05% | 162.79 ms | 113.09 ms | -10.15% |
+| 128 | 179.15 | 182.64 | +1.95% | 550.00 ms | 552.88 ms | -2.12% |
+| 384 | 178.99 | 177.01 | -1.11% | 1,578.48 ms | 1,601.72 ms | +2.06% |
+
+Both arms returned exactly 98.000% Recall@100 on the 16-query diagnostic,
+30 median requests, and 12,979,200 median bytes. Those 16 queries establish
+functional equality only; V75 remains the quality evidence. In the unloaded
+diagnostic, Rayon averaged 44.03 ms p50 and sequential averaged 50.80 ms, a
+15.36% regression, while p99 was effectively equal (79.46 versus 78.90 ms).
+
+The sequential perf-stat pass used 4.831 CPUs on average, 470,056 context
+switches, and 4,813 migrations, versus V83 Rayon's 12.262 CPUs, 2,301,634
+switches, and 353,231 migrations. Removing work stealing therefore saves
+scheduler activity, but the saving does not become useful throughput and costs
+unloaded latency. The detailed sequential symbol report was not produced
+because this host's `perf report` rejected the requested `tid` sort key; the
+runner nevertheless exited zero, so only the authenticated perf-stat counters
+are usable from that profiling sub-step.
+
+The preregistered promotion required at least 10% paired QPS gain, identical
+results, and no more than 5% p99 regression. Sequential CPU fails the QPS gate
+at every load. It is rejected, Rayon remains the selected path, and no longer
+open-loop qualification is justified for this change. The next binding work is
+the query-visible delta/generation/compaction path, not another CPU scheduler
+hypothesis.

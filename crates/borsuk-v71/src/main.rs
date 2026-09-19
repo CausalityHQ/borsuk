@@ -27,20 +27,14 @@
 //! 69 for 99.185%.
 
 use std::{
-    env,
-    error::Error,
-    fs,
-    ops::Range,
-    path::PathBuf,
-    sync::Arc,
-    time::Instant,
+    env, error::Error, fs, future::Future, ops::Range, path::PathBuf, sync::Arc, time::Instant,
 };
 
 use futures_util::stream::{self, StreamExt};
-use rayon::prelude::*;
-use wide::f32x8;
 use object_store::{GetOptions, GetRange, ObjectStore, parse_url_opts, path::Path as ObjectPath};
+use rayon::prelude::*;
 use url::Url;
+use wide::f32x8;
 
 type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -65,6 +59,21 @@ struct Manifest {
     truth: Vec<i64>,
 }
 
+#[derive(Clone, Copy)]
+enum InQueryCpu {
+    Rayon,
+    Sequential,
+}
+
+impl InQueryCpu {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Rayon => "rayon",
+            Self::Sequential => "sequential",
+        }
+    }
+}
+
 fn read_u64(bytes: &[u8], cursor: &mut usize) -> u64 {
     let value = u64::from_le_bytes(bytes[*cursor..*cursor + 8].try_into().expect("8 bytes"));
     *cursor += 8;
@@ -75,7 +84,9 @@ fn read_f32_vec(bytes: &[u8], cursor: &mut usize, count: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(count);
     for index in 0..count {
         let at = *cursor + index * 4;
-        out.push(f32::from_le_bytes(bytes[at..at + 4].try_into().expect("4 bytes")));
+        out.push(f32::from_le_bytes(
+            bytes[at..at + 4].try_into().expect("4 bytes"),
+        ));
     }
     *cursor += count * 4;
     out
@@ -85,7 +96,9 @@ fn read_i64_vec(bytes: &[u8], cursor: &mut usize, count: usize) -> Vec<i64> {
     let mut out = Vec::with_capacity(count);
     for index in 0..count {
         let at = *cursor + index * 8;
-        out.push(i64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes")));
+        out.push(i64::from_le_bytes(
+            bytes[at..at + 8].try_into().expect("8 bytes"),
+        ));
     }
     *cursor += count * 8;
     out
@@ -109,8 +122,7 @@ fn load_manifest(path: &PathBuf) -> BenchResult<Manifest> {
     if subspaces * width != dimensions {
         return Err("codebook subspaces times width differs from the dimension".into());
     }
-    let summaries =
-        read_f32_vec(&bytes, &mut cursor, pages * blocks_per_page * dimensions);
+    let summaries = read_f32_vec(&bytes, &mut cursor, pages * blocks_per_page * dimensions);
     let low = read_f32_vec(&bytes, &mut cursor, dimensions);
     let span_step = read_f32_vec(&bytes, &mut cursor, dimensions);
     let codebooks = read_f32_vec(&bytes, &mut cursor, subspaces * 256 * width);
@@ -168,22 +180,28 @@ fn coalesce(sorted: &[usize], gap: usize) -> Vec<Range<usize>> {
 /// Dense and small - two 768-dimensional summaries per 256-row page is one
 /// dot product per 128 rows - so this stays affordable where scanning every
 /// row does not.
-fn coarse_regions(manifest: &Manifest, query: &[f32], regions: usize) -> Vec<usize> {
+fn coarse_regions(
+    manifest: &Manifest,
+    query: &[f32],
+    regions: usize,
+    in_query_cpu: InQueryCpu,
+) -> Vec<usize> {
     let dimensions = manifest.dimensions;
     let blocks = manifest.pages * manifest.blocks_per_page;
-    let mut page_scores: Vec<f32> = (0..blocks)
-        .into_par_iter()
-        .map(|block| {
-            let summary = &manifest.summaries[block * dimensions..(block + 1) * dimensions];
-            let mut squared = 0.0f32;
-            let mut inner = 0.0f32;
-            for index in 0..dimensions {
-                squared += summary[index] * summary[index];
-                inner += summary[index] * query[index];
-            }
-            squared - 2.0 * inner
-        })
-        .collect();
+    let score = |block| {
+        let summary = &manifest.summaries[block * dimensions..(block + 1) * dimensions];
+        let mut squared = 0.0f32;
+        let mut inner = 0.0f32;
+        for index in 0..dimensions {
+            squared += summary[index] * summary[index];
+            inner += summary[index] * query[index];
+        }
+        squared - 2.0 * inner
+    };
+    let mut page_scores: Vec<f32> = match in_query_cpu {
+        InQueryCpu::Rayon => (0..blocks).into_par_iter().map(score).collect(),
+        InQueryCpu::Sequential => (0..blocks).map(score).collect(),
+    };
     // A page scores as the best of its blocks.
     let mut best = vec![f32::INFINITY; manifest.pages];
     for block in 0..blocks {
@@ -205,6 +223,7 @@ fn route(
     query: &[f32],
     shortlist: usize,
     regions: usize,
+    in_query_cpu: InQueryCpu,
 ) -> Vec<usize> {
     let subspaces = manifest.subspaces;
     let width = manifest.width;
@@ -224,23 +243,24 @@ fn route(
     }
 
     // Second level: score only the rows inside the regions the first level kept.
-    let candidates = coarse_regions(manifest, query, regions);
+    let candidates = coarse_regions(manifest, query, regions, in_query_cpu);
     let table = &table;
-    let mut scored: Vec<(f32, u32)> = candidates
-        .par_iter()
-        .flat_map_iter(move |page| {
-            let first = page * manifest.page_rows;
-            let last = ((page + 1) * manifest.page_rows).min(manifest.rows);
-            (first..last).map(move |row| {
-                let codes = &manifest.row_codes[row * subspaces..(row + 1) * subspaces];
-                let mut total = 0.0f32;
-                for subspace in 0..subspaces {
-                    total += table[subspace * 256 + usize::from(codes[subspace])];
-                }
-                (total, row as u32)
-            })
+    let score_page = |page: &usize| {
+        let first = page * manifest.page_rows;
+        let last = ((page + 1) * manifest.page_rows).min(manifest.rows);
+        (first..last).map(move |row| {
+            let codes = &manifest.row_codes[row * subspaces..(row + 1) * subspaces];
+            let mut total = 0.0f32;
+            for subspace in 0..subspaces {
+                total += table[subspace * 256 + usize::from(codes[subspace])];
+            }
+            (total, row as u32)
         })
-        .collect();
+    };
+    let mut scored: Vec<(f32, u32)> = match in_query_cpu {
+        InQueryCpu::Rayon => candidates.par_iter().flat_map_iter(score_page).collect(),
+        InQueryCpu::Sequential => candidates.iter().flat_map(score_page).collect(),
+    };
     let take = shortlist.min(scored.len());
     scored.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
     scored.truncate(take);
@@ -272,21 +292,19 @@ fn fused_inner(codes: &[u8], weights: &[f32]) -> f32 {
     while offset + 16 <= codes.len() {
         let low: [u8; 8] = codes[offset..offset + 8].try_into().expect("8 bytes");
         let high: [u8; 8] = codes[offset + 8..offset + 16].try_into().expect("8 bytes");
-        let low_weights: [f32; 8] =
-            weights[offset..offset + 8].try_into().expect("8 floats");
-        let high_weights: [f32; 8] =
-            weights[offset + 8..offset + 16].try_into().expect("8 floats");
+        let low_weights: [f32; 8] = weights[offset..offset + 8].try_into().expect("8 floats");
+        let high_weights: [f32; 8] = weights[offset + 8..offset + 16]
+            .try_into()
+            .expect("8 floats");
         accumulator =
             f32x8::from(low.map(f32::from)).mul_add(f32x8::from(low_weights), accumulator);
-        second =
-            f32x8::from(high.map(f32::from)).mul_add(f32x8::from(high_weights), second);
+        second = f32x8::from(high.map(f32::from)).mul_add(f32x8::from(high_weights), second);
         offset += 16;
     }
     while offset + 8 <= codes.len() {
         let lane: [u8; 8] = codes[offset..offset + 8].try_into().expect("8 bytes");
         let scale: [f32; 8] = weights[offset..offset + 8].try_into().expect("8 floats");
-        accumulator =
-            f32x8::from(lane.map(f32::from)).mul_add(f32x8::from(scale), accumulator);
+        accumulator = f32x8::from(lane.map(f32::from)).mul_add(f32x8::from(scale), accumulator);
         offset += 8;
     }
     let mut total = (accumulator + second).reduce_add();
@@ -314,10 +332,11 @@ async fn search(
     regions: usize,
     gap: usize,
     concurrency: usize,
+    in_query_cpu: InQueryCpu,
 ) -> BenchResult<QueryOutcome> {
     let row_bytes = 8 + 4 + manifest.dimensions;
     let started = Instant::now();
-    let chosen = route(manifest, query, budget, regions);
+    let chosen = route(manifest, query, budget, regions, in_query_cpu);
     let ranges = coalesce(&chosen, gap);
     let route_ms = started.elapsed().as_secs_f64() * 1000.0;
 
@@ -364,24 +383,27 @@ async fn search(
     }
     shift -= query_norm / 2.0;
 
-    let mut best: Vec<(f32, i64)> = blobs
-        .par_iter()
-        .flat_map_iter(|(_, body)| {
-            let count = body.len() / row_bytes;
-            (0..count).map(move |row| {
+    let score_blob = |(_, body): &(usize, bytes::Bytes)| {
+        let count = body.len() / row_bytes;
+        (0..count)
+            .map(|row| {
                 let base = row * row_bytes;
                 let identifier =
                     i64::from_le_bytes(body[base..base + 8].try_into().expect("8 bytes"));
                 let norm =
                     f32::from_le_bytes(body[base + 8..base + 12].try_into().expect("4 bytes"));
                 let codes = &body[base + 12..base + row_bytes];
-                (norm, identifier, codes)
+                (
+                    norm - 2.0 * (fused_inner(codes, &weights) + shift),
+                    identifier,
+                )
             })
-        })
-        .map(|(norm, identifier, codes)| {
-            (norm - 2.0 * (fused_inner(codes, &weights) + shift), identifier)
-        })
-        .collect();
+            .collect::<Vec<_>>()
+    };
+    let mut best: Vec<(f32, i64)> = match in_query_cpu {
+        InQueryCpu::Rayon => blobs.par_iter().flat_map_iter(score_blob).collect(),
+        InQueryCpu::Sequential => blobs.iter().flat_map(score_blob).collect(),
+    };
     let take = manifest.neighbors.min(best.len());
     if take > 0 {
         best.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
@@ -406,6 +428,24 @@ fn percentile(values: &[f64], quantile: f64) -> f64 {
     ordered[((ordered.len() - 1) as f64 * quantile).round() as usize]
 }
 
+async fn run_spawned_bounded<F, T>(
+    jobs: Vec<F>,
+    limit: usize,
+) -> Vec<Result<T, tokio::task::JoinError>>
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    stream::iter(jobs.into_iter().map(tokio::spawn))
+        .buffer_unordered(limit)
+        .collect()
+        .await
+}
+
+fn successful_qps(successful_queries: usize, elapsed_seconds: f64) -> f64 {
+    successful_queries as f64 / elapsed_seconds
+}
+
 fn required(name: &str) -> BenchResult<String> {
     env::var(name).map_err(|_| format!("missing required environment variable {name}").into())
 }
@@ -414,6 +454,15 @@ fn optional_usize(name: &str, fallback: usize) -> BenchResult<usize> {
     match env::var(name) {
         Ok(value) => Ok(value.parse()?),
         Err(_) => Ok(fallback),
+    }
+}
+
+fn in_query_cpu() -> BenchResult<InQueryCpu> {
+    match env::var("BORSUK_V71_IN_QUERY_CPU") {
+        Err(_) => Ok(InQueryCpu::Rayon),
+        Ok(value) if value == "rayon" => Ok(InQueryCpu::Rayon),
+        Ok(value) if value == "sequential" => Ok(InQueryCpu::Sequential),
+        Ok(value) => Err(format!("invalid BORSUK_V71_IN_QUERY_CPU {value}").into()),
     }
 }
 
@@ -448,7 +497,9 @@ fn self_test() -> BenchResult<()> {
     let mut weights = Vec::new();
     let mut state = 12_345u64;
     for index in 0..775usize {
-        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
         codes.push((state >> 33) as u8);
         weights.push(((state >> 20) as u32 % 2_000) as f32 / 1_000.0 - 1.0);
         if index >= 768 {
@@ -485,6 +536,7 @@ async fn main() -> BenchResult<()> {
     let concurrency = optional_usize("BORSUK_V71_CONCURRENCY", 64)?;
     let regions = optional_usize("BORSUK_V71_REGIONS", 1024)?;
     let measured = optional_usize("BORSUK_V71_QUERIES", 200)?;
+    let in_query_cpu = in_query_cpu()?;
 
     let manifest = Arc::new(load_manifest(&manifest_path)?);
     let url = Url::parse(&uri)?;
@@ -504,8 +556,18 @@ async fn main() -> BenchResult<()> {
     for index in 0..measured {
         let offset = index * manifest.dimensions;
         let query = &manifest.query_vectors[offset..offset + manifest.dimensions];
-        let outcome =
-            search(&store, &key, &manifest, query, budget, regions, gap, concurrency).await?;
+        let outcome = search(
+            &store,
+            &key,
+            &manifest,
+            query,
+            budget,
+            regions,
+            gap,
+            concurrency,
+            in_query_cpu,
+        )
+        .await?;
         let truth_offset = index * manifest.neighbors;
         let truth = &manifest.truth[truth_offset..truth_offset + manifest.neighbors];
         let found = outcome
@@ -531,27 +593,38 @@ async fn main() -> BenchResult<()> {
         for workers in [8usize, 32, 128, 384] {
             let started = Instant::now();
             let mut errors = 0usize;
-            let outcomes = stream::iter((0..workers * 8).map(|slot| {
-                let store = Arc::clone(&store);
-                let key = key.clone();
-                let manifest = Arc::clone(&manifest);
-                async move {
-                    let index = slot % manifest.queries;
-                    let offset = index * manifest.dimensions;
-                    let query = manifest.query_vectors[offset..offset + manifest.dimensions]
-                        .to_vec();
-                    search(&store, &key, &manifest, &query, budget, regions, gap, concurrency).await
-                }
-            }))
-            .buffer_unordered(workers)
-            .collect::<Vec<_>>()
-            .await;
+            let jobs = (0..workers * 8)
+                .map(|slot| {
+                    let store = Arc::clone(&store);
+                    let key = key.clone();
+                    let manifest = Arc::clone(&manifest);
+                    async move {
+                        let index = slot % manifest.queries;
+                        let offset = index * manifest.dimensions;
+                        let query =
+                            manifest.query_vectors[offset..offset + manifest.dimensions].to_vec();
+                        search(
+                            &store,
+                            &key,
+                            &manifest,
+                            &query,
+                            budget,
+                            regions,
+                            gap,
+                            concurrency,
+                            in_query_cpu,
+                        )
+                        .await
+                    }
+                })
+                .collect::<Vec<_>>();
+            let outcomes = run_spawned_bounded(jobs, workers).await;
             let elapsed = started.elapsed().as_secs_f64();
             let mut latencies = Vec::new();
             for outcome in outcomes {
                 match outcome {
-                    Ok(value) => latencies.push(value.route_ms + value.io_ms + value.scan_ms),
-                    Err(_) => errors += 1,
+                    Ok(Ok(value)) => latencies.push(value.route_ms + value.io_ms + value.scan_ms),
+                    Ok(Err(_)) | Err(_) => errors += 1,
                 }
             }
             throughput.push(serde_json::json!({
@@ -559,7 +632,7 @@ async fn main() -> BenchResult<()> {
                 "queries": workers * 8,
                 "errors": errors,
                 "elapsed_seconds": elapsed,
-                "qps": (workers * 8) as f64 / elapsed,
+                "qps": successful_qps(latencies.len(), elapsed),
                 "latency_p50_ms": if latencies.is_empty() { 0.0 } else { percentile(&latencies, 0.50) },
                 "latency_p99_ms": if latencies.is_empty() { 0.0 } else { percentile(&latencies, 0.99) },
             }));
@@ -573,6 +646,7 @@ async fn main() -> BenchResult<()> {
         "evidence_kind": "measured-native-single-round-trip-sq8-with-resident-row-router",
         "storage": "real-object-store-ranged-gets-no-local-cache",
         "cpu_path": "safe-rust-simd-scan-and-adc-router",
+        "in_query_cpu": in_query_cpu.label(),
         "rows": manifest.rows,
         "dimensions": manifest.dimensions,
         "page_rows": manifest.page_rows,
@@ -602,4 +676,87 @@ async fn main() -> BenchResult<()> {
     fs::write(&output, format!("{report}\n"))?;
     println!("{report}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use super::{InQueryCpu, Manifest, route, run_spawned_bounded, successful_qps};
+
+    fn routing_fixture() -> Manifest {
+        let dimensions = 4;
+        let subspaces = 2;
+        let width = 2;
+        let mut codebooks = vec![0.0; subspaces * 256 * width];
+        for (index, value) in codebooks.iter_mut().enumerate() {
+            *value = ((index * 17 % 101) as f32 - 50.0) / 31.0;
+        }
+        Manifest {
+            rows: 8,
+            dimensions,
+            page_rows: 2,
+            pages: 4,
+            queries: 0,
+            neighbors: 2,
+            subspaces,
+            width,
+            blocks_per_page: 1,
+            summaries: vec![
+                0.1, 0.2, 0.3, 0.4, 1.0, 0.5, 0.2, 0.1, -0.5, 0.7, 0.9, -0.2, 0.6, -0.8, 0.4, 0.3,
+            ],
+            low: vec![-1.0; dimensions],
+            span_step: vec![2.0 / 255.0; dimensions],
+            codebooks,
+            row_codes: vec![3, 7, 11, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71],
+            query_vectors: Vec::new(),
+            truth: Vec::new(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn throughput_jobs_execute_independently_under_the_admission_limit() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let jobs = (0..2)
+            .map(|_| {
+                let active = Arc::clone(&active);
+                let peak = Arc::clone(&peak);
+                async move {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    // Models the synchronous routing/scoring work inside one
+                    // async query future. Independent query tasks must overlap
+                    // this work instead of serialising it on the parent task.
+                    std::thread::sleep(Duration::from_millis(50));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    now
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let outcomes = run_spawned_bounded(jobs, 2).await;
+        assert!(outcomes.iter().all(Result::is_ok));
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn throughput_qps_counts_only_successful_queries() {
+        assert_eq!(successful_qps(7, 2.0), 3.5);
+    }
+
+    #[test]
+    fn query_level_and_in_query_parallel_routing_choose_identical_pages() {
+        let manifest = routing_fixture();
+        let query = [0.25, -0.4, 0.75, 0.1];
+        let parallel = route(&manifest, &query, 4, 3, InQueryCpu::Rayon);
+        let query_level = route(&manifest, &query, 4, 3, InQueryCpu::Sequential);
+        assert_eq!(query_level, parallel);
+    }
 }

@@ -1,15 +1,18 @@
-//! Incremental ingest throughput and visibility for the V73 serving format.
+//! Encode and immutable-object publication throughput for the V73 row format.
 //!
 //! Every write number so far has been a bulk build: encode a whole corpus,
 //! upload once, divide. That is not what turbopuffer's ~10,000 vectors/s or
 //! S3 Vectors' 2,500 vectors/s per index describe, which is sustained ingest
-//! where the written vectors become queryable.
+//! where the written vectors become queryable. This diagnostic does not meet
+//! that stronger definition: it has no generation manifest or reader-side
+//! delta merge, so it must not be reported as query-visible ingest.
 //!
-//! A batch is encoded into the serving row format - an SQ8 row with its
-//! precomputed squared norm, plus the router's per-row code - and published as
-//! one immutable delta object. Visibility is the acknowledged PUT: once the
-//! object exists a reader scans it alongside the base, so the write is
-//! queryable with no index rebuild.
+//! A batch is encoded into an experimental combined row - an SQ8 row with its
+//! precomputed squared norm plus the router's per-row code - and published as
+//! one immutable object. The production reader stores row codes in its
+//! manifest rather than appending them to the S3 row, so even the byte layout
+//! is not directly consumable. The acknowledged PUT measures object
+//! availability, not query visibility.
 //!
 //! Encode cost is data-independent at fixed dimension - quantisation is a clip
 //! and a round, and code assignment is a fixed-size argmin over the codebooks
@@ -18,7 +21,9 @@
 use std::{env, error::Error, sync::Arc, time::Instant};
 
 use futures_util::stream::{self, StreamExt};
-use object_store::{ObjectStore, ObjectStoreExt, PutPayload, parse_url_opts, path::Path as ObjectPath};
+use object_store::{
+    ObjectStore, ObjectStoreExt, PutPayload, parse_url_opts, path::Path as ObjectPath,
+};
 use rayon::prelude::*;
 use url::Url;
 
@@ -198,9 +203,9 @@ async fn main() -> BenchResult<()> {
     let pipelined = encode_rate.min(publish_rate);
     let serialised = 1.0 / (1.0 / encode_rate + 1.0 / publish_rate);
     let report = serde_json::json!({
-        "schema": "borsuk-v74-ingest-result-v1",
+        "schema": "borsuk-v74-object-publication-result-v2",
         "claim_eligible": false,
-        "evidence_kind": "measured-incremental-ingest-visible-on-acknowledged-put",
+        "evidence_kind": "measured-synthetic-row-encode-and-object-put-not-query-visible-ingest",
         "vector_source": "deterministic-synthetic-encode-cost-is-data-independent",
         "dimensions": DIMENSIONS,
         "row_bytes": ROW_BYTES,
@@ -217,7 +222,7 @@ async fn main() -> BenchResult<()> {
         "serialised_vectors_per_second": serialised.round() as u64,
         "published_mib_per_second":
             (vectors * ROW_BYTES) as f64 / publish_seconds / (1024.0 * 1024.0),
-        "visibility_ms": {
+        "put_acknowledgement_ms": {
             "p50": percentile(&visibility, 0.50),
             "p95": percentile(&visibility, 0.95),
             "p99": percentile(&visibility, 0.99),
