@@ -1121,8 +1121,20 @@ At a matched top-2,048 evidence width it reached 98.4375% page-SQ8. A
 base-only conditional page-posterior fitted on 256 hashed self-queries retained
 a 100% candidate-set physical oracle, but reached only 98.3750% page-SQ8 and
 98.4062% exact. Its controlled loss against the matched top-2,048 arm was two
-of 3,200 hits; the larger comparison against top-1,024 is a performance
-comparison, not an isolated calibration ablation.
+of 3,200 hits, or 0.0625 percentage points; the larger seven-hit comparison
+against top-1,024 is a performance comparison, not an isolated calibration
+ablation. Thirty-two queries cannot resolve an effect this small. No causal
+promotion follows until the frozen existing arms are paired-rescored across
+all 1,000 available development queries with per-query evidence and an
+interval for their paired difference.
+
+The V85 runner configured 16 BLAS/OpenMP threads for this work. Its recall
+evidence remains usable, but its timings are not single-thread query-cost
+evidence. The frozen PQ64 row representation also projects to approximately
+6.39 GB at 99.9 million base rows before planner workspace; it cannot satisfy
+the eventual sub-3-GiB resident target unchanged. These limitations pause
+further selector or calibration tuning and prevent treating the 1M instrument
+as a qualified 100M serving architecture.
 
 Before testing another page representation, attempt `exact-row-control-a0015`
 replaced PQ ADC row scores with exact float32 row distances and left the
@@ -1710,3 +1722,58 @@ pass advances to the native full-planner/reader measurement, where routing,
 I/O, decode, rerank, and end-to-end latency are all measured. A failure sends
 the design directly to page packing/request coalescing rather than spending on
 128-query or larger-corpus evaluation.
+
+### V95 result — quality reproduces, but the real-S3 tail gate fails
+
+The sole attempt used source
+`2da2ab1f480a0019942209f1093806f1117ca18a` on c7i.8xlarge Spot instance
+`i-094269d7a4169d002` in `eu-central-1a`. Every source and dataset hash passed,
+the instance published a complete terminal, and it terminated immediately.
+Immutable evidence is under
+`research/v95-real-s3-plan-replay/2da2ab1f480a0019942209f1093806f1117ca18a/runs/v95-real-s3-20260920T011819Z-2da2ab1f/a0001/`.
+The canonical result SHA-256 is
+`5ed8db6c68c8fdbf99ea83933aa2e514794e7872025417644e0325c78b94e948`;
+the terminal SHA-256 is
+`51eb3eb4a4f508d03e9240be7755df21576463caea5a5871b96ce19a7c2131d0`.
+
+The replay authenticated a 173,043,456-byte PQ192 code object with SHA-256
+`b8e984b83e4140e97b308683e9c2c2c40cd1c90a137e711251d2a4fa9d91375c`
+and a 723,902,208-byte page-SQ8 object with SHA-256
+`b05154d3d8e707acde5b4984ff1f5fc05b4830f7d7d5ceb815038cbbfbc59f56`.
+The fresh replay process held no local base corpus. Its 32 untimed preflight
+GETs transferred 4,081,664 bytes; the 16 measured queries issued 1,205 real
+range GETs, for 1,237 actual S3 requests including preflight.
+
+| metric | real-S3 frozen-plan replay |
+|---|---:|
+| Recall@100 | **98.8750%** (1,582 / 1,600), exact frozen-plan match |
+| worst query | **86 / 100** |
+| GETs/query, mean / max | **75.31 / 88** |
+| bytes/query, mean / max | **31,145,600 / 38,351,680** |
+| code I/O p50 / max | **89.927 / 205.356 ms** |
+| data I/O p50 / max | **116.686 / 436.832 ms** |
+| storage I/O p50 / max-of-16 | **205.070 / 642.188 ms** |
+| decode p50 / max | **104.994 / 134.711 ms** |
+| rerank p50 / max | **132.826 / 145.606 ms** |
+| end-to-end p50 / max-of-16 | **493.714 / 971.243 ms** |
+
+The storage-only gate required p50 at most 250 ms and max-of-16 at most
+500 ms. The median passed, but the tail failed at 642.188 ms, so V95 rejects
+this measurement boundary and does not advance to full-reader engineering.
+Quality is not the failure: every query reproduced its frozen offline hit
+count exactly.
+
+The failed tail is concentrated in the first measured query. Ordinal 328 used
+84 GETs and 38,351,680 bytes and took 642.188 ms of storage I/O; later
+ordinals 340 and 343 transferred the same maximum bytes with 85 and 88 GETs
+but took only 214.051 and 213.775 ms. That is evidence of a position-dependent
+transport effect after the small-page preflight, not proof of its mechanism.
+The next bounded falsifier must therefore reverse the first-query order and
+repeat the same immutable ranges from fresh clients before changing page
+packing. It can reuse these two S3 objects and needs no corpus download,
+training, reranking, or larger query split.
+
+Preparation took 4:20.19 at 10,398,504 KiB peak RSS and zero swaps. The fresh
+replay took 10.05 seconds at 2,106,012 KiB peak RSS and zero swaps. This result
+is claim-ineligible, measures plan replay rather than planner latency, and
+transfers wave-one code pages without decoding them.
