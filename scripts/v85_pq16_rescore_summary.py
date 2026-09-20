@@ -236,9 +236,9 @@ def summarize_paired_pq16_rotation(
     challenger_samples = challenger["samples"]
     if len(baseline_samples) != len(challenger_samples):
         raise ValueError("paired PQ16 rotation query count differs")
-    for query, (left, right) in enumerate(
-        zip(baseline_samples, challenger_samples, strict=True)
-    ):
+    for query in range(len(baseline_samples)):
+        left = baseline_samples[query]
+        right = challenger_samples[query]
         if left["query"] != query or right["query"] != query:
             raise ValueError("paired PQ16 rotation query ordinal differs")
         if left["truth_ids"] != right["truth_ids"]:

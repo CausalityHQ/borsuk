@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import pyarrow as pa
@@ -191,12 +192,18 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             ],
         }
 
-        summary = summarize_paired_pq16_rotation(
-            baseline,
-            challenger,
-            baseline_sha256="1" * 64,
-            challenger_sha256="2" * 64,
-        )
+        python39_zip = zip
+
+        def zip_without_strict(*iterables: object) -> object:
+            return python39_zip(*iterables)
+
+        with mock.patch("builtins.zip", zip_without_strict):
+            summary = summarize_paired_pq16_rotation(
+                baseline,
+                challenger,
+                baseline_sha256="1" * 64,
+                challenger_sha256="2" * 64,
+            )
 
         self.assertEqual(
             summary["paired_recall10_delta_ci95_ppm"], [100_000, 100_000]
