@@ -93,6 +93,12 @@ def _truth_rows(path: pathlib.Path) -> list[list[int]]:
     return rows
 
 
+def _zip_equal_lengths(left: list[Any], right: list[Any]) -> Any:
+    if len(left) != len(right):
+        raise ValueError("semantic screen reader sample count differs")
+    return ((left[index], right[index]) for index in range(len(left)))
+
+
 def _run_reader(
     request: ScreenRequest,
     generation_path: pathlib.Path,
@@ -132,7 +138,7 @@ def _run_reader(
     samples = result.get("samples")
     if not isinstance(samples, list) or len(samples) != len(truth_rows):
         raise ValueError("semantic screen reader sample count differs")
-    for sample, truth_ids in zip(samples, truth_rows, strict=True):
+    for sample, truth_ids in _zip_equal_lengths(samples, truth_rows):
         sample["truth_ids"] = truth_ids
     return result
 

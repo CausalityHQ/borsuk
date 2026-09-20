@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from scripts.v85_delta_compaction_screen import _path_for_uri
+from scripts.v85_delta_compaction_screen import _path_for_uri, _zip_equal_lengths
 from scripts.v85_qualification import (
     frozen_matrix,
     validate_delta_compaction_screen,
@@ -15,6 +15,18 @@ from scripts.v85_qualification import (
 
 
 class V85QualificationTests(unittest.TestCase):
+    def test_compaction_screen_rejects_mismatched_reader_and_truth_rows_on_python39(
+        self,
+    ) -> None:
+        # Break caught: the remote screen uses Python 3.9, where zip(strict=True)
+        # raises TypeError before any scientific gate can be evaluated.
+        self.assertEqual(
+            list(_zip_equal_lengths(["sample"], [[1, 2, 3]])),
+            [("sample", [1, 2, 3])],
+        )
+        with self.assertRaisesRegex(ValueError, "sample count differs"):
+            list(_zip_equal_lengths(["sample"], []))
+
     def test_compaction_screen_resolves_duplicate_basenames_by_registered_identity(
         self,
     ) -> None:
