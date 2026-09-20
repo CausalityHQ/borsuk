@@ -1185,6 +1185,63 @@ removed. This evidence remains claim-ineligible. Work now returns to the
 registered V85 delta/mutation/compaction qualification; no 10M or 100M scale
 promotion follows from this rescore.
 
+### Task-5 fail-fast closure — resident delta fixes S3 work, centroid pages fail quality
+
+Commit `856a5988e185f9f26be96354353510468c583ae7` changed the
+qualification reader so that an authenticated delta run is fetched once at
+startup, held resident under a 128-MiB cap, and merged with every query under
+snapshot semantics. Delta pages no longer consume per-query S3 requests or
+bytes. The focused resident-delta test, the 8 binary tests, the 10 delta library
+tests, the 21 package tests, the 15 qualification/build-delta tests, strict
+package Clippy, Ruff 0.15.20, Python compilation, shell syntax, formatting, and
+diff checks all passed before the commit was pushed.
+
+The current-format 10,000-row fail-fast replay `preflight-a0019` ran on
+c7i.8xlarge Spot instance `i-06047d8adffe2484d` and terminated normally. At
+the registered 32-page arm it recovered every ground-truth neighbour on all
+100 development queries: aggregate and worst-query Recall@100 were both
+**100.0000%**, with 32 GETs/query, 1,154,656 bytes/query, and peak RSS
+25,255,936 bytes. The canonical result SHA-256 is
+`acd1da99700a36492a7a58f1e32ea60a49e9423b1feef40f4db5756c7560bfcd`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v85-delta-qualification/856a5988e185f9f26be96354353510468c583ae7/preflight-a0019/attempt/`.
+The instance terminated and local packaging scratch was removed.
+
+Attempt `a0020` deliberately tried the current reader against the immutable
+historical 100,000-row artifacts from source
+`021fb90a80270f42cc255317c693223427892d09`. It stopped before
+science with exit 99 because those artifacts predate the current SQ8 page
+schema. This is an expected pre-release format boundary, not evidence about
+quality. No compatibility reader or migration path will be added.
+
+The replacement current-format 100,000-row screen `100k-current-a0021` built a
+90,000-row base plus a 10,000-row resident delta and evaluated 32 development
+queries using real in-region S3 range GETs. It ran on c7i.8xlarge Spot instance
+`i-0a47061ce4c6ab276`, terminated normally, and was terminated immediately
+after its terminal marker. Build wall time was 4.20 seconds, peak RSS was
+1,830,196 KiB, and aggregate CPU utilization was 685%.
+
+| arm | Recall@100 | worst query | GETs/query | max bytes/query | query latency |
+|---|---:|---:|---:|---:|---:|
+| centroid pages, 16 | **83.9062%** (2,685/3,200) | 37% | 16 | 2,695,208 | p50 51.045 ms, max 68.330 ms |
+| centroid pages, 32 | **92.8750%** (2,972/3,200) | 74% | 32 | 5,209,112 | p50 89.200 ms, max 101.855 ms |
+
+The p16 and p32 result SHA-256 values are respectively
+`c9d2476b87edc35ff7cdadb1daa717ccc7c7a0efe5730d35e6c5df799493eae8`
+and `8c69aa9372c7f7f43105f6a6a51bb854d547b9017241873006c7363c57311be9`.
+The evidence is under
+`s3://borsuk-bench-453182569524-euc1/research/v85-delta-qualification/856a5988e185f9f26be96354353510468c583ae7/100k-current-a0021/attempt/`.
+
+**Ruling:** resident authenticated deltas solve the duplicated-request defect,
+but centroid-to-contiguous-page routing is rejected at 100,000 rows under the
+frozen 99% Recall@100, 32-GET, 16-MiB gate. A 1M Task-5 run would only make an
+already decisive failure slower, so it remains fenced. The sole next
+representation hypothesis is a bounded PQ16 per-row-code page nominator,
+screened first on this 100,000-row shape against the centroid p32 control. No
+request gate will be loosened implicitly, and no 10M/100M promotion occurs
+unless the validator has recomputed per-query recall, mutation, and compaction
+evidence and a complete sub-3-GiB 100M memory worksheet is feasible.
+
 ### Original exact-row control
 
 Before testing another page representation, attempt `exact-row-control-a0015`
