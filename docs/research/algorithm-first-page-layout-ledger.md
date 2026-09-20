@@ -1334,6 +1334,53 @@ page-ordered codes so no ID-to-page table is resident, and a sparse touched-page
 planner. The current dense traceback would project **4,595,961,792 bytes** and
 is explicitly disallowed; the sparse replacement is not yet implemented.
 
+### V85 competitive rescore — 1,000-query development evidence
+
+Source `fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d` ran one c7i.8xlarge
+Spot cell, instance `i-07da75d2499d6e449`, against all 1,000 development
+queries and a freshly recomputed exact truth for the authenticated 100,000-row
+current-format corpus. Query execution was serial with fixed 16-thread BLAS;
+there was no Rayon or query-level work stealing. The instance terminated after
+publishing both raw result files. Evidence is under
+`research/v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/`.
+
+| fixed arm | average Recall@10 | average Recall@100 | p05 Recall@100 | max GETs | max bytes |
+|---|---:|---:|---:|---:|---:|
+| centroid p32, real S3 | 97.4500% | 94.6600% | not promotion-tested | 32 | 5,480,704 |
+| bounded PQ16 page containment | **99.8200%** | **99.1890%** | **95.0000%** | 32 | 14,126,480 |
+
+The PQ16-minus-centroid paired bootstrap 95% interval is **+2.0000 to
++2.7500 percentage points** at Recall@10 and **+4.1479 to +4.9340 points** at
+Recall@100. The intervals use the same 1,000 queries and 10,000 deterministic
+paired resamples. PQ16 passes qualification contract v2 on this fully burned
+development split. It does not promote by itself: this was page containment,
+not a real-S3 PQ16 latency measurement, and no held-out query was opened.
+
+The centroid arm made 32,000 actual range GETs. Its p50/p95/p99 query latency
+was 86.273/634.093/655.755 ms. Truth construction took 1:03.39 at 1,685,640
+KiB peak RSS; centroid replay took 4:23.90 at 86,080 KiB; PQ16 construction and
+scoring took 32.53 seconds at 2,212,064 KiB. Every phase reported zero swaps.
+
+The original terminal is retained with exit 104 because a post-science reducer
+incorrectly expected duplicated truth IDs inside the centroid result. Both raw
+scientific outputs were already complete. The corrected reducer at
+`698e80d5ac46c9969b280be1429798c5686a12b3` uses the PQ sample's authenticated
+truth authority, independently recomputes both arms, and produced canonical
+summary SHA-256
+`c7bf42254618670457b911ab003f803cc8aa4e9e479e5f2771af543d27aa2979`.
+The raw centroid and PQ16 SHA-256 values are respectively
+`3572f999d23ebfbf69c308b3fd603588203ea615ec34888056c802a73c4a6ed1`
+and `3b01a1bd33294707d0bc706efa3e136291c3ddffbb3c8dc5d129a4f6a9964951`.
+No scientific rerun was performed.
+
+**Ruling:** 99% average Recall@100 is achievable at 100,000 rows, but it is no
+longer the product gate. The vendor-aligned distributional contract is the
+authority. The fixed PQ16 arm advances exactly once to an untouched 1M
+held-out screen; its training seed, 2,048-row shortlist, reciprocal-rank page
+weights, 32-range/16-MiB work limits, and quality gates are frozen. Failure
+returns to page-locality design; success advances to a native real-S3 replay
+and sparse-planner implementation, not directly to 10M or 100M.
+
 ### Original exact-row control
 
 Before testing another page representation, attempt `exact-row-control-a0015`
