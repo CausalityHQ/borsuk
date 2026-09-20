@@ -95,6 +95,37 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             },
         )
 
+    def test_1m_runner_preregisters_frozen_validation_without_retuning(self) -> None:
+        # Break caught: scale promotion reopens development, changes the PQ arm,
+        # or launches a 10M/100M campaign before the fixed 1M gate.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_pq16_1m_validation_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "blas_threads": 16,
+                "instance_type": "c7i.8xlarge",
+                "max_wall_seconds": 1800,
+                "page_budget": 32,
+                "queries": 1000,
+                "query_parallelism": 1,
+                "shortlist_rows": 2048,
+                "split": "validation",
+                "spot_only": True,
+            },
+        )
+
     def test_rank_weighted_planner_uses_exact_dense_range_budget(self) -> None:
         # Break caught: the screen reads every page touched by the shortlist
         # instead of selecting the maximum reciprocal-rank evidence under the
