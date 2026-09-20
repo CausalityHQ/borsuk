@@ -14,6 +14,7 @@ from scripts.v85_delta_compaction_screen import (
 from scripts.v85_qualification import (
     frozen_matrix,
     validate_delta_compaction_screen,
+    validate_mutation_screen,
     validate_preflight_receipt,
     validate_qualification_receipt,
 )
@@ -221,6 +222,136 @@ class V85QualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "compaction screen"):
             validate_delta_compaction_screen(low_quality)
 
+    @staticmethod
+    def _mutation_screen_fixture() -> dict[str, object]:
+        cases = []
+        for offset in range(500):
+            old_digest = f"{offset + 1:064x}"
+            new_digest = f"{offset + 501:064x}"
+            cases.append(
+                {
+                    "compacted_code_sha256": new_digest,
+                    "compacted_sequence": 2,
+                    "directory": {
+                        "row": offset,
+                        "run_id": 101,
+                        "sequence": 2,
+                        "state": "live",
+                    },
+                    "id": 90_000 + offset,
+                    "kind": "replacement",
+                    "physical_rows": [
+                        {
+                            "code_sha256": old_digest,
+                            "row": offset,
+                            "run_id": 1,
+                            "sequence": 1,
+                            "state": "live",
+                        },
+                        {
+                            "code_sha256": new_digest,
+                            "row": offset,
+                            "run_id": 101,
+                            "sequence": 2,
+                            "state": "live",
+                        },
+                    ],
+                    "writes": [
+                        {"sequence": 1, "state": "live"},
+                        {"sequence": 2, "state": "live"},
+                    ],
+                }
+            )
+        for offset in range(500):
+            cases.append(
+                {
+                    "compacted_code_sha256": None,
+                    "compacted_sequence": None,
+                    "directory": {
+                        "row": None,
+                        "run_id": None,
+                        "sequence": 2,
+                        "state": "tombstone",
+                    },
+                    "id": 90_500 + offset,
+                    "kind": "tombstone",
+                    "physical_rows": [
+                        {
+                            "code_sha256": f"{offset + 1_001:064x}",
+                            "row": offset,
+                            "run_id": 2,
+                            "sequence": 1,
+                            "state": "live",
+                        }
+                    ],
+                    "writes": [
+                        {"sequence": 1, "state": "live"},
+                        {"sequence": 2, "state": "tombstone"},
+                    ],
+                }
+            )
+        return {
+            "after_generation_sha256": "b" * 64,
+            "before_generation_sha256": "a" * 64,
+            "cases": cases,
+            "claim_eligible": False,
+            "compacted_generation_sha256": "c" * 64,
+            "evidence_kind": "semantic-local-artifact-screen",
+            "schema": "borsuk-v85-mutation-screen-v1",
+        }
+
+    def test_mutation_screen_recomputes_directory_physical_and_compacted_state(
+        self,
+    ) -> None:
+        # Break caught: the qualification validator accepts 1,000 self-reported
+        # latest-write claims without binding them to stale/new physical rows,
+        # the mutation directory, and the compacted survivors.
+        receipt = self._mutation_screen_fixture()
+
+        self.assertEqual(
+            validate_mutation_screen(receipt),
+            {
+                "replacement_rows": 500,
+                "schema": "borsuk-v85-mutation-screen-summary-v1",
+                "tombstone_rows": 500,
+            },
+        )
+
+        mutations = []
+        stale_directory = copy.deepcopy(receipt)
+        stale_directory["cases"][0]["directory"]["sequence"] = 1
+        mutations.append(stale_directory)
+        resurrected_tombstone = copy.deepcopy(receipt)
+        resurrected_tombstone["cases"][500]["compacted_sequence"] = 2
+        resurrected_tombstone["cases"][500]["compacted_code_sha256"] = "d" * 64
+        mutations.append(resurrected_tombstone)
+        missing_old_row = copy.deepcopy(receipt)
+        missing_old_row["cases"][0]["physical_rows"].pop(0)
+        mutations.append(missing_old_row)
+        wrong_new_location = copy.deepcopy(receipt)
+        wrong_new_location["cases"][0]["physical_rows"][1]["row"] = 999
+        mutations.append(wrong_new_location)
+        unchanged_replacement = copy.deepcopy(receipt)
+        unchanged_replacement["cases"][0]["physical_rows"][1][
+            "code_sha256"
+        ] = unchanged_replacement["cases"][0]["physical_rows"][0][
+            "code_sha256"
+        ]
+        unchanged_replacement["cases"][0]["compacted_code_sha256"] = (
+            unchanged_replacement["cases"][0]["physical_rows"][0][
+                "code_sha256"
+            ]
+        )
+        mutations.append(unchanged_replacement)
+        duplicate_id = copy.deepcopy(receipt)
+        duplicate_id["cases"][1]["id"] = duplicate_id["cases"][0]["id"]
+        mutations.append(duplicate_id)
+
+        for index, mutated in enumerate(mutations):
+            with self.subTest(index=index):
+                with self.assertRaisesRegex(ValueError, "mutation screen"):
+                    validate_mutation_screen(mutated)
+
     def test_remote_runner_exposes_only_the_frozen_matrix_without_aws(self) -> None:
         # Break caught: shell-local constants drift from the independently tested
         # matrix, or describing the campaign performs a remote side effect.
@@ -233,6 +364,39 @@ class V85QualificationTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(json.loads(completed.stdout), frozen_matrix())
+
+    def test_mutation_screen_remote_runner_exposes_bounded_matrix_without_aws(
+        self,
+    ) -> None:
+        # Break caught: the mutation gate silently expands beyond the frozen
+        # 100k/1,000-operation semantic screen or performs AWS work on describe.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_mutation_100k_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "base_rows": 90_000,
+                "claim_eligible": False,
+                "delta_rows": 10_000,
+                "evidence_kind": "semantic-local-artifact-screen",
+                "instance_type": "c7i.8xlarge",
+                "replacement_rows": 500,
+                "rows": 100_000,
+                "schema": "borsuk-v85-mutation-screen-matrix-v1",
+                "spot_only": True,
+                "tombstone_rows": 500,
+            },
+        )
 
         rejected = subprocess.run(
             ["bash", str(root / "scripts/v85_run_remote.sh"), "--unknown"],

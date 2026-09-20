@@ -350,6 +350,148 @@ def validate_delta_compaction_screen(receipt: Any) -> dict[str, Any]:
     }
 
 
+def _sha256_digest(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and value == value.lower()
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def validate_mutation_screen(receipt: Any) -> dict[str, Any]:
+    """Recompute replacement/tombstone evidence from concrete row witnesses."""
+
+    label = "mutation screen"
+    receipt = _exact_keys(
+        receipt,
+        {
+            "after_generation_sha256",
+            "before_generation_sha256",
+            "cases",
+            "claim_eligible",
+            "compacted_generation_sha256",
+            "evidence_kind",
+            "schema",
+        },
+        label,
+    )
+    generation_digests = [
+        receipt["before_generation_sha256"],
+        receipt["after_generation_sha256"],
+        receipt["compacted_generation_sha256"],
+    ]
+    if (
+        receipt["schema"] != "borsuk-v85-mutation-screen-v1"
+        or receipt["evidence_kind"] != "semantic-local-artifact-screen"
+        or receipt["claim_eligible"] is not False
+        or any(not _sha256_digest(digest) for digest in generation_digests)
+        or len(set(generation_digests)) != len(generation_digests)
+    ):
+        raise ValueError(f"{label} authority differs")
+
+    cases = receipt["cases"]
+    if not isinstance(cases, list) or len(cases) != 1_000:
+        raise ValueError(f"{label} cases differ")
+    counts = {"replacement": 0, "tombstone": 0}
+    previous_id = None
+    for candidate in cases:
+        case = _exact_keys(
+            candidate,
+            {
+                "compacted_code_sha256",
+                "compacted_sequence",
+                "directory",
+                "id",
+                "kind",
+                "physical_rows",
+                "writes",
+            },
+            f"{label} case",
+        )
+        if (
+            case["kind"] not in counts
+            or type(case["id"]) is not int
+            or case["id"] < 0
+            or (previous_id is not None and case["id"] <= previous_id)
+        ):
+            raise ValueError(f"{label} case authority differs")
+        previous_id = case["id"]
+        counts[case["kind"]] += 1
+
+        expected_state = (
+            "live" if case["kind"] == "replacement" else "tombstone"
+        )
+        writes = case["writes"]
+        if writes != [
+            {"sequence": 1, "state": "live"},
+            {"sequence": 2, "state": expected_state},
+        ]:
+            raise ValueError(f"{label} writes differ")
+        directory = _exact_keys(
+            case["directory"],
+            {"row", "run_id", "sequence", "state"},
+            f"{label} directory",
+        )
+        if directory["sequence"] != 2 or directory["state"] != expected_state:
+            raise ValueError(f"{label} directory differs")
+
+        physical_rows = case["physical_rows"]
+        expected_row_count = 2 if case["kind"] == "replacement" else 1
+        if not isinstance(physical_rows, list) or len(physical_rows) != expected_row_count:
+            raise ValueError(f"{label} physical rows differ")
+        parsed_rows = [
+            _exact_keys(
+                row,
+                {"code_sha256", "row", "run_id", "sequence", "state"},
+                f"{label} physical row",
+            )
+            for row in physical_rows
+        ]
+        for row in parsed_rows:
+            if (
+                not _sha256_digest(row["code_sha256"])
+                or type(row["run_id"]) is not int
+                or row["run_id"] < 0
+                or type(row["row"]) is not int
+                or row["row"] < 0
+                or row["state"] != "live"
+            ):
+                raise ValueError(f"{label} physical row differs")
+        stale = parsed_rows[0]
+        if stale["sequence"] != 1:
+            raise ValueError(f"{label} stale row differs")
+
+        if case["kind"] == "replacement":
+            newest = parsed_rows[1]
+            if (
+                newest["sequence"] != 2
+                or newest["code_sha256"] == stale["code_sha256"]
+                or (newest["run_id"], newest["row"])
+                == (stale["run_id"], stale["row"])
+                or directory["run_id"] != newest["run_id"]
+                or directory["row"] != newest["row"]
+                or case["compacted_sequence"] != newest["sequence"]
+                or case["compacted_code_sha256"] != newest["code_sha256"]
+            ):
+                raise ValueError(f"{label} replacement differs")
+        elif (
+            directory["run_id"] is not None
+            or directory["row"] is not None
+            or case["compacted_sequence"] is not None
+            or case["compacted_code_sha256"] is not None
+        ):
+            raise ValueError(f"{label} tombstone differs")
+
+    if counts != {"replacement": 500, "tombstone": 500}:
+        raise ValueError(f"{label} mix differs")
+    return {
+        "replacement_rows": counts["replacement"],
+        "schema": "borsuk-v85-mutation-screen-summary-v1",
+        "tombstone_rows": counts["tombstone"],
+    }
+
+
 def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
     """Reject a 10k preflight that cannot safely promote to the paid 1M cell."""
 
