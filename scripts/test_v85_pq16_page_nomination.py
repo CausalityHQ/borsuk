@@ -118,18 +118,25 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             "schema": "borsuk-v85-sparse-residual-development-ceiling-v1",
         }
 
-        summary = validate_sparse_residual_development_ceiling(
-            result, result_sha256="5" * 64
-        )
+        python39_zip = zip
+
+        def zip_without_strict(*iterables: object) -> object:
+            return python39_zip(*iterables)
+
+        with mock.patch("builtins.zip", zip_without_strict):
+            summary = validate_sparse_residual_development_ceiling(
+                result, result_sha256="5" * 64
+            )
 
         self.assertEqual(summary["classification"], "validation-eligible")
         self.assertEqual(summary["exact_average_recall100_ppm"], 1_000_000)
         malformed = json.loads(json.dumps(result))
         malformed["arms"]["exact-f32"]["samples"][0]["hits"] = 99
         with self.assertRaisesRegex(ValueError, "exact-f32 aggregate differs"):
-            validate_sparse_residual_development_ceiling(
-                malformed, result_sha256="5" * 64
-            )
+            with mock.patch("builtins.zip", zip_without_strict):
+                validate_sparse_residual_development_ceiling(
+                    malformed, result_sha256="5" * 64
+                )
 
     def test_exact_f32_ranker_matches_scalar_total_order_in_bounded_batches(
         self,

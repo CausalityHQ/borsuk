@@ -378,7 +378,9 @@ def validate_sparse_residual_development_ceiling(
 
     identity_samples = arms["pq16-identity"]["samples"]
     for role in ("sparse-residual-pq8", "exact-f32"):
-        for left, right in zip(identity_samples, arms[role]["samples"], strict=True):
+        for query in range(len(identity_samples)):
+            left = identity_samples[query]
+            right = arms[role]["samples"][query]
             if left["query"] != right["query"] or left["truth_ids"] != right["truth_ids"]:
                 raise ValueError(f"{role} paired authority differs")
 
