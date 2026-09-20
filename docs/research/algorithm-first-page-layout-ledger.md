@@ -1136,6 +1136,57 @@ the eventual sub-3-GiB resident target unchanged. These limitations pause
 further selector or calibration tuning and prevent treating the 1M instrument
 as a qualified 100M serving architecture.
 
+### Later paired-rescore closure
+
+The registered 1,000-query paired rescore closed the 32-query ambiguity. The
+first attempt, `paired-rescore-1000-a0016`, ran source
+`900f39c50c527bfb48123975fa1da3ed7294a9e3` on Spot instance
+`i-0cccea9231b1292aa` and terminated with exit 96 before emitting a result:
+the paired-only path disabled shortlist cells, but the shared recall
+denominator was initialized inside the shortlist loop. Its authenticated
+terminal SHA-256 is
+`68ff2b40f2d279fa39294dcc7f51a2a912da16522064f6148686a8451b80b821`.
+The defect was reproduced by a rank-only unit fixture, fixed test-first, and
+delivered as `ad7561997e0ba38baf92541e90318042b2da0a38`.
+
+The one clean retry, `paired-rescore-1000-a0017`, used the same immutable
+ReLAION 1M x 768 development source, query, truth, layout, arm parameters, and
+100,000-repetition paired bootstrap. It ran on c7i.8xlarge Spot instance
+`i-05542a10787290ee8` and terminated normally. The registered 32-query prefix
+SHA-256
+`354ddcb810a13ee8fe981b6904bdfeb21084fe423c79deca8be75f32d21b0aa1`
+recomputed exactly before the 1,000-query evidence was accepted.
+
+| frozen arm | page-SQ8 Recall@100 | exact Recall@100 | worst page / exact hits |
+|---|---:|---:|---:|
+| exact rank, top 1,024 | **99.2850%** (99,285/100,000) | **99.4870%** (99,487/100,000) | 76 / 76 |
+| exact rank, top 2,048 | **99.2490%** (99,249/100,000) | **99.4430%** (99,443/100,000) | 76 / 76 |
+| page posterior, top 2,048 | **99.2210%** (99,221/100,000) | **99.4100%** (99,410/100,000) | 75 / 75 |
+
+Against its matched top-2,048 rank control, the posterior lost 28 page-SQ8
+hits, or 0.0280 percentage points, with a deterministic paired-bootstrap 95%
+interval of **[-0.0520, -0.0060] percentage points**. It lost 33 exact hits,
+or 0.0330 points, with interval **[-0.0580, -0.0100] points**. Per query, the
+posterior page result won/tied/lost 12/954/34 and the exact result 12/948/40.
+The top-1,024 rank arm also remained better than the posterior by 0.0640 page
+points and 0.0770 exact points. Thus the conditional page posterior is
+rejected; no further calibration or selector tuning is justified by V85.
+
+The canonical result is 476,810 bytes with SHA-256
+`63f1f094b14f09b48798b26a1a482809c6b405ec084b07585378f3597d8ab586`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v85-shared-overlay/ad7561997e0ba38baf92541e90318042b2da0a38/paired-rescore-1000-a0017/attempt/`.
+The terminal SHA-256 is
+`b47f1cd9bb2db9ec872852152e3de9e807306c3b6aff354df378c4a5f1b43ea3`.
+Wall time was 38:23.12, peak RSS 16,523,152 KiB, aggregate CPU utilization
+241%, and swap zero. These are whole-screen construction/evaluation resources,
+not serving latency. The instance terminated and local inspection scratch was
+removed. This evidence remains claim-ineligible. Work now returns to the
+registered V85 delta/mutation/compaction qualification; no 10M or 100M scale
+promotion follows from this rescore.
+
+### Original exact-row control
+
 Before testing another page representation, attempt `exact-row-control-a0015`
 replaced PQ ADC row scores with exact float32 row distances and left the
 top-2,048 reciprocal-rank aggregation and exact physical planner unchanged.
