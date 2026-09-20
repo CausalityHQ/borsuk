@@ -13,15 +13,48 @@ import pyarrow.parquet as pq
 
 from scripts.v85_pq16_page_nomination import (
     PageEntry,
+    _srht_rotate,
     evaluate_page_nominations,
     order_pages_by_pq_cooccurrence,
     plan_rank_weighted_ranges,
     remap_page_layout,
 )
-from scripts.v85_pq16_rescore_summary import summarize_paired_rescore
+from scripts.v85_pq16_rescore_summary import (
+    summarize_paired_pq16_rotation,
+    summarize_paired_rescore,
+)
 
 
 class V85Pq16PageNominationTests(unittest.TestCase):
+    def test_srht_rotation_is_seeded_orthogonal_and_distance_preserving(self) -> None:
+        # Break caught: the proposed PQ preconditioner changes Euclidean
+        # authority, uses an evaluation-dependent transform, or is nondeterministic.
+        vectors = np.asarray(
+            [
+                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                [-2.0, 0.5, 7.0, -1.0, 3.0, 2.0],
+                [0.0, -4.0, 1.0, 8.0, -3.0, 5.0],
+            ],
+            dtype=np.float32,
+        )
+
+        rotated = _srht_rotate(vectors, seed=7216)
+
+        self.assertEqual(rotated.shape, (3, 8))
+        np.testing.assert_array_equal(rotated, _srht_rotate(vectors, seed=7216))
+        self.assertFalse(
+            np.array_equal(rotated, _srht_rotate(vectors, seed=7217))
+        )
+        original_distances = np.sum(
+            (vectors[:, None, :] - vectors[None, :, :]) ** 2, axis=2
+        )
+        rotated_distances = np.sum(
+            (rotated[:, None, :] - rotated[None, :, :]) ** 2, axis=2
+        )
+        np.testing.assert_allclose(
+            rotated_distances, original_distances, rtol=2e-6, atol=2e-5
+        )
+
     def test_query_blind_cooccurrence_order_groups_related_pages_and_remaps_bytes(
         self,
     ) -> None:
@@ -87,6 +120,8 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             "p05_recall100_ppm": 1_000_000,
             "samples": [
                 {
+                    "bytes": 1,
+                    "gets": 1,
                     "query": 0,
                     "truth_ids": truth,
                     "hit10_ids": truth[:10],
@@ -108,6 +143,68 @@ class V85Pq16PageNominationTests(unittest.TestCase):
         self.assertEqual(summary["centroid_average_recall100_ppm"], 1_000_000)
         self.assertEqual(summary["paired_recall10_delta_ci95_ppm"], [0, 0])
         self.assertEqual(summary["paired_recall100_delta_ci95_ppm"], [0, 0])
+
+    def test_rotation_summary_recomputes_paired_samples_and_promotion(self) -> None:
+        # Break caught: the SRHT decision trusts runner aggregates or compares
+        # unmatched queries instead of immutable per-query hit evidence.
+        truth = list(range(100))
+        baseline = {
+            "average_recall10_ppm": 900_000,
+            "average_recall100_ppm": 990_000,
+            "gate_passed": False,
+            "max_bytes_per_query": 1,
+            "max_gets_per_query": 1,
+            "p05_recall100_ppm": 990_000,
+            "schema": "borsuk-v85-pq16-page-nomination-result-v2",
+            "samples": [
+                {
+                    "bytes": 1,
+                    "gets": 1,
+                    "query": 0,
+                    "truth_ids": truth,
+                    "hit10_ids": truth[:9],
+                    "hit_ids": truth[:99],
+                    "hits10": 9,
+                    "hits": 99,
+                }
+            ],
+        }
+        challenger = {
+            "average_recall10_ppm": 1_000_000,
+            "average_recall100_ppm": 1_000_000,
+            "gate_passed": True,
+            "max_bytes_per_query": 1,
+            "max_gets_per_query": 1,
+            "p05_recall100_ppm": 1_000_000,
+            "rotation": "srht",
+            "samples": [
+                {
+                    "bytes": 1,
+                    "gets": 1,
+                    "query": 0,
+                    "truth_ids": truth,
+                    "hit10_ids": truth[:10],
+                    "hit_ids": truth,
+                    "hits10": 10,
+                    "hits": 100,
+                }
+            ],
+        }
+
+        summary = summarize_paired_pq16_rotation(
+            baseline,
+            challenger,
+            baseline_sha256="1" * 64,
+            challenger_sha256="2" * 64,
+        )
+
+        self.assertEqual(
+            summary["paired_recall10_delta_ci95_ppm"], [100_000, 100_000]
+        )
+        self.assertEqual(
+            summary["paired_recall100_delta_ci95_ppm"], [10_000, 10_000]
+        )
+        self.assertTrue(summary["challenger_promoted"])
 
     def test_100k_rescore_runner_preregisters_full_development_evidence(self) -> None:
         # Break caught: the paid rescore silently uses 32 queries, retunes the
@@ -135,6 +232,40 @@ class V85Pq16PageNominationTests(unittest.TestCase):
                 "queries": 1000,
                 "query_parallelism": 1,
                 "shortlist_rows": 2048,
+                "spot_only": True,
+            },
+        )
+
+    def test_srht_runner_preregisters_one_arm_and_reuses_frozen_identity(self) -> None:
+        # Break caught: the representation falsifier reruns an old arm, sweeps
+        # rotation parameters, or reduces the already-burned development set.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_pq16_srht_100k_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "baseline_rerun": False,
+                "blas_threads": 16,
+                "instance_type": "c7i.8xlarge",
+                "max_wall_seconds": 1200,
+                "page_budget": 32,
+                "queries": 1000,
+                "query_parallelism": 1,
+                "rotation": "srht",
+                "rotation_seed_xor": 0x53524854,
+                "shortlist_rows": 2048,
+                "split": "burned-development",
                 "spot_only": True,
             },
         )
@@ -430,11 +561,25 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             self.assertEqual(result["p05_recall100_ppm"], 1_000_000)
             self.assertEqual(result["rows"], 257)
             self.assertTrue(result["gate_passed"])
+            self.assertEqual(result["rotation"], "identity")
+            self.assertEqual(result["rotated_dimensions"], dimensions)
+            self.assertIsNone(result["rotation_seed"])
             self.assertEqual(result_body[-1:], b"\n")
             self.assertEqual(
                 json.loads(completed.stdout)["result_sha256"],
                 hashlib.sha256(result_body).hexdigest(),
             )
+
+            srht_output = root / "srht-result.json"
+            srht_command = command.copy()
+            srht_command[srht_command.index(str(output))] = str(srht_output)
+            srht_command.extend(["--rotation", "srht"])
+            subprocess.run(srht_command, check=True, capture_output=True, text=True)
+            srht_result = json.loads(srht_output.read_bytes())
+            self.assertEqual(srht_result["rotation"], "srht")
+            self.assertEqual(srht_result["rotated_dimensions"], dimensions)
+            self.assertEqual(srht_result["rotation_seed"], 7216 ^ 0x53524854)
+            self.assertEqual(srht_result["average_recall100_ppm"], 1_000_000)
 
             cooccurrence_output = root / "cooccurrence-result.json"
             cooccurrence_command = command.copy()

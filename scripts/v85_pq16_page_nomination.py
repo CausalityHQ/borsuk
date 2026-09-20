@@ -392,6 +392,37 @@ def _train_pq16(vectors: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarray]
     return books, codes
 
 
+def _srht_rotate(vectors: np.ndarray, seed: int) -> np.ndarray:
+    """Apply one deterministic orthonormal sign-Hadamard rotation."""
+
+    if (
+        vectors.ndim != 2
+        or vectors.shape[0] == 0
+        or vectors.shape[1] == 0
+        or not np.isfinite(vectors).all()
+    ):
+        raise ValueError("SRHT rotation input differs")
+    dimensions = vectors.shape[1]
+    padded = 1 << (dimensions - 1).bit_length()
+    rotated = np.zeros((vectors.shape[0], padded), dtype=np.float32)
+    rotated[:, :dimensions] = vectors
+    generator = np.random.default_rng(seed)
+    signs = generator.choice(
+        np.asarray([-1.0, 1.0], dtype=np.float32), size=padded
+    )
+    rotated *= signs[None, :]
+    width = 1
+    while width < padded:
+        for start in range(0, padded, 2 * width):
+            left = rotated[:, start : start + width].copy()
+            right = rotated[:, start + width : start + 2 * width].copy()
+            rotated[:, start : start + width] = left + right
+            rotated[:, start + width : start + 2 * width] = left - right
+        width *= 2
+    rotated *= np.float32(1.0 / np.sqrt(padded))
+    return rotated
+
+
 def _rank_pq16(
     queries: np.ndarray,
     base_ids: np.ndarray,
@@ -498,6 +529,7 @@ def main() -> None:
     parser.add_argument("--shortlist-rows", type=int, default=2048)
     parser.add_argument("--gap-pages", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7216)
+    parser.add_argument("--rotation", choices=("identity", "srht"), default="identity")
     parser.add_argument("--cooccurrence-pseudoqueries", type=int, default=0)
     parser.add_argument("--cooccurrence-shortlist-rows", type=int, default=512)
     parser.add_argument("--cooccurrence-unique-pages", type=int, default=32)
@@ -563,8 +595,17 @@ def main() -> None:
     ):
         raise ValueError("evaluation query count differs")
 
-    books, codes = _train_pq16(base_vectors, args.seed)
-    ranked = _rank_pq16(queries, base_ids, books, codes, args.shortlist_rows)
+    rotation_seed = args.seed ^ 0x53524854
+    if args.rotation == "srht":
+        scoring_base = _srht_rotate(base_vectors, rotation_seed)
+        scoring_queries = _srht_rotate(queries, rotation_seed)
+    else:
+        scoring_base = base_vectors
+        scoring_queries = queries
+    books, codes = _train_pq16(scoring_base, args.seed)
+    ranked = _rank_pq16(
+        scoring_queries, base_ids, books, codes, args.shortlist_rows
+    )
     maximum_page_bytes = max(entry.encoded_bytes for entry in page_entries.values())
     max_span_pages = (16 * 1024 * 1024) // maximum_page_bytes
     evaluation_args = dict(
@@ -595,6 +636,9 @@ def main() -> None:
         "page_planner": "exact-reciprocal-rank",
         "queries": args.queries_count,
         "resident_bytes_at_100m": 1_600_000_000,
+        "rotated_dimensions": scoring_base.shape[1],
+        "rotation": args.rotation,
+        "rotation_seed": rotation_seed if args.rotation == "srht" else None,
         "rows": len(source_ids),
         "shortlist_rows": args.shortlist_rows,
         "span_page_budget": max_span_pages,
@@ -605,7 +649,7 @@ def main() -> None:
         )
         pseudoquery_ids = base_ids[pseudoquery_indices]
         pseudoquery_ranked = _rank_pq16(
-            base_vectors[pseudoquery_indices],
+            scoring_base[pseudoquery_indices],
             base_ids,
             books,
             codes,
