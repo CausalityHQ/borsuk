@@ -186,11 +186,11 @@ python3.12 -m venv .venv || exit 91
 .venv/bin/pip install -q numpy==1.26.4 pyarrow==17.0.0 || exit 91
 
 phase=source
-aws s3 cp "$V98_SOURCE_ARCHIVE_URI" source.tar.gz --only-show-errors || exit 92
+[ -f source.tar.gz ] || aws s3 cp "$V98_SOURCE_ARCHIVE_URI" source.tar.gz --only-show-errors || exit 92
 [ "$(stat -c%s source.tar.gz)" = "$V98_SOURCE_ARCHIVE_BYTES" ] || exit 93
 printf '%s  source.tar.gz\n' "$V98_SOURCE_ARCHIVE_SHA256" >hashes.txt
 sha256sum -c hashes.txt || exit 93
-mkdir repo && tar -xzf source.tar.gz -C repo || exit 94
+[ -d repo ] || { mkdir repo && tar -xzf source.tar.gz -C repo; } || exit 94
 
 phase=inputs
 for role in source queries truth generation base delta; do

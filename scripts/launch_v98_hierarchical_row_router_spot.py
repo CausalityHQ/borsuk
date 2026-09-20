@@ -174,13 +174,7 @@ def _q(value: object) -> str:
 
 
 def worker_script(plan: V98SpotPlan) -> str:
-    """Bind a plan to the reviewed remote runner shell."""
-
-    runner = (
-        pathlib.Path(__file__)
-        .with_name("v98_hierarchical_row_router_run_remote.sh")
-        .read_text()
-    )
+    """Bind a plan to a size-bounded authenticated bootstrap."""
     exports = {
         "V98_ATTEMPT": plan.attempt,
         "V98_BOOTSTRAP_RESAMPLES": plan.bootstrap_resamples,
@@ -210,7 +204,21 @@ def worker_script(plan: V98SpotPlan) -> str:
     header = "\n".join(
         f"export {name}={_q(value)}" for name, value in sorted(exports.items())
     )
-    return f"#!/bin/bash\n{header}\n{runner}"
+    bootstrap = """set -euo pipefail
+root=/mnt/v98-hierarchical-g1
+mkdir -p "$root" && cd "$root"
+aws s3 cp "$V98_SOURCE_ARCHIVE_URI" source.tar.gz --only-show-errors
+[ "$(stat -c%s source.tar.gz)" = "$V98_SOURCE_ARCHIVE_BYTES" ]
+printf '%s  source.tar.gz\\n' "$V98_SOURCE_ARCHIVE_SHA256" >hashes.txt
+sha256sum -c hashes.txt
+mkdir repo
+tar -xzf source.tar.gz -C repo
+exec bash repo/scripts/v98_hierarchical_row_router_run_remote.sh
+"""
+    script = f"#!/bin/bash\n{header}\n{bootstrap}"
+    if len(script.encode()) > 16_384:
+        raise ValueError("V98 user data exceeds EC2 limit")
+    return script
 
 
 def build_launch_specs(plan: V98SpotPlan) -> list[dict[str, object]]:

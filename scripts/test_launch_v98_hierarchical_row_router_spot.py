@@ -134,6 +134,13 @@ class V98SpotLauncherTests(unittest.TestCase):
         # Break caught: partial evidence becomes visible as terminal, or the
         # remote process runs an unregistered split/configuration.
         script = worker_script(self.plan())
+        runner = (
+            pathlib.Path(__file__)
+            .with_name("v98_hierarchical_row_router_run_remote.sh")
+            .read_text()
+        )
+        combined = script + runner
+        self.assertLessEqual(len(script.encode()), 16_384)
         for role, identity in self.plan().inputs.items():
             self.assertIn(identity.uri, script, role)
             self.assertIn(identity.sha256, script, role)
@@ -158,14 +165,15 @@ class V98SpotLauncherTests(unittest.TestCase):
             "1048576",
             "pressure-stop.txt",
         ):
-            self.assertIn(literal, script)
-        self.assertLess(script.index("rescore.json"), script.rindex("terminal.json"))
+            self.assertIn(literal, combined)
+        self.assertLess(runner.index("rescore.json"), runner.rindex("terminal.json"))
         self.assertLess(
-            script.rindex("terminal.json"), script.rindex("shutdown -h now")
+            runner.rindex("terminal.json"), runner.rindex("shutdown -h now")
         )
-        self.assertNotIn("validation-query", script)
-        self.assertNotIn("holdout", script)
-        self.assertNotIn("attempt=2", script)
+        self.assertIn("repo/scripts/v98_hierarchical_row_router_run_remote.sh", script)
+        self.assertNotIn("validation-query", combined)
+        self.assertNotIn("holdout", combined)
+        self.assertNotIn("attempt=2", combined)
 
     def test_launch_specs_are_one_time_spot_x86_and_terminate_on_shutdown(self) -> None:
         # Break caught: the experiment uses On-Demand, persists after terminal,
