@@ -2307,3 +2307,54 @@ residual fails those gates or regresses identity average or p05 Recall@100,
 the residual arm is rejected. Only if both checks pass may the already-frozen
 claim-ineligible validation rerun proceed without retuning. No native-S3,
 10M, 100M, or sealed-holdout work follows directly from this screen.
+
+### V85 1M development ceiling rejects sparse residual scoring
+
+The first attempt used source
+`7a6dca3847b6dd5c051de1da91c560abf9ed3a4d` on Spot instance
+`i-0e0bb0a096e8e5ca9`. It authenticated all downloaded bytes but stopped in
+six seconds before emitting science because the development query and truth
+roles use the V36 `embedding` and long-form ranked schemas, while the new
+runner had selected the validation-role `vector` and nested-neighbor readers.
+Its terminal SHA-256 is
+`d87e6be246ff7e5c56d97a88aeb0c23350103c71ab4029187f458f26650ee6de`.
+This was a harness failure, not quality evidence. Source
+`03a64eb79cb4a25797425d6615214cbcff4c297f` added strict explicit readers for
+the two authenticated role formats and preserved stderr.
+
+The one scientific attempt used source
+`03a64eb79cb4a25797425d6615214cbcff4c297f` on c7i.8xlarge Spot instance
+`i-042c2d37f20804056`. It opened only development ordinals 456 through 583,
+published the complete canonical three-arm result, and terminated. Evidence is
+under
+`research/v85-sparse-residual-development/03a64eb79cb4a25797425d6615214cbcff4c297f/runs/v85-sparse-residual-development-20260920T122501Z-03a64eb/a0001/`.
+
+| fixed arm | average Recall@10 | average Recall@100 | p05 / worst Recall@100 | max GETs | max bytes |
+|---|---:|---:|---:|---:|---:|
+| identity PQ16 | 97.3437% | 94.0312% | 70% / 52% | 32 | 16,727,848 |
+| sparse residual PQ | 97.8125% | 94.3750% | 70% / 52% | 32 | 16,727,848 |
+| exact-f32 row ceiling | **100.0000%** | **99.0781%** | **94% / 79%** | 32 | 16,734,128 |
+
+Exact-f32 passed every absolute gate on the identical frozen layout and
+planner. Page locality is therefore sufficient for this split. Sparse
+residual improved average Recall@10 by 0.4688 points and Recall@100 by 0.3438
+points but left the p05 and worst-query tail unchanged and failed the 97.5%
+average Recall@100 and 90% p05 gates. The preregistered classification is
+`sparse-residual-rejected`; the burned validation rerun remains fenced. The
+next representation work must improve compressed row-score fidelity rather
+than spend more page bytes or change the accepted locality policy.
+
+The scientific result SHA-256 is
+`bfdc4b71e2d855e80e0e4c538053ea15ecbe9f728f4bb99b3dd44fb41edac981`.
+Science completed in 1:42.70 at 10,865,224 KiB peak RSS, 704% aggregate CPU,
+and zero swaps. The attempt then exited 99 in validation because the remote
+Python 3.9 runtime rejected `zip(strict=...)`; its terminal, timing, and
+validator-log SHA-256 values are respectively
+`164480d25b0513db127e0ce25982e511a1c45254a78ac911b5c2b3085459bbc8`,
+`0ce56e365bde07348da6e83517e64f09e314f3c26c886dfed0557ee76e70eacc`,
+and `6aedfd1b510b118d958490c96f46552bf5688dc790443d557506de87066b833b`.
+No science was rerun. Validator source
+`eb7d1c47e168ddb0a4345b5e3b8996d438fe9fd0` added a Python-3.9 regression
+test and independently recomputed the immutable result. The repaired canonical
+summary SHA-256 is
+`1908850070120f7e7a1dd5267abd779678a8b6719197d662411a061aa12a6f54`.
