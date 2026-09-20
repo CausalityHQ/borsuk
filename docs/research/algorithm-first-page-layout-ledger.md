@@ -1300,6 +1300,40 @@ PQ representations or all possible layouts, but it does reject this sole
 registered follow-up hypothesis. No 1M, 10M, or 100M promotion follows, and no
 request or quality boundary is loosened from this development evidence.
 
+### Competitive qualification contract v2 — frozen before the next 1M split
+
+The original 99% average plus 99% absolute-worst Recall@100 rule was a research
+aspiration, not a market-parity requirement. It is stricter than the published
+first-party targets available for comparable object-backed services: Amazon S3
+Vectors documents greater than 90% average recall for most datasets, while
+turbopuffer documents a 90--95% Recall@10 target across live queries. These are
+not paired measurements: their datasets, cutoffs, filters, and latency methods
+differ from BORSUK's. They define an external competitive floor, not evidence
+that a BORSUK arm has matched either product.
+
+Before opening another 1M held-out split, qualification matrix v2 therefore
+freezes three independently recomputed distributional gates: at least 96%
+average Recall@10, 97.5% average Recall@100, and 90% p05 Recall@100. Absolute
+worst-query Recall@100 remains reported but is no longer a veto. The 32-GET,
+16-MiB, and 3-GiB ceilings are unchanged. Receipt v3 derives every quality
+value from ordered raw result and truth IDs; the remote runner no longer trusts
+its own aggregate fields. This contract is externally anchored and is not a
+retroactive pass for the 32-query development arms. In particular, their
+Recall@10 was not measured.
+
+The executable 100M worksheet also closes the representation-only accounting
+gap. At 100,000,000 live rows with at most 8,000,000 uncompacted mutations it
+budgets 1,600,000,000 bytes of page-ordered PQ16 codes, 256,000,000 bytes for a
+sorted 32-byte-per-mutation directory, 3,125,016 bytes of page offsets, 786,432
+bytes of codebooks, 268,435,456 bytes for sixteen bounded sparse-planner
+workspaces, 33,554,432 bytes of metadata reserve, and 536,870,912 bytes of
+runtime reserve. Total projected residency is **2,698,772,248 bytes**, leaving
+522,453,224 bytes below 3 GiB. This is feasibility arithmetic, not a serving
+measurement. It requires exact delta vectors and page bodies to remain in S3,
+page-ordered codes so no ID-to-page table is resident, and a sparse touched-page
+planner. The current dense traceback would project **4,595,961,792 bytes** and
+is explicitly disallowed; the sparse replacement is not yet implemented.
+
 ### Original exact-row control
 
 Before testing another page representation, attempt `exact-row-control-a0015`
