@@ -115,6 +115,7 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             json.loads(completed.stdout),
             {
                 "blas_threads": 16,
+                "build_virtual_memory_gib": 48,
                 "instance_type": "c7i.8xlarge",
                 "max_wall_seconds": 1800,
                 "page_budget": 32,

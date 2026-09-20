@@ -3,7 +3,7 @@ set -uo pipefail
 
 case "${1:-}" in
   --describe)
-    printf '%s\n' '{"blas_threads":16,"instance_type":"c7i.8xlarge","max_wall_seconds":1800,"page_budget":32,"queries":1000,"query_parallelism":1,"shortlist_rows":2048,"split":"validation","spot_only":true}'
+    printf '%s\n' '{"blas_threads":16,"build_virtual_memory_gib":48,"instance_type":"c7i.8xlarge","max_wall_seconds":1800,"page_budget":32,"queries":1000,"query_parallelism":1,"shortlist_rows":2048,"split":"validation","spot_only":true}'
     exit 0
     ;;
   "") ;;
@@ -40,7 +40,7 @@ publish_terminal() {
 trap publish_terminal EXIT
 
 mkdir -p "$root" && cd "$root" || exit 90
-ulimit -v $((24 * 1024 * 1024))
+ulimit -v $((48 * 1024 * 1024))
 export HOME=${HOME:-/root}
 export OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16 MKL_NUM_THREADS=16
 
