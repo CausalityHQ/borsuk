@@ -2626,7 +2626,7 @@ removed, and no retry is authorized or needed for this rejected architecture.
 
 The next G1 action is not a wider PQ row code. It is one bounded 1M-development
 representation hypothesis that changes how the exact retained rows are reduced
-to eight pages while preserving the same 32-GET/16-MiB serving budget. It must
+to the final 32-GET/16-MiB page set. It must
 first beat this exact-f32 ceiling on all 1,000 queries with paired evidence;
 only then may width selection and the complete 100M `<3 GiB` worksheet resume.
 S3 Vector and TurboPuffer are not measured in this cell, so no matched or
