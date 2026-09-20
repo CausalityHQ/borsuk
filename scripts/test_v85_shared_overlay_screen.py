@@ -698,6 +698,37 @@ class V85SharedOverlayScreenTests(unittest.TestCase):
             self.assertLessEqual(cell["base_gets_max"], 2)
             self.assertGreaterEqual(cell["sq8_recall_ppm"], 500_000)
 
+    def test_overlay_rank_only_path_computes_recall_without_shortlist_cells(self) -> None:
+        # Break caught: paired-rescore disables shortlist cells, leaving the
+        # shared recall denominator uninitialized before rank evaluation.
+        base = np.eye(4, dtype=np.float32)
+        delta = np.asarray([[0.5, 0.5, 0.5, 0.5]], dtype=np.float32)
+
+        result = evaluate_overlay(
+            base,
+            delta,
+            np.asarray([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+            base_ids=np.asarray([10, 20, 30, 40], dtype=np.int64),
+            delta_ids=np.asarray([50], dtype=np.int64),
+            truth_ids=np.asarray([[10, 50]], dtype=np.int64),
+            page_rows=1,
+            neighbors=2,
+            subspaces=2,
+            clusters=2,
+            shortlists=(),
+            rank_top_rows=(2,),
+            rank_page_caps=(2,),
+            rank_planners=("exact",),
+            training_sample_rows=4,
+            encode_chunk_rows=2,
+        )
+
+        self.assertEqual(result["cells"], [])
+        self.assertEqual(len(result["rank_weighted_cells"]), 1)
+        self.assertEqual(
+            result["rank_weighted_cells"][0]["exact_recall_ppm"], 1_000_000
+        )
+
     def test_nonfinite_or_incompatible_inputs_fail_closed(self) -> None:
         base = np.eye(4, dtype=np.float32)
         delta = np.eye(4, dtype=np.float32)[:1]

@@ -1404,6 +1404,7 @@ def evaluate_overlay(
     )
     page_payload_bytes = oracle_result["page_payload_bytes"]
     max_base_pages = oracle_result["physical_oracle"]["max_base_pages"]
+    denominator = len(queries) * truth_width
 
     router_scores = [_adc_scores(query, base_codes, books) for query in queries]
     cells = []
@@ -1461,7 +1462,6 @@ def evaluate_overlay(
                     "result_ids": page_sq8_result,
                 }
             )
-        denominator = len(queries) * truth_width
         first_result = samples[0]["result_ids"]
         base_bytes = [sample["base_bytes"] for sample in samples]
         base_gets = [sample["base_gets"] for sample in samples]
