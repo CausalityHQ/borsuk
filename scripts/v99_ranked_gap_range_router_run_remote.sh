@@ -60,7 +60,7 @@ finish() {
   finished_epoch=$(date +%s)
   pressure_end=$(tr '\n' ';' </proc/pressure/memory)
   swap_end_kib=$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{print t-f}' /proc/meminfo)
-  max_rss_kib=$(awk -F: '/Maximum resident set size/{gsub(/ /,"",$2); if($2>m)m=$2} END{print m+0}' producer.time rescore.time 2>/dev/null)
+  max_rss_kib=$(awk -F: '/Maximum resident set size/{gsub(/ /,"",$2); value=$2+0; if(value>m)m=value} END{print m+0}' producer.time rescore.time 2>/dev/null)
   max_rss_kib=${max_rss_kib:-0}
   status=failed
   [ "$interrupted" -eq 1 ] && status=interrupted

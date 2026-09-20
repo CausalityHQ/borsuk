@@ -134,6 +134,7 @@ def _range_sample(
     directory: dict[tuple[str, int], tuple[int, int]],
     expected_truth: tuple[tuple[int, ...], tuple[tuple[str, int], ...]],
     expected_fence: tuple[int, int, int],
+    expected_retained_pages: tuple[tuple[str, int], ...],
 ) -> _RangeSample:
     item = _mapping(
         value,
@@ -170,6 +171,7 @@ def _range_sample(
         _fail("truth evidence")
 
     selected_pages: list[tuple[str, int]] = []
+    retained_pages = set(expected_retained_pages)
     ranges = _list(item["selected_ranges"], "selected ranges")
     previous: tuple[str, int, int] | None = None
     total_bytes = 0
@@ -190,7 +192,13 @@ def _range_sample(
         ):
             _fail("selected range order")
         pages = [(role, ordinal) for ordinal in range(first, last + 1)]
-        if any(page not in directory for page in pages):
+        if (
+            any(page not in directory for page in pages)
+            or pages[0] not in retained_pages
+            or pages[-1] not in retained_pages
+        ):
+            if pages[0] not in retained_pages or pages[-1] not in retained_pages:
+                _fail("shared hierarchy fence")
             _fail("selected range page")
         offset = directory[pages[0]][0]
         final_offset, final_bytes = directory[pages[-1]]
@@ -457,6 +465,7 @@ def _load_and_rescore(
                 directory=directory,
                 expected_truth=truths[ordinal],
                 expected_fence=fences[ordinal],
+                expected_retained_pages=containment_tuple[ordinal].selected_pages,
             )
             for ordinal, value in enumerate(exact_values)
         )
@@ -541,14 +550,10 @@ def _load_and_rescore(
                 directory=directory,
                 expected_truth=truths[ordinal],
                 expected_fence=fences[ordinal],
+                expected_retained_pages=containment_tuple[ordinal].selected_pages,
             )
             for ordinal, sample_value in enumerate(samples_values)
         )
-        for ordinal, sample in enumerate(samples):
-            if not set(sample.selected_pages).issubset(
-                set(containment_tuple[ordinal].selected_pages)
-            ):
-                _fail("shared hierarchy fence")
         aggregate = _range_aggregate(samples, expected_config)
         _aggregate_claim(arm["aggregate"], aggregate, "arm aggregate")
         arm_samples[name] = samples

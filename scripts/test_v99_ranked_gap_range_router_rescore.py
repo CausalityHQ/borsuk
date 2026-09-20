@@ -14,6 +14,7 @@ from scripts import test_v99_ranked_gap_range_router as v99_test
 from scripts.v97_row_width_screen import PageKey
 from scripts.v99_ranked_gap_range_router import canonical_v99_result_bytes, evaluate_v99
 from scripts.v99_ranked_gap_range_router_rescore import (
+    _range_sample,
     canonical_v99_rescore_bytes,
     rescore_v99_result,
     validate_v99_result,
@@ -78,6 +79,81 @@ class V99RescoreTests(unittest.TestCase):
             json.loads(receipt)["schema"],
             "borsuk-v99-ranked-gap-range-router-rescore-v1",
         )
+
+    def test_range_validator_accepts_only_gap_ranges_with_retained_endpoints(
+        self,
+    ) -> None:
+        # Break caught: the hostile reducer rejects authenticated interior gap
+        # pages even though adjacent-range serving deliberately reads them to
+        # consolidate retained endpoints into one GET.
+        directory = {
+            ("base", 0): (0, 10),
+            ("base", 1): (10, 10),
+            ("base", 2): (20, 10),
+        }
+        value = {
+            "query_ordinal": 0,
+            "truth_ids": [11, 12],
+            "truth_pages": [
+                {"object_role": "base", "ordinal": 0},
+                {"object_role": "base", "ordinal": 2},
+            ],
+            "selected_ranges": [
+                {
+                    "object_role": "base",
+                    "first_page": 0,
+                    "last_page": 2,
+                    "offset": 0,
+                    "bytes": 30,
+                }
+            ],
+            "selected_pages": [
+                {"object_role": "base", "ordinal": ordinal} for ordinal in range(3)
+            ],
+            "hit10_ids": [11, 12],
+            "hit_ids": [11, 12],
+            "hits10": 2,
+            "hits": 2,
+            "recall10_ppm": 1_000_000,
+            "recall100_ppm": 1_000_000,
+            "gets": 1,
+            "bytes": 30,
+            "root_evaluations": 1,
+            "page_evaluations": 3,
+            "scanned_rows": 3,
+        }
+        retained = (("base", 0), ("base", 2))
+        sample = _range_sample(
+            value,
+            query_ordinal=0,
+            config=self.config,
+            directory=directory,
+            expected_truth=((11, 12), retained),
+            expected_fence=(1, 3, 3),
+            expected_retained_pages=retained,
+        )
+        self.assertEqual(sample.selected_pages, tuple(directory))
+
+        changed = copy.deepcopy(value)
+        changed["selected_ranges"][0].update(first_page=1, offset=10, bytes=20)
+        changed["selected_pages"] = changed["selected_pages"][1:]
+        changed["hit10_ids"] = [12]
+        changed["hit_ids"] = [12]
+        changed["hits10"] = 1
+        changed["hits"] = 1
+        changed["recall10_ppm"] = 500_000
+        changed["recall100_ppm"] = 500_000
+        changed["bytes"] = 20
+        with self.assertRaisesRegex(ValueError, "shared hierarchy fence"):
+            _range_sample(
+                changed,
+                query_ordinal=0,
+                config=self.config,
+                directory=directory,
+                expected_truth=((11, 12), retained),
+                expected_fence=(1, 3, 3),
+                expected_retained_pages=retained,
+            )
 
     def test_rejects_authority_range_sample_projection_and_decision_drift(self) -> None:
         # Break caught: a valid-looking digest reroot lets forged physical or

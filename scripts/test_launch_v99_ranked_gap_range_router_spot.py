@@ -169,6 +169,7 @@ class V99SpotLauncherTests(unittest.TestCase):
             "V99_PREFLIGHT_MAX_SECONDS=5",
             "preflight.json",
             "max_rss_kib=${max_rss_kib:-0}",
+            "value=$2+0",
         ):
             self.assertIn(literal, combined)
         self.assertLess(runner.index("rescore.json"), runner.rindex("terminal.json"))
