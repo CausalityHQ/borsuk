@@ -45,7 +45,7 @@ class V85QualificationTests(unittest.TestCase):
         self.assertEqual(matrix["query_count"], 1_000)
         self.assertEqual(matrix["neighbors"], 100)
         self.assertEqual(matrix["offered_load_ppm"], 700_000)
-        self.assertEqual(matrix["preflight_page_budgets"], [8, 16])
+        self.assertEqual(matrix["preflight_page_budgets"], [16, 32])
         self.assertEqual(matrix["max_gets_per_query"], 32)
         self.assertEqual(matrix["max_bytes_per_query"], 16 * 1024 * 1024)
         self.assertEqual(matrix["max_peak_rss_bytes"], 3 * 1024**3)
@@ -87,7 +87,7 @@ class V85QualificationTests(unittest.TestCase):
             ("peak_rss_bytes", 3 * 1024**3 + 1),
             ("aggregate_recall_ppm", 989_999),
             ("worst_recall_ppm", 989_999),
-            ("selected_page_budget", 32),
+            ("selected_page_budget", 64),
         ):
             drift = copy.deepcopy(receipt)
             drift[field] = value

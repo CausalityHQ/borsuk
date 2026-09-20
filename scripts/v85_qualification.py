@@ -21,7 +21,7 @@ def frozen_matrix() -> dict[str, Any]:
         "min_aggregate_recall_ppm": 990_000,
         "neighbors": 100,
         "offered_load_ppm": 700_000,
-        "preflight_page_budgets": [8, 16],
+        "preflight_page_budgets": [16, 32],
         "range_concurrency": 16,
         "replacement_rows": 500,
         "query_count": 1_000,

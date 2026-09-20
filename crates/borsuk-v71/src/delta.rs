@@ -84,6 +84,27 @@ impl RunAuthority {
         }
         None
     }
+
+    /// Returns every registered page range in deterministic page order.
+    pub fn page_reads(&self) -> Result<Vec<PageRead>, DeltaError> {
+        let mut reads = Vec::with_capacity(self.pages.len());
+        let mut row_offset = 0u32;
+        for page in &self.pages {
+            reads.push(PageRead {
+                run_id: self.run_id,
+                page: page.page,
+                row_offset,
+                uri: self.object.uri.clone(),
+                offset: page.offset,
+                bytes: page.bytes,
+                rows: page.rows,
+            });
+            row_offset = row_offset
+                .checked_add(page.rows)
+                .ok_or_else(|| DeltaError::authority("run row offset overflows"))?;
+        }
+        Ok(reads)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

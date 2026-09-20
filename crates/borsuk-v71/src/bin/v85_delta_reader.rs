@@ -22,6 +22,8 @@ use url::Url;
 
 type ReaderResult<T> = Result<T, ReaderError>;
 
+const MAX_RESIDENT_DELTA_BYTES: u64 = 128 * 1024 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ReaderError(String);
 
@@ -235,12 +237,9 @@ async fn read_planned_page_streams(
     codec: &Sq8Codec,
     range_concurrency: usize,
 ) -> ReaderResult<Vec<DecodedRow>> {
-    let dimensions = codec.dimensions()?;
     if range_concurrency == 0 {
         return Err(ReaderError::authority("page read shape differs"));
     }
-    let expected_schema = page_schema(dimensions);
-    let mut decoded = Vec::new();
     let mut bodies = stream::iter(reads.iter().cloned())
         .map(|read| async move {
             let url = Url::parse(&read.uri)
@@ -269,6 +268,16 @@ async fn read_planned_page_streams(
         .try_collect::<Vec<_>>()
         .await?;
     bodies.sort_by_key(|(read, _)| (read.run_id, read.page, read.offset));
+    decode_page_streams(bodies, codec)
+}
+
+fn decode_page_streams(
+    bodies: Vec<(borsuk_v71::delta::PageRead, bytes::Bytes)>,
+    codec: &Sq8Codec,
+) -> ReaderResult<Vec<DecodedRow>> {
+    let dimensions = codec.dimensions()?;
+    let expected_schema = page_schema(dimensions);
+    let mut decoded = Vec::new();
     for (read, body) in bodies {
         let expected_bytes = usize::try_from(read.bytes)
             .map_err(|_| ReaderError::authority("page length is not addressable"))?;
@@ -355,6 +364,77 @@ async fn read_planned_page_streams(
         }
     }
     Ok(decoded)
+}
+
+async fn read_resident_delta_rows(
+    store: &dyn ObjectStore,
+    generation: &borsuk_v71::delta::GenerationManifest,
+    codec: &Sq8Codec,
+    concurrency: usize,
+) -> ReaderResult<Vec<DecodedRow>> {
+    if concurrency == 0 {
+        return Err(ReaderError::authority("resident delta concurrency differs"));
+    }
+    let delta_runs = generation
+        .runs()
+        .iter()
+        .filter(|run| run.kind() == "delta")
+        .cloned()
+        .collect::<Vec<_>>();
+    let total_bytes = delta_runs.iter().try_fold(0u64, |total, run| {
+        total
+            .checked_add(run.object_identity().2)
+            .ok_or_else(|| ReaderError::authority("resident delta length overflows"))
+    })?;
+    if total_bytes > MAX_RESIDENT_DELTA_BYTES {
+        return Err(ReaderError::authority(
+            "resident delta exceeds memory bound",
+        ));
+    }
+
+    let fetched = stream::iter(delta_runs)
+        .map(|run| async move {
+            let (uri, expected_sha256, expected_bytes) = run.object_identity();
+            let body = store
+                .get(&object_path(uri)?)
+                .await
+                .map_err(|error| {
+                    ReaderError::authority(format!("resident delta GET failed: {error}"))
+                })?
+                .bytes()
+                .await
+                .map_err(|error| {
+                    ReaderError::authority(format!("resident delta body failed: {error}"))
+                })?;
+            if u64::try_from(body.len()).ok() != Some(expected_bytes)
+                || format!("{:x}", Sha256::digest(&body)) != expected_sha256
+            {
+                return Err(ReaderError::authority(
+                    "resident delta payload identity differs",
+                ));
+            }
+            let mut pages = Vec::new();
+            for read in run.page_reads().map_err(|error| {
+                ReaderError::authority(format!("delta page plan differs: {error}"))
+            })? {
+                let begin = usize::try_from(read.offset)
+                    .map_err(|_| ReaderError::authority("delta page offset is not addressable"))?;
+                let end = usize::try_from(
+                    read.offset
+                        .checked_add(read.bytes)
+                        .ok_or_else(|| ReaderError::authority("delta page range overflows"))?,
+                )
+                .map_err(|_| ReaderError::authority("delta page end is not addressable"))?;
+                pages.push((read, body.slice(begin..end)));
+            }
+            Ok::<_, ReaderError>(pages)
+        })
+        .buffer_unordered(concurrency)
+        .try_collect::<Vec<_>>()
+        .await?;
+    let mut pages = fetched.into_iter().flatten().collect::<Vec<_>>();
+    pages.sort_by_key(|(read, _)| (read.run_id, read.page, read.offset));
+    decode_page_streams(pages, codec)
 }
 
 #[derive(Clone, Debug)]
@@ -851,6 +931,8 @@ async fn execute_with_store(
         .iter()
         .map(|run| (run.run_id(), run.kind()))
         .collect::<BTreeMap<_, _>>();
+    let resident_delta =
+        read_resident_delta_rows(store, &generation, &router.codec, range_concurrency).await?;
     let mut samples = Vec::with_capacity(queries.len());
     for (query_index, query) in queries.iter().enumerate() {
         let started = std::time::Instant::now();
@@ -876,6 +958,10 @@ async fn execute_with_store(
         selected.dedup();
         let reads = plan_page_reads(&selected, &generation)
             .map_err(|error| ReaderError::authority(format!("page plan differs: {error}")))?;
+        let reads = reads
+            .into_iter()
+            .filter(|read| run_kinds.get(&read.run_id).copied() == Some("base"))
+            .collect::<Vec<_>>();
         let rows =
             read_planned_page_streams(store, &reads, &router.codec, range_concurrency).await?;
         let decoded_bytes = rows.iter().map(|row| row.bytes).sum::<u64>();
@@ -885,7 +971,16 @@ async fn execute_with_store(
             return Err(ReaderError::authority("decoded page evidence differs"));
         }
         let mut base = Vec::new();
-        let mut delta = Vec::new();
+        let delta = resident_delta
+            .iter()
+            .map(|row| Candidate {
+                id: row.id,
+                sequence: row.sequence,
+                distance: squared_distance(query, &row.vector),
+                run_id: row.run_id,
+                row: row.row,
+            })
+            .collect::<Vec<_>>();
         for row in rows {
             let candidate = Candidate {
                 id: row.id,
@@ -896,7 +991,11 @@ async fn execute_with_store(
             };
             match run_kinds.get(&row.run_id).copied() {
                 Some("base") => base.push(candidate),
-                Some("delta") => delta.push(candidate),
+                Some("delta") => {
+                    return Err(ReaderError::authority(
+                        "delta candidate was fetched on the query path",
+                    ));
+                }
                 _ => return Err(ReaderError::authority("candidate run differs")),
             }
         }
@@ -1707,23 +1806,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_reader_uses_registered_ranges_without_local_run_files() {
-        // Break caught: remote execution authenticates by downloading or opening
-        // complete run files locally instead of issuing only registered ranges.
+    async fn remote_reader_authenticates_resident_delta_and_ranges_only_base() {
+        // Break caught: each query rereads immutable delta pages, exhausting the
+        // request budget as run count grows, or resident delta bytes skip SHA-256.
         let root = TempDir::new().unwrap();
         let local = exact_local_request(&root);
         let store = InMemory::new();
         let mut runs = Vec::new();
+        let mut run_bodies = Vec::new();
         for run in &local.runs {
             let body = fs::read(&run.path).unwrap();
             let uri = url::Url::parse(&run.uri).unwrap();
             store
                 .put(
                     &Path::from(uri.path().trim_start_matches('/')),
-                    Bytes::from(body).into(),
+                    Bytes::from(body.clone()).into(),
                 )
                 .await
                 .unwrap();
+            run_bodies.push(body);
             runs.push(RemoteArtifactIdentity {
                 uri: run.uri.clone(),
                 sha256: run.sha256.clone(),
@@ -1746,9 +1847,20 @@ mod tests {
         let body = execute_remote_with_store(&request, &store).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["aggregate_recall_ppm"], 1_000_000);
-        assert_eq!(value["total_requests"], 8);
+        assert_eq!(value["total_requests"], 4);
         assert_eq!(value["samples"][0]["result_ids"], serde_json::json!([1, 5]));
         assert_eq!(value["samples"][1]["result_ids"], serde_json::json!([3, 6]));
+
+        assert_eq!(run_bodies[1].len(), run_bodies[2].len());
+        let delta_zero = url::Url::parse(&request.runs[1].uri).unwrap();
+        store
+            .put(
+                &Path::from(delta_zero.path().trim_start_matches('/')),
+                Bytes::from(run_bodies[2].clone()).into(),
+            )
+            .await
+            .unwrap();
+        assert!(execute_remote_with_store(&request, &store).await.is_err());
 
         let mut authority_drift = request;
         authority_drift.router.uri = "s3://fixture/unbound-router".into();
@@ -1767,7 +1879,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["aggregate_recall_ppm"], 1_000_000);
         assert_eq!(value["worst_recall_ppm"], 1_000_000);
-        assert_eq!(value["total_requests"], 8);
+        assert_eq!(value["total_requests"], 4);
         assert_eq!(value["generation"], 1);
     }
 
