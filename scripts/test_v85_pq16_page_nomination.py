@@ -1,0 +1,325 @@
+import hashlib
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
+import unittest
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.ipc as ipc
+import pyarrow.parquet as pq
+
+from scripts.v85_pq16_page_nomination import (
+    PageEntry,
+    evaluate_page_nominations,
+)
+
+
+class V85Pq16PageNominationTests(unittest.TestCase):
+    @staticmethod
+    def _write_page(path: pathlib.Path, row_ids: list[int], dimensions: int) -> int:
+        schema = pa.schema(
+            [
+                pa.field("id", pa.int64(), nullable=False),
+                pa.field("sequence", pa.uint64(), nullable=False),
+                pa.field("state", pa.uint8(), nullable=False),
+                pa.field(
+                    "code",
+                    pa.list_(
+                        pa.field("element", pa.uint8(), nullable=False), dimensions
+                    ),
+                    nullable=False,
+                ),
+            ]
+        )
+        table = pa.Table.from_arrays(
+            [
+                pa.array(row_ids, type=pa.int64()),
+                pa.array([1] * len(row_ids), type=pa.uint64()),
+                pa.array([0] * len(row_ids), type=pa.uint8()),
+                pa.FixedSizeListArray.from_arrays(
+                    pa.array([0] * (len(row_ids) * dimensions), type=pa.uint8()),
+                    dimensions,
+                ),
+            ],
+            schema=schema,
+        )
+        sink = pa.BufferOutputStream()
+        with ipc.new_stream(sink, schema) as writer:
+            writer.write_table(table)
+        body = sink.getvalue().to_pybytes()
+        path.write_bytes(body)
+        return len(body)
+
+    def test_cli_authenticates_real_artifacts_and_emits_canonical_result(self) -> None:
+        # Break caught: the paid screen reaches science with a mismatched Arrow
+        # page schema, query/truth Parquet shape, digest, or CLI binding.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            dimensions = 16
+            base_ids = list(range(256))
+            source_ids = base_ids + [900]
+            vectors = np.arange(len(source_ids) * dimensions, dtype=np.float32).reshape(
+                -1, dimensions
+            )
+            source = root / "source.parquet"
+            queries = root / "queries.parquet"
+            truth = root / "truth.parquet"
+            generation = root / "generation.json"
+            base = root / "base.arrow"
+            delta = root / "delta.arrow"
+            output = root / "result.json"
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array(source_ids, type=pa.uint64()),
+                        pa.FixedSizeListArray.from_arrays(
+                            pa.array(vectors.reshape(-1), type=pa.float32()), dimensions
+                        ),
+                    ],
+                    schema=pa.schema(
+                        [
+                            pa.field("feature_row_id", pa.uint64(), nullable=False),
+                            pa.field(
+                                "embedding",
+                                pa.list_(
+                                    pa.field("item", pa.float32(), nullable=False),
+                                    dimensions,
+                                ),
+                                nullable=False,
+                            ),
+                        ]
+                    ),
+                ),
+                source,
+            )
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array([0], type=pa.uint32()),
+                        pa.FixedSizeListArray.from_arrays(
+                            pa.array(vectors[0], type=pa.float32()), dimensions
+                        ),
+                    ],
+                    schema=pa.schema(
+                        [
+                            pa.field("query", pa.uint32(), nullable=False),
+                            pa.field(
+                                "vector",
+                                pa.list_(
+                                    pa.field("element", pa.float32(), nullable=False),
+                                    dimensions,
+                                ),
+                                nullable=False,
+                            ),
+                        ]
+                    ),
+                ),
+                queries,
+            )
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array([0], type=pa.uint32()),
+                        pa.FixedSizeListArray.from_arrays(
+                            pa.array([0, 900], type=pa.int64()), 2
+                        ),
+                    ],
+                    schema=pa.schema(
+                        [
+                            pa.field("query", pa.uint32(), nullable=False),
+                            pa.field(
+                                "neighbors",
+                                pa.list_(
+                                    pa.field("element", pa.int64(), nullable=False), 2
+                                ),
+                                nullable=False,
+                            ),
+                        ]
+                    ),
+                ),
+                truth,
+            )
+            base_bytes = self._write_page(base, base_ids, dimensions)
+            delta_bytes = self._write_page(delta, [900], dimensions)
+
+            def identity(path: pathlib.Path) -> dict[str, object]:
+                body = path.read_bytes()
+                return {
+                    "bytes": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                    "uri": f"s3://fixture/{path.name}",
+                }
+
+            manifest = {
+                "dimensions": dimensions,
+                "runs": [
+                    {
+                        "kind": "base",
+                        "object": identity(base),
+                        "pages": [
+                            {"bytes": base_bytes, "offset": 0, "page": 0, "rows": 256}
+                        ],
+                    },
+                    {
+                        "kind": "delta",
+                        "object": identity(delta),
+                        "pages": [
+                            {"bytes": delta_bytes, "offset": 0, "page": 1, "rows": 1}
+                        ],
+                    },
+                ],
+            }
+            generation.write_bytes(
+                json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            command = [
+                sys.executable,
+                str(pathlib.Path(__file__).with_name("v85_pq16_page_nomination.py")),
+            ]
+            for role, path in (
+                ("source", source),
+                ("queries", queries),
+                ("truth", truth),
+                ("generation", generation),
+            ):
+                command.extend(
+                    [
+                        f"--{role}",
+                        str(path),
+                        f"--{role}-uri",
+                        f"s3://fixture/{path.name}",
+                        f"--{role}-sha256",
+                        hashlib.sha256(path.read_bytes()).hexdigest(),
+                    ]
+                )
+            command.extend(
+                [
+                    "--base",
+                    str(base),
+                    "--delta",
+                    str(delta),
+                    "--output",
+                    str(output),
+                    "--dimensions",
+                    str(dimensions),
+                    "--neighbors",
+                    "2",
+                    "--queries-count",
+                    "1",
+                    "--shortlist-rows",
+                    "256",
+                ]
+            )
+            completed = subprocess.run(
+                command, check=True, capture_output=True, text=True
+            )
+            result_body = output.read_bytes()
+            result = json.loads(result_body)
+            self.assertEqual(result["aggregate_recall_ppm"], 1_000_000)
+            self.assertEqual(result["rows"], 257)
+            self.assertTrue(result["gate_passed"])
+            self.assertEqual(result_body[-1:], b"\n")
+            self.assertEqual(
+                json.loads(completed.stdout)["result_sha256"],
+                hashlib.sha256(result_body).hexdigest(),
+            )
+
+    def test_resident_delta_and_coalesced_base_ranges_are_counted_exactly(self) -> None:
+        # Break caught: delta hits consume S3 work, or a coalesced request counts
+        # only selected page payloads rather than the full physical byte span.
+        pages = {
+            0: PageEntry(offset=0, encoded_bytes=100),
+            1: PageEntry(offset=100, encoded_bytes=100),
+            3: PageEntry(offset=200, encoded_bytes=100),
+            5: PageEntry(offset=300, encoded_bytes=100),
+        }
+        result = evaluate_page_nominations(
+            ranked_base_ids=np.asarray([[10, 30], [10, 30]], dtype=np.int64),
+            truth_ids=np.asarray([[10, 50, 900], [50, 900, 901]], dtype=np.int64),
+            base_page_by_id={10: 0, 30: 3, 50: 5},
+            resident_delta_ids={900, 901},
+            page_entries=pages,
+            neighbors=3,
+            gap_pages=2,
+            max_gets=1,
+            max_bytes=300,
+            min_recall_ppm=600_000,
+        )
+
+        self.assertEqual(result["aggregate_recall_ppm"], 666_667)
+        self.assertEqual(result["worst_recall_ppm"], 666_667)
+        self.assertEqual(result["max_gets_per_query"], 1)
+        self.assertEqual(result["max_bytes_per_query"], 300)
+        self.assertTrue(result["gate_passed"])
+        self.assertEqual(
+            result["samples"],
+            [
+                {
+                    "bytes": 300,
+                    "gets": 1,
+                    "hit_ids": [10, 900],
+                    "hits": 2,
+                    "query": 0,
+                    "selected_pages": [0, 3],
+                    "truth_ids": [10, 50, 900],
+                },
+                {
+                    "bytes": 300,
+                    "gets": 1,
+                    "hit_ids": [900, 901],
+                    "hits": 2,
+                    "query": 1,
+                    "selected_pages": [0, 3],
+                    "truth_ids": [50, 900, 901],
+                },
+            ],
+        )
+
+    def test_gate_rejects_quality_requests_and_bytes_independently(self) -> None:
+        # Break caught: a containment result promotes after any frozen serving
+        # boundary is exceeded.
+        pages = {
+            0: PageEntry(offset=0, encoded_bytes=10),
+            2: PageEntry(offset=10, encoded_bytes=10),
+        }
+        common = dict(
+            ranked_base_ids=np.asarray([[10, 20]], dtype=np.int64),
+            truth_ids=np.asarray([[10, 20]], dtype=np.int64),
+            base_page_by_id={10: 0, 20: 2},
+            resident_delta_ids=set(),
+            page_entries=pages,
+            neighbors=2,
+            gap_pages=0,
+            min_recall_ppm=1_000_000,
+        )
+
+        self.assertTrue(
+            evaluate_page_nominations(**common, max_gets=2, max_bytes=20)[
+                "gate_passed"
+            ]
+        )
+        self.assertFalse(
+            evaluate_page_nominations(**common, max_gets=1, max_bytes=20)[
+                "gate_passed"
+            ]
+        )
+        self.assertFalse(
+            evaluate_page_nominations(**common, max_gets=2, max_bytes=19)[
+                "gate_passed"
+            ]
+        )
+        low_quality = dict(common)
+        low_quality["truth_ids"] = np.asarray([[10, 99]], dtype=np.int64)
+        self.assertFalse(
+            evaluate_page_nominations(**low_quality, max_gets=2, max_bytes=20)[
+                "gate_passed"
+            ]
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
