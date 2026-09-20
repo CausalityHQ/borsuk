@@ -235,9 +235,7 @@ def _record_rescue_code_budgets(
         )
         maxima["max_total_bytes"] = max(
             maxima["max_total_bytes"],
-            int(sample["wave1_bytes"])
-            + rescue_bytes
-            + int(sample["wave2_bytes"]),
+            int(sample["wave1_bytes"]) + rescue_bytes + int(sample["wave2_bytes"]),
         )
         maxima["max_total_requests"] = max(
             maxima["max_total_requests"],
@@ -292,17 +290,25 @@ def evaluate_protected_rescue_arms(
     delta_ids: np.ndarray,
     truth_ids: np.ndarray,
     query_ordinals: np.ndarray,
+    policies: tuple[str, ...] = ("budget_only", "direct_rescue", "code_rescue"),
 ) -> dict[str, Any]:
-    """Build shared evidence once and evaluate three protected rescue policies."""
+    """Build shared evidence once and evaluate the requested rescue policies."""
 
     base = np.asarray(base, dtype=np.float32)
     queries = np.asarray(queries, dtype=np.float32)
+    allowed_policies = {"budget_only", "direct_rescue", "code_rescue"}
+    requested_policies = set(policies)
+    if (
+        not policies
+        or len(requested_policies) != len(policies)
+        or not requested_policies.issubset(allowed_policies)
+    ):
+        raise ValueError("V93 rescue policies differ")
     _validate_sketch(sketch_artifact, rows=base.shape[0], dimensions=base.shape[1])
     control_sha256 = control_artifact.digest()
     sketch_sha256 = sketch_artifact.digest()
     if (
-        sketch_artifact.base_vectors_sha256
-        != _array_sha256(base, np.dtype(np.float32))
+        sketch_artifact.base_vectors_sha256 != _array_sha256(base, np.dtype(np.float32))
         or sketch_artifact.control_artifact_sha256 != control_sha256
         or sketch_artifact.page_rows != _PAGE_ROWS
     ):
@@ -329,9 +335,7 @@ def evaluate_protected_rescue_arms(
     row_min_scores = np.vstack(row_min_rows)
     row_min_sha256 = _array_sha256(row_min_scores, np.dtype(np.float32))
     page_evidence_sha256 = hashlib.sha256(
-        ("borsuk-v93-v90-row-min-v1:" + sketch_sha256 + row_min_sha256).encode(
-            "ascii"
-        )
+        ("borsuk-v93-v90-row-min-v1:" + sketch_sha256 + row_min_sha256).encode("ascii")
     ).hexdigest()
     code_page_bytes = _PAGE_ROWS * _CONTROL_SUBSPACES + _CODE_PAGE_HEADER_BYTES
     data_page_bytes = _page_payload_bytes(
@@ -359,69 +363,67 @@ def evaluate_protected_rescue_arms(
         "wave1_page_evidence_sha256": page_evidence_sha256,
     }
     control_result = evaluate_coarse_to_fine(base, delta, queries, **common)
-    rescue_rows: dict[str, list[np.ndarray]] = {
-        "budget_only": [],
-        "direct_rescue": [],
-        "code_rescue": [],
-    }
+    rescue_rows: dict[str, list[np.ndarray]] = {name: [] for name in policies}
     for query_index, query in enumerate(queries):
         sample = control_result["samples"][query_index]
         wave1_pages = np.asarray(sample["wave1_pages"], dtype=np.int64)
         baseline_wave2_pages = np.asarray(sample["wave2_pages"], dtype=np.int64)
-        wave1_positions = _page_rows(
-            wave1_pages, rows=base.shape[0], page_rows=_PAGE_ROWS
-        )
-        wave1_scores = _adc_scores(
-            query,
-            control_artifact.row_codes[wave1_positions],
-            list(control_artifact.books),
-        )
-        shortlist_order = np.lexsort((wave1_positions, wave1_scores))[
-            : min(_WAVE2_TOP_ROWS, wave1_positions.size)
-        ]
-        pq_shortlist = wave1_positions[shortlist_order]
-        budget_pages = rank_rescue_pages(
-            pq_shortlist,
-            baseline_pages=baseline_wave2_pages,
-            page_rows=_PAGE_ROWS,
-            page_count=page_count,
-            take_rows=_WAVE2_TOP_ROWS,
-            max_pages=_RESCUE_PAGE_CAP,
-        )
-        candidates, estimates, valid = evidence[query_index]
-        nominations = nominate_unselected_rows(
-            candidates,
-            estimates,
-            valid,
-            selected_pages=wave1_pages,
-            page_rows=_PAGE_ROWS,
-            rows=base.shape[0],
-            take=_NOMINATION_ROWS,
-        )
-        direct_pages = rank_rescue_pages(
-            nominations,
-            baseline_pages=baseline_wave2_pages,
-            page_rows=_PAGE_ROWS,
-            page_count=page_count,
-            take_rows=_NOMINATION_ROWS,
-            max_pages=_RESCUE_PAGE_CAP,
-        )
-        code_pages = code_rescore_rescue_pages(
-            query,
-            control_artifact,
-            wave1_pages=wave1_pages,
-            baseline_wave2_pages=baseline_wave2_pages,
-            nominated_rescue_pages=direct_pages,
-            rows=base.shape[0],
-            page_rows=_PAGE_ROWS,
-            top_rows=_WAVE2_TOP_ROWS,
-            max_pages=_RESCUE_PAGE_CAP,
-        )
-        for name, pages in (
-            ("budget_only", budget_pages),
-            ("direct_rescue", direct_pages),
-            ("code_rescue", code_pages),
-        ):
+        pages_by_policy: dict[str, np.ndarray] = {}
+        if "budget_only" in requested_policies:
+            wave1_positions = _page_rows(
+                wave1_pages, rows=base.shape[0], page_rows=_PAGE_ROWS
+            )
+            wave1_scores = _adc_scores(
+                query,
+                control_artifact.row_codes[wave1_positions],
+                list(control_artifact.books),
+            )
+            shortlist_order = np.lexsort((wave1_positions, wave1_scores))[
+                : min(_WAVE2_TOP_ROWS, wave1_positions.size)
+            ]
+            pq_shortlist = wave1_positions[shortlist_order]
+            pages_by_policy["budget_only"] = rank_rescue_pages(
+                pq_shortlist,
+                baseline_pages=baseline_wave2_pages,
+                page_rows=_PAGE_ROWS,
+                page_count=page_count,
+                take_rows=_WAVE2_TOP_ROWS,
+                max_pages=_RESCUE_PAGE_CAP,
+            )
+        if requested_policies.intersection({"direct_rescue", "code_rescue"}):
+            candidates, estimates, valid = evidence[query_index]
+            nominations = nominate_unselected_rows(
+                candidates,
+                estimates,
+                valid,
+                selected_pages=wave1_pages,
+                page_rows=_PAGE_ROWS,
+                rows=base.shape[0],
+                take=_NOMINATION_ROWS,
+            )
+            direct_pages = rank_rescue_pages(
+                nominations,
+                baseline_pages=baseline_wave2_pages,
+                page_rows=_PAGE_ROWS,
+                page_count=page_count,
+                take_rows=_NOMINATION_ROWS,
+                max_pages=_RESCUE_PAGE_CAP,
+            )
+            if "direct_rescue" in requested_policies:
+                pages_by_policy["direct_rescue"] = direct_pages
+            if "code_rescue" in requested_policies:
+                pages_by_policy["code_rescue"] = code_rescore_rescue_pages(
+                    query,
+                    control_artifact,
+                    wave1_pages=wave1_pages,
+                    baseline_wave2_pages=baseline_wave2_pages,
+                    nominated_rescue_pages=direct_pages,
+                    rows=base.shape[0],
+                    page_rows=_PAGE_ROWS,
+                    top_rows=_WAVE2_TOP_ROWS,
+                    max_pages=_RESCUE_PAGE_CAP,
+                )
+        for name, pages in pages_by_policy.items():
             if not 0 <= pages.size <= _RESCUE_PAGE_CAP:
                 raise ValueError("V93 rescue page authority differs")
             rescue_rows[name].append(pages)
@@ -440,9 +442,9 @@ def evaluate_protected_rescue_arms(
         ("direct_rescue", "protected-pq16-direct-rescue"),
         ("code_rescue", "protected-pq16-to-pq192-code-rescue"),
     ):
-        pages = np.full(
-            (queries.shape[0], _RESCUE_PAGE_CAP), -1, dtype=np.int64
-        )
+        if name not in requested_policies:
+            continue
+        pages = np.full((queries.shape[0], _RESCUE_PAGE_CAP), -1, dtype=np.int64)
         for query_index, row in enumerate(rescue_rows[name]):
             pages[query_index, : row.size] = row
         digest = _rescue_digest(pages)
@@ -485,9 +487,7 @@ def evaluate_protected_rescue_arms(
 def build_run_metadata() -> dict[str, Any]:
     metadata = _v90_run_metadata()
     code_page_bytes = _PAGE_ROWS * _CONTROL_SUBSPACES + _CODE_PAGE_HEADER_BYTES
-    data_page_bytes = _page_payload_bytes(
-        dimensions=_DIMENSIONS, page_rows=_PAGE_ROWS
-    )
+    data_page_bytes = _page_payload_bytes(dimensions=_DIMENSIONS, page_rows=_PAGE_ROWS)
     rescue_code_bytes = _RESCUE_PAGE_CAP * code_page_bytes
     metadata["configuration"].update(
         {
@@ -505,9 +505,7 @@ def build_run_metadata() -> dict[str, Any]:
                 + _EXPANDED_WAVE2_MAX_PAGES * data_page_bytes
             ),
             "whole_query_max_requests": (
-                _WAVE1_MAX_RANGES
-                + _RESCUE_PAGE_CAP
-                + _EXPANDED_WAVE2_MAX_RANGES
+                _WAVE1_MAX_RANGES + _RESCUE_PAGE_CAP + _EXPANDED_WAVE2_MAX_RANGES
             ),
             "worker_model": "fixed-16-thread-blas",
         }
@@ -525,9 +523,7 @@ def build_run_metadata() -> dict[str, Any]:
     metadata["planned_max_requests_per_query"] = {
         "budget_only": _WAVE1_MAX_RANGES + _EXPANDED_WAVE2_MAX_RANGES,
         "code_rescue": (
-            _WAVE1_MAX_RANGES
-            + _RESCUE_PAGE_CAP
-            + _EXPANDED_WAVE2_MAX_RANGES
+            _WAVE1_MAX_RANGES + _RESCUE_PAGE_CAP + _EXPANDED_WAVE2_MAX_RANGES
         ),
         "control": _WAVE1_MAX_RANGES + _WAVE2_MAX_RANGES,
         "direct_rescue": _WAVE1_MAX_RANGES + _EXPANDED_WAVE2_MAX_RANGES,
@@ -558,8 +554,7 @@ def finalize_decision(result: dict[str, Any]) -> None:
     if control_hits != (3_167, 2_846, 90, 90):
         raise ValueError("V93 registered control differs")
     direct_candidate_truth_hits = sum(
-        int(sample["wave2_base_truth_page_hits"])
-        + int(sample["delta_truth_hits"])
+        int(sample["wave2_base_truth_page_hits"]) + int(sample["delta_truth_hits"])
         for sample in result["arms"]["direct_rescue"]["result"]["samples"]
     )
     counterfactual_matches = direct_candidate_truth_hits == 3_183
@@ -611,7 +606,9 @@ def finalize_decision(result: dict[str, Any]) -> None:
         "arm_passed": passed_arms,
         "reason": reason,
         "total_hit_delta_vs_budget_only": (
-            0 if accepted in (None, "budget_only") else arm_hits[accepted][0] - budget_hits
+            0
+            if accepted in (None, "budget_only")
+            else arm_hits[accepted][0] - budget_hits
         ),
     }
     result["registered_gate"] = {
@@ -628,7 +625,9 @@ def finalize_decision(result: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the fixed V93 protected rescue falsifier.")
+    parser = argparse.ArgumentParser(
+        description="Run the fixed V93 protected rescue falsifier."
+    )
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--queries", type=pathlib.Path, required=True)
     parser.add_argument("--ground-truth", type=pathlib.Path, required=True)

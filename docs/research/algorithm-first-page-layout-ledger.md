@@ -1610,3 +1610,31 @@ signal beyond merely spending 24 more PQ192 pages. It does not yet establish
 real-S3 latency. The next gate is a native real-S3 1M measurement of the fixed
 direct-rescue arm, followed by a sparse hierarchical replacement for the dense
 traceback before any 100M qualification or reserved confirmation run.
+
+### V94 preregistration — confirm the frozen arm before serving engineering
+
+The sequencing above is superseded before any reserved query was read. The
+operator prioritized proving the 1M algorithm step by step before investing in
+native-S3 integration or a sparse serving implementation. V94 therefore opens
+only the untouched development-confirmation ordinals 328 through 455 against
+the immutable 1M corpus. It makes zero S3 query requests and does not establish
+latency. Ordinals 456 through 999, the separately registered validation role,
+sealed holdout, larger corpora, and performance queries remain unread.
+
+The direct-rescue policy is frozen exactly as V93 selected it: 256 PQ16 row
+nominations, at most 24 protected additional pages, the same PQ192 control,
+SQ8 delta, exact reranker, training seeds, physical layout, and per-query
+budgets. The sole paired arms are the V90 control and V93 direct rescue. This is
+a configuration confirmation, not a new attribution experiment; V93 remains
+the authority that PQ16 beat the equal-budget PQ192 control.
+
+The direct-rescue arm must reach at least 12,685 of 12,800 Recall@100 hits,
+991,000-ppm base-only recall, an 85-hit per-query floor, no query more than one
+hit below its paired control, and at least four more total hits than control.
+All values are fixed before opening the split. The last condition prevents an
+equal-quality arm from accepting the extra page budget. One c7i.8xlarge Spot
+cell runs fixed 16-thread BLAS with one query at a time and no Rayon or nested
+query work stealing. It has a 1,800-second scientific cap and publishes the
+original terminal and complete evidence before shutting down. A pass advances
+to native real-S3 1M latency measurement; a failure rejects direct rescue and
+returns to algorithm diagnosis without serving or larger-scale engineering.
