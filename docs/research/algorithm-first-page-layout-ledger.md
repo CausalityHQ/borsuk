@@ -2624,10 +2624,29 @@ adds a failing-then-passing executable awk regression and the parenthesized
 comparison. The instance is terminated, all named authentication scratch was
 removed, and no retry is authorized or needed for this rejected architecture.
 
-The next G1 action is not a wider PQ row code. It is one bounded 1M-development
-representation hypothesis that changes how the exact retained rows are reduced
-to the final 32-GET/16-MiB page set. It must
-first beat this exact-f32 ceiling on all 1,000 queries with paired evidence;
-only then may width selection and the complete 100M `<3 GiB` worksheet resume.
-S3 Vector and TurboPuffer are not measured in this cell, so no matched or
-published-number parity claim is made.
+An authenticated post-terminal oracle explains the failure more precisely.
+With each 256-row page charged as one GET, even a truth-aware selector can
+recover at most 85.9710% average Recall@100 and 61% p05 within 32 pages: the
+top 100 neighbors occupy 43.337 distinct pages on average. The current exact
+planner is therefore only 2.6690 percentage points below that impossible
+single-page-GET ceiling. This rules out shortlist or scoring tweaks on the same
+physical planning unit.
+
+The same immutable result and authenticated generation manifest support one
+different physical oracle. Consecutive pages in each object are contiguous byte
+ranges, so up to 32 adjacent intervals can remain 32 S3 range GETs. Greedily
+merging the cheapest same-object gaps covers every retained truth page within
+both caps for 983/1,000 queries; required bytes are 6,876,464 at p50,
+13,226,760 at p95, and 17,869,232 at p99. For the 17 over-budget queries, a
+feasible truth-aware interval drop by reward-per-byte yields 98.7500% average
+Recall@10, 98.3720% average Recall@100, and 91% p05 Recall@100 with at most 32
+GETs and 16,740,984 bytes. This is an oracle, not a serving algorithm: it uses
+truth labels only to prove that the current clustered physical order can meet
+the gates when adjacent pages share a GET.
+
+The next and only G1 representation hypothesis is therefore an authenticated,
+query-blind adjacent-range planner. Exact row ranks choose deterministic
+same-object page ranges under the unchanged 32-GET/16-MiB caps; only if its
+exact ceiling passes on all 1,000 queries may PQ width selection and the full
+100M `<3 GiB` worksheet resume. S3 Vector and TurboPuffer are not measured in
+this cell, so no matched or published-number parity claim is made.
