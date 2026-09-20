@@ -2358,3 +2358,43 @@ No science was rerun. Validator source
 test and independently recomputed the immutable result. The repaired canonical
 summary SHA-256 is
 `1908850070120f7e7a1dd5267abd779678a8b6719197d662411a061aa12a6f54`.
+
+### V85 all-development rescore confirms the compressed-score bottleneck
+
+The 128-query slice was too small to resolve a few-hit representation effect.
+Source `edf92ccffe7d669533d396848ff1652883a6dd3d` therefore repeated the exact
+same frozen three-arm comparison on all 1,000 already-burned ReLAION 1M
+development queries. It changed no representation, training seed, shortlist,
+layout, page planner, or physical budget. The independent reducer authenticated
+all per-query truth and hit identities and recomputed deterministic paired
+10,000-resample confidence intervals.
+
+The original Spot process ran on `i-00f89b2db75d1a31a` in `eu-central-1a`,
+completed with exit zero, and terminated. Evidence is under
+`research/v85-sparse-residual-development/edf92ccffe7d669533d396848ff1652883a6dd3d/v85-development-all1000-20260920T123800Z-edf92cc/a0001/`.
+
+| fixed arm | average Recall@10 | average Recall@100 | p05 Recall@100 | max GETs | max bytes |
+|---|---:|---:|---:|---:|---:|
+| identity PQ16 | 97.8800% | 94.4680% | 75% | 32 | 16,734,128 |
+| sparse residual PQ | 98.0900% | 94.7750% | 76% | 32 | 16,734,128 |
+| exact-f32 row ceiling | **100.0000%** | **99.3950%** | **96%** | 32 | 16,734,128 |
+
+The paired 95% intervals for sparse residual minus identity are **+0.0800 to
++0.3400 percentage points** at Recall@10 and **+0.2280 to +0.3940 points** at
+Recall@100. Sparse residual is therefore a real improvement, but it remains
+2.725 points below the 97.5% Recall@100 gate and 14 points below the 90% p05
+gate. Exact-f32 exceeds both gates under the identical physical work limit;
+its paired intervals over identity are **+1.7500 to +2.5200 points** at
+Recall@10 and **+4.4690 to +5.3900 points** at Recall@100. The registered
+classification remains `sparse-residual-rejected`. This closes the sampling
+ambiguity without reopening validation or introducing another representation.
+
+The canonical result, summary, timing, and terminal SHA-256 values are
+respectively
+`1a4674b0f8749fc9ea23c2d64c9075c589007cc0ec937e94ac332a912555b569`,
+`4ec59cf9a25570804165f53ac776990d3374b917119dd3f01f40dcbc10b9bf7c`,
+`4b8f9da31e6da9144c98b1784431ea237be7104e7a6945bc2663f52c5a35ecf3`,
+and `e8914bdc0008e7c2fdee2e2bee58d9f586f5ae34edd76a91ef8b61e738fa3279`.
+Scientific wall time was 8:15.42, peak RSS was 11,132,400 KiB, aggregate CPU
+was 477%, and swaps were zero. All local evidence and source scratch was
+explicitly removed after independent current-source validation.
