@@ -2571,3 +2571,63 @@ logs, and then terminal; incomplete result bytes are never inspected.
 Named local scratch is removed after independent authentication. Duplicates,
 automatic restarts, 10M/100M work, production changes, and competitive parity
 claims are fenced until this attempt is terminal and independently verified.
+
+### V98 result — exact hierarchy ceiling rejected
+
+The sole registered attempt completed on Spot instance
+`i-06dae1df91b93028f` in `eu-central-1c`. It evaluated all 1,000 frozen
+ReLAION-1M development queries against exact top-100 truth. The canonical
+terminal is 1,516 bytes with SHA-256
+`f173a3b1f726f23340bbbf510b3222cb8fec01525a0991ac127741827d10173d`;
+it records exit code 0, status `complete`, and `claim_eligible=true`. The
+terminal-bound evidence is:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| result | 52,466,885 | `f8d6382fdfe84b5708cbfeaeae526e2b651c9a5f9d408e74b14c196b632de6fe` |
+| rescore | 790 | `740d6f475e21850e768398c2d7a661d3030815f1b2c2999fe8b49d4e7066e56c` |
+| resources | 457 | `b313a9c89f3150eba9a021b4a4217ff981fcd545f7c2ad7ec078815bc78ce87c` |
+| worker log | 11,376 | `b7df5611795f650422fd11cde99a11205a3de894f14e511e7612a09adb496d7b` |
+
+Current-source hostile recomputation authenticated the result and produced
+rescore bytes exactly equal to the terminal-bound rescore object. The shared
+10,000-row bootstrap matrix has SHA-256
+`8146b2c781e73f07293b293e11b31e6d923c3d456491a417d0ec847ac4ec8d28`.
+The hierarchy contains 7,278 pages and 910 eight-page roots; its 574,328-byte
+Arrow evidence has SHA-256
+`5e47350fcb36d9696500429e454fc35dce0e11909ca5ad8de81e9bd2243769e8`.
+
+| stage | avg R@10 | avg R@100 | p05 R@100 | max GETs | max bytes | quality | resource |
+|---|---:|---:|---:|---:|---:|---|---|
+| hierarchy containment | 98.8600% | 98.5180% | 92.0000% | n/a | n/a | pass | pass |
+| exact-f32 ceiling | 98.8600% | 83.3020% | 54.0000% | 32 | 6,427,384 | **fail** | pass |
+
+Both stages evaluated at most 910 roots, 4,096 pages, and 142,841 rows per
+query. The exact ceiling misses the 97.5000% average and 90% p05 Recall@100
+gates by 14.1980 and 36.0000 percentage points. Fail-fast therefore stopped
+before PQ16, PQ24, PQ32, PQ32x4, or summary-only evaluation; there is no width
+winner, paired width interval, or applicable 100M width worksheet. The
+classification is `hierarchy-exact-ceiling-rejected`. This localizes the
+failure after hierarchy containment: the registered 2,048-row shortlist and
+eight-page selection cannot preserve broad top-100 coverage even though the
+exposed hierarchy contains it. G2, 10M, 100M, and parity claims remain fenced.
+
+The worker ran for 271 seconds, reported a maximum process RSS of 613,620 KiB,
+zero swap at start and finish, memory PSI `full avg10=0.00` at start and
+finish, and an upper-bound Spot charge of 58,574 microdollars at the registered
+$0.7781/hour price. A worker-log audit found the continuous PSI comparison was
+not operational: awk parsed the unparenthesized ternary after `print` as output
+redirection. This does not alter the deterministic negative quality decision;
+RSS, endpoint PSI, and swap were far below their stops, and no latency or
+throughput claim is made. Commit `da5f5410c8018ec6c118ee5687d50c3ed40ba931`
+adds a failing-then-passing executable awk regression and the parenthesized
+comparison. The instance is terminated, all named authentication scratch was
+removed, and no retry is authorized or needed for this rejected architecture.
+
+The next G1 action is not a wider PQ row code. It is one bounded 1M-development
+representation hypothesis that changes how the exact retained rows are reduced
+to eight pages while preserving the same 32-GET/16-MiB serving budget. It must
+first beat this exact-f32 ceiling on all 1,000 queries with paired evidence;
+only then may width selection and the complete 100M `<3 GiB` worksheet resume.
+S3 Vector and TurboPuffer are not measured in this cell, so no matched or
+published-number parity claim is made.
