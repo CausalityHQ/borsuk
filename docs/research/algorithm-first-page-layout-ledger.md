@@ -2121,3 +2121,47 @@ small and the byte direction is wrong. This exact layout family is rejected
 without a parameter sweep or 1M rerun. Work returns to mutation/compaction
 qualification and no additional representation hypothesis is opened from this
 burned evidence.
+
+### V85 100k fragmentation and compaction qualification passes
+
+The registered correctness screen used ReLAION 100k x 768: the first 90,000
+rows formed the base, 10,000 rows formed the query-visible delta, and 32 fixed
+development queries used exact subset GT@100. It compared one, ten, and one
+hundred immutable delta runs and the post-compaction generation. Every arm
+returned identical ordered identifiers and identical truth. Aggregate, worst,
+and p05 Recall@100 were respectively **99.5312%**, **98%**, and **99%**.
+
+The first scientifically classifiable attempt, source
+`c40e49432b64fcd45246e945765088708b6691b1`, preserved receipt SHA-256
+`005394a3d32528cf8854a17054b91d3e87eff76d7d7a0d922f22ce5873221368`.
+It failed only the physical-amplification gate at 5.768043x. The compactor was
+authenticating each immutable run and then reading it again page by page, and
+it reread the completed output to hash it. This was physical duplicate work,
+not a result-ordering or recall defect.
+
+Source `f96cfd4513df17d138dd6fee3c8d70a94ccb588c` changed compaction to read
+each authenticated input once and hash output incrementally. Its sole final
+Spot run on `i-0e6cb6b74de103953` completed GREEN and terminated. Immutable
+evidence is under
+`research/v85-delta-compaction-100k/f96cfd4513df17d138dd6fee3c8d70a94ccb588c/runs/v85-delta-compaction-100k-20260920T110919Z-f96cfd4/a0001/`.
+Receipt, summary, screen-time, and terminal SHA-256 values are respectively
+`87b7ca3bc15cf6e103b702cb52cae60697b5c99abd6a4cd0c5b82838730c0f37`,
+`c81b0a115c42b937936bbb2a95622bcadd5a1f57d59b356cb5817bab17166620`,
+`b25b1b6507d1b71de305905d39d07a4240d668f1ea0706a63794e6bfa339b3ca`,
+and `7ae3d8d60febd4df12ba848be871f2c534b562230574ee74046077df4190f914`.
+
+| metric | final result | gate |
+|---|---:|---:|
+| logical live bytes | 7,850,000 | reported |
+| physical read bytes | 14,573,739 | reported |
+| physical write bytes | 8,476,287 | reported |
+| physical amplification | **2.936309x** | at most 5.0x — pass |
+| scientific wall | 46.22 s | reported |
+| maximum RSS | 1,876,496 KiB | reported |
+| swaps | 0 | required — pass |
+
+This closes fragmentation invariance and local compaction amplification at
+100k. It is a semantic local-artifact screen, not S3 request, latency, or
+throughput evidence. The next fail-fast gate is the registered 1,000-operation
+replacement/tombstone trace; larger serving qualification remains fenced until
+the validator recomputes that evidence.
