@@ -11,6 +11,7 @@ use crate::{
     index::IndexConfig,
     logical_cell_catalog::{LogicalCellCatalog, LogicalCellCatalogRef},
     metric::{VectorMetric, unit_l2_normalized},
+    native_ann::NativeAnnRef,
     record::{BuildConfig, LeafCapability, LeafMode},
     row_bundle::ArtifactRef,
     segment::vector_signature,
@@ -268,6 +269,8 @@ pub struct Manifest {
     /// so an older manifest (which lacks the field) reloads with no reference.
     #[serde(default)]
     pub(crate) quantizer_ref: Option<QuantizerRef>,
+    /// The sole pre-release dense ANN serving authority.
+    pub(crate) native_ann_ref: Option<NativeAnnRef>,
     /// Reference to the V12 global codebook and leaf-run epoch. The field is
     /// null until an offline bulk-load finish or full compaction publishes a
     /// complete base run.
@@ -566,6 +569,7 @@ impl Manifest {
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
             quantizer_ref: None,
+            native_ann_ref: None,
             global_ann_ref: None,
             global_cell_card_ann_ref: None,
             lexical_roots: Vec::new(),
@@ -609,6 +613,7 @@ impl Manifest {
             // Any publish that CHANGES the segment set explicitly recomputes or
             // clears this before publishing (see the compaction/flush paths).
             quantizer_ref: self.quantizer_ref.clone(),
+            native_ann_ref: self.native_ann_ref.clone(),
             global_ann_ref: self.global_ann_ref.clone(),
             global_cell_card_ann_ref: self.global_cell_card_ann_ref.clone(),
             lexical_roots: self.lexical_roots.clone(),

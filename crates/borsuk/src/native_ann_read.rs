@@ -6,14 +6,20 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use arrow_array::{Array, FixedSizeListArray, Int64Array, UInt8Array, UInt64Array};
+use arrow_array::{
+    Array, BinaryArray, FixedSizeListArray, StringArray, UInt8Array, UInt32Array, UInt64Array,
+};
 use arrow_ipc::reader::StreamReader;
 use arrow_schema::{DataType, Field, Schema};
+use bytes::Bytes;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     error::{BorsukError, Result},
-    native_ann_format::NativeRouterArtifacts,
+    native_ann::{NativeAnnRef, NativeArtifactRef},
+    native_ann_format::{NativeRouterArtifacts, decode_native_router},
     native_ann_router::{NativeRouteLimits, route_native_query},
     segment_cache::AdmissionGate,
     storage::Storage,
@@ -21,6 +27,10 @@ use crate::{
 
 const PAGE_ROWS: u64 = 256;
 const MAX_PAGE_BODY_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_MAX_SUMMARY_PAGES: usize = 128;
+const DEFAULT_MAX_CANDIDATE_ROWS: usize = 512;
+const DEFAULT_MAX_OUTPUT_PAGES: usize = 32;
+const DEFAULT_RANGE_CONCURRENCY: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -50,14 +60,14 @@ pub(crate) struct NativePageRef {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NativeMutationEntry {
-    pub(crate) id: i64,
+    pub(crate) id: Vec<u8>,
     pub(crate) sequence: u64,
     pub(crate) state: NativeRowState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NativeResidentRow {
-    pub(crate) id: i64,
+    pub(crate) id: Vec<u8>,
     pub(crate) sequence: u64,
     pub(crate) state: NativeRowState,
     pub(crate) code: Vec<u8>,
@@ -79,7 +89,7 @@ pub(crate) struct NativeSnapshotInputs {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeSearchHit {
-    pub(crate) id: i64,
+    pub(crate) id: Vec<u8>,
     pub(crate) sequence: u64,
     pub(crate) distance: f32,
 }
@@ -88,6 +98,7 @@ pub(crate) struct NativeSearchHit {
 pub(crate) struct NativeSearchOutcome {
     pub(crate) generation: u64,
     pub(crate) hits: Vec<NativeSearchHit>,
+    pub(crate) rows_scored: usize,
     pub(crate) pages_read: usize,
     pub(crate) physical_gets: u64,
     pub(crate) bytes_read: u64,
@@ -95,7 +106,7 @@ pub(crate) struct NativeSearchOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativeStoredRow {
-    id: i64,
+    id: Vec<u8>,
     sequence: u64,
     state: NativeRowState,
     code: Vec<u8>,
@@ -108,7 +119,7 @@ pub(crate) struct NativeAnnSnapshot {
     dimensions: usize,
     router: NativeRouterArtifacts,
     pages: Vec<NativePageRef>,
-    mutations: BTreeMap<i64, NativeMutationEntry>,
+    mutations: BTreeMap<Vec<u8>, NativeMutationEntry>,
     delta_rows: Vec<NativeResidentRow>,
     sq8_low: Vec<f32>,
     sq8_step: Vec<f32>,
@@ -121,10 +132,10 @@ pub(crate) struct NativeAnnHandle {
     snapshot: RwLock<Arc<NativeAnnSnapshot>>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct SearchCandidate {
     distance: f32,
-    id: i64,
+    id: Vec<u8>,
     sequence: u64,
 }
 
@@ -166,7 +177,7 @@ fn invalid(message: impl Into<String>) -> BorsukError {
 
 fn native_page_schema(dimensions: i32) -> Schema {
     Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
+        Field::new("id", DataType::Binary, false),
         Field::new("sequence", DataType::UInt64, false),
         Field::new("state", DataType::UInt8, false),
         Field::new(
@@ -180,23 +191,270 @@ fn native_page_schema(dimensions: i32) -> Schema {
     ])
 }
 
-pub(crate) fn decode_native_page(
+fn artifact_path(reference: &NativeArtifactRef) -> Result<String> {
+    reference.validate(&reference.role)?;
+    let uri = url::Url::parse(&reference.uri)
+        .map_err(|error| invalid(format!("native ANN artifact URI is invalid: {error}")))?;
+    let path = uri.path().trim_start_matches('/');
+    if path.is_empty() {
+        return Err(invalid("native ANN artifact URI path is empty"));
+    }
+    Ok(path.to_owned())
+}
+
+fn read_artifact(storage: &Storage, reference: &NativeArtifactRef) -> Result<Vec<u8>> {
+    let path = artifact_path(reference)?;
+    let bytes = storage
+        .read_object_fresh(&path)?
+        .ok_or_else(|| invalid(format!("native ANN artifact `{path}` is absent")))?;
+    if reference.encoded_bytes != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        || reference.sha256 != format!("{:x}", Sha256::digest(&bytes))
+    {
+        return Err(invalid(format!(
+            "native ANN {} byte authority differs",
+            reference.role
+        )));
+    }
+    Ok(bytes)
+}
+
+fn page_directory_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("page", DataType::UInt32, false),
+        Field::new("object", DataType::Utf8, false),
+        Field::new("offset", DataType::UInt64, false),
+        Field::new("length", DataType::UInt64, false),
+        Field::new("sha256", DataType::Utf8, false),
+        Field::new("rows", DataType::UInt32, false),
+    ])
+}
+
+fn decode_page_directory(bytes: Vec<u8>, reference: &NativeAnnRef) -> Result<Vec<NativePageRef>> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))?;
+    if builder.schema().as_ref() != &page_directory_schema()
+        || builder.metadata().file_metadata().num_rows() != i64::from(reference.router.page_count)
+    {
+        return Err(invalid("native ANN page-directory shape differs"));
+    }
+    let base_path = artifact_path(&reference.base_runs[0].artifact)?;
+    let mut pages = Vec::with_capacity(reference.router.page_count as usize);
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 6 || batch.columns().iter().any(|array| array.null_count() != 0) {
+            return Err(invalid("native ANN page-directory batch differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("native ANN page-directory ordinal differs"))?;
+        let objects = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid("native ANN page-directory object differs"))?;
+        let offsets = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("native ANN page-directory offset differs"))?;
+        let lengths = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("native ANN page-directory length differs"))?;
+        let digests = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid("native ANN page-directory digest differs"))?;
+        let rows = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("native ANN page-directory rows differs"))?;
+        for row in 0..batch.num_rows() {
+            let start = offsets.value(row);
+            let end = start
+                .checked_add(lengths.value(row))
+                .ok_or_else(|| invalid("native ANN page-directory range overflows"))?;
+            if objects.value(row) != base_path {
+                return Err(invalid("native ANN page-directory run binding differs"));
+            }
+            pages.push(NativePageRef {
+                page: ordinals.value(row),
+                object: objects.value(row).to_owned(),
+                range: start..end,
+                sha256: digests.value(row).to_owned(),
+                rows: rows.value(row),
+            });
+        }
+    }
+    Ok(pages)
+}
+
+fn mutation_directory_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Binary, false),
+        Field::new("sequence", DataType::UInt64, false),
+        Field::new("state", DataType::UInt8, false),
+        Field::new(
+            "version",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt8, false)), 24),
+            false,
+        ),
+    ])
+}
+
+fn decode_mutation_directory(bytes: Vec<u8>) -> Result<Vec<NativeMutationEntry>> {
+    let mut reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &mutation_directory_schema() {
+        return Err(invalid("native ANN mutation-directory schema differs"));
+    }
+    let mut entries = Vec::new();
+    for batch in &mut reader {
+        let batch = batch?;
+        if batch.num_columns() != 4 || batch.columns().iter().any(|array| array.null_count() != 0) {
+            return Err(invalid("native ANN mutation-directory batch differs"));
+        }
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| invalid("native ANN mutation-directory id differs"))?;
+        let sequences = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("native ANN mutation-directory sequence differs"))?;
+        let states = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(|| invalid("native ANN mutation-directory state differs"))?;
+        for row in 0..batch.num_rows() {
+            entries.push(NativeMutationEntry {
+                id: ids.value(row).to_vec(),
+                sequence: sequences.value(row),
+                state: NativeRowState::from_u8(states.value(row))?,
+            });
+        }
+    }
+    Ok(entries)
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NativeSq8Parameters {
+    low: Vec<f32>,
+    step: Vec<f32>,
+}
+
+pub(crate) fn load_native_ann_snapshot(
+    storage: Storage,
+    reference: &NativeAnnRef,
+) -> Result<NativeAnnSnapshot> {
+    reference.validate()?;
+    let codebooks = read_artifact(&storage, &reference.router.codebooks)?;
+    let row_codes = read_artifact(&storage, &reference.router.row_codes)?;
+    let summary_codes = read_artifact(&storage, &reference.router.summary_codes)?;
+    let router = decode_native_router(
+        &reference.router,
+        reference.dimensions,
+        Bytes::from(codebooks),
+        Bytes::from(row_codes),
+        Bytes::from(summary_codes),
+    )?;
+    let page_directory = read_artifact(&storage, &reference.page_directory)?;
+    let pages = decode_page_directory(page_directory, reference)?;
+    let mutation_directory = read_artifact(&storage, &reference.mutation_directory)?;
+    let mutation_entries = decode_mutation_directory(mutation_directory)?;
+    let mut latest_delta_rows = BTreeMap::<Vec<u8>, NativeResidentRow>::new();
+    for run in &reference.delta_runs {
+        let bytes = read_artifact(&storage, &run.artifact)?;
+        let expected_rows = usize::try_from(run.rows)
+            .map_err(|_| invalid("native ANN delta row count exceeds usize"))?;
+        for row in decode_native_rows(&bytes, reference.dimensions, expected_rows)? {
+            let resident = NativeResidentRow {
+                id: row.id,
+                sequence: row.sequence,
+                state: row.state,
+                code: row.code,
+            };
+            if latest_delta_rows
+                .get(&resident.id)
+                .is_none_or(|current| current.sequence < resident.sequence)
+            {
+                latest_delta_rows.insert(resident.id.clone(), resident);
+            }
+        }
+    }
+    let delta_rows = latest_delta_rows.into_values().collect::<Vec<_>>();
+    let sq8_bytes = read_artifact(&storage, &reference.sq8.parameters)?;
+    let sq8: NativeSq8Parameters = serde_json::from_slice(&sq8_bytes)
+        .map_err(|error| invalid(format!("native ANN SQ8 JSON is invalid: {error}")))?;
+    let mut canonical_sq8 = serde_json::to_vec(&sq8)
+        .map_err(|error| invalid(format!("native ANN SQ8 JSON serialization failed: {error}")))?;
+    canonical_sq8.push(b'\n');
+    if canonical_sq8 != sq8_bytes {
+        return Err(invalid("native ANN SQ8 JSON is not canonical"));
+    }
+    let bytes_per_page = pages
+        .iter()
+        .map(|page| page.range.end - page.range.start)
+        .max()
+        .ok_or_else(|| invalid("native ANN page directory is empty"))?;
+    NativeAnnSnapshot::open(
+        storage,
+        NativeSnapshotInputs {
+            generation: reference.generation,
+            dimensions: reference.dimensions,
+            router,
+            pages,
+            mutation_entries,
+            delta_rows,
+            sq8_low: sq8.low,
+            sq8_step: sq8.step,
+            route_limits: NativeRouteLimits {
+                max_summary_pages: DEFAULT_MAX_SUMMARY_PAGES,
+                max_candidate_rows: DEFAULT_MAX_CANDIDATE_ROWS,
+                max_output_pages: DEFAULT_MAX_OUTPUT_PAGES,
+                bytes_per_page,
+                max_body_bytes: MAX_PAGE_BODY_BYTES,
+            },
+            range_concurrency: DEFAULT_RANGE_CONCURRENCY,
+        },
+    )
+}
+
+fn decode_native_page(
     bytes: &[u8],
     dimensions: u32,
     expected_rows: u32,
+) -> Result<Vec<NativeStoredRow>> {
+    if expected_rows == 0 || u64::from(expected_rows) > PAGE_ROWS {
+        return Err(invalid("native ANN page shape differs"));
+    }
+    decode_native_rows(bytes, dimensions, expected_rows as usize)
+}
+
+fn decode_native_rows(
+    bytes: &[u8],
+    dimensions: u32,
+    expected_rows: usize,
 ) -> Result<Vec<NativeStoredRow>> {
     let dimensions_usize = usize::try_from(dimensions)
         .map_err(|_| invalid("native ANN page dimensions exceed usize"))?;
     let dimensions_i32 =
         i32::try_from(dimensions).map_err(|_| invalid("native ANN page dimensions exceed i32"))?;
-    if dimensions == 0 || expected_rows == 0 || u64::from(expected_rows) > PAGE_ROWS {
+    if dimensions == 0 || expected_rows == 0 {
         return Err(invalid("native ANN page shape differs"));
     }
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None)?;
     if reader.schema().as_ref() != &native_page_schema(dimensions_i32) {
         return Err(invalid("native ANN page physical schema differs"));
     }
-    let mut rows = Vec::with_capacity(expected_rows as usize);
+    let mut rows = Vec::with_capacity(expected_rows);
     for batch in &mut reader {
         let batch = batch?;
         if batch.num_columns() != 4 || batch.columns().iter().any(|array| array.null_count() != 0) {
@@ -205,7 +463,7 @@ pub(crate) fn decode_native_page(
         let ids = batch
             .column(0)
             .as_any()
-            .downcast_ref::<Int64Array>()
+            .downcast_ref::<BinaryArray>()
             .ok_or_else(|| invalid("native ANN page id column differs"))?;
         let sequences = batch
             .column(1)
@@ -239,17 +497,17 @@ pub(crate) fn decode_native_page(
                 return Err(invalid("native ANN page sequence must be nonzero"));
             }
             rows.push(NativeStoredRow {
-                id: ids.value(row),
+                id: ids.value(row).to_vec(),
                 sequence,
                 state: NativeRowState::from_u8(states.value(row))?,
                 code: code.values().to_vec(),
             });
         }
     }
-    if rows.len() != expected_rows as usize
-        || rows
-            .windows(2)
-            .any(|pair| (pair[0].id, pair[0].sequence) >= (pair[1].id, pair[1].sequence))
+    if rows.len() != expected_rows
+        || rows.windows(2).any(|pair| {
+            (pair[0].id.as_slice(), pair[0].sequence) >= (pair[1].id.as_slice(), pair[1].sequence)
+        })
     {
         return Err(invalid("native ANN page row order or count differs"));
     }
@@ -313,24 +571,36 @@ impl NativeAnnSnapshot {
 
         let mut mutations = BTreeMap::new();
         for entry in &inputs.mutation_entries {
-            if entry.sequence == 0 || mutations.insert(entry.id, entry.clone()).is_some() {
+            if entry.id.is_empty()
+                || entry.sequence == 0
+                || mutations.insert(entry.id.clone(), entry.clone()).is_some()
+            {
                 return Err(invalid("native ANN mutation directory is not unique"));
             }
         }
         let mut previous_id = None;
         for row in &inputs.delta_rows {
-            if row.sequence == 0
-                || row.code.len() != dimensions
-                || previous_id.is_some_and(|id| id >= row.id)
-                || mutations
-                    .get(&row.id)
-                    .is_none_or(|entry| entry.sequence != row.sequence || entry.state != row.state)
-            {
+            if row.sequence == 0 {
+                return Err(invalid("native ANN resident delta sequence differs"));
+            }
+            if row.code.len() != dimensions {
+                return Err(invalid("native ANN resident delta code width differs"));
+            }
+            if previous_id.is_some_and(|id| id >= row.id.as_slice()) {
+                return Err(invalid("native ANN resident delta order differs"));
+            }
+            let entry = mutations
+                .get(&row.id)
+                .ok_or_else(|| invalid("native ANN resident delta directory ID is absent"))?;
+            if entry.sequence != row.sequence {
                 return Err(invalid(
-                    "native ANN resident delta differs from its directory",
+                    "native ANN resident delta directory sequence differs",
                 ));
             }
-            previous_id = Some(row.id);
+            if entry.state != row.state {
+                return Err(invalid("native ANN resident delta directory state differs"));
+            }
+            previous_id = Some(row.id.as_slice());
         }
         if mutations.len() != inputs.delta_rows.len() {
             return Err(invalid(
@@ -449,7 +719,7 @@ impl NativeAnnSnapshot {
             }
         }
 
-        let mut winners = BTreeMap::<i64, SearchCandidate>::new();
+        let mut winners = BTreeMap::<Vec<u8>, SearchCandidate>::new();
         for (reference, body) in selected.iter().zip(page_bodies) {
             let body = body.ok_or_else(|| invalid("native ANN page body is missing"))?;
             if format!("{:x}", Sha256::digest(&body)) != reference.sha256 {
@@ -466,7 +736,7 @@ impl NativeAnnSnapshot {
                     continue;
                 }
                 winners.insert(
-                    row.id,
+                    row.id.clone(),
                     SearchCandidate {
                         distance: self.score_code(query, &row.code)?,
                         id: row.id,
@@ -480,19 +750,23 @@ impl NativeAnnSnapshot {
                 continue;
             }
             winners.insert(
-                row.id,
+                row.id.clone(),
                 SearchCandidate {
                     distance: self.score_code(query, &row.code)?,
-                    id: row.id,
+                    id: row.id.clone(),
                     sequence: row.sequence,
                 },
             );
         }
+        let rows_scored = winners.len();
         let mut heap = BinaryHeap::with_capacity(k);
         for candidate in winners.into_values() {
             if heap.len() < k {
                 heap.push(candidate);
-            } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+            } else if heap
+                .peek()
+                .is_some_and(|worst| candidate.cmp(worst).is_lt())
+            {
                 heap.pop();
                 heap.push(candidate);
             }
@@ -509,6 +783,7 @@ impl NativeAnnSnapshot {
         Ok(NativeSearchOutcome {
             generation: self.generation,
             hits,
+            rows_scored,
             pages_read: selected.len(),
             physical_gets: requests.len() as u64,
             bytes_read: requests
@@ -553,7 +828,7 @@ mod tests {
     use std::{ops::Range, sync::Arc};
 
     use arrow_array::{
-        ArrayRef, FixedSizeListArray, Int64Array, RecordBatch, UInt8Array, UInt64Array,
+        ArrayRef, BinaryArray, FixedSizeListArray, Int64Array, RecordBatch, UInt8Array, UInt64Array,
     };
     use arrow_ipc::writer::StreamWriter;
     use arrow_schema::{DataType, Field, Schema};
@@ -586,7 +861,10 @@ mod tests {
         }
     }
 
-    fn encode_page(mut rows: Vec<(i64, u64, u8, Vec<u8>)>, shape: PageShape) -> Vec<u8> {
+    fn encode_page<I: AsRef<[u8]>>(
+        mut rows: Vec<(I, u64, u8, Vec<u8>)>,
+        shape: PageShape,
+    ) -> Vec<u8> {
         if shape.reverse_rows {
             rows.reverse();
         }
@@ -619,7 +897,7 @@ mod tests {
             ref other => panic!("unsupported sequence type {other:?}"),
         };
         let schema = Arc::new(Schema::new(vec![
-            Field::new(shape.id_name, DataType::Int64, shape.id_nullable),
+            Field::new(shape.id_name, DataType::Binary, shape.id_nullable),
             Field::new("sequence", sequence.data_type().clone(), false),
             Field::new("state", DataType::UInt8, false),
             Field::new(
@@ -631,8 +909,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int64Array::from(
-                    rows.iter().map(|(id, _, _, _)| *id).collect::<Vec<_>>(),
+                Arc::new(BinaryArray::from_iter_values(
+                    rows.iter().map(|(id, _, _, _)| id.as_ref()),
                 )),
                 sequence,
                 Arc::new(UInt8Array::from(
@@ -664,6 +942,49 @@ mod tests {
             }
         }
         values.into_boxed_slice()
+    }
+
+    #[test]
+    fn native_ann_read_uses_generic_binary_record_ids() {
+        let child = Arc::new(Field::new("element", DataType::UInt8, false));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Binary, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("state", DataType::UInt8, false),
+            Field::new(
+                "code",
+                DataType::FixedSizeList(Arc::clone(&child), 16),
+                false,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::BinaryArray::from(vec![
+                    b"customer/vector-\xff".as_slice(),
+                ])),
+                Arc::new(UInt64Array::from(vec![1_u64])),
+                Arc::new(UInt8Array::from(vec![0_u8])),
+                Arc::new(
+                    FixedSizeListArray::try_new(
+                        child,
+                        16,
+                        Arc::new(UInt8Array::from(vec![7_u8; 16])),
+                        None,
+                    )
+                    .unwrap(),
+                ),
+            ],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let decoded = decode_native_page(&bytes, 16, 1).unwrap();
+        assert_eq!(decoded[0].id, b"customer/vector-\xff");
     }
 
     fn router() -> NativeRouterArtifacts {
@@ -712,11 +1033,24 @@ mod tests {
 
     fn fixture() -> (Storage, NativeSnapshotInputs) {
         let storage = Storage::from_uri("memory:///native-ann-read").unwrap();
-        let mut first_rows = vec![(1, 1, 0, vec![1; 16]), (2, 1, 0, vec![2; 16])];
-        first_rows.extend((0..254).map(|ordinal| (1000 + ordinal, 1, 0, vec![255; 16])));
+        let mut first_rows = vec![
+            (b"0001".to_vec(), 1, 0, vec![1; 16]),
+            (b"0002".to_vec(), 1, 0, vec![2; 16]),
+        ];
+        first_rows.extend((0..254).map(|ordinal| {
+            (
+                format!("{:04}", 1000 + ordinal).into_bytes(),
+                1,
+                0,
+                vec![255; 16],
+            )
+        }));
         let first = encode_page(first_rows, PageShape::default());
         let second = encode_page(
-            vec![(3, 1, 0, vec![3; 16]), (5, 1, 0, vec![4; 16])],
+            vec![
+                (b"0003".to_vec(), 1, 0, vec![3; 16]),
+                (b"0005".to_vec(), 1, 0, vec![4; 16]),
+            ],
             PageShape::default(),
         );
         let mut object = first.clone();
@@ -740,36 +1074,36 @@ mod tests {
             pages,
             mutation_entries: vec![
                 NativeMutationEntry {
-                    id: 1,
+                    id: b"0001".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Live,
                 },
                 NativeMutationEntry {
-                    id: 2,
+                    id: b"0002".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Tombstone,
                 },
                 NativeMutationEntry {
-                    id: 4,
+                    id: b"0004".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Live,
                 },
             ],
             delta_rows: vec![
                 NativeResidentRow {
-                    id: 1,
+                    id: b"0001".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Live,
                     code: vec![0; 16],
                 },
                 NativeResidentRow {
-                    id: 2,
+                    id: b"0002".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Tombstone,
                     code: vec![0; 16],
                 },
                 NativeResidentRow {
-                    id: 4,
+                    id: b"0004".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Live,
                     code: vec![1; 16],
@@ -795,22 +1129,22 @@ mod tests {
             outcome.hits,
             vec![
                 NativeSearchHit {
-                    id: 1,
+                    id: b"0001".to_vec(),
                     sequence: 2,
                     distance: 0.0,
                 },
                 NativeSearchHit {
-                    id: 4,
+                    id: b"0004".to_vec(),
                     sequence: 2,
                     distance: 16.0,
                 },
                 NativeSearchHit {
-                    id: 3,
+                    id: b"0003".to_vec(),
                     sequence: 1,
                     distance: 144.0,
                 },
                 NativeSearchHit {
-                    id: 5,
+                    id: b"0005".to_vec(),
                     sequence: 1,
                     distance: 256.0,
                 },
@@ -847,7 +1181,13 @@ mod tests {
                 ..PageShape::default()
             },
         ] {
-            let bytes = encode_page(vec![(1, 1, 0, vec![1; 16]), (2, 1, 0, vec![2; 16])], shape);
+            let bytes = encode_page(
+                vec![
+                    (b"0001".to_vec(), 1, 0, vec![1; 16]),
+                    (b"0002".to_vec(), 1, 0, vec![2; 16]),
+                ],
+                shape,
+            );
             assert!(decode_native_page(&bytes, 16, 2).is_err());
         }
 

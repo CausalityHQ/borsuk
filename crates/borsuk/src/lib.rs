@@ -52,6 +52,7 @@ mod mutation;
 )]
 mod mutation_extent;
 mod native_ann;
+mod native_ann_build;
 mod native_ann_format;
 mod native_ann_read;
 mod native_ann_router;

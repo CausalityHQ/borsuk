@@ -15,6 +15,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use rayon::prelude::*;
+use sha2::{Digest as Sha2Digest, Sha256};
 use tokio::sync::Semaphore;
 use url::Url;
 use uuid::Uuid;
@@ -116,6 +117,12 @@ use crate::{
         CanonicalMutation, MutationClock, MutationOperation, MutationStamp, MutationState,
         MutationVersion,
     },
+    native_ann::{NativeAnnRef, native_ann_root_bytes},
+    native_ann_build::{
+        NativeBuildConfig, NativeBuildRow, build_native_delta_generation, build_native_generation,
+        publish_native_generation,
+    },
+    native_ann_read::{NativeAnnSnapshot, NativeRowState, load_native_ann_snapshot},
     observability,
     positioned_candidate::{
         LexicalDeltaAuthority, MaterializationArtifactRef, MaterializationArtifactRole,
@@ -668,6 +675,123 @@ struct HybridCandidate {
 struct SearchExecution {
     report: SearchReport,
     vectors: Vec<Vec<f32>>,
+}
+
+fn native_search_report(
+    outcome: crate::native_ann_read::NativeSearchOutcome,
+    page_count: usize,
+    resident_bytes_estimate: u64,
+    elapsed_ms: u64,
+) -> SearchReport {
+    let hits = outcome
+        .hits
+        .into_iter()
+        .map(|hit| SearchHit {
+            id: RecordId::from_bytes(hit.id),
+            distance: hit.distance,
+            metadata: None,
+        })
+        .collect();
+    SearchReport {
+        hits,
+        leaf_mode: "native-hierarchical-delta".to_string(),
+        termination_reason: SearchTerminationReason::Complete,
+        recall_guarantee: RecallGuarantee::Degraded,
+        segments_total: page_count,
+        segments_searched: outcome.pages_read,
+        segments_skipped: page_count.saturating_sub(outcome.pages_read),
+        routing_page_indexes_read: 0,
+        routing_pages_read: 0,
+        bytes_read: outcome.bytes_read,
+        prefetched_bytes_unused: 0,
+        graph_bytes_read: 0,
+        decoded_cache_hits: 0,
+        decoded_cache_bytes_read: 0,
+        object_cache_hits: 0,
+        object_cache_misses: outcome.pages_read,
+        disk_cache_bytes_read: 0,
+        backing_bytes_read: outcome.bytes_read,
+        disk_cache_reads: 0,
+        backing_reads: outcome.physical_gets,
+        cache_repairs: 0,
+        records_considered: outcome.rows_scored,
+        records_scored: outcome.rows_scored,
+        graph_candidates_added: 0,
+        global_graph_chunks_searched: 0,
+        global_scan_chunks_searched: outcome.pages_read,
+        global_identity_rows_resolved: outcome.rows_scored,
+        global_exact_vectors_fetched: 0,
+        global_leaf_directory_reads: 0,
+        global_leaf_directory_bytes: 0,
+        global_leaf_code_pages_read: 0,
+        global_leaf_code_requests: 0,
+        global_leaf_code_bytes: 0,
+        global_leaf_pages_read: outcome.pages_read,
+        global_leaf_exact_requests: outcome.physical_gets as usize,
+        global_leaf_exact_cells: 0,
+        global_leaf_exact_cards: 0,
+        global_leaf_deepest_winning_card_rank: 0,
+        global_leaf_exact_groups: 0,
+        global_leaf_exact_selected_bytes: outcome.bytes_read,
+        global_leaf_exact_speculative_bytes: 0,
+        global_leaf_page_bytes: outcome.bytes_read,
+        global_leaf_exact_scores: outcome.rows_scored,
+        global_leaf_continuations: 0,
+        global_leaf_waves: usize::from(outcome.pages_read > 0),
+        global_base_approximate_us: 0,
+        global_base_head_admission_us: 0,
+        global_base_head_fetch_us: 0,
+        global_base_head_read_attempts: 0,
+        global_base_head_read_successes: 0,
+        global_base_head_read_response_bytes: 0,
+        global_base_head_read_us_sum: 0,
+        global_base_head_read_us_max: 0,
+        global_base_head_read_queue_us_sum: 0,
+        global_base_head_read_queue_us_max: 0,
+        global_base_head_reads_over_20ms: 0,
+        global_base_head_reads_over_30ms: 0,
+        global_base_head_reads_over_50ms: 0,
+        global_base_head_reads_over_100ms: 0,
+        global_base_head_decode_admission_us: 0,
+        global_base_head_decode_us: 0,
+        global_base_exact_admission_us: 0,
+        global_base_exact_fetch_us: 0,
+        global_base_exact_read_attempts: outcome.physical_gets,
+        global_base_exact_read_successes: outcome.physical_gets,
+        global_base_exact_read_response_bytes: outcome.bytes_read,
+        global_base_exact_read_queue_us_sum: 0,
+        global_base_exact_read_queue_us_max: 0,
+        global_base_exact_read_us_max: 0,
+        global_base_exact_read_us_sum: 0,
+        global_base_exact_reads_over_20ms: 0,
+        global_base_exact_reads_over_30ms: 0,
+        global_base_exact_reads_over_50ms: 0,
+        global_base_exact_reads_over_100ms: 0,
+        global_base_exact_cpu_us: 0,
+        global_base_exact_rerank_us: 0,
+        resident_bytes_estimate,
+        prepared_positioned_bytes: 0,
+        collection_resident_bytes: 0,
+        retained_bytes: 0,
+        retained_capacity_bytes: 0,
+        retained_peak_bytes: 0,
+        transient_bytes: 0,
+        transient_capacity_bytes: 0,
+        transient_peak_bytes: 0,
+        elapsed_ms,
+        requests: RequestCounts {
+            gets: outcome.physical_gets,
+            ..RequestCounts::default()
+        },
+        rows_evaluated: 0,
+        rows_passed_filter: 0,
+        segments_pruned_by_filter: 0,
+        wal_cells_examined: 0,
+        wal_lanes_examined: 0,
+        wal_runs_examined: 0,
+        wal_records_examined: 0,
+        wal_snapshot_retries: 0,
+    }
 }
 
 #[derive(Default)]
@@ -1516,6 +1640,8 @@ pub struct BorsukIndex {
     /// Snapshot-owned codebook/base metadata. Cloned handles keep these immutable
     /// allocations alive even after the shared bounded cache advances.
     resident_global_ann_pins: Option<ResidentGlobalAnnPins>,
+    /// Authenticated native dense snapshot pinned to this collection manifest.
+    native_ann_snapshot: Option<Arc<NativeAnnSnapshot>>,
     /// Compact term-range roots loaded before serving; postings remain paged.
     resident_lexical_roots: ResidentLexicalRoots,
     admission: Arc<AdmissionGate>,
@@ -4366,7 +4492,7 @@ impl BorsukIndex {
             );
         }
         let summaries = self.active_segment_summaries()?;
-        self.refresh_resident_global_ann_from_summaries(&summaries, 0)
+        self.publish_native_ann_from_summaries(&summaries)
     }
 
     /// Reject the retired post-create logical-cell catalog replacement path.
@@ -4952,6 +5078,7 @@ impl BorsukIndex {
                 RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
             )),
             resident_global_ann_pins: None,
+            native_ann_snapshot: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: Arc::clone(&read_runtime.admission),
             leaf_read_width: read_runtime.leaf_read_width,
@@ -5327,6 +5454,7 @@ impl BorsukIndex {
                 RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
             )),
             resident_global_ann_pins: None,
+            native_ann_snapshot: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: Arc::clone(&read_runtime.admission),
             leaf_read_width: read_runtime.leaf_read_width,
@@ -5405,6 +5533,12 @@ impl BorsukIndex {
         let manifest = index.manifest.clone();
         let pins = index.preload_resident_global_ann_for_manifest(&manifest)?;
         index.install_resident_global_ann_pins(pins);
+        index.native_ann_snapshot = manifest
+            .native_ann_ref
+            .as_ref()
+            .map(|reference| load_native_ann_snapshot(index.storage.clone(), reference))
+            .transpose()?
+            .map(Arc::new);
         progress.complete();
         let progress = observability::OpenProgress::start("lexical-roots");
         let _ = index.load_resident_lexical_roots()?;
@@ -15660,8 +15794,9 @@ impl BorsukIndex {
             return Ok(());
         }
         let previous = self.manifest.clone();
-        let global_base_present =
-            previous.global_ann_ref.is_some() || previous.global_cell_card_ann_ref.is_some();
+        let global_base_present = previous.global_ann_ref.is_some()
+            || previous.global_cell_card_ann_ref.is_some()
+            || previous.native_ann_ref.is_some();
         let prior_global_delta = if previous.segments_are_global_delta {
             previous.segments.clone()
         } else {
@@ -15845,6 +15980,56 @@ impl BorsukIndex {
             std::mem::swap(&mut segments_to_write, &mut remaining);
         }
         let new_global_delta = manifest.segments[existing_segment_count..].to_vec();
+        let mut native_delta_rows = self
+            .native_build_rows_from_summaries(&new_global_delta)?
+            .into_iter()
+            .flatten()
+            .map(|row| (row.id.clone(), row))
+            .collect::<BTreeMap<_, _>>();
+        for transaction in &selected_transactions {
+            for run in &transaction.runs {
+                if run.kind != CellWalRunKind::Tombstones {
+                    continue;
+                }
+                let tombstones =
+                    self.load_tombstone_run(&Self::cell_wal_tombstone_summary(run)?)?;
+                for (id, state) in tombstones.iter() {
+                    if !state.is_deleted() {
+                        continue;
+                    }
+                    let version = state.stamp().version();
+                    let row = NativeBuildRow {
+                        id: id.clone(),
+                        sequence: version.hlc(),
+                        version: version.to_bytes(),
+                        state: NativeRowState::Tombstone,
+                        vector: vec![0.0; previous.config.dimensions],
+                    };
+                    if native_delta_rows
+                        .get(&row.id)
+                        .is_none_or(|current| current.sequence < row.sequence)
+                    {
+                        native_delta_rows.insert(row.id.clone(), row);
+                    }
+                }
+            }
+        }
+        let native_delta = if let Some(native) = previous.native_ann_ref.as_ref()
+            && !native_delta_rows.is_empty()
+        {
+            let built = build_native_delta_generation(
+                &self.storage,
+                native,
+                native_delta_rows.into_values().collect(),
+            )?;
+            let expected_head = self
+                .storage
+                .read_coordination_object("native-ann/HEAD.json")?;
+            publish_native_generation(&self.storage, &built, expected_head.as_ref())?;
+            Some(built.reference)
+        } else {
+            None
+        };
         let remaining_transactions = self
             .cell_wal_snapshot
             .iter()
@@ -15875,6 +16060,11 @@ impl BorsukIndex {
             manifest.global_ann_ref = None;
             manifest.global_cell_card_ann_ref = None;
         }
+        if let Some(native) = native_delta {
+            manifest.native_ann_ref = Some(native);
+            manifest.segments.clear();
+            manifest.segments_are_global_delta = false;
+        }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published = if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
@@ -15887,6 +16077,13 @@ impl BorsukIndex {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
         self.manifest = published;
+        self.native_ann_snapshot = self
+            .manifest
+            .native_ann_ref
+            .as_ref()
+            .map(|reference| load_native_ann_snapshot(self.storage.clone(), reference))
+            .transpose()?
+            .map(Arc::new);
         if !global_base_present {
             self.install_resident_global_ann_pins(None);
         }
@@ -18192,11 +18389,10 @@ impl BorsukIndex {
             };
             global_ann_summaries.retain(|summary| !selected_ids.contains(summary.id.as_str()));
             global_ann_summaries.extend(new_lexical_summaries.iter().cloned());
-            manifest.global_cell_card_ann_ref = self.rebuild_global_ann_epoch_from_segments(
-                &global_ann_summaries,
-                manifest.version,
-                0,
-            )?;
+            manifest.native_ann_ref =
+                Some(self.publish_native_generation_from_summaries(&global_ann_summaries)?);
+            manifest.global_ann_ref = None;
+            manifest.global_cell_card_ann_ref = None;
         }
 
         if let Some(active) = lexical_active_summaries.as_mut() {
@@ -18374,6 +18570,13 @@ impl BorsukIndex {
         self.rekey_resident_global_mutations_after_manifest_publish(
             mutation_snapshot_key_before_compaction,
         );
+        self.native_ann_snapshot = self
+            .manifest
+            .native_ann_ref
+            .as_ref()
+            .map(|reference| load_native_ann_snapshot(self.storage.clone(), reference))
+            .transpose()?
+            .map(Arc::new);
         // Compaction rebuilt the (paged) cell layout; refresh the persisted cold
         // quantizer from the full active summary set so a cold/paged query routes
         // through the IVF probe list instead of the degraded routing tree.
@@ -25201,6 +25404,115 @@ impl BorsukIndex {
         )
     }
 
+    fn publish_native_ann_from_summaries(&mut self, summaries: &[SegmentSummary]) -> Result<()> {
+        let native = self.publish_native_generation_from_summaries(summaries)?;
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.native_ann_ref = Some(native);
+        manifest.global_ann_ref = None;
+        manifest.global_cell_card_ann_ref = None;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.native_ann_snapshot = self
+            .manifest
+            .native_ann_ref
+            .as_ref()
+            .map(|reference| load_native_ann_snapshot(self.storage.clone(), reference))
+            .transpose()?
+            .map(Arc::new);
+        Ok(())
+    }
+
+    fn publish_native_generation_from_summaries(
+        &self,
+        summaries: &[SegmentSummary],
+    ) -> Result<NativeAnnRef> {
+        let mut source_summaries = summaries
+            .iter()
+            .map(|summary| {
+                (
+                    summary.id.as_str(),
+                    summary.path.as_str(),
+                    summary.checksum.as_str(),
+                    summary.object_count,
+                )
+            })
+            .collect::<Vec<_>>();
+        source_summaries.sort_unstable();
+        let mut source_hasher = blake3::Hasher::new();
+        source_hasher.update(b"borsuk-native-ann-source-v1\0");
+        for (id, path, checksum, rows) in source_summaries {
+            for value in [id, path, checksum] {
+                source_hasher.update(&(value.len() as u64).to_le_bytes());
+                source_hasher.update(value.as_bytes());
+            }
+            source_hasher.update(&(rows as u64).to_le_bytes());
+        }
+
+        let runs = self.native_build_rows_from_summaries(summaries)?;
+
+        let generation = self
+            .manifest
+            .native_ann_ref
+            .as_ref()
+            .map_or(1, |reference| reference.generation.saturating_add(1));
+        let previous_generation_sha256 = self
+            .manifest
+            .native_ann_ref
+            .as_ref()
+            .map(native_ann_root_bytes)
+            .transpose()?
+            .map(|bytes| format!("{:x}", Sha256::digest(bytes)));
+        let built = build_native_generation(
+            NativeBuildConfig {
+                generation,
+                previous_generation_sha256,
+                source_identity: source_hasher.finalize().to_hex().to_string(),
+                metric: self.manifest.config.metric.clone(),
+                dimensions: u32::try_from(self.manifest.config.dimensions).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "native ANN dimensions exceed the persisted u32 authority".to_string(),
+                    )
+                })?,
+            },
+            runs.iter().map(Vec::as_slice),
+        )?;
+        let expected_head = self
+            .storage
+            .read_coordination_object("native-ann/HEAD.json")?;
+        publish_native_generation(&self.storage, &built, expected_head.as_ref())?;
+        Ok(built.reference)
+    }
+
+    fn native_build_rows_from_summaries(
+        &self,
+        summaries: &[SegmentSummary],
+    ) -> Result<Vec<Vec<NativeBuildRow>>> {
+        let mut runs = Vec::with_capacity(summaries.len());
+        for summary in summaries {
+            let (segment, _, _, _) = self.read_segment_for_rewrite(summary)?;
+            let mut rows = Vec::with_capacity(segment.records.len());
+            for record in segment.records {
+                let stamp = record.mutation_stamp().ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "native ANN source record `{}` is missing its mutation stamp",
+                        record.id
+                    ))
+                })?;
+                rows.push(NativeBuildRow {
+                    id: record.id.as_bytes().to_vec(),
+                    sequence: stamp.version().hlc(),
+                    version: stamp.version().to_bytes(),
+                    state: NativeRowState::Live,
+                    vector: record.vector,
+                });
+            }
+            runs.push(rows);
+        }
+        Ok(runs)
+    }
+
     /// Rebuild and atomically publish one offline V12 codebook plus one base run.
     fn refresh_resident_global_ann_from_summaries(
         &mut self,
@@ -26558,6 +26870,37 @@ impl BorsukIndex {
 
         let requests_before = self.storage.request_counts();
         let started = Instant::now();
+        if options.k > 0
+            && matches!(&options.mode, SearchMode::Approx { .. })
+            && !options.guaranteed_recall
+            && options.filter.is_none()
+            && !options.include_metadata
+            && !include_vectors
+            && self.cell_wal_snapshot.is_empty()
+            && !self.manifest.segments_are_global_delta
+            && let Some(snapshot) = &self.native_ann_snapshot
+        {
+            let outcome = snapshot.search(query, options.k)?;
+            let page_count = self
+                .manifest
+                .native_ann_ref
+                .as_ref()
+                .map_or(0, |reference| reference.router.page_count as usize);
+            let mut execution = SearchExecution {
+                report: native_search_report(
+                    outcome,
+                    page_count,
+                    self.manifest.resident_bytes_estimate(),
+                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                ),
+                vectors: Vec::new(),
+            };
+            if resident_global_latency_expired(&options, started) {
+                execution.report.termination_reason = SearchTerminationReason::MaxLatency;
+            }
+            observability::record_search_report(&span, &execution.report);
+            return Ok(execution);
+        }
         let resident_global_v12_context = self.resident_global_v12_context(&options)?;
         let wal_query_cells = self.wal_query_cells(query, &options)?;
         let live_wal_tail = if options.k == 0 {
@@ -50881,4 +51224,328 @@ fn v20_large_stable_planes_require_a_retained_cache() {
         CELL_CARD_RANGE_READ_MAX_BYTES
     );
     assert!(cell_card_plane_promotion_ceiling(true) > CELL_CARD_RANGE_READ_MAX_BYTES);
+}
+
+#[test]
+fn native_ann_build_cutover_publishes_one_generic_dense_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: directory.path().to_string_lossy().into_owned(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+
+    index.finish_bulk_load().unwrap();
+
+    let native = index
+        .manifest
+        .native_ann_ref
+        .as_ref()
+        .expect("bulk-load finalization must publish the native authority");
+    assert_eq!(native.router.physical_rows, 520);
+    assert_eq!(native.router.page_count, 3);
+    assert!(index.manifest.global_ann_ref.is_none());
+    assert!(index.manifest.global_cell_card_ann_ref.is_none());
+}
+
+#[test]
+fn native_ann_build_cutover_reopens_and_serves_the_native_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    let report = index
+        .search_with_report(
+            &[0.0; 16],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert_eq!(
+        report.hits[0].id.as_bytes(),
+        [b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat()
+    );
+    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert!(report.bytes_read > 0);
+    assert!(report.requests.gets > 0);
+}
+
+#[test]
+fn native_ann_flush_publishes_query_visible_delta_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    let base_generation = index.manifest.native_ann_ref.as_ref().unwrap().generation;
+
+    let fresh_id = b"\0fresh-binary-id".to_vec();
+    index
+        .add(vec![VectorRecord::new_bytes(
+            fresh_id.clone(),
+            vec![-1.0; 16],
+        )])
+        .unwrap();
+    index.flush().unwrap();
+
+    let delta_authority = index
+        .manifest
+        .native_ann_ref
+        .as_ref()
+        .expect("flush must preserve and advance native authority");
+    assert_eq!(delta_authority.generation, base_generation + 1);
+    assert_eq!(delta_authority.delta_runs.len(), 1);
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    let report = index
+        .search_with_report(
+            &[-1.0; 16],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id.as_bytes(), fresh_id);
+    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+}
+
+#[test]
+fn native_ann_flush_publishes_query_visible_tombstone() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    let removed_id = [b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+
+    index.delete([removed_id.clone()]).unwrap();
+    index.flush().unwrap();
+    assert_eq!(
+        index.manifest.native_ann_ref.as_ref().unwrap().generation,
+        2
+    );
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    let report = index
+        .search_with_report(
+            &[0.0; 16],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert!(
+        report
+            .hits
+            .iter()
+            .all(|hit| hit.id.as_bytes() != removed_id)
+    );
+    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+}
+
+#[test]
+fn native_ann_multiple_delta_generations_apply_latest_wins() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    let revived_id = [b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+
+    index.delete([revived_id.clone()]).unwrap();
+    index.flush().unwrap();
+    index
+        .upsert(vec![VectorRecord::new_bytes(
+            revived_id.clone(),
+            vec![0.0; 16],
+        )])
+        .unwrap();
+    index.flush().unwrap();
+
+    let native = index.manifest.native_ann_ref.as_ref().unwrap();
+    assert_eq!(native.generation, 3);
+    assert_eq!(native.delta_runs.len(), 2);
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    let report = index
+        .search_with_report(
+            &[0.0; 16],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id.as_bytes(), revived_id);
+    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+}
+
+#[test]
+fn native_ann_compaction_rebuilds_one_deterministic_base_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    let fresh_id = b"\0compacted-binary-id".to_vec();
+    index
+        .add(vec![VectorRecord::new_bytes(
+            fresh_id.clone(),
+            vec![0.0; 16],
+        )])
+        .unwrap();
+    index.flush().unwrap();
+
+    let report = index
+        .compact(CompactionOptions {
+            max_segments: None,
+            ..CompactionOptions::default()
+        })
+        .unwrap();
+    assert!(report.compacted);
+    let native = index.manifest.native_ann_ref.as_ref().unwrap();
+    assert_eq!(native.generation, 3);
+    assert_eq!(native.router.physical_rows, 521);
+    assert!(native.delta_runs.is_empty());
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    let report = index
+        .search_with_report(
+            &[0.0; 16],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+    assert_eq!(report.hits[0].id.as_bytes(), fresh_id);
+    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
 }

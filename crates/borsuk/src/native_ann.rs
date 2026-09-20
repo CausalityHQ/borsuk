@@ -64,6 +64,7 @@ pub(crate) struct NativeAnnRef {
     pub(crate) metric: VectorMetric,
     pub(crate) page_rows: u32,
     pub(crate) router: NativeRouterRef,
+    pub(crate) page_directory: NativeArtifactRef,
     pub(crate) mutation_directory: NativeArtifactRef,
     pub(crate) base_runs: Vec<NativeRunRef>,
     pub(crate) delta_runs: Vec<NativeRunRef>,
@@ -141,7 +142,7 @@ impl NativeRunRef {
 }
 
 impl NativeAnnRef {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.format_version != NATIVE_ANN_FORMAT_VERSION {
             return Err(invalid("native ANN format version differs"));
         }
@@ -201,6 +202,7 @@ impl NativeAnnRef {
         self.router.codebooks.validate("router-codebooks")?;
         self.router.row_codes.validate("router-row-codes")?;
         self.router.summary_codes.validate("router-summary-codes")?;
+        self.page_directory.validate("page-directory")?;
         self.mutation_directory.validate("mutation-directory")?;
         self.sq8.parameters.validate("sq8-authority")?;
         validate_hex(
@@ -235,6 +237,7 @@ impl NativeAnnRef {
             &self.router.codebooks,
             &self.router.row_codes,
             &self.router.summary_codes,
+            &self.page_directory,
             &self.mutation_directory,
             &self.sq8.parameters,
         ];
@@ -375,6 +378,7 @@ mod tests {
                     64,
                 ),
             },
+            page_directory: artifact("page-directory", "page-directory.parquet", DIGEST_C, 1_024),
             mutation_directory: artifact(
                 "mutation-directory",
                 "mutation-directory.arrow",
