@@ -221,7 +221,10 @@ def _vectors_by_page(
     return {
         key: np.ascontiguousarray(
             vectors[
-                [position_by_id[int(row_id)] for row_id in inputs.row_order_by_page[key]]
+                [
+                    position_by_id[int(row_id)]
+                    for row_id in inputs.row_order_by_page[key]
+                ]
             ]
         )
         for key in page_keys
@@ -235,7 +238,9 @@ def _root_layout(
     roots: list[RootGroup] = []
     for role in ("base", "delta"):
         role_pages = tuple(key for key in page_keys if key.object_role == role)
-        for ordinal, start in enumerate(range(0, len(role_pages), config.pages_per_root)):
+        for ordinal, start in enumerate(
+            range(0, len(role_pages), config.pages_per_root)
+        ):
             pages = role_pages[start : start + config.pages_per_root]
             roots.append(
                 RootGroup(
@@ -273,9 +278,7 @@ def _ipc_bytes(
     page_codes: np.ndarray,
 ) -> bytes:
     parent_by_page = {
-        key: root_index
-        for root_index, root in enumerate(roots)
-        for key in root.pages
+        key: root_index for root_index, root in enumerate(roots) for key in root.pages
     }
     kind: list[int] = []
     role: list[int] = []
@@ -348,7 +351,8 @@ def read_hierarchy_ipc(body: bytes) -> tuple[HierarchyRecord, ...]:
     except (pa.ArrowException, OSError) as error:
         raise ValueError("hierarchy IPC bytes differ") from error
     columns = {
-        name: table[name].combine_chunks().to_pylist() for name in table.column_names[:-1]
+        name: table[name].combine_chunks().to_pylist()
+        for name in table.column_names[:-1]
     }
     code_array = table["code"].combine_chunks()
     flat_codes = code_array.values.to_numpy(zero_copy_only=False).reshape(-1, 16)
@@ -358,10 +362,15 @@ def read_hierarchy_ipc(body: bytes) -> tuple[HierarchyRecord, ...]:
         role_raw = columns["role"][index]
         slot = columns["summary_slot"][index]
         parent = columns["parent_root"][index]
-        if kind_raw not in (_ROOT_KIND, _PAGE_KIND) or role_raw not in (
-            _BASE_ROLE,
-            _DELTA_ROLE,
-        ) or slot not in (0, 1):
+        if (
+            kind_raw not in (_ROOT_KIND, _PAGE_KIND)
+            or role_raw
+            not in (
+                _BASE_ROLE,
+                _DELTA_ROLE,
+            )
+            or slot not in (0, 1)
+        ):
             raise ValueError("hierarchy IPC record differs")
         records.append(
             HierarchyRecord(
@@ -401,14 +410,10 @@ def build_hierarchy(inputs: ScreenInputs, config: HierarchyConfig) -> HierarchyA
     )
     page_codes = np.ascontiguousarray(encode_pq(page_means, summary_books, PQ16X8))
     roots = _root_layout(page_keys, config)
-    page_row_counts = tuple(
-        len(inputs.row_order_by_page[key]) for key in page_keys
-    )
+    page_row_counts = tuple(len(inputs.row_order_by_page[key]) for key in page_keys)
     root_means = _root_means(roots, vectors_by_page)
     root_codes = np.ascontiguousarray(encode_pq(root_means, summary_books, PQ16X8))
-    ipc_body = _ipc_bytes(
-        roots, page_keys, page_row_counts, root_codes, page_codes
-    )
+    ipc_body = _ipc_bytes(roots, page_keys, page_row_counts, root_codes, page_codes)
     artifact = HierarchyArtifact(
         config=config,
         roots=roots,
@@ -462,7 +467,10 @@ def validate_hierarchy(
     ):
         raise ValueError("root summary codes differ")
     expected_book_shape = (16, 256, inputs.vectors.shape[1] // 16)
-    if artifact.summary_books.shape != expected_book_shape or artifact.summary_books.dtype != np.float32:
+    if (
+        artifact.summary_books.shape != expected_book_shape
+        or artifact.summary_books.dtype != np.float32
+    ):
         raise ValueError("summary codebook differs")
     if artifact.page_summary_codes_identity != _array_identity(
         artifact.page_summary_codes
@@ -587,17 +595,16 @@ def route_hierarchy(
         or artifact.page_summary_codes.shape != (len(artifact.page_keys) * 2, 16)
     ):
         raise ValueError("hierarchy routing input differs")
-    root_scores = adc_scores(
-        vector, artifact.summary_books, artifact.root_summary_codes, PQ16X8
-    ).reshape(-1, 2).min(axis=1)
+    root_scores = (
+        adc_scores(vector, artifact.summary_books, artifact.root_summary_codes, PQ16X8)
+        .reshape(-1, 2)
+        .min(axis=1)
+    )
     root_keys = tuple(
-        (0 if root.role == "base" else 1, root.ordinal)
-        for root in artifact.roots
+        (0 if root.role == "base" else 1, root.ordinal) for root in artifact.roots
     )
     root_candidate_count = min(len(artifact.roots), config.maximum_exposed_pages)
-    root_order = _bounded_total_order(
-        root_scores, root_keys, root_candidate_count
-    )
+    root_order = _bounded_total_order(root_scores, root_keys, root_candidate_count)
     exposed: list[PageKey] = []
     for root_index in root_order:
         pages = artifact.roots[root_index].pages
@@ -616,18 +623,20 @@ def route_hierarchy(
     code_positions = np.stack(
         (exposed_positions * 2, exposed_positions * 2 + 1), axis=1
     ).reshape(-1)
-    page_scores = adc_scores(
-        vector,
-        artifact.summary_books,
-        np.ascontiguousarray(artifact.page_summary_codes[code_positions]),
-        PQ16X8,
-    ).reshape(-1, 2).min(axis=1)
+    page_scores = (
+        adc_scores(
+            vector,
+            artifact.summary_books,
+            np.ascontiguousarray(artifact.page_summary_codes[code_positions]),
+            PQ16X8,
+        )
+        .reshape(-1, 2)
+        .min(axis=1)
+    )
     retained_count = min(config.retained_pages, len(exposed))
     page_order = _bounded_total_order(page_scores, tuple(exposed), retained_count)
     retained = tuple(exposed[index] for index in page_order)
-    scanned_rows = sum(
-        artifact.page_row_counts[page_position[key]] for key in retained
-    )
+    scanned_rows = sum(artifact.page_row_counts[page_position[key]] for key in retained)
     if scanned_rows > config.maximum_scanned_rows:
         raise ValueError("hierarchy scanned-row cap differs")
     return HierarchyFence(
@@ -770,6 +779,7 @@ class ContainmentSample:
 
     query_ordinal: int
     truth_ids: tuple[int, ...]
+    truth_pages: tuple[PageKey, ...]
     retained_pages: tuple[PageKey, ...]
     hit_ids: tuple[int, ...]
     hits10: int
@@ -787,7 +797,9 @@ class ArmSample:
 
     query_ordinal: int
     truth_ids: tuple[int, ...]
+    truth_pages: tuple[PageKey, ...]
     selected_pages: tuple[PageKey, ...]
+    selected_page_bytes: tuple[int, ...]
     hit10_ids: tuple[int, ...]
     hit_ids: tuple[int, ...]
     hits10: int
@@ -850,6 +862,28 @@ class ArmEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class PairedIntervalEvidence:
+    """Producer claim for one arm's paired intervals against PQ16."""
+
+    name: str
+    average_recall10_ppm: tuple[int, int]
+    average_recall100_ppm: tuple[int, int]
+    p05_recall100_ppm: tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class ArmEligibilityEvidence:
+    """Producer claim for every gate contributing to width eligibility."""
+
+    name: str
+    absolute_quality: bool
+    resource: bool
+    memory: bool
+    paired_noninferior: bool
+    eligible: bool
+
+
+@dataclass(frozen=True, slots=True)
 class V98Result:
     """Complete typed producer evidence for the V98 decision."""
 
@@ -859,6 +893,7 @@ class V98Result:
     query_count: int
     bootstrap_seed: int
     bootstrap_resamples: int
+    bootstrap_matrix_sha256: str
     classification: Literal[
         "hierarchy-containment-rejected",
         "hierarchy-exact-ceiling-rejected",
@@ -870,6 +905,9 @@ class V98Result:
     exact_aggregate: AggregateEvidence | None
     exact_samples: tuple[ArmSample, ...]
     arms: tuple[ArmEvidence, ...]
+    paired_intervals: tuple[PairedIntervalEvidence, ...]
+    eligibility: tuple[ArmEligibilityEvidence, ...]
+    winner: str | None
 
 
 def project_v98_resident_bytes_100m(
@@ -978,6 +1016,7 @@ def _containment_sample(
     return ContainmentSample(
         query_ordinal=query_ordinal,
         truth_ids=tuple(int(row_id) for row_id in truth),
+        truth_pages=tuple(inputs.page_by_id[int(row_id)] for row_id in truth),
         retained_pages=fence.retained_pages,
         hit_ids=evidence.hit_ids,
         hits10=evidence.hits10,
@@ -1008,7 +1047,11 @@ def _arm_sample(
     return ArmSample(
         query_ordinal=query_ordinal,
         truth_ids=tuple(int(row_id) for row_id in truth),
+        truth_pages=tuple(inputs.page_by_id[int(row_id)] for row_id in truth),
         selected_pages=selected_pages,
+        selected_page_bytes=tuple(
+            inputs.pages[key].encoded_bytes for key in selected_pages
+        ),
         hit10_ids=tuple(
             int(row_id)
             for row_id in truth[:cutoff]
@@ -1025,6 +1068,119 @@ def _arm_sample(
         page_evaluations=fence.page_evaluations,
         scanned_rows=fence.scanned_rows,
     )
+
+
+def _producer_bootstrap_matrix(
+    query_count: int, *, seed: int, resamples: int
+) -> np.ndarray:
+    if query_count <= 0 or resamples != 10_000:
+        raise ValueError("V98 bootstrap configuration differs")
+    return np.random.default_rng(seed).integers(
+        0,
+        query_count,
+        size=(resamples, query_count),
+        dtype=np.int32,
+    )
+
+
+def _producer_paired_interval(
+    challenger: Sequence[int],
+    control: Sequence[int],
+    matrix: np.ndarray,
+    *,
+    statistic: Literal["mean", "p05"],
+) -> tuple[int, int]:
+    left = np.asarray(challenger, dtype=np.int64)
+    right = np.asarray(control, dtype=np.int64)
+    if left.shape != right.shape or left.ndim != 1 or matrix.shape[1] != left.size:
+        raise ValueError("V98 paired evidence differs")
+    differences = np.empty(matrix.shape[0], dtype=np.float64)
+    p05_index = max(0, (left.size * 5 + 99) // 100 - 1)
+    for start in range(0, matrix.shape[0], 256):
+        stop = min(start + 256, matrix.shape[0])
+        draws = matrix[start:stop]
+        left_draws = left[draws]
+        right_draws = right[draws]
+        if statistic == "mean":
+            differences[start:stop] = (left_draws - right_draws).mean(axis=1)
+        else:
+            differences[start:stop] = (
+                np.partition(left_draws, p05_index, axis=1)[:, p05_index]
+                - np.partition(right_draws, p05_index, axis=1)[:, p05_index]
+            )
+    lower, upper = np.quantile(differences, [0.025, 0.975], method="nearest")
+    return int(np.rint(lower)), int(np.rint(upper))
+
+
+def _producer_decisions(
+    arms: tuple[ArmEvidence, ...],
+    exact_aggregate: AggregateEvidence,
+    matrix: np.ndarray,
+) -> tuple[
+    tuple[PairedIntervalEvidence, ...],
+    tuple[ArmEligibilityEvidence, ...],
+    str | None,
+]:
+    control = next(arm for arm in arms if arm.name == PQ16X8.name)
+    control10 = tuple(sample.recall10_ppm for sample in control.samples)
+    control100 = tuple(sample.recall100_ppm for sample in control.samples)
+    paired: list[PairedIntervalEvidence] = []
+    eligibility: list[ArmEligibilityEvidence] = []
+    arm_by_name = {arm.name: arm for arm in arms}
+    for arm in arms:
+        recall10 = tuple(sample.recall10_ppm for sample in arm.samples)
+        recall100 = tuple(sample.recall100_ppm for sample in arm.samples)
+        interval = PairedIntervalEvidence(
+            name=arm.name,
+            average_recall10_ppm=_producer_paired_interval(
+                recall10, control10, matrix, statistic="mean"
+            ),
+            average_recall100_ppm=_producer_paired_interval(
+                recall100, control100, matrix, statistic="mean"
+            ),
+            p05_recall100_ppm=_producer_paired_interval(
+                recall100, control100, matrix, statistic="p05"
+            ),
+        )
+        paired.append(interval)
+        absolute_quality = (
+            exact_aggregate.quality_gate_passed and arm.aggregate.quality_gate_passed
+        )
+        resource = (
+            exact_aggregate.resource_gate_passed and arm.aggregate.resource_gate_passed
+        )
+        memory = arm.projection.eligible
+        paired_noninferior = interval.average_recall100_ppm[1] >= 0
+        eligible = (
+            arm.name != SUMMARY_ONLY_PQ16X8.name
+            and absolute_quality
+            and resource
+            and memory
+            and paired_noninferior
+        )
+        eligibility.append(
+            ArmEligibilityEvidence(
+                name=arm.name,
+                absolute_quality=absolute_quality,
+                resource=resource,
+                memory=memory,
+                paired_noninferior=paired_noninferior,
+                eligible=eligible,
+            )
+        )
+    candidates = [item.name for item in eligibility if item.eligible]
+    winner = None
+    if candidates:
+        winner = min(
+            candidates,
+            key=lambda name: (
+                arm_by_name[name].row_bytes,
+                -arm_by_name[name].aggregate.p05_recall100_ppm,
+                -arm_by_name[name].aggregate.average_recall10_ppm,
+                name,
+            ),
+        )
+    return tuple(paired), tuple(eligibility), winner
 
 
 def _retained_row_positions(
@@ -1108,6 +1264,9 @@ def _early_result(
     exact_samples: tuple[ArmSample, ...] = (),
     exact_aggregate: AggregateEvidence | None = None,
 ) -> V98Result:
+    matrix = _producer_bootstrap_matrix(
+        len(containment_samples), seed=authority.seed, resamples=10_000
+    )
     return V98Result(
         schema="borsuk-v98-hierarchical-row-router-v1",
         authority=authority,
@@ -1115,6 +1274,7 @@ def _early_result(
         query_count=len(containment_samples),
         bootstrap_seed=authority.seed,
         bootstrap_resamples=10_000,
+        bootstrap_matrix_sha256=hashlib.sha256(matrix.tobytes(order="C")).hexdigest(),
         classification=classification,
         hierarchy=_hierarchy_evidence(artifact),
         containment_aggregate=containment_aggregate,
@@ -1122,6 +1282,9 @@ def _early_result(
         exact_aggregate=exact_aggregate,
         exact_samples=exact_samples,
         arms=(),
+        paired_intervals=(),
+        eligibility=(),
+        winner=None,
     )
 
 
@@ -1147,9 +1310,7 @@ def evaluate_v98(
     ):
         raise ValueError("V98 input authority differs")
     artifact = build_hierarchy(inputs, config)
-    fences = tuple(
-        route_hierarchy(query, artifact, config) for query in queries
-    )
+    fences = tuple(route_hierarchy(query, artifact, config) for query in queries)
     containment_samples = tuple(
         _containment_sample(ordinal, truth_ids[ordinal], fences[ordinal], inputs)
         for ordinal in range(queries.shape[0])
@@ -1275,14 +1436,19 @@ def evaluate_v98(
             row_bytes=0,
             codebook_identity=None,
             codes_identity=None,
-            projection=project_v98_resident_bytes_100m(
-                SUMMARY_ONLY_PQ16X8, config
-            ),
+            projection=project_v98_resident_bytes_100m(SUMMARY_ONLY_PQ16X8, config),
             aggregate=_aggregate_samples(
                 summary_samples, enforce_resources=True, config=config
             ),
             samples=summary_samples,
         )
+    )
+    arm_tuple = tuple(arms)
+    matrix = _producer_bootstrap_matrix(
+        queries.shape[0], seed=authority.seed, resamples=10_000
+    )
+    paired_intervals, eligibility, winner = _producer_decisions(
+        arm_tuple, exact_aggregate, matrix
     )
     return V98Result(
         schema="borsuk-v98-hierarchical-row-router-v1",
@@ -1291,13 +1457,17 @@ def evaluate_v98(
         query_count=queries.shape[0],
         bootstrap_seed=authority.seed,
         bootstrap_resamples=10_000,
+        bootstrap_matrix_sha256=hashlib.sha256(matrix.tobytes(order="C")).hexdigest(),
         classification="widths-evaluated",
         hierarchy=_hierarchy_evidence(artifact),
         containment_aggregate=containment_aggregate,
         containment_samples=containment_samples,
         exact_aggregate=exact_aggregate,
         exact_samples=exact_samples,
-        arms=tuple(arms),
+        arms=arm_tuple,
+        paired_intervals=paired_intervals,
+        eligibility=eligibility,
+        winner=winner,
     )
 
 
@@ -1312,19 +1482,35 @@ def canonical_v98_result_bytes(result: V98Result) -> bytes:
         != tuple(range(result.query_count))
         or result.bootstrap_resamples != 10_000
         or result.bootstrap_seed != result.authority.seed
+        or len(result.bootstrap_matrix_sha256) != 64
         or (
             result.classification == "hierarchy-containment-rejected"
-            and (result.exact_samples or result.arms or result.exact_aggregate is not None)
+            and (
+                result.exact_samples
+                or result.arms
+                or result.exact_aggregate is not None
+                or result.paired_intervals
+                or result.eligibility
+                or result.winner is not None
+            )
         )
         or (
             result.classification == "hierarchy-exact-ceiling-rejected"
-            and (len(result.exact_samples) != result.query_count or result.arms)
+            and (
+                len(result.exact_samples) != result.query_count
+                or result.arms
+                or result.paired_intervals
+                or result.eligibility
+                or result.winner is not None
+            )
         )
         or (
             result.classification == "widths-evaluated"
             and (
                 len(result.exact_samples) != result.query_count
                 or len(result.arms) != 5
+                or len(result.paired_intervals) != 5
+                or len(result.eligibility) != 5
             )
         )
     ):

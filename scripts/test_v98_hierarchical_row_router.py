@@ -135,7 +135,9 @@ class V98HierarchyAuthorityTests(unittest.TestCase):
             )
         )
 
-    def test_singleton_page_duplicates_its_only_summary_and_ipc_round_trips(self) -> None:
+    def test_singleton_page_duplicates_its_only_summary_and_ipc_round_trips(
+        self,
+    ) -> None:
         # Break caught: a one-row page creates an empty-mean NaN, or the
         # cross-language hierarchy bytes lose order, slot, or child metadata.
         singleton = PageKey("delta", 8)
@@ -151,14 +153,18 @@ class V98HierarchyAuthorityTests(unittest.TestCase):
         )
         self.assertEqual(artifact.ipc_schema, hierarchy_ipc_schema())
         records = read_hierarchy_ipc(artifact.ipc_bytes)
-        self.assertEqual(len(records), 2 * (len(artifact.roots) + len(artifact.page_keys)))
+        self.assertEqual(
+            len(records), 2 * (len(artifact.roots) + len(artifact.page_keys))
+        )
         self.assertEqual(records[0].kind, "root")
         self.assertEqual(records[0].role, "base")
         self.assertEqual(records[-1].kind, "page")
         self.assertEqual(records[-1].role, "delta")
         self.assertEqual(records[-1].entity_ordinal, 8)
         self.assertEqual(records[-1].summary_slot, 1)
-        self.assertEqual(hashlib.sha256(artifact.ipc_bytes).hexdigest(), artifact.ipc_sha256)
+        self.assertEqual(
+            hashlib.sha256(artifact.ipc_bytes).hexdigest(), artifact.ipc_sha256
+        )
         validate_hierarchy(artifact, inputs, self.config())
 
     def test_rejects_cap_root_code_identity_and_visible_roster_drift(self) -> None:
@@ -304,9 +310,7 @@ class V98BoundedRoutingTests(unittest.TestCase):
         # Break caught: equal summary scores use unstable argpartition order or
         # count every partial page as 256 rows instead of its visible rows.
         inputs, config, artifact = self.literal_zero_scoring_artifact()
-        fence = route_hierarchy(
-            np.zeros(16, dtype=np.float32), artifact, config
-        )
+        fence = route_hierarchy(np.zeros(16, dtype=np.float32), artifact, config)
 
         self.assertEqual(fence.root_evaluations, 18)
         self.assertEqual(fence.page_evaluations, 137)
@@ -339,9 +343,7 @@ class V98BoundedRoutingTests(unittest.TestCase):
             root_summary_codes=root_codes,
             page_summary_codes=np.zeros((8_208, 16), dtype=np.uint8),
         )
-        fence = route_hierarchy(
-            np.zeros(16, dtype=np.float32), artifact, config
-        )
+        fence = route_hierarchy(np.zeros(16, dtype=np.float32), artifact, config)
 
         self.assertEqual(fence.root_evaluations, 513)
         self.assertEqual(len(fence.exposed_pages), 4_096)
@@ -398,9 +400,7 @@ class V98BoundedRoutingTests(unittest.TestCase):
                 dtype=np.uint8,
             )
             stored_codes = (
-                pack_pq4(literal_codes)
-                if spec.centroid_bits == 4
-                else literal_codes
+                pack_pq4(literal_codes) if spec.centroid_bits == 4 else literal_codes
             )
             scores = adc_scores(query, books, stored_codes, spec)
             expected = tuple(
@@ -550,15 +550,21 @@ class V98ProducerTests(unittest.TestCase):
             truth_key=PageKey("delta", 0),
             far_truth=False,
         )
-        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+        result = evaluate_v98(
+            inputs, self.authority(inputs), V98HierarchyAuthorityTests.config()
+        )
 
         self.assertEqual(result.classification, "hierarchy-containment-rejected")
         self.assertEqual(len(result.containment_samples), 3)
-        self.assertTrue(all(sample.hit_ids == () for sample in result.containment_samples))
+        self.assertTrue(
+            all(sample.hit_ids == () for sample in result.containment_samples)
+        )
         self.assertEqual(result.exact_samples, ())
         self.assertEqual(result.arms, ())
 
-    def test_exact_failure_stops_before_width_arms_and_retains_literal_evidence(self) -> None:
+    def test_exact_failure_stops_before_width_arms_and_retains_literal_evidence(
+        self,
+    ) -> None:
         # Break caught: compressed arms run after the exact row ceiling proves
         # the fixed hierarchy/planner cannot meet the quality contract.
         truth_key = PageKey("base", 1_000)
@@ -570,7 +576,9 @@ class V98ProducerTests(unittest.TestCase):
             truth_key=truth_key,
             far_truth=True,
         )
-        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+        result = evaluate_v98(
+            inputs, self.authority(inputs), V98HierarchyAuthorityTests.config()
+        )
 
         self.assertEqual(result.classification, "hierarchy-exact-ceiling-rejected")
         self.assertEqual(result.containment_samples[0].hit_ids, (3_000,))
@@ -579,7 +587,9 @@ class V98ProducerTests(unittest.TestCase):
         self.assertLessEqual(result.exact_samples[0].bytes, 16 * 1024**2)
         self.assertEqual(result.arms, ())
 
-    def test_passing_ceilings_execute_five_registered_arms_and_canonicalize(self) -> None:
+    def test_passing_ceilings_execute_five_registered_arms_and_canonicalize(
+        self,
+    ) -> None:
         # Break caught: a width is skipped/reordered, the summary-only control
         # gains a distinct planner, or result bytes are not canonical.
         inputs = self.inputs(
@@ -590,7 +600,9 @@ class V98ProducerTests(unittest.TestCase):
             truth_key=PageKey("base", 0),
             far_truth=False,
         )
-        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+        result = evaluate_v98(
+            inputs, self.authority(inputs), V98HierarchyAuthorityTests.config()
+        )
 
         self.assertEqual(result.classification, "widths-evaluated")
         self.assertEqual(result.containment_samples[0].hit_ids, (1_000,))
@@ -616,7 +628,9 @@ class V98ProducerTests(unittest.TestCase):
             truth_key=PageKey("delta", 0),
             far_truth=False,
         )
-        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+        result = evaluate_v98(
+            inputs, self.authority(inputs), V98HierarchyAuthorityTests.config()
+        )
 
         self.assertEqual(result.query_count, 1_000)
         self.assertEqual(
@@ -624,7 +638,9 @@ class V98ProducerTests(unittest.TestCase):
             tuple(range(1_000)),
         )
 
-    def test_100m_projection_adds_hierarchy_terms_once_and_enforces_budget(self) -> None:
+    def test_100m_projection_adds_hierarchy_terms_once_and_enforces_budget(
+        self,
+    ) -> None:
         # Break caught: root summaries or hierarchy directories disappear from
         # RAM accounting, or page summaries are charged twice.
         config = V98HierarchyAuthorityTests.config()
@@ -636,9 +652,7 @@ class V98ProducerTests(unittest.TestCase):
         self.assertEqual(projection.root_child_bytes, 48_829 * 6)
         self.assertLess(projection.total_bytes, 3 * 1024**3)
         self.assertTrue(projection.eligible)
-        self.assertFalse(
-            project_v98_resident_bytes_100m(PQ32X8, config).eligible
-        )
+        self.assertFalse(project_v98_resident_bytes_100m(PQ32X8, config).eligible)
 
 
 if __name__ == "__main__":
