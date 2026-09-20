@@ -33,7 +33,7 @@ watch_health() {
     full_avg10=$(awk '/^full/{for(i=1;i<=NF;i++) if($i ~ /^avg10=/){split($i,a,"="); print a[2]}}' /proc/pressure/memory)
     swap_now=$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{print t-f}' /proc/meminfo)
     swap_delta=$((swap_now - swap_start_kib))
-    over=$(awk -v value="$full_avg10" 'BEGIN{print value > 0.50 ? 1 : 0}')
+    over=$(awk -v value="$full_avg10" 'BEGIN{print (value > 0.50 ? 1 : 0)}')
     if [ "$over" -eq 1 ]; then breaches=$((breaches + 1)); else breaches=0; fi
     if [ "$breaches" -ge 3 ] || [ "$swap_delta" -gt 1048576 ]; then
       printf 'full avg10=%s swap_delta_kib=%s\n' "$full_avg10" "$swap_delta" >pressure-stop.txt

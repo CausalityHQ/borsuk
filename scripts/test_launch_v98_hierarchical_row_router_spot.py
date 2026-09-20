@@ -176,6 +176,26 @@ class V98SpotLauncherTests(unittest.TestCase):
         self.assertNotIn("holdout", combined)
         self.assertNotIn("attempt=2", combined)
 
+    def test_pressure_threshold_is_valid_awk_and_classifies_both_sides(self) -> None:
+        # Break caught: awk parses an unparenthesized comparison after `print`
+        # as output redirection, disabling the pressure watcher with a syntax error.
+        runner = (
+            pathlib.Path(__file__)
+            .with_name("v98_hierarchical_row_router_run_remote.sh")
+            .read_text()
+        )
+        expression = "BEGIN{print (value > 0.50 ? 1 : 0)}"
+        self.assertIn(expression, runner)
+        for value, expected in (("0.00", "0"), ("0.51", "1")):
+            completed = subprocess.run(
+                ["awk", "-v", f"value={value}", expression],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), expected)
+
     def test_launch_specs_are_one_time_spot_x86_and_terminate_on_shutdown(self) -> None:
         # Break caught: the experiment uses On-Demand, persists after terminal,
         # or launches overlapping workers in multiple zones.
