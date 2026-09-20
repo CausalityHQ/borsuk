@@ -14,7 +14,12 @@ import pyarrow.parquet as pq
 
 from scripts.v85_pq16_page_nomination import (
     PageEntry,
+    SparseResidualPq8,
+    _rank_pq16_sparse_residual,
+    _sparse_residual_resident_bytes,
     _srht_rotate,
+    _train_pq16,
+    _train_sparse_residual_pq8,
     evaluate_page_nominations,
     order_pages_by_pq_cooccurrence,
     plan_rank_weighted_ranges,
@@ -23,10 +28,76 @@ from scripts.v85_pq16_page_nomination import (
 from scripts.v85_pq16_rescore_summary import (
     summarize_paired_pq16_rotation,
     summarize_paired_rescore,
+    summarize_paired_sparse_residual,
 )
 
 
 class V85Pq16PageNominationTests(unittest.TestCase):
+    def test_sparse_residual_corrects_selected_rows_and_has_bounded_residency(
+        self,
+    ) -> None:
+        # Break caught: the variable-rate arm cannot repair a base-PQ ordering,
+        # changes unselected rows, or exceeds the 100M resident-memory budget.
+        books = np.zeros((16, 256, 1), dtype=np.float32)
+        books[:, 1, 0] = 1.0
+        codes = np.asarray([[0] * 16, [1] * 16], dtype=np.uint8)
+        residual_books = np.zeros((8, 256, 2), dtype=np.float32)
+        residual_books[:, 1, :] = -0.5
+        residual = SparseResidualPq8(
+            selected_indices=np.asarray([1], dtype=np.int64),
+            books=residual_books,
+            codes=np.asarray([[1] * 8], dtype=np.uint8),
+            combined_norms=np.asarray([4.0], dtype=np.float32),
+        )
+
+        ranked = _rank_pq16_sparse_residual(
+            np.asarray([[0.45] * 16], dtype=np.float32),
+            np.asarray([10, 11], dtype=np.int64),
+            books,
+            codes,
+            residual,
+            shortlist_rows=2,
+        )
+
+        np.testing.assert_array_equal(ranked, np.asarray([[11, 10]]))
+        self.assertEqual(
+            _sparse_residual_resident_bytes(100_000_000, 250_000),
+            1_912_500_000,
+        )
+
+    def test_sparse_residual_training_selects_highest_base_reconstruction_error(
+        self,
+    ) -> None:
+        # Break caught: residual capacity is selected from evaluation queries
+        # instead of the query-independent base reconstruction error.
+        generator = np.random.default_rng(85)
+        vectors = generator.normal(size=(1024, 16)).astype(np.float32)
+        ids = np.arange(10_000, 11_024, dtype=np.int64)
+        books, codes = _train_pq16(vectors, seed=7216)
+
+        residual = _train_sparse_residual_pq8(
+            vectors,
+            ids,
+            books,
+            codes,
+            fraction_ppm=250_000,
+            seed=7216 ^ 0x52535138,
+        )
+
+        reconstructed = np.empty_like(vectors)
+        for subspace in range(16):
+            reconstructed[:, subspace : subspace + 1] = books[
+                subspace, codes[:, subspace]
+            ]
+        errors = np.einsum(
+            "ij,ij->i", vectors - reconstructed, vectors - reconstructed
+        )
+        expected = np.lexsort((ids, -errors))[:256]
+        np.testing.assert_array_equal(residual.selected_indices, expected)
+        self.assertEqual(residual.books.shape, (8, 256, 2))
+        self.assertEqual(residual.codes.shape, (256, 8))
+        self.assertTrue(np.isfinite(residual.combined_norms).all())
+
     def test_srht_rotation_is_seeded_orthogonal_and_distance_preserving(self) -> None:
         # Break caught: the proposed PQ preconditioner changes Euclidean
         # authority, uses an evaluation-dependent transform, or is nondeterministic.
@@ -213,6 +284,56 @@ class V85Pq16PageNominationTests(unittest.TestCase):
         )
         self.assertTrue(summary["challenger_promoted"])
 
+    def test_sparse_residual_summary_recomputes_paired_promotion(self) -> None:
+        truth = list(range(100))
+
+        def result(hits10: int, hits100: int, representation: str) -> dict[str, object]:
+            return {
+                "average_recall10_ppm": hits10 * 100_000,
+                "average_recall100_ppm": hits100 * 10_000,
+                "gate_passed": hits10 >= 10 and hits100 >= 98,
+                "max_bytes_per_query": 1,
+                "max_gets_per_query": 1,
+                "p05_recall100_ppm": hits100 * 10_000,
+                "representation": representation,
+                "rotation": "identity" if representation != "pq16-identity" else None,
+                "schema": (
+                    "borsuk-v85-sparse-residual-page-nomination-result-v1"
+                    if representation == "sparse-residual-pq8"
+                    else "borsuk-v85-pq16-page-nomination-result-v2"
+                ),
+                "samples": [
+                    {
+                        "bytes": 1,
+                        "gets": 1,
+                        "query": 0,
+                        "truth_ids": truth,
+                        "hit10_ids": truth[:hits10],
+                        "hit_ids": truth[:hits100],
+                        "hits10": hits10,
+                        "hits": hits100,
+                    }
+                ],
+            }
+
+        baseline = result(9, 97, "pq16-identity")
+        baseline.pop("rotation")
+        challenger = result(10, 100, "sparse-residual-pq8")
+        challenger["residual_fraction_ppm"] = 250_000
+
+        summary = summarize_paired_sparse_residual(
+            baseline,
+            challenger,
+            baseline_sha256="1" * 64,
+            challenger_sha256="2" * 64,
+            expected_fraction_ppm=250_000,
+        )
+
+        self.assertEqual(
+            summary["paired_recall100_delta_ci95_ppm"], [30_000, 30_000]
+        )
+        self.assertTrue(summary["challenger_promoted"])
+
     def test_100k_rescore_runner_preregisters_full_development_evidence(self) -> None:
         # Break caught: the paid rescore silently uses 32 queries, retunes the
         # arm, or enables nested query-level work stealing.
@@ -271,6 +392,40 @@ class V85Pq16PageNominationTests(unittest.TestCase):
                 "query_parallelism": 1,
                 "rotation": "srht",
                 "rotation_seed_xor": 0x53524854,
+                "shortlist_rows": 2048,
+                "split": "burned-development",
+                "spot_only": True,
+            },
+        )
+
+    def test_sparse_residual_runner_preregisters_one_memory_bounded_arm(
+        self,
+    ) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_sparse_residual_100k_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "baseline_rerun": False,
+                "blas_threads": 16,
+                "instance_type": "c7i.8xlarge",
+                "max_wall_seconds": 1200,
+                "page_budget": 32,
+                "queries": 1000,
+                "query_parallelism": 1,
+                "residual_fraction_ppm": 250_000,
+                "residual_row_bytes": 12,
                 "shortlist_rows": 2048,
                 "split": "burned-development",
                 "spot_only": True,
@@ -587,6 +742,23 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             self.assertEqual(srht_result["rotated_dimensions"], dimensions)
             self.assertEqual(srht_result["rotation_seed"], 7216 ^ 0x53524854)
             self.assertEqual(srht_result["average_recall100_ppm"], 1_000_000)
+
+            residual_output = root / "residual-result.json"
+            residual_command = command.copy()
+            residual_command[residual_command.index(str(output))] = str(
+                residual_output
+            )
+            residual_command.extend(
+                ["--sparse-residual-fraction-ppm", "1000000"]
+            )
+            subprocess.run(
+                residual_command, check=True, capture_output=True, text=True
+            )
+            residual_result = json.loads(residual_output.read_bytes())
+            self.assertEqual(residual_result["representation"], "sparse-residual-pq8")
+            self.assertEqual(residual_result["residual_fraction_ppm"], 1_000_000)
+            self.assertEqual(residual_result["residual_selected_rows"], 256)
+            self.assertEqual(residual_result["average_recall100_ppm"], 1_000_000)
 
             cooccurrence_output = root / "cooccurrence-result.json"
             cooccurrence_command = command.copy()

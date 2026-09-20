@@ -47,6 +47,19 @@ class V85MemoryWorksheetTests(unittest.TestCase):
         )
         self.assertFalse(exact_delta["feasible"])
 
+    def test_100m_sparse_residual_quartile_remains_below_3gib(self) -> None:
+        result = project_v85_resident_memory(
+            sparse_residual_fraction_ppm=250_000
+        )
+
+        self.assertEqual(result["sparse_residual_rows"], 25_000_000)
+        self.assertEqual(result["sparse_residual_codes_and_norms_bytes"], 300_000_000)
+        self.assertEqual(result["sparse_residual_bitmap_bytes"], 12_500_000)
+        self.assertEqual(result["sparse_residual_codebooks_bytes"], 786_432)
+        self.assertEqual(result["projected_resident_bytes"], 3_012_058_680)
+        self.assertEqual(result["headroom_bytes"], 209_166_792)
+        self.assertTrue(result["feasible"])
+
 
 if __name__ == "__main__":
     unittest.main()

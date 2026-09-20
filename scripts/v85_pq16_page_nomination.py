@@ -29,6 +29,14 @@ class PageEntry:
     encoded_bytes: int
 
 
+@dataclasses.dataclass(frozen=True)
+class SparseResidualPq8:
+    selected_indices: np.ndarray
+    books: np.ndarray
+    codes: np.ndarray
+    combined_norms: np.ndarray
+
+
 def _sha256_file(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -348,11 +356,12 @@ def evaluate_page_nominations(
     }
 
 
-def _train_pq16(vectors: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarray]:
+def _train_pq(
+    vectors: np.ndarray, subspaces: int, seed: int
+) -> tuple[np.ndarray, np.ndarray]:
     rows, dimensions = vectors.shape
-    subspaces = 16
-    if dimensions % subspaces != 0 or rows < 256:
-        raise ValueError("PQ16 training shape differs")
+    if subspaces <= 0 or dimensions % subspaces != 0 or rows < 256:
+        raise ValueError("PQ training shape differs")
     width = dimensions // subspaces
     generator = np.random.default_rng(seed)
     sample = vectors[generator.choice(rows, min(rows, 100_000), replace=False)]
@@ -390,6 +399,66 @@ def _train_pq16(vectors: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarray]
                 norms[None, :] - 2.0 * (block @ centroids.T), axis=1
             )
     return books, codes
+
+
+def _train_pq16(vectors: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    return _train_pq(vectors, 16, seed)
+
+
+def _train_sparse_residual_pq8(
+    vectors: np.ndarray,
+    base_ids: np.ndarray,
+    books: np.ndarray,
+    codes: np.ndarray,
+    *,
+    fraction_ppm: int,
+    seed: int,
+) -> SparseResidualPq8:
+    rows, dimensions = vectors.shape
+    if (
+        rows != base_ids.size
+        or books.shape[0] != 16
+        or books.shape[1] != 256
+        or books.shape[2] * 16 != dimensions
+        or codes.shape != (rows, 16)
+        or not 0 < fraction_ppm <= 1_000_000
+    ):
+        raise ValueError("sparse residual training shape differs")
+    selected_count = (rows * fraction_ppm + 999_999) // 1_000_000
+    if selected_count < 256:
+        raise ValueError("sparse residual training population differs")
+    base_width = dimensions // 16
+    errors = np.zeros(rows, dtype=np.float32)
+    for subspace in range(16):
+        lo, hi = subspace * base_width, (subspace + 1) * base_width
+        delta = vectors[:, lo:hi] - books[subspace, codes[:, subspace]]
+        errors += np.einsum("ij,ij->i", delta, delta)
+    selected_indices = np.lexsort((base_ids, -errors))[:selected_count].astype(
+        np.int64, copy=False
+    )
+    residual_vectors = vectors[selected_indices].copy()
+    for subspace in range(16):
+        lo, hi = subspace * base_width, (subspace + 1) * base_width
+        residual_vectors[:, lo:hi] -= books[
+            subspace, codes[selected_indices, subspace]
+        ]
+    residual_books, residual_codes = _train_pq(residual_vectors, 8, seed)
+    combined = np.empty_like(residual_vectors)
+    for subspace in range(16):
+        lo, hi = subspace * base_width, (subspace + 1) * base_width
+        combined[:, lo:hi] = books[subspace, codes[selected_indices, subspace]]
+    residual_width = dimensions // 8
+    for subspace in range(8):
+        lo, hi = subspace * residual_width, (subspace + 1) * residual_width
+        combined[:, lo:hi] += residual_books[
+            subspace, residual_codes[:, subspace]
+        ]
+    return SparseResidualPq8(
+        selected_indices=selected_indices,
+        books=residual_books,
+        codes=residual_codes,
+        combined_norms=np.einsum("ij,ij->i", combined, combined),
+    )
 
 
 def _srht_rotate(vectors: np.ndarray, seed: int) -> np.ndarray:
@@ -441,6 +510,90 @@ def _rank_pq16(
             delta = books[subspace] - query[lo:hi]
             table[subspace] = np.einsum("ij,ij->i", delta, delta)
         scores = table.reshape(-1)[code_offsets].sum(axis=1)
+        head = np.argpartition(scores, shortlist_rows - 1)[:shortlist_rows]
+        ordered = head[np.lexsort((base_ids[head], scores[head]))]
+        ranked[query_ordinal] = base_ids[ordered]
+    return ranked
+
+
+def _sparse_residual_resident_bytes(rows: int, fraction_ppm: int) -> int:
+    if (
+        type(rows) is not int
+        or rows <= 0
+        or type(fraction_ppm) is not int
+        or not 0 < fraction_ppm <= 1_000_000
+    ):
+        raise ValueError("sparse residual projection differs")
+    selected = (rows * fraction_ppm + 999_999) // 1_000_000
+    return rows * 16 + selected * (8 + 4) + (rows + 7) // 8
+
+
+def _rank_pq16_sparse_residual(
+    queries: np.ndarray,
+    base_ids: np.ndarray,
+    books: np.ndarray,
+    codes: np.ndarray,
+    residual: SparseResidualPq8,
+    shortlist_rows: int,
+) -> np.ndarray:
+    """Rank PQ16 rows, replacing selected scores with PQ8 residual scores."""
+
+    subspaces, _, width = books.shape
+    residual_subspaces, _, residual_width = residual.books.shape
+    if (
+        subspaces != 16
+        or residual_subspaces != 8
+        or queries.ndim != 2
+        or queries.shape[1] != subspaces * width
+        or residual_width * residual_subspaces != queries.shape[1]
+        or codes.shape != (base_ids.size, subspaces)
+        or residual.selected_indices.ndim != 1
+        or residual.codes.shape
+        != (residual.selected_indices.size, residual_subspaces)
+        or residual.combined_norms.shape != (residual.selected_indices.size,)
+        or shortlist_rows <= 0
+        or shortlist_rows > base_ids.size
+        or np.any(residual.selected_indices < 0)
+        or np.any(residual.selected_indices >= base_ids.size)
+        or len(set(residual.selected_indices.tolist()))
+        != residual.selected_indices.size
+    ):
+        raise ValueError("sparse residual ranking shape differs")
+    offsets = np.arange(subspaces, dtype=np.int32) * 256
+    code_offsets = codes.astype(np.int32) + offsets[None, :]
+    residual_offsets = np.arange(residual_subspaces, dtype=np.int32) * 256
+    residual_code_offsets = (
+        residual.codes.astype(np.int32) + residual_offsets[None, :]
+    )
+    ranked = np.empty((queries.shape[0], shortlist_rows), dtype=np.int64)
+    for query_ordinal, query in enumerate(queries):
+        base_distance_table = np.empty((subspaces, 256), dtype=np.float32)
+        base_dot_table = np.empty((subspaces, 256), dtype=np.float32)
+        for subspace in range(subspaces):
+            lo, hi = subspace * width, (subspace + 1) * width
+            delta = books[subspace] - query[lo:hi]
+            base_distance_table[subspace] = np.einsum("ij,ij->i", delta, delta)
+            base_dot_table[subspace] = books[subspace] @ query[lo:hi]
+        scores = base_distance_table.reshape(-1)[code_offsets].sum(axis=1)
+        residual_dot_table = np.empty(
+            (residual_subspaces, 256), dtype=np.float32
+        )
+        for subspace in range(residual_subspaces):
+            lo, hi = subspace * residual_width, (subspace + 1) * residual_width
+            residual_dot_table[subspace] = residual.books[subspace] @ query[lo:hi]
+        selected_base_dot = (
+            base_dot_table.reshape(-1)[code_offsets[residual.selected_indices]].sum(
+                axis=1
+            )
+        )
+        selected_residual_dot = (
+            residual_dot_table.reshape(-1)[residual_code_offsets].sum(axis=1)
+        )
+        scores[residual.selected_indices] = (
+            residual.combined_norms
+            + np.dot(query, query)
+            - 2.0 * (selected_base_dot + selected_residual_dot)
+        )
         head = np.argpartition(scores, shortlist_rows - 1)[:shortlist_rows]
         ordered = head[np.lexsort((base_ids[head], scores[head]))]
         ranked[query_ordinal] = base_ids[ordered]
@@ -530,10 +683,22 @@ def main() -> None:
     parser.add_argument("--gap-pages", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7216)
     parser.add_argument("--rotation", choices=("identity", "srht"), default="identity")
+    parser.add_argument("--sparse-residual-fraction-ppm", type=int, default=0)
     parser.add_argument("--cooccurrence-pseudoqueries", type=int, default=0)
     parser.add_argument("--cooccurrence-shortlist-rows", type=int, default=512)
     parser.add_argument("--cooccurrence-unique-pages", type=int, default=32)
     args = parser.parse_args()
+    if (
+        args.sparse_residual_fraction_ppm < 0
+        or args.sparse_residual_fraction_ppm > 1_000_000
+        or (
+            args.sparse_residual_fraction_ppm
+            and (
+                args.rotation != "identity" or args.cooccurrence_pseudoqueries != 0
+            )
+        )
+    ):
+        raise ValueError("sparse residual configuration differs")
 
     identities = {}
     for name in ("source", "queries", "truth", "generation"):
@@ -603,9 +768,28 @@ def main() -> None:
         scoring_base = base_vectors
         scoring_queries = queries
     books, codes = _train_pq16(scoring_base, args.seed)
-    ranked = _rank_pq16(
-        scoring_queries, base_ids, books, codes, args.shortlist_rows
-    )
+    residual = None
+    if args.sparse_residual_fraction_ppm:
+        residual = _train_sparse_residual_pq8(
+            scoring_base,
+            base_ids,
+            books,
+            codes,
+            fraction_ppm=args.sparse_residual_fraction_ppm,
+            seed=args.seed ^ 0x52535138,
+        )
+        ranked = _rank_pq16_sparse_residual(
+            scoring_queries,
+            base_ids,
+            books,
+            codes,
+            residual,
+            args.shortlist_rows,
+        )
+    else:
+        ranked = _rank_pq16(
+            scoring_queries, base_ids, books, codes, args.shortlist_rows
+        )
     maximum_page_bytes = max(entry.encoded_bytes for entry in page_entries.values())
     max_span_pages = (16 * 1024 * 1024) // maximum_page_bytes
     evaluation_args = dict(
@@ -635,7 +819,25 @@ def main() -> None:
         "neighbors": args.neighbors,
         "page_planner": "exact-reciprocal-rank",
         "queries": args.queries_count,
-        "resident_bytes_at_100m": 1_600_000_000,
+        "representation": (
+            "sparse-residual-pq8"
+            if residual is not None
+            else f"pq16-{args.rotation}"
+        ),
+        "resident_bytes_at_100m": (
+            _sparse_residual_resident_bytes(
+                100_000_000, args.sparse_residual_fraction_ppm
+            )
+            if residual is not None
+            else 1_600_000_000
+        ),
+        "residual_code_row_bytes": 8 if residual is not None else 0,
+        "residual_fraction_ppm": args.sparse_residual_fraction_ppm,
+        "residual_norm_bytes": 4 if residual is not None else 0,
+        "residual_seed": args.seed ^ 0x52535138 if residual is not None else None,
+        "residual_selected_rows": (
+            residual.selected_indices.size if residual is not None else 0
+        ),
         "rotated_dimensions": scoring_base.shape[1],
         "rotation": args.rotation,
         "rotation_seed": rotation_seed if args.rotation == "srht" else None,
@@ -704,7 +906,11 @@ def main() -> None:
         result = {
             **evaluation,
             **common_result,
-            "schema": "borsuk-v85-pq16-page-nomination-result-v2",
+            "schema": (
+                "borsuk-v85-sparse-residual-page-nomination-result-v1"
+                if residual is not None
+                else "borsuk-v85-pq16-page-nomination-result-v2"
+            ),
         }
     body = _canonical_bytes(result)
     args.output.write_bytes(body)

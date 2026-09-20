@@ -264,3 +264,63 @@ def summarize_paired_pq16_rotation(
         "queries": len(baseline_samples),
         "schema": "borsuk-v85-pq16-srht-summary-v1",
     }
+
+
+def summarize_paired_sparse_residual(
+    baseline: Any,
+    challenger: Any,
+    *,
+    baseline_sha256: str,
+    challenger_sha256: str,
+    expected_fraction_ppm: int,
+) -> dict[str, Any]:
+    """Recompute one sparse-residual arm against immutable identity PQ16."""
+
+    _digest(baseline_sha256, "identity PQ16")
+    _digest(challenger_sha256, "sparse-residual PQ16")
+    if (
+        type(expected_fraction_ppm) is not int
+        or not 0 < expected_fraction_ppm <= 1_000_000
+        or not isinstance(challenger, dict)
+        or challenger.get("schema")
+        != "borsuk-v85-sparse-residual-page-nomination-result-v1"
+        or challenger.get("representation") != "sparse-residual-pq8"
+        or challenger.get("rotation") != "identity"
+        or challenger.get("residual_fraction_ppm") != expected_fraction_ppm
+    ):
+        raise ValueError("sparse-residual PQ16 result differs")
+    baseline10, baseline100 = _pq_evidence(
+        baseline, "identity", allow_legacy_identity=True
+    )
+    challenger10, challenger100 = _pq_evidence(challenger, "identity")
+    baseline_samples = baseline["samples"]
+    challenger_samples = challenger["samples"]
+    if len(baseline_samples) != len(challenger_samples):
+        raise ValueError("paired sparse-residual query count differs")
+    for query in range(len(baseline_samples)):
+        left = baseline_samples[query]
+        right = challenger_samples[query]
+        if left["query"] != query or right["query"] != query:
+            raise ValueError("paired sparse-residual query ordinal differs")
+        if left["truth_ids"] != right["truth_ids"]:
+            raise ValueError("paired sparse-residual truth differs")
+    ci10 = _paired_ci(np.subtract(challenger10, baseline10).tolist(), 10)
+    ci100 = _paired_ci(np.subtract(challenger100, baseline100).tolist(), 100)
+    return {
+        "baseline_average_recall10_ppm": baseline["average_recall10_ppm"],
+        "baseline_average_recall100_ppm": baseline["average_recall100_ppm"],
+        "baseline_p05_recall100_ppm": baseline["p05_recall100_ppm"],
+        "baseline_result_sha256": baseline_sha256,
+        "challenger_average_recall10_ppm": challenger["average_recall10_ppm"],
+        "challenger_average_recall100_ppm": challenger["average_recall100_ppm"],
+        "challenger_p05_recall100_ppm": challenger["p05_recall100_ppm"],
+        "challenger_promoted": challenger["gate_passed"] is True
+        and ci10[0] >= 0
+        and ci100[0] >= 0,
+        "challenger_result_sha256": challenger_sha256,
+        "paired_recall10_delta_ci95_ppm": ci10,
+        "paired_recall100_delta_ci95_ppm": ci100,
+        "queries": len(baseline_samples),
+        "residual_fraction_ppm": expected_fraction_ppm,
+        "schema": "borsuk-v85-sparse-residual-summary-v1",
+    }

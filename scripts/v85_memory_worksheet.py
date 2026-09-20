@@ -8,7 +8,9 @@ import json
 
 
 def project_v85_resident_memory(
-    *, resident_exact_delta_row_bytes: int = 0
+    *,
+    resident_exact_delta_row_bytes: int = 0,
+    sparse_residual_fraction_ppm: int = 0,
 ) -> dict[str, int | bool | str]:
     """Project the complete bounded resident footprint at 100M rows.
 
@@ -21,6 +23,8 @@ def project_v85_resident_memory(
     if (
         type(resident_exact_delta_row_bytes) is not int
         or resident_exact_delta_row_bytes < 0
+        or type(sparse_residual_fraction_ppm) is not int
+        or not 0 <= sparse_residual_fraction_ppm <= 1_000_000
     ):
         raise ValueError("resident exact delta row bytes differ")
 
@@ -42,6 +46,16 @@ def project_v85_resident_memory(
     delta_pages = (maximum_delta_rows + page_rows - 1) // page_rows
     page_directories_bytes = (base_pages + delta_pages + 2) * 8
     pq16_codebooks_bytes = 16 * 256 * (768 // 16) * 4
+    sparse_residual_rows = (
+        collection_rows * sparse_residual_fraction_ppm + 999_999
+    ) // 1_000_000
+    sparse_residual_codes_and_norms_bytes = sparse_residual_rows * (8 + 4)
+    sparse_residual_bitmap_bytes = (
+        (collection_rows + 7) // 8 if sparse_residual_rows else 0
+    )
+    sparse_residual_codebooks_bytes = (
+        8 * 256 * (768 // 8) * 4 if sparse_residual_rows else 0
+    )
     concurrent_sparse_planner_bytes = range_concurrency * sparse_planner_bytes_per_query
     resident_exact_delta_bytes = maximum_delta_rows * resident_exact_delta_row_bytes
     projected_resident_bytes = sum(
@@ -50,6 +64,9 @@ def project_v85_resident_memory(
             mutation_directory_bytes,
             page_directories_bytes,
             pq16_codebooks_bytes,
+            sparse_residual_codes_and_norms_bytes,
+            sparse_residual_bitmap_bytes,
+            sparse_residual_codebooks_bytes,
             metadata_reserve_bytes,
             concurrent_sparse_planner_bytes,
             runtime_reserve_bytes,
@@ -94,6 +111,11 @@ def project_v85_resident_memory(
         "router_codes_bytes": router_codes_bytes,
         "runtime_reserve_bytes": runtime_reserve_bytes,
         "schema": "borsuk-v85-memory-worksheet-v1",
+        "sparse_residual_bitmap_bytes": sparse_residual_bitmap_bytes,
+        "sparse_residual_codebooks_bytes": sparse_residual_codebooks_bytes,
+        "sparse_residual_codes_and_norms_bytes": sparse_residual_codes_and_norms_bytes,
+        "sparse_residual_fraction_ppm": sparse_residual_fraction_ppm,
+        "sparse_residual_rows": sparse_residual_rows,
         "workspace_boundary": "sparse-touched-page-planner-only",
     }
 
