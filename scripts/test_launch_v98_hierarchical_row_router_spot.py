@@ -1,5 +1,8 @@
 import io
 import json
+import pathlib
+import subprocess
+import sys
 import unittest
 from types import SimpleNamespace
 
@@ -106,6 +109,26 @@ class V98SpotLauncherTests(unittest.TestCase):
         )
         self.assertEqual(plan.instance_type, "c7i.8xlarge")
         self.assertEqual(plan.image_architecture, "x86_64")
+
+    def test_direct_script_cli_resolves_local_typed_dependencies(self) -> None:
+        # Break caught: the exact operator invocation fails before argparse or
+        # any AWS boundary because direct execution cannot resolve `scripts`.
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(
+                    pathlib.Path(__file__).with_name(
+                        "launch_v98_hierarchical_row_router_spot.py"
+                    )
+                ),
+                "--help",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--source-commit", completed.stdout)
 
     def test_worker_authenticates_six_inputs_then_publishes_terminal_last(self) -> None:
         # Break caught: partial evidence becomes visible as terminal, or the

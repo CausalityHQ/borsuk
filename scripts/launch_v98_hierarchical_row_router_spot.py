@@ -9,10 +9,14 @@ import hashlib
 import json
 import pathlib
 import shlex
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal
+
+if not __package__:  # Direct ``python scripts/...`` execution.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from scripts.v97_row_width_screen import ObjectIdentity
 from scripts.v98_hierarchical_row_router import HierarchyConfig
