@@ -186,6 +186,7 @@ def worker_script(plan: V99SpotPlan) -> str:
         "V99_MAXIMUM_SCANNED_ROWS": plan.config.maximum_scanned_rows,
         "V99_OUTPUT_PREFIX": plan.output_prefix.rstrip("/"),
         "V99_PAGES_PER_ROOT": plan.config.pages_per_root,
+        "V99_PREFLIGHT_MAX_SECONDS": 5,
         "V99_QUERY_COUNT": plan.query_count,
         "V99_RETAINED_PAGES": plan.config.retained_pages,
         "V99_SHORTLIST_ROWS": plan.config.shortlist_rows,

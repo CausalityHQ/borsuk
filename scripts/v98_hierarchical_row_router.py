@@ -681,26 +681,23 @@ def blockwise_top_rows(
         or not np.issubdtype(values.dtype, np.floating)
         or not np.issubdtype(ids.dtype, np.integer)
         or not np.isfinite(values).all()
-        or len(set(int(row_id) for row_id in ids)) != ids.size
+        or np.unique(ids).size != ids.size
         or type(count) is not int
         or not 0 < count <= ids.size
         or type(block_rows) is not int
         or block_rows <= 0
     ):
         raise ValueError("bounded row-score input differs")
-    heap: list[tuple[float, int, int]] = []
+    best_scores = np.empty(0, dtype=values.dtype)
+    best_ids = np.empty(0, dtype=ids.dtype)
     for start in range(0, ids.size, block_rows):
         stop = min(start + block_rows, ids.size)
-        for score, row_id in zip(
-            values[start:stop].tolist(), ids[start:stop].tolist(), strict=True
-        ):
-            _push_best(heap, float(score), int(row_id), count)
-    return tuple(
-        row_id
-        for _, row_id in sorted(
-            ((-negative_score, stored_id) for negative_score, _, stored_id in heap)
-        )
-    )
+        candidate_scores = np.concatenate((best_scores, values[start:stop]))
+        candidate_ids = np.concatenate((best_ids, ids[start:stop]))
+        order = np.lexsort((candidate_ids, candidate_scores))[:count]
+        best_scores = np.ascontiguousarray(candidate_scores[order])
+        best_ids = np.ascontiguousarray(candidate_ids[order])
+    return tuple(int(row_id) for row_id in best_ids)
 
 
 def score_retained_rows(
@@ -727,7 +724,7 @@ def score_retained_rows(
         or not np.issubdtype(ids.dtype, np.integer)
         or ids.size == 0
         or ids.size > maximum_rows
-        or len(set(int(row_id) for row_id in ids)) != ids.size
+        or np.unique(ids).size != ids.size
         or codes.ndim != 2
         or codes.shape[0] != ids.size
         or type(shortlist_rows) is not int
@@ -736,7 +733,8 @@ def score_retained_rows(
         or block_rows <= 0
     ):
         raise ValueError("retained row-score input differs")
-    heap: list[tuple[float, int, int]] = []
+    best_scores = np.empty(0, dtype=np.float32)
+    best_ids = np.empty(0, dtype=ids.dtype)
     try:
         for start in range(0, ids.size, block_rows):
             stop = min(start + block_rows, ids.size)
@@ -746,18 +744,14 @@ def score_retained_rows(
                 np.ascontiguousarray(codes[start:stop]),
                 spec,
             )
-            for score, row_id in zip(
-                block_scores.tolist(), ids[start:stop].tolist(), strict=True
-            ):
-                _push_best(heap, float(score), int(row_id), shortlist_rows)
+            candidate_scores = np.concatenate((best_scores, block_scores))
+            candidate_ids = np.concatenate((best_ids, ids[start:stop]))
+            order = np.lexsort((candidate_ids, candidate_scores))[:shortlist_rows]
+            best_scores = np.ascontiguousarray(candidate_scores[order])
+            best_ids = np.ascontiguousarray(candidate_ids[order])
     except ValueError as error:
         raise ValueError("retained row-score input differs") from error
-    return tuple(
-        row_id
-        for _, row_id in sorted(
-            ((-negative_score, stored_id) for negative_score, _, stored_id in heap)
-        )
-    )
+    return tuple(int(row_id) for row_id in best_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1210,21 +1204,18 @@ def _score_exact_retained_rows(
     shortlist_rows: int,
 ) -> tuple[int, ...]:
     count = min(shortlist_rows, row_ids.size)
-    heap: list[tuple[float, int, int]] = []
+    best_scores = np.empty(0, dtype=np.float32)
+    best_ids = np.empty(0, dtype=row_ids.dtype)
     for start in range(0, row_ids.size, 8_192):
         stop = min(start + 8_192, row_ids.size)
         delta = vectors[positions[start:stop]] - query
         scores = np.einsum("ij,ij->i", delta, delta, dtype=np.float32)
-        for score, row_id in zip(
-            scores.tolist(), row_ids[start:stop].tolist(), strict=True
-        ):
-            _push_best(heap, float(score), int(row_id), count)
-    return tuple(
-        row_id
-        for _, row_id in sorted(
-            ((-negative_score, stored_id) for negative_score, _, stored_id in heap)
-        )
-    )
+        candidate_scores = np.concatenate((best_scores, scores))
+        candidate_ids = np.concatenate((best_ids, row_ids[start:stop]))
+        order = np.lexsort((candidate_ids, candidate_scores))[:count]
+        best_scores = np.ascontiguousarray(candidate_scores[order])
+        best_ids = np.ascontiguousarray(candidate_ids[order])
+    return tuple(int(row_id) for row_id in best_ids)
 
 
 def _selected_pages_from_rows(

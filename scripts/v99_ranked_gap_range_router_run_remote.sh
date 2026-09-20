@@ -61,6 +61,7 @@ finish() {
   pressure_end=$(tr '\n' ';' </proc/pressure/memory)
   swap_end_kib=$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{print t-f}' /proc/meminfo)
   max_rss_kib=$(awk -F: '/Maximum resident set size/{gsub(/ /,"",$2); if($2>m)m=$2} END{print m+0}' producer.time rescore.time 2>/dev/null)
+  max_rss_kib=${max_rss_kib:-0}
   status=failed
   [ "$interrupted" -eq 1 ] && status=interrupted
   [ "$code" -eq 0 ] && status=complete
@@ -107,7 +108,7 @@ Path("resources.json").write_bytes(
 )
 PY
   cp worker.log worker-evidence.log 2>/dev/null || : >worker-evidence.log
-  for name in result.json rescore.json resources.json producer.time rescore.time producer.log rescore.log worker-evidence.log hashes.txt pressure-stop.txt; do
+  for name in result.json rescore.json resources.json preflight.json producer.time rescore.time producer.log rescore.log worker-evidence.log hashes.txt pressure-stop.txt; do
     [ -f "$name" ] && aws s3 cp "$name" "$output_prefix/evidence/$name" --only-show-errors
   done
   STATUS="$status" EXIT_CODE="$code" INSTANCE_ID="$iid" python3.12 - <<'PY'
@@ -213,6 +214,83 @@ done
 sha256sum -c hashes.txt || exit 96
 
 export PYTHONPATH="$root/repo"
+phase=preflight
+.venv/bin/python - <<'PY' || exit 96
+import json, os, time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+import numpy as np
+
+from scripts.v97_row_width_screen import PQ16X8, PageKey, RoutedPage
+from scripts.v98_hierarchical_row_router import _score_exact_retained_rows, score_retained_rows
+from scripts.v99_ranked_gap_range_router import select_ranked_gap_ranges
+
+@dataclass(frozen=True, slots=True)
+class Preflight:
+    rows: int
+    shortlist_rows: int
+    exact_seconds: float
+    pq16_seconds: float
+    planner_seconds: float
+    maximum_seconds: float
+    passed: bool
+
+rng = np.random.default_rng(7216)
+rows = 262_144
+shortlist = 8_192
+query = rng.normal(size=96).astype(np.float32)
+row_ids = np.arange(rows, dtype=np.int64)[::-1]
+positions = np.arange(rows, dtype=np.int64)
+vectors = rng.normal(size=(rows, 96)).astype(np.float32)
+books = rng.normal(size=(16, 256, 6)).astype(np.float32)
+codes = rng.integers(0, 256, size=(rows, 16), dtype=np.uint8)
+
+started = time.perf_counter()
+exact = _score_exact_retained_rows(query, row_ids, positions, vectors, shortlist)
+exact_seconds = time.perf_counter() - started
+started = time.perf_counter()
+approximate = score_retained_rows(
+    query, row_ids, codes, books, PQ16X8,
+    maximum_rows=rows, shortlist_rows=shortlist,
+)
+pq16_seconds = time.perf_counter() - started
+pages = {}
+offset = 0
+for ordinal in range(1_024):
+    key = PageKey("base", ordinal)
+    pages[key] = RoutedPage(key, offset, 1_600)
+    offset += 1_600
+ranked = tuple(PageKey("base", (ordinal * 613) % 1_024) for ordinal in range(shortlist))
+started = time.perf_counter()
+selection = select_ranked_gap_ranges(
+    ranked, pages, max_gets=32, max_bytes=16 * 1024**2
+)
+planner_seconds = time.perf_counter() - started
+maximum = float(os.environ["V99_PREFLIGHT_MAX_SECONDS"])
+passed = (
+    len(exact) == shortlist
+    and len(approximate) == shortlist
+    and selection.gets <= 32
+    and selection.bytes <= 16 * 1024**2
+    and max(exact_seconds, pq16_seconds, planner_seconds) <= maximum
+)
+receipt = Preflight(
+    rows=rows,
+    shortlist_rows=shortlist,
+    exact_seconds=exact_seconds,
+    pq16_seconds=pq16_seconds,
+    planner_seconds=planner_seconds,
+    maximum_seconds=maximum,
+    passed=passed,
+)
+Path("preflight.json").write_bytes(
+    json.dumps(asdict(receipt), allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+)
+if not passed:
+    raise SystemExit(1)
+PY
+
 phase=producer
 /usr/bin/time -v -o producer.time timeout "$V99_WALL_SECONDS" .venv/bin/python - <<'PY' >producer.log 2>&1 || exit 97
 import os

@@ -2,6 +2,7 @@ import dataclasses
 import hashlib
 import json
 import unittest
+from unittest import mock
 
 import numpy as np
 import pyarrow as pa
@@ -23,6 +24,7 @@ from scripts.v97_row_width_screen import (
 from scripts.v98_hierarchical_row_router import (
     HierarchyConfig,
     RootGroup,
+    _score_exact_retained_rows,
     blockwise_top_rows,
     build_hierarchy,
     canonical_v98_result_bytes,
@@ -422,6 +424,61 @@ class V98BoundedRoutingTests(unittest.TestCase):
                 ),
                 expected,
             )
+
+    def test_retained_scoring_uses_bounded_vector_selection_not_per_row_heap(
+        self,
+    ) -> None:
+        # Break caught: the 8,192-row V99 shortlist spends two hours pushing
+        # each scored row through a Python heap while 31 vCPUs remain idle.
+        generator = np.random.default_rng(7_216)
+        query = generator.normal(size=96).astype(np.float32)
+        row_ids = np.arange(10_000, 10_257, dtype=np.int64)[::-1]
+        vectors = generator.normal(size=(row_ids.size, 96)).astype(np.float32)
+        books = generator.normal(size=(16, 256, 6)).astype(np.float32)
+        codes = generator.integers(0, 256, size=(row_ids.size, 16), dtype=np.uint8)
+        with mock.patch(
+            "scripts.v98_hierarchical_row_router._push_best",
+            side_effect=AssertionError("per-row heap used"),
+        ):
+            exact = _score_exact_retained_rows(
+                query,
+                row_ids,
+                np.arange(row_ids.size, dtype=np.int64),
+                vectors,
+                31,
+            )
+            approximate = score_retained_rows(
+                query,
+                row_ids,
+                codes,
+                books,
+                PQ16X8,
+                maximum_rows=262_144,
+                shortlist_rows=31,
+                block_rows=29,
+            )
+        exact_scores = np.einsum(
+            "ij,ij->i", vectors - query, vectors - query, dtype=np.float32
+        )
+        adc = adc_scores(query, books, codes, PQ16X8)
+        self.assertEqual(
+            exact,
+            tuple(
+                row_id
+                for _, row_id in sorted(
+                    zip(exact_scores.tolist(), row_ids.tolist(), strict=True)
+                )[:31]
+            ),
+        )
+        self.assertEqual(
+            approximate,
+            tuple(
+                row_id
+                for _, row_id in sorted(
+                    zip(adc.tolist(), row_ids.tolist(), strict=True)
+                )[:31]
+            ),
+        )
 
     def test_routing_and_row_scoring_reject_malformed_or_over_cap_inputs(self) -> None:
         # Break caught: nonfinite scores, duplicate identities, malformed codes,

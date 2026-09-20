@@ -212,20 +212,30 @@ def _registered_page(key: PageKey, pages: Mapping[PageKey, RoutedPage]) -> Route
     return page
 
 
+def _validate_page_directory(pages: Mapping[PageKey, RoutedPage]) -> None:
+    for role in ("base", "delta"):
+        registered = sorted(
+            (page for key, page in pages.items() if key.object_role == role),
+            key=lambda page: page.key.ordinal,
+        )
+        for ordinal, page in enumerate(registered):
+            if page.key.ordinal != ordinal:
+                raise ValueError("page ranges are not contiguous")
+            _registered_page(page.key, pages)
+            if ordinal:
+                previous = registered[ordinal - 1]
+                if previous.offset + previous.encoded_bytes != page.offset:
+                    raise ValueError("page ranges are not contiguous")
+
+
 def _page_range(
     object_role: str,
     first_page: int,
     last_page: int,
     pages: Mapping[PageKey, RoutedPage],
 ) -> PageRange:
-    registered = tuple(
-        _registered_page(PageKey(object_role, ordinal), pages)
-        for ordinal in range(first_page, last_page + 1)
-    )
-    for left, right in zip(registered, registered[1:], strict=False):
-        if left.offset + left.encoded_bytes != right.offset:
-            raise ValueError("page ranges are not contiguous")
-    first, last = registered[0], registered[-1]
+    first = _registered_page(PageKey(object_role, first_page), pages)
+    last = _registered_page(PageKey(object_role, last_page), pages)
     return PageRange(
         object_role=object_role,
         first_page=first_page,
@@ -266,6 +276,7 @@ def select_ranked_gap_ranges(
 
     if max_gets <= 0 or max_bytes <= 0 or not pages:
         raise ValueError("range budget differs")
+    _validate_page_directory(pages)
     intervals: list[tuple[str, int, int]] = []
     accepted: RangeSelection | None = None
     for key in ranked_pages:
