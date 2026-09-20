@@ -1150,6 +1150,8 @@ def screen_result_document(
     neighbors: int,
     max_gets: int,
     max_bytes: int,
+    summary_page_limit: int,
+    shortlist_rows: int,
     bootstrap_seed: int,
     bootstrap_resamples: int,
 ) -> dict[str, object]:
@@ -1160,6 +1162,8 @@ def screen_result_document(
         or neighbors <= 0
         or max_gets != 32
         or max_bytes != 16 * 1024**2
+        or summary_page_limit != 128
+        or shortlist_rows != 512
         or bootstrap_resamples != 10_000
     ):
         raise ValueError("screen result configuration differs")
@@ -1259,7 +1263,9 @@ def screen_result_document(
         "max_gets": max_gets,
         "neighbors": neighbors,
         "queries": result.query_count,
-        "schema": "borsuk-v97-row-width-screen-v1",
+        "schema": "borsuk-v97-row-width-screen-v2",
+        "shortlist_rows": shortlist_rows,
+        "summary_page_limit": summary_page_limit,
         "winner": winner,
     }
 
@@ -1289,6 +1295,8 @@ def run_screen(
         neighbors=inputs.neighbors,
         max_gets=inputs.max_gets,
         max_bytes=inputs.max_bytes,
+        summary_page_limit=inputs.summary_page_limit,
+        shortlist_rows=inputs.shortlist_rows,
         bootstrap_seed=inputs.seed,
         bootstrap_resamples=10_000,
     )

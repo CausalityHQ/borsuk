@@ -352,12 +352,19 @@ def validate_screen_result(
         "neighbors",
         "queries",
         "schema",
+        "shortlist_rows",
+        "summary_page_limit",
         "winner",
     }
     if not isinstance(result, dict) or set(result) != expected_keys:
         raise ValueError("screen result schema differs")
-    if result["schema"] != "borsuk-v97-row-width-screen-v1":
+    if result["schema"] != "borsuk-v97-row-width-screen-v2":
         raise ValueError("screen result schema differs")
+    if (
+        _integer(result["summary_page_limit"], "summary page limit") != 128
+        or _integer(result["shortlist_rows"], "shortlist rows") != 512
+    ):
+        raise ValueError("screen routing limits differ")
     artifacts = result["artifacts"]
     expected_artifact_roles = {
         "summary-router",
@@ -624,7 +631,7 @@ def rescore_screen_result(
         "arms": summary["arms"],
         "exact_f32": summary["exact_f32"],
         "result_sha256": expected_sha256,
-        "schema": "borsuk-v97-row-width-rescore-v1",
+        "schema": "borsuk-v97-row-width-rescore-v2",
         "winner": summary["winner"],
     }
     output.write_bytes(

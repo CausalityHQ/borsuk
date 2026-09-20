@@ -471,6 +471,8 @@ class RowWidthEvaluationTests(unittest.TestCase):
             neighbors=2,
             max_gets=32,
             max_bytes=16 * 1024 * 1024,
+            summary_page_limit=128,
+            shortlist_rows=512,
             bootstrap_seed=7216,
             bootstrap_resamples=10_000,
         )
@@ -487,7 +489,9 @@ class RowWidthEvaluationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(len(result.exact_f32_samples), 2)
-        self.assertEqual(document["schema"], "borsuk-v97-row-width-screen-v1")
+        self.assertEqual(document["schema"], "borsuk-v97-row-width-screen-v2")
+        self.assertEqual(document["summary_page_limit"], 128)
+        self.assertEqual(document["shortlist_rows"], 512)
         self.assertEqual(document["queries"], 2)
         self.assertEqual(
             set(document["artifacts"]),
