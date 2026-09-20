@@ -1,0 +1,362 @@
+import io
+import json
+import pathlib
+import subprocess
+import sys
+import unittest
+from types import SimpleNamespace
+
+from scripts.launch_v99_ranked_gap_range_router_spot import (
+    CRITIQUE_RESULT_SHA256,
+    SpotTarget,
+    V99SpotPlan,
+    build_launch_specs,
+    build_plan,
+    canonical_terminal_bytes,
+    claim_launched_attempt,
+    claim_reserved_attempt,
+    derive_attempt_prefix,
+    launch_one_spot,
+    monitor_and_terminate,
+    parse_args,
+    validate_terminal_bytes,
+    worker_script,
+)
+from scripts.v97_row_width_screen import ObjectIdentity
+from scripts.v99_ranked_gap_range_router import RankedGapConfig
+
+
+class V99SpotLauncherTests(unittest.TestCase):
+    @staticmethod
+    def plan() -> V99SpotPlan:
+        roles = ("source", "queries", "truth", "generation", "base", "delta")
+        return build_plan(
+            profile="causality",
+            source_commit="1" * 40,
+            source_archive=ObjectIdentity(
+                uri="s3://fixture/source.tar.gz", sha256="2" * 64, bytes=100
+            ),
+            inputs={
+                role: ObjectIdentity(
+                    uri=f"s3://fixture/development-{role}",
+                    sha256=f"{index + 3:x}" * 64,
+                    bytes=index + 1,
+                )
+                for index, role in enumerate(roles)
+            },
+            critique_result_sha256=CRITIQUE_RESULT_SHA256,
+            output_prefix="s3://fixture/v99/a0001",
+            image_id="ami-fixture-x86",
+            image_architecture="x86_64",
+            security_group_id="sg-fixture",
+            instance_profile_arn="arn:aws:iam::123456789012:instance-profile/fixture",
+            targets=(
+                SpotTarget("eu-central-1a", "subnet-a"),
+                SpotTarget("eu-central-1b", "subnet-b"),
+            ),
+            spot_price_usd_per_hour_micros=480_000,
+        )
+
+    def test_plan_freezes_one_development_attempt_and_every_cap(self) -> None:
+        # Break caught: an attempt retunes on protected queries, omits an
+        # immutable role, or silently relaxes the hierarchy/resource contract.
+        plan = self.plan()
+        self.assertEqual(plan.profile, "causality")
+        self.assertEqual(plan.attempt, 1)
+        self.assertEqual(plan.query_count, 1_000)
+        self.assertEqual(plan.bootstrap_resamples, 10_000)
+        self.assertEqual(plan.critique_result_sha256, CRITIQUE_RESULT_SHA256)
+        self.assertEqual(
+            set(plan.inputs),
+            {"source", "queries", "truth", "generation", "base", "delta"},
+        )
+        self.assertEqual(
+            plan.config,
+            RankedGapConfig(
+                pages_per_root=8,
+                maximum_root_groups=65_536,
+                maximum_exposed_pages=4_096,
+                retained_pages=1_024,
+                maximum_scanned_rows=262_144,
+                shortlist_rows=8_192,
+                maximum_gets=32,
+                maximum_bytes=16 * 1024**2,
+            ),
+        )
+        protected = " ".join(identity.uri for identity in plan.inputs.values())
+        self.assertNotIn("validation", protected)
+        self.assertNotIn("holdout", protected)
+
+    def test_prefix_and_cli_freeze_campaign_source_time_and_x86_target(self) -> None:
+        # Break caught: two attempts collide, or an Arm AMI is paired with the
+        # x86_64 c7i scientific worker.
+        self.assertEqual(
+            derive_attempt_prefix("v99-g1", "1" * 40, "20260920T120000Z"),
+            "v99-g1/1111111111111111111111111111111111111111/20260920T120000Z/a0001",
+        )
+        plan = parse_args(
+            [
+                "--source-commit",
+                "1" * 40,
+                "--source-archive-uri",
+                "s3://fixture/source.tar.gz",
+                "--source-archive-sha256",
+                "2" * 64,
+                "--source-archive-bytes",
+                "100",
+                "--output-prefix",
+                "s3://fixture/v99/a0001",
+            ]
+        )
+        self.assertEqual(plan.instance_type, "c7i.8xlarge")
+        self.assertEqual(plan.image_architecture, "x86_64")
+
+    def test_direct_script_cli_resolves_local_typed_dependencies(self) -> None:
+        # Break caught: the exact operator invocation fails before argparse or
+        # any AWS boundary because direct execution cannot resolve `scripts`.
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(
+                    pathlib.Path(__file__).with_name(
+                        "launch_v99_ranked_gap_range_router_spot.py"
+                    )
+                ),
+                "--help",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--source-commit", completed.stdout)
+
+    def test_worker_authenticates_six_inputs_then_publishes_terminal_last(self) -> None:
+        # Break caught: partial evidence becomes visible as terminal, or the
+        # remote process runs an unregistered split/configuration.
+        script = worker_script(self.plan())
+        runner = (
+            pathlib.Path(__file__)
+            .with_name("v99_ranked_gap_range_router_run_remote.sh")
+            .read_text()
+        )
+        combined = script + runner
+        self.assertLessEqual(len(script.encode()), 16_384)
+        for role, identity in self.plan().inputs.items():
+            self.assertIn(identity.uri, script, role)
+            self.assertIn(identity.sha256, script, role)
+            self.assertIn(str(identity.bytes), script, role)
+        for literal in (
+            "V99_QUERY_COUNT=1000",
+            "V99_BOOTSTRAP_RESAMPLES=10000",
+            "V99_MAXIMUM_EXPOSED_PAGES=4096",
+            "V99_RETAINED_PAGES=1024",
+            "V99_MAXIMUM_SCANNED_ROWS=262144",
+            "V99_SHORTLIST_ROWS=8192",
+            "V99_MAXIMUM_GETS=32",
+            "V99_MAXIMUM_BYTES=16777216",
+            CRITIQUE_RESULT_SHA256,
+            "result.json",
+            "rescore.json",
+            "resources.json",
+            "terminal.json",
+            "/proc/pressure/memory",
+            "full avg10",
+            "0.50",
+            "1048576",
+            "pressure-stop.txt",
+        ):
+            self.assertIn(literal, combined)
+        self.assertLess(runner.index("rescore.json"), runner.rindex("terminal.json"))
+        self.assertLess(
+            runner.rindex("terminal.json"), runner.rindex("shutdown -h now")
+        )
+        self.assertIn("repo/scripts/v99_ranked_gap_range_router_run_remote.sh", script)
+        self.assertNotIn("validation-query", combined)
+        self.assertNotIn("holdout", combined)
+        self.assertNotIn("attempt=2", combined)
+
+    def test_pressure_threshold_is_valid_awk_and_classifies_both_sides(self) -> None:
+        # Break caught: awk parses an unparenthesized comparison after `print`
+        # as output redirection, disabling the pressure watcher with a syntax error.
+        runner = (
+            pathlib.Path(__file__)
+            .with_name("v99_ranked_gap_range_router_run_remote.sh")
+            .read_text()
+        )
+        expression = "BEGIN{print (value > 0.50 ? 1 : 0)}"
+        self.assertIn(expression, runner)
+        for value, expected in (("0.00", "0"), ("0.51", "1")):
+            completed = subprocess.run(
+                ["awk", "-v", f"value={value}", expression],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), expected)
+
+    def test_launch_specs_are_one_time_spot_x86_and_terminate_on_shutdown(self) -> None:
+        # Break caught: the experiment uses On-Demand, persists after terminal,
+        # or launches overlapping workers in multiple zones.
+        specs = build_launch_specs(self.plan())
+        self.assertEqual(len(specs), 2)
+        for spec in specs:
+            self.assertEqual(spec["ImageId"], "ami-fixture-x86")
+            self.assertEqual(spec["InstanceType"], "c7i.8xlarge")
+            self.assertEqual(
+                spec["InstanceMarketOptions"],
+                {
+                    "MarketType": "spot",
+                    "SpotOptions": {
+                        "InstanceInterruptionBehavior": "terminate",
+                        "SpotInstanceType": "one-time",
+                    },
+                },
+            )
+            self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
+            self.assertEqual((spec["MinCount"], spec["MaxCount"]), (1, 1))
+
+    def test_capacity_fallback_launches_only_one_original(self) -> None:
+        # Break caught: multi-AZ fallback overlaps duplicate scientific cells.
+        class FakeEc2:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def run_instances(self, **_request):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("InsufficientInstanceCapacity")
+                return {"Instances": [{"InstanceId": "i-v99"}]}
+
+        ec2 = FakeEc2()
+        self.assertEqual(launch_one_spot(self.plan(), ec2_client=ec2), "i-v99")
+        self.assertEqual(ec2.calls, 2)
+
+    def test_launch_claim_is_atomic_and_binds_every_input(self) -> None:
+        # Break caught: an interrupted prefix can be launched twice or its
+        # launch receipt does not bind the immutable scientific inputs.
+        class FakeEvents:
+            def __init__(self) -> None:
+                self.handlers = {}
+
+            def register_first(self, _name, handler, *, unique_id):
+                self.handlers[unique_id] = handler
+
+            def unregister(
+                self, _name, handler=None, unique_id=None, unique_id_uses_count=False
+            ):
+                del handler, unique_id_uses_count
+                if unique_id is not None:
+                    self.handlers.pop(unique_id, None)
+
+        class FakeS3:
+            def __init__(self) -> None:
+                self.meta = SimpleNamespace(events=FakeEvents())
+                self.request = None
+                self.headers = None
+
+            def put_object(self, **request):
+                if len(self.meta.events.handlers) != 1:
+                    raise RuntimeError("duplicate signing handlers")
+                signed = SimpleNamespace(headers={})
+                next(iter(self.meta.events.handlers.values()))(signed)
+                self.headers = signed.headers
+                self.request = request
+
+        s3 = FakeS3()
+        claim_reserved_attempt(self.plan(), s3_client=s3)
+        self.assertEqual(s3.meta.events.handlers, {})
+        claim_launched_attempt(self.plan(), s3_client=s3, instance_id="i-v99")
+        self.assertEqual(s3.meta.events.handlers, {})
+        receipt = json.loads(s3.request["Body"])
+        self.assertEqual(s3.headers["If-None-Match"], "*")
+        self.assertEqual(receipt["instance_id"], "i-v99")
+        self.assertEqual(set(receipt["inputs"]), set(self.plan().inputs))
+        self.assertEqual(receipt["critique_result_sha256"], CRITIQUE_RESULT_SHA256)
+
+    def test_terminal_is_canonical_bound_and_only_complete_is_eligible(self) -> None:
+        # Break caught: a failed/interrupted/mutated receipt is promoted or a
+        # complete terminal does not bind result, rescore, resources and logs.
+        complete = canonical_terminal_bytes(
+            self.plan(),
+            instance_id="i-v99",
+            status="complete",
+            exit_code=0,
+            evidence={
+                role: ObjectIdentity(
+                    f"s3://fixture/v99/{role}", str(index + 1) * 64, index + 1
+                )
+                for index, role in enumerate(
+                    ("result", "rescore", "resources", "worker_log")
+                )
+            },
+        )
+        terminal = validate_terminal_bytes(complete, self.plan(), "i-v99")
+        self.assertTrue(terminal.claim_eligible)
+        self.assertEqual(terminal.status, "complete")
+        failed = canonical_terminal_bytes(
+            self.plan(), instance_id="i-v99", status="failed", exit_code=98, evidence={}
+        )
+        self.assertFalse(
+            validate_terminal_bytes(failed, self.plan(), "i-v99").claim_eligible
+        )
+        interrupted = canonical_terminal_bytes(
+            self.plan(),
+            instance_id="i-v99",
+            status="interrupted",
+            exit_code=143,
+            evidence={},
+        )
+        self.assertFalse(
+            validate_terminal_bytes(interrupted, self.plan(), "i-v99").claim_eligible
+        )
+        with self.assertRaises(ValueError):
+            validate_terminal_bytes(
+                complete.replace(b'"attempt":1', b'"attempt":2'), self.plan(), "i-v99"
+            )
+
+    def test_monitor_reads_only_terminal_and_always_terminates_instance(self) -> None:
+        # Break caught: the launcher inspects incomplete result bytes or leaves
+        # a stopped/failed Spot instance alive after terminal classification.
+        body = canonical_terminal_bytes(
+            self.plan(), instance_id="i-v99", status="failed", exit_code=98, evidence={}
+        )
+
+        class FakeS3:
+            def __init__(self) -> None:
+                self.get_keys = []
+
+            def get_object(self, *, Bucket, Key):  # noqa: N803
+                self.get_keys.append((Bucket, Key))
+                return {"Body": io.BytesIO(body), "ContentLength": len(body)}
+
+        class FakeEc2:
+            def __init__(self) -> None:
+                self.terminated = []
+
+            def terminate_instances(self, *, InstanceIds):  # noqa: N803
+                self.terminated.extend(InstanceIds)
+
+        s3, ec2 = FakeS3(), FakeEc2()
+        terminal = monitor_and_terminate(
+            self.plan(), s3_client=s3, ec2_client=ec2, instance_id="i-v99"
+        )
+        self.assertEqual(terminal.status, "failed")
+        self.assertEqual(s3.get_keys, [("fixture", "v99/a0001/terminal.json")])
+        self.assertEqual(ec2.terminated, ["i-v99"])
+
+        class MissingS3:
+            def get_object(self, **_request):
+                raise RuntimeError("instance terminated without terminal marker")
+
+        ec2 = FakeEc2()
+        with self.assertRaisesRegex(RuntimeError, "without terminal"):
+            monitor_and_terminate(
+                self.plan(), s3_client=MissingS3(), ec2_client=ec2, instance_id="i-v99"
+            )
+        self.assertEqual(ec2.terminated, ["i-v99"])
+
+
+if __name__ == "__main__":
+    unittest.main()
