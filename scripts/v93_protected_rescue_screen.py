@@ -423,11 +423,9 @@ def evaluate_protected_rescue_arms(
             ("code_rescue", code_pages),
         ):
             if (
-                name != "code_rescue"
-                and pages.size != _RESCUE_PAGE_CAP
+                name != "code_rescue" and not 0 < pages.size <= _RESCUE_PAGE_CAP
             ) or (
-                name == "code_rescue"
-                and not 0 <= pages.size <= _RESCUE_PAGE_CAP
+                name == "code_rescue" and not 0 <= pages.size <= _RESCUE_PAGE_CAP
             ):
                 raise ValueError("V93 rescue page authority differs")
             rescue_rows[name].append(pages)
@@ -528,6 +526,16 @@ def build_run_metadata() -> dict[str, Any]:
             "serving_memory_qualified": False,
         }
     )
+    metadata["planned_max_requests_per_query"] = {
+        "budget_only": _WAVE1_MAX_RANGES + _EXPANDED_WAVE2_MAX_RANGES,
+        "code_rescue": (
+            _WAVE1_MAX_RANGES
+            + _RESCUE_PAGE_CAP
+            + _EXPANDED_WAVE2_MAX_RANGES
+        ),
+        "control": _WAVE1_MAX_RANGES + _WAVE2_MAX_RANGES,
+        "direct_rescue": _WAVE1_MAX_RANGES + _EXPANDED_WAVE2_MAX_RANGES,
+    }
     metadata["scope"] = "fixed-1m-burned-development-protected-rescue-falsifier"
     return metadata
 
@@ -553,16 +561,18 @@ def finalize_decision(result: dict[str, Any]) -> None:
     control_hits = _hits(control)
     if control_hits != (3_167, 2_846, 90, 90):
         raise ValueError("V93 registered control differs")
-    if sum(
+    direct_candidate_truth_hits = sum(
         int(sample["wave2_base_truth_page_hits"])
         + int(sample["delta_truth_hits"])
         for sample in result["arms"]["direct_rescue"]["result"]["samples"]
-    ) != 3_183:
-        raise ValueError("V93 registered counterfactual differs")
-    candidates = []
+    )
+    counterfactual_matches = direct_candidate_truth_hits == 3_183
+    passed_arms: dict[str, bool] = {}
+    arm_hits: dict[str, tuple[int, int, int, int]] = {}
     for name in ("budget_only", "code_rescue", "direct_rescue"):
         arm_result = result["arms"][name]["result"]
         hits = _hits(arm_result)
+        arm_hits[name] = hits
         no_large_regression = all(
             int(arm_result["samples"][index]["page_sq8_hits"])
             >= int(control["samples"][index]["page_sq8_hits"]) - 1
@@ -575,21 +585,46 @@ def finalize_decision(result: dict[str, Any]) -> None:
             and hits[3] >= 90
             and no_large_regression
         )
-        if passed:
-            candidates.append(name)
-    accepted = next(
-        (name for name in ("budget_only", "code_rescue", "direct_rescue") if name in candidates),
-        None,
-    )
+        passed_arms[name] = passed
+    attribution_margin = 4
+    budget_hits = arm_hits["budget_only"][0]
+    accepted = None
+    if counterfactual_matches:
+        if passed_arms["budget_only"]:
+            accepted = "budget_only"
+        elif (
+            passed_arms["direct_rescue"]
+            and arm_hits["direct_rescue"][0] >= budget_hits + attribution_margin
+        ):
+            accepted = "direct_rescue"
+        elif (
+            passed_arms["code_rescue"]
+            and arm_hits["code_rescue"][0] >= budget_hits + attribution_margin
+        ):
+            accepted = "code_rescue"
+    if not counterfactual_matches:
+        reason = "registered-counterfactual-differs"
+    elif accepted is not None:
+        reason = "registered-gate-passed"
+    elif any(passed_arms.values()):
+        reason = "pq16-attribution-margin-failed"
+    else:
+        reason = "registered-gate-failed"
     result["decision"] = {
         "accepted": accepted,
-        "reason": "registered-gate-passed" if accepted else "registered-gate-failed",
+        "arm_passed": passed_arms,
+        "reason": reason,
+        "total_hit_delta_vs_budget_only": (
+            0 if accepted in (None, "budget_only") else arm_hits[accepted][0] - budget_hits
+        ),
     }
     result["registered_gate"] = {
         "base_hits": 2_854,
         "control_hits": 3_167,
         "direct_candidate_truth_hits": 3_183,
         "maximum_query_regression": 1,
+        "observed_direct_candidate_truth_hits": direct_candidate_truth_hits,
+        "pq16_attribution_margin": attribution_margin,
         "query_15_hits": 90,
         "total_hits": 3_176,
         "worst_query_hits": 90,
