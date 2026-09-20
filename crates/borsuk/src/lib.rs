@@ -52,6 +52,7 @@ mod mutation;
 )]
 mod mutation_extent;
 mod native_ann;
+mod native_ann_format;
 mod observability;
 mod parallel;
 mod physical_layout;

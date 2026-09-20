@@ -88,7 +88,7 @@ fn validate_hex(value: &str, len: usize, name: &str) -> Result<()> {
 }
 
 impl NativeArtifactRef {
-    fn validate(&self, expected_role: &str) -> Result<()> {
+    pub(crate) fn validate(&self, expected_role: &str) -> Result<()> {
         if self.role != expected_role {
             return Err(invalid(format!(
                 "native ANN artifact role differs: expected {expected_role}, got {}",
