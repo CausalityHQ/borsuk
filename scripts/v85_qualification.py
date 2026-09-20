@@ -19,10 +19,12 @@ def frozen_matrix() -> dict[str, Any]:
         "max_gets_per_query": 32,
         "max_peak_rss_bytes": 3 * 1024**3,
         "min_aggregate_recall_ppm": 990_000,
+        "neighbors": 100,
         "offered_load_ppm": 700_000,
         "preflight_page_budgets": [8, 16],
         "range_concurrency": 16,
         "replacement_rows": 500,
+        "query_count": 1_000,
         "run_counts": [1, 10, 100],
         "schema": "borsuk-v85-qualification-matrix-v1",
         "source_objects": [
@@ -56,6 +58,77 @@ def _exact_keys(value: Any, keys: set[str], label: str) -> dict[str, Any]:
 
 def _positive_int(value: Any) -> bool:
     return type(value) is int and value > 0
+
+
+def _nearest_percentile(values: list[int], quantile: float) -> int:
+    ordered = sorted(values)
+    return ordered[round((len(ordered) - 1) * quantile)]
+
+
+def _qualification_samples(
+    samples: Any, matrix: dict[str, Any], label: str
+) -> dict[str, Any]:
+    if not isinstance(samples, list) or len(samples) != matrix["query_count"]:
+        raise ValueError(f"{label} query count differs")
+    sample_keys = {
+        "bytes",
+        "latency_ns",
+        "neighbors",
+        "query",
+        "requests",
+        "result_ids",
+        "truth_ids",
+    }
+    total_hits = 0
+    latencies = []
+    result_ids = []
+    all_truth_ids = []
+    worst_recall_ppm = 1_000_000
+    max_requests = 0
+    max_bytes = 0
+    for query, candidate in enumerate(samples):
+        sample = _exact_keys(candidate, sample_keys, f"{label} sample")
+        ids = sample["result_ids"]
+        truth_ids = sample["truth_ids"]
+        if (
+            sample["query"] != query
+            or sample["neighbors"] != matrix["neighbors"]
+            or not _positive_int(sample["requests"])
+            or sample["requests"] > matrix["max_gets_per_query"]
+            or not _positive_int(sample["bytes"])
+            or sample["bytes"] > matrix["max_bytes_per_query"]
+            or not _positive_int(sample["latency_ns"])
+            or not isinstance(ids, list)
+            or len(ids) != matrix["neighbors"]
+            or any(type(identifier) is not int for identifier in ids)
+            or len(set(ids)) != len(ids)
+            or not isinstance(truth_ids, list)
+            or len(truth_ids) != matrix["neighbors"]
+            or any(type(identifier) is not int for identifier in truth_ids)
+            or len(set(truth_ids)) != len(truth_ids)
+        ):
+            raise ValueError(f"{label} sample gate failed")
+        hits = len(set(ids).intersection(truth_ids))
+        total_hits += hits
+        recall_ppm = hits * 1_000_000 // sample["neighbors"]
+        worst_recall_ppm = min(worst_recall_ppm, recall_ppm)
+        max_requests = max(max_requests, sample["requests"])
+        max_bytes = max(max_bytes, sample["bytes"])
+        latencies.append(sample["latency_ns"])
+        result_ids.append(ids)
+        all_truth_ids.append(truth_ids)
+    return {
+        "bytes_per_query": max_bytes,
+        "gets_per_query": max_requests,
+        "p50_ns": _nearest_percentile(latencies, 0.50),
+        "p95_ns": _nearest_percentile(latencies, 0.95),
+        "p99_ns": _nearest_percentile(latencies, 0.99),
+        "recall_ppm": total_hits * 1_000_000
+        // (matrix["query_count"] * matrix["neighbors"]),
+        "result_ids": result_ids,
+        "truth_ids": all_truth_ids,
+        "worst_recall_ppm": worst_recall_ppm,
+    }
 
 
 def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
@@ -123,81 +196,194 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
         raise ValueError("preflight gate failed")
 
 
-def validate_qualification_receipt(receipt: Any, matrix: Any) -> None:
+def validate_qualification_receipt(
+    receipt: Any, matrix: Any
+) -> dict[str, Any]:
     """Independently recompute the frozen 1M promotion gates."""
 
     matrix = _exact_keys(matrix, set(frozen_matrix()), "matrix")
     receipt = _exact_keys(
         receipt,
         {
-            "base_capacity_qps_milli",
+            "base_capacity",
             "cells",
-            "compaction_amplification_ppm",
-            "fresh_recall_ppm",
-            "mutation_checks",
-            "offered_qps_milli",
-            "post_compaction_result_ids",
+            "compaction",
+            "fresh_samples",
+            "mutation_cases",
             "schema",
-            "visibility_p95_ns",
         },
         "qualification",
     )
-    cell_keys = {
-        "bytes_per_query",
-        "failed_queries",
-        "gets_per_query",
-        "p50_ns",
-        "p95_ns",
-        "p99_ns",
-        "peak_rss_bytes",
-        "recall_ppm",
-        "result_ids",
-        "runs",
-        "successful_qps_milli",
-        "worst_recall_ppm",
-    }
-    cells = receipt["cells"]
-    mutation_checks = receipt["mutation_checks"]
-    if (
-        receipt["schema"] != "borsuk-v85-qualification-receipt-v1"
-        or not isinstance(cells, list)
-        or len(cells) != 3
-        or not isinstance(mutation_checks, dict)
-        or set(mutation_checks) != {"newest", "replacement", "tombstone"}
-        or not all(value is True for value in mutation_checks.values())
-        or not _positive_int(receipt["base_capacity_qps_milli"])
-        or receipt["offered_qps_milli"]
-        != receipt["base_capacity_qps_milli"] * matrix["offered_load_ppm"] // 1_000_000
-        or receipt["visibility_p95_ns"] > 1_000_000_000
-        or receipt["compaction_amplification_ppm"] > 5_000_000
-        or receipt["fresh_recall_ppm"] < matrix["min_aggregate_recall_ppm"]
-    ):
-        raise ValueError("qualification gate failed")
+    if receipt["schema"] != "borsuk-v85-qualification-receipt-v2":
+        raise ValueError("qualification schema differs")
 
-    for expected_runs, cell in zip(matrix["run_counts"], cells, strict=True):
-        cell = _exact_keys(cell, cell_keys, "qualification cell")
+    capacity = _exact_keys(
+        receipt["base_capacity"],
+        {"attempted_queries", "elapsed_ns", "successful_queries"},
+        "qualification capacity",
+    )
+    if (
+        not _positive_int(capacity["attempted_queries"])
+        or capacity["successful_queries"] != capacity["attempted_queries"]
+        or not _positive_int(capacity["elapsed_ns"])
+    ):
+        raise ValueError("qualification capacity gate failed")
+    base_capacity_qps_milli = (
+        capacity["successful_queries"] * 1_000_000_000_000
+        // capacity["elapsed_ns"]
+    )
+    offered_qps_milli = (
+        base_capacity_qps_milli * matrix["offered_load_ppm"] // 1_000_000
+    )
+
+    fresh = _qualification_samples(
+        receipt["fresh_samples"], matrix, "qualification fresh"
+    )
+    if fresh["recall_ppm"] < matrix["min_aggregate_recall_ppm"]:
+        raise ValueError("qualification fresh quality gate failed")
+
+    cells = receipt["cells"]
+    if not isinstance(cells, list) or len(cells) != len(matrix["run_counts"]):
+        raise ValueError("qualification cells differ")
+    derived_cells = []
+    cell_keys = {"elapsed_ns", "peak_rss_bytes", "runs", "samples"}
+    for expected_runs, candidate in zip(matrix["run_counts"], cells, strict=True):
+        cell = _exact_keys(candidate, cell_keys, "qualification cell")
+        sample_summary = _qualification_samples(
+            cell["samples"], matrix, "qualification cell"
+        )
+        if not _positive_int(cell["elapsed_ns"]):
+            raise ValueError("qualification cell elapsed time differs")
+        successful_qps_milli = (
+            matrix["query_count"] * 1_000_000_000_000 // cell["elapsed_ns"]
+        )
         if (
             cell["runs"] != expected_runs
-            or cell["failed_queries"] != 0
-            or cell["successful_qps_milli"] < receipt["offered_qps_milli"]
-            or cell["gets_per_query"] > matrix["max_gets_per_query"]
-            or cell["bytes_per_query"] > matrix["max_bytes_per_query"]
+            or successful_qps_milli < offered_qps_milli
+            or not _positive_int(cell["peak_rss_bytes"])
             or cell["peak_rss_bytes"] > matrix["max_peak_rss_bytes"]
-            or cell["recall_ppm"] < matrix["min_aggregate_recall_ppm"]
-            or abs(cell["recall_ppm"] - receipt["fresh_recall_ppm"]) > 2_000
-            or not isinstance(cell["result_ids"], list)
-            or len(cell["result_ids"]) != 100
-            or any(type(value) is not int for value in cell["result_ids"])
+            or sample_summary["recall_ppm"] < matrix["min_aggregate_recall_ppm"]
+            or abs(sample_summary["recall_ppm"] - fresh["recall_ppm"]) > 2_000
+            or sample_summary["truth_ids"] != fresh["truth_ids"]
         ):
             raise ValueError("qualification cell gate failed")
+        derived_cells.append(
+            {
+                key: value
+                for key, value in sample_summary.items()
+                if key not in {"result_ids", "truth_ids"}
+            }
+            | {
+                "peak_rss_bytes": cell["peak_rss_bytes"],
+                "runs": cell["runs"],
+                "successful_qps_milli": successful_qps_milli,
+            }
+        )
 
-    one, _ten, hundred = cells
+    one, _ten, hundred = derived_cells
     if (
         hundred["p95_ns"] * 1_000_000 > one["p95_ns"] * 1_250_000
         or hundred["p99_ns"] * 1_000_000 > one["p99_ns"] * 1_500_000
-        or receipt["post_compaction_result_ids"] != hundred["result_ids"]
     ):
         raise ValueError("qualification fragmentation gate failed")
+
+    mutation_keys = {
+        "id",
+        "kind",
+        "observed_sequence",
+        "observed_state",
+        "visibility_latency_ns",
+        "writes",
+    }
+    write_keys = {"sequence", "state"}
+    cases = receipt["mutation_cases"]
+    if not isinstance(cases, list) or len(cases) != 3:
+        raise ValueError("qualification mutation cases differ")
+    seen_kinds = set()
+    seen_ids = set()
+    visibility_latencies = []
+    for candidate in cases:
+        case = _exact_keys(candidate, mutation_keys, "qualification mutation")
+        writes = case["writes"]
+        if (
+            case["kind"] not in {"newest", "replacement", "tombstone"}
+            or case["kind"] in seen_kinds
+            or type(case["id"]) is not int
+            or case["id"] in seen_ids
+            or not isinstance(writes, list)
+            or len(writes) < 2
+            or not _positive_int(case["visibility_latency_ns"])
+        ):
+            raise ValueError("qualification mutation gate failed")
+        seen_kinds.add(case["kind"])
+        seen_ids.add(case["id"])
+        parsed_writes = [
+            _exact_keys(write, write_keys, "qualification mutation write")
+            for write in writes
+        ]
+        if any(
+            not _positive_int(write["sequence"])
+            or write["state"] not in {"live", "tombstone"}
+            for write in parsed_writes
+        ):
+            raise ValueError("qualification mutation write gate failed")
+        sequences = [write["sequence"] for write in parsed_writes]
+        if len(set(sequences)) != len(sequences):
+            raise ValueError("qualification mutation sequence tie")
+        latest = max(parsed_writes, key=lambda write: write["sequence"])
+        expected_state = "tombstone" if case["kind"] == "tombstone" else "live"
+        if (
+            latest["state"] != expected_state
+            or case["observed_sequence"] != latest["sequence"]
+            or case["observed_state"] != latest["state"]
+        ):
+            raise ValueError("qualification mutation visibility differs")
+        visibility_latencies.append(case["visibility_latency_ns"])
+    visibility_p95_ns = _nearest_percentile(visibility_latencies, 0.95)
+    if visibility_p95_ns > 1_000_000_000:
+        raise ValueError("qualification visibility gate failed")
+
+    compaction = _exact_keys(
+        receipt["compaction"],
+        {
+            "amplification_ppm",
+            "logical_live_bytes",
+            "post_result_ids",
+            "read_bytes",
+            "write_bytes",
+        },
+        "qualification compaction",
+    )
+    if (
+        not _positive_int(compaction["logical_live_bytes"])
+        or not _positive_int(compaction["read_bytes"])
+        or not _positive_int(compaction["write_bytes"])
+    ):
+        raise ValueError("qualification compaction counters differ")
+    amplification_ppm = (
+        (compaction["read_bytes"] + compaction["write_bytes"])
+        * 1_000_000
+        // compaction["logical_live_bytes"]
+    )
+    if (
+        compaction["amplification_ppm"] != amplification_ppm
+        or amplification_ppm > 5_000_000
+        or compaction["post_result_ids"]
+        != _qualification_samples(
+            cells[2]["samples"], matrix, "qualification pre-compaction"
+        )["result_ids"]
+    ):
+        raise ValueError("qualification compaction gate failed")
+
+    return {
+        "base_capacity_qps_milli": base_capacity_qps_milli,
+        "cells": derived_cells,
+        "compaction_amplification_ppm": amplification_ppm,
+        "fresh_recall_ppm": fresh["recall_ppm"],
+        "offered_qps_milli": offered_qps_milli,
+        "schema": "borsuk-v85-qualification-summary-v1",
+        "visibility_p95_ns": visibility_p95_ns,
+    }
 
 
 def main() -> None:

@@ -42,6 +42,8 @@ class V85QualificationTests(unittest.TestCase):
         self.assertEqual(matrix["run_counts"], [1, 10, 100])
         self.assertEqual(matrix["replacement_rows"], 500)
         self.assertEqual(matrix["tombstone_rows"], 500)
+        self.assertEqual(matrix["query_count"], 1_000)
+        self.assertEqual(matrix["neighbors"], 100)
         self.assertEqual(matrix["offered_load_ppm"], 700_000)
         self.assertEqual(matrix["preflight_page_budgets"], [8, 16])
         self.assertEqual(matrix["max_gets_per_query"], 32)
@@ -92,63 +94,220 @@ class V85QualificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "preflight"):
                 validate_preflight_receipt(drift, frozen_matrix())
 
-    def test_full_receipt_recomputes_relative_and_compaction_gates(self) -> None:
-        # Break caught: a missing/error cell, stale mutation result, excessive
-        # fragmentation tail, or non-identical post-compaction result promotes.
-        result_ids = list(range(100))
-        def cell(runs: int, p95: int, p99: int) -> dict[str, object]:
-            return {
-                "bytes_per_query": 12 * 1024 * 1024,
-                "failed_queries": 0,
-                "gets_per_query": 24,
-                "p50_ns": 40_000_000,
-                "p95_ns": p95,
-                "p99_ns": p99,
+    @staticmethod
+    def _qualification_fixture() -> tuple[dict[str, object], dict[str, object]]:
+        matrix = copy.deepcopy(frozen_matrix())
+        matrix["query_count"] = 2
+
+        def samples(max_latency_ns: int) -> list[dict[str, object]]:
+            return [
+                {
+                    "bytes": 12 * 1024 * 1024,
+                    "latency_ns": 40_000_000,
+                    "neighbors": 100,
+                    "query": 0,
+                    "requests": 24,
+                    "result_ids": list(range(100)),
+                    "truth_ids": list(range(100)),
+                },
+                {
+                    "bytes": 11 * 1024 * 1024,
+                    "latency_ns": max_latency_ns,
+                    "neighbors": 100,
+                    "query": 1,
+                    "requests": 23,
+                    "result_ids": list(range(100, 199)) + [999],
+                    "truth_ids": list(range(100, 200)),
+                },
+            ]
+
+        cells = [
+            {
+                "elapsed_ns": 20_000_000,
                 "peak_rss_bytes": 2 * 1024**3,
-                "recall_ppm": 992_000,
-                "result_ids": result_ids,
-                "runs": runs,
-                "successful_qps_milli": 84_000,
-                "worst_recall_ppm": 900_000,
-            }
+                "runs": 1,
+                "samples": samples(60_000_000),
+            },
+            {
+                "elapsed_ns": 20_000_000,
+                "peak_rss_bytes": 2 * 1024**3,
+                "runs": 10,
+                "samples": samples(65_000_000),
+            },
+            {
+                "elapsed_ns": 20_000_000,
+                "peak_rss_bytes": 2 * 1024**3,
+                "runs": 100,
+                "samples": samples(70_000_000),
+            },
+        ]
         receipt = {
-            "base_capacity_qps_milli": 120_000,
-            "cells": [
-                cell(1, 60_000_000, 80_000_000),
-                cell(10, 65_000_000, 90_000_000),
-                cell(100, 70_000_000, 100_000_000),
+            "base_capacity": {
+                "attempted_queries": 12,
+                "elapsed_ns": 100_000_000,
+                "successful_queries": 12,
+            },
+            "cells": cells,
+            "compaction": {
+                "amplification_ppm": 4_000_000,
+                "logical_live_bytes": 1_000,
+                "post_result_ids": [
+                    sample["result_ids"] for sample in cells[2]["samples"]
+                ],
+                "read_bytes": 2_000,
+                "write_bytes": 2_000,
+            },
+            "fresh_samples": samples(55_000_000),
+            "mutation_cases": [
+                {
+                    "id": 10,
+                    "kind": "newest",
+                    "observed_sequence": 3,
+                    "observed_state": "live",
+                    "visibility_latency_ns": 300_000_000,
+                    "writes": [
+                        {"sequence": 1, "state": "live"},
+                        {"sequence": 3, "state": "live"},
+                    ],
+                },
+                {
+                    "id": 11,
+                    "kind": "replacement",
+                    "observed_sequence": 4,
+                    "observed_state": "live",
+                    "visibility_latency_ns": 400_000_000,
+                    "writes": [
+                        {"sequence": 1, "state": "live"},
+                        {"sequence": 4, "state": "live"},
+                    ],
+                },
+                {
+                    "id": 12,
+                    "kind": "tombstone",
+                    "observed_sequence": 5,
+                    "observed_state": "tombstone",
+                    "visibility_latency_ns": 500_000_000,
+                    "writes": [
+                        {"sequence": 2, "state": "live"},
+                        {"sequence": 5, "state": "tombstone"},
+                    ],
+                },
             ],
-            "compaction_amplification_ppm": 4_000_000,
-            "fresh_recall_ppm": 993_000,
-            "mutation_checks": {"newest": True, "replacement": True, "tombstone": True},
-            "offered_qps_milli": 84_000,
-            "post_compaction_result_ids": result_ids,
-            "schema": "borsuk-v85-qualification-receipt-v1",
-            "visibility_p95_ns": 500_000_000,
+            "schema": "borsuk-v85-qualification-receipt-v2",
         }
-        validate_qualification_receipt(receipt, frozen_matrix())
+        return matrix, receipt
+
+    def test_full_receipt_recomputes_every_gate_from_raw_evidence(self) -> None:
+        # Break caught: promotion trusts runner-supplied aggregates rather than
+        # deriving quality, work, capacity, mutation, and compaction gates.
+        matrix, receipt = self._qualification_fixture()
+
+        summary = validate_qualification_receipt(receipt, matrix)
+
+        self.assertEqual(
+            summary,
+            {
+                "base_capacity_qps_milli": 120_000,
+                "cells": [
+                    {
+                        "bytes_per_query": 12 * 1024 * 1024,
+                        "gets_per_query": 24,
+                        "p50_ns": 40_000_000,
+                        "p95_ns": latency,
+                        "p99_ns": latency,
+                        "peak_rss_bytes": 2 * 1024**3,
+                        "recall_ppm": 995_000,
+                        "runs": runs,
+                        "successful_qps_milli": 100_000,
+                        "worst_recall_ppm": 990_000,
+                    }
+                    for runs, latency in ((1, 60_000_000), (10, 65_000_000), (100, 70_000_000))
+                ],
+                "compaction_amplification_ppm": 4_000_000,
+                "fresh_recall_ppm": 995_000,
+                "offered_qps_milli": 84_000,
+                "schema": "borsuk-v85-qualification-summary-v1",
+                "visibility_p95_ns": 500_000_000,
+            },
+        )
+
+    def test_full_receipt_rejects_per_query_capacity_and_quality_drift(self) -> None:
+        # Break caught: missing/failed queries, invalid rankings, unbounded S3
+        # work, slow capacity, tail regression, or stale recall still promote.
+        matrix, receipt = self._qualification_fixture()
+        mutations = []
+
+        missing = copy.deepcopy(receipt)
+        missing["cells"][0]["samples"].pop()
+        mutations.append(missing)
+        duplicate = copy.deepcopy(receipt)
+        duplicate["cells"][0]["samples"][0]["result_ids"][1] = 0
+        mutations.append(duplicate)
+        truth_drift = copy.deepcopy(receipt)
+        truth_drift["cells"][1]["samples"][0]["truth_ids"] = list(
+            range(1_000, 1_100)
+        )
+        truth_drift["cells"][1]["samples"][0]["result_ids"] = list(
+            range(1_000, 1_100)
+        )
+        mutations.append(truth_drift)
+        requests = copy.deepcopy(receipt)
+        requests["cells"][1]["samples"][0]["requests"] = 33
+        mutations.append(requests)
+        payload = copy.deepcopy(receipt)
+        payload["cells"][1]["samples"][0]["bytes"] = 16 * 1024 * 1024 + 1
+        mutations.append(payload)
+        capacity = copy.deepcopy(receipt)
+        capacity["cells"][1]["elapsed_ns"] = 25_000_000
+        mutations.append(capacity)
+        failed_capacity = copy.deepcopy(receipt)
+        failed_capacity["base_capacity"]["successful_queries"] = 11
+        mutations.append(failed_capacity)
+        tail = copy.deepcopy(receipt)
+        tail["cells"][2]["samples"][1]["latency_ns"] = 90_000_001
+        mutations.append(tail)
+        memory = copy.deepcopy(receipt)
+        memory["cells"][0]["peak_rss_bytes"] = 3 * 1024**3 + 1
+        mutations.append(memory)
+        quality = copy.deepcopy(receipt)
+        quality["fresh_samples"][0]["result_ids"] = list(range(1_000, 1_100))
+        mutations.append(quality)
+
+        for mutated in mutations:
+            with self.subTest(mutated=mutations.index(mutated)):
+                with self.assertRaisesRegex(ValueError, "qualification"):
+                    validate_qualification_receipt(mutated, matrix)
+
+    def test_full_receipt_rejects_mutation_and_compaction_evidence_drift(self) -> None:
+        # Break caught: stale latest-write state, excessive visibility latency,
+        # fabricated amplification, or changed post-compaction results promote.
+        matrix, receipt = self._qualification_fixture()
+        mutations = []
 
         stale = copy.deepcopy(receipt)
-        stale["mutation_checks"]["tombstone"] = False
-        with self.assertRaisesRegex(ValueError, "qualification"):
-            validate_qualification_receipt(stale, frozen_matrix())
-
-        tail = copy.deepcopy(receipt)
-        tail["cells"][2]["p99_ns"] = 120_000_001
-        with self.assertRaisesRegex(ValueError, "qualification"):
-            validate_qualification_receipt(tail, frozen_matrix())
-
+        stale["mutation_cases"][0]["observed_sequence"] = 1
+        mutations.append(stale)
+        missing_case = copy.deepcopy(receipt)
+        missing_case["mutation_cases"].pop()
+        mutations.append(missing_case)
+        visibility = copy.deepcopy(receipt)
+        visibility["mutation_cases"][2]["visibility_latency_ns"] = 1_000_000_001
+        mutations.append(visibility)
+        fabricated = copy.deepcopy(receipt)
+        fabricated["compaction"]["amplification_ppm"] = 3_999_999
+        mutations.append(fabricated)
+        amplified = copy.deepcopy(receipt)
+        amplified["compaction"]["write_bytes"] = 3_001
+        amplified["compaction"]["amplification_ppm"] = 5_001_000
+        mutations.append(amplified)
         changed = copy.deepcopy(receipt)
-        changed["post_compaction_result_ids"] = list(reversed(result_ids))
-        with self.assertRaisesRegex(ValueError, "qualification"):
-            validate_qualification_receipt(changed, frozen_matrix())
+        changed["compaction"]["post_result_ids"][0] = list(reversed(range(100)))
+        mutations.append(changed)
 
-        zero_quality = copy.deepcopy(receipt)
-        zero_quality["fresh_recall_ppm"] = 0
-        for candidate in zero_quality["cells"]:
-            candidate["recall_ppm"] = 0
-        with self.assertRaisesRegex(ValueError, "qualification"):
-            validate_qualification_receipt(zero_quality, frozen_matrix())
+        for mutated in mutations:
+            with self.subTest(mutated=mutations.index(mutated)):
+                with self.assertRaisesRegex(ValueError, "qualification"):
+                    validate_qualification_receipt(mutated, matrix)
 
 
 if __name__ == "__main__":
