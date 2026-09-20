@@ -208,8 +208,8 @@ export HOME=${{HOME:-/root}}
 export OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16 MKL_NUM_THREADS=16
 
 phase=install
-dnf install -y -q python3-pip tar gzip time >install.log 2>&1 || exit 91
-python3 -m venv .venv >>install.log 2>&1 || exit 91
+dnf install -y -q python3.12 python3.12-pip tar gzip time >install.log 2>&1 || exit 91
+python3.12 -m venv .venv >>install.log 2>&1 || exit 91
 .venv/bin/pip install -q numpy==1.26.4 pyarrow==17.0.0 >>install.log 2>&1 || exit 91
 
 phase=source

@@ -74,6 +74,8 @@ class V97SpotLauncherTests(unittest.TestCase):
         self.assertIn("--query-count 1000", script)
         self.assertIn("--bootstrap-resamples 10000", script)
         self.assertIn("ulimit -v $((48 * 1024 * 1024))", script)
+        self.assertIn("dnf install -y -q python3.12 python3.12-pip", script)
+        self.assertIn("python3.12 -m venv .venv", script)
         self.assertIn("result.json", script)
         self.assertIn("rescore.json", script)
         self.assertIn("resources.json", script)
