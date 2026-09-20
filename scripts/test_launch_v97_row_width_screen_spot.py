@@ -7,6 +7,7 @@ from scripts.launch_v97_row_width_screen_spot import (
     claim_launched_attempt,
     ensure_unstarted,
     launch_one_spot,
+    parse_args,
     worker_script,
 )
 from scripts.v97_row_width_screen import ObjectIdentity
@@ -51,6 +52,19 @@ class V97SpotLauncherTests(unittest.TestCase):
         })
         self.assertNotIn("validation", " ".join(value.uri for value in plan.inputs.values()))
         self.assertNotIn("holdout", " ".join(value.uri for value in plan.inputs.values()))
+
+    def test_cli_defaults_freeze_x86_image_for_c7i_worker(self) -> None:
+        # Break caught: an ARM64 AMI is paired with the x86_64 c7i worker and
+        # EC2 rejects the request before an immutable attempt can launch.
+        plan = parse_args([
+            "--source-commit", "1" * 40,
+            "--source-archive-uri", "s3://fixture/source.tar.gz",
+            "--source-archive-sha256", "2" * 64,
+            "--source-archive-bytes", "100",
+            "--output-prefix", "s3://fixture/v97/attempt-0001",
+        ])
+        self.assertEqual(plan.instance_type, "c7i.8xlarge")
+        self.assertEqual(plan.image_id, "ami-06121aa3085b6f918")
 
     def test_worker_authenticates_runs_rescores_then_publishes_terminal(self) -> None:
         # Break caught: a terminal becomes visible before result/rescore, or an

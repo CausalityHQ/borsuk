@@ -395,7 +395,7 @@ def parse_args(argv: Sequence[str] | None = None) -> V97SpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--profile", default="causality")
-    parser.add_argument("--image-id", default="ami-07bcecd13a160173f")
+    parser.add_argument("--image-id", default="ami-06121aa3085b6f918")
     parser.add_argument("--security-group-id", default="sg-0b1fd3e4fbde4af0d")
     parser.add_argument(
         "--instance-profile-arn",
