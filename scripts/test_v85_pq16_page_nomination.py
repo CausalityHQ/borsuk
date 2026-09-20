@@ -125,18 +125,44 @@ class V85Pq16PageNominationTests(unittest.TestCase):
 
         with mock.patch("builtins.zip", zip_without_strict):
             summary = validate_sparse_residual_development_ceiling(
-                result, result_sha256="5" * 64
+                result,
+                result_sha256="5" * 64,
+                expected_query_start=456,
+                expected_queries=1,
             )
 
         self.assertEqual(summary["classification"], "validation-eligible")
         self.assertEqual(summary["exact_average_recall100_ppm"], 1_000_000)
+        self.assertEqual(
+            summary["exact_minus_identity_recall10_ci95_ppm"], [0, 0]
+        )
+        self.assertEqual(
+            summary["exact_minus_identity_recall100_ci95_ppm"], [30_000, 30_000]
+        )
+        self.assertEqual(
+            summary["sparse_minus_identity_recall10_ci95_ppm"], [0, 0]
+        )
+        self.assertEqual(
+            summary["sparse_minus_identity_recall100_ci95_ppm"], [20_000, 20_000]
+        )
+        self.assertEqual(summary["schema"], "borsuk-v85-development-rescore-summary-v2")
         malformed = json.loads(json.dumps(result))
         malformed["arms"]["exact-f32"]["samples"][0]["hits"] = 99
         with self.assertRaisesRegex(ValueError, "exact-f32 aggregate differs"):
             with mock.patch("builtins.zip", zip_without_strict):
                 validate_sparse_residual_development_ceiling(
-                    malformed, result_sha256="5" * 64
+                    malformed,
+                    result_sha256="5" * 64,
+                    expected_query_start=456,
+                    expected_queries=1,
                 )
+        with self.assertRaisesRegex(ValueError, "development query window differs"):
+            validate_sparse_residual_development_ceiling(
+                result,
+                result_sha256="5" * 64,
+                expected_query_start=0,
+                expected_queries=1,
+            )
 
     def test_exact_f32_ranker_matches_scalar_total_order_in_bounded_batches(
         self,
@@ -620,12 +646,12 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             {
                 "arms": ["pq16-identity", "sparse-residual-pq8", "exact-f32"],
                 "blas_threads": 16,
-                "development_end_exclusive": 584,
-                "development_start": 456,
+                "development_end_exclusive": 1000,
+                "development_start": 0,
                 "instance_type": "c7i.8xlarge",
                 "max_wall_seconds": 1800,
                 "page_budget": 32,
-                "queries": 128,
+                "queries": 1000,
                 "query_parallelism": 1,
                 "residual_fraction_ppm": 250_000,
                 "reuse_frozen_artifacts": True,

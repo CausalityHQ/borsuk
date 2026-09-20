@@ -330,22 +330,33 @@ def validate_sparse_residual_development_ceiling(
     result: Any,
     *,
     result_sha256: str,
+    expected_query_start: int,
+    expected_queries: int,
 ) -> dict[str, Any]:
     """Independently recompute the fixed three-arm 1M development screen."""
 
     _digest(result_sha256, "development ceiling")
     if (
+        type(expected_query_start) is not int
+        or expected_query_start < 0
+        or type(expected_queries) is not int
+        or expected_queries <= 0
+    ):
+        raise ValueError("development query window differs")
+    if (
         not isinstance(result, dict)
         or result.get("schema")
         != "borsuk-v85-sparse-residual-development-ceiling-v1"
-        or result.get("query_start") != 456
-        or type(result.get("queries")) is not int
-        or result["queries"] <= 0
         or result.get("residual_fraction_ppm") != 250_000
         or set(result.get("arms", {}))
         != {"exact-f32", "pq16-identity", "sparse-residual-pq8"}
     ):
         raise ValueError("development ceiling result differs")
+    if (
+        result.get("query_start") != expected_query_start
+        or result.get("queries") != expected_queries
+    ):
+        raise ValueError("development query window differs")
     for name in ("pq16_books_sha256", "pq16_codes_sha256"):
         _digest(result.get(name), name)
     page_runs = result.get("page_run_identities")
@@ -387,6 +398,9 @@ def validate_sparse_residual_development_ceiling(
     exact = arms["exact-f32"]
     residual = arms["sparse-residual-pq8"]
     identity = arms["pq16-identity"]
+    identity10, identity100 = evidence["pq16-identity"]
+    residual10, residual100 = evidence["sparse-residual-pq8"]
+    exact10, exact100 = evidence["exact-f32"]
     if not exact["gate_passed"]:
         classification = "layout-locality-rejected"
     elif (
@@ -405,13 +419,33 @@ def validate_sparse_residual_development_ceiling(
 
     return {
         "classification": classification,
+        "exact_average_recall10_ppm": exact["average_recall10_ppm"],
         "exact_average_recall100_ppm": exact["average_recall100_ppm"],
+        "exact_minus_identity_recall10_ci95_ppm": _paired_ci(
+            np.subtract(exact10, identity10).tolist(), 10
+        ),
+        "exact_minus_identity_recall100_ci95_ppm": _paired_ci(
+            np.subtract(exact100, identity100).tolist(), 100
+        ),
+        "exact_p05_recall100_ppm": exact["p05_recall100_ppm"],
+        "identity_average_recall10_ppm": identity["average_recall10_ppm"],
         "identity_average_recall100_ppm": identity["average_recall100_ppm"],
+        "identity_p05_recall100_ppm": identity["p05_recall100_ppm"],
         "queries": result["queries"],
         "query_start": result["query_start"],
         "result_sha256": result_sha256,
-        "schema": "borsuk-v85-sparse-residual-development-ceiling-summary-v1",
+        "schema": "borsuk-v85-development-rescore-summary-v2",
+        "sparse_minus_identity_recall10_ci95_ppm": _paired_ci(
+            np.subtract(residual10, identity10).tolist(), 10
+        ),
+        "sparse_minus_identity_recall100_ci95_ppm": _paired_ci(
+            np.subtract(residual100, identity100).tolist(), 100
+        ),
+        "sparse_residual_average_recall10_ppm": residual[
+            "average_recall10_ppm"
+        ],
         "sparse_residual_average_recall100_ppm": residual[
             "average_recall100_ppm"
         ],
+        "sparse_residual_p05_recall100_ppm": residual["p05_recall100_ppm"],
     }

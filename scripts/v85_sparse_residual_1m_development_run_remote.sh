@@ -3,7 +3,7 @@ set -uo pipefail
 
 case "${1:-}" in
   --describe)
-    printf '%s\n' '{"arms":["pq16-identity","sparse-residual-pq8","exact-f32"],"blas_threads":16,"development_end_exclusive":584,"development_start":456,"instance_type":"c7i.8xlarge","max_wall_seconds":1800,"page_budget":32,"queries":128,"query_parallelism":1,"residual_fraction_ppm":250000,"reuse_frozen_artifacts":true,"shortlist_rows":2048,"spot_only":true,"validation_or_holdout_reads":false}'
+    printf '%s\n' '{"arms":["pq16-identity","sparse-residual-pq8","exact-f32"],"blas_threads":16,"development_end_exclusive":1000,"development_start":0,"instance_type":"c7i.8xlarge","max_wall_seconds":1800,"page_budget":32,"queries":1000,"query_parallelism":1,"residual_fraction_ppm":250000,"reuse_frozen_artifacts":true,"shortlist_rows":2048,"spot_only":true,"validation_or_holdout_reads":false}'
     exit 0
     ;;
   "") ;;
@@ -84,7 +84,7 @@ export PYTHONPATH="$root/repo"
   --truth truth.parquet --truth-uri "$truth_uri" --truth-sha256 fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11 \
   --generation generation.json --generation-uri "$generation_uri" --generation-sha256 45fa4e708ab660151a7b1ea79e35eada6090faced1bfb147f7e20cac7055e754 \
   --base base-000.arrow --delta delta-000.arrow --output result.json \
-  --dimensions 768 --neighbors 100 --queries-count 128 --query-start 456 \
+  --dimensions 768 --neighbors 100 --queries-count 1000 --query-start 0 \
   --query-field embedding --truth-layout long \
   --shortlist-rows 2048 --gap-pages 0 --seed 7216 \
   --sparse-residual-fraction-ppm 250000 --compare-sparse-residual-exact \
@@ -99,7 +99,10 @@ from scripts.v85_pq16_rescore_summary import validate_sparse_residual_developmen
 
 body = Path("result.json").read_bytes()
 summary = validate_sparse_residual_development_ceiling(
-    json.loads(body), result_sha256=hashlib.sha256(body).hexdigest()
+    json.loads(body),
+    result_sha256=hashlib.sha256(body).hexdigest(),
+    expected_query_start=0,
+    expected_queries=1000,
 )
 print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
 PY
