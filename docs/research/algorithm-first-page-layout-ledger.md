@@ -2771,3 +2771,65 @@ quality gates. The next representation hypothesis must improve compact
 ranking at a resident cost compatible with `<3 GiB`; it must first beat PQ16
 on the same immutable 1,000-query paired harness and retain the exact
 32-GET/16-MiB physical contract.
+
+## V100 result — page-relative residual PQ improves PQ16 but fails G1
+
+V100 tested the single registered follow-up representation: one query-blind
+16-byte residual PQ code per row, trained around page means decoded from the
+authenticated V98 hierarchy summaries, followed by V99's unchanged adjacent-
+range planner. Source commit
+`b7630390f343320036f04fa013a48d0f4e5294f0` is archived at
+`s3://borsuk-bench-453182569524-euc1/research/v100-page-residual-range/b7630390f343320036f04fa013a48d0f4e5294f0/source/source.tar.gz`;
+the archive is 10,729,710 bytes with SHA-256
+`795a768a88936f982c2ec28ea6208c103dea646f839bbf4a23c4034e2ff573e6`.
+The sole attempt used all 1,000 frozen ReLAION-1M development queries, exact
+top-100 truth, 32 GETs, 16,777,216 bytes, the same hierarchy caps, and a
+matched V99 PQ16 control. No validation or holdout queries were consumed.
+
+The `c7i.8xlarge` Spot instance `i-0b6ffb451324fa4c3` ran in
+`eu-central-1c` and is terminated. Its 1,507-byte canonical terminal has
+SHA-256
+`ff339a048b22ce04feee3d9876d6750361d0ee161e198f1216d4055c24baaae9`,
+status `complete`, exit code 0, and `claim_eligible=true`. Terminal-bound
+evidence is:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| result | 27,795,092 | `bb00194d057ddce193341fd6e754b0b1551834eaea672c8e41a074126ac97fe0` |
+| rescore | 819 | `6fd83b4c4bb597a8e0fd1650524fdd5c3fe535ead1c9e8adc2b43b03d0a4362e` |
+| resources | 461 | `7c273869c99459c6214243f4a4be645c24662a3855bd0673ad1d84d46cb3a9f4` |
+| worker log | 352 | `e45363bdf19e957326291503284a46011142a90829094bb44f7903b5f743f241` |
+
+The independent reducer authenticated the result and recomputed every query's
+truth-page membership, selected-range union, recall, aggregates, shared
+10,000-resample paired intervals, memory projection, and final
+classification. Its decision is:
+
+| arm | avg R@10 | avg R@100 | p05 R@100 | max GETs | max bytes | quality | resource |
+|---|---:|---:|---:|---:|---:|---|---|
+| matched V99 PQ16 | 96.3100% | 91.9180% | 66% | 32 | 16,777,216 | fail | pass |
+| V100 page-relative residual PQ16 | 97.1400% | 92.8780% | 69% | 32 | 16,777,216 | **fail** | pass |
+
+The paired 95% interval for V100 minus PQ16 is +0.5000 to +1.1700 percentage
+points at Recall@10, +0.7220 to +1.2020 points at Recall@100, and 0 to +5
+points at p05 Recall@100. The improvement is real but far below the absolute
+97.5000% average and 90% p05 Recall@100 gates. Its conservative 100M resident
+projection is 2,872,650,430 bytes, including bounded decoded-mean scratch and
+zero resident dense page means, so memory passes. Classification is
+`page-residual-rejected`.
+
+The fixed preflight passed at 262,144 rows and an 8,192-row shortlist: exact
+scoring took 0.074349 seconds, PQ16 scoring 0.061057 seconds, and range planning
+0.286555 seconds. The full producer took 26:31.51 wall, 2,194.02 user seconds,
+1,960.77 system seconds, 261% CPU, and 13,073,008 KiB maximum RSS. Independent
+reduction took 1.37 seconds and 342,468 KiB maximum RSS. Swap and memory PSI
+were zero throughout; the registered resource receipt estimates $0.216800 of
+Spot spend. All named local scratch was removed.
+
+**Ruling:** reject this V100 representation without retry or parameter tuning.
+It proves that page-relative residual evidence improves compact ranking, but
+not nearly enough under the fixed 32-GET/16-MiB physical budget. G1 still has
+no eligible compact representation; 10M/100M, G2 promotion, and competitor
+parity claims remain fenced. Do not reinterpret this as failure of the exact
+hierarchy/range layout, whose V99 exact ceiling remains above every quality
+gate.
