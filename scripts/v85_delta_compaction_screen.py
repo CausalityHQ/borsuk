@@ -143,6 +143,15 @@ def _run_reader(
     return result
 
 
+def _write_and_validate_receipt(
+    receipt: dict[str, Any], output: pathlib.Path
+) -> None:
+    output.write_text(
+        json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n"
+    )
+    validate_delta_compaction_screen(receipt)
+
+
 def run_screen(request: ScreenRequest) -> dict[str, Any]:
     from scripts.v85_build_delta import (
         BuildRequest,
@@ -230,10 +239,7 @@ def run_screen(request: ScreenRequest) -> dict[str, Any]:
         "rows": ROWS,
         "schema": "borsuk-v85-delta-compaction-screen-v1",
     }
-    validate_delta_compaction_screen(receipt)
-    request.output.write_text(
-        json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n"
-    )
+    _write_and_validate_receipt(receipt, request.output)
     return receipt
 
 

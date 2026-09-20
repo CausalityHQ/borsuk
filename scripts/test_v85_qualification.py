@@ -6,7 +6,11 @@ import subprocess
 import tempfile
 import unittest
 
-from scripts.v85_delta_compaction_screen import _path_for_uri, _zip_equal_lengths
+from scripts.v85_delta_compaction_screen import (
+    _path_for_uri,
+    _write_and_validate_receipt,
+    _zip_equal_lengths,
+)
 from scripts.v85_qualification import (
     frozen_matrix,
     validate_delta_compaction_screen,
@@ -16,6 +20,15 @@ from scripts.v85_qualification import (
 
 
 class V85QualificationTests(unittest.TestCase):
+    def test_rejected_compaction_screen_preserves_candidate_receipt(self) -> None:
+        # Break caught: validation fails before receipt.json is written, leaving
+        # a terminal failure that cannot be classified without another run.
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "receipt.json"
+            with self.assertRaisesRegex(ValueError, "compaction screen"):
+                _write_and_validate_receipt({"schema": "invalid"}, output)
+            self.assertEqual(output.read_bytes(), b'{"schema":"invalid"}\n')
+
     def test_remote_python39_dependency_closure_avoids_zip_strict(self) -> None:
         # Break caught: Amazon Linux runs Python 3.9, so any reachable
         # zip(strict=True) fails before the scientific receipt is written.
