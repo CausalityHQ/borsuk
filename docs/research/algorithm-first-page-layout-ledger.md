@@ -2506,14 +2506,19 @@ measurement exists at G1, so no competitive parity claim is made.
 
 V98 is one fail-fast ReLAION-1M development attempt. It uses all 1,000 frozen
 development queries and exact top-100 truth; it reads no validation or sealed
-holdout query. Source `c73d7d6b9c7e900cded890055b5875808957e33c` is archived
+holdout query. Source `8ec42e96373f84664c6725592a9b2869e622cbcc` is archived
 at
-`s3://borsuk-bench-453182569524-euc1/research/v98-hierarchical-row-router/c73d7d6b9c7e900cded890055b5875808957e33c/source/source.tar.gz`
-with SHA-256 `855b27042101f23a638ffcb89916d44ced5b2d8eed5773801547d9b732e4bb6c`
-and 10,672,189 bytes. The sole attempt prefix is
-`research/v98-hierarchical-row-router/c73d7d6b9c7e900cded890055b5875808957e33c/runs/v98-g1-20260920T173828Z-c73d7d6/a0001/`.
+`s3://borsuk-bench-453182569524-euc1/research/v98-hierarchical-row-router/8ec42e96373f84664c6725592a9b2869e622cbcc/source/source.tar.gz`
+with SHA-256 `a15ee41fe8970fc6d764e9e40b96064295f4b2e9c0b23ee2bed48945a989eadc`
+and 10,674,524 bytes. The sole attempt prefix is
+`research/v98-hierarchical-row-router/8ec42e96373f84664c6725592a9b2869e622cbcc/runs/v98-g1-20260920T174130Z-8ec42e9/a0001/`.
 The preregistered dual-critique result is
 `edcde2149f98bc38c5121b387b165fe9baf0ca6df79658ac624abf86866bcb87`.
+An earlier local direct-script preflight of source
+`c73d7d6b9c7e900cded890055b5875808957e33c` failed at import resolution before
+any AWS API call, reservation, instance, or spend. Its uploaded source archive
+is unused; source `8ec42e96373f84664c6725592a9b2869e622cbcc` adds the exact
+subprocess regression and the established direct-execution import boundary.
 
 The six immutable input identities are:
 
