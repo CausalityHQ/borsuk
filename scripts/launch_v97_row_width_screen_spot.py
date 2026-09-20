@@ -378,13 +378,24 @@ def claim_launched_attempt(
         ).encode()
         + b"\n"
     )
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=f"{prefix.rstrip('/')}/launch.json",
-        Body=body,
-        ContentType="application/json",
-        IfNoneMatch="*",
+    event_name = "before-sign.s3.PutObject"
+    event_id = "borsuk-v97-launch-if-none-match"
+
+    def add_precondition(request: object, **_: object) -> None:
+        request.headers["If-None-Match"] = "*"
+
+    s3_client.meta.events.register_first(
+        event_name, add_precondition, unique_id=event_id
     )
+    try:
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=f"{prefix.rstrip('/')}/launch.json",
+            Body=body,
+            ContentType="application/json",
+        )
+    finally:
+        s3_client.meta.events.unregister(event_name, event_id)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> V97SpotPlan:

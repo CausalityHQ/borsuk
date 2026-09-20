@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from scripts.launch_v97_row_width_screen_spot import (
     SpotTarget,
@@ -128,16 +129,32 @@ class V97SpotLauncherTests(unittest.TestCase):
     def test_launch_receipt_is_conditionally_persisted_before_monitoring(self) -> None:
         # Break caught: a pre-terminal Spot interruption leaves no durable
         # consumed-attempt marker and permits an accidental duplicate.
+        class FakeEvents:
+            def __init__(self) -> None:
+                self.handler = None
+
+            def register_first(self, name, handler, *, unique_id):
+                self.handler = handler
+
+            def unregister(self, name, unique_id):
+                self.handler = None
+
         class FakeS3:
             def __init__(self) -> None:
                 self.request = None
+                self.signed_headers = None
+                self.meta = SimpleNamespace(events=FakeEvents())
 
             def put_object(self, **request):
+                signed = SimpleNamespace(headers={})
+                self.meta.events.handler(signed)
+                self.signed_headers = signed.headers
                 self.request = request
 
         client = FakeS3()
         claim_launched_attempt(self.plan(), s3_client=client, instance_id="i-v97")
-        self.assertEqual(client.request["IfNoneMatch"], "*")
+        self.assertNotIn("IfNoneMatch", client.request)
+        self.assertEqual(client.signed_headers["If-None-Match"], "*")
         self.assertTrue(client.request["Key"].endswith("/launch.json"))
         self.assertIn(b'"instance_id":"i-v97"', client.request["Body"])
 
