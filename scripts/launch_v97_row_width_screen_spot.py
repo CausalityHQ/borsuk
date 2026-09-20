@@ -136,7 +136,7 @@ def worker_script(plan: V97SpotPlan) -> str:
             f"--{role} {filename} --{role}-uri {_q(identity.uri)} "
             f"--{role}-sha256 {identity.sha256} --{role}-bytes {identity.bytes}"
         )
-    screen_arguments = " \\\n+  ".join(argument_lines)
+    screen_arguments = (" \\" + "\n  ").join(argument_lines)
     return f"""#!/bin/bash
 set -uo pipefail
 root=/mnt/v97-row-width-g1

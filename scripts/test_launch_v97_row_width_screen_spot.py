@@ -67,6 +67,7 @@ class V97SpotLauncherTests(unittest.TestCase):
         self.assertIn("terminal.json", script)
         self.assertLess(script.index("rescore.json"), script.index("terminal.json"))
         self.assertLess(script.index("terminal.json"), script.index("shutdown -h now"))
+        self.assertNotIn("\n+  --", script)
         self.assertNotIn("validation", script)
         self.assertNotIn("holdout", script)
 
