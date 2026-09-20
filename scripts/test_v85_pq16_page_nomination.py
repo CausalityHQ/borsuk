@@ -14,10 +14,25 @@ import pyarrow.parquet as pq
 from scripts.v85_pq16_page_nomination import (
     PageEntry,
     evaluate_page_nominations,
+    plan_rank_weighted_ranges,
 )
 
 
 class V85Pq16PageNominationTests(unittest.TestCase):
+    def test_rank_weighted_planner_uses_exact_dense_range_budget(self) -> None:
+        # Break caught: the screen reads every page touched by the shortlist
+        # instead of selecting the maximum reciprocal-rank evidence under the
+        # registered physical span and range budgets.
+        ranges = plan_rank_weighted_ranges(
+            ranked_base_ids=np.asarray([10, 30, 31, 40], dtype=np.int64),
+            base_page_by_id={10: 0, 30: 3, 31: 3, 40: 4},
+            page_count=6,
+            max_span_pages=2,
+            max_ranges=1,
+        )
+
+        self.assertEqual(ranges, [(3, 4)])
+
     @staticmethod
     def _write_page(path: pathlib.Path, row_ids: list[int], dimensions: int) -> int:
         schema = pa.schema(

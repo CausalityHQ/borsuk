@@ -60,6 +60,89 @@ def _coalesced_work(
     return len(groups), encoded_bytes
 
 
+def plan_rank_weighted_ranges(
+    *,
+    ranked_base_ids: np.ndarray,
+    base_page_by_id: dict[int, int],
+    page_count: int,
+    max_span_pages: int,
+    max_ranges: int,
+) -> list[tuple[int, int]]:
+    """Select the exact maximum reciprocal-rank page evidence under a budget."""
+
+    if (
+        ranked_base_ids.ndim != 1
+        or ranked_base_ids.size == 0
+        or page_count <= 0
+        or max_span_pages <= 0
+        or max_ranges <= 0
+    ):
+        raise ValueError("rank-weighted page plan differs")
+    weights = np.zeros(page_count, dtype=np.float64)
+    for rank, row_id in enumerate(ranked_base_ids):
+        page = base_page_by_id.get(int(row_id))
+        if page is None or not 0 <= page < page_count:
+            raise ValueError("rank-weighted row page differs")
+        weights[page] += 1_000_000_000 // (rank + 1)
+
+    unreachable = np.float64(-np.inf)
+    shape = (max_ranges + 1, max_span_pages + 1)
+    off = np.full(shape, unreachable, dtype=np.float64)
+    on = np.full(shape, unreachable, dtype=np.float64)
+    off[0, 0] = 0
+    off_choices = np.zeros((page_count, *shape), dtype=np.uint8)
+    on_choices = np.zeros((page_count, *shape), dtype=np.uint8)
+    for page, weight in enumerate(weights):
+        next_off = np.maximum(off, on)
+        off_choices[page] = on > off
+        next_on = np.full(shape, unreachable, dtype=np.float64)
+        continuing = on[:, :-1]
+        next_on[:, 1:] = continuing
+        on_choices[page, :, 1:][continuing != unreachable] = 1
+        starting = off[:-1, :-1]
+        replace = starting > next_on[1:, 1:]
+        next_on[1:, 1:][replace] = starting[replace]
+        on_choices[page, 1:, 1:][replace] = 2
+        reachable = next_on != unreachable
+        next_on[reachable] += weight
+        off, on = next_off, next_on
+
+    best_value = unreachable
+    best = (0, 0, 0)
+    for pages in range(max_span_pages + 1):
+        for ranges in range(max_ranges + 1):
+            for state, values in enumerate((off, on)):
+                value = values[ranges, pages]
+                if value > best_value:
+                    best_value = value
+                    best = (ranges, pages, state)
+    ranges, pages, state = best
+    selected = np.zeros(page_count, dtype=np.bool_)
+    for page in range(page_count - 1, -1, -1):
+        if state == 0:
+            state = int(off_choices[page, ranges, pages])
+            continue
+        selected[page] = True
+        choice = int(on_choices[page, ranges, pages])
+        pages -= 1
+        if choice == 2:
+            ranges -= 1
+            state = 0
+        elif choice == 1:
+            state = 1
+        else:
+            raise AssertionError("rank-weighted page backtrack differs")
+    selected_pages = np.flatnonzero(selected)
+    if selected_pages.size == 0:
+        return []
+    breaks = np.flatnonzero(np.diff(selected_pages) > 1)
+    starts = np.concatenate(([selected_pages[0]], selected_pages[breaks + 1]))
+    ends = np.concatenate((selected_pages[breaks], [selected_pages[-1]]))
+    return [
+        (int(starts[index]), int(ends[index])) for index in range(starts.size)
+    ]
+
+
 def evaluate_page_nominations(
     *,
     ranked_base_ids: np.ndarray,
@@ -72,6 +155,7 @@ def evaluate_page_nominations(
     max_gets: int,
     max_bytes: int,
     min_recall_ppm: int,
+    max_span_pages: int | None = None,
 ) -> dict[str, Any]:
     if (
         ranked_base_ids.ndim != 2
@@ -83,19 +167,45 @@ def evaluate_page_nominations(
     ):
         raise ValueError("PQ16 page-nomination shape differs")
     samples = []
+    all_pages = sorted(page_entries)
+    page_count = all_pages[-1] + 1
     for query in range(truth_ids.shape[0]):
-        selected_pages = sorted(
-            {
-                base_page_by_id[int(row_id)]
-                for row_id in ranked_base_ids[query]
-                if int(row_id) in base_page_by_id
-            }
-        )
+        planned_ranges = None
+        if max_span_pages is not None:
+            planned_ranges = plan_rank_weighted_ranges(
+                ranked_base_ids=ranked_base_ids[query],
+                base_page_by_id=base_page_by_id,
+                page_count=page_count,
+                max_span_pages=max_span_pages,
+                max_ranges=max_gets,
+            )
+            selected_pages = [
+                page
+                for page in all_pages
+                if any(start <= page <= end for start, end in planned_ranges)
+            ]
+        else:
+            selected_pages = sorted(
+                {
+                    base_page_by_id[int(row_id)]
+                    for row_id in ranked_base_ids[query]
+                    if int(row_id) in base_page_by_id
+                }
+            )
         if any(page not in page_entries for page in selected_pages):
             raise ValueError("PQ16 page nomination references an unknown page")
-        gets, encoded_bytes = _coalesced_work(
-            selected_pages, page_entries, gap_pages
-        )
+        if planned_ranges is None:
+            gets, encoded_bytes = _coalesced_work(
+                selected_pages, page_entries, gap_pages
+            )
+        else:
+            gets = len(planned_ranges)
+            encoded_bytes = 0
+            for start, end in planned_ranges:
+                present = [page for page in all_pages if start <= page <= end]
+                first = page_entries[present[0]]
+                last = page_entries[present[-1]]
+                encoded_bytes += last.offset + last.encoded_bytes - first.offset
         selected = set(selected_pages)
         hit_ids = [
             int(row_id)
@@ -268,7 +378,7 @@ def main() -> None:
     parser.add_argument("--neighbors", type=int, default=100)
     parser.add_argument("--queries-count", type=int, default=32)
     parser.add_argument("--shortlist-rows", type=int, default=2048)
-    parser.add_argument("--gap-pages", type=int, default=2)
+    parser.add_argument("--gap-pages", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7216)
     args = parser.parse_args()
 
@@ -330,6 +440,8 @@ def main() -> None:
     ranked = _rank_pq16(
         queries, base_ids, books, codes, args.shortlist_rows
     )
+    maximum_page_bytes = max(entry.encoded_bytes for entry in page_entries.values())
+    max_span_pages = (16 * 1024 * 1024) // maximum_page_bytes
     evaluation = evaluate_page_nominations(
         ranked_base_ids=ranked,
         truth_ids=truth_ids,
@@ -341,6 +453,7 @@ def main() -> None:
         max_gets=32,
         max_bytes=16 * 1024 * 1024,
         min_recall_ppm=990_000,
+        max_span_pages=max_span_pages,
     )
     result = {
         **evaluation,
@@ -352,11 +465,13 @@ def main() -> None:
         "gap_pages": args.gap_pages,
         "inputs": identities,
         "neighbors": args.neighbors,
+        "page_planner": "exact-reciprocal-rank",
         "queries": args.queries_count,
         "resident_bytes_at_100m": 1_600_000_000,
         "rows": len(source_ids),
         "schema": "borsuk-v85-pq16-page-nomination-result-v1",
         "shortlist_rows": args.shortlist_rows,
+        "span_page_budget": max_span_pages,
     }
     body = _canonical_bytes(result)
     args.output.write_bytes(body)
