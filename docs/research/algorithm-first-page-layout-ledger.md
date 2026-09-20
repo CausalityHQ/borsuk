@@ -2020,6 +2020,26 @@ repeat the same immutable ranges from fresh clients before changing page
 packing. It can reuse these two S3 objects and needs no corpus download,
 training, reranking, or larger query split.
 
+### V96 preregistration — reverse-order transport diagnosis
+
+V96 changes only the temporal order of the immutable V95 range plan. A fresh
+S3 client authenticates the frozen V95 plan plus the exact PQ192 and page-SQ8
+object identities, performs the same separately counted 32-GET connection
+preflight, and then executes ordinals 343 through 328 serially. It downloads no
+corpus, query, truth, delta, or vector artifact, decodes no page, and performs
+no planner or reranker work. Each query reads exactly its registered code and
+data ranges with at most 16 concurrent range requests. The probe therefore
+tests transport ordering only and cannot change or newly substantiate quality.
+
+The prior 500 ms storage-I/O tail threshold is retained without tuning. If the
+first reversed query (ordinal 343) exceeds it while ordinal 328 does not, the
+position-dependent-tail hypothesis is supported. If ordinal 328 exceeds it in
+the final position while ordinal 343 does not, a query-specific range-plan
+effect is supported. If both exceed it, the cause remains unresolved; if
+neither does, the original tail did not reproduce. Every outcome remains
+claim-ineligible. No packing, client, retry, concurrency, or object-layout
+change is permitted until this classification is terminal.
+
 Preparation took 4:20.19 at 10,398,504 KiB peak RSS and zero swaps. The fresh
 replay took 10.05 seconds at 2,106,012 KiB peak RSS and zero swaps. This result
 is claim-ineligible, measures plan replay rather than planner latency, and
