@@ -1358,10 +1358,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
 
 
-if __name__ == "__main__":
-    main()
-
-
 def project_resident_bytes_100m(spec: PqSpec) -> ResidentProjection:
     """Return the full 100M resident projection for one G1 arm."""
 
@@ -1424,3 +1420,7 @@ def project_resident_bytes_100m(spec: PqSpec) -> ResidentProjection:
         budget_bytes=THREE_GIB,
         eligible=total_bytes < THREE_GIB,
     )
+
+
+if __name__ == "__main__":
+    main()

@@ -43,6 +43,15 @@ from scripts.v97_row_width_screen import (
 
 
 class RowWidthContractTests(unittest.TestCase):
+    def test_direct_script_defines_projection_before_invoking_main(self) -> None:
+        # Break caught: imported tests pass, but direct paid execution calls
+        # main before a helper used while serializing the completed result.
+        source = pathlib.Path(__file__).with_name("v97_row_width_screen.py").read_text()
+        self.assertLess(
+            source.index("def project_resident_bytes_100m"),
+            source.index('if __name__ == "__main__"'),
+        )
+
     def test_cli_requires_all_six_registered_object_identities(self) -> None:
         # Break caught: the paid CLI accepts an unbound base/delta artifact or
         # a validation/holdout tuning input outside the registered dev cell.
