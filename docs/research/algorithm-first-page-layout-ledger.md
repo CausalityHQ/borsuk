@@ -2501,3 +2501,54 @@ a bounded hierarchical router that must restore the exact-f32 ceiling on the
 same 1,000-query development evidence before compressed widths are rescored.
 This is internal research evidence only; no matched S3 Vector or TurboPuffer
 measurement exists at G1, so no competitive parity claim is made.
+
+## V98 preregistration — bounded hierarchy before row-width selection
+
+V98 is one fail-fast ReLAION-1M development attempt. It uses all 1,000 frozen
+development queries and exact top-100 truth; it reads no validation or sealed
+holdout query. Source `c73d7d6b9c7e900cded890055b5875808957e33c` is archived
+at
+`s3://borsuk-bench-453182569524-euc1/research/v98-hierarchical-row-router/c73d7d6b9c7e900cded890055b5875808957e33c/source/source.tar.gz`
+with SHA-256 `855b27042101f23a638ffcb89916d44ced5b2d8eed5773801547d9b732e4bb6c`
+and 10,672,189 bytes. The sole attempt prefix is
+`research/v98-hierarchical-row-router/c73d7d6b9c7e900cded890055b5875808957e33c/runs/v98-g1-20260920T173828Z-c73d7d6/a0001/`.
+The preregistered dual-critique result is
+`edcde2149f98bc38c5121b387b165fe9baf0ca6df79658ac624abf86866bcb87`.
+
+The six immutable input identities are:
+
+| role | bytes | SHA-256 | URI |
+|---|---:|---|---|
+| source | 1,458,450,077 | `2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86` | `s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet` |
+| queries | 1,558,506 | `310bb54f79f2e79d09fe63aa4f6b5c6e9e7ffb31101964f816be978dadb2db54` | `s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/development-query.parquet` |
+| truth | 2,046,505 | `fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11` | `s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/development-gt100.parquet` |
+| generation | 416,563 | `45fa4e708ab660151a7b1ea79e35eada6090faced1bfb147f7e20cac7055e754` | `s3://borsuk-bench-453182569524-euc1/research/v85-pq16-1m-validation/da42b3da7a78a7a44ab259bb06f12c42527e8800/runs/v85-1m-validation-20260920T100638Z-da42b3d/a0001/artifacts/generation.json` |
+| base | 708,888,104 | `c2e86f6199777c21dde048ff4a46aae65ce96a4b20f03c11905851c80312b862` | `s3://borsuk-bench-453182569524-euc1/research/v85-pq16-1m-validation/da42b3da7a78a7a44ab259bb06f12c42527e8800/runs/v85-1m-validation-20260920T100638Z-da42b3d/a0001/artifacts/base-000.arrow` |
+| delta | 80,900,000 | `a0498ff17acbe8cc81a8b2501e7ffcd0d6998c5379efaae5895c64d3bcc7e869` | `s3://borsuk-bench-453182569524-euc1/research/v85-pq16-1m-validation/da42b3da7a78a7a44ab259bb06f12c42527e8800/runs/v85-1m-validation-20260920T100638Z-da42b3d/a0001/artifacts/delta-000.arrow` |
+
+The query-independent hierarchy fixes eight same-role pages per root, at most
+65,536 root groups, 4,096 exposed pages, 1,024 retained pages, 262,144 scored
+rows, and a 2,048-row shortlist. Every query remains capped at 32 physical
+GETs and 16,777,216 encoded bytes. Containment and then exact-f32 must each
+pass 96.0000% average Recall@10, 97.5000% average Recall@100, and 90% p05
+Recall@100 before PQ16, PQ24, PQ32, PQ32x4, and the summary-only control run.
+Paired decisions use seed 7216, exactly 10,000 shared bootstrap rows, and the
+independently reproduced matrix identity. Terminal classes are
+`hierarchy-containment-rejected`, `hierarchy-exact-ceiling-rejected`, or
+`widths-evaluated`; a width also requires a complete 100M projection below
+3 GiB and a paired average-Recall@100 interval not inferior to PQ16.
+
+The worker is one c7i.8xlarge Spot instance using available x86_64 AMI
+`ami-06121aa3085b6f918`, tried serially in eu-central-1c, 1b, then 1a. The
+2026-09-20 price snapshots were $0.6911, $0.7781, and $0.7224 per hour;
+$0.7781/hour is the conservative registered estimate. Science has a 7,200
+second wall cap and a 48-GiB process virtual-memory cap. The worker stops after
+three consecutive five-second memory-PSI `full avg10 > 0.50` observations or
+more than 1,048,576 KiB of swap growth. The launcher allows 900 seconds for a
+terminal after the science cap, then terminates the exact instance in every
+terminal or error path. The maximum registered compute plus 100-GiB gp3
+exposure is $1.80. The worker uploads immutable result, rescore, resources,
+logs, and then terminal; incomplete result bytes are never inspected.
+Named local scratch is removed after independent authentication. Duplicates,
+automatic restarts, 10M/100M work, production changes, and competitive parity
+claims are fenced until this attempt is terminal and independently verified.
