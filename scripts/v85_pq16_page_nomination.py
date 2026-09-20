@@ -60,6 +60,95 @@ def _coalesced_work(
     return len(groups), encoded_bytes
 
 
+def order_pages_by_pq_cooccurrence(
+    *,
+    ranked_base_ids: np.ndarray,
+    base_page_by_id: dict[int, int],
+    page_count: int,
+    unique_pages_per_query: int,
+) -> list[int]:
+    """Order pages by query-independent PQ shortlist co-occurrence."""
+
+    if (
+        ranked_base_ids.ndim != 2
+        or ranked_base_ids.shape[0] == 0
+        or ranked_base_ids.shape[1] == 0
+        or page_count <= 0
+        or unique_pages_per_query <= 1
+    ):
+        raise ValueError("PQ cooccurrence layout shape differs")
+    adjacency: list[dict[int, int]] = [dict() for _ in range(page_count)]
+    for ranked_ids in ranked_base_ids:
+        pages = []
+        seen = set()
+        for row_id in ranked_ids:
+            page = base_page_by_id.get(int(row_id))
+            if page is None or not 0 <= page < page_count:
+                raise ValueError("PQ cooccurrence row page differs")
+            if page not in seen:
+                seen.add(page)
+                pages.append(page)
+                if len(pages) == unique_pages_per_query:
+                    break
+        for left_rank, left in enumerate(pages):
+            for right_rank in range(left_rank + 1, len(pages)):
+                right = pages[right_rank]
+                weight = 1_000_000 // (right_rank + 1)
+                adjacency[left][right] = adjacency[left].get(right, 0) + weight
+                adjacency[right][left] = adjacency[right].get(left, 0) + weight
+
+    degree = [sum(neighbors.values()) for neighbors in adjacency]
+    frontier = [0] * page_count
+    unvisited = set(range(page_count))
+    order = []
+    while unvisited:
+        connected = [page for page in unvisited if frontier[page] > 0]
+        if connected:
+            page = min(
+                connected, key=lambda value: (-frontier[value], -degree[value], value)
+            )
+        else:
+            page = min(unvisited, key=lambda value: (-degree[value], value))
+        order.append(page)
+        unvisited.remove(page)
+        for neighbor, weight in adjacency[page].items():
+            if neighbor in unvisited:
+                frontier[neighbor] += weight
+    return order
+
+
+def remap_page_layout(
+    *,
+    base_page_by_id: dict[int, int],
+    page_entries: dict[int, PageEntry],
+    old_pages_in_new_order: list[int],
+) -> tuple[dict[int, int], dict[int, PageEntry]]:
+    """Apply a page permutation without changing page membership or bytes."""
+
+    page_count = len(page_entries)
+    if sorted(page_entries) != list(range(page_count)) or sorted(
+        old_pages_in_new_order
+    ) != list(range(page_count)):
+        raise ValueError("PQ cooccurrence page permutation differs")
+    old_to_new = {
+        old_page: new_page for new_page, old_page in enumerate(old_pages_in_new_order)
+    }
+    remapped_ids = {}
+    for row_id, old_page in base_page_by_id.items():
+        if old_page not in old_to_new:
+            raise ValueError("PQ cooccurrence row membership differs")
+        remapped_ids[row_id] = old_to_new[old_page]
+    remapped_entries = {}
+    offset = 0
+    for new_page, old_page in enumerate(old_pages_in_new_order):
+        encoded_bytes = page_entries[old_page].encoded_bytes
+        remapped_entries[new_page] = PageEntry(
+            offset=offset, encoded_bytes=encoded_bytes
+        )
+        offset += encoded_bytes
+    return remapped_ids, remapped_entries
+
+
 def plan_rank_weighted_ranges(
     *,
     ranked_base_ids: np.ndarray,
@@ -327,6 +416,21 @@ def _rank_pq16(
     return ranked
 
 
+def _splitmix64(values: np.ndarray, seed: int) -> np.ndarray:
+    mixed = values.astype(np.uint64, copy=True) ^ np.uint64(seed)
+    mixed += np.uint64(0x9E3779B97F4A7C15)
+    mixed = (mixed ^ (mixed >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+    mixed = (mixed ^ (mixed >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+    return mixed ^ (mixed >> np.uint64(31))
+
+
+def _pseudoquery_indices(base_ids: np.ndarray, count: int, seed: int) -> np.ndarray:
+    if base_ids.ndim != 1 or count <= 0 or count > base_ids.size:
+        raise ValueError("PQ cooccurrence pseudoquery count differs")
+    keys = _splitmix64(base_ids, seed ^ 0xC001C0DE)
+    return np.lexsort((base_ids, keys))[:count]
+
+
 def _read_fixed_list(path: pathlib.Path, field: str, dimensions: int) -> np.ndarray:
     table = pq.read_table(path)
     column = table.column(field).combine_chunks()
@@ -394,6 +498,9 @@ def main() -> None:
     parser.add_argument("--shortlist-rows", type=int, default=2048)
     parser.add_argument("--gap-pages", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7216)
+    parser.add_argument("--cooccurrence-pseudoqueries", type=int, default=0)
+    parser.add_argument("--cooccurrence-shortlist-rows", type=int, default=512)
+    parser.add_argument("--cooccurrence-unique-pages", type=int, default=32)
     args = parser.parse_args()
 
     identities = {}
@@ -460,7 +567,7 @@ def main() -> None:
     ranked = _rank_pq16(queries, base_ids, books, codes, args.shortlist_rows)
     maximum_page_bytes = max(entry.encoded_bytes for entry in page_entries.values())
     max_span_pages = (16 * 1024 * 1024) // maximum_page_bytes
-    evaluation = evaluate_page_nominations(
+    evaluation_args = dict(
         ranked_base_ids=ranked,
         truth_ids=truth_ids,
         base_page_by_id=base_page_by_id,
@@ -475,8 +582,8 @@ def main() -> None:
         min_p05_recall100_ppm=900_000,
         max_span_pages=max_span_pages,
     )
-    result = {
-        **evaluation,
+    evaluation = evaluate_page_nominations(**evaluation_args)
+    common_result = {
         "claim_eligible": False,
         "code_row_bytes": 16,
         "codes_built_without_queries_or_truth": True,
@@ -489,23 +596,80 @@ def main() -> None:
         "queries": args.queries_count,
         "resident_bytes_at_100m": 1_600_000_000,
         "rows": len(source_ids),
-        "schema": "borsuk-v85-pq16-page-nomination-result-v2",
         "shortlist_rows": args.shortlist_rows,
         "span_page_budget": max_span_pages,
     }
+    if args.cooccurrence_pseudoqueries:
+        pseudoquery_indices = _pseudoquery_indices(
+            base_ids, args.cooccurrence_pseudoqueries, args.seed
+        )
+        pseudoquery_ids = base_ids[pseudoquery_indices]
+        pseudoquery_ranked = _rank_pq16(
+            base_vectors[pseudoquery_indices],
+            base_ids,
+            books,
+            codes,
+            args.cooccurrence_shortlist_rows,
+        )
+        page_order = order_pages_by_pq_cooccurrence(
+            ranked_base_ids=pseudoquery_ranked,
+            base_page_by_id=base_page_by_id,
+            page_count=len(page_entries),
+            unique_pages_per_query=args.cooccurrence_unique_pages,
+        )
+        remapped_ids, remapped_entries = remap_page_layout(
+            base_page_by_id=base_page_by_id,
+            page_entries=page_entries,
+            old_pages_in_new_order=page_order,
+        )
+        cooccurrence_args = dict(evaluation_args)
+        cooccurrence_args["base_page_by_id"] = remapped_ids
+        cooccurrence_args["page_entries"] = remapped_entries
+        cooccurrence = evaluate_page_nominations(**cooccurrence_args)
+        non_regression = all(
+            cooccurrence[field] >= evaluation[field]
+            for field in (
+                "average_recall10_ppm",
+                "average_recall100_ppm",
+                "p05_recall100_ppm",
+            )
+        )
+        page_order_bytes = np.asarray(page_order, dtype="<u4").tobytes()
+        pseudoquery_id_bytes = np.asarray(pseudoquery_ids, dtype="<i8").tobytes()
+        result = {
+            **common_result,
+            "control": evaluation,
+            "cooccurrence": cooccurrence,
+            "gate_passed": cooccurrence["gate_passed"] and non_regression,
+            "layout": {
+                "algorithm": "maximum-adjacency-pq-cooccurrence-v1",
+                "constructed_without_evaluation_queries_or_truth": True,
+                "page_order": page_order,
+                "page_order_sha256": hashlib.sha256(page_order_bytes).hexdigest(),
+                "pseudoquery_count": args.cooccurrence_pseudoqueries,
+                "pseudoquery_ids_sha256": hashlib.sha256(
+                    pseudoquery_id_bytes
+                ).hexdigest(),
+                "shortlist_rows": args.cooccurrence_shortlist_rows,
+                "unique_pages_per_query": args.cooccurrence_unique_pages,
+            },
+            "non_regression": non_regression,
+            "schema": "borsuk-v85-pq16-cooccurrence-layout-result-v1",
+        }
+    else:
+        result = {
+            **evaluation,
+            **common_result,
+            "schema": "borsuk-v85-pq16-page-nomination-result-v2",
+        }
     body = _canonical_bytes(result)
     args.output.write_bytes(body)
     print(
         json.dumps(
             {
-                "average_recall10_ppm": result["average_recall10_ppm"],
-                "average_recall100_ppm": result["average_recall100_ppm"],
                 "gate_passed": result["gate_passed"],
-                "max_bytes_per_query": result["max_bytes_per_query"],
-                "max_gets_per_query": result["max_gets_per_query"],
-                "p05_recall100_ppm": result["p05_recall100_ppm"],
                 "result_sha256": hashlib.sha256(body).hexdigest(),
-                "worst_recall_ppm": result["worst_recall_ppm"],
+                "schema": result["schema"],
             },
             separators=(",", ":"),
             sort_keys=True,

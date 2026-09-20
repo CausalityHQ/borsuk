@@ -14,12 +14,56 @@ import pyarrow.parquet as pq
 from scripts.v85_pq16_page_nomination import (
     PageEntry,
     evaluate_page_nominations,
+    order_pages_by_pq_cooccurrence,
     plan_rank_weighted_ranges,
+    remap_page_layout,
 )
 from scripts.v85_pq16_rescore_summary import summarize_paired_rescore
 
 
 class V85Pq16PageNominationTests(unittest.TestCase):
+    def test_query_blind_cooccurrence_order_groups_related_pages_and_remaps_bytes(
+        self,
+    ) -> None:
+        # Break caught: the layout consumes evaluation queries/truth, leaves
+        # co-occurring pages separated, or changes row membership/page bytes.
+        page_by_id = {10: 0, 11: 0, 20: 1, 21: 1, 30: 2, 31: 2, 40: 3, 41: 3}
+        pseudo_ranked_ids = np.asarray(
+            [[10, 30, 11, 31], [20, 40, 21, 41]], dtype=np.int64
+        )
+
+        order = order_pages_by_pq_cooccurrence(
+            ranked_base_ids=pseudo_ranked_ids,
+            base_page_by_id=page_by_id,
+            page_count=4,
+            unique_pages_per_query=2,
+        )
+        remapped_ids, remapped_entries = remap_page_layout(
+            base_page_by_id=page_by_id,
+            page_entries={
+                0: PageEntry(offset=0, encoded_bytes=10),
+                1: PageEntry(offset=10, encoded_bytes=20),
+                2: PageEntry(offset=30, encoded_bytes=30),
+                3: PageEntry(offset=60, encoded_bytes=40),
+            },
+            old_pages_in_new_order=order,
+        )
+
+        self.assertEqual(order, [0, 2, 1, 3])
+        self.assertEqual(
+            remapped_ids,
+            {10: 0, 11: 0, 20: 2, 21: 2, 30: 1, 31: 1, 40: 3, 41: 3},
+        )
+        self.assertEqual(
+            remapped_entries,
+            {
+                0: PageEntry(offset=0, encoded_bytes=10),
+                1: PageEntry(offset=10, encoded_bytes=30),
+                2: PageEntry(offset=40, encoded_bytes=20),
+                3: PageEntry(offset=60, encoded_bytes=40),
+            },
+        )
+
     def test_paired_summary_uses_pq_truth_when_centroid_result_omits_it(self) -> None:
         # Break caught: the reducer requires duplicated truth IDs from the
         # centroid result even though PQ evidence is the authenticated authority.
@@ -123,6 +167,42 @@ class V85Pq16PageNominationTests(unittest.TestCase):
                 "query_parallelism": 1,
                 "shortlist_rows": 2048,
                 "split": "validation",
+                "spot_only": True,
+            },
+        )
+
+    def test_cooccurrence_runner_preregisters_one_burned_development_probe(
+        self,
+    ) -> None:
+        # Break caught: the physical-order probe consumes validation/holdout,
+        # changes the PQ arm, or grows into an unbounded parameter sweep.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_pq16_cooccurrence_100k_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "blas_threads": 16,
+                "instance_type": "c7i.8xlarge",
+                "max_wall_seconds": 1200,
+                "page_budget": 32,
+                "pseudoqueries": 256,
+                "pseudoquery_shortlist_rows": 512,
+                "pseudoquery_unique_pages": 32,
+                "queries": 1000,
+                "query_parallelism": 1,
+                "shortlist_rows": 2048,
+                "split": "burned-development",
                 "spot_only": True,
             },
         )
@@ -354,6 +434,43 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             self.assertEqual(
                 json.loads(completed.stdout)["result_sha256"],
                 hashlib.sha256(result_body).hexdigest(),
+            )
+
+            cooccurrence_output = root / "cooccurrence-result.json"
+            cooccurrence_command = command.copy()
+            cooccurrence_command[cooccurrence_command.index(str(output))] = str(
+                cooccurrence_output
+            )
+            cooccurrence_command.extend(
+                [
+                    "--cooccurrence-pseudoqueries",
+                    "8",
+                    "--cooccurrence-shortlist-rows",
+                    "256",
+                    "--cooccurrence-unique-pages",
+                    "2",
+                ]
+            )
+            cooccurrence_completed = subprocess.run(
+                cooccurrence_command, check=True, capture_output=True, text=True
+            )
+            cooccurrence_body = cooccurrence_output.read_bytes()
+            cooccurrence_result = json.loads(cooccurrence_body)
+            self.assertEqual(
+                cooccurrence_result["schema"],
+                "borsuk-v85-pq16-cooccurrence-layout-result-v1",
+            )
+            self.assertEqual(
+                cooccurrence_result["control"]["samples"], result["samples"]
+            )
+            self.assertEqual(
+                cooccurrence_result["cooccurrence"]["samples"], result["samples"]
+            )
+            self.assertEqual(cooccurrence_result["layout"]["pseudoquery_count"], 8)
+            self.assertEqual(cooccurrence_result["layout"]["page_order"], [0])
+            self.assertEqual(
+                json.loads(cooccurrence_completed.stdout)["result_sha256"],
+                hashlib.sha256(cooccurrence_body).hexdigest(),
             )
 
     def test_resident_delta_and_coalesced_base_ranges_are_counted_exactly(self) -> None:
