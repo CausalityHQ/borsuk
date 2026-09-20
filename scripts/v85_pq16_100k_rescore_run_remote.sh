@@ -133,46 +133,18 @@ phase=summary
 import hashlib
 import json
 from pathlib import Path
-import numpy as np
+from scripts.v85_pq16_rescore_summary import summarize_paired_rescore
 
 centroid = json.loads(Path("centroid.json").read_bytes())
 pq16 = json.loads(Path("pq16.json").read_bytes())
-if len(centroid["samples"]) != 1_000 or len(pq16["samples"]) != 1_000:
+summary = summarize_paired_rescore(
+    centroid,
+    pq16,
+    centroid_sha256=hashlib.sha256(Path("centroid.json").read_bytes()).hexdigest(),
+    pq16_sha256=hashlib.sha256(Path("pq16.json").read_bytes()).hexdigest(),
+)
+if summary["queries"] != 1_000:
     raise ValueError("paired rescore query count differs")
-centroid100 = []
-centroid10 = []
-pq100 = []
-pq10 = []
-for left, right in zip(centroid["samples"], pq16["samples"], strict=True):
-    if left["query"] != right["query"] or left["truth_ids"] != right["truth_ids"]:
-        raise ValueError("paired rescore authority differs")
-    truth = left["truth_ids"]
-    centroid100.append(len(set(left["result_ids"]).intersection(truth)))
-    centroid10.append(len(set(left["result_ids"][:10]).intersection(truth[:10])))
-    pq100.append(right["hits"])
-    pq10.append(right["hits10"])
-
-def paired_ci(delta, denominator):
-    values = np.asarray(delta, dtype=np.int16)
-    rng = np.random.default_rng(85_100_000)
-    draws = rng.choice(values, size=(10_000, len(values)), replace=True).mean(axis=1)
-    lo, hi = np.quantile(draws, [0.025, 0.975], method="nearest")
-    return [int(lo * 1_000_000 // denominator), int(hi * 1_000_000 // denominator)]
-
-summary = {
-    "centroid_average_recall10_ppm": sum(centroid10) * 1_000_000 // 10_000,
-    "centroid_average_recall100_ppm": sum(centroid100) * 1_000_000 // 100_000,
-    "centroid_result_sha256": hashlib.sha256(Path("centroid.json").read_bytes()).hexdigest(),
-    "paired_recall10_delta_ci95_ppm": paired_ci(np.subtract(pq10, centroid10), 10),
-    "paired_recall100_delta_ci95_ppm": paired_ci(np.subtract(pq100, centroid100), 100),
-    "pq16_average_recall10_ppm": pq16["average_recall10_ppm"],
-    "pq16_average_recall100_ppm": pq16["average_recall100_ppm"],
-    "pq16_gate_passed": pq16["gate_passed"],
-    "pq16_p05_recall100_ppm": pq16["p05_recall100_ppm"],
-    "pq16_result_sha256": hashlib.sha256(Path("pq16.json").read_bytes()).hexdigest(),
-    "queries": 1_000,
-    "schema": "borsuk-v85-pq16-100k-rescore-summary-v1",
-}
 print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
 PY
 

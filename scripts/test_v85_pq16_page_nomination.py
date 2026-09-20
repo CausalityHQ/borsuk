@@ -16,9 +16,55 @@ from scripts.v85_pq16_page_nomination import (
     evaluate_page_nominations,
     plan_rank_weighted_ranges,
 )
+from scripts.v85_pq16_rescore_summary import summarize_paired_rescore
 
 
 class V85Pq16PageNominationTests(unittest.TestCase):
+    def test_paired_summary_uses_pq_truth_when_centroid_result_omits_it(self) -> None:
+        # Break caught: the reducer requires duplicated truth IDs from the
+        # centroid result even though PQ evidence is the authenticated authority.
+        truth = list(range(100))
+        centroid = {
+            "samples": [
+                {
+                    "query": 0,
+                    "result_ids": truth,
+                    "hits": 100,
+                    "bytes": 12,
+                    "requests": 2,
+                    "latency_ns": 30,
+                }
+            ]
+        }
+        pq16 = {
+            "average_recall10_ppm": 1_000_000,
+            "average_recall100_ppm": 1_000_000,
+            "gate_passed": True,
+            "p05_recall100_ppm": 1_000_000,
+            "samples": [
+                {
+                    "query": 0,
+                    "truth_ids": truth,
+                    "hit10_ids": truth[:10],
+                    "hit_ids": truth,
+                    "hits10": 10,
+                    "hits": 100,
+                }
+            ],
+        }
+
+        summary = summarize_paired_rescore(
+            centroid,
+            pq16,
+            centroid_sha256="1" * 64,
+            pq16_sha256="2" * 64,
+        )
+
+        self.assertEqual(summary["centroid_average_recall10_ppm"], 1_000_000)
+        self.assertEqual(summary["centroid_average_recall100_ppm"], 1_000_000)
+        self.assertEqual(summary["paired_recall10_delta_ci95_ppm"], [0, 0])
+        self.assertEqual(summary["paired_recall100_delta_ci95_ppm"], [0, 0])
+
     def test_100k_rescore_runner_preregisters_full_development_evidence(self) -> None:
         # Break caught: the paid rescore silently uses 32 queries, retunes the
         # arm, or enables nested query-level work stealing.
