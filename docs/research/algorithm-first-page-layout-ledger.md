@@ -2199,3 +2199,47 @@ had a null directory location, and was absent after compaction. Scientific
 wall time was 5.65 seconds, peak RSS was 1,898,540 KiB, CPU utilization was
 506%, and swaps were zero. This closes mutation semantics at 100k; it is not
 query latency, S3 request, throughput, or 1M serving evidence.
+
+### V85 fixed SRHT preconditioner loses to identity PQ16
+
+The sole remaining representation hypothesis applied one query-independent
+seeded sign plus orthonormal Walsh-Hadamard rotation, zero-padding 768 to 1,024
+dimensions, before the same 16-byte PQ encoder. It kept seed 7216, the
+2,048-row shortlist, the exact reciprocal-rank planner, all physical work
+limits, and all 1,000 already-burned ReLAION 100k development queries fixed.
+The frozen identity result was reused byte-for-byte; it was not rerun.
+
+Source `f1bcc1095099c9401df371f36f017f31564e4121` ran once on Spot instance
+`i-09be192a172b56e8d`, which terminated. Evidence is under
+`research/v85-pq16-srht/f1bcc1095099c9401df371f36f017f31564e4121/runs/v85-pq16-srht-100k-20260920T114220Z-f1bcc10/a0001/`.
+
+| fixed arm | average Recall@10 | average Recall@100 | p05 Recall@100 | max GETs | max bytes |
+|---|---:|---:|---:|---:|---:|
+| identity PQ16 | **99.8200%** | **99.1890%** | **95%** | 32 | 14,126,480 |
+| sign-Hadamard PQ16 | 99.6600% | 98.9380% | 94% | 32 | **13,646,848** |
+
+The paired 10,000-resample 95% intervals for SRHT minus identity are
+**-0.3000 to -0.0400 percentage points** at Recall@10 and **-0.3260 to
+-0.1790 points** at Recall@100. SRHT saves at most 479,632 bytes/query but
+causes a statistically resolved quality regression, so it is rejected and
+does not advance to 1M.
+
+The scientific result SHA-256 is
+`3d31eda1f4f192e992dfa55f92881faf1c20fecd75116dba81fd84c2ec3154c7`.
+Scientific wall was 49.84 seconds, peak RSS was 2,078,072 KiB, CPU utilization
+was 531%, and swaps were zero. The original terminal SHA-256 is
+`8dbd9a79921d2b2afb2766dec2b3f2b976b51198ee27dcbda76203c84fc9a549`;
+it records exit 99 after science because the reducer used Python 3.10's
+`zip(strict=...)` on the Python 3.9 remote runtime. No science was rerun.
+Reducer source `842fec13a0c4f9a461b78a1437d97123c31b206c` removed that runtime-only
+incompatibility, revalidated every immutable per-query sample, and produced
+canonical repaired summary SHA-256
+`b298e9d0ba47e63dc46f8ad25f57b211e05b47eb5dea1c3150c046dc97bc9ac6`.
+
+**Ruling:** a random orthogonal preconditioner does not repair the PQ16 row
+ranking gap. The 99% aspiration remains useful as a stretch diagnostic, but
+the frozen product gate remains the vendor-anchored distributional contract:
+96% average Recall@10, 97.5% average Recall@100, and 90% p05 Recall@100 under
+32 GETs and 16 MiB. This development result passes those absolute gates but
+loses causally to the simpler identity baseline; therefore identity remains
+the current 100k reference and no parameter sweep or 1M promotion follows.
