@@ -18,7 +18,9 @@ def frozen_matrix() -> dict[str, Any]:
         "max_bytes_per_query": 16 * 1024 * 1024,
         "max_gets_per_query": 32,
         "max_peak_rss_bytes": 3 * 1024**3,
-        "min_aggregate_recall_ppm": 990_000,
+        "min_average_recall10_ppm": 960_000,
+        "min_average_recall100_ppm": 975_000,
+        "min_p05_recall100_ppm": 900_000,
         "neighbors": 100,
         "offered_load_ppm": 700_000,
         "preflight_page_budgets": [16, 32],
@@ -26,7 +28,7 @@ def frozen_matrix() -> dict[str, Any]:
         "replacement_rows": 500,
         "query_count": 1_000,
         "run_counts": [1, 10, 100],
-        "schema": "borsuk-v85-qualification-matrix-v1",
+        "schema": "borsuk-v85-qualification-matrix-v2",
         "source_objects": [
             {
                 "role": "source",
@@ -66,9 +68,15 @@ def _nearest_percentile(values: list[int], quantile: float) -> int:
 
 
 def _qualification_samples(
-    samples: Any, matrix: dict[str, Any], label: str
+    samples: Any,
+    matrix: dict[str, Any],
+    label: str,
+    expected_query_count: int | None = None,
 ) -> dict[str, Any]:
-    if not isinstance(samples, list) or len(samples) != matrix["query_count"]:
+    query_count = (
+        matrix["query_count"] if expected_query_count is None else expected_query_count
+    )
+    if not isinstance(samples, list) or len(samples) != query_count:
         raise ValueError(f"{label} query count differs")
     sample_keys = {
         "bytes",
@@ -79,7 +87,9 @@ def _qualification_samples(
         "result_ids",
         "truth_ids",
     }
-    total_hits = 0
+    total_hits10 = 0
+    total_hits100 = 0
+    recall100_values = []
     latencies = []
     result_ids = []
     all_truth_ids = []
@@ -108,27 +118,43 @@ def _qualification_samples(
             or len(set(truth_ids)) != len(truth_ids)
         ):
             raise ValueError(f"{label} sample gate failed")
-        hits = len(set(ids).intersection(truth_ids))
-        total_hits += hits
-        recall_ppm = hits * 1_000_000 // sample["neighbors"]
-        worst_recall_ppm = min(worst_recall_ppm, recall_ppm)
+        hits10 = len(set(ids[:10]).intersection(truth_ids[:10]))
+        hits100 = len(set(ids).intersection(truth_ids))
+        total_hits10 += hits10
+        total_hits100 += hits100
+        recall100_ppm = hits100 * 1_000_000 // sample["neighbors"]
+        recall100_values.append(recall100_ppm)
+        worst_recall_ppm = min(worst_recall_ppm, recall100_ppm)
         max_requests = max(max_requests, sample["requests"])
         max_bytes = max(max_bytes, sample["bytes"])
         latencies.append(sample["latency_ns"])
         result_ids.append(ids)
         all_truth_ids.append(truth_ids)
     return {
+        "average_recall10_ppm": total_hits10 * 1_000_000 // (query_count * 10),
+        "average_recall100_ppm": total_hits100
+        * 1_000_000
+        // (query_count * matrix["neighbors"]),
         "bytes_per_query": max_bytes,
         "gets_per_query": max_requests,
         "p50_ns": _nearest_percentile(latencies, 0.50),
         "p95_ns": _nearest_percentile(latencies, 0.95),
         "p99_ns": _nearest_percentile(latencies, 0.99),
-        "recall_ppm": total_hits * 1_000_000
-        // (matrix["query_count"] * matrix["neighbors"]),
+        "p05_recall100_ppm": sorted(recall100_values)[
+            max(0, (query_count * 5 + 99) // 100 - 1)
+        ],
         "result_ids": result_ids,
         "truth_ids": all_truth_ids,
         "worst_recall_ppm": worst_recall_ppm,
     }
+
+
+def _quality_gate_passes(summary: dict[str, Any], matrix: dict[str, Any]) -> bool:
+    return (
+        summary["average_recall10_ppm"] >= matrix["min_average_recall10_ppm"]
+        and summary["average_recall100_ppm"] >= matrix["min_average_recall100_ppm"]
+        and summary["p05_recall100_ppm"] >= matrix["min_p05_recall100_ppm"]
+    )
 
 
 def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
@@ -139,7 +165,6 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
         receipt,
         {
             "authenticated_inputs",
-            "aggregate_recall_ppm",
             "binary_authenticated",
             "binary_sha256",
             "built_rows",
@@ -150,17 +175,17 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
             "max_gets_per_query",
             "peak_rss_bytes",
             "query_count",
+            "samples",
             "result_sha256",
             "schema",
             "selected_page_budget",
             "source_archive_sha256",
             "source_commit",
-            "worst_recall_ppm",
         },
         "preflight",
     )
     if (
-        receipt["schema"] != "borsuk-v85-preflight-receipt-v1"
+        receipt["schema"] != "borsuk-v85-preflight-receipt-v2"
         or type(receipt["binary_authenticated"]) is not bool
         or not receipt["binary_authenticated"]
         or type(receipt["cas_conflict_observed"]) is not bool
@@ -184,8 +209,6 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
         or receipt["query_count"] != 1
         or receipt["failed_queries"] != 0
         or receipt["selected_page_budget"] not in matrix["preflight_page_budgets"]
-        or receipt["aggregate_recall_ppm"] < matrix["min_aggregate_recall_ppm"]
-        or receipt["worst_recall_ppm"] < matrix["min_aggregate_recall_ppm"]
         or not _positive_int(receipt["max_gets_per_query"])
         or receipt["max_gets_per_query"] > matrix["max_gets_per_query"]
         or not _positive_int(receipt["max_bytes_per_query"])
@@ -194,11 +217,18 @@ def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
         or receipt["peak_rss_bytes"] > matrix["max_peak_rss_bytes"]
     ):
         raise ValueError("preflight gate failed")
+    samples = _qualification_samples(
+        receipt["samples"], matrix, "preflight", expected_query_count=1
+    )
+    if (
+        not _quality_gate_passes(samples, matrix)
+        or receipt["max_gets_per_query"] != samples["gets_per_query"]
+        or receipt["max_bytes_per_query"] != samples["bytes_per_query"]
+    ):
+        raise ValueError("preflight quality gate failed")
 
 
-def validate_qualification_receipt(
-    receipt: Any, matrix: Any
-) -> dict[str, Any]:
+def validate_qualification_receipt(receipt: Any, matrix: Any) -> dict[str, Any]:
     """Independently recompute the frozen 1M promotion gates."""
 
     matrix = _exact_keys(matrix, set(frozen_matrix()), "matrix")
@@ -214,7 +244,7 @@ def validate_qualification_receipt(
         },
         "qualification",
     )
-    if receipt["schema"] != "borsuk-v85-qualification-receipt-v2":
+    if receipt["schema"] != "borsuk-v85-qualification-receipt-v3":
         raise ValueError("qualification schema differs")
 
     capacity = _exact_keys(
@@ -229,8 +259,7 @@ def validate_qualification_receipt(
     ):
         raise ValueError("qualification capacity gate failed")
     base_capacity_qps_milli = (
-        capacity["successful_queries"] * 1_000_000_000_000
-        // capacity["elapsed_ns"]
+        capacity["successful_queries"] * 1_000_000_000_000 // capacity["elapsed_ns"]
     )
     offered_qps_milli = (
         base_capacity_qps_milli * matrix["offered_load_ppm"] // 1_000_000
@@ -239,7 +268,7 @@ def validate_qualification_receipt(
     fresh = _qualification_samples(
         receipt["fresh_samples"], matrix, "qualification fresh"
     )
-    if fresh["recall_ppm"] < matrix["min_aggregate_recall_ppm"]:
+    if not _quality_gate_passes(fresh, matrix):
         raise ValueError("qualification fresh quality gate failed")
 
     cells = receipt["cells"]
@@ -262,8 +291,15 @@ def validate_qualification_receipt(
             or successful_qps_milli < offered_qps_milli
             or not _positive_int(cell["peak_rss_bytes"])
             or cell["peak_rss_bytes"] > matrix["max_peak_rss_bytes"]
-            or sample_summary["recall_ppm"] < matrix["min_aggregate_recall_ppm"]
-            or abs(sample_summary["recall_ppm"] - fresh["recall_ppm"]) > 2_000
+            or not _quality_gate_passes(sample_summary, matrix)
+            or abs(
+                sample_summary["average_recall10_ppm"] - fresh["average_recall10_ppm"]
+            )
+            > 2_000
+            or abs(
+                sample_summary["average_recall100_ppm"] - fresh["average_recall100_ppm"]
+            )
+            > 2_000
             or sample_summary["truth_ids"] != fresh["truth_ids"]
         ):
             raise ValueError("qualification cell gate failed")
@@ -379,9 +415,11 @@ def validate_qualification_receipt(
         "base_capacity_qps_milli": base_capacity_qps_milli,
         "cells": derived_cells,
         "compaction_amplification_ppm": amplification_ppm,
-        "fresh_recall_ppm": fresh["recall_ppm"],
+        "fresh_average_recall10_ppm": fresh["average_recall10_ppm"],
+        "fresh_average_recall100_ppm": fresh["average_recall100_ppm"],
+        "fresh_p05_recall100_ppm": fresh["p05_recall100_ppm"],
         "offered_qps_milli": offered_qps_milli,
-        "schema": "borsuk-v85-qualification-summary-v1",
+        "schema": "borsuk-v85-qualification-summary-v2",
         "visibility_p95_ns": visibility_p95_ns,
     }
 

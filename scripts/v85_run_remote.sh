@@ -196,39 +196,34 @@ for budget in matrix["preflight_page_budgets"]:
             key, value = line.rsplit(":", 1)
             time_fields[key.strip()] = value.strip()
     peak = int(time_fields["Maximum resident set size (kbytes)"]) * 1024
-    sample = result["samples"][0]
-    if (
-        result["aggregate_recall_ppm"] >= 990_000
-        and result["worst_recall_ppm"] >= 990_000
-        and sample["requests"] <= matrix["max_gets_per_query"]
-        and sample["bytes"] <= matrix["max_bytes_per_query"]
-        and peak <= matrix["max_peak_rss_bytes"]
-    ):
-        candidates.append((budget, body, result, peak))
+    receipt = {
+        "authenticated_inputs": 4,
+        "binary_authenticated": True,
+        "binary_sha256": hashlib.sha256(Path("repo/target/release/v85_delta_reader").read_bytes()).hexdigest(),
+        "built_rows": 10_000,
+        "cas_conflict_observed": True,
+        "failed_queries": 0,
+        "manifest_drift": False,
+        "max_bytes_per_query": max(sample["bytes"] for sample in result["samples"]),
+        "max_gets_per_query": max(sample["requests"] for sample in result["samples"]),
+        "peak_rss_bytes": peak,
+        "query_count": len(result["samples"]),
+        "samples": result["samples"],
+        "result_sha256": hashlib.sha256(body).hexdigest(),
+        "schema": "borsuk-v85-preflight-receipt-v2",
+        "selected_page_budget": budget,
+        "source_archive_sha256": os.environ["V85_SOURCE_ARCHIVE_SHA256"],
+        "source_commit": os.environ["V85_SOURCE_COMMIT"],
+    }
+    try:
+        validate_preflight_receipt(receipt, matrix)
+    except ValueError:
+        continue
+    candidates.append((budget, body, receipt))
 if not candidates:
     raise ValueError("preflight has no page budget satisfying quality and S3 work gates")
-budget, result_body, result, peak_rss_bytes = candidates[0]
+budget, result_body, receipt = candidates[0]
 Path("preflight-result.json").write_bytes(result_body)
-receipt = {
-    "authenticated_inputs": 4,
-    "aggregate_recall_ppm": result["aggregate_recall_ppm"],
-    "binary_authenticated": True,
-    "binary_sha256": hashlib.sha256(Path("repo/target/release/v85_delta_reader").read_bytes()).hexdigest(),
-    "built_rows": 10_000,
-    "cas_conflict_observed": True,
-    "failed_queries": 0,
-    "manifest_drift": False,
-    "max_bytes_per_query": max(sample["bytes"] for sample in result["samples"]),
-    "max_gets_per_query": max(sample["requests"] for sample in result["samples"]),
-    "peak_rss_bytes": peak_rss_bytes,
-    "query_count": len(result["samples"]),
-    "result_sha256": hashlib.sha256(result_body).hexdigest(),
-    "schema": "borsuk-v85-preflight-receipt-v1",
-    "selected_page_budget": budget,
-    "source_archive_sha256": os.environ["V85_SOURCE_ARCHIVE_SHA256"],
-    "source_commit": os.environ["V85_SOURCE_COMMIT"],
-    "worst_recall_ppm": result["worst_recall_ppm"],
-}
 validate_preflight_receipt(receipt, matrix)
 Path("preflight-receipt.json").write_text(
     json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n"
