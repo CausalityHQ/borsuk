@@ -19,6 +19,36 @@ from scripts.v85_pq16_page_nomination import (
 
 
 class V85Pq16PageNominationTests(unittest.TestCase):
+    def test_100k_rescore_runner_preregisters_full_development_evidence(self) -> None:
+        # Break caught: the paid rescore silently uses 32 queries, retunes the
+        # arm, or enables nested query-level work stealing.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_pq16_100k_rescore_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "blas_threads": 16,
+                "instance_type": "c7i.8xlarge",
+                "max_wall_seconds": 1800,
+                "page_budget": 32,
+                "queries": 1000,
+                "query_parallelism": 1,
+                "shortlist_rows": 2048,
+                "spot_only": True,
+            },
+        )
+
     def test_rank_weighted_planner_uses_exact_dense_range_budget(self) -> None:
         # Break caught: the screen reads every page touched by the shortlist
         # instead of selecting the maximum reciprocal-rank evidence under the
