@@ -2165,3 +2165,37 @@ This closes fragmentation invariance and local compaction amplification at
 throughput evidence. The next fail-fast gate is the registered 1,000-operation
 replacement/tombstone trace; larger serving qualification remains fenced until
 the validator recomputes that evidence.
+
+### V85 100k replacement and tombstone trace passes
+
+The earlier full-receipt validator derived latest-write ordering only from a
+runner-supplied write list. That could detect an internally stale claim, but it
+could not prove that the Arrow mutation directory, stale and new physical
+rows, and compacted survivors agreed. Source
+`55e961a3970aab061056dcce0265c1a19c103e11` added a bounded artifact screen
+that requires those concrete witnesses for exactly 500 base-row replacements
+and 500 base-row tombstones. The receipt is claim-ineligible and adds no bytes
+to serving artifacts.
+
+The sole ReLAION 100k x 768 Spot run used instance
+`i-0a62172f265d7ce91`, completed GREEN, and terminated. Immutable evidence is
+under
+`research/v85-mutation-100k/55e961a3970aab061056dcce0265c1a19c103e11/runs/v85-mutation-100k-20260920T112659Z-55e961a/a0001/`.
+Receipt, summary, screen-time, and terminal SHA-256 values are respectively
+`b5be0925b06af802d505b557f3a3e272a1bf1b2612aaa972ff5fcdecbb4e9baf`,
+`2dbd25af7860dfef9e5e75d79000427dcf9b1fa2131b1de2ea4fdb9c8673fb49`,
+`842676532fb5b73d753f51e8721e8efc8c87618a3ba29a297c49a0f59ea679e3`,
+and `e7aa77fcb695e3f6cbe85da5226bab8a83102a2f30626532add37385e2958e07`.
+The before, mutated, and compacted generation SHA-256 values are
+`4db5bce8eda58c4f2098c05fbcaca701b8558effcd1407c9a73f47ca9deb0118`,
+`53c9a0239ea497794b6609bf2aa7c29a881acafc560843a36ca76b28be2e0b2b`,
+and `149a27cd11b08b5cf3292d424a6cadaf28499f2b6056e3fce4981af0ca345892`.
+
+Independent current-source validation recomputed all 1,000 cases. Every
+replacement retained a stale sequence-1 base witness, had a distinct
+sequence-2 physical code at the exact directory location, and survived
+compaction with that code. Every tombstone retained its stale base witness,
+had a null directory location, and was absent after compaction. Scientific
+wall time was 5.65 seconds, peak RSS was 1,898,540 KiB, CPU utilization was
+506%, and swaps were zero. This closes mutation semantics at 100k; it is not
+query latency, S3 request, throughput, or 1M serving evidence.
