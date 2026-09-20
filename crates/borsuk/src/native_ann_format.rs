@@ -23,6 +23,7 @@ const THREE_GIB: u64 = 3 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeRouterArtifacts {
+    pub(crate) dimensions: u32,
     pub(crate) row_codebooks: Box<[f32]>,
     pub(crate) summary_codebooks: Box<[f32]>,
     pub(crate) row_codes: Box<[u8]>,
@@ -426,6 +427,7 @@ pub(crate) fn decode_native_router(
         });
     }
     Ok(NativeRouterArtifacts {
+        dimensions,
         row_codebooks,
         summary_codebooks,
         row_codes,
