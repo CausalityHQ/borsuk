@@ -1547,3 +1547,66 @@ preregistered feasibility calculation: final SQ8 Recall@100 remains unmeasured,
 and the old 81-page/32-range boundary would be deliberately relaxed rather
 than silently reinterpreted. Reserved confirmation queries and larger-scale
 data remain unread.
+
+## V93 — protected PQ16 rescue passes the 1M development gate
+
+V93 tested the preregistered additive follow-up to V92. It preserved every
+V90 wave-two page and compared three bounded additions: ordinary extra PQ192
+pages, the best 24 pages supported by the first 256 PQ16 nominations, and the
+same PQ16 nominations filtered through their PQ192 code pages. Query and truth
+labels were not selection inputs. The original 340-page/32-range wave-one plan,
+resident SQ8 delta, exact reranker, and frozen 32-query development split were
+unchanged. The rescue arrays and inherited row-min evidence were digest-bound.
+
+The first attempt used source `1d2618a62ab8f0c80f8cd6bcf5b232f873819a2c`
+on c7i.8xlarge Spot instance `i-0efd67c7be611cb52`. All source and dataset
+hashes passed, but the screen rejected a legitimate query with zero new rescue
+pages because its authority check still required at least one. It published
+terminal SHA-256
+`d1f6c8bc9dbf7d1197cc1f6ecb32403ba62ea3c9beeec9e65fcc4af05d3c3256`
+with exit 96 and no scientific result, then terminated. A focused repair made
+the registered "at most 24" rule literal and preserved an empty-rescue test.
+
+The sole clean attempt used source
+`798bbf4125c1281f55c269a46547066d2d78fa0d` on c7i.8xlarge Spot instance
+`i-098afa3cfb6dd845f` in `eu-central-1a`. Every source and dataset hash passed,
+the instance published a successful terminal, and it terminated immediately.
+Immutable evidence is under
+`research/v93-protected-rescue/798bbf4125c1281f55c269a46547066d2d78fa0d/runs/v93-protected-rescue-20260920T001102Z-798bbf41/a0001/`.
+The canonical result SHA-256 is
+`2b202891fcbefc11c3ecfb9a96e94b0810320f1ab7cff90f07b0f9cbb2444c3f`;
+the terminal SHA-256 is
+`3fea85acbeec313fc51f2d5e3984294e364c93856d23dfba947a47a08e8f8ce0`.
+The row-min score SHA-256 remained exactly V91/V92's
+`09dc6af46edbf7adfe3edc091996e38602327e05737206aa46c4869211b3345e`.
+
+| arm | added evidence | page-SQ8 Recall@100 | exact recall | base-only recall | query 15 | worst | max requests | max bytes |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| V90 control | none | **98.9688%** (3,167/3,200) | 99.0312% (3,169/3,200) | 98.8538% (2,846/2,879) | 90 | 90 | 64 | 33,410,368 |
+| budget-only | protected PQ192 pages | **99.1250%** (3,172/3,200) | 99.1875% (3,174/3,200) | 99.0274% (2,851/2,879) | 95 | 93 | 86 | 38,351,680 |
+| direct rescue | protected PQ16 pages | **99.3750%** (3,180/3,200) | 99.4688% (3,183/3,200) | 99.3053% (2,859/2,879) | 93 | 93 | 88 | 38,351,680 |
+| code-filtered rescue | PQ16 then PQ192 filter | **99.3750%** (3,180/3,200) | 99.4688% (3,183/3,200) | 99.3053% (2,859/2,879) | 93 | 93 | 98 | 36,856,320 |
+
+Budget-only improved one query and left 31 unchanged. Both PQ16 rescue arms
+improved nine queries, left 23 unchanged, and regressed none. Direct rescue
+beat the budget-only attribution control by eight final SQ8 hits, exceeding the
+preregistered four-hit attribution margin, and passed the 3,176-total,
+2,854-base, query-15=90, worst=90, and no-query-worse-than-control-minus-one
+gates. It is therefore the accepted V93 arm. Code filtering retained identical
+quality while reducing mean data pages from 81.41 to 59.69, but its additional
+code-page wave increased the maximum request envelope from 88 to 98; direct
+rescue remains the simpler accepted design.
+
+This was an offline 1M algorithm screen and made zero S3 query requests. Its
+request and byte values are reconstructed physical maxima, not latency
+measurements. Scientific wall time was 5:42.66, peak RSS was 10,432,568 KiB,
+CPU utilization was 894%, and swaps were zero. The representation projection
+at 100M remains 2,057,023,104 resident bytes, but the current dense planner
+traceback remains 8,791,406,250 bytes per query and is explicitly unqualified
+for 100M serving memory, CPU, or latency.
+
+V93 establishes that protected query-dependent PQ16 rescue contains useful
+signal beyond merely spending 24 more PQ192 pages. It does not yet establish
+real-S3 latency. The next gate is a native real-S3 1M measurement of the fixed
+direct-rescue arm, followed by a sparse hierarchical replacement for the dense
+traceback before any 100M qualification or reserved confirmation run.
