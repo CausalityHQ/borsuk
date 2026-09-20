@@ -14,6 +14,7 @@ from scripts.launch_v98_hierarchical_row_router_spot import (
     build_plan,
     canonical_terminal_bytes,
     claim_launched_attempt,
+    claim_reserved_attempt,
     derive_attempt_prefix,
     launch_one_spot,
     monitor_and_terminate,
@@ -217,13 +218,17 @@ class V98SpotLauncherTests(unittest.TestCase):
         # launch receipt does not bind the immutable scientific inputs.
         class FakeEvents:
             def __init__(self) -> None:
-                self.handler = None
+                self.handlers = {}
 
             def register_first(self, _name, handler, *, unique_id):
-                self.handler = handler
+                self.handlers[unique_id] = handler
 
-            def unregister(self, _name, _unique_id):
-                self.handler = None
+            def unregister(
+                self, _name, handler=None, unique_id=None, unique_id_uses_count=False
+            ):
+                del handler, unique_id_uses_count
+                if unique_id is not None:
+                    self.handlers.pop(unique_id, None)
 
         class FakeS3:
             def __init__(self) -> None:
@@ -232,13 +237,18 @@ class V98SpotLauncherTests(unittest.TestCase):
                 self.headers = None
 
             def put_object(self, **request):
+                if len(self.meta.events.handlers) != 1:
+                    raise RuntimeError("duplicate signing handlers")
                 signed = SimpleNamespace(headers={})
-                self.meta.events.handler(signed)
+                next(iter(self.meta.events.handlers.values()))(signed)
                 self.headers = signed.headers
                 self.request = request
 
         s3 = FakeS3()
+        claim_reserved_attempt(self.plan(), s3_client=s3)
+        self.assertEqual(s3.meta.events.handlers, {})
         claim_launched_attempt(self.plan(), s3_client=s3, instance_id="i-v98")
+        self.assertEqual(s3.meta.events.handlers, {})
         receipt = json.loads(s3.request["Body"])
         self.assertEqual(s3.headers["If-None-Match"], "*")
         self.assertEqual(receipt["instance_id"], "i-v98")

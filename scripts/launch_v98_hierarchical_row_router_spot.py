@@ -335,7 +335,7 @@ def _atomic_put(s3_client: object, *, bucket: str, key: str, body: bytes) -> Non
             ContentType="application/json",
         )
     finally:
-        s3_client.meta.events.unregister(event_name, event_id)
+        s3_client.meta.events.unregister(event_name, unique_id=event_id)
 
 
 def _launch_receipt(plan: V98SpotPlan, instance_id: str | None) -> bytes:
