@@ -6,12 +6,26 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.ipc as ipc
 
-from scripts.v97_row_width_screen import PageKey, RoutedPage, ScreenInputs
+from scripts.v97_row_width_screen import (
+    PQ16X8,
+    PQ24X8,
+    PQ32X4,
+    PQ32X8,
+    PageKey,
+    RoutedPage,
+    ScreenInputs,
+    adc_scores,
+    pack_pq4,
+)
 from scripts.v98_hierarchical_row_router import (
     HierarchyConfig,
+    RootGroup,
+    blockwise_top_rows,
     build_hierarchy,
     hierarchy_ipc_schema,
     read_hierarchy_ipc,
+    route_hierarchy,
+    score_retained_rows,
     validate_hierarchy,
 )
 
@@ -261,6 +275,175 @@ class V98HierarchyAuthorityTests(unittest.TestCase):
             writer.write_table(empty)
         with self.assertRaisesRegex(ValueError, "hierarchy IPC schema differs"):
             read_hierarchy_ipc(sink.getvalue().to_pybytes())
+
+
+class V98BoundedRoutingTests(unittest.TestCase):
+    @staticmethod
+    def literal_zero_scoring_artifact():
+        inputs = V98HierarchyAuthorityTests.inputs()
+        config = V98HierarchyAuthorityTests.config()
+        artifact = build_hierarchy(inputs, config)
+        return (
+            inputs,
+            config,
+            dataclasses.replace(
+                artifact,
+                summary_books=np.zeros((16, 256, 1), dtype=np.float32),
+                page_summary_codes=np.zeros_like(artifact.page_summary_codes),
+                root_summary_codes=np.zeros_like(artifact.root_summary_codes),
+            ),
+        )
+
+    def test_route_uses_total_order_and_actual_partial_page_row_counts(self) -> None:
+        # Break caught: equal summary scores use unstable argpartition order or
+        # count every partial page as 256 rows instead of its visible rows.
+        inputs, config, artifact = self.literal_zero_scoring_artifact()
+        fence = route_hierarchy(
+            np.zeros(16, dtype=np.float32), artifact, config
+        )
+
+        self.assertEqual(fence.root_evaluations, 18)
+        self.assertEqual(fence.page_evaluations, 137)
+        self.assertEqual(fence.exposed_pages, tuple(sorted(inputs.pages)))
+        self.assertEqual(fence.retained_pages, tuple(sorted(inputs.pages)))
+        self.assertEqual(fence.scanned_rows, 274)
+
+    def test_route_stops_before_the_root_that_would_exceed_4096_children(self) -> None:
+        # Break caught: the hierarchy admits a whole next root after reaching
+        # the child cap, making 100M page and row work data-dependent.
+        _, config, seed_artifact = self.literal_zero_scoring_artifact()
+        page_keys = tuple(PageKey("base", ordinal) for ordinal in range(4_104))
+        roots = tuple(
+            RootGroup(
+                role="base",
+                ordinal=ordinal,
+                pages=page_keys[ordinal * 8 : ordinal * 8 + 8],
+                child_offset=ordinal * 8,
+                child_count=8,
+            )
+            for ordinal in range(513)
+        )
+        root_codes = np.zeros((1_026, 16), dtype=np.uint8)
+        root_codes[-2:] = 1
+        artifact = dataclasses.replace(
+            seed_artifact,
+            roots=roots,
+            page_keys=page_keys,
+            page_row_counts=tuple(1 for _ in page_keys),
+            root_summary_codes=root_codes,
+            page_summary_codes=np.zeros((8_208, 16), dtype=np.uint8),
+        )
+        fence = route_hierarchy(
+            np.zeros(16, dtype=np.float32), artifact, config
+        )
+
+        self.assertEqual(fence.root_evaluations, 513)
+        self.assertEqual(len(fence.exposed_pages), 4_096)
+        self.assertNotIn(PageKey("base", 4_096), fence.exposed_pages)
+        self.assertEqual(fence.page_evaluations, 4_096)
+        self.assertEqual(fence.retained_pages, page_keys[:1_024])
+        self.assertEqual(fence.scanned_rows, 1_024)
+
+    def test_blockwise_top_rows_matches_literal_total_order_at_boundaries(self) -> None:
+        # Break caught: bounded heap replacement loses a lower row ID at a tie
+        # or assumes IDs are dense/ordered like score-array positions.
+        cases = (
+            (
+                np.asarray([3.0, 1.0, 1.0, 2.0], dtype=np.float32),
+                np.asarray([90, 70, 10, 30], dtype=np.int64),
+            ),
+            (
+                np.asarray([np.finfo(np.float32).tiny, 0.0, -0.0], dtype=np.float32),
+                np.asarray([8, 9, 7], dtype=np.int64),
+            ),
+            (
+                np.random.default_rng(7_216).normal(size=257).astype(np.float32),
+                np.arange(20_000, 20_257, dtype=np.int64)[::-1],
+            ),
+        )
+        for scores, row_ids in cases:
+            for count in (1, min(17, scores.size), scores.size):
+                expected = tuple(
+                    row_id
+                    for _, row_id in sorted(
+                        zip(scores.tolist(), row_ids.tolist(), strict=True)
+                    )[:count]
+                )
+                self.assertEqual(
+                    blockwise_top_rows(scores, row_ids, count, block_rows=13),
+                    expected,
+                )
+
+    def test_retained_row_scoring_matches_full_adc_sort_for_every_width(self) -> None:
+        # Break caught: one width uses the wrong persistent code shape or the
+        # bounded heap diverges from exact `(distance,row_id)` ordering.
+        generator = np.random.default_rng(1_337)
+        query = generator.normal(size=96).astype(np.float32)
+        row_ids = np.arange(50_000, 50_037, dtype=np.int64)[::-1]
+        for spec in (PQ16X8, PQ24X8, PQ32X8, PQ32X4):
+            centroid_count = 1 << spec.centroid_bits
+            books = generator.normal(
+                size=(spec.subspaces, centroid_count, 96 // spec.subspaces)
+            ).astype(np.float32)
+            literal_codes = generator.integers(
+                0,
+                centroid_count,
+                size=(row_ids.size, spec.subspaces),
+                dtype=np.uint8,
+            )
+            stored_codes = (
+                pack_pq4(literal_codes)
+                if spec.centroid_bits == 4
+                else literal_codes
+            )
+            scores = adc_scores(query, books, stored_codes, spec)
+            expected = tuple(
+                row_id
+                for _, row_id in sorted(
+                    zip(scores.tolist(), row_ids.tolist(), strict=True)
+                )[:19]
+            )
+            self.assertEqual(
+                score_retained_rows(
+                    query,
+                    row_ids,
+                    stored_codes,
+                    books,
+                    spec,
+                    maximum_rows=262_144,
+                    shortlist_rows=19,
+                    block_rows=7,
+                ),
+                expected,
+            )
+
+    def test_routing_and_row_scoring_reject_malformed_or_over_cap_inputs(self) -> None:
+        # Break caught: nonfinite scores, duplicate identities, malformed codes,
+        # or excessive scans enter deterministic-looking evidence.
+        with self.assertRaisesRegex(ValueError, "bounded row-score input differs"):
+            blockwise_top_rows(
+                np.asarray([0.0, np.nan], dtype=np.float32),
+                np.asarray([1, 2], dtype=np.int64),
+                1,
+            )
+        with self.assertRaisesRegex(ValueError, "bounded row-score input differs"):
+            blockwise_top_rows(
+                np.asarray([0.0, 1.0], dtype=np.float32),
+                np.asarray([1, 1], dtype=np.int64),
+                1,
+            )
+        query = np.zeros(96, dtype=np.float32)
+        books = np.zeros((16, 256, 6), dtype=np.float32)
+        with self.assertRaisesRegex(ValueError, "retained row-score input differs"):
+            score_retained_rows(
+                query,
+                np.arange(3, dtype=np.int64),
+                np.zeros((3, 15), dtype=np.uint8),
+                books,
+                PQ16X8,
+                maximum_rows=2,
+                shortlist_rows=1,
+            )
 
 
 if __name__ == "__main__":

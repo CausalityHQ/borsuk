@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 from dataclasses import dataclass
 from typing import Literal
 
@@ -14,7 +15,9 @@ import pyarrow.ipc as ipc
 from scripts.v97_row_width_screen import (
     PQ16X8,
     PageKey,
+    PqSpec,
     ScreenInputs,
+    adc_scores,
     encode_pq,
     fit_pq,
     page_block_means,
@@ -97,6 +100,7 @@ class HierarchyRecord:
     parent_root: int | None
     child_offset: int
     child_count: int
+    page_row_count: int
     code: bytes
 
 
@@ -107,12 +111,14 @@ class HierarchyArtifact:
     config: HierarchyConfig
     roots: tuple[RootGroup, ...]
     page_keys: tuple[PageKey, ...]
+    page_row_counts: tuple[int, ...]
     summary_books: np.ndarray
     page_summary_codes: np.ndarray
     root_summary_codes: np.ndarray
     summary_books_identity: ArrayIdentity
     page_summary_codes_identity: ArrayIdentity
     root_summary_codes_identity: ArrayIdentity
+    page_row_counts_identity: ArrayIdentity
     ipc_schema: pa.Schema
     ipc_bytes: bytes
     ipc_sha256: str
@@ -130,6 +136,7 @@ def hierarchy_ipc_schema() -> pa.Schema:
             pa.field("parent_root", pa.uint32(), nullable=False),
             pa.field("child_offset", pa.uint32(), nullable=False),
             pa.field("child_count", pa.uint16(), nullable=False),
+            pa.field("page_row_count", pa.uint16(), nullable=False),
             pa.field(
                 "code",
                 pa.list_(pa.field("element", pa.uint8(), nullable=False), 16),
@@ -249,6 +256,7 @@ def _root_means(
 def _ipc_bytes(
     roots: tuple[RootGroup, ...],
     page_keys: tuple[PageKey, ...],
+    page_row_counts: tuple[int, ...],
     root_codes: np.ndarray,
     page_codes: np.ndarray,
 ) -> bytes:
@@ -264,6 +272,7 @@ def _ipc_bytes(
     parent_root: list[int] = []
     child_offset: list[int] = []
     child_count: list[int] = []
+    page_row_count: list[int] = []
     codes: list[np.ndarray] = []
     for root_index, root in enumerate(roots):
         for slot in range(2):
@@ -274,6 +283,7 @@ def _ipc_bytes(
             parent_root.append(_NO_PARENT)
             child_offset.append(root.child_offset)
             child_count.append(root.child_count)
+            page_row_count.append(0)
             codes.append(root_codes[root_index * 2 + slot])
     for page_index, key in enumerate(page_keys):
         for slot in range(2):
@@ -284,6 +294,7 @@ def _ipc_bytes(
             parent_root.append(parent_by_page[key])
             child_offset.append(0)
             child_count.append(0)
+            page_row_count.append(page_row_counts[page_index])
             codes.append(page_codes[page_index * 2 + slot])
     schema = hierarchy_ipc_schema()
     flat_codes = np.ascontiguousarray(np.stack(codes), dtype=np.uint8).reshape(-1)
@@ -296,6 +307,7 @@ def _ipc_bytes(
             pa.array(parent_root, type=pa.uint32()),
             pa.array(child_offset, type=pa.uint32()),
             pa.array(child_count, type=pa.uint16()),
+            pa.array(page_row_count, type=pa.uint16()),
             pa.FixedSizeListArray.from_arrays(
                 pa.array(flat_codes, type=pa.uint8()),
                 16,
@@ -348,6 +360,7 @@ def read_hierarchy_ipc(body: bytes) -> tuple[HierarchyRecord, ...]:
                 parent_root=None if parent == _NO_PARENT else int(parent),
                 child_offset=int(columns["child_offset"][index]),
                 child_count=int(columns["child_count"][index]),
+                page_row_count=int(columns["page_row_count"][index]),
                 code=np.ascontiguousarray(flat_codes[index], dtype=np.uint8).tobytes(),
             )
         )
@@ -376,19 +389,28 @@ def build_hierarchy(inputs: ScreenInputs, config: HierarchyConfig) -> HierarchyA
     )
     page_codes = np.ascontiguousarray(encode_pq(page_means, summary_books, PQ16X8))
     roots = _root_layout(page_keys, config)
+    page_row_counts = tuple(
+        len(inputs.row_order_by_page[key]) for key in page_keys
+    )
     root_means = _root_means(roots, vectors_by_page)
     root_codes = np.ascontiguousarray(encode_pq(root_means, summary_books, PQ16X8))
-    ipc_body = _ipc_bytes(roots, page_keys, root_codes, page_codes)
+    ipc_body = _ipc_bytes(
+        roots, page_keys, page_row_counts, root_codes, page_codes
+    )
     artifact = HierarchyArtifact(
         config=config,
         roots=roots,
         page_keys=page_keys,
+        page_row_counts=page_row_counts,
         summary_books=summary_books,
         page_summary_codes=page_codes,
         root_summary_codes=root_codes,
         summary_books_identity=_array_identity(summary_books),
         page_summary_codes_identity=_array_identity(page_codes),
         root_summary_codes_identity=_array_identity(root_codes),
+        page_row_counts_identity=_array_identity(
+            np.asarray(page_row_counts, dtype=np.uint16)
+        ),
         ipc_schema=hierarchy_ipc_schema(),
         ipc_bytes=ipc_body,
         ipc_sha256=hashlib.sha256(ipc_body).hexdigest(),
@@ -408,8 +430,13 @@ def validate_hierarchy(
         raise ValueError("hierarchy configuration differs")
     page_keys, position_by_id = _validated_visible_rows(inputs)
     expected_roots = _root_layout(page_keys, config)
+    expected_page_row_counts = tuple(
+        len(inputs.row_order_by_page[key]) for key in page_keys
+    )
     if artifact.roots != expected_roots or artifact.page_keys != page_keys:
         raise ValueError("root group differs")
+    if artifact.page_row_counts != expected_page_row_counts:
+        raise ValueError("visible row roster differs")
     expected_page_shape = (len(page_keys) * 2, 16)
     expected_root_shape = (len(expected_roots) * 2, 16)
     if (
@@ -434,6 +461,10 @@ def validate_hierarchy(
         raise ValueError("root summary identity differs")
     if artifact.summary_books_identity != _array_identity(artifact.summary_books):
         raise ValueError("summary codebook identity differs")
+    if artifact.page_row_counts_identity != _array_identity(
+        np.asarray(artifact.page_row_counts, dtype=np.uint16)
+    ):
+        raise ValueError("page row-count identity differs")
 
     vectors_by_page = _vectors_by_page(inputs, page_keys, position_by_id)
     summary_keys, page_means = page_block_means(vectors_by_page)
@@ -465,6 +496,7 @@ def validate_hierarchy(
     expected_ipc = _ipc_bytes(
         expected_roots,
         page_keys,
+        expected_page_row_counts,
         artifact.root_summary_codes,
         artifact.page_summary_codes,
     )
@@ -474,3 +506,233 @@ def validate_hierarchy(
         or len(records) != 2 * (len(expected_roots) + len(page_keys))
     ):
         raise ValueError("hierarchy IPC identity differs")
+
+
+@dataclass(frozen=True, slots=True)
+class HierarchyFence:
+    """Bounded page hierarchy selected for one query."""
+
+    exposed_pages: tuple[PageKey, ...]
+    retained_pages: tuple[PageKey, ...]
+    root_evaluations: int
+    page_evaluations: int
+    scanned_rows: int
+
+
+def _bounded_total_order(
+    scores: np.ndarray,
+    keys: tuple[PageKey, ...] | tuple[tuple[int, int], ...],
+    count: int,
+) -> tuple[int, ...]:
+    values = np.asarray(scores)
+    if (
+        values.ndim != 1
+        or values.size != len(keys)
+        or not np.issubdtype(values.dtype, np.floating)
+        or not np.isfinite(values).all()
+        or type(count) is not int
+        or count <= 0
+        or count > values.size
+    ):
+        raise ValueError("bounded total-order input differs")
+    if count == values.size:
+        candidates = np.arange(values.size, dtype=np.int64)
+    else:
+        threshold = np.partition(values, count - 1)[count - 1]
+        lower = np.flatnonzero(values < threshold)
+        equal = np.flatnonzero(values == threshold)
+        remaining = count - lower.size
+        ordered_equal = sorted(equal.tolist(), key=lambda index: keys[index])
+        candidates = np.concatenate(
+            (lower, np.asarray(ordered_equal[:remaining], dtype=np.int64))
+        )
+    return tuple(
+        sorted(
+            (int(index) for index in candidates),
+            key=lambda index: (float(values[index]), keys[index]),
+        )
+    )
+
+
+def route_hierarchy(
+    query: np.ndarray,
+    artifact: HierarchyArtifact,
+    config: HierarchyConfig,
+) -> HierarchyFence:
+    """Select a deterministic bounded set of pages through both levels."""
+
+    vector = np.asarray(query)
+    if (
+        artifact.config != config
+        or vector.ndim != 1
+        or vector.dtype != np.float32
+        or not np.isfinite(vector).all()
+        or len(artifact.roots) == 0
+        or len(artifact.roots) > config.maximum_root_groups
+        or len(artifact.page_keys) != len(artifact.page_row_counts)
+        or artifact.root_summary_codes.shape != (len(artifact.roots) * 2, 16)
+        or artifact.page_summary_codes.shape != (len(artifact.page_keys) * 2, 16)
+    ):
+        raise ValueError("hierarchy routing input differs")
+    root_scores = adc_scores(
+        vector, artifact.summary_books, artifact.root_summary_codes, PQ16X8
+    ).reshape(-1, 2).min(axis=1)
+    root_keys = tuple(
+        (0 if root.role == "base" else 1, root.ordinal)
+        for root in artifact.roots
+    )
+    root_candidate_count = min(len(artifact.roots), config.maximum_exposed_pages)
+    root_order = _bounded_total_order(
+        root_scores, root_keys, root_candidate_count
+    )
+    exposed: list[PageKey] = []
+    for root_index in root_order:
+        pages = artifact.roots[root_index].pages
+        if len(exposed) + len(pages) > config.maximum_exposed_pages:
+            break
+        exposed.extend(pages)
+    if not exposed:
+        raise ValueError("hierarchy exposed no pages")
+    page_position = {key: index for index, key in enumerate(artifact.page_keys)}
+    try:
+        exposed_positions = np.asarray(
+            [page_position[key] for key in exposed], dtype=np.int64
+        )
+    except KeyError as error:
+        raise ValueError("hierarchy root child differs") from error
+    code_positions = np.stack(
+        (exposed_positions * 2, exposed_positions * 2 + 1), axis=1
+    ).reshape(-1)
+    page_scores = adc_scores(
+        vector,
+        artifact.summary_books,
+        np.ascontiguousarray(artifact.page_summary_codes[code_positions]),
+        PQ16X8,
+    ).reshape(-1, 2).min(axis=1)
+    retained_count = min(config.retained_pages, len(exposed))
+    page_order = _bounded_total_order(page_scores, tuple(exposed), retained_count)
+    retained = tuple(exposed[index] for index in page_order)
+    scanned_rows = sum(
+        artifact.page_row_counts[page_position[key]] for key in retained
+    )
+    if scanned_rows > config.maximum_scanned_rows:
+        raise ValueError("hierarchy scanned-row cap differs")
+    return HierarchyFence(
+        exposed_pages=tuple(exposed),
+        retained_pages=retained,
+        root_evaluations=len(artifact.roots),
+        page_evaluations=len(exposed),
+        scanned_rows=scanned_rows,
+    )
+
+
+def _push_best(
+    heap: list[tuple[float, int, int]],
+    score: float,
+    row_id: int,
+    count: int,
+) -> None:
+    item = (-score, -row_id, row_id)
+    if len(heap) < count:
+        heapq.heappush(heap, item)
+        return
+    worst = (-heap[0][0], -heap[0][1])
+    if (score, row_id) < worst:
+        heapq.heapreplace(heap, item)
+
+
+def blockwise_top_rows(
+    scores: np.ndarray,
+    row_ids: np.ndarray,
+    count: int,
+    *,
+    block_rows: int = 8_192,
+) -> tuple[int, ...]:
+    """Return row IDs under exact `(score,row_id)` order with bounded storage."""
+
+    values = np.asarray(scores)
+    ids = np.asarray(row_ids)
+    if (
+        values.ndim != 1
+        or ids.ndim != 1
+        or values.shape != ids.shape
+        or not np.issubdtype(values.dtype, np.floating)
+        or not np.issubdtype(ids.dtype, np.integer)
+        or not np.isfinite(values).all()
+        or len(set(int(row_id) for row_id in ids)) != ids.size
+        or type(count) is not int
+        or not 0 < count <= ids.size
+        or type(block_rows) is not int
+        or block_rows <= 0
+    ):
+        raise ValueError("bounded row-score input differs")
+    heap: list[tuple[float, int, int]] = []
+    for start in range(0, ids.size, block_rows):
+        stop = min(start + block_rows, ids.size)
+        for score, row_id in zip(
+            values[start:stop].tolist(), ids[start:stop].tolist(), strict=True
+        ):
+            _push_best(heap, float(score), int(row_id), count)
+    return tuple(
+        row_id
+        for _, row_id in sorted(
+            ((-negative_score, stored_id) for negative_score, _, stored_id in heap)
+        )
+    )
+
+
+def score_retained_rows(
+    query: np.ndarray,
+    row_ids: np.ndarray,
+    row_codes: np.ndarray,
+    books: np.ndarray,
+    spec: PqSpec,
+    *,
+    maximum_rows: int,
+    shortlist_rows: int,
+    block_rows: int = 8_192,
+) -> tuple[int, ...]:
+    """ADC-score retained rows without materializing all `(score,id)` pairs."""
+
+    vector = np.asarray(query)
+    ids = np.asarray(row_ids)
+    codes = np.asarray(row_codes)
+    if (
+        vector.ndim != 1
+        or vector.dtype != np.float32
+        or not np.isfinite(vector).all()
+        or ids.ndim != 1
+        or not np.issubdtype(ids.dtype, np.integer)
+        or ids.size == 0
+        or ids.size > maximum_rows
+        or len(set(int(row_id) for row_id in ids)) != ids.size
+        or codes.ndim != 2
+        or codes.shape[0] != ids.size
+        or type(shortlist_rows) is not int
+        or not 0 < shortlist_rows <= ids.size
+        or type(block_rows) is not int
+        or block_rows <= 0
+    ):
+        raise ValueError("retained row-score input differs")
+    heap: list[tuple[float, int, int]] = []
+    try:
+        for start in range(0, ids.size, block_rows):
+            stop = min(start + block_rows, ids.size)
+            block_scores = adc_scores(
+                vector,
+                books,
+                np.ascontiguousarray(codes[start:stop]),
+                spec,
+            )
+            for score, row_id in zip(
+                block_scores.tolist(), ids[start:stop].tolist(), strict=True
+            ):
+                _push_best(heap, float(score), int(row_id), shortlist_rows)
+    except ValueError as error:
+        raise ValueError("retained row-score input differs") from error
+    return tuple(
+        row_id
+        for _, row_id in sorted(
+            ((-negative_score, stored_id) for negative_score, _, stored_id in heap)
+        )
+    )
