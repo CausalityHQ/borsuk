@@ -2024,3 +2024,63 @@ Preparation took 4:20.19 at 10,398,504 KiB peak RSS and zero swaps. The fresh
 replay took 10.05 seconds at 2,106,012 KiB peak RSS and zero swaps. This result
 is claim-ineligible, measures plan replay rather than planner latency, and
 transfers wave-one code pages without decoding them.
+
+## V85 competitive gate — fixed 1M validation rejects the current PQ16 layout
+
+After the full 1,000-query 100k development rescore, V85 froze PQ16 seed 7216,
+a 2,048-row shortlist, the exact reciprocal-rank page planner, 32 GETs, and 16
+MiB per query. It then opened the registered 1M validation role once. The
+900,000-row base plus 100,000-row delta used 768 dimensions and 256-row pages;
+the 1,000 validation queries and exact Recall@100 truth were authenticated from
+the immutable V36 dataset freeze. This was an offline page-containment test,
+not a serving-latency measurement, and it read no sealed holdout.
+
+The first attempt used source
+`ed61ab22571467f98f026a7057f94ecf2e79d846` on c7i.8xlarge Spot instance
+`i-06be3537c5c3f2e76`. Its 24 GiB virtual-address cap rejected a PyArrow 512
+MiB allocation during build even though peak RSS was 9,135,912 KiB and swaps
+were zero. It published exit 100 in phase `build`, terminal SHA-256
+`a7666c347e9a9c8502214011a540dc6fafd5e51b9fa84ce6725013710740068e`,
+and terminated. This was a harness failure with no scientific result. A
+test-first repair raised only the scientific build address-space cap to 48
+GiB; it did not change the frozen algorithm, quality gates, or serving-memory
+contract.
+
+The sole scientific attempt used source
+`da42b3da7a78a7a44ab259bb06f12c42527e8800` on c7i.8xlarge Spot instance
+`i-0872a019ab6814b59` in `eu-central-1a`. Every source and dataset hash passed,
+the instance published a successful terminal, and it terminated immediately.
+Immutable evidence is under
+`research/v85-pq16-1m-validation/da42b3da7a78a7a44ab259bb06f12c42527e8800/runs/v85-1m-validation-20260920T100638Z-da42b3d/a0001/`.
+The canonical result SHA-256 is
+`62f629f7706adc0972ce209dffc5ba4e02a8f2567aa3cad154fefda3a68aa0f2`;
+the terminal SHA-256 is
+`6cb7b8fc499954212c2fe2aa316be09c064cb23361b8f6a7e65b00b06e23e581`.
+
+| metric | fixed 1M validation result | gate |
+|---|---:|---:|
+| average Recall@10 | **97.5200%** | at least 96% — pass |
+| average Recall@100 | **93.5050%** | at least 97.5% — fail |
+| p05 Recall@100 | **70.0000%** | at least 90% — fail |
+| median / p75 Recall@100 | **99% / 100%** | reported |
+| worst Recall@100 | **32%** | reported, no absolute veto |
+| GETs/query | 20 median / **32 max** | at most 32 — pass |
+| bytes/query | 16,361,264 median / **16,734,128 max** | at most 16,777,216 — pass |
+
+The current layout therefore passes the vendor-aligned average Recall@10 and
+physical request/byte bounds, but fails its own distributional Recall@100
+contract. The failure is a hard-query tail rather than uniform degradation:
+the 25th percentile was 92%, the median was 99%, and at least 25% of queries
+were perfect, while the p10/p05/min were 79%/70%/32%. This rejects the present
+page-locality design at 1M; it does not establish that 99% average recall is a
+necessary universal product threshold, nor does it justify increasing S3
+downloads.
+
+Build wall time was 29.59 seconds at 10,905,200 KiB peak RSS. PQ evaluation
+wall time was 3:05.04 at 10,973,932 KiB peak RSS. Both phases reported zero
+swaps and the monitor observed zero memory PSI. The result remains
+claim-ineligible because page containment was computed offline. The validation
+role is now burned and must not be retuned against. The next research step is
+bounded development-only page-locality diagnosis and one replacement
+hypothesis aimed at the lower tail; 10M/100M promotion and native-S3 replay of
+this rejected arm remain fenced.
