@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import hashlib
 import heapq
-from dataclasses import dataclass
+import json
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 import numpy as np
@@ -14,13 +16,22 @@ import pyarrow.ipc as ipc
 
 from scripts.v97_row_width_screen import (
     PQ16X8,
+    PQ24X8,
+    PQ32X4,
+    PQ32X8,
+    SUMMARY_ONLY_PQ16X8,
     PageKey,
     PqSpec,
+    ResidentProjection,
+    ScreenAuthority,
     ScreenInputs,
     adc_scores,
     encode_pq,
+    evaluate_selected_pages,
     fit_pq,
     page_block_means,
+    project_resident_bytes_100m,
+    select_budgeted_pages,
 )
 
 _ROOT_KIND = 0
@@ -169,7 +180,8 @@ def _validated_visible_rows(
         or vectors.ndim != 2
         or vectors.dtype != np.float32
         or vectors.shape[0] != source_ids.size
-        or vectors.shape[1] != 16
+        or vectors.shape[1] <= 0
+        or vectors.shape[1] % PQ16X8.subspaces
         or not np.isfinite(vectors).all()
         or len(set(int(row_id) for row_id in source_ids)) != source_ids.size
         or set(page_keys) != set(inputs.row_order_by_page)
@@ -449,7 +461,8 @@ def validate_hierarchy(
         or artifact.root_summary_codes.dtype != np.uint8
     ):
         raise ValueError("root summary codes differ")
-    if artifact.summary_books.shape != (16, 256, 1) or artifact.summary_books.dtype != np.float32:
+    expected_book_shape = (16, 256, inputs.vectors.shape[1] // 16)
+    if artifact.summary_books.shape != expected_book_shape or artifact.summary_books.dtype != np.float32:
         raise ValueError("summary codebook differs")
     if artifact.page_summary_codes_identity != _array_identity(
         artifact.page_summary_codes
@@ -735,4 +748,593 @@ def score_retained_rows(
         for _, row_id in sorted(
             ((-negative_score, stored_id) for negative_score, _, stored_id in heap)
         )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AggregateEvidence:
+    """Independently derivable aggregate over one complete query cohort."""
+
+    average_recall10_ppm: int
+    average_recall100_ppm: int
+    p05_recall100_ppm: int
+    maximum_gets: int
+    maximum_bytes: int
+    quality_gate_passed: bool
+    resource_gate_passed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ContainmentSample:
+    """Truth membership in the pages retained by the hierarchy."""
+
+    query_ordinal: int
+    truth_ids: tuple[int, ...]
+    retained_pages: tuple[PageKey, ...]
+    hit_ids: tuple[int, ...]
+    hits10: int
+    hits: int
+    recall10_ppm: int
+    recall100_ppm: int
+    root_evaluations: int
+    page_evaluations: int
+    scanned_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class ArmSample:
+    """One query's selected-page quality and physical-work evidence."""
+
+    query_ordinal: int
+    truth_ids: tuple[int, ...]
+    selected_pages: tuple[PageKey, ...]
+    hit10_ids: tuple[int, ...]
+    hit_ids: tuple[int, ...]
+    hits10: int
+    hits: int
+    recall10_ppm: int
+    recall100_ppm: int
+    gets: int
+    bytes: int
+    root_evaluations: int
+    page_evaluations: int
+    scanned_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class V98Projection:
+    """Complete 100M resident projection including hierarchy-specific terms."""
+
+    base: ResidentProjection
+    root_groups: int
+    page_summary_bytes: int
+    root_summary_bytes: int
+    page_to_root_bytes: int
+    root_child_bytes: int
+    row_code_offsets_bytes: int
+    root_scores_workspace_bytes: int
+    page_scores_workspace_bytes: int
+    row_scores_workspace_bytes: int
+    shortlist_workspace_bytes: int
+    hierarchy_additional_bytes: int
+    total_bytes: int
+    budget_bytes: int
+    eligible: bool
+
+
+@dataclass(frozen=True, slots=True)
+class HierarchyEvidence:
+    """Small immutable identities for the derived hierarchy artifact."""
+
+    roots: int
+    pages: int
+    summary_books: ArrayIdentity
+    page_summary_codes: ArrayIdentity
+    root_summary_codes: ArrayIdentity
+    page_row_counts: ArrayIdentity
+    ipc_sha256: str
+    ipc_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class ArmEvidence:
+    """One row representation's identities, samples, and 100M projection."""
+
+    name: str
+    row_bytes: int
+    codebook_identity: ArrayIdentity | None
+    codes_identity: ArrayIdentity | None
+    projection: V98Projection
+    aggregate: AggregateEvidence
+    samples: tuple[ArmSample, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class V98Result:
+    """Complete typed producer evidence for the V98 decision."""
+
+    schema: str
+    authority: ScreenAuthority
+    config: HierarchyConfig
+    query_count: int
+    bootstrap_seed: int
+    bootstrap_resamples: int
+    classification: Literal[
+        "hierarchy-containment-rejected",
+        "hierarchy-exact-ceiling-rejected",
+        "widths-evaluated",
+    ]
+    hierarchy: HierarchyEvidence
+    containment_aggregate: AggregateEvidence
+    containment_samples: tuple[ContainmentSample, ...]
+    exact_aggregate: AggregateEvidence | None
+    exact_samples: tuple[ArmSample, ...]
+    arms: tuple[ArmEvidence, ...]
+
+
+def project_v98_resident_bytes_100m(
+    spec: PqSpec, config: HierarchyConfig
+) -> V98Projection:
+    """Extend the V97 worksheet with non-overlapping hierarchy terms."""
+
+    base = project_resident_bytes_100m(spec)
+    pages = base.pages
+    root_groups = (pages + config.pages_per_root - 1) // config.pages_per_root
+    page_summary_bytes = pages * 2 * 16
+    if page_summary_bytes != base.summary_codes_bytes:
+        raise ValueError("V98 page summary projection differs")
+    root_summary_bytes = root_groups * 2 * 16
+    page_to_root_bytes = pages * 4
+    root_child_bytes = root_groups * (4 + 2)
+    row_code_offsets_bytes = (pages + 2) * 8
+    root_scores_workspace_bytes = root_groups * 4
+    page_scores_workspace_bytes = config.maximum_exposed_pages * 4
+    row_scores_workspace_bytes = config.maximum_scanned_rows * 4
+    shortlist_workspace_bytes = config.shortlist_rows * (4 + 8)
+    hierarchy_additional_bytes = sum(
+        (
+            root_summary_bytes,
+            page_to_root_bytes,
+            root_child_bytes,
+            row_code_offsets_bytes,
+            root_scores_workspace_bytes,
+            page_scores_workspace_bytes,
+            row_scores_workspace_bytes,
+            shortlist_workspace_bytes,
+        )
+    )
+    total_bytes = base.total_bytes + hierarchy_additional_bytes
+    return V98Projection(
+        base=base,
+        root_groups=root_groups,
+        page_summary_bytes=page_summary_bytes,
+        root_summary_bytes=root_summary_bytes,
+        page_to_root_bytes=page_to_root_bytes,
+        root_child_bytes=root_child_bytes,
+        row_code_offsets_bytes=row_code_offsets_bytes,
+        root_scores_workspace_bytes=root_scores_workspace_bytes,
+        page_scores_workspace_bytes=page_scores_workspace_bytes,
+        row_scores_workspace_bytes=row_scores_workspace_bytes,
+        shortlist_workspace_bytes=shortlist_workspace_bytes,
+        hierarchy_additional_bytes=hierarchy_additional_bytes,
+        total_bytes=total_bytes,
+        budget_bytes=base.budget_bytes,
+        eligible=total_bytes < base.budget_bytes,
+    )
+
+
+def _aggregate_samples(
+    samples: Sequence[ContainmentSample | ArmSample],
+    *,
+    enforce_resources: bool,
+    config: HierarchyConfig,
+) -> AggregateEvidence:
+    if not samples:
+        raise ValueError("V98 samples are empty")
+    recall10 = [sample.recall10_ppm for sample in samples]
+    recall100 = [sample.recall100_ppm for sample in samples]
+    ordered100 = sorted(recall100)
+    p05_index = max(0, (len(ordered100) * 5 + 99) // 100 - 1)
+    maximum_gets = max(
+        (sample.gets if isinstance(sample, ArmSample) else 0) for sample in samples
+    )
+    maximum_bytes = max(
+        (sample.bytes if isinstance(sample, ArmSample) else 0) for sample in samples
+    )
+    average10 = sum(recall10) // len(recall10)
+    average100 = sum(recall100) // len(recall100)
+    p05 = ordered100[p05_index]
+    return AggregateEvidence(
+        average_recall10_ppm=average10,
+        average_recall100_ppm=average100,
+        p05_recall100_ppm=p05,
+        maximum_gets=maximum_gets,
+        maximum_bytes=maximum_bytes,
+        quality_gate_passed=(
+            average10 >= 960_000 and average100 >= 975_000 and p05 >= 900_000
+        ),
+        resource_gate_passed=(
+            not enforce_resources
+            or (
+                maximum_gets <= config.maximum_gets
+                and maximum_bytes <= config.maximum_bytes
+            )
+        ),
+    )
+
+
+def _containment_sample(
+    query_ordinal: int,
+    truth: np.ndarray,
+    fence: HierarchyFence,
+    inputs: ScreenInputs,
+) -> ContainmentSample:
+    evidence = evaluate_selected_pages(
+        selected_pages=fence.retained_pages,
+        truth_ids=truth,
+        page_by_id=inputs.page_by_id,
+        neighbors=inputs.neighbors,
+    )
+    return ContainmentSample(
+        query_ordinal=query_ordinal,
+        truth_ids=tuple(int(row_id) for row_id in truth),
+        retained_pages=fence.retained_pages,
+        hit_ids=evidence.hit_ids,
+        hits10=evidence.hits10,
+        hits=evidence.hits,
+        recall10_ppm=evidence.recall10_ppm,
+        recall100_ppm=evidence.recall100_ppm,
+        root_evaluations=fence.root_evaluations,
+        page_evaluations=fence.page_evaluations,
+        scanned_rows=fence.scanned_rows,
+    )
+
+
+def _arm_sample(
+    query_ordinal: int,
+    truth: np.ndarray,
+    selected_pages: tuple[PageKey, ...],
+    fence: HierarchyFence,
+    inputs: ScreenInputs,
+) -> ArmSample:
+    evidence = evaluate_selected_pages(
+        selected_pages=selected_pages,
+        truth_ids=truth,
+        page_by_id=inputs.page_by_id,
+        neighbors=inputs.neighbors,
+    )
+    selected = set(selected_pages)
+    cutoff = min(10, inputs.neighbors)
+    return ArmSample(
+        query_ordinal=query_ordinal,
+        truth_ids=tuple(int(row_id) for row_id in truth),
+        selected_pages=selected_pages,
+        hit10_ids=tuple(
+            int(row_id)
+            for row_id in truth[:cutoff]
+            if inputs.page_by_id[int(row_id)] in selected
+        ),
+        hit_ids=evidence.hit_ids,
+        hits10=evidence.hits10,
+        hits=evidence.hits,
+        recall10_ppm=evidence.recall10_ppm,
+        recall100_ppm=evidence.recall100_ppm,
+        gets=len(selected_pages),
+        bytes=sum(inputs.pages[key].encoded_bytes for key in selected_pages),
+        root_evaluations=fence.root_evaluations,
+        page_evaluations=fence.page_evaluations,
+        scanned_rows=fence.scanned_rows,
+    )
+
+
+def _retained_row_positions(
+    fence: HierarchyFence,
+    inputs: ScreenInputs,
+    position_by_id: dict[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    row_ids = np.asarray(
+        [
+            int(row_id)
+            for key in fence.retained_pages
+            for row_id in inputs.row_order_by_page[key]
+        ],
+        dtype=np.int64,
+    )
+    positions = np.asarray(
+        [position_by_id[int(row_id)] for row_id in row_ids], dtype=np.int64
+    )
+    return row_ids, positions
+
+
+def _score_exact_retained_rows(
+    query: np.ndarray,
+    row_ids: np.ndarray,
+    positions: np.ndarray,
+    vectors: np.ndarray,
+    shortlist_rows: int,
+) -> tuple[int, ...]:
+    count = min(shortlist_rows, row_ids.size)
+    heap: list[tuple[float, int, int]] = []
+    for start in range(0, row_ids.size, 8_192):
+        stop = min(start + 8_192, row_ids.size)
+        delta = vectors[positions[start:stop]] - query
+        scores = np.einsum("ij,ij->i", delta, delta, dtype=np.float32)
+        for score, row_id in zip(
+            scores.tolist(), row_ids[start:stop].tolist(), strict=True
+        ):
+            _push_best(heap, float(score), int(row_id), count)
+    return tuple(
+        row_id
+        for _, row_id in sorted(
+            ((-negative_score, stored_id) for negative_score, _, stored_id in heap)
+        )
+    )
+
+
+def _selected_pages_from_rows(
+    ranked_row_ids: Sequence[int], inputs: ScreenInputs, config: HierarchyConfig
+) -> tuple[PageKey, ...]:
+    return select_budgeted_pages(
+        (inputs.page_by_id[int(row_id)] for row_id in ranked_row_ids),
+        inputs.pages,
+        max_gets=config.maximum_gets,
+        max_bytes=config.maximum_bytes,
+    )
+
+
+def _hierarchy_evidence(artifact: HierarchyArtifact) -> HierarchyEvidence:
+    return HierarchyEvidence(
+        roots=len(artifact.roots),
+        pages=len(artifact.page_keys),
+        summary_books=artifact.summary_books_identity,
+        page_summary_codes=artifact.page_summary_codes_identity,
+        root_summary_codes=artifact.root_summary_codes_identity,
+        page_row_counts=artifact.page_row_counts_identity,
+        ipc_sha256=artifact.ipc_sha256,
+        ipc_bytes=len(artifact.ipc_bytes),
+    )
+
+
+def _early_result(
+    *,
+    authority: ScreenAuthority,
+    config: HierarchyConfig,
+    artifact: HierarchyArtifact,
+    containment_samples: tuple[ContainmentSample, ...],
+    containment_aggregate: AggregateEvidence,
+    classification: Literal[
+        "hierarchy-containment-rejected", "hierarchy-exact-ceiling-rejected"
+    ],
+    exact_samples: tuple[ArmSample, ...] = (),
+    exact_aggregate: AggregateEvidence | None = None,
+) -> V98Result:
+    return V98Result(
+        schema="borsuk-v98-hierarchical-row-router-v1",
+        authority=authority,
+        config=config,
+        query_count=len(containment_samples),
+        bootstrap_seed=authority.seed,
+        bootstrap_resamples=10_000,
+        classification=classification,
+        hierarchy=_hierarchy_evidence(artifact),
+        containment_aggregate=containment_aggregate,
+        containment_samples=containment_samples,
+        exact_aggregate=exact_aggregate,
+        exact_samples=exact_samples,
+        arms=(),
+    )
+
+
+def evaluate_v98(
+    inputs: ScreenInputs,
+    authority: ScreenAuthority,
+    config: HierarchyConfig,
+) -> V98Result:
+    """Run V98's containment, exact ceiling, then registered width arms."""
+
+    queries = np.asarray(inputs.queries)
+    truth_ids = np.asarray(inputs.truth_ids)
+    if (
+        queries.ndim != 2
+        or queries.dtype != np.float32
+        or truth_ids.shape != (queries.shape[0], inputs.neighbors)
+        or not np.issubdtype(truth_ids.dtype, np.integer)
+        or not np.isfinite(queries).all()
+        or authority.dimensions != inputs.vectors.shape[1]
+        or authority.seed != inputs.seed
+        or inputs.max_gets != config.maximum_gets
+        or inputs.max_bytes != config.maximum_bytes
+    ):
+        raise ValueError("V98 input authority differs")
+    artifact = build_hierarchy(inputs, config)
+    fences = tuple(
+        route_hierarchy(query, artifact, config) for query in queries
+    )
+    containment_samples = tuple(
+        _containment_sample(ordinal, truth_ids[ordinal], fences[ordinal], inputs)
+        for ordinal in range(queries.shape[0])
+    )
+    containment_aggregate = _aggregate_samples(
+        containment_samples, enforce_resources=False, config=config
+    )
+    if not containment_aggregate.quality_gate_passed:
+        return _early_result(
+            authority=authority,
+            config=config,
+            artifact=artifact,
+            containment_samples=containment_samples,
+            containment_aggregate=containment_aggregate,
+            classification="hierarchy-containment-rejected",
+        )
+
+    source_ids = np.asarray(inputs.source_ids)
+    vectors = np.asarray(inputs.vectors)
+    position_by_id = {
+        int(row_id): position for position, row_id in enumerate(source_ids)
+    }
+    retained = tuple(
+        _retained_row_positions(fence, inputs, position_by_id) for fence in fences
+    )
+    exact_samples_list: list[ArmSample] = []
+    for ordinal, query in enumerate(queries):
+        row_ids, positions = retained[ordinal]
+        ranked = _score_exact_retained_rows(
+            query, row_ids, positions, vectors, config.shortlist_rows
+        )
+        selected = _selected_pages_from_rows(ranked, inputs, config)
+        exact_samples_list.append(
+            _arm_sample(ordinal, truth_ids[ordinal], selected, fences[ordinal], inputs)
+        )
+    exact_samples = tuple(exact_samples_list)
+    exact_aggregate = _aggregate_samples(
+        exact_samples, enforce_resources=True, config=config
+    )
+    if not (
+        exact_aggregate.quality_gate_passed and exact_aggregate.resource_gate_passed
+    ):
+        return _early_result(
+            authority=authority,
+            config=config,
+            artifact=artifact,
+            containment_samples=containment_samples,
+            containment_aggregate=containment_aggregate,
+            classification="hierarchy-exact-ceiling-rejected",
+            exact_samples=exact_samples,
+            exact_aggregate=exact_aggregate,
+        )
+
+    base_positions = np.asarray(
+        [
+            position
+            for position, row_id in enumerate(source_ids)
+            if inputs.page_by_id[int(row_id)].object_role == "base"
+        ],
+        dtype=np.int64,
+    )
+    base_vectors = np.ascontiguousarray(vectors[base_positions])
+    arms: list[ArmEvidence] = []
+    for spec in (PQ16X8, PQ24X8, PQ32X8, PQ32X4):
+        books = fit_pq(
+            base_vectors,
+            spec,
+            seed=inputs.seed,
+            sample_rows=inputs.training_rows,
+            iterations=inputs.training_iterations,
+        )
+        codes = encode_pq(vectors, books, spec)
+        samples: list[ArmSample] = []
+        for ordinal, query in enumerate(queries):
+            row_ids, positions = retained[ordinal]
+            ranked = score_retained_rows(
+                query,
+                row_ids,
+                np.ascontiguousarray(codes[positions]),
+                books,
+                spec,
+                maximum_rows=config.maximum_scanned_rows,
+                shortlist_rows=min(config.shortlist_rows, row_ids.size),
+            )
+            selected = _selected_pages_from_rows(ranked, inputs, config)
+            samples.append(
+                _arm_sample(
+                    ordinal, truth_ids[ordinal], selected, fences[ordinal], inputs
+                )
+            )
+        sample_tuple = tuple(samples)
+        arms.append(
+            ArmEvidence(
+                name=spec.name,
+                row_bytes=spec.row_bytes,
+                codebook_identity=_array_identity(books),
+                codes_identity=_array_identity(codes),
+                projection=project_v98_resident_bytes_100m(spec, config),
+                aggregate=_aggregate_samples(
+                    sample_tuple, enforce_resources=True, config=config
+                ),
+                samples=sample_tuple,
+            )
+        )
+    summary_samples = tuple(
+        _arm_sample(
+            ordinal,
+            truth_ids[ordinal],
+            select_budgeted_pages(
+                fences[ordinal].retained_pages,
+                inputs.pages,
+                max_gets=config.maximum_gets,
+                max_bytes=config.maximum_bytes,
+            ),
+            fences[ordinal],
+            inputs,
+        )
+        for ordinal in range(queries.shape[0])
+    )
+    arms.append(
+        ArmEvidence(
+            name=SUMMARY_ONLY_PQ16X8.name,
+            row_bytes=0,
+            codebook_identity=None,
+            codes_identity=None,
+            projection=project_v98_resident_bytes_100m(
+                SUMMARY_ONLY_PQ16X8, config
+            ),
+            aggregate=_aggregate_samples(
+                summary_samples, enforce_resources=True, config=config
+            ),
+            samples=summary_samples,
+        )
+    )
+    return V98Result(
+        schema="borsuk-v98-hierarchical-row-router-v1",
+        authority=authority,
+        config=config,
+        query_count=queries.shape[0],
+        bootstrap_seed=authority.seed,
+        bootstrap_resamples=10_000,
+        classification="widths-evaluated",
+        hierarchy=_hierarchy_evidence(artifact),
+        containment_aggregate=containment_aggregate,
+        containment_samples=containment_samples,
+        exact_aggregate=exact_aggregate,
+        exact_samples=exact_samples,
+        arms=tuple(arms),
+    )
+
+
+def canonical_v98_result_bytes(result: V98Result) -> bytes:
+    """Serialize typed V98 evidence as canonical newline-terminated JSON."""
+
+    if (
+        not isinstance(result, V98Result)
+        or result.schema != "borsuk-v98-hierarchical-row-router-v1"
+        or result.query_count != len(result.containment_samples)
+        or tuple(sample.query_ordinal for sample in result.containment_samples)
+        != tuple(range(result.query_count))
+        or result.bootstrap_resamples != 10_000
+        or result.bootstrap_seed != result.authority.seed
+        or (
+            result.classification == "hierarchy-containment-rejected"
+            and (result.exact_samples or result.arms or result.exact_aggregate is not None)
+        )
+        or (
+            result.classification == "hierarchy-exact-ceiling-rejected"
+            and (len(result.exact_samples) != result.query_count or result.arms)
+        )
+        or (
+            result.classification == "widths-evaluated"
+            and (
+                len(result.exact_samples) != result.query_count
+                or len(result.arms) != 5
+            )
+        )
+    ):
+        raise ValueError("V98 result structure differs")
+    return (
+        json.dumps(
+            asdict(result),
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        + b"\n"
     )

@@ -1,5 +1,6 @@
 import dataclasses
 import hashlib
+import json
 import unittest
 
 import numpy as np
@@ -11,8 +12,10 @@ from scripts.v97_row_width_screen import (
     PQ24X8,
     PQ32X4,
     PQ32X8,
+    ObjectIdentity,
     PageKey,
     RoutedPage,
+    ScreenAuthority,
     ScreenInputs,
     adc_scores,
     pack_pq4,
@@ -22,7 +25,10 @@ from scripts.v98_hierarchical_row_router import (
     RootGroup,
     blockwise_top_rows,
     build_hierarchy,
+    canonical_v98_result_bytes,
+    evaluate_v98,
     hierarchy_ipc_schema,
+    project_v98_resident_bytes_100m,
     read_hierarchy_ipc,
     route_hierarchy,
     score_retained_rows,
@@ -444,6 +450,195 @@ class V98BoundedRoutingTests(unittest.TestCase):
                 maximum_rows=2,
                 shortlist_rows=1,
             )
+
+
+class V98ProducerTests(unittest.TestCase):
+    @staticmethod
+    def inputs(
+        *,
+        dimensions: int,
+        base_pages: int,
+        delta_pages: int,
+        query_count: int,
+        truth_key: PageKey,
+        far_truth: bool,
+    ) -> ScreenInputs:
+        keys = tuple(
+            [PageKey("base", ordinal) for ordinal in range(base_pages)]
+            + [PageKey("delta", ordinal) for ordinal in range(delta_pages)]
+        )
+        source_ids: list[int] = []
+        vectors: list[np.ndarray] = []
+        row_order_by_page: dict[PageKey, tuple[int, ...]] = {}
+        page_by_id: dict[int, PageKey] = {}
+        next_id = 1_000
+        truth_id = -1
+        for key in keys:
+            rows = (next_id, next_id + 1)
+            next_id += 2
+            row_order_by_page[key] = rows
+            for local, row_id in enumerate(rows):
+                source_ids.append(row_id)
+                page_by_id[row_id] = key
+                if key.object_role == "delta":
+                    level = np.float32(20.0 + key.ordinal)
+                else:
+                    level = np.float32(local * 0.0001)
+                if key == truth_key and local == 0:
+                    truth_id = row_id
+                    if far_truth:
+                        level = np.float32(100.0)
+                vectors.append(np.full(dimensions, level, dtype=np.float32))
+        if truth_id < 0:
+            raise AssertionError("truth page missing from fixture")
+        ids = np.asarray(source_ids, dtype=np.int64)
+        queries = np.zeros((query_count, dimensions), dtype=np.float32)
+        truth = np.full((query_count, 1), truth_id, dtype=np.int64)
+        pages = {
+            key: RoutedPage(
+                key=key,
+                offset=position * 2_048,
+                encoded_bytes=1_024,
+            )
+            for position, key in enumerate(keys)
+        }
+        return ScreenInputs(
+            source_ids=ids,
+            vectors=np.asarray(vectors, dtype=np.float32),
+            queries=queries,
+            truth_ids=truth,
+            page_by_id=page_by_id,
+            pages=pages,
+            row_order_by_page=row_order_by_page,
+            seed=7_216,
+            neighbors=1,
+            max_gets=32,
+            max_bytes=16 * 1024**2,
+            training_rows=max(256, min(ids.size, 1_024)),
+            training_iterations=1,
+        )
+
+    @staticmethod
+    def authority(inputs: ScreenInputs) -> ScreenAuthority:
+        identities = {
+            role: ObjectIdentity(
+                uri=f"s3://fixture/{role}",
+                sha256=f"{position + 1:x}" * 64,
+                bytes=position + 1,
+            )
+            for position, role in enumerate(
+                ("source", "queries", "truth", "generation", "base", "delta")
+            )
+        }
+        return ScreenAuthority(
+            source_commit="a" * 40,
+            critique_result_sha256="b" * 64,
+            page_map_sha256="c" * 64,
+            dimensions=inputs.vectors.shape[1],
+            seed=inputs.seed,
+            identities=identities,
+        )
+
+    def test_containment_failure_stops_before_exact_and_width_arms(self) -> None:
+        # Break caught: an already-failed hierarchy spends time fitting widths
+        # or emits arm evidence that can be mistaken for a G1 comparison.
+        inputs = self.inputs(
+            dimensions=16,
+            base_pages=1_024,
+            delta_pages=1,
+            query_count=3,
+            truth_key=PageKey("delta", 0),
+            far_truth=False,
+        )
+        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+
+        self.assertEqual(result.classification, "hierarchy-containment-rejected")
+        self.assertEqual(len(result.containment_samples), 3)
+        self.assertTrue(all(sample.hit_ids == () for sample in result.containment_samples))
+        self.assertEqual(result.exact_samples, ())
+        self.assertEqual(result.arms, ())
+
+    def test_exact_failure_stops_before_width_arms_and_retains_literal_evidence(self) -> None:
+        # Break caught: compressed arms run after the exact row ceiling proves
+        # the fixed hierarchy/planner cannot meet the quality contract.
+        truth_key = PageKey("base", 1_000)
+        inputs = self.inputs(
+            dimensions=16,
+            base_pages=1_024,
+            delta_pages=1,
+            query_count=1,
+            truth_key=truth_key,
+            far_truth=True,
+        )
+        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+
+        self.assertEqual(result.classification, "hierarchy-exact-ceiling-rejected")
+        self.assertEqual(result.containment_samples[0].hit_ids, (3_000,))
+        self.assertEqual(result.exact_samples[0].hit_ids, ())
+        self.assertLessEqual(result.exact_samples[0].gets, 32)
+        self.assertLessEqual(result.exact_samples[0].bytes, 16 * 1024**2)
+        self.assertEqual(result.arms, ())
+
+    def test_passing_ceilings_execute_five_registered_arms_and_canonicalize(self) -> None:
+        # Break caught: a width is skipped/reordered, the summary-only control
+        # gains a distinct planner, or result bytes are not canonical.
+        inputs = self.inputs(
+            dimensions=96,
+            base_pages=128,
+            delta_pages=9,
+            query_count=2,
+            truth_key=PageKey("base", 0),
+            far_truth=False,
+        )
+        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+
+        self.assertEqual(result.classification, "widths-evaluated")
+        self.assertEqual(result.containment_samples[0].hit_ids, (1_000,))
+        self.assertEqual(result.exact_samples[0].hit_ids, (1_000,))
+        self.assertEqual(
+            tuple(arm.name for arm in result.arms),
+            ("pq16x8", "pq24x8", "pq32x8", "pq32x4", "summary-only-pq16x8"),
+        )
+        self.assertTrue(all(len(arm.samples) == 2 for arm in result.arms))
+        body = canonical_v98_result_bytes(result)
+        self.assertTrue(body.endswith(b"\n"))
+        self.assertNotIn(b" ", body)
+        self.assertEqual(json.loads(body), json.loads(body.decode()))
+
+    def test_full_development_contract_emits_1000_unique_query_ordinals(self) -> None:
+        # Break caught: a development result silently evaluates a short slice
+        # or duplicates query evidence while claiming all 1,000 queries.
+        inputs = self.inputs(
+            dimensions=16,
+            base_pages=1_024,
+            delta_pages=1,
+            query_count=1_000,
+            truth_key=PageKey("delta", 0),
+            far_truth=False,
+        )
+        result = evaluate_v98(inputs, self.authority(inputs), V98HierarchyAuthorityTests.config())
+
+        self.assertEqual(result.query_count, 1_000)
+        self.assertEqual(
+            tuple(sample.query_ordinal for sample in result.containment_samples),
+            tuple(range(1_000)),
+        )
+
+    def test_100m_projection_adds_hierarchy_terms_once_and_enforces_budget(self) -> None:
+        # Break caught: root summaries or hierarchy directories disappear from
+        # RAM accounting, or page summaries are charged twice.
+        config = V98HierarchyAuthorityTests.config()
+        projection = project_v98_resident_bytes_100m(PQ16X8, config)
+
+        self.assertEqual(projection.page_summary_bytes, 390_625 * 2 * 16)
+        self.assertEqual(projection.root_summary_bytes, 48_829 * 2 * 16)
+        self.assertEqual(projection.page_to_root_bytes, 390_625 * 4)
+        self.assertEqual(projection.root_child_bytes, 48_829 * 6)
+        self.assertLess(projection.total_bytes, 3 * 1024**3)
+        self.assertTrue(projection.eligible)
+        self.assertFalse(
+            project_v98_resident_bytes_100m(PQ32X8, config).eligible
+        )
 
 
 if __name__ == "__main__":
