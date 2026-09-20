@@ -410,14 +410,17 @@ def _load_mutation_rows(
         raise ValueError("compaction mutation schema differs")
     rows: dict[int, tuple[int, int, int | None, int | None]] = {}
     prior_id: int | None = None
-    for row_id, sequence, state, run_id, row in zip(
-        table.column("id").to_pylist(),
-        table.column("sequence").to_pylist(),
-        table.column("state").to_pylist(),
-        table.column("run_id").to_pylist(),
-        table.column("row").to_pylist(),
-        strict=True,
-    ):
+    row_ids = table.column("id").to_pylist()
+    sequences = table.column("sequence").to_pylist()
+    states = table.column("state").to_pylist()
+    run_ids = table.column("run_id").to_pylist()
+    row_ordinals = table.column("row").to_pylist()
+    for index in range(table.num_rows):
+        row_id = row_ids[index]
+        sequence = sequences[index]
+        state = states[index]
+        run_id = run_ids[index]
+        row = row_ordinals[index]
         if (
             row_id in rows
             or (prior_id is not None and row_id <= prior_id)
@@ -604,9 +607,10 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
                 ids = table.column("id").to_pylist()
                 sequences = table.column("sequence").to_pylist()
                 states = table.column("state").to_pylist()
-                for index, (row_id, sequence, state) in enumerate(
-                    zip(ids, sequences, states, strict=True)
-                ):
+                for index in range(table.num_rows):
+                    row_id = ids[index]
+                    sequence = sequences[index]
+                    state = states[index]
                     directory = mutations.get(int(row_id))
                     if directory is None or state != 0 or sequence > directory[0]:
                         raise ValueError("compaction live mutation binding differs")

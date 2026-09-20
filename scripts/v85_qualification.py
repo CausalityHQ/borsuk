@@ -283,7 +283,8 @@ def validate_delta_compaction_screen(receipt: Any) -> dict[str, Any]:
     worst_recall = None
     baseline_truth = None
     baseline_generation = None
-    for expected_runs, candidate in zip((1, 10, 100), cells, strict=True):
+    for index, expected_runs in enumerate((1, 10, 100)):
+        candidate = cells[index]
         cell = _exact_keys(candidate, {"result", "runs"}, f"{label} cell")
         if cell["runs"] != expected_runs:
             raise ValueError(f"{label} run count differs")
@@ -468,7 +469,8 @@ def validate_qualification_receipt(receipt: Any, matrix: Any) -> dict[str, Any]:
         raise ValueError("qualification cells differ")
     derived_cells = []
     cell_keys = {"elapsed_ns", "peak_rss_bytes", "runs", "samples"}
-    for expected_runs, candidate in zip(matrix["run_counts"], cells, strict=True):
+    for index, expected_runs in enumerate(matrix["run_counts"]):
+        candidate = cells[index]
         cell = _exact_keys(candidate, cell_keys, "qualification cell")
         sample_summary = _qualification_samples(
             cell["samples"], matrix, "qualification cell"

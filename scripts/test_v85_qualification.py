@@ -1,3 +1,4 @@
+import ast
 import copy
 import json
 import pathlib
@@ -15,6 +16,26 @@ from scripts.v85_qualification import (
 
 
 class V85QualificationTests(unittest.TestCase):
+    def test_remote_python39_dependency_closure_avoids_zip_strict(self) -> None:
+        # Break caught: Amazon Linux runs Python 3.9, so any reachable
+        # zip(strict=True) fails before the scientific receipt is written.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for relative in (
+            "scripts/v85_build_delta.py",
+            "scripts/v85_delta_compaction_screen.py",
+            "scripts/v85_qualification.py",
+        ):
+            tree = ast.parse((root / relative).read_text())
+            incompatible = [
+                node.lineno
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "zip"
+                and any(keyword.arg == "strict" for keyword in node.keywords)
+            ]
+            self.assertEqual(incompatible, [], relative)
+
     def test_compaction_screen_rejects_mismatched_reader_and_truth_rows_on_python39(
         self,
     ) -> None:
