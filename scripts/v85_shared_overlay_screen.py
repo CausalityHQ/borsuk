@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 from typing import Any
@@ -12,6 +13,10 @@ import numpy as np
 import pyarrow.parquet as pq
 
 _PAGE_HEADER_BYTES = 64
+_V85_PAIRED_PREFIX_QUERIES = 32
+_V85_PAIRED_PREFIX_SHA256 = (
+    "354ddcb810a13ee8fe981b6904bdfeb21084fe423c79deca8be75f32d21b0aa1"
+)
 
 
 def _fit_grouped_page_posterior(
@@ -819,6 +824,198 @@ def _nearest_percentile(values: list[int], quantile: float) -> int:
     return ordered[round((len(ordered) - 1) * quantile)]
 
 
+def _paired_bootstrap_recall_interval(
+    differences: np.ndarray,
+    *,
+    neighbors: int,
+    seed: int,
+    repetitions: int,
+) -> list[int]:
+    differences = np.asarray(differences, dtype=np.int64)
+    if (
+        differences.ndim != 1
+        or differences.size == 0
+        or neighbors <= 0
+        or repetitions <= 0
+    ):
+        raise ValueError("paired bootstrap differs")
+    generator = np.random.default_rng(seed)
+    means = np.empty(repetitions, dtype=np.float64)
+    chunk_repetitions = 2_048
+    for start in range(0, repetitions, chunk_repetitions):
+        stop = min(start + chunk_repetitions, repetitions)
+        sample_indices = generator.integers(
+            0,
+            differences.size,
+            size=(stop - start, differences.size),
+        )
+        means[start:stop] = np.mean(differences[sample_indices], axis=1)
+    lower, upper = np.quantile(means, [0.025, 0.975], method="nearest")
+    return [
+        round(float(lower) * 1_000_000 / neighbors),
+        round(float(upper) * 1_000_000 / neighbors),
+    ]
+
+
+def _paired_rescore_evidence(
+    rank_weighted_cells: list[dict[str, Any]],
+    page_posterior_cells: list[dict[str, Any]],
+    *,
+    neighbors: int,
+    historical_prefix_queries: int,
+    historical_prefix_sha256: str,
+    bootstrap_seed: int,
+    bootstrap_repetitions: int,
+) -> dict[str, Any]:
+    """Bind and compare the three frozen V85 arms query by query."""
+
+    def rank_cell(top_rows: int) -> dict[str, Any]:
+        matches = [
+            cell
+            for cell in rank_weighted_cells
+            if cell.get("planner") == "exact"
+            and cell.get("page_cap") == 81
+            and cell.get("top_rows") == top_rows
+        ]
+        if len(matches) != 1:
+            raise ValueError("paired rescore arms differ")
+        return matches[0]
+
+    if (
+        neighbors <= 0
+        or historical_prefix_queries <= 0
+        or len(historical_prefix_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in historical_prefix_sha256)
+        or bootstrap_repetitions <= 0
+        or len(page_posterior_cells) != 1
+        or page_posterior_cells[0].get("top_rows") != 2_048
+    ):
+        raise ValueError("paired rescore authority differs")
+    rank_1024 = rank_cell(1_024)
+    rank_2048 = rank_cell(2_048)
+    posterior = page_posterior_cells[0]
+    arm_samples = {
+        "rank_1024": rank_1024.get("samples"),
+        "rank_2048": rank_2048.get("samples"),
+        "posterior": posterior.get("samples"),
+    }
+    if not all(isinstance(samples, list) and samples for samples in arm_samples.values()):
+        raise ValueError("paired rescore samples differ")
+    query_count = len(arm_samples["rank_1024"])
+    if (
+        historical_prefix_queries > query_count
+        or any(len(samples) != query_count for samples in arm_samples.values())
+    ):
+        raise ValueError("paired rescore samples differ")
+
+    per_query = []
+    for query in range(query_count):
+        samples = {name: values[query] for name, values in arm_samples.items()}
+        if any(sample.get("query") != query for sample in samples.values()):
+            raise ValueError("paired rescore query order differs")
+        hits = {}
+        for name, sample in samples.items():
+            for metric in ("exact_hits", "page_sq8_hits"):
+                value = sample.get(metric)
+                if (
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or not 0 <= value <= neighbors
+                ):
+                    raise ValueError("paired rescore hits differ")
+                hits[f"{name}_{metric}"] = value
+        per_query.append(
+            {
+                "posterior_exact_hits": hits["posterior_exact_hits"],
+                "posterior_page_sq8_hits": hits["posterior_page_sq8_hits"],
+                "query": query,
+                "rank_1024_exact_hits": hits["rank_1024_exact_hits"],
+                "rank_1024_page_sq8_hits": hits["rank_1024_page_sq8_hits"],
+                "rank_2048_exact_hits": hits["rank_2048_exact_hits"],
+                "rank_2048_page_sq8_hits": hits["rank_2048_page_sq8_hits"],
+            }
+        )
+
+    prefix_payload = {
+        "page_posterior": arm_samples["posterior"][:historical_prefix_queries],
+        "rank_exact_top_1024": arm_samples["rank_1024"][:historical_prefix_queries],
+        "rank_exact_top_2048": arm_samples["rank_2048"][:historical_prefix_queries],
+    }
+    prefix_bytes = json.dumps(
+        prefix_payload, separators=(",", ":"), sort_keys=True
+    ).encode()
+    observed_prefix_sha256 = hashlib.sha256(prefix_bytes).hexdigest()
+    if observed_prefix_sha256 != historical_prefix_sha256:
+        raise ValueError("paired rescore historical prefix differs")
+
+    def arm_summary(prefix: str) -> dict[str, int]:
+        exact_hits = sum(sample[f"{prefix}_exact_hits"] for sample in per_query)
+        page_hits = sum(
+            sample[f"{prefix}_page_sq8_hits"] for sample in per_query
+        )
+        denominator = query_count * neighbors
+        return {
+            "exact_hits": exact_hits,
+            "exact_recall_ppm": round(exact_hits * 1_000_000 / denominator),
+            "page_sq8_hits": page_hits,
+            "page_sq8_recall_ppm": round(page_hits * 1_000_000 / denominator),
+        }
+
+    def comparison(reference: str) -> dict[str, Any]:
+        compared = {}
+        for metric in ("page_sq8", "exact"):
+            differences = np.asarray(
+                [
+                    sample[f"posterior_{metric}_hits"]
+                    - sample[f"{reference}_{metric}_hits"]
+                    for sample in per_query
+                ],
+                dtype=np.int64,
+            )
+            difference_hits = int(np.sum(differences))
+            compared[metric] = {
+                "difference_hits": difference_hits,
+                "difference_recall_ppm": round(
+                    difference_hits * 1_000_000 / (query_count * neighbors)
+                ),
+                "paired_bootstrap_95_recall_ppm": (
+                    _paired_bootstrap_recall_interval(
+                        differences,
+                        neighbors=neighbors,
+                        seed=bootstrap_seed,
+                        repetitions=bootstrap_repetitions,
+                    )
+                ),
+            }
+        return compared
+
+    return {
+        "arms": {
+            "posterior_2048": arm_summary("posterior"),
+            "rank_exact_1024": arm_summary("rank_1024"),
+            "rank_exact_2048": arm_summary("rank_2048"),
+        },
+        "bootstrap": {
+            "method": "paired-query-percentile",
+            "repetitions": bootstrap_repetitions,
+            "seed": bootstrap_seed,
+        },
+        "claim_eligible": False,
+        "comparisons": {
+            "posterior_minus_rank_1024": comparison("rank_1024"),
+            "posterior_minus_rank_2048": comparison("rank_2048"),
+        },
+        "historical_prefix": {
+            "query_count": historical_prefix_queries,
+            "sha256": observed_prefix_sha256,
+            "verified": True,
+        },
+        "per_query": per_query,
+        "query_count": query_count,
+        "schema": "borsuk-v85-paired-rescore-v1",
+    }
+
+
 def evaluate_physical_oracle(
     *,
     base_ids: np.ndarray,
@@ -1077,6 +1274,7 @@ def evaluate_overlay(
     shortlists: tuple[int, ...] = (256, 512, 1024),
     rank_top_rows: tuple[int, ...] = (512, 1024, 2048),
     rank_page_caps: tuple[int, ...] = (64, 81),
+    rank_planners: tuple[str, ...] = ("greedy", "exact"),
     logical_run_counts: tuple[int, ...] = (1, 10, 100),
     seed: int = 85,
     base_ids: np.ndarray | None = None,
@@ -1114,8 +1312,10 @@ def evaluate_overlay(
         or neighbors <= 0
         or not rank_top_rows
         or not rank_page_caps
+        or not rank_planners
         or min(rank_top_rows) <= 0
         or min(rank_page_caps) <= 0
+        or any(planner not in {"greedy", "exact"} for planner in rank_planners)
         or training_sample_rows <= 0
         or encode_chunk_rows <= 0
         or max_base_bytes <= 0
@@ -1296,7 +1496,7 @@ def evaluate_overlay(
         (top_rows, page_cap, planner)
         for top_rows in rank_top_rows
         for page_cap in rank_page_caps
-        for planner in ("greedy", "exact")
+        for planner in rank_planners
     ):
             samples = []
             exact_hits = 0
@@ -1716,6 +1916,7 @@ def main() -> None:
     parser.add_argument("--landmark-incidence", action="store_true")
     parser.add_argument("--page-posterior", action="store_true")
     parser.add_argument("--exact-row-control", action="store_true")
+    parser.add_argument("--paired-rescore", action="store_true")
     args = parser.parse_args()
     if not 0 < args.base_rows < args.rows:
         parser.error("base rows must be inside the corpus")
@@ -1730,6 +1931,15 @@ def main() -> None:
         raise ValueError("base layout order differs")
     if args.exact_row_control and (args.oracle_only or args.landmark_incidence or args.page_posterior):
         parser.error("exact row control must run alone")
+    if args.paired_rescore and (
+        args.oracle_only
+        or args.landmark_incidence
+        or args.page_posterior
+        or args.exact_row_control
+    ):
+        parser.error("paired rescore must run alone")
+    if args.paired_rescore and args.query_count != 1_000:
+        parser.error("paired rescore requires the complete 1,000-query development split")
     if args.oracle_only:
         result = evaluate_physical_oracle(
             base_ids=source_ids[base_order],
@@ -1747,16 +1957,36 @@ def main() -> None:
             "truth_ids": truth_ids,
         }
         if not args.exact_row_control:
-            evaluation_args.update(
-                landmark_count=1_024 if args.landmark_incidence else 0,
-                posterior_training_queries=256 if args.page_posterior else 0,
-            )
+            if args.paired_rescore:
+                evaluation_args.update(
+                    logical_run_counts=(),
+                    posterior_training_queries=256,
+                    rank_page_caps=(81,),
+                    rank_planners=("exact",),
+                    rank_top_rows=(1_024, 2_048),
+                    shortlists=(),
+                )
+            else:
+                evaluation_args.update(
+                    landmark_count=1_024 if args.landmark_incidence else 0,
+                    posterior_training_queries=256 if args.page_posterior else 0,
+                )
         result = evaluation(
             source[base_order],
             source[args.base_rows : args.rows],
             queries,
             **evaluation_args,
         )
+        if args.paired_rescore:
+            result["paired_rescore"] = _paired_rescore_evidence(
+                result["rank_weighted_cells"],
+                result["page_posterior_cells"],
+                neighbors=100,
+                historical_prefix_queries=_V85_PAIRED_PREFIX_QUERIES,
+                historical_prefix_sha256=_V85_PAIRED_PREFIX_SHA256,
+                bootstrap_seed=85_000,
+                bootstrap_repetitions=100_000,
+            )
     body = json.dumps(result, separators=(",", ":"), sort_keys=True) + "\n"
     args.output.write_text(body)
     print(body, end="")

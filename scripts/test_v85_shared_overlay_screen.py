@@ -1,3 +1,4 @@
+import copy
 import itertools
 import pathlib
 import subprocess
@@ -17,6 +18,7 @@ from scripts.v85_shared_overlay_screen import (
     _maximum_physical_oracle_hits,
     _page_payload_bytes,
     _page_posterior_features,
+    _paired_rescore_evidence,
     _score_page_posterior,
     _select_optimal_weighted_pages,
     _select_rank_weighted_pages,
@@ -27,6 +29,134 @@ from scripts.v85_shared_overlay_screen import (
 
 
 class V85SharedOverlayScreenTests(unittest.TestCase):
+    def test_cli_exposes_frozen_paired_rescore(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(pathlib.Path(__file__).with_name("v85_shared_overlay_screen.py")),
+                "--help",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertIn("--paired-rescore", completed.stdout)
+
+    def test_paired_rescore_binds_prefix_and_reports_paired_intervals(self) -> None:
+        def rank_cell(top_rows: int, page_hits: list[int], exact_hits: list[int]):
+            return {
+                "page_cap": 81,
+                "planner": "exact",
+                "samples": [
+                    {
+                        "base_bytes": 1_000 + query,
+                        "base_gets": 10 + query,
+                        "exact_hits": exact_hits[query],
+                        "page_sq8_hits": page_hits[query],
+                        "query": query,
+                    }
+                    for query in range(3)
+                ],
+                "top_rows": top_rows,
+            }
+
+        rank_cells = [
+            rank_cell(1_024, [9, 8, 7], [10, 9, 8]),
+            rank_cell(2_048, [8, 8, 8], [9, 9, 9]),
+        ]
+        posterior = {
+            "samples": [
+                {
+                    "base_bytes": 2_000 + query,
+                    "base_gets": 20 + query,
+                    "candidate_oracle_hits": 10,
+                    "exact_hits": [8, 10, 9][query],
+                    "page_sq8_hits": [7, 9, 8][query],
+                    "query": query,
+                }
+                for query in range(3)
+            ],
+            "top_rows": 2_048,
+        }
+        expected_prefix_sha256 = (
+            "fa46f147f0ed47cc80f9fe0a488c46af098a12ef6da09b2615e8622858f6ec7f"
+        )
+
+        evidence = _paired_rescore_evidence(
+            rank_cells,
+            [posterior],
+            neighbors=10,
+            historical_prefix_queries=3,
+            historical_prefix_sha256=expected_prefix_sha256,
+            bootstrap_seed=85,
+            bootstrap_repetitions=10_000,
+        )
+
+        self.assertEqual(evidence["schema"], "borsuk-v85-paired-rescore-v1")
+        self.assertEqual(evidence["query_count"], 3)
+        self.assertEqual(
+            evidence["historical_prefix"],
+            {
+                "query_count": 3,
+                "sha256": expected_prefix_sha256,
+                "verified": True,
+            },
+        )
+        self.assertEqual(
+            evidence["per_query"],
+            [
+                {
+                    "posterior_exact_hits": 8,
+                    "posterior_page_sq8_hits": 7,
+                    "query": 0,
+                    "rank_1024_exact_hits": 10,
+                    "rank_1024_page_sq8_hits": 9,
+                    "rank_2048_exact_hits": 9,
+                    "rank_2048_page_sq8_hits": 8,
+                },
+                {
+                    "posterior_exact_hits": 10,
+                    "posterior_page_sq8_hits": 9,
+                    "query": 1,
+                    "rank_1024_exact_hits": 9,
+                    "rank_1024_page_sq8_hits": 8,
+                    "rank_2048_exact_hits": 9,
+                    "rank_2048_page_sq8_hits": 8,
+                },
+                {
+                    "posterior_exact_hits": 9,
+                    "posterior_page_sq8_hits": 8,
+                    "query": 2,
+                    "rank_1024_exact_hits": 8,
+                    "rank_1024_page_sq8_hits": 7,
+                    "rank_2048_exact_hits": 9,
+                    "rank_2048_page_sq8_hits": 8,
+                },
+            ],
+        )
+        matched = evidence["comparisons"]["posterior_minus_rank_2048"]
+        self.assertEqual(matched["page_sq8"]["difference_hits"], 0)
+        self.assertEqual(matched["page_sq8"]["difference_recall_ppm"], 0)
+        self.assertEqual(
+            matched["page_sq8"]["paired_bootstrap_95_recall_ppm"],
+            [-100_000, 100_000],
+        )
+        self.assertEqual(matched["exact"]["difference_hits"], 0)
+
+        mutated = copy.deepcopy(rank_cells)
+        mutated[1]["samples"][0]["page_sq8_hits"] = 7
+        with self.assertRaisesRegex(ValueError, "historical prefix differs"):
+            _paired_rescore_evidence(
+                mutated,
+                [posterior],
+                neighbors=10,
+                historical_prefix_queries=3,
+                historical_prefix_sha256=expected_prefix_sha256,
+                bootstrap_seed=85,
+                bootstrap_repetitions=10_000,
+            )
+
     def test_cli_exposes_one_fixed_page_posterior_screen(self) -> None:
         completed = subprocess.run(
             [

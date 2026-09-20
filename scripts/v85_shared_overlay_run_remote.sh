@@ -12,6 +12,7 @@ set -u
 : "${V85_LANDMARK_INCIDENCE:=0}"
 : "${V85_PAGE_POSTERIOR:=0}"
 : "${V85_EXACT_ROW_CONTROL:=0}"
+: "${V85_PAIRED_RESCORE:=0}"
 
 root=/mnt/v85-shared-overlay
 phase=bootstrap
@@ -76,6 +77,9 @@ if [ "$V85_PAGE_POSTERIOR" = 1 ]; then
 fi
 if [ "$V85_EXACT_ROW_CONTROL" = 1 ]; then
   screen_args+=(--exact-row-control)
+fi
+if [ "$V85_PAIRED_RESCORE" = 1 ]; then
+  screen_args+=(--paired-rescore)
 fi
 /usr/bin/time -v -o time.log .venv/bin/python screen.py \
   "${screen_args[@]}" \
