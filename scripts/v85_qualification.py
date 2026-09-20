@@ -157,6 +157,198 @@ def _quality_gate_passes(summary: dict[str, Any], matrix: dict[str, Any]) -> boo
     )
 
 
+def _semantic_screen_result(value: Any, label: str) -> dict[str, Any]:
+    result = _exact_keys(
+        value,
+        {
+            "aggregate_recall_ppm",
+            "generation",
+            "samples",
+            "total_bytes",
+            "total_requests",
+            "worst_recall_ppm",
+        },
+        label,
+    )
+    if not _positive_int(result["generation"]):
+        raise ValueError(f"{label} generation differs")
+    samples = result["samples"]
+    if not isinstance(samples, list) or not samples:
+        raise ValueError(f"{label} samples differ")
+    total_hits = 0
+    total_neighbors = 0
+    total_bytes = 0
+    total_requests = 0
+    worst_recall = 1_000_000
+    ordered_ids = []
+    ordered_truth = []
+    recalls = []
+    sample_keys = {
+        "bytes",
+        "hits",
+        "latency_ns",
+        "neighbors",
+        "query",
+        "recall_ppm",
+        "requests",
+        "result_ids",
+        "truth_ids",
+    }
+    for expected_query, candidate in enumerate(samples):
+        sample = _exact_keys(candidate, sample_keys, f"{label} sample")
+        result_ids = sample["result_ids"]
+        truth_ids = sample["truth_ids"]
+        if (
+            sample["query"] != expected_query
+            or not _positive_int(sample["neighbors"])
+            or not _positive_int(sample["bytes"])
+            or not _positive_int(sample["requests"])
+            or not _positive_int(sample["latency_ns"])
+            or not isinstance(result_ids, list)
+            or not isinstance(truth_ids, list)
+            or len(result_ids) != sample["neighbors"]
+            or len(truth_ids) != sample["neighbors"]
+            or any(type(row_id) is not int for row_id in result_ids + truth_ids)
+            or len(set(result_ids)) != len(result_ids)
+            or len(set(truth_ids)) != len(truth_ids)
+        ):
+            raise ValueError(f"{label} sample differs")
+        hits = len(set(result_ids).intersection(truth_ids))
+        recall_ppm = hits * 1_000_000 // sample["neighbors"]
+        if sample["hits"] != hits or sample["recall_ppm"] != recall_ppm:
+            raise ValueError(f"{label} recall differs")
+        total_hits += hits
+        total_neighbors += sample["neighbors"]
+        total_bytes += sample["bytes"]
+        total_requests += sample["requests"]
+        worst_recall = min(worst_recall, recall_ppm)
+        ordered_ids.append(result_ids)
+        ordered_truth.append(truth_ids)
+        recalls.append(recall_ppm)
+    aggregate_recall = total_hits * 1_000_000 // total_neighbors
+    if (
+        result["aggregate_recall_ppm"] != aggregate_recall
+        or result["worst_recall_ppm"] != worst_recall
+        or result["total_bytes"] != total_bytes
+        or result["total_requests"] != total_requests
+    ):
+        raise ValueError(f"{label} aggregate differs")
+    return {
+        "aggregate_recall_ppm": aggregate_recall,
+        "generation": result["generation"],
+        "ordered_ids": ordered_ids,
+        "ordered_truth": ordered_truth,
+        "p05_recall_ppm": _nearest_percentile(recalls, 0.05),
+        "query_count": len(samples),
+        "worst_recall_ppm": worst_recall,
+    }
+
+
+def validate_delta_compaction_screen(receipt: Any) -> dict[str, Any]:
+    """Validate the real-data run-fragmentation and compaction fail-fast screen."""
+
+    label = "compaction screen"
+    receipt = _exact_keys(
+        receipt,
+        {
+            "base_rows",
+            "claim_eligible",
+            "compaction",
+            "delta_rows",
+            "evidence_kind",
+            "page_budget",
+            "query_count",
+            "results",
+            "rows",
+            "schema",
+        },
+        label,
+    )
+    if (
+        receipt["schema"] != "borsuk-v85-delta-compaction-screen-v1"
+        or receipt["evidence_kind"] != "semantic-local-artifact-screen"
+        or receipt["claim_eligible"] is not False
+        or receipt["rows"] != 100_000
+        or receipt["base_rows"] != 90_000
+        or receipt["delta_rows"] != 10_000
+        or receipt["query_count"] != 32
+        or receipt["page_budget"] != 512
+    ):
+        raise ValueError(f"{label} authority differs")
+    cells = receipt["results"]
+    if not isinstance(cells, list) or len(cells) != 3:
+        raise ValueError(f"{label} cells differ")
+    baseline_ids = None
+    aggregate_recall = None
+    worst_recall = None
+    baseline_truth = None
+    baseline_generation = None
+    for expected_runs, candidate in zip((1, 10, 100), cells, strict=True):
+        cell = _exact_keys(candidate, {"result", "runs"}, f"{label} cell")
+        if cell["runs"] != expected_runs:
+            raise ValueError(f"{label} run count differs")
+        summary = _semantic_screen_result(cell["result"], label)
+        if summary["query_count"] != receipt["query_count"]:
+            raise ValueError(f"{label} query count differs")
+        if baseline_ids is None:
+            baseline_ids = summary["ordered_ids"]
+            aggregate_recall = summary["aggregate_recall_ppm"]
+            worst_recall = summary["worst_recall_ppm"]
+            baseline_truth = summary["ordered_truth"]
+            baseline_generation = cell["result"]["generation"]
+        elif cell["result"]["generation"] != baseline_generation:
+            raise ValueError(f"{label} generation identities differ")
+        elif (
+            summary["ordered_ids"] != baseline_ids
+            or summary["ordered_truth"] != baseline_truth
+        ):
+            raise ValueError(f"{label} fragmented results differ")
+
+    compaction = _exact_keys(
+        receipt["compaction"],
+        {
+            "amplification_ppm",
+            "input_runs",
+            "logical_live_bytes",
+            "read_bytes",
+            "result",
+            "write_bytes",
+        },
+        f"{label} compaction",
+    )
+    if (
+        compaction["input_runs"] != 100
+        or not _positive_int(compaction["logical_live_bytes"])
+        or not _positive_int(compaction["read_bytes"])
+        or not _positive_int(compaction["write_bytes"])
+    ):
+        raise ValueError(f"{label} compaction counters differ")
+    amplification_ppm = (
+        (compaction["read_bytes"] + compaction["write_bytes"])
+        * 1_000_000
+        // compaction["logical_live_bytes"]
+    )
+    compacted = _semantic_screen_result(compaction["result"], label)
+    if (
+        compaction["amplification_ppm"] != amplification_ppm
+        or amplification_ppm > 5_000_000
+        or compacted["generation"] <= baseline_generation
+        or compacted["query_count"] != receipt["query_count"]
+        or compacted["ordered_ids"] != baseline_ids
+        or compacted["ordered_truth"] != baseline_truth
+        or aggregate_recall < 975_000
+        or compacted["p05_recall_ppm"] < 900_000
+    ):
+        raise ValueError(f"{label} compaction differs")
+    return {
+        "aggregate_recall_ppm": aggregate_recall,
+        "compaction_amplification_ppm": amplification_ppm,
+        "query_count": receipt["query_count"],
+        "schema": "borsuk-v85-delta-compaction-screen-summary-v1",
+        "worst_recall_ppm": worst_recall,
+    }
+
+
 def validate_preflight_receipt(receipt: Any, matrix: Any) -> None:
     """Reject a 10k preflight that cannot safely promote to the paid 1M cell."""
 

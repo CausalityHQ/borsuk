@@ -2,16 +2,179 @@ import copy
 import json
 import pathlib
 import subprocess
+import tempfile
 import unittest
 
+from scripts.v85_delta_compaction_screen import _path_for_uri
 from scripts.v85_qualification import (
     frozen_matrix,
+    validate_delta_compaction_screen,
     validate_preflight_receipt,
     validate_qualification_receipt,
 )
 
 
 class V85QualificationTests(unittest.TestCase):
+    def test_compaction_screen_resolves_duplicate_basenames_by_registered_identity(
+        self,
+    ) -> None:
+        # Break caught: compacted mutations.arrow is confused with the level-0
+        # file solely because both immutable objects share one basename.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            level0 = root / "level0"
+            compacted = root / "compacted"
+            level0.mkdir()
+            compacted.mkdir()
+            (level0 / "mutations.arrow").write_bytes(b"level-zero")
+            wanted = compacted / "mutations.arrow"
+            wanted.write_bytes(b"compacted")
+            identity = {
+                "bytes": wanted.stat().st_size,
+                "sha256": __import__("hashlib").sha256(wanted.read_bytes()).hexdigest(),
+                "uri": "s3://fixture/compacted/mutations.arrow",
+            }
+
+            self.assertEqual(
+                _path_for_uri(identity, (level0, compacted)),
+                wanted,
+            )
+
+    def test_delta_compaction_runner_exposes_fixed_100k_fail_fast_screen(
+        self,
+    ) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_delta_compaction_100k_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "base_rows": 90_000,
+                "claim_eligible": False,
+                "delta_rows": 10_000,
+                "evidence_kind": "semantic-local-artifact-screen",
+                "page_budget": 512,
+                "query_count": 32,
+                "rows": 100_000,
+                "run_counts": [1, 10, 100],
+                "schema": "borsuk-v85-delta-compaction-screen-matrix-v1",
+            },
+        )
+
+    @staticmethod
+    def _semantic_result(generation: int) -> dict[str, object]:
+        samples = [
+            {
+                "bytes": 80_000_000,
+                "hits": 100,
+                "latency_ns": 10_000_000,
+                "neighbors": 100,
+                "query": query,
+                "recall_ppm": 1_000_000,
+                "requests": 400,
+                "result_ids": list(range(query * 1_000, query * 1_000 + 100)),
+                "truth_ids": list(range(query * 1_000, query * 1_000 + 100)),
+            }
+            for query in range(32)
+        ]
+        return {
+            "aggregate_recall_ppm": 1_000_000,
+            "generation": generation,
+            "samples": samples,
+            "total_bytes": sum(sample["bytes"] for sample in samples),
+            "total_requests": sum(sample["requests"] for sample in samples),
+            "worst_recall_ppm": 1_000_000,
+        }
+
+    def test_delta_compaction_screen_recomputes_real_scale_semantic_equivalence(
+        self,
+    ) -> None:
+        # Break caught: the paid 1M cell starts before 1/10/100-run and compacted
+        # real-data results are proven identical from raw per-query evidence.
+        results = [self._semantic_result(1) for _runs in (1, 10, 100)]
+        compacted = self._semantic_result(2)
+        receipt = {
+            "base_rows": 90_000,
+            "claim_eligible": False,
+            "compaction": {
+                "amplification_ppm": 4_000_000,
+                "input_runs": 100,
+                "logical_live_bytes": 1_000,
+                "read_bytes": 2_000,
+                "result": compacted,
+                "write_bytes": 2_000,
+            },
+            "delta_rows": 10_000,
+            "evidence_kind": "semantic-local-artifact-screen",
+            "page_budget": 512,
+            "query_count": 32,
+            "results": [
+                {"result": result, "runs": runs}
+                for runs, result in zip((1, 10, 100), results, strict=True)
+            ],
+            "rows": 100_000,
+            "schema": "borsuk-v85-delta-compaction-screen-v1",
+        }
+
+        summary = validate_delta_compaction_screen(receipt)
+
+        self.assertEqual(
+            summary,
+            {
+                "aggregate_recall_ppm": 1_000_000,
+                "compaction_amplification_ppm": 4_000_000,
+                "query_count": 32,
+                "schema": "borsuk-v85-delta-compaction-screen-summary-v1",
+                "worst_recall_ppm": 1_000_000,
+            },
+        )
+
+        for mutate in (
+            lambda value: value["results"].pop(),
+            lambda value: value["results"][1].update({"runs": 11}),
+            lambda value: value["results"][1]["result"]["samples"][0][
+                "result_ids"
+            ].reverse(),
+            lambda value: value["compaction"]["result"]["samples"][0][
+                "result_ids"
+            ].reverse(),
+            lambda value: value["compaction"].update(
+                {"amplification_ppm": 3_999_999}
+            ),
+            lambda value: value["compaction"].update({"write_bytes": 3_001}),
+        ):
+            drift = copy.deepcopy(receipt)
+            mutate(drift)
+            with self.assertRaisesRegex(ValueError, "compaction screen"):
+                validate_delta_compaction_screen(drift)
+
+        low_quality = copy.deepcopy(receipt)
+        low_results = [
+            cell["result"] for cell in low_quality["results"]
+        ] + [low_quality["compaction"]["result"]]
+        for result in low_results:
+            for sample in result["samples"]:
+                query = sample["query"]
+                sample["result_ids"] = list(
+                    range(1_000_000 + query * 100, 1_000_100 + query * 100)
+                )
+                sample["hits"] = 0
+                sample["recall_ppm"] = 0
+            result["aggregate_recall_ppm"] = 0
+            result["worst_recall_ppm"] = 0
+        with self.assertRaisesRegex(ValueError, "compaction screen"):
+            validate_delta_compaction_screen(low_quality)
+
     def test_remote_runner_exposes_only_the_frozen_matrix_without_aws(self) -> None:
         # Break caught: shell-local constants drift from the independently tested
         # matrix, or describing the campaign performs a remote side effect.
