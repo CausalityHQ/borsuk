@@ -157,6 +157,36 @@ class V85QualificationTests(unittest.TestCase):
                 "samples": samples(70_000_000),
             },
         ]
+        mutation_cases = []
+        for offset in range(matrix["replacement_rows"]):
+            mutation_cases.append(
+                {
+                    "id": 10_000 + offset,
+                    "kind": "replacement",
+                    "observed_sequence": 2,
+                    "observed_state": "live",
+                    "visibility_latency_ns": 300_000_000,
+                    "writes": [
+                        {"sequence": 1, "state": "live"},
+                        {"sequence": 2, "state": "live"},
+                    ],
+                }
+            )
+        for offset in range(matrix["tombstone_rows"]):
+            mutation_cases.append(
+                {
+                    "id": 20_000 + offset,
+                    "kind": "tombstone",
+                    "observed_sequence": 3,
+                    "observed_state": "tombstone",
+                    "visibility_latency_ns": 500_000_000,
+                    "writes": [
+                        {"sequence": 1, "state": "live"},
+                        {"sequence": 3, "state": "tombstone"},
+                    ],
+                }
+            )
+
         receipt = {
             "base_capacity": {
                 "attempted_queries": 12,
@@ -174,42 +204,8 @@ class V85QualificationTests(unittest.TestCase):
                 "write_bytes": 2_000,
             },
             "fresh_samples": samples(55_000_000),
-            "mutation_cases": [
-                {
-                    "id": 10,
-                    "kind": "newest",
-                    "observed_sequence": 3,
-                    "observed_state": "live",
-                    "visibility_latency_ns": 300_000_000,
-                    "writes": [
-                        {"sequence": 1, "state": "live"},
-                        {"sequence": 3, "state": "live"},
-                    ],
-                },
-                {
-                    "id": 11,
-                    "kind": "replacement",
-                    "observed_sequence": 4,
-                    "observed_state": "live",
-                    "visibility_latency_ns": 400_000_000,
-                    "writes": [
-                        {"sequence": 1, "state": "live"},
-                        {"sequence": 4, "state": "live"},
-                    ],
-                },
-                {
-                    "id": 12,
-                    "kind": "tombstone",
-                    "observed_sequence": 5,
-                    "observed_state": "tombstone",
-                    "visibility_latency_ns": 500_000_000,
-                    "writes": [
-                        {"sequence": 2, "state": "live"},
-                        {"sequence": 5, "state": "tombstone"},
-                    ],
-                },
-            ],
-            "schema": "borsuk-v85-qualification-receipt-v3",
+            "mutation_cases": mutation_cases,
+            "schema": "borsuk-v85-qualification-receipt-v4",
         }
         return matrix, receipt
 
@@ -408,8 +404,17 @@ class V85QualificationTests(unittest.TestCase):
         missing_case["mutation_cases"].pop()
         mutations.append(missing_case)
         visibility = copy.deepcopy(receipt)
-        visibility["mutation_cases"][2]["visibility_latency_ns"] = 1_000_000_001
+        for case in visibility["mutation_cases"][-51:]:
+            case["visibility_latency_ns"] = 1_000_000_001
         mutations.append(visibility)
+        wrong_mix = copy.deepcopy(receipt)
+        wrong_mix["mutation_cases"][0]["kind"] = "tombstone"
+        wrong_mix["mutation_cases"][0]["observed_state"] = "tombstone"
+        wrong_mix["mutation_cases"][0]["writes"][-1]["state"] = "tombstone"
+        mutations.append(wrong_mix)
+        duplicate_id = copy.deepcopy(receipt)
+        duplicate_id["mutation_cases"][1]["id"] = duplicate_id["mutation_cases"][0]["id"]
+        mutations.append(duplicate_id)
         fabricated = copy.deepcopy(receipt)
         fabricated["compaction"]["amplification_ppm"] = 3_999_999
         mutations.append(fabricated)

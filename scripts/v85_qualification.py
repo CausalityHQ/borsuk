@@ -244,7 +244,7 @@ def validate_qualification_receipt(receipt: Any, matrix: Any) -> dict[str, Any]:
         },
         "qualification",
     )
-    if receipt["schema"] != "borsuk-v85-qualification-receipt-v3":
+    if receipt["schema"] != "borsuk-v85-qualification-receipt-v4":
         raise ValueError("qualification schema differs")
 
     capacity = _exact_keys(
@@ -333,17 +333,17 @@ def validate_qualification_receipt(receipt: Any, matrix: Any) -> dict[str, Any]:
     }
     write_keys = {"sequence", "state"}
     cases = receipt["mutation_cases"]
-    if not isinstance(cases, list) or len(cases) != 3:
+    expected_mutations = matrix["replacement_rows"] + matrix["tombstone_rows"]
+    if not isinstance(cases, list) or len(cases) != expected_mutations:
         raise ValueError("qualification mutation cases differ")
-    seen_kinds = set()
     seen_ids = set()
+    kind_counts = {"replacement": 0, "tombstone": 0}
     visibility_latencies = []
     for candidate in cases:
         case = _exact_keys(candidate, mutation_keys, "qualification mutation")
         writes = case["writes"]
         if (
-            case["kind"] not in {"newest", "replacement", "tombstone"}
-            or case["kind"] in seen_kinds
+            case["kind"] not in kind_counts
             or type(case["id"]) is not int
             or case["id"] in seen_ids
             or not isinstance(writes, list)
@@ -351,8 +351,8 @@ def validate_qualification_receipt(receipt: Any, matrix: Any) -> dict[str, Any]:
             or not _positive_int(case["visibility_latency_ns"])
         ):
             raise ValueError("qualification mutation gate failed")
-        seen_kinds.add(case["kind"])
         seen_ids.add(case["id"])
+        kind_counts[case["kind"]] += 1
         parsed_writes = [
             _exact_keys(write, write_keys, "qualification mutation write")
             for write in writes
@@ -375,6 +375,11 @@ def validate_qualification_receipt(receipt: Any, matrix: Any) -> dict[str, Any]:
         ):
             raise ValueError("qualification mutation visibility differs")
         visibility_latencies.append(case["visibility_latency_ns"])
+    if kind_counts != {
+        "replacement": matrix["replacement_rows"],
+        "tombstone": matrix["tombstone_rows"],
+    }:
+        raise ValueError("qualification mutation mix differs")
     visibility_p95_ns = _nearest_percentile(visibility_latencies, 0.95)
     if visibility_p95_ns > 1_000_000_000:
         raise ValueError("qualification visibility gate failed")
