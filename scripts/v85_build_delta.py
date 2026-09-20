@@ -394,9 +394,9 @@ def _read_page_stream(body: bytes, dimensions: int) -> pa.Table:
 
 
 def _load_mutation_rows(
-    path: pathlib.Path,
+    body: bytes,
 ) -> dict[int, tuple[int, int, int | None, int | None]]:
-    table = ipc.open_file(path).read_all()
+    table = ipc.open_file(pa.py_buffer(body)).read_all()
     expected = pa.schema(
         [
             pa.field("id", pa.int64(), nullable=False),
@@ -559,24 +559,25 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
     mutation_body = mutation_path.read_bytes()
     if _identity(mutation_identity["uri"], mutation_body) != mutation_identity:
         raise ValueError("compaction mutation identity differs")
-    mutations = _load_mutation_rows(mutation_path)
-    read_bytes = len(generation_body) + 2 * len(mutation_body)
-    read_operations = 3
-    page_inputs: dict[int, list[tuple[int, pathlib.Path, dict[str, Any], int]]] = (
+    mutations = _load_mutation_rows(mutation_body)
+    read_bytes = len(generation_body) + len(mutation_body)
+    read_operations = 2
+    page_inputs: dict[int, list[tuple[int, bytes, dict[str, Any], int]]] = (
         defaultdict(list)
     )
     for run_id in sorted(delta_runs):
         run = delta_runs[run_id]
         path = root / pathlib.PurePosixPath(run["object"]["uri"]).name
-        if _identity_from_path(run["object"]["uri"], path) != run["object"]:
+        body = path.read_bytes()
+        if _identity(run["object"]["uri"], body) != run["object"]:
             raise ValueError("compaction run identity differs")
-        read_bytes += path.stat().st_size + sum(page["bytes"] for page in run["pages"])
-        read_operations += 1 + len(run["pages"])
+        read_bytes += len(body)
+        read_operations += 1
         run_row = 0
         for page in run["pages"]:
-            if page["offset"] + page["bytes"] > path.stat().st_size:
+            if page["offset"] + page["bytes"] > len(body):
                 raise ValueError("compaction page range differs")
-            page_inputs[int(page["page"])].append((run_id, path, page, run_row))
+            page_inputs[int(page["page"])].append((run_id, body, page, run_row))
             run_row += page["rows"]
 
     request.output.mkdir(parents=True, exist_ok=True)
@@ -588,16 +589,15 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
     represented: set[int] = set()
     output_row = 0
     output_offset = 0
+    output_run_digest = hashlib.sha256()
     with output_run_path.open("wb") as output_handle:
         for routed_page in sorted(page_inputs):
             live_page: dict[int, tuple[int, np.ndarray]] = {}
-            for run_id, path, page, run_row in page_inputs[routed_page]:
-                with path.open("rb") as input_handle:
-                    input_handle.seek(page["offset"])
-                    body = input_handle.read(page["bytes"])
-                if len(body) != page["bytes"]:
+            for run_id, body, page, run_row in page_inputs[routed_page]:
+                page_body = body[page["offset"] : page["offset"] + page["bytes"]]
+                if len(page_body) != page["bytes"]:
                     raise ValueError("compaction page range differs")
-                table = _read_page_stream(body, dimensions)
+                table = _read_page_stream(page_body, dimensions)
                 if table.num_rows != page["rows"]:
                     raise ValueError("compaction page row count differs")
                 codes = np.asarray(
@@ -639,6 +639,7 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
                 ids_array, sequence_array, state_array, code_array
             )
             output_handle.write(stream)
+            output_run_digest.update(stream)
             pages.append(
                 {
                     "bytes": len(stream),
@@ -707,17 +708,21 @@ def compact_delta_artifacts(request: CompactionRequest) -> dict[str, Any]:
     output_manifest["previous_generation_sha256"] = _sha256(generation_body)
     output_manifest["runs"] = [run for run in manifest["runs"] if run["kind"] == "base"]
     if pages:
+        if output_run_path.stat().st_size != output_offset:
+            raise ValueError("compaction output length differs")
         output_manifest["runs"].append(
             {
                 "generation": output_generation,
                 "kind": "delta",
-                "object": _identity_from_path(output_run_uri, output_run_path),
+                "object": {
+                    "bytes": output_offset,
+                    "sha256": output_run_digest.hexdigest(),
+                    "uri": output_run_uri,
+                },
                 "pages": pages,
                 "run_id": output_run_id,
             }
         )
-        read_bytes += output_run_path.stat().st_size
-        read_operations += 1
     output_generation_body = _canonical_bytes(output_manifest)
     (request.output / "generation.json").write_bytes(output_generation_body)
 

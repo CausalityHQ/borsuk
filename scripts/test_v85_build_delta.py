@@ -279,7 +279,8 @@ class V85BuildDeltaTests(unittest.TestCase):
 
     def test_compaction_is_permutation_independent_and_accounts_all_io(self) -> None:
         # Break caught: level-0 enumeration order changes the compacted bytes, drops
-        # visible rows, or omits input/output bytes from amplification accounting.
+        # visible rows, or authenticates immutable inputs and outputs by rereading
+        # every byte instead of hashing the same single physical pass.
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             source = root / "source.parquet"
@@ -292,9 +293,9 @@ class V85BuildDeltaTests(unittest.TestCase):
             )
             expected_read_bytes = (
                 (level0 / "generation.json").stat().st_size
-                + 2 * (level0 / "mutations.arrow").stat().st_size
+                + (level0 / "mutations.arrow").stat().st_size
                 + sum(
-                    run["object"]["bytes"] + sum(page["bytes"] for page in run["pages"])
+                    run["object"]["bytes"]
                     for run in manifest["runs"]
                     if run["kind"] == "delta"
                 )
@@ -339,16 +340,11 @@ class V85BuildDeltaTests(unittest.TestCase):
             self.assertEqual(forward_receipt, reverse_receipt)
             self.assertEqual(forward_receipt["input_runs"], 10)
             self.assertEqual(forward_receipt["output_runs"], 1)
-            expected_read_bytes += (forward / "delta-l1.arrow").stat().st_size
             self.assertEqual(forward_receipt["read_bytes"], expected_read_bytes)
             self.assertEqual(
                 forward_receipt["read_operations"],
-                4
-                + sum(
-                    1 + len(run["pages"])
-                    for run in manifest["runs"]
-                    if run["kind"] == "delta"
-                ),
+                2
+                + sum(1 for run in manifest["runs"] if run["kind"] == "delta"),
             )
             self.assertEqual(forward_receipt["write_operations"], 4)
             self.assertEqual(
