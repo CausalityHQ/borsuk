@@ -2691,3 +2691,83 @@ small fixed-query performance preflight. A new immutable revision may run one
 fresh 1,000-query attempt only after that preflight demonstrates sufficient
 headroom under the same 7,200-second cap. No same-revision retry, 10M/100M
 work, G2 promotion, or competitor comparison is permitted from V99.
+
+## V99 repaired producer result — exact ceiling passes; compact arms fail G1
+
+The performance-repaired source is
+`b3db2b2d060eeb56a3890ab9607cdaea85bfa7e0`. Its 10,698,435-byte source
+archive is at
+`s3://borsuk-bench-453182569524-euc1/research/v99-ranked-gap-range-router/b3db2b2d060eeb56a3890ab9607cdaea85bfa7e0/source/source.tar.gz`
+with SHA-256
+`8cea900dd3bbb617a4e36e538aac59108c40509ed559bc266f76077135e26ffd`.
+The sole attempt prefix is
+`research/v99-ranked-gap-range-router/b3db2b2d060eeb56a3890ab9607cdaea85bfa7e0/runs/v99-g1-20260920T205800Z-b3db2b2/a0001/`.
+It reused the six registered ReLAION-1M development identities, all of which
+authenticated before science, and evaluated all 1,000 development queries
+against exact top-100 truth under 32 GETs, 16,777,216 bytes, 1,024 retained
+pages, 262,144 scanned rows, and an 8,192-row shortlist.
+
+The fixed synthetic preflight passed before the full evaluation: 262,144 rows
+and an 8,192-row shortlist took 0.076031 seconds for exact scoring, 0.060969
+seconds for PQ16 scoring, and 0.286084 seconds for range planning, each below
+the registered 5-second stop. The producer then completed in 1:58:23 with
+exit status 0, 7,574.16 user seconds, 1,134.68 system seconds, 122% CPU,
+maximum RSS 11,107,352 KiB, one major fault, and zero swaps. The canonical
+129,153,048-byte result has SHA-256
+`a122e673dd005c8ec40e311aa3fe32391d8506db2ac732401bd090fcb863bad6`.
+The instance `i-07ab13e2dbbf903fd` was a `c7i.8xlarge` Spot instance in
+`eu-central-1c` and is terminated. Memory PSI remained zero, swap remained
+zero, and the registered resource receipt estimates $0.952267 of Spot spend.
+
+The source reducer rejected the completed result because it incorrectly
+required every interior page read by a merged adjacent range to be one of the
+hierarchy-retained pages. Ranked-gap serving deliberately reads authenticated
+contiguous gap pages between retained endpoints. The terminal therefore
+remains immutable `failed`, exit 98, and `claim_eligible=false`; its 350 bytes
+have SHA-256
+`4bea9d8098f0cd8bef096252df5589dd25d9c13011bac66a53f66c00bc9f9d54`.
+The same cleanup also compared decimal RSS fields lexicographically and wrote
+the reducer RSS rather than the producer maximum into `resources.json`.
+Reducer/receipt repair `ac200754164f07bb61976ba4f9d91bc570e028bb`
+requires retained range endpoints while permitting authenticated interior
+gaps and compares RSS numerically. It does not modify the producer result.
+
+The repaired independent recomputation is stored separately at
+`s3://borsuk-bench-453182569524-euc1/research/v99-ranked-gap-range-router/b3db2b2d060eeb56a3890ab9607cdaea85bfa7e0/runs/v99-g1-20260920T205800Z-b3db2b2/a0001/posthoc/ac200754164f07bb61976ba4f9d91bc570e028bb/rescore.json`.
+It is 3,164 bytes with SHA-256
+`76d9f55378e790e4cc7bca8c2583da5ed81641dd17e7d3999bb4d68b95d846a9`,
+binds the original result SHA-256 in object metadata, recomputes all 1,000
+samples with the registered 10,000-resample matrix, and used 1,395,480 KiB
+maximum local RSS with zero swaps.
+
+The hierarchy containment ceiling passes at 98.8600% average Recall@10,
+98.5180% average Recall@100, and 92% p05 Recall@100. The exact-vector
+ranked-gap ceiling also passes at 98.8700%, 98.4240%, and 91%, respectively,
+with 32 maximum GETs and 16,777,200 maximum bytes. This proves that the
+hierarchy and adjacent-range physical representation can satisfy the G1
+quality/resource gates.
+
+No compact arm passes all quality gates:
+
+| Arm | avg R@10 | avg R@100 | p05 R@100 | max GETs | max bytes | 100M resident projection |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| PQ16x8 | 96.3100% | 91.9180% | 66% | 32 | 16,777,216 | 2,869,504,702 B |
+| PQ24x8 | 97.3900% | 93.2660% | 71% | 32 | 16,777,216 | 3,669,504,702 B |
+| PQ32x8 | 97.9500% | 94.2420% | 75% | 32 | 16,777,216 | 4,469,504,702 B |
+| PQ32x4 | 94.7600% | 88.9840% | 59% | 32 | 16,777,208 | 2,868,767,422 B |
+| summary-only PQ16x8 | 93.4000% | 89.4150% | 57% | 32 | 16,777,216 | 1,268,718,270 B |
+
+PQ24x8 and PQ32x8 improve significantly over PQ16x8 under paired bootstrap,
+but exceed the 100M `<3 GiB` resident limit and still miss average and tail
+Recall@100. PQ32x4 and summary-only are significantly worse than PQ16x8. The
+classification is `widths-evaluated`, `winner=null`, and every arm is
+ineligible. These are paired ReLAION-1M development measurements, not S3
+Vector or TurboPuffer results; no competitor parity claim is made.
+
+**Ruling:** G1 rejects plain PQ16/PQ24/PQ32/PQ32x4 and summary-only ranking
+for this hierarchy. The physical hierarchy/range layout is retained because
+its exact ceiling passes. Do not scale to 10M/100M or weaken the registered
+quality gates. The next representation hypothesis must improve compact
+ranking at a resident cost compatible with `<3 GiB`; it must first beat PQ16
+on the same immutable 1,000-query paired harness and retain the exact
+32-GET/16-MiB physical contract.
