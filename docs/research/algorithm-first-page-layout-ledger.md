@@ -2506,12 +2506,12 @@ measurement exists at G1, so no competitive parity claim is made.
 
 V98 is one fail-fast ReLAION-1M development attempt. It uses all 1,000 frozen
 development queries and exact top-100 truth; it reads no validation or sealed
-holdout query. Source `7b6baa80d8e7670d66a4e1b1cb7743c98416c17c` is archived
+holdout query. Source `1e9ea0935a4f90dd1b3ac9d2f52a80e5e96f0fd8` is archived
 at
-`s3://borsuk-bench-453182569524-euc1/research/v98-hierarchical-row-router/7b6baa80d8e7670d66a4e1b1cb7743c98416c17c/source/source.tar.gz`
-with SHA-256 `ae9d4c21c4b3d79c2a6dbe0a9d37a100a66d6138e895129b6268b127e2f3115b`
-and 10,675,111 bytes. The sole attempt prefix is
-`research/v98-hierarchical-row-router/7b6baa80d8e7670d66a4e1b1cb7743c98416c17c/runs/v98-g1-20260920T174537Z-7b6baa8/a0001/`.
+`s3://borsuk-bench-453182569524-euc1/research/v98-hierarchical-row-router/1e9ea0935a4f90dd1b3ac9d2f52a80e5e96f0fd8/source/source.tar.gz`
+with SHA-256 `b4b4774ade03086f5a7e83f759186fd49000be77107f9e9ec476687b07fc8849`
+and 10,674,746 bytes. The sole attempt prefix is
+`research/v98-hierarchical-row-router/1e9ea0935a4f90dd1b3ac9d2f52a80e5e96f0fd8/runs/v98-g1-20260920T175131Z-1e9ea09/a0001/`.
 The preregistered dual-critique result is
 `edcde2149f98bc38c5121b387b165fe9baf0ca6df79658ac624abf86866bcb87`.
 An earlier local direct-script preflight of source
@@ -2524,7 +2524,15 @@ That source then atomically reserved its prefix, but EC2 rejected
 the 16,384-byte service limit. It produced no science or spend and is not
 reused. Source `7b6baa80d8e7670d66a4e1b1cb7743c98416c17c` adds a tested
 size-bounded user-data bootstrap; the full reviewed runner remains
-authenticated inside its exact source archive.
+authenticated inside its exact source archive. That source reserved its prefix
+and launched Spot instance `i-0fa45996f014d5479` in `eu-central-1c`, but the
+post-launch create-only receipt failed before science because the reservation's
+temporary signing hook was not unregistered and duplicated the next PUT's
+signed headers. The safety boundary immediately terminated the instance; no
+scientific artifact was produced and its prefix is not reused. Source
+`1e9ea0935a4f90dd1b3ac9d2f52a80e5e96f0fd8` fixes the botocore unregister
+call and adds a two-PUT regression proving each conditional-signing hook is
+removed before the next receipt.
 
 The six immutable input identities are:
 
