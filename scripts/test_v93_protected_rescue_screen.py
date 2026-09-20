@@ -93,6 +93,16 @@ class V93ProtectedRescueTests(unittest.TestCase):
 
         self.assertEqual(pages.tolist(), [4, 5])
 
+        no_new_pages = rank_rescue_pages(
+            np.asarray([4, 5], dtype=np.int64),
+            baseline_pages=np.asarray([2], dtype=np.int64),
+            page_rows=2,
+            page_count=8,
+            take_rows=2,
+            max_pages=2,
+        )
+        self.assertEqual(no_new_pages.tolist(), [])
+
     def test_code_rescore_uses_pq192_before_selecting_rescue_data_pages(self) -> None:
         base = np.asarray(
             [[0.0], [0.1], [10.0], [10.1], [20.0], [20.1]],

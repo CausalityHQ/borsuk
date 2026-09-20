@@ -422,11 +422,7 @@ def evaluate_protected_rescue_arms(
             ("direct_rescue", direct_pages),
             ("code_rescue", code_pages),
         ):
-            if (
-                name != "code_rescue" and not 0 < pages.size <= _RESCUE_PAGE_CAP
-            ) or (
-                name == "code_rescue" and not 0 <= pages.size <= _RESCUE_PAGE_CAP
-            ):
+            if not 0 <= pages.size <= _RESCUE_PAGE_CAP:
                 raise ValueError("V93 rescue page authority differs")
             rescue_rows[name].append(pages)
     arms: dict[str, dict[str, Any]] = {
