@@ -2446,3 +2446,58 @@ and `e8914bdc0008e7c2fdee2e2bee58d9f586f5ae34edd76a91ef8b61e738fa3279`.
 Scientific wall time was 8:15.42, peak RSS was 11,132,400 KiB, aggregate CPU
 was 477%, and swaps were zero. All local evidence and source scratch was
 explicitly removed after independent current-source validation.
+
+## V97 — the full-development width screen rejects the common summary fence
+
+V97 compared the five registered resident representations on all 1,000
+ReLAION-1M development queries under one query-independent two-summary,
+128-page candidate fence and the fixed 32-GET/16-MiB serving budget. The raw
+producer retained every per-query truth, hit, page and byte identity. A
+separate reducer authenticated the 32,449,663-byte result and independently
+recomputed every sample, aggregate, 10,000-draw paired interval, gate and
+100M memory worksheet.
+
+The successful source was
+`6d413d367e38a6ddb7106537bd26233b526c1ee7` on c7i.8xlarge Spot instance
+`i-0a0ff2dc21aee92d4` in `eu-central-1c`; the instance terminated. Evidence is
+under
+`research/v97-row-width-screen/6d413d367e38a6ddb7106537bd26233b526c1ee7/runs/v97-g1-20260920T162741Z-6d413d3/attempt-0001/`.
+
+| representation | avg R@10 | avg R@100 | p05 / worst R@100 | max GETs | max bytes | projected 100M resident bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| exact f32 behind the same fence | **92.270%** | **82.193%** | **51% / 7%** | 32 | 6,366,152 | n/a |
+| PQ16x8 | 82.720% | 71.888% | 33% / 4% | 32 | 6,401,472 | 2,861,603,104 (pass) |
+| PQ24x8 | 86.490% | 74.077% | 38% / 6% | 32 | 6,274,304 | 3,661,603,104 (fail) |
+| PQ32x8 | **88.580%** | **75.515%** | **38% / 6%** | 32 | 6,272,736 | 4,461,603,104 (fail) |
+| PQ32x4 | 81.940% | 69.395% | 31% / 5% | 32 | 6,451,712 | 2,860,865,824 (pass) |
+| summary-only PQ16x8 | 65.860% | 59.037% | 13% / 0% | 32 | **5,059,152** | **1,260,816,672 (pass)** |
+
+Against PQ16, the paired 95% average-R@100 intervals in percentage points
+were PQ24 **+1.885 to +2.497**, PQ32 **+3.305 to +3.957**, PQ32x4
+**-2.972 to -2.036**, and summary-only **-13.685 to -12.005**. The width
+effects are therefore resolved, but none is eligible: every representation
+missed the absolute 96% average R@10, 97.5% average R@100 and 90% p05 R@100
+contract. Exact-f32 also failed far below the gate, so quantizer width is not
+causal at this boundary. The common summary fence is rejected and `winner` is
+null. No arm advances to G2, and no 10M/100M spend follows.
+
+The canonical result, independent rescore, resources and terminal SHA-256
+values are respectively
+`e5cfd9bdcf523989f8217f626626690a26f934e1b5d63c08129c176d8c12ee10`,
+`6e72211b5efebe2b567f5f8de4ea6c3820a06a2c59b799de871cf5144e4218af`,
+`be6adac9152a793ed5048d10ad207b94a273cf87539a974da13bb5bf25b394e9`,
+and `a3b85df8f5d2a8676e4e67d9d7b37a371b626a27537839dadbef2ca8f2bf060c`.
+Screen and rescore wall times were 2:33.36 and 8.53 seconds. Whole-cell wall
+was 195 seconds, peak process RSS was 11,195,404 KiB, PSI full remained zero,
+and swaps were zero. At the observed eu-central-1c Spot rate of $0.692/hour,
+the successful-cell compute estimate is $0.0375. Two separately preserved
+pre-science/harness failures and one one-second receipt failure bring the
+estimated total G1 compute exposure to about $0.096; none produced quality
+evidence.
+
+**Ruling:** retain the fixed physical budget and the 100M `<3 GiB` worksheet,
+but pause row-width selection. The next and only representation hypothesis is
+a bounded hierarchical router that must restore the exact-f32 ceiling on the
+same 1,000-query development evidence before compressed widths are rescored.
+This is internal research evidence only; no matched S3 Vector or TurboPuffer
+measurement exists at G1, so no competitive parity claim is made.
