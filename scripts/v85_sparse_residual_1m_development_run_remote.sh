@@ -23,7 +23,7 @@ publish_terminal() {
   trap - EXIT
   set +e
   cd "$root" 2>/dev/null || true
-  for name in install.log hashes.log screen.time result.json summary.json validate.log; do
+  for name in install.log hashes.log screen.log screen.time result.json summary.json validate.log; do
     [ -f "$name" ] && aws s3 cp "$name" "$V85_OUTPUT_URI/evidence/$name" --only-show-errors
   done
   instance_id=unknown
@@ -85,8 +85,10 @@ export PYTHONPATH="$root/repo"
   --generation generation.json --generation-uri "$generation_uri" --generation-sha256 45fa4e708ab660151a7b1ea79e35eada6090faced1bfb147f7e20cac7055e754 \
   --base base-000.arrow --delta delta-000.arrow --output result.json \
   --dimensions 768 --neighbors 100 --queries-count 128 --query-start 456 \
+  --query-field embedding --truth-layout long \
   --shortlist-rows 2048 --gap-pages 0 --seed 7216 \
-  --sparse-residual-fraction-ppm 250000 --compare-sparse-residual-exact >/dev/null || exit 98
+  --sparse-residual-fraction-ppm 250000 --compare-sparse-residual-exact \
+  >/dev/null 2>screen.log || exit 98
 
 phase=validate
 .venv/bin/python - <<'PY' >summary.json 2>validate.log || exit 99

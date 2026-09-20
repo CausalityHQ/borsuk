@@ -688,6 +688,63 @@ def _read_fixed_list(path: pathlib.Path, field: str, dimensions: int) -> np.ndar
     return values
 
 
+def _read_truth_ids(
+    path: pathlib.Path,
+    *,
+    layout: str,
+    neighbors: int,
+) -> np.ndarray:
+    table = pq.read_table(path)
+    if layout == "nested":
+        column = table.column("neighbors").combine_chunks()
+        values = np.asarray(column.values.to_numpy(), dtype=np.int64).reshape(
+            -1, neighbors
+        )
+        if column.null_count:
+            raise ValueError("truth authority differs")
+        return values
+    expected = pa.schema(
+        [
+            pa.field("query_ordinal", pa.uint32(), nullable=False),
+            pa.field("rank", pa.uint16(), nullable=False),
+            pa.field("feature_row_id", pa.uint64(), nullable=False),
+            pa.field("squared_distance", pa.float64(), nullable=False),
+        ]
+    )
+    if table.schema != expected or table.num_rows % neighbors:
+        raise ValueError("long truth schema differs")
+    query_count = table.num_rows // neighbors
+    query_ordinals = np.asarray(
+        table.column("query_ordinal").combine_chunks().to_numpy(), dtype=np.uint32
+    )
+    ranks = np.asarray(
+        table.column("rank").combine_chunks().to_numpy(), dtype=np.uint16
+    )
+    ids = np.asarray(
+        table.column("feature_row_id").combine_chunks().to_numpy(), dtype=np.int64
+    ).reshape(query_count, neighbors)
+    distances = np.asarray(
+        table.column("squared_distance").combine_chunks().to_numpy(),
+        dtype=np.float64,
+    ).reshape(query_count, neighbors)
+    if (
+        not np.array_equal(
+            query_ordinals,
+            np.repeat(np.arange(query_count, dtype=np.uint32), neighbors),
+        )
+        or not np.array_equal(
+            ranks,
+            np.tile(np.arange(neighbors, dtype=np.uint16), query_count),
+        )
+        or not np.isfinite(distances).all()
+        or np.any(distances < 0)
+        or np.any(distances[:, 1:] < distances[:, :-1])
+        or any(len(set(row.tolist())) != neighbors for row in ids)
+    ):
+        raise ValueError("long truth authority differs")
+    return ids
+
+
 def _read_page_run(
     path: pathlib.Path, run: dict[str, Any], dimensions: int
 ) -> tuple[dict[int, int], dict[int, PageEntry]]:
@@ -741,6 +798,8 @@ def main() -> None:
     parser.add_argument("--dimensions", type=int, default=768)
     parser.add_argument("--neighbors", type=int, default=100)
     parser.add_argument("--queries-count", type=int, default=32)
+    parser.add_argument("--query-field", choices=("vector", "embedding"), default="vector")
+    parser.add_argument("--truth-layout", choices=("nested", "long"), default="nested")
     parser.add_argument("--shortlist-rows", type=int, default=2048)
     parser.add_argument("--gap-pages", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7216)
@@ -817,12 +876,10 @@ def main() -> None:
     base_vectors = np.ascontiguousarray(
         vectors[[row_by_id[int(row_id)] for row_id in base_ids]]
     )
-    all_queries = _read_fixed_list(args.queries, "vector", args.dimensions)
-    truth_table = pq.read_table(args.truth)
-    all_truth_ids = np.asarray(
-        truth_table.column("neighbors").combine_chunks().values.to_numpy(),
-        dtype=np.int64,
-    ).reshape(-1, args.neighbors)
+    all_queries = _read_fixed_list(args.queries, args.query_field, args.dimensions)
+    all_truth_ids = _read_truth_ids(
+        args.truth, layout=args.truth_layout, neighbors=args.neighbors
+    )
     query_stop = args.query_start + args.queries_count
     if (
         all_queries.shape[0] != all_truth_ids.shape[0]

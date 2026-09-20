@@ -627,6 +627,14 @@ class V85Pq16PageNominationTests(unittest.TestCase):
                 "validation_or_holdout_reads": False,
             },
         )
+        runner = (
+            root / "scripts/v85_sparse_residual_1m_development_run_remote.sh"
+        ).read_text()
+        self.assertIn('2>screen.log', runner)
+        self.assertIn(
+            'install.log hashes.log screen.log screen.time result.json summary.json validate.log',
+            runner,
+        )
 
     def test_1m_runner_preregisters_frozen_validation_without_retuning(self) -> None:
         # Break caught: scale promotion reopens development, changes the PQ arm,
@@ -981,6 +989,88 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             self.assertEqual(
                 ceiling_result["page_run_identities"]["base"]["sha256"],
                 identity(base)["sha256"],
+            )
+
+            development_queries = root / "development-queries.parquet"
+            development_truth = root / "development-truth.parquet"
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array([0], type=pa.uint32()),
+                        pa.array([123], type=pa.uint64()),
+                        pa.FixedSizeListArray.from_arrays(
+                            pa.array(vectors[0], type=pa.float32()), dimensions
+                        ),
+                    ],
+                    schema=pa.schema(
+                        [
+                            pa.field("query_ordinal", pa.uint32(), nullable=False),
+                            pa.field("feature_row_id", pa.uint64(), nullable=False),
+                            pa.field(
+                                "embedding",
+                                pa.list_(
+                                    pa.field("item", pa.float32(), nullable=False),
+                                    dimensions,
+                                ),
+                                nullable=False,
+                            ),
+                        ]
+                    ),
+                ),
+                development_queries,
+            )
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array([0, 0], type=pa.uint32()),
+                        pa.array([0, 1], type=pa.uint16()),
+                        pa.array([0, 900], type=pa.uint64()),
+                        pa.array([0.0, 1.0], type=pa.float64()),
+                    ],
+                    schema=pa.schema(
+                        [
+                            pa.field("query_ordinal", pa.uint32(), nullable=False),
+                            pa.field("rank", pa.uint16(), nullable=False),
+                            pa.field("feature_row_id", pa.uint64(), nullable=False),
+                            pa.field("squared_distance", pa.float64(), nullable=False),
+                        ]
+                    ),
+                ),
+                development_truth,
+            )
+            development_output = root / "development-result.json"
+            development_command = command.copy()
+            for role, old_path, new_path in (
+                ("queries", queries, development_queries),
+                ("truth", truth, development_truth),
+            ):
+                development_command[
+                    development_command.index(str(old_path))
+                ] = str(new_path)
+                digest_flag = development_command.index(f"--{role}-sha256") + 1
+                development_command[digest_flag] = hashlib.sha256(
+                    new_path.read_bytes()
+                ).hexdigest()
+            development_command[development_command.index(str(output))] = str(
+                development_output
+            )
+            development_command.extend(
+                [
+                    "--query-field",
+                    "embedding",
+                    "--truth-layout",
+                    "long",
+                    "--sparse-residual-fraction-ppm",
+                    "1000000",
+                    "--compare-sparse-residual-exact",
+                ]
+            )
+            subprocess.run(
+                development_command, check=True, capture_output=True, text=True
+            )
+            self.assertEqual(
+                json.loads(development_output.read_bytes())["classification"],
+                "validation-eligible",
             )
 
             cooccurrence_output = root / "cooccurrence-result.json"
