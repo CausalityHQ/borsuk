@@ -270,6 +270,16 @@ class V99EvaluationTests(unittest.TestCase):
         result = evaluate_v99(inputs, V98ProducerTests.authority(inputs), self.config())
         self.assertEqual(result.classification, "widths-evaluated")
         self.assertEqual(result.exact_samples[0].hit_ids, (1_000,))
+        self.assertEqual(len(result.page_directory), len(inputs.pages))
+        self.assertEqual(
+            (
+                result.page_directory[0].object_role,
+                result.page_directory[0].ordinal,
+                result.page_directory[0].offset,
+                result.page_directory[0].bytes,
+            ),
+            ("base", 0, 0, 1_024),
+        )
         self.assertEqual(
             tuple(arm.name for arm in result.arms),
             ("pq16x8", "pq24x8", "pq32x8", "pq32x4", "summary-only-pq16x8"),

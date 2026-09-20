@@ -158,6 +158,25 @@ class RangeSample:
     scanned_rows: int
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class PageDirectoryEntry:
+    """One authenticated physical page needed to recompute byte spans."""
+
+    object_role: str
+    ordinal: int
+    offset: int
+    bytes: int
+
+    def __post_init__(self) -> None:
+        if (
+            self.object_role not in ("base", "delta")
+            or self.ordinal < 0
+            or self.offset < 0
+            or self.bytes <= 0
+        ):
+            raise ValueError("page directory entry differs")
+
+
 @dataclass(frozen=True, slots=True)
 class V99Result:
     """Complete typed evidence for the V99 ranked-gap decision."""
@@ -175,6 +194,7 @@ class V99Result:
         "widths-evaluated",
     ]
     hierarchy: HierarchyEvidence
+    page_directory: tuple[PageDirectoryEntry, ...]
     containment_aggregate: AggregateEvidence
     containment_samples: tuple[ContainmentSample, ...]
     exact_aggregate: AggregateEvidence | None
@@ -372,11 +392,24 @@ def _selection_from_rows(
     )
 
 
+def _page_directory(inputs: ScreenInputs) -> tuple[PageDirectoryEntry, ...]:
+    return tuple(
+        PageDirectoryEntry(
+            object_role=key.object_role,
+            ordinal=key.ordinal,
+            offset=inputs.pages[key].offset,
+            bytes=inputs.pages[key].encoded_bytes,
+        )
+        for key in sorted(inputs.pages)
+    )
+
+
 def _early_result(
     *,
     authority: ScreenAuthority,
     config: RankedGapConfig,
     artifact: object,
+    inputs: ScreenInputs,
     containment_samples: tuple[ContainmentSample, ...],
     containment_aggregate: AggregateEvidence,
     classification: Literal[
@@ -398,6 +431,7 @@ def _early_result(
         bootstrap_matrix_sha256=hashlib.sha256(matrix.tobytes(order="C")).hexdigest(),
         classification=classification,
         hierarchy=_hierarchy_evidence(artifact),  # type: ignore[arg-type]
+        page_directory=_page_directory(inputs),
         containment_aggregate=containment_aggregate,
         containment_samples=containment_samples,
         exact_aggregate=exact_aggregate,
@@ -445,6 +479,7 @@ def evaluate_v99(
             authority=authority,
             config=config,
             artifact=artifact,
+            inputs=inputs,
             containment_samples=containment_samples,
             containment_aggregate=containment_aggregate,
             classification="hierarchy-containment-rejected",
@@ -479,6 +514,7 @@ def evaluate_v99(
             authority=authority,
             config=config,
             artifact=artifact,
+            inputs=inputs,
             containment_samples=containment_samples,
             containment_aggregate=containment_aggregate,
             classification="range-exact-ceiling-rejected",
@@ -578,6 +614,7 @@ def evaluate_v99(
         bootstrap_matrix_sha256=hashlib.sha256(matrix.tobytes(order="C")).hexdigest(),
         classification="widths-evaluated",
         hierarchy=_hierarchy_evidence(artifact),
+        page_directory=_page_directory(inputs),
         containment_aggregate=containment_aggregate,
         containment_samples=containment_samples,
         exact_aggregate=exact_aggregate,
