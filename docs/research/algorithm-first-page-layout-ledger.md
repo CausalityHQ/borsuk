@@ -2084,3 +2084,40 @@ role is now burned and must not be retuned against. The next research step is
 bounded development-only page-locality diagnosis and one replacement
 hypothesis aimed at the lower tail; 10M/100M promotion and native-S3 replay of
 this rejected arm remain fenced.
+
+### V85 query-independent PQ co-occurrence page ordering is marginal
+
+The one permitted post-rejection representation probe changed only the
+physical order of existing immutable pages. It sampled 256 base rows by a
+fixed query-independent SplitMix64 order, ranked 512 PQ16 rows for each, built
+a weighted graph from each pseudoquery's first 32 unique pages, and emitted a
+deterministic maximum-adjacency page order. Page membership, PQ16 codebooks and
+codes, the 2,048-row evaluation shortlist, reciprocal-rank planner, 32-range
+cap, 16-MiB cap, and all 1,000 already-burned 100k development queries were
+unchanged. Validation and holdout roles were not opened.
+
+The sole run used source `7ffc2eb7aedc875f2756ddb05a3fb0f006c8473e` on
+c7i.8xlarge Spot instance `i-004cafd6cfd32ef10` in `eu-central-1a`. It
+published a successful terminal and terminated immediately. Immutable evidence
+is under
+`research/v85-pq16-cooccurrence-layout/7ffc2eb7aedc875f2756ddb05a3fb0f006c8473e/runs/v85-cooccurrence-100k-20260920T102300Z-7ffc2eb/a0001/`.
+The canonical result SHA-256 is
+`93e4a153259aafc1e0beba952559f673664b8b7b2a6fe1701c2360ad58720cc8`;
+the terminal SHA-256 is
+`eeece60b0f44f35060b0649ba738135586b99508726e38ecd325c19e605e4c2f`.
+
+| fixed arm | Recall@10 | Recall@100 | p05 / worst Recall@100 | median / max bytes | max GETs |
+|---|---:|---:|---:|---:|---:|
+| existing order | **99.8200%** | 99.1890% | 95% / 80% | 12,544,712 / 14,126,480 | 32 |
+| PQ co-occurrence order | 99.8100% | **99.2850%** | **96% / 82%** | 12,948,240 / 14,545,648 | 32 |
+
+The challenger recovered 96 Recall@100 hits per 100,000 while losing one
+Recall@10 hit, and increased both median and maximum bytes. It therefore failed
+the preregistered non-regression rule even though its absolute competitive
+quality gates passed. Scientific wall time was 48.37 seconds, peak RSS was
+2,210,672 KiB, and swaps were zero. The result shows that query-independent
+physical adjacency contains some useful tail signal, but the effect is too
+small and the byte direction is wrong. This exact layout family is rejected
+without a parameter sweep or 1M rerun. Work returns to mutation/compaction
+qualification and no additional representation hypothesis is opened from this
+burned evidence.
