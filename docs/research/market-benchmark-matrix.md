@@ -181,13 +181,15 @@ storage backend, and observed filter/tenant distribution.
 Amazon S3 Vectors and turbopuffer are the two competitors whose durable
 authority is object storage, which makes them the right architectural
 comparison for BORSUK. Everything in this section is **evidence class 5**:
-first-party vendor documentation read on 2026-09-14, never a paired run on our
+first-party vendor documentation refreshed on 2026-09-20, never a paired run on our
 data, and never merged into a ranking with our measured rows. No 1M ingestion
 was performed into either service.
 
 ### Amazon S3 Vectors
 
-Source: [Limitations and restrictions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-limitations.html).
+Sources: [Amazon S3 Vectors](https://aws.amazon.com/s3/features/vectors/),
+[best practices](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-best-practices.html),
+and [limitations and restrictions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-limitations.html).
 
 | Published limit | Value |
 |---|---:|
@@ -195,6 +197,9 @@ Source: [Limitations and restrictions](https://docs.aws.amazon.com/AmazonS3/late
 | Dimension value per vector | 1 to 4,096 |
 | Combined PutVectors and DeleteVectors requests per second per index | Up to 1,000 |
 | Combined vectors inserted and deleted per second per index | Up to 2,500 |
+| Query/Get/List request rate per index | Hundreds per second |
+| Warm query latency | As low as 100 ms |
+| Cold/infrequent query latency | Sub-second |
 | Top-K results per QueryVectors request | Up to 10,000 |
 | Results per page in a QueryVectors response | Up to 100 |
 | Request payload size | Up to 20 MiB |
@@ -205,14 +210,16 @@ S3 Vectors contributes a scale and write-rate baseline, not a quality baseline.
 ### turbopuffer
 
 Sources: [Architecture](https://turbopuffer.com/docs/architecture),
+[Performance](https://turbopuffer.com/docs/performance),
+[Limits](https://turbopuffer.com/docs/limits), and
 [Recall](https://turbopuffer.com/docs/recall).
 
 | Published figure | Value |
 |---|---:|
-| Cold query, 1M documents | p50 874 ms |
-| Warm/cached query, 1M documents | p50 14 ms |
-| Cold-query roundtrips to object storage | 3-4, "as little as ~400ms" |
-| Write throughput | ~10,000+ vectors/sec |
+| Warm vector query, 10M documents | p50 14 ms, p90 17 ms, p99 27 ms |
+| Vector recall@10 | 90-100% published operating range |
+| Per-namespace write throughput | 10,000 writes/s at 32 MB/s |
+| Observed global write throughput | 10M+ writes/s at 32 GB/s |
 | Write latency | p50 165 ms for 500 kB |
 | WAL rate limit | 1 WAL entry per second per namespace |
 
@@ -229,18 +236,18 @@ service-level recall guarantee.
 
 Two cautions this table exists to enforce:
 
-1. Only the p50 figures above were verified at source. Percentile spreads
-   (p90/p99) quoted elsewhere in earlier working notes were not confirmed on
-   the vendor pages and must not be cited as vendor-reported.
-2. turbopuffer's cold p50 is a managed service's first request to a namespace.
-   It is not equivalent to a provably cold BORSUK process, and the two must
-   not be placed in the same column without saying so.
+1. The current 10M latency table is explicitly a warm operating point.
+2. The vendor does not publish the dataset, metric, dimensions, `k`, measured
+   recall, client placement, or a current cold percentile for that table. It
+   cannot be placed beside a provably cold BORSUK process or used for a speedup
+   claim.
 
 ### What this implies for BORSUK's target
 
-turbopuffer openly accepts roughly 400-900 ms cold latency and relies on
-caching for ~14 ms warm. BORSUK therefore does not need an implausible
-cold-S3 latency to be competitive. The defensible target is: returned
+turbopuffer publishes ~14 ms warm latency while documenting object storage as
+durable state behind memory/NVMe caches. S3 Vectors publishes sub-second cold
+and as-low-as-100-ms warm latency. BORSUK therefore does not need an implausible
+15 ms cold-S3 target to be competitive. The defensible target is: returned
 Recall@100 at or above the quality bar in
 [the algorithm-first ledger](algorithm-first-page-layout-ledger.md), warm p50
 in the low tens of milliseconds, cold p50 well under a second, write
