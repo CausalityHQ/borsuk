@@ -2040,6 +2040,34 @@ neither does, the original tail did not reproduce. Every outcome remains
 claim-ineligible. No packing, client, retry, concurrency, or object-layout
 change is permitted until this classification is terminal.
 
+### V96 result — the S3 tail follows first measured position
+
+The sole reverse-order attempt used source
+`76112a31cae8efa828a19a2957b6b968062d30c7` on c7i.8xlarge Spot instance
+`i-05018540f05b6f008` in `eu-central-1a`. The terminal completed with exit zero
+and the instance terminated. Immutable evidence is under
+`research/v96-s3-transport-order/76112a31cae8efa828a19a2957b6b968062d30c7/runs/v96-reverse-order-a0001/`.
+The result and terminal SHA-256 values are
+`6450878a3d99327a7fb9a370c3fdf746e0b4173597888f8f456e906bdaf5d12e`
+and `1f60759f7e7244a1814f3a1674ff205cec398089c00bfe0a19a7c60cc6cf0113`.
+
+The probe issued the same 32 untimed preflight GETs and 1,205 measured range
+GETs as V95. Measured work remained 498,329,600 bytes: 75.3125 GETs and
+31,145,600 bytes per query on average, with maxima of 88 GETs and 38,351,680
+bytes. Reversed ordinal 343 became position zero and took **577.646 ms** of
+storage I/O. Ordinal 328 moved to position 15 and fell to **206.272 ms** even
+though both transferred the same maximum bytes. Cohort storage I/O was
+200.796 ms p50, 577.646 ms max-of-16, and 232.386 ms mean. The registered
+classification is `position-dependent-tail-supported`.
+
+This reproduces the tail on a different maximum-work query and removes page
+choice or ordinal 328 as its cause. It does not prove the lower-level mechanism,
+but it rejects page repacking as the next response: transport/client warm-state
+handling must be isolated before changing immutable layout. The diagnostic
+wall was 4.23 seconds, peak RSS was 173,428 KiB, and swaps were zero. It
+downloaded no corpus, query, truth, delta, or vector artifact and remains
+claim-ineligible.
+
 Preparation took 4:20.19 at 10,398,504 KiB peak RSS and zero swaps. The fresh
 replay took 10.05 seconds at 2,106,012 KiB peak RSS and zero swaps. This result
 is claim-ineligible, measures plan replay rather than planner latency, and
