@@ -2650,3 +2650,44 @@ same-object page ranges under the unchanged 32-GET/16-MiB caps; only if its
 exact ceiling passes on all 1,000 queries may PQ width selection and the full
 100M `<3 GiB` worksheet resume. S3 Vector and TurboPuffer are not measured in
 this cell, so no matched or published-number parity claim is made.
+
+## V99 result — prototype timed out before scientific evidence
+
+V99 source `6082926d035580f3833c363dcf846c9a2e1273c2` is archived at
+`s3://borsuk-bench-453182569524-euc1/research/v99-ranked-gap-range-router/6082926d035580f3833c363dcf846c9a2e1273c2/source/source.tar.gz`
+with SHA-256
+`cdd9a919e51e4b89ce0aa41c12d87b200bee616aa3d4b3ec1356dcf63374803d`
+and 10,696,645 bytes. The sole attempt prefix is
+`research/v99-ranked-gap-range-router/6082926d035580f3833c363dcf846c9a2e1273c2/runs/v99-g1-20260920T183715Z-6082926/a0001/`.
+It reused the six exact V98 input identities and the registered critique
+SHA-256, but increased the deterministic shortlist from 2,048 to 8,192 rows
+while preserving 1,000 ReLAION-1M development queries, exact top-100 truth,
+32 GETs, 16,777,216 bytes, and all hierarchy caps.
+
+The one-time `c7i.8xlarge` Spot instance `i-06baa9b6fffdd0ce3` ran in
+`eu-central-1c` and is terminated. Its 350-byte terminal has SHA-256
+`60e6b1180c5598e63e8493e3a18ac945eaf158143288090d7e9a99dafa745b0d`,
+status `failed`, exit code 97, `claim_eligible=false`, and no evidence map.
+The producer was stopped by its exact 7,200-second timeout before writing a
+result. `/usr/bin/time` independently records exit status 124, 7,207.41 user
+seconds, 27.88 system seconds, 100% CPU, 2:00:00 wall, maximum RSS 11,136,608
+KiB, one major fault, and zero swaps; that receipt is 810 bytes with SHA-256
+`b91d278adc470d4783fe160a3f153e972e54fbd1c5debf9b8f22eb6fdb437d19`.
+All seven source/input hashes passed before science. The 481-byte worker log
+has SHA-256
+`081375013048e166e879691a565b382002737a94e56a7d693aa8b1a51ea8b4c6`.
+Cleanup resource serialization also failed after the producer timeout, so no
+canonical resources receipt or exact spend was emitted; the compute exposure
+is bounded by the registered Spot price and wall envelope, and no result,
+recall, width, latency, throughput, or parity claim exists.
+
+**Ruling:** this is a prototype-performance failure, not evidence against the
+ranked-gap representation. The scalar Python scorer maintains an 8,192-entry
+heap one row at a time and repeats that work across exact and width arms, using
+only one of 32 vCPUs. Before any new full cell, replace per-row heap traffic
+with bounded deterministic NumPy block selection, prove byte-for-byte
+`(distance,row_id)` equality on ties and adversarial inputs, and require a
+small fixed-query performance preflight. A new immutable revision may run one
+fresh 1,000-query attempt only after that preflight demonstrates sufficient
+headroom under the same 7,200-second cap. No same-revision retry, 10M/100M
+work, G2 promotion, or competitor comparison is permitted from V99.
