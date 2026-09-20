@@ -130,6 +130,10 @@ class V98SpotLauncherTests(unittest.TestCase):
             "resources.json",
             "terminal.json",
             "/proc/pressure/memory",
+            "full avg10",
+            "0.50",
+            "1048576",
+            "pressure-stop.txt",
         ):
             self.assertIn(literal, script)
         self.assertLess(script.index("rescore.json"), script.rindex("terminal.json"))

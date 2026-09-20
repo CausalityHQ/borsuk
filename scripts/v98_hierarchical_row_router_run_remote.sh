@@ -6,6 +6,8 @@ interrupted=0
 watcher_pid=
 started_epoch=$(date +%s)
 output_prefix=$V98_OUTPUT_PREFIX
+pressure_start=$(tr '\n' ';' </proc/pressure/memory)
+swap_start_kib=$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{print t-f}' /proc/meminfo)
 mkdir -p "$root" && cd "$root" || exit 90
 exec > >(tee -a worker.log) 2>&1
 
@@ -18,13 +20,23 @@ instance_id() {
   printf '%s' "$value"
 }
 
-watch_interruption() {
-  local token
+watch_health() {
+  local token full_avg10 swap_now swap_delta over breaches=0
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
-    http://169.254.169.254/latest/api/token 2>/dev/null) || return 0
+    http://169.254.169.254/latest/api/token 2>/dev/null) || token=
   while sleep 5; do
-    if curl -fsS -H "X-aws-ec2-metadata-token: $token" \
+    if [ -n "$token" ] && curl -fsS -H "X-aws-ec2-metadata-token: $token" \
       http://169.254.169.254/latest/meta-data/spot/instance-action >/dev/null 2>&1; then
+      kill -TERM $$
+      return 0
+    fi
+    full_avg10=$(awk '/^full/{for(i=1;i<=NF;i++) if($i ~ /^avg10=/){split($i,a,"="); print a[2]}}' /proc/pressure/memory)
+    swap_now=$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{print t-f}' /proc/meminfo)
+    swap_delta=$((swap_now - swap_start_kib))
+    over=$(awk -v value="$full_avg10" 'BEGIN{print value > 0.50 ? 1 : 0}')
+    if [ "$over" -eq 1 ]; then breaches=$((breaches + 1)); else breaches=0; fi
+    if [ "$breaches" -ge 3 ] || [ "$swap_delta" -gt 1048576 ]; then
+      printf 'full avg10=%s swap_delta_kib=%s\n' "$full_avg10" "$swap_delta" >pressure-stop.txt
       kill -TERM $$
       return 0
     fi
@@ -95,7 +107,7 @@ Path("resources.json").write_bytes(
 )
 PY
   cp worker.log worker-evidence.log 2>/dev/null || : >worker-evidence.log
-  for name in result.json rescore.json resources.json producer.time rescore.time producer.log rescore.log worker-evidence.log hashes.txt; do
+  for name in result.json rescore.json resources.json producer.time rescore.time producer.log rescore.log worker-evidence.log hashes.txt pressure-stop.txt; do
     [ -f "$name" ] && aws s3 cp "$name" "$output_prefix/evidence/$name" --only-show-errors
   done
   STATUS="$status" EXIT_CODE="$code" INSTANCE_ID="$iid" python3.12 - <<'PY'
@@ -161,11 +173,9 @@ PY
 
 trap finish EXIT
 trap mark_interrupted TERM INT
-watch_interruption &
+watch_health &
 watcher_pid=$!
 shutdown --poweroff +125
-pressure_start=$(tr '\n' ';' </proc/pressure/memory)
-swap_start_kib=$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{print t-f}' /proc/meminfo)
 ulimit -v $((48 * 1024 * 1024))
 export HOME=${HOME:-/root}
 export OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16 MKL_NUM_THREADS=16
