@@ -1242,6 +1242,64 @@ request gate will be loosened implicitly, and no 10M/100M promotion occurs
 unless the validator has recomputed per-query recall, mutation, and compaction
 evidence and a complete sub-3-GiB 100M memory worksheet is feasible.
 
+### PQ16 100k page-nomination closure
+
+The one permitted follow-up representation hypothesis reused a 16-byte
+query-independent PQ code per base row, ranked a fixed 2,048 rows by ADC, and
+treated the authenticated 10,000-row delta as resident. The source, query,
+truth, generation, base-run, and delta-run bytes were authenticated before
+science. Results are offline page-containment evidence, not page-SQ8 serving
+quality or latency.
+
+Attempt `100k-a0022` stopped before science with exit 95 because its submitted
+shell transcribed the delta digest incorrectly. The generation manifest's
+registered digest was re-read directly, the failed Spot instance
+`i-05b6fb39384b726a8` was terminated, and no result was emitted. No scientific
+claim uses this attempt.
+
+Attempt `100k-a0023` used source
+`24383d853474a19702d18d2de700bee3618167f5` and measured the diagnostic policy
+that reads every physical page touched by the top-2,048 rows. On 32 development
+queries it reached **99.7500%** page containment (3,192/3,200), with 96% worst
+query. This required as many as **53 GETs and 45,651,248 bytes/query**; the
+median query touched 98 pages and used 39 GETs. The arm therefore fails both
+registered S3-work gates despite clearing aggregate quality. Its canonical
+result SHA-256 is
+`5c4be5718f4ac2bb80a7b8abea49bf15f308c1439c4c6064318d7e8fc8f8dc3d`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/`.
+Scientific wall time was 11.28 seconds, peak RSS was 2,197,948 KiB, and swap
+was zero. Spot instance `i-0c093338b4fef14b9` terminated.
+
+Attempt `100k-a0024` corrected the probe to the already-established
+deterministic page policy: reciprocal-rank page weights from the same top-2,048
+PQ16 rows, followed by exact maximum-weight dense selection under 32 ranges and
+an 83-page conservative span cap. Source
+`2fa9f00f96e562641e5bbc8b3a8eead408dc0689` had four focused tests plus Ruff
+0.15.20, Python compilation, and diff checks green before execution.
+
+| PQ16 policy | aggregate containment | worst query | max GETs | max bytes |
+|---|---:|---:|---:|---:|
+| read every touched page | **99.7500%** | 96% | 53 | 45,651,248 |
+| exact bounded reciprocal-rank planner | **98.7500%** (3,160/3,200) | 93% | **32** | **13,201,752** |
+
+The bounded arm met both S3-work gates but missed the 99% aggregate and
+worst-query gates. Nine queries fell below 99 hits; queries 1 and 23 each
+returned 93/100. Its canonical result SHA-256 is
+`a54b384a3f097302469830cf2ea3a7156ee86225ff491669df8e8e98fb446e05`
+under
+`s3://borsuk-bench-453182569524-euc1/research/v85-pq16-page-nomination/2fa9f00f96e562641e5bbc8b3a8eead408dc0689/100k-a0024/attempt/`.
+Scientific wall time was 11.96 seconds, peak RSS was 2,198,268 KiB, and swap
+was zero. Spot instance `i-069f7909f44ca3189` terminated.
+
+**Ruling:** direct PQ16 row nomination on the current physical layout is
+rejected under the joint quality and S3-work contract. Reading enough nominated
+pages clears quality but exceeds work by a wide margin; the exact bounded
+planner clears work but loses 40 of 3,200 neighbours. This does not reject all
+PQ representations or all possible layouts, but it does reject this sole
+registered follow-up hypothesis. No 1M, 10M, or 100M promotion follows, and no
+request or quality boundary is loosened from this development evidence.
+
 ### Original exact-row control
 
 Before testing another page representation, attempt `exact-row-control-a0015`
