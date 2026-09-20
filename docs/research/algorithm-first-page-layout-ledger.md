@@ -1681,3 +1681,32 @@ end-to-end query latency without downloading the corpus locally. Only after
 that fail-fast serving gate passes do we replace the dense per-query traceback
 with a sparse hierarchical index and consider a larger corpus. V94 establishes
 quality, not 100M scalability or production latency.
+
+### V95 preregistration — fail-fast real-S3 frozen-plan replay
+
+V95 first isolates the S3/layout risk before porting the dense planner. It
+reuses confirmation ordinals 328 through 343 and their already-frozen V94
+direct-rescue page plans; it opens no new query or truth role and permits no
+retuning. The 900,000 base rows are encoded once into authenticated fixed-width
+PQ192 and per-page SQ8 objects in Standard S3. Before measurement, the builder
+unlinks the local base corpus and exits. A fresh process retains only the
+100,000-row SQ8 delta, queries, truth, and canonical plan, then replays the
+registered wave-one and wave-two ranges through actual in-region S3 GETs.
+
+Queries execute serially. Each request wave has at most 16 I/O workers; there
+is no query-level pool, Rayon, or nested work stealing. The result must exactly
+reproduce every frozen query's page-SQ8 hits, reconcile physical GETs and bytes,
+and authenticate both S3 objects by length and SHA-256 checksum before the
+first range read. An untimed, separately counted 32-GET preflight establishes
+all 16 HTTP connections before measurement. The bounded storage-I/O feasibility
+gate is p50 at most 250 ms and p95 at most 500 ms over 16 queries; nearest-rank
+p95 is therefore also the cohort maximum. Decode, rerank, and total latency are
+reported separately but do not decide this storage-floor gate. These loose
+limits decide only whether this physical request envelope deserves full reader
+engineering; they are not a production SLA or competitor claim.
+
+This probe deliberately excludes planner latency and is claim-ineligible. A
+pass advances to the native full-planner/reader measurement, where routing,
+I/O, decode, rerank, and end-to-end latency are all measured. A failure sends
+the design directly to page packing/request coalescing rather than spending on
+128-query or larger-corpus evaluation.
