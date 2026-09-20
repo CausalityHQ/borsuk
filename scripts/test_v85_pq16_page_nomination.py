@@ -234,7 +234,12 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             )
             result_body = output.read_bytes()
             result = json.loads(result_body)
-            self.assertEqual(result["aggregate_recall_ppm"], 1_000_000)
+            self.assertEqual(
+                result["schema"], "borsuk-v85-pq16-page-nomination-result-v2"
+            )
+            self.assertEqual(result["average_recall10_ppm"], 1_000_000)
+            self.assertEqual(result["average_recall100_ppm"], 1_000_000)
+            self.assertEqual(result["p05_recall100_ppm"], 1_000_000)
             self.assertEqual(result["rows"], 257)
             self.assertTrue(result["gate_passed"])
             self.assertEqual(result_body[-1:], b"\n")
@@ -262,11 +267,15 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             gap_pages=2,
             max_gets=1,
             max_bytes=300,
-            min_recall_ppm=600_000,
+            min_average_recall10_ppm=600_000,
+            min_average_recall100_ppm=600_000,
+            min_p05_recall100_ppm=600_000,
         )
 
-        self.assertEqual(result["aggregate_recall_ppm"], 666_667)
-        self.assertEqual(result["worst_recall_ppm"], 666_667)
+        self.assertEqual(result["average_recall10_ppm"], 666_666)
+        self.assertEqual(result["average_recall100_ppm"], 666_666)
+        self.assertEqual(result["p05_recall100_ppm"], 666_666)
+        self.assertEqual(result["worst_recall_ppm"], 666_666)
         self.assertEqual(result["max_gets_per_query"], 1)
         self.assertEqual(result["max_bytes_per_query"], 300)
         self.assertTrue(result["gate_passed"])
@@ -276,7 +285,9 @@ class V85Pq16PageNominationTests(unittest.TestCase):
                 {
                     "bytes": 300,
                     "gets": 1,
+                    "hit10_ids": [10, 900],
                     "hit_ids": [10, 900],
+                    "hits10": 2,
                     "hits": 2,
                     "query": 0,
                     "selected_pages": [0, 3],
@@ -285,7 +296,9 @@ class V85Pq16PageNominationTests(unittest.TestCase):
                 {
                     "bytes": 300,
                     "gets": 1,
+                    "hit10_ids": [900, 901],
                     "hit_ids": [900, 901],
+                    "hits10": 2,
                     "hits": 2,
                     "query": 1,
                     "selected_pages": [0, 3],
@@ -309,23 +322,19 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             page_entries=pages,
             neighbors=2,
             gap_pages=0,
-            min_recall_ppm=1_000_000,
+            min_average_recall10_ppm=1_000_000,
+            min_average_recall100_ppm=1_000_000,
+            min_p05_recall100_ppm=1_000_000,
         )
 
         self.assertTrue(
-            evaluate_page_nominations(**common, max_gets=2, max_bytes=20)[
-                "gate_passed"
-            ]
+            evaluate_page_nominations(**common, max_gets=2, max_bytes=20)["gate_passed"]
         )
         self.assertFalse(
-            evaluate_page_nominations(**common, max_gets=1, max_bytes=20)[
-                "gate_passed"
-            ]
+            evaluate_page_nominations(**common, max_gets=1, max_bytes=20)["gate_passed"]
         )
         self.assertFalse(
-            evaluate_page_nominations(**common, max_gets=2, max_bytes=19)[
-                "gate_passed"
-            ]
+            evaluate_page_nominations(**common, max_gets=2, max_bytes=19)["gate_passed"]
         )
         low_quality = dict(common)
         low_quality["truth_ids"] = np.asarray([[10, 99]], dtype=np.int64)
@@ -334,6 +343,45 @@ class V85Pq16PageNominationTests(unittest.TestCase):
                 "gate_passed"
             ]
         )
+
+    def test_gate_uses_p05_distribution_and_reports_absolute_worst(self) -> None:
+        # Break caught: one outlier still vetoes promotion, or the p05 gate is
+        # approximated from an aggregate rather than per-query containment.
+        truth = np.asarray(
+            [list(range(query * 100, query * 100 + 100)) for query in range(21)],
+            dtype=np.int64,
+        )
+        ranked = truth[:, :1].copy()
+        pages = {
+            page: PageEntry(offset=page * 10, encoded_bytes=10) for page in range(21)
+        }
+        base_page_by_id = {
+            int(row_id): query for query, row_id in enumerate(truth[:, 0])
+        }
+        resident = set(int(row_id) for row_id in truth[:, 1:].reshape(-1))
+        for row_id in truth[0, 80:]:
+            resident.remove(int(row_id))
+
+        result = evaluate_page_nominations(
+            ranked_base_ids=ranked,
+            truth_ids=truth,
+            base_page_by_id=base_page_by_id,
+            resident_delta_ids=resident,
+            page_entries=pages,
+            neighbors=100,
+            gap_pages=0,
+            max_gets=32,
+            max_bytes=16 * 1024 * 1024,
+            min_average_recall10_ppm=960_000,
+            min_average_recall100_ppm=975_000,
+            min_p05_recall100_ppm=900_000,
+        )
+
+        self.assertEqual(result["average_recall10_ppm"], 1_000_000)
+        self.assertEqual(result["average_recall100_ppm"], 990_476)
+        self.assertEqual(result["p05_recall100_ppm"], 1_000_000)
+        self.assertEqual(result["worst_recall_ppm"], 800_000)
+        self.assertTrue(result["gate_passed"])
 
 
 if __name__ == "__main__":

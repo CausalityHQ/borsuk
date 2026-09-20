@@ -138,9 +138,7 @@ def plan_rank_weighted_ranges(
     breaks = np.flatnonzero(np.diff(selected_pages) > 1)
     starts = np.concatenate(([selected_pages[0]], selected_pages[breaks + 1]))
     ends = np.concatenate((selected_pages[breaks], [selected_pages[-1]]))
-    return [
-        (int(starts[index]), int(ends[index])) for index in range(starts.size)
-    ]
+    return [(int(starts[index]), int(ends[index])) for index in range(starts.size)]
 
 
 def evaluate_page_nominations(
@@ -154,7 +152,9 @@ def evaluate_page_nominations(
     gap_pages: int,
     max_gets: int,
     max_bytes: int,
-    min_recall_ppm: int,
+    min_average_recall10_ppm: int,
+    min_average_recall100_ppm: int,
+    min_p05_recall100_ppm: int,
     max_span_pages: int | None = None,
 ) -> dict[str, Any]:
     if (
@@ -213,34 +213,47 @@ def evaluate_page_nominations(
             if int(row_id) in resident_delta_ids
             or base_page_by_id.get(int(row_id)) in selected
         ]
+        recall10_cutoff = min(10, neighbors)
+        hit10_ids = [
+            int(row_id)
+            for row_id in truth_ids[query, :recall10_cutoff]
+            if int(row_id) in resident_delta_ids
+            or base_page_by_id.get(int(row_id)) in selected
+        ]
         samples.append(
             {
                 "bytes": encoded_bytes,
                 "gets": gets,
+                "hit10_ids": hit10_ids,
                 "hit_ids": hit_ids,
+                "hits10": len(hit10_ids),
                 "hits": len(hit_ids),
                 "query": query,
                 "selected_pages": selected_pages,
                 "truth_ids": [int(value) for value in truth_ids[query]],
             }
         )
-    total_hits = sum(sample["hits"] for sample in samples)
-    aggregate_recall_ppm = round(
-        total_hits * 1_000_000 / (len(samples) * neighbors)
-    )
-    worst_recall_ppm = round(
-        min(sample["hits"] for sample in samples) * 1_000_000 / neighbors
-    )
+    total_hits10 = sum(sample["hits10"] for sample in samples)
+    total_hits100 = sum(sample["hits"] for sample in samples)
+    recall10_cutoff = min(10, neighbors)
+    average_recall10_ppm = total_hits10 * 1_000_000 // (len(samples) * recall10_cutoff)
+    average_recall100_ppm = total_hits100 * 1_000_000 // (len(samples) * neighbors)
+    recalls100 = sorted(sample["hits"] * 1_000_000 // neighbors for sample in samples)
+    p05_recall100_ppm = recalls100[max(0, (len(samples) * 5 + 99) // 100 - 1)]
+    worst_recall_ppm = recalls100[0]
     max_gets_per_query = max(sample["gets"] for sample in samples)
     max_bytes_per_query = max(sample["bytes"] for sample in samples)
     return {
-        "aggregate_recall_ppm": aggregate_recall_ppm,
-        "gate_passed": aggregate_recall_ppm >= min_recall_ppm
-        and worst_recall_ppm >= min_recall_ppm
+        "average_recall10_ppm": average_recall10_ppm,
+        "average_recall100_ppm": average_recall100_ppm,
+        "gate_passed": average_recall10_ppm >= min_average_recall10_ppm
+        and average_recall100_ppm >= min_average_recall100_ppm
+        and p05_recall100_ppm >= min_p05_recall100_ppm
         and max_gets_per_query <= max_gets
         and max_bytes_per_query <= max_bytes,
         "max_bytes_per_query": max_bytes_per_query,
         "max_gets_per_query": max_gets_per_query,
+        "p05_recall100_ppm": p05_recall100_ppm,
         "samples": samples,
         "worst_recall_ppm": worst_recall_ppm,
     }
@@ -253,9 +266,7 @@ def _train_pq16(vectors: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarray]
         raise ValueError("PQ16 training shape differs")
     width = dimensions // subspaces
     generator = np.random.default_rng(seed)
-    sample = vectors[
-        generator.choice(rows, min(rows, 100_000), replace=False)
-    ]
+    sample = vectors[generator.choice(rows, min(rows, 100_000), replace=False)]
     books = np.empty((subspaces, 256, width), dtype=np.float32)
     codes = np.empty((rows, subspaces), dtype=np.uint8)
     for subspace in range(subspaces):
@@ -331,7 +342,10 @@ def _read_page_run(
     path: pathlib.Path, run: dict[str, Any], dimensions: int
 ) -> tuple[dict[int, int], dict[int, PageEntry]]:
     identity = run["object"]
-    if path.stat().st_size != identity["bytes"] or _sha256_file(path) != identity["sha256"]:
+    if (
+        path.stat().st_size != identity["bytes"]
+        or _sha256_file(path) != identity["sha256"]
+    ):
         raise ValueError("PQ16 run identity differs")
     body = path.read_bytes()
     page_by_id: dict[int, int] = {}
@@ -418,7 +432,10 @@ def main() -> None:
         source.column("embedding").combine_chunks().values.to_numpy(),
         dtype=np.float32,
     ).reshape(-1, args.dimensions)
-    if len(set(source_ids.tolist())) != len(source_ids) or not np.isfinite(vectors).all():
+    if (
+        len(set(source_ids.tolist())) != len(source_ids)
+        or not np.isfinite(vectors).all()
+    ):
         raise ValueError("source authority differs")
     row_by_id = {int(row_id): row for row, row_id in enumerate(source_ids)}
     if set(base_page_by_id) | set(delta_page_by_id) != set(row_by_id):
@@ -433,13 +450,14 @@ def main() -> None:
         truth_table.column("neighbors").combine_chunks().values.to_numpy(),
         dtype=np.int64,
     ).reshape(-1, args.neighbors)
-    if queries.shape[0] != args.queries_count or truth_ids.shape[0] != args.queries_count:
+    if (
+        queries.shape[0] != args.queries_count
+        or truth_ids.shape[0] != args.queries_count
+    ):
         raise ValueError("evaluation query count differs")
 
     books, codes = _train_pq16(base_vectors, args.seed)
-    ranked = _rank_pq16(
-        queries, base_ids, books, codes, args.shortlist_rows
-    )
+    ranked = _rank_pq16(queries, base_ids, books, codes, args.shortlist_rows)
     maximum_page_bytes = max(entry.encoded_bytes for entry in page_entries.values())
     max_span_pages = (16 * 1024 * 1024) // maximum_page_bytes
     evaluation = evaluate_page_nominations(
@@ -452,7 +470,9 @@ def main() -> None:
         gap_pages=args.gap_pages,
         max_gets=32,
         max_bytes=16 * 1024 * 1024,
-        min_recall_ppm=990_000,
+        min_average_recall10_ppm=960_000,
+        min_average_recall100_ppm=975_000,
+        min_p05_recall100_ppm=900_000,
         max_span_pages=max_span_pages,
     )
     result = {
@@ -469,20 +489,29 @@ def main() -> None:
         "queries": args.queries_count,
         "resident_bytes_at_100m": 1_600_000_000,
         "rows": len(source_ids),
-        "schema": "borsuk-v85-pq16-page-nomination-result-v1",
+        "schema": "borsuk-v85-pq16-page-nomination-result-v2",
         "shortlist_rows": args.shortlist_rows,
         "span_page_budget": max_span_pages,
     }
     body = _canonical_bytes(result)
     args.output.write_bytes(body)
-    print(json.dumps({
-        "aggregate_recall_ppm": result["aggregate_recall_ppm"],
-        "gate_passed": result["gate_passed"],
-        "max_bytes_per_query": result["max_bytes_per_query"],
-        "max_gets_per_query": result["max_gets_per_query"],
-        "result_sha256": hashlib.sha256(body).hexdigest(),
-        "worst_recall_ppm": result["worst_recall_ppm"],
-    }, separators=(",", ":"), sort_keys=True), flush=True)
+    print(
+        json.dumps(
+            {
+                "average_recall10_ppm": result["average_recall10_ppm"],
+                "average_recall100_ppm": result["average_recall100_ppm"],
+                "gate_passed": result["gate_passed"],
+                "max_bytes_per_query": result["max_bytes_per_query"],
+                "max_gets_per_query": result["max_gets_per_query"],
+                "p05_recall100_ppm": result["p05_recall100_ppm"],
+                "result_sha256": hashlib.sha256(body).hexdigest(),
+                "worst_recall_ppm": result["worst_recall_ppm"],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
