@@ -1638,3 +1638,46 @@ query work stealing. It has a 1,800-second scientific cap and publishes the
 original terminal and complete evidence before shutting down. A pass advances
 to native real-S3 1M latency measurement; a failure rejects direct rescue and
 returns to algorithm diagnosis without serving or larger-scale engineering.
+
+### V94 result — frozen direct rescue confirms on 128 untouched queries
+
+The sole attempt used source
+`f110610fd731c47a1cab403d307590cddcc019dc` on c7i.8xlarge Spot instance
+`i-0b23eb9fcb07a82d1` in `eu-central-1a`. All source and dataset hashes
+passed, the instance published a successful terminal, and it terminated
+immediately. Immutable evidence is under
+`research/v94-protected-rescue-confirmation/f110610fd731c47a1cab403d307590cddcc019dc/runs/v94-confirmation-20260920T003759Z-f110610f/a0001/`.
+The canonical result SHA-256 is
+`71a1ce7b31b189e8eadd6ecddf192f00d9451ce42c0f1a71d378f2bfc09e8f7e`;
+the terminal SHA-256 is
+`3520829138671c878a2463291e54904eedb5ef61ee00985bb078cbebcc631b93`.
+The frozen direct-rescue evidence SHA-256 is
+`95a29d766d5cd45c42ca747ef3b4c7e2ec5fe020de3c6f744bf1ae2657d681ba`,
+and the newly recomputed row-min score SHA-256 is
+`304110613c8f2e6ae5e0bd87f32cd2b967e52022ea75aab253747b8927877d5e`.
+
+| arm | page-SQ8 Recall@100 | exact recall | base-only recall | worst | mean / max planned GETs | mean / max planned bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| V90 control | **99.0859%** (12,683/12,800) | 99.2578% (12,705/12,800) | 99.0426% | 77 | 55.11 / 64 | 27,465,352 / 33,410,368 |
+| frozen direct rescue | **99.4531%** (12,730/12,800) | 99.6406% (12,754/12,800) | 99.4517% | 86 | 77.16 / 88 | 32,406,664 / 38,351,680 |
+
+Direct rescue improved 19 of 128 paired queries, tied 109, and regressed none.
+It added 47 final SQ8 hits, exceeding the preregistered four-hit benefit gate,
+and passed the 12,685-total, 991,000-ppm-base, 85-worst-query, and paired
+non-regression gates. V94 therefore accepts the frozen direct-rescue
+configuration on this untouched development-confirmation split. Ordinals 456
+through 999, the validation role, and the sealed holdout remain unread.
+
+This was still an offline algorithm confirmation and made zero S3 query
+requests. The GET and byte counts above reconstruct the physical request
+envelope; they are not latency measurements. Scientific wall time was 7:44.02,
+peak RSS was 10,568,872 KiB, CPU utilization was 767%, and swaps were zero.
+The fixed 16-thread BLAS configuration processed one query at a time without
+Rayon or nested query work stealing.
+
+The next gate is a native real-S3 1M measurement of this exact frozen arm. It
+must measure cold object GET latency, request concurrency, bytes, CPU, and
+end-to-end query latency without downloading the corpus locally. Only after
+that fail-fast serving gate passes do we replace the dense per-query traceback
+with a sparse hierarchical index and consider a larger corpus. V94 establishes
+quality, not 100M scalability or production latency.
