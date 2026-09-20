@@ -53,6 +53,9 @@ def project_v85_resident_memory(
     sparse_residual_bitmap_bytes = (
         (collection_rows + 7) // 8 if sparse_residual_rows else 0
     )
+    sparse_residual_rank_directory_bytes = (
+        (((collection_rows + 511) // 512) + 1) * 4 if sparse_residual_rows else 0
+    )
     sparse_residual_codebooks_bytes = (
         8 * 256 * (768 // 8) * 4 if sparse_residual_rows else 0
     )
@@ -66,6 +69,7 @@ def project_v85_resident_memory(
             pq16_codebooks_bytes,
             sparse_residual_codes_and_norms_bytes,
             sparse_residual_bitmap_bytes,
+            sparse_residual_rank_directory_bytes,
             sparse_residual_codebooks_bytes,
             metadata_reserve_bytes,
             concurrent_sparse_planner_bytes,
@@ -86,6 +90,7 @@ def project_v85_resident_memory(
     )
 
     return {
+        "allocator_stack_reserve_bytes": 128 * 1024**2,
         "base_id_to_page_bytes": 0,
         "base_rows": base_rows,
         "collection_rows": collection_rows,
@@ -93,6 +98,7 @@ def project_v85_resident_memory(
         "dense_planner_feasible": dense_planner_projected_bytes <= ram_budget_bytes,
         "dense_planner_projected_bytes": dense_planner_projected_bytes,
         "dense_traceback_bytes_per_query": dense_traceback_bytes,
+        "decode_scratch_bytes": 128 * 1024**2,
         "delta_page_bodies": "s3-only",
         "feasible": projected_resident_bytes <= ram_budget_bytes,
         "headroom_bytes": ram_budget_bytes - projected_resident_bytes,
@@ -106,12 +112,14 @@ def project_v85_resident_memory(
         "projected_resident_bytes": projected_resident_bytes,
         "qualification_state": "feasible-only-sparse-planner-not-implemented",
         "ram_budget_bytes": ram_budget_bytes,
+        "range_response_buffers_bytes": range_concurrency * 16 * 1024**2,
         "range_concurrency": range_concurrency,
         "resident_exact_delta_bytes": resident_exact_delta_bytes,
         "router_codes_bytes": router_codes_bytes,
         "runtime_reserve_bytes": runtime_reserve_bytes,
         "schema": "borsuk-v85-memory-worksheet-v1",
         "sparse_residual_bitmap_bytes": sparse_residual_bitmap_bytes,
+        "sparse_residual_rank_directory_bytes": sparse_residual_rank_directory_bytes,
         "sparse_residual_codebooks_bytes": sparse_residual_codebooks_bytes,
         "sparse_residual_codes_and_norms_bytes": sparse_residual_codes_and_norms_bytes,
         "sparse_residual_fraction_ppm": sparse_residual_fraction_ppm,

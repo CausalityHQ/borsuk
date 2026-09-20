@@ -324,3 +324,92 @@ def summarize_paired_sparse_residual(
         "residual_fraction_ppm": expected_fraction_ppm,
         "schema": "borsuk-v85-sparse-residual-summary-v1",
     }
+
+
+def validate_sparse_residual_development_ceiling(
+    result: Any,
+    *,
+    result_sha256: str,
+) -> dict[str, Any]:
+    """Independently recompute the fixed three-arm 1M development screen."""
+
+    _digest(result_sha256, "development ceiling")
+    if (
+        not isinstance(result, dict)
+        or result.get("schema")
+        != "borsuk-v85-sparse-residual-development-ceiling-v1"
+        or result.get("query_start") != 456
+        or type(result.get("queries")) is not int
+        or result["queries"] <= 0
+        or result.get("residual_fraction_ppm") != 250_000
+        or set(result.get("arms", {}))
+        != {"exact-f32", "pq16-identity", "sparse-residual-pq8"}
+    ):
+        raise ValueError("development ceiling result differs")
+    for name in ("pq16_books_sha256", "pq16_codes_sha256"):
+        _digest(result.get(name), name)
+    page_runs = result.get("page_run_identities")
+    if not isinstance(page_runs, dict) or set(page_runs) != {"base", "delta"}:
+        raise ValueError("development ceiling page runs differ")
+    for role in ("base", "delta"):
+        identity = page_runs[role]
+        if (
+            not isinstance(identity, dict)
+            or type(identity.get("bytes")) is not int
+            or identity["bytes"] <= 0
+        ):
+            raise ValueError(f"development ceiling {role} identity differs")
+        _digest(identity.get("sha256"), f"development ceiling {role}")
+
+    arms = result["arms"]
+    evidence: dict[str, tuple[list[int], list[int]]] = {}
+    for role in ("pq16-identity", "sparse-residual-pq8", "exact-f32"):
+        arm = arms[role]
+        if not isinstance(arm, dict):
+            raise ValueError(f"{role} aggregate differs")
+        normalized = dict(arm)
+        normalized["rotation"] = "identity"
+        try:
+            evidence[role] = _pq_evidence(normalized, "identity")
+        except ValueError as error:
+            raise ValueError(f"{role} aggregate differs") from error
+        if len(arm["samples"]) != result["queries"]:
+            raise ValueError(f"{role} query count differs")
+
+    identity_samples = arms["pq16-identity"]["samples"]
+    for role in ("sparse-residual-pq8", "exact-f32"):
+        for left, right in zip(identity_samples, arms[role]["samples"], strict=True):
+            if left["query"] != right["query"] or left["truth_ids"] != right["truth_ids"]:
+                raise ValueError(f"{role} paired authority differs")
+
+    exact = arms["exact-f32"]
+    residual = arms["sparse-residual-pq8"]
+    identity = arms["pq16-identity"]
+    if not exact["gate_passed"]:
+        classification = "layout-locality-rejected"
+    elif (
+        not residual["gate_passed"]
+        or residual["average_recall100_ppm"] < identity["average_recall100_ppm"]
+        or residual["p05_recall100_ppm"] < identity["p05_recall100_ppm"]
+    ):
+        classification = "sparse-residual-rejected"
+    else:
+        classification = "validation-eligible"
+    if (
+        result.get("classification") != classification
+        or result.get("gate_passed") is not (classification == "validation-eligible")
+    ):
+        raise ValueError("development ceiling classification differs")
+
+    return {
+        "classification": classification,
+        "exact_average_recall100_ppm": exact["average_recall100_ppm"],
+        "identity_average_recall100_ppm": identity["average_recall100_ppm"],
+        "queries": result["queries"],
+        "query_start": result["query_start"],
+        "result_sha256": result_sha256,
+        "schema": "borsuk-v85-sparse-residual-development-ceiling-summary-v1",
+        "sparse_residual_average_recall100_ppm": residual[
+            "average_recall100_ppm"
+        ],
+    }

@@ -2243,3 +2243,67 @@ the frozen product gate remains the vendor-anchored distributional contract:
 32 GETs and 16 MiB. This development result passes those absolute gates but
 loses causally to the simpler identity baseline; therefore identity remains
 the current 100k reference and no parameter sweep or 1M promotion follows.
+
+### V85 sparse residual PQ improves the 100k fixed arm
+
+The next and only open representation hypothesis retained the 16-byte PQ16
+code for every row and selected the query-independent quartile with the largest
+base-PQ reconstruction error. Those selected rows received an eight-byte PQ8
+residual code and a four-byte combined-reconstruction norm. Queries and truth
+did not participate in selection or training. The identity and residual arms
+used the same seed-7216 base PQ16, 2,048-row shortlist, reciprocal-rank planner,
+32-GET cap, 16-MiB cap, and all 1,000 already-burned ReLAION 100k development
+queries.
+
+Source `cc5847b52c8652e1dce75b5225be8958eaab8c58` ran once on Spot
+instance `i-0766ab62baf1130d9`, which terminated. Evidence is under
+`research/v85-sparse-residual/cc5847b52c8652e1dce75b5225be8958eaab8c58/runs/v85-sparse-residual-100k-20260920T115910Z-cc5847b/a0001/`.
+
+| fixed arm | average Recall@10 | average Recall@100 | p05 / worst Recall@100 | max GETs | max bytes |
+|---|---:|---:|---:|---:|---:|
+| identity PQ16 | 99.8200% | 99.1890% | 95% / 80% | 32 | 14,126,480 |
+| sparse residual PQ | **99.8600%** | **99.3260%** | **96% / 82%** | 32 | 14,268,568 |
+
+The paired 10,000-resample 95% intervals for sparse residual minus identity
+were **+0.0100 to +0.0800 percentage points** at Recall@10 and **+0.0950 to
++0.1820 points** at Recall@100. The challenger therefore passed the fixed
+100k promotion rule. The scientific result, summary, timing, and terminal
+SHA-256 values are respectively
+`ad33152c6bea6318b5b979b70855cc5392df3c5ec102b047f7d359f7e50e8fcf`,
+`9b5f953e9ad2e91baf0b8e7b016f166b0481a732307651a164df2a38d1fbf39f`,
+`e71b31838924e87f6a70d7e6e9a034cf4b3c16e005cfb074eb5e3856d1a2603d`,
+and `c94ef5ba3474837f5f665338b00241c660036c30e1a4dff1b15dcbd711c35b86`.
+Scientific wall time was 40.32 seconds, peak RSS was 2,210,904 KiB, CPU
+utilization was 906%, and swaps were zero.
+
+The executable 100M worksheet projects 3,012,839,936 resident bytes after
+adding the bitmap rank directory, leaving 208,385,536 bytes below 3 GiB. Its
+512-MiB runtime reserve is now explicitly partitioned into 256 MiB of sixteen
+bounded range-response buffers, 128 MiB of decode scratch, and 128 MiB of
+allocator, stack, and runtime reserve. This remains a feasibility projection;
+the sparse planner and measured serving residency do not yet exist.
+
+### V85 preregistration — 1M development locality ceiling before validation
+
+The 100k screen is not byte-constrained, whereas the rejected 1M validation
+arm used 16,361,264 median bytes against the 16-MiB cap. A second look at the
+already-burned validation role is therefore fenced until one fail-fast
+development screen establishes causality on the same frozen 256-cell layout.
+The screen opens only previously unread development ordinals 456 through 583
+and reads neither validation nor holdout.
+
+One c7i.8xlarge Spot process trains the base PQ16 once and evaluates exactly
+three paired 2,048-row-ranking arms through the identical 32-GET/16-MiB
+reciprocal-rank planner: identity PQ16, the fixed 25% sparse residual arm, and
+exact-f32 row scoring. It records SHA-256 identities for the base books, base
+codes, and both immutable page runs. An independent reducer recomputes every
+arm's per-query hits, aggregates, physical maxima, paired truth, and causal
+classification.
+
+The decision order is fixed. If exact-f32 fails 96% average Recall@10, 97.5%
+average Recall@100, or 90% p05 Recall@100, the layout/locality policy is
+rejected and no quantizer promotion follows. If exact-f32 passes but sparse
+residual fails those gates or regresses identity average or p05 Recall@100,
+the residual arm is rejected. Only if both checks pass may the already-frozen
+claim-ineligible validation rerun proceed without retuning. No native-S3,
+10M, 100M, or sealed-holdout work follows directly from this screen.

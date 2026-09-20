@@ -516,6 +516,48 @@ def _rank_pq16(
     return ranked
 
 
+def _rank_exact_f32(
+    queries: np.ndarray,
+    base_ids: np.ndarray,
+    base_vectors: np.ndarray,
+    shortlist_rows: int,
+    *,
+    query_batch_rows: int = 16,
+) -> np.ndarray:
+    """Rank exact rows in bounded query batches using (distance, id) ties."""
+
+    if (
+        queries.ndim != 2
+        or base_vectors.ndim != 2
+        or queries.shape[1] != base_vectors.shape[1]
+        or base_ids.shape != (base_vectors.shape[0],)
+        or not 0 < shortlist_rows <= base_ids.size
+        or query_batch_rows <= 0
+        or not np.isfinite(queries).all()
+        or not np.isfinite(base_vectors).all()
+    ):
+        raise ValueError("exact f32 ranking shape differs")
+    ranked = np.empty((queries.shape[0], shortlist_rows), dtype=np.int64)
+    base_norms = np.einsum("ij,ij->i", base_vectors, base_vectors)
+    for start in range(0, queries.shape[0], query_batch_rows):
+        batch = queries[start : start + query_batch_rows]
+        query_norms = np.einsum("ij,ij->i", batch, batch)
+        scores = (
+            base_norms[:, None]
+            + query_norms[None, :]
+            - np.float32(2.0) * (base_vectors @ batch.T)
+        )
+        for local_query in range(batch.shape[0]):
+            column = scores[:, local_query]
+            threshold = np.partition(column, shortlist_rows - 1)[shortlist_rows - 1]
+            candidates = np.flatnonzero(column <= threshold)
+            ordered = candidates[
+                np.lexsort((base_ids[candidates], column[candidates]))
+            ][:shortlist_rows]
+            ranked[start + local_query] = base_ids[ordered]
+    return ranked
+
+
 def _sparse_residual_resident_bytes(rows: int, fraction_ppm: int) -> int:
     if (
         type(rows) is not int
@@ -526,6 +568,26 @@ def _sparse_residual_resident_bytes(rows: int, fraction_ppm: int) -> int:
         raise ValueError("sparse residual projection differs")
     selected = (rows * fraction_ppm + 999_999) // 1_000_000
     return rows * 16 + selected * (8 + 4) + (rows + 7) // 8
+
+
+def _classify_sparse_residual_development_ceiling(
+    identity: dict[str, Any],
+    residual: dict[str, Any],
+    exact: dict[str, Any],
+) -> str:
+    """Apply the preregistered fail-fast order for the development screen."""
+
+    if not exact.get("gate_passed", False):
+        return "layout-locality-rejected"
+    if (
+        not residual.get("gate_passed", False)
+        or residual.get("average_recall100_ppm", -1)
+        < identity.get("average_recall100_ppm", -1)
+        or residual.get("p05_recall100_ppm", -1)
+        < identity.get("p05_recall100_ppm", -1)
+    ):
+        return "sparse-residual-rejected"
+    return "validation-eligible"
 
 
 def _rank_pq16_sparse_residual(
@@ -684,6 +746,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=7216)
     parser.add_argument("--rotation", choices=("identity", "srht"), default="identity")
     parser.add_argument("--sparse-residual-fraction-ppm", type=int, default=0)
+    parser.add_argument("--query-start", type=int, default=0)
+    parser.add_argument("--compare-sparse-residual-exact", action="store_true")
     parser.add_argument("--cooccurrence-pseudoqueries", type=int, default=0)
     parser.add_argument("--cooccurrence-shortlist-rows", type=int, default=512)
     parser.add_argument("--cooccurrence-unique-pages", type=int, default=32)
@@ -696,6 +760,11 @@ def main() -> None:
             and (
                 args.rotation != "identity" or args.cooccurrence_pseudoqueries != 0
             )
+        )
+        or args.query_start < 0
+        or (
+            args.compare_sparse_residual_exact
+            and args.sparse_residual_fraction_ppm == 0
         )
     ):
         raise ValueError("sparse residual configuration differs")
@@ -748,17 +817,20 @@ def main() -> None:
     base_vectors = np.ascontiguousarray(
         vectors[[row_by_id[int(row_id)] for row_id in base_ids]]
     )
-    queries = _read_fixed_list(args.queries, "vector", args.dimensions)
+    all_queries = _read_fixed_list(args.queries, "vector", args.dimensions)
     truth_table = pq.read_table(args.truth)
-    truth_ids = np.asarray(
+    all_truth_ids = np.asarray(
         truth_table.column("neighbors").combine_chunks().values.to_numpy(),
         dtype=np.int64,
     ).reshape(-1, args.neighbors)
+    query_stop = args.query_start + args.queries_count
     if (
-        queries.shape[0] != args.queries_count
-        or truth_ids.shape[0] != args.queries_count
+        all_queries.shape[0] != all_truth_ids.shape[0]
+        or query_stop > all_queries.shape[0]
     ):
         raise ValueError("evaluation query count differs")
+    queries = np.ascontiguousarray(all_queries[args.query_start:query_stop])
+    truth_ids = np.ascontiguousarray(all_truth_ids[args.query_start:query_stop])
 
     rotation_seed = args.seed ^ 0x53524854
     if args.rotation == "srht":
@@ -808,6 +880,10 @@ def main() -> None:
         max_span_pages=max_span_pages,
     )
     evaluation = evaluate_page_nominations(**evaluation_args)
+    base_books_sha256 = hashlib.sha256(
+        np.asarray(books, dtype="<f4").tobytes(order="C")
+    ).hexdigest()
+    base_codes_sha256 = hashlib.sha256(codes.tobytes(order="C")).hexdigest()
     common_result = {
         "claim_eligible": False,
         "code_row_bytes": 16,
@@ -818,7 +894,14 @@ def main() -> None:
         "inputs": identities,
         "neighbors": args.neighbors,
         "page_planner": "exact-reciprocal-rank",
+        "page_run_identities": {
+            "base": base_runs[0]["object"],
+            "delta": delta_runs[0]["object"],
+        },
+        "pq16_books_sha256": base_books_sha256,
+        "pq16_codes_sha256": base_codes_sha256,
         "queries": args.queries_count,
+        "query_start": args.query_start,
         "representation": (
             "sparse-residual-pq8"
             if residual is not None
@@ -845,7 +928,35 @@ def main() -> None:
         "shortlist_rows": args.shortlist_rows,
         "span_page_budget": max_span_pages,
     }
-    if args.cooccurrence_pseudoqueries:
+    if args.compare_sparse_residual_exact:
+        identity_args = dict(evaluation_args)
+        identity_args["ranked_base_ids"] = _rank_pq16(
+            scoring_queries, base_ids, books, codes, args.shortlist_rows
+        )
+        identity = evaluate_page_nominations(**identity_args)
+        exact_args = dict(evaluation_args)
+        exact_args["ranked_base_ids"] = _rank_exact_f32(
+            queries,
+            base_ids,
+            base_vectors,
+            args.shortlist_rows,
+        )
+        exact = evaluate_page_nominations(**exact_args)
+        classification = _classify_sparse_residual_development_ceiling(
+            identity, evaluation, exact
+        )
+        result = {
+            **common_result,
+            "arms": {
+                "exact-f32": exact,
+                "pq16-identity": identity,
+                "sparse-residual-pq8": evaluation,
+            },
+            "classification": classification,
+            "gate_passed": classification == "validation-eligible",
+            "schema": "borsuk-v85-sparse-residual-development-ceiling-v1",
+        }
+    elif args.cooccurrence_pseudoqueries:
         pseudoquery_indices = _pseudoquery_indices(
             base_ids, args.cooccurrence_pseudoqueries, args.seed
         )

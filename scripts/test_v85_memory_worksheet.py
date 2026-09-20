@@ -18,6 +18,9 @@ class V85MemoryWorksheetTests(unittest.TestCase):
         self.assertEqual(result["pq16_codebooks_bytes"], 786_432)
         self.assertEqual(result["concurrent_sparse_planner_bytes"], 268_435_456)
         self.assertEqual(result["runtime_reserve_bytes"], 536_870_912)
+        self.assertEqual(result["range_response_buffers_bytes"], 268_435_456)
+        self.assertEqual(result["decode_scratch_bytes"], 134_217_728)
+        self.assertEqual(result["allocator_stack_reserve_bytes"], 134_217_728)
         self.assertEqual(result["projected_resident_bytes"], 2_698_772_248)
         self.assertEqual(result["headroom_bytes"], 522_453_224)
         self.assertTrue(result["feasible"])
@@ -55,9 +58,10 @@ class V85MemoryWorksheetTests(unittest.TestCase):
         self.assertEqual(result["sparse_residual_rows"], 25_000_000)
         self.assertEqual(result["sparse_residual_codes_and_norms_bytes"], 300_000_000)
         self.assertEqual(result["sparse_residual_bitmap_bytes"], 12_500_000)
+        self.assertEqual(result["sparse_residual_rank_directory_bytes"], 781_256)
         self.assertEqual(result["sparse_residual_codebooks_bytes"], 786_432)
-        self.assertEqual(result["projected_resident_bytes"], 3_012_058_680)
-        self.assertEqual(result["headroom_bytes"], 209_166_792)
+        self.assertEqual(result["projected_resident_bytes"], 3_012_839_936)
+        self.assertEqual(result["headroom_bytes"], 208_385_536)
         self.assertTrue(result["feasible"])
 
 

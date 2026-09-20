@@ -15,6 +15,8 @@ import pyarrow.parquet as pq
 from scripts.v85_pq16_page_nomination import (
     PageEntry,
     SparseResidualPq8,
+    _classify_sparse_residual_development_ceiling,
+    _rank_exact_f32,
     _rank_pq16_sparse_residual,
     _sparse_residual_resident_bytes,
     _srht_rotate,
@@ -29,10 +31,131 @@ from scripts.v85_pq16_rescore_summary import (
     summarize_paired_pq16_rotation,
     summarize_paired_rescore,
     summarize_paired_sparse_residual,
+    validate_sparse_residual_development_ceiling,
 )
 
 
 class V85Pq16PageNominationTests(unittest.TestCase):
+    def test_development_ceiling_classifies_layout_then_residual_then_validation(
+        self,
+    ) -> None:
+        # Break caught: a failed exact-row locality ceiling is blamed on PQ,
+        # or a worse residual arm is allowed to spend the burned validation.
+        identity = {
+            "average_recall100_ppm": 930_000,
+            "p05_recall100_ppm": 700_000,
+        }
+        passing = {
+            "average_recall100_ppm": 980_000,
+            "p05_recall100_ppm": 910_000,
+            "gate_passed": True,
+        }
+
+        self.assertEqual(
+            _classify_sparse_residual_development_ceiling(
+                identity, passing, {**passing, "gate_passed": False}
+            ),
+            "layout-locality-rejected",
+        )
+        self.assertEqual(
+            _classify_sparse_residual_development_ceiling(
+                identity,
+                {**passing, "average_recall100_ppm": 920_000},
+                passing,
+            ),
+            "sparse-residual-rejected",
+        )
+        self.assertEqual(
+            _classify_sparse_residual_development_ceiling(
+                identity, passing, passing
+            ),
+            "validation-eligible",
+        )
+
+    def test_development_ceiling_validator_recomputes_all_three_arms(self) -> None:
+        truth = list(range(100))
+
+        def arm(hits: int) -> dict[str, object]:
+            return {
+                "average_recall10_ppm": 1_000_000,
+                "average_recall100_ppm": hits * 10_000,
+                "bytes": 1,
+                "gate_passed": hits >= 98,
+                "max_bytes_per_query": 1,
+                "max_gets_per_query": 1,
+                "p05_recall100_ppm": hits * 10_000,
+                "samples": [
+                    {
+                        "bytes": 1,
+                        "gets": 1,
+                        "hit10_ids": truth[:10],
+                        "hit_ids": truth[:hits],
+                        "hits10": 10,
+                        "hits": hits,
+                        "query": 0,
+                        "truth_ids": truth,
+                    }
+                ],
+            }
+
+        result = {
+            "arms": {
+                "exact-f32": arm(100),
+                "pq16-identity": arm(97),
+                "sparse-residual-pq8": arm(99),
+            },
+            "classification": "validation-eligible",
+            "gate_passed": True,
+            "page_run_identities": {
+                "base": {"bytes": 1, "sha256": "1" * 64},
+                "delta": {"bytes": 1, "sha256": "2" * 64},
+            },
+            "pq16_books_sha256": "3" * 64,
+            "pq16_codes_sha256": "4" * 64,
+            "queries": 1,
+            "query_start": 456,
+            "residual_fraction_ppm": 250_000,
+            "schema": "borsuk-v85-sparse-residual-development-ceiling-v1",
+        }
+
+        summary = validate_sparse_residual_development_ceiling(
+            result, result_sha256="5" * 64
+        )
+
+        self.assertEqual(summary["classification"], "validation-eligible")
+        self.assertEqual(summary["exact_average_recall100_ppm"], 1_000_000)
+        malformed = json.loads(json.dumps(result))
+        malformed["arms"]["exact-f32"]["samples"][0]["hits"] = 99
+        with self.assertRaisesRegex(ValueError, "exact-f32 aggregate differs"):
+            validate_sparse_residual_development_ceiling(
+                malformed, result_sha256="5" * 64
+            )
+
+    def test_exact_f32_ranker_matches_scalar_total_order_in_bounded_batches(
+        self,
+    ) -> None:
+        # Break caught: the locality ceiling uses PQ scores, allocates the full
+        # query-by-row matrix, or loses the registered (distance, id) tie-break.
+        base = np.asarray(
+            [[0.0, 0.0], [1.0, 0.0], [-1.0, 0.0], [0.0, 2.0]],
+            dtype=np.float32,
+        )
+        ids = np.asarray([40, 20, 10, 30], dtype=np.int64)
+        queries = np.asarray([[0.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+
+        ranked = _rank_exact_f32(
+            queries,
+            ids,
+            base,
+            shortlist_rows=3,
+            query_batch_rows=1,
+        )
+
+        np.testing.assert_array_equal(
+            ranked,
+            np.asarray([[40, 10, 20], [30, 40, 10]], dtype=np.int64),
+        )
+
     def test_sparse_residual_corrects_selected_rows_and_has_bounded_residency(
         self,
     ) -> None:
@@ -467,6 +590,44 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             },
         )
 
+    def test_sparse_residual_1m_development_ceiling_precedes_burned_validation(
+        self,
+    ) -> None:
+        # Break caught: promotion spends another burned-validation look before
+        # proving the arm and the exact-row locality ceiling on unread dev rows.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                "bash",
+                str(root / "scripts/v85_sparse_residual_1m_development_run_remote.sh"),
+                "--describe",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "arms": ["pq16-identity", "sparse-residual-pq8", "exact-f32"],
+                "blas_threads": 16,
+                "development_end_exclusive": 584,
+                "development_start": 456,
+                "instance_type": "c7i.8xlarge",
+                "max_wall_seconds": 1800,
+                "page_budget": 32,
+                "queries": 128,
+                "query_parallelism": 1,
+                "residual_fraction_ppm": 250_000,
+                "reuse_frozen_artifacts": True,
+                "shortlist_rows": 2048,
+                "spot_only": True,
+                "validation_or_holdout_reads": False,
+            },
+        )
+
     def test_1m_runner_preregisters_frozen_validation_without_retuning(self) -> None:
         # Break caught: scale promotion reopens development, changes the PQ arm,
         # or launches a 10M/100M campaign before the fixed 1M gate.
@@ -794,6 +955,33 @@ class V85Pq16PageNominationTests(unittest.TestCase):
             self.assertEqual(residual_result["residual_fraction_ppm"], 1_000_000)
             self.assertEqual(residual_result["residual_selected_rows"], 256)
             self.assertEqual(residual_result["average_recall100_ppm"], 1_000_000)
+
+            ceiling_output = root / "development-ceiling.json"
+            ceiling_command = residual_command.copy()
+            ceiling_command[ceiling_command.index(str(residual_output))] = str(
+                ceiling_output
+            )
+            ceiling_command.extend(["--compare-sparse-residual-exact"])
+            subprocess.run(
+                ceiling_command, check=True, capture_output=True, text=True
+            )
+            ceiling_result = json.loads(ceiling_output.read_bytes())
+            self.assertEqual(
+                ceiling_result["schema"],
+                "borsuk-v85-sparse-residual-development-ceiling-v1",
+            )
+            self.assertEqual(ceiling_result["classification"], "validation-eligible")
+            self.assertEqual(
+                sorted(ceiling_result["arms"]),
+                ["exact-f32", "pq16-identity", "sparse-residual-pq8"],
+            )
+            self.assertEqual(ceiling_result["query_start"], 0)
+            self.assertEqual(len(ceiling_result["pq16_books_sha256"]), 64)
+            self.assertEqual(len(ceiling_result["pq16_codes_sha256"]), 64)
+            self.assertEqual(
+                ceiling_result["page_run_identities"]["base"]["sha256"],
+                identity(base)["sha256"],
+            )
 
             cooccurrence_output = root / "cooccurrence-result.json"
             cooccurrence_command = command.copy()
