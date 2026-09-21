@@ -26898,13 +26898,10 @@ impl BorsukIndex {
             && let Some(snapshot) = &self.native_ann_snapshot
         {
             let live_wal = self.dense_live_wal_records(None)?;
-            let mut shadowed_ids = live_wal
+            let shadowed_ids = live_wal
                 .iter()
                 .map(|record| record.id.as_bytes().to_vec())
                 .collect::<BTreeSet<_>>();
-            for summary in self.cell_wal_tombstone_summaries()? {
-                shadowed_ids.extend(self.load_tombstone_run(&summary)?.keys().cloned());
-            }
             let outcome = snapshot.search_with_overlay(
                 query,
                 options.k,
@@ -51564,6 +51561,55 @@ fn native_ann_flush_publishes_query_visible_tombstone() {
             .all(|hit| hit.id.as_bytes() != removed_id)
     );
     assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+}
+
+#[test]
+fn native_ann_pending_delete_search_suppresses_committed_snapshot_row() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    let removed_id = [b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+
+    index.delete([removed_id.clone()]).unwrap();
+
+    let report = index
+        .search_with_report(
+            &[0.0; 16],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert!(
+        report
+            .hits
+            .iter()
+            .all(|hit| hit.id.as_bytes() != removed_id)
+    );
 }
 
 #[test]
