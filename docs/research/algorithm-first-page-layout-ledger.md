@@ -3284,3 +3284,63 @@ configuration and do not scale it to 1M. G1 must first qualify a stronger
 bounded shortlist under the fixed 32-GET/16-MiB serving budget; its latency
 must then be measured on real S3 rather than inferred from these warm-local
 numbers.
+
+## V107 result — 1,024-page capacity exposes a stale 512-row nomination gate
+
+V107 reran the registered five-width G1 screen on all 1,000 ReLAION-1M
+development queries after replacing V97's already-rejected 128-page capacity
+with 1,024 pages. The page count came from V104/V105's qualified capacity
+boundary, but the distinct two-summary ranker remained subject to a fresh
+exact-f32 causal gate. No validation or holdout query was consumed.
+
+The immutable source revision was
+`b404f1018aab344a72d272a14cf7f700071f6ad0`. Its 10,803,881-byte source
+archive has SHA-256
+`fe26c9721b9415205f447248d856b7f8ae83314cc7f5188f967e56049b6aa03c`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v97-row-width-screen/b404f1018aab344a72d272a14cf7f700071f6ad0/runs/v97-g1-20260921T044920Z-b404f101/a0001/`.
+It ran on c7i.8xlarge Spot instance `i-058127a6e5eae76a7` in
+eu-central-1b, which is terminated. The canonical 415-byte terminal is
+`complete`, exit 0, with SHA-256
+`c2ebb5bf02c9ec22b5d6813d31035a3a1b0ea9cfbf9562015b076fe18c6b8175`.
+
+Terminal-bound evidence was:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| producer result | 32,480,230 | `deae6837f4b5bcf5acbf62cc66469e704b9b409f7353305ce9cbf046f5c48636` |
+| independent rescore | 1,588 | `71be530ea3d5c51acdbb4dc2fc3a4f8fa988ed91fc065fea08f382bf89bd6c0d` |
+| resources | 386 | `7493d5c0839a97a59823f10a513e6d51db7c5cf3640f483335a009a8965fc02e` |
+| screen timing | 2,895 | `93b7b46743c58cd3e7db77f0c5dd6713c0e65649d015cd8bca55f5f784715798` |
+| rescore timing | 3,002 | `ab301dca279e8889f795d3f77ced812b0c5c469388040502921918d8f0ec8013` |
+
+| representation | avg R@10 | avg R@100 | p05 / worst R@100 | max GETs | max bytes | 100M resident |
+|---|---:|---:|---:|---:|---:|---:|
+| exact f32 | **99.7100%** | **83.7470%** | **54% / 39%** | 32 | 6,427,384 | n/a |
+| PQ16x8 | 84.0200% | 71.6900% | 34% / 4% | 32 | 6,451,712 | 2,861,603,104 B |
+| PQ24x8 | 89.2100% | 74.4480% | 39% / 12% | 32 | 6,445,432 | 3,661,603,104 B |
+| PQ32x8 | **92.3500%** | **76.2620%** | **42% / 15%** | 32 | 6,277,448 | 4,461,603,104 B |
+| PQ32x4 | 81.3400% | 67.1660% | 27% / 5% | 32 | 6,451,712 | 2,860,865,824 B |
+| summary-only PQ16x8 | 65.8600% | 59.0370% | 13% / 0% | 32 | 5,059,152 | 1,260,816,672 B |
+
+The independent reducer authenticated the producer result, all 1,000 query
+ordinals and samples, every aggregate and budget maximum, the fixed-seed
+10,000-resample paired intervals, and every 100M memory term. PQ24 and PQ32
+were strictly better than PQ16 on both average recall metrics, but both exceed
+the 3-GiB resident projection and every compressed arm failed all three
+absolute quality gates. The exact-f32 arm passed Recall@10 but failed average
+and p05 Recall@100, so no width is causally interpretable and `winner` is null.
+
+The screen took 618.43 seconds; the independent rescore took 8.69 seconds.
+Whole-cell elapsed time was 660 seconds, peak process RSS was 11,502,932 KiB,
+and both swap and memory PSI remained zero. At the observed eu-central-1b
+c7i.8xlarge Spot price of $0.7763/hour, estimated compute cost was $0.1423.
+
+**Ruling:** kill this 512-row shortlist configuration and do not interpret the
+width ordering as a G1 decision. Expanding the page fence recovered Recall@10
+but not the long Recall@100 tail. The remaining gate difference from the
+qualified V104/V105 exact path is the row nomination bound: V107 retained only
+512 rows, while the qualified exact path retained 8,192 before the identical
+32-GET/16-MiB planner. The next gate-correctness cell changes only that bound
+to 8,192 and must first restore the exact-f32 gate; if it does not, G1 stops
+without another representation or scale run.
