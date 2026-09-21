@@ -3,13 +3,12 @@ from __future__ import annotations
 import base64
 import io
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.benchmark_s3_vectors_parquet import ObjectIdentity
 from scripts.launch_matched_s3_vectors_1m_spot import (
+    ObjectIdentity,
     SpotTarget,
     build_launch_specs,
     build_plan,
@@ -143,7 +142,7 @@ class MatchedS3VectorsSpotLauncherTests(unittest.TestCase):
         script = Path(__file__).with_name("launch_matched_s3_vectors_1m_spot.py")
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(
-                [sys.executable, str(script), "--help"],
+                ["/usr/bin/python3", str(script), "--help"],
                 cwd=directory,
                 capture_output=True,
                 text=True,

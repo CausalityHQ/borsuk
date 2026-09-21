@@ -7,17 +7,29 @@ import argparse
 import base64
 import hashlib
 import json
-import pathlib
 import shlex
-import sys
 import time
 from dataclasses import asdict, dataclass
 from typing import Literal, Mapping, Sequence
 
-if not __package__:  # Direct ``python scripts/...`` execution.
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from scripts.benchmark_s3_vectors_parquet import ObjectIdentity
+@dataclass(frozen=True, slots=True)
+class ObjectIdentity:
+    role: str
+    uri: str
+    sha256: str
+    bytes: int
+
+    def __post_init__(self) -> None:
+        if (
+            not self.role
+            or not self.uri.startswith("s3://")
+            or len(self.sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.sha256)
+            or type(self.bytes) is not int
+            or self.bytes <= 0
+        ):
+            raise ValueError("object identity differs")
 
 
 @dataclass(frozen=True, slots=True)
