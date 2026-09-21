@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -13,6 +16,7 @@ from scripts.native_geometric_layout_screen import (
     LayoutAuthority,
     LayoutMethod,
     MembershipRow,
+    construct_layout,
     layout_authority_from_dict,
     membership_schema,
     read_membership_parquet,
@@ -187,6 +191,122 @@ class AuthorityAndMembershipTests(unittest.TestCase):
             self.assertEqual(first.read_bytes(), second.read_bytes())
             self.assertEqual(first_identity.sha256, second_identity.sha256)
             self.assertEqual(first_identity.encoded_bytes, second_identity.encoded_bytes)
+
+
+class QueryBlindConstructorTests(unittest.TestCase):
+    def authority(
+        self,
+        method: LayoutMethod,
+        *,
+        rows: int = 8,
+        dimensions: int = 2,
+        maximum_page_rows: int = 2,
+        maximum_page_bytes: int = 4096,
+    ) -> LayoutAuthority:
+        return LayoutAuthority(
+            schema="borsuk-native-geometric-layout-authority-v1",
+            source=ArtifactIdentity(
+                role="source",
+                uri="s3://frozen/source.parquet",
+                sha256="11" * 32,
+                encoded_bytes=12_345,
+            ),
+            rows=rows,
+            dimensions=dimensions,
+            metric="l2",
+            seed=20260921,
+            method=method,
+            maximum_page_rows=maximum_page_rows,
+            maximum_page_bytes=maximum_page_bytes,
+        )
+
+    @staticmethod
+    def pages(rows: list[MembershipRow]) -> list[list[int]]:
+        pages: dict[int, list[int]] = {}
+        for row in rows:
+            pages.setdefault(row.page_ordinal, []).append(row.source_ordinal)
+        return list(pages.values())
+
+    def test_id_and_random_projection_controls_are_literal_and_deterministic(self) -> None:
+        stable_ids = tuple(
+            value.to_bytes(16, "big")
+            for value in (80, 10, 70, 20, 60, 30, 50, 40)
+        )
+        vectors = np.asarray(
+            ((0, 0), (1, 0), (0, 2), (3, 0), (0, 4), (5, 0), (0, 6), (7, 0)),
+            dtype=np.float32,
+        )
+
+        id_rows = construct_layout(
+            self.authority(LayoutMethod.ID_ORDER_256), stable_ids, vectors
+        )
+        self.assertEqual(self.pages(id_rows), [[1, 3], [5, 7], [6, 4], [2, 0]])
+
+        projection_authority = self.authority(LayoutMethod.RANDOM_PROJECTION_256)
+        first = construct_layout(projection_authority, stable_ids, vectors)
+        second = construct_layout(projection_authority, stable_ids, vectors.copy())
+        self.assertEqual(self.pages(first), [[6, 4], [2, 0], [1, 3], [5, 7]])
+        self.assertEqual(first, second)
+
+    def test_balanced_two_means_obeys_capacity_and_stable_ties(self) -> None:
+        stable_ids = tuple(value.to_bytes(16, "big") for value in range(8))
+        vectors = np.asarray(
+            ((-9, 0), (-8, 0), (-7, 0), (-6, 0), (6, 0), (7, 0), (8, 0), (9, 0)),
+            dtype=np.float32,
+        )
+        authority = self.authority(LayoutMethod.TWO_MEANS_256)
+        rows = construct_layout(authority, stable_ids, vectors)
+        self.assertEqual(self.pages(rows), [[6, 7], [4, 5], [2, 3], [0, 1]])
+        self.assertTrue(all(row.page_rows == 2 for row in rows))
+        self.assertTrue(
+            all(row.encoded_page_bytes <= authority.maximum_page_bytes for row in rows)
+        )
+        self.assertEqual(len({row.construction_sha256 for row in rows}), 1)
+
+    def test_two_means_rejects_nonfinite_empty_and_unsplittable_geometry(self) -> None:
+        authority = self.authority(LayoutMethod.TWO_MEANS_256, rows=4)
+        stable_ids = tuple(value.to_bytes(16, "big") for value in range(4))
+        fixtures = (
+            np.asarray(((0, 0), (1, 0), (2, 0), (np.nan, 0)), dtype=np.float32),
+            np.zeros((4, 2), dtype=np.float32),
+        )
+        for vectors in fixtures:
+            with self.subTest(vectors=vectors), self.assertRaises(ValueError):
+                construct_layout(authority, stable_ids, vectors)
+
+    def test_constructor_cli_has_no_query_truth_or_evaluation_surface(self) -> None:
+        script = Path(__file__).with_name("native_geometric_layout_screen.py")
+        help_result = subprocess.run(
+            [sys.executable, str(script), "construct", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        help_text = help_result.stdout.lower()
+        for forbidden in ("query", "truth", "ground-truth", "gt-path"):
+            self.assertNotIn(forbidden, help_text)
+
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "construct",
+                "--authority",
+                "authority.json",
+                "--source",
+                "source.parquet",
+                "--output",
+                "membership.parquet",
+                "--query-path",
+                "queries.parquet",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("unrecognized arguments: --query-path", rejected.stderr)
 
 
 if __name__ == "__main__":

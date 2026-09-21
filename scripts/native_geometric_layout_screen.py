@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import enum
 import hashlib
+import json
+import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -301,3 +305,289 @@ def read_membership_parquet(
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("membership payload differs") from error
     return _validate_membership(authority, rows, source_ids)
+
+
+def _projection_token(seed: int, index: int) -> bytes:
+    return hashlib.sha256(
+        seed.to_bytes(8, "little") + index.to_bytes(4, "little")
+    ).digest()
+
+
+def _srht_projection(vectors: np.ndarray, seed: int) -> np.ndarray:
+    dimensions = vectors.shape[1]
+    padded_dimensions = 1 << (dimensions - 1).bit_length()
+    projected = np.zeros((vectors.shape[0], padded_dimensions), dtype=np.float32)
+    projected[:, :dimensions] = vectors
+    signs = np.asarray(
+        [1.0 if _projection_token(seed, index)[0] & 1 == 0 else -1.0 for index in range(padded_dimensions)],
+        dtype=np.float32,
+    )
+    projected *= signs
+    width = 1
+    while width < padded_dimensions:
+        for start in range(0, padded_dimensions, width * 2):
+            left = projected[:, start : start + width].copy()
+            right = projected[:, start + width : start + width * 2].copy()
+            projected[:, start : start + width] = left + right
+            projected[:, start + width : start + width * 2] = left - right
+        width *= 2
+    projected *= np.float32(1.0 / math.sqrt(padded_dimensions))
+    permutation = sorted(
+        range(padded_dimensions),
+        key=lambda index: (int.from_bytes(_projection_token(seed, index)[1:9], "little"), index),
+    )
+    return np.ascontiguousarray(projected[:, permutation[: min(dimensions, 192)]])
+
+
+def _encoded_page_bytes(
+    source_ordinals: np.ndarray,
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+) -> int:
+    flat = pa.array(
+        vectors[source_ordinals].reshape(-1),
+        type=pa.float32(),
+        from_pandas=False,
+    )
+    embeddings = pa.FixedSizeListArray.from_arrays(flat, vectors.shape[1])
+    table = pa.Table.from_arrays(
+        [
+            pa.array([stable_ids[int(index)] for index in source_ordinals], type=pa.binary()),
+            embeddings,
+        ],
+        names=["stable_id", "embedding"],
+    )
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue().size
+
+
+def _split_ordered_pages(
+    order: np.ndarray,
+    authority: LayoutAuthority,
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+) -> list[np.ndarray]:
+    pending = [order[start : start + authority.maximum_page_rows] for start in range(0, len(order), authority.maximum_page_rows)]
+    pages: list[np.ndarray] = []
+    while pending:
+        page = pending.pop(0)
+        if _encoded_page_bytes(page, stable_ids, vectors) <= authority.maximum_page_bytes:
+            pages.append(page)
+            continue
+        if len(page) == 1:
+            raise ValueError("one layout row exceeds the page byte cap")
+        cut = len(page) // 2
+        pending[0:0] = [page[:cut], page[cut:]]
+    return pages
+
+
+def _two_means_order(
+    row_ordinals: np.ndarray,
+    projected: np.ndarray,
+    stable_ids: Sequence[bytes],
+) -> tuple[np.ndarray, np.ndarray]:
+    ids = np.asarray([stable_ids[int(index)] for index in row_ordinals])
+    seed_rank = int(np.argmin(ids))
+    first = projected[int(row_ordinals[seed_rank])].astype(np.float64)
+    seed_distances = np.sum(
+        (projected[row_ordinals].astype(np.float64) - first) ** 2,
+        axis=1,
+    )
+    second_rank = int(np.argmax(seed_distances))
+    if not seed_distances[second_rank] > 0.0:
+        raise ValueError("two-means geometry is unsplittable")
+    centroids = np.stack(
+        (first, projected[int(row_ordinals[second_rank])].astype(np.float64))
+    )
+    for _ in range(8):
+        rows = projected[row_ordinals].astype(np.float64)
+        distances = np.sum((rows[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+        assignments = np.argmin(distances, axis=1)
+        if not np.any(assignments == 0) or not np.any(assignments == 1):
+            raise ValueError("two-means produced an empty cluster")
+        centroids = np.stack(
+            (
+                rows[assignments == 0].mean(axis=0),
+                rows[assignments == 1].mean(axis=0),
+            )
+        )
+    rows = projected[row_ordinals].astype(np.float64)
+    scores = np.sum((rows - centroids[1]) ** 2, axis=1) - np.sum(
+        (rows - centroids[0]) ** 2, axis=1
+    )
+    if not np.isfinite(scores).all() or float(np.ptp(scores)) == 0.0:
+        raise ValueError("two-means split scores differ")
+    ranked = np.lexsort((ids, scores))
+    cut = len(row_ordinals) // 2
+    if cut == 0 or cut == len(row_ordinals):
+        raise ValueError("two-means split capacity differs")
+    return row_ordinals[ranked[:cut]], row_ordinals[ranked[cut:]]
+
+
+def _two_means_pages(
+    row_ordinals: np.ndarray,
+    authority: LayoutAuthority,
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+    projected: np.ndarray,
+) -> list[np.ndarray]:
+    if (
+        len(row_ordinals) <= authority.maximum_page_rows
+        and _encoded_page_bytes(row_ordinals, stable_ids, vectors)
+        <= authority.maximum_page_bytes
+    ):
+        inside = sorted(row_ordinals, key=lambda index: stable_ids[int(index)])
+        return [np.asarray(inside, dtype=np.int64)]
+    left, right = _two_means_order(row_ordinals, projected, stable_ids)
+    return _two_means_pages(left, authority, stable_ids, vectors, projected) + _two_means_pages(
+        right, authority, stable_ids, vectors, projected
+    )
+
+
+def _construction_digest(
+    authority: LayoutAuthority,
+    rows: Sequence[MembershipRow],
+) -> bytes:
+    digest = hashlib.sha256()
+    digest.update(authority.schema.encode())
+    digest.update(authority.source.sha256.encode())
+    digest.update(authority.method.value.encode())
+    digest.update(authority.seed.to_bytes(8, "little"))
+    for row in rows:
+        digest.update(len(row.stable_id).to_bytes(4, "little"))
+        digest.update(row.stable_id)
+        digest.update(row.source_ordinal.to_bytes(4, "little"))
+        digest.update(row.page_ordinal.to_bytes(4, "little"))
+        digest.update(row.in_page_ordinal.to_bytes(2, "little"))
+        digest.update(row.page_rows.to_bytes(2, "little"))
+        digest.update(row.encoded_page_bytes.to_bytes(4, "little"))
+    return digest.digest()
+
+
+def construct_layout(
+    authority: LayoutAuthority,
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+) -> list[MembershipRow]:
+    if (
+        len(stable_ids) != authority.rows
+        or len(set(stable_ids)) != authority.rows
+        or any(type(stable_id) is not bytes or not stable_id for stable_id in stable_ids)
+    ):
+        raise ValueError("layout source stable IDs differ")
+    if (
+        type(vectors) is not np.ndarray
+        or vectors.dtype != np.float32
+        or vectors.shape != (authority.rows, authority.dimensions)
+        or not np.isfinite(vectors).all()
+    ):
+        raise ValueError("layout source vectors differ")
+    geometry = vectors
+    if authority.metric == "cosine":
+        norms = np.linalg.norm(vectors.astype(np.float64), axis=1)
+        if np.any(norms == 0.0) or not np.isfinite(norms).all():
+            raise ValueError("layout cosine vector norms differ")
+        geometry = np.asarray(vectors / norms[:, None], dtype=np.float32)
+
+    source_ordinals = np.arange(authority.rows, dtype=np.int64)
+    if authority.method is LayoutMethod.ID_ORDER_256:
+        order = np.asarray(sorted(source_ordinals, key=lambda index: stable_ids[int(index)]))
+        pages = _split_ordered_pages(order, authority, stable_ids, vectors)
+    else:
+        projected = _srht_projection(geometry, authority.seed)
+        if authority.method is LayoutMethod.RANDOM_PROJECTION_256:
+            order = np.asarray(
+                sorted(
+                    source_ordinals,
+                    key=lambda index: (float(projected[int(index), 0]), stable_ids[int(index)]),
+                )
+            )
+            pages = _split_ordered_pages(order, authority, stable_ids, vectors)
+        elif authority.method in {LayoutMethod.TWO_MEANS_256, LayoutMethod.TWO_MEANS_480K}:
+            pages = _two_means_pages(
+                source_ordinals,
+                authority,
+                stable_ids,
+                vectors,
+                projected,
+            )
+        else:
+            raise ValueError("layout method differs")
+
+    source_sha = bytes.fromhex(authority.source.sha256)
+    rows: list[MembershipRow] = []
+    for page_ordinal, page in enumerate(pages):
+        encoded_bytes = _encoded_page_bytes(page, stable_ids, vectors)
+        if encoded_bytes > authority.maximum_page_bytes:
+            raise ValueError("layout page exceeds byte cap")
+        for in_page_ordinal, source_ordinal in enumerate(page):
+            rows.append(
+                MembershipRow(
+                    stable_id=stable_ids[int(source_ordinal)],
+                    source_ordinal=int(source_ordinal),
+                    page_ordinal=page_ordinal,
+                    in_page_ordinal=in_page_ordinal,
+                    page_rows=len(page),
+                    encoded_page_bytes=encoded_bytes,
+                    method=authority.method,
+                    source_sha256=source_sha,
+                    seed=authority.seed,
+                    construction_sha256=bytes(32),
+                )
+            )
+    construction_sha = _construction_digest(authority, rows)
+    bound = [dataclasses.replace(row, construction_sha256=construction_sha) for row in rows]
+    return _validate_membership(authority, bound, stable_ids)
+
+
+def _source_arrays(path: Path, authority: LayoutAuthority) -> tuple[tuple[bytes, ...], np.ndarray]:
+    payload = path.read_bytes()
+    if (
+        len(payload) != authority.source.encoded_bytes
+        or hashlib.sha256(payload).hexdigest() != authority.source.sha256
+    ):
+        raise ValueError("layout source artifact identity differs")
+    table = pq.read_table(path, columns=["feature_row_id", "embedding"])
+    id_values = table["feature_row_id"].combine_chunks().to_pylist()
+    stable_ids = tuple(
+        value if type(value) is bytes else int(value).to_bytes(16, "big")
+        for value in id_values
+    )
+    embedding = table["embedding"].combine_chunks()
+    vectors = np.asarray(
+        embedding.values.to_numpy(zero_copy_only=False), dtype=np.float32
+    ).reshape(table.num_rows, authority.dimensions)
+    return stable_ids, vectors
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    construct = subcommands.add_parser(
+        "construct",
+        help="construct a query-blind page-layout membership artifact",
+    )
+    construct.add_argument("--authority", type=Path, required=True)
+    construct.add_argument("--source", type=Path, required=True)
+    construct.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    if args.command != "construct":
+        raise ValueError("layout command differs")
+    authority_payload = json.loads(args.authority.read_text())
+    authority = layout_authority_from_dict(authority_payload)
+    stable_ids, vectors = _source_arrays(args.source, authority)
+    rows = construct_layout(authority, stable_ids, vectors)
+    identity = write_membership_parquet(args.output, authority, rows)
+    print(
+        json.dumps(dataclasses.asdict(identity), sort_keys=True, separators=(",", ":"))
+    )
+
+
+if __name__ == "__main__":
+    main()
