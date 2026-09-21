@@ -3402,3 +3402,67 @@ width, misses the Recall@100 tail before exact page scoring. Do not run V109,
 real-S3 qualification, validation, 10M, or 100M for this line. Preserve V107
 and V108 as negative evidence and proceed to release/closeout rather than
 opening another architecture or critique.
+
+## Architecture closeout — matched-service disposition
+
+The post-V108 closeout attempted one matched Amazon S3 Vectors cell because
+that comparison is competitor evidence, not a qualification of the rejected
+BORSUK router. The registered workload was the same frozen ReLAION-1M
+development workload: 1,000,000 source rows × 768 float32 dimensions, all
+1,000 development queries, exact GT100, Euclidean distance, and `topK=100`.
+The three Parquet inputs retained their V108 authorities:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| source | 1,458,450,077 | `2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86` |
+| development queries | 1,558,506 | `310bb54f79f2e79d09fe63aa4f6b5c6e9e7ffb31101964f816be978dadb2db54` |
+| development GT100 | 2,046,505 | `fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11` |
+
+The immutable executable revision was
+`01320ab960c6d13c69080dad4ca434ec19bcf79d`. Its 10,823,530-byte source
+archive has SHA-256
+`684d062c492373e4a687af3b91e373270485346e7f3c93eb4924e9cd65c8441a`.
+The sole resource-creating attempt was
+`s3://borsuk-bench-453182569524-euc1/research/matched-s3-vectors-1m/01320ab960c6d13c69080dad4ca434ec19bcf79d/runs/matched-s3v-20260921T054216Z-01320ab9/a0001/`.
+It used c7i.8xlarge Spot instance `i-0566ef1d52e7604cc` in eu-central-1c;
+the instance is terminated.
+
+The 268-byte canonical terminal is `failed`, exit 94, claim-ineligible, with
+SHA-256
+`e1179b60b91def3173f86f4f74a73d84d7ef89e3ff8f0fe6547ca6b4b6f34035`.
+The authenticated input downloads and hashes completed, but the producer
+failed before its first S3 Vectors control-plane call: PyArrow attempted a
+NumPy conversion while NumPy was absent from the remote environment. The
+preserved worker log is 1,481 bytes with SHA-256
+`2b8bace1e37a1b91f88cd554a74c537fab0dcd2c84bedcc206f3a2360f9e16af`;
+the 1,857-byte process timing has SHA-256
+`a14eefee41703485c34d4e4139ed887c67effbf2a809dae05a0a7d468165e3fb`.
+The 455-byte resource receipt has SHA-256
+`9aa76055ab12d5da83946542ab076e0fe7c07843000fec25b3aa0007dfebb704`:
+32 seconds elapsed, 109,760 KiB peak process RSS, zero swap, zero memory PSI,
+and estimated Spot compute spend of $0.006116 at $0.688/hour.
+
+No vector bucket or index was created, and a post-terminal service listing
+confirmed the registered temporary bucket name was absent. The instance
+terminated at 05:43:03 UTC. The one-attempt protocol forbids replacing this
+failed cell, so there is **no matched S3 Vectors recall, latency, throughput,
+bytes, or service-cost measurement** from this campaign. Published S3 Vectors
+numbers remain context-only and must not be presented as matched evidence.
+The reproducibility defect is repaired in
+`8b906dbc2cf324d57cfdd8bed8bea4b2c92fe326`, which pins NumPy, PyArrow,
+and boto3 in one remote requirements file; that repair was not used to rerun
+the closed cell.
+
+Turbopuffer could not be executed. The environment contained no Turbopuffer
+API credential, tenant, region, or namespace; AWS Secrets Manager returned no
+matching secret name, and SSM Parameter Store returned no matching parameter
+name. This is a concrete access blocker, not a performance result. Published
+Turbopuffer figures in the market matrix remain explicitly vendor-reported,
+non-matched context.
+
+**Closeout ruling:** no release candidate is justified. V108 closes the
+two-summary router/row-width architecture on its exact-f32 causal failure, and
+the sole matched-service attempt produced no claim-eligible competitor result.
+Do not scale this router to validation, 10M, or 100M, and do not imply parity
+with S3 Vectors or Turbopuffer. Preserve the evidence and tag this revision as
+an architecture closeout.
