@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import dataclasses
 import hashlib
 import json
@@ -458,7 +457,7 @@ phase=complete
 
 
 def build_launch_specs(plan: SpotLayoutPlan) -> list[dict[str, object]]:
-    encoded = base64.b64encode(worker_script(plan).encode()).decode()
+    user_data = worker_script(plan)
     specs = []
     for target in plan.targets:
         token = hashlib.sha256(
@@ -508,7 +507,7 @@ def build_launch_specs(plan: SpotLayoutPlan) -> list[dict[str, object]]:
                         ],
                     }
                 ],
-                "UserData": encoded,
+                "UserData": user_data,
             }
         )
     return specs

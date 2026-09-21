@@ -150,6 +150,13 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
             )
             self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
 
+    def test_launch_specs_leave_user_data_raw_for_botocore_single_encoding(self) -> None:
+        plan = self.valid_plan()
+        expected = worker_script(plan)
+        self.assertLessEqual((len(expected.encode()) + 2) // 3 * 4, 25_600)
+        for spec in build_launch_specs(plan):
+            self.assertEqual(spec["UserData"], expected)
+
     def test_worker_independently_validates_before_complete(self) -> None:
         script = worker_script(self.valid_plan())
         validate_start = script.index("phase=validate")
