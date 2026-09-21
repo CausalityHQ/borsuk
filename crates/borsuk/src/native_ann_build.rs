@@ -13,7 +13,9 @@ use crate::{
     error::{BorsukError, Result},
     metric::VectorMetric,
     native_ann::{
-        NativeAnnRef, NativeArtifactRef, NativeRouterRef, NativeRunRef, native_ann_root_bytes,
+        NativeAnnRef, NativeArtifactRef, NativeBoundedAnnRef, NativeBoundedRouteLimits,
+        NativeBoundedRouterRef, NativeRouterRef, NativeRunRef, NativeSq8Authority,
+        native_ann_root_bytes, native_bounded_ann_root_bytes,
     },
     native_ann_read::{NativePageRef, NativeRowState},
     rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
@@ -23,6 +25,8 @@ use crate::{
 const PAGE_ROWS: usize = 256;
 const PQ_WIDTH: usize = 16;
 const CODEWORDS: usize = 256;
+const BOUNDED_PQ_WIDTH: usize = 64;
+const BOUNDED_SUMMARY_BLOCKS: usize = 2;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeBuildRow {
@@ -52,6 +56,16 @@ pub(crate) struct NativeBuildObject {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeBuildOutput {
     pub(crate) reference: NativeAnnRef,
+    pub(crate) root_bytes: Vec<u8>,
+    pub(crate) root_sha256: String,
+    pub(crate) root_path: String,
+    pub(crate) objects: Vec<NativeBuildObject>,
+    pub(crate) page_directory: Vec<NativePageRef>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeBoundedBuildOutput {
+    pub(crate) reference: NativeBoundedAnnRef,
     pub(crate) root_bytes: Vec<u8>,
     pub(crate) root_sha256: String,
     pub(crate) root_path: String,
@@ -274,6 +288,243 @@ fn encode_summary_codes(codes: Vec<u8>, pages: usize) -> Result<Vec<u8>> {
             )?),
         ],
     )
+}
+
+fn fit_bounded_quantizer(
+    vectors: &[Vec<f32>],
+    dimensions: usize,
+    seed: u64,
+) -> Result<RotatedProductQuantizer> {
+    if vectors.is_empty() {
+        return Err(invalid("native bounded ANN quantizer rows are absent"));
+    }
+    let padded;
+    let fit_vectors = if vectors.len() < CODEWORDS {
+        padded = vectors
+            .iter()
+            .cycle()
+            .take(CODEWORDS)
+            .cloned()
+            .collect::<Vec<_>>();
+        padded.as_slice()
+    } else {
+        vectors
+    };
+    RotatedProductQuantizer::fit(
+        ProductQuantizerConfig {
+            rotation: ProductRotation::Identity,
+            seed,
+            dimensions,
+            subspaces: BOUNDED_PQ_WIDTH,
+            centroids: CODEWORDS,
+            sample_limit: fit_vectors.len().min(65_536),
+            iterations: if vectors.len() < 4_096 { 1 } else { 8 },
+        },
+        fit_vectors,
+    )
+}
+
+fn padded_bounded_codebooks(quantizer: &RotatedProductQuantizer, dimensions: usize) -> Vec<f32> {
+    let state = quantizer.state();
+    let width = dimensions.div_ceil(BOUNDED_PQ_WIDTH);
+    let mut padded = vec![0.0_f32; BOUNDED_PQ_WIDTH * CODEWORDS * width];
+    for subspace in 0..BOUNDED_PQ_WIDTH {
+        let active = state.subspace_offsets[subspace + 1] - state.subspace_offsets[subspace];
+        for codeword in 0..CODEWORDS {
+            let source = codeword * active;
+            let target = (subspace * CODEWORDS + codeword) * width;
+            padded[target..target + active]
+                .copy_from_slice(&state.codebooks[subspace][source..source + active]);
+        }
+    }
+    padded
+}
+
+fn encode_bounded_codebooks(values: &[f32], dimensions: usize) -> Result<Vec<u8>> {
+    let width = dimensions.div_ceil(BOUNDED_PQ_WIDTH);
+    let child = Arc::new(Field::new("element", DataType::Float32, false));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("subspace", DataType::UInt16, false),
+        Field::new("codeword", DataType::UInt16, false),
+        Field::new(
+            "centroid",
+            DataType::FixedSizeList(Arc::clone(&child), width as i32),
+            false,
+        ),
+    ]));
+    parquet_bytes(
+        schema,
+        vec![
+            Arc::new(UInt16Array::from(
+                (0..BOUNDED_PQ_WIDTH)
+                    .flat_map(|subspace| [subspace as u16; CODEWORDS])
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt16Array::from(
+                (0..BOUNDED_PQ_WIDTH)
+                    .flat_map(|_| (0..CODEWORDS).map(|codeword| codeword as u16))
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(FixedSizeListArray::try_new(
+                child,
+                width as i32,
+                Arc::new(Float32Array::from(values.to_vec())),
+                None,
+            )?),
+        ],
+    )
+}
+
+fn encode_bounded_row_codes(codes: Vec<u8>) -> Result<Vec<u8>> {
+    let child = Arc::new(Field::new("element", DataType::UInt8, false));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "code",
+        DataType::FixedSizeList(Arc::clone(&child), BOUNDED_PQ_WIDTH as i32),
+        false,
+    )]));
+    parquet_bytes(
+        schema,
+        vec![Arc::new(FixedSizeListArray::try_new(
+            child,
+            BOUNDED_PQ_WIDTH as i32,
+            Arc::new(UInt8Array::from(codes)),
+            None,
+        )?)],
+    )
+}
+
+fn page_summaries(rows: &[NativeBuildRow], dimensions: usize) -> Vec<Vec<f32>> {
+    let midpoint = rows.len().div_ceil(2);
+    let first = &rows[..midpoint];
+    let second = if midpoint < rows.len() {
+        &rows[midpoint..]
+    } else {
+        first
+    };
+    [first, second]
+        .into_iter()
+        .map(|block| {
+            let mut summary = vec![0.0_f32; dimensions];
+            for row in block {
+                for (target, value) in summary.iter_mut().zip(&row.vector) {
+                    *target += *value;
+                }
+            }
+            let scale = 1.0 / block.len() as f32;
+            summary.iter_mut().for_each(|value| *value *= scale);
+            summary
+        })
+        .collect()
+}
+
+fn encode_bounded_summaries(summaries: &[Vec<f32>], dimensions: usize) -> Result<Vec<u8>> {
+    let child = Arc::new(Field::new("element", DataType::Float32, false));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("page", DataType::UInt32, false),
+        Field::new("block", DataType::UInt8, false),
+        Field::new(
+            "summary",
+            DataType::FixedSizeList(Arc::clone(&child), dimensions as i32),
+            false,
+        ),
+    ]));
+    parquet_bytes(
+        schema,
+        vec![
+            Arc::new(UInt32Array::from(
+                (0..summaries.len() / BOUNDED_SUMMARY_BLOCKS)
+                    .flat_map(|page| [page as u32; BOUNDED_SUMMARY_BLOCKS])
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt8Array::from(
+                (0..summaries.len() / BOUNDED_SUMMARY_BLOCKS)
+                    .flat_map(|_| [0_u8, 1])
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(FixedSizeListArray::try_new(
+                child,
+                dimensions as i32,
+                Arc::new(Float32Array::from(
+                    summaries.iter().flatten().copied().collect::<Vec<_>>(),
+                )),
+                None,
+            )?),
+        ],
+    )
+}
+
+fn sq8_authority(rows: &[NativeBuildRow], dimensions: usize) -> NativeSq8Authority {
+    let mut low = vec![f32::INFINITY; dimensions];
+    let mut high = vec![f32::NEG_INFINITY; dimensions];
+    for row in rows {
+        for dimension in 0..dimensions {
+            low[dimension] = low[dimension].min(row.vector[dimension]);
+            high[dimension] = high[dimension].max(row.vector[dimension]);
+        }
+    }
+    let step = low
+        .iter()
+        .zip(high)
+        .map(|(low, high)| {
+            let span = high - low;
+            if span > 0.0 { span / 255.0 } else { 1.0 }
+        })
+        .collect();
+    NativeSq8Authority { low, step }
+}
+
+fn encode_bounded_page(
+    rows: &[NativeBuildRow],
+    sq8: &NativeSq8Authority,
+    dimensions: usize,
+) -> Result<Vec<u8>> {
+    let child = Arc::new(Field::new("element", DataType::UInt8, false));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Binary, false),
+        Field::new("sequence", DataType::UInt64, false),
+        Field::new("state", DataType::UInt8, false),
+        Field::new(
+            "code",
+            DataType::FixedSizeList(Arc::clone(&child), dimensions as i32),
+            false,
+        ),
+    ]));
+    let codes = rows
+        .iter()
+        .flat_map(|row| {
+            row.vector.iter().enumerate().map(|(dimension, value)| {
+                ((value - sq8.low[dimension]) / sq8.step[dimension])
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            })
+        })
+        .collect::<Vec<_>>();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(BinaryArray::from_iter_values(
+                rows.iter().map(|row| row.id.as_slice()),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt8Array::from(
+                rows.iter().map(|row| row.state as u8).collect::<Vec<_>>(),
+            )),
+            Arc::new(FixedSizeListArray::try_new(
+                child,
+                dimensions as i32,
+                Arc::new(UInt8Array::from(codes)),
+                None,
+            )?),
+        ],
+    )?;
+    let mut bytes = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(bytes)
 }
 
 fn encode_page(rows: &[NativeBuildRow], vectors: &[f32], dimensions: usize) -> Result<Vec<u8>> {
@@ -623,6 +874,172 @@ pub(crate) fn build_native_generation<'a>(
     })
 }
 
+pub(crate) fn build_native_bounded_generation<'a>(
+    config: NativeBuildConfig,
+    runs: impl IntoIterator<Item = &'a [NativeBuildRow]>,
+) -> Result<NativeBoundedBuildOutput> {
+    let rows = compact_native_rows(runs)?;
+    let dimensions = usize::try_from(config.dimensions)
+        .map_err(|_| invalid("native bounded ANN dimensions exceed usize"))?;
+    if config.generation == 0
+        || config.source_identity.is_empty()
+        || config.metric != VectorMetric::SquaredEuclidean
+        || dimensions < BOUNDED_PQ_WIDTH
+        || rows.is_empty()
+        || rows
+            .iter()
+            .any(|row| row.id.is_empty() || row.vector.len() != dimensions)
+    {
+        return Err(invalid("native bounded ANN build configuration differs"));
+    }
+    match (
+        config.generation,
+        config.previous_generation_sha256.as_deref(),
+    ) {
+        (1, None) => {}
+        (1, Some(_)) | (_, None) => {
+            return Err(invalid("native bounded ANN predecessor binding differs"));
+        }
+        (_, Some(previous))
+            if previous.len() != 64
+                || !previous
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+        {
+            return Err(invalid("native bounded ANN predecessor digest differs"));
+        }
+        _ => {}
+    }
+
+    let vectors = rows
+        .iter()
+        .map(|row| row.vector.clone())
+        .collect::<Vec<_>>();
+    let quantizer = fit_bounded_quantizer(&vectors, dimensions, 0x4253_4b33)?;
+    let row_codes = vectors
+        .iter()
+        .map(|vector| quantizer.encode(vector))
+        .collect::<Result<Vec<_>>>()?;
+    let summaries = rows
+        .chunks(PAGE_ROWS)
+        .flat_map(|page| page_summaries(page, dimensions))
+        .collect::<Vec<_>>();
+    let codebooks = padded_bounded_codebooks(&quantizer, dimensions);
+    let sq8 = sq8_authority(&rows, dimensions);
+
+    let mut objects = Vec::new();
+    let (summary_ref, summary_object) = artifact(
+        "route-summaries",
+        "parquet",
+        encode_bounded_summaries(&summaries, dimensions)?,
+    );
+    objects.push(summary_object);
+    let (codebook_ref, codebook_object) = artifact(
+        "route-codebooks",
+        "parquet",
+        encode_bounded_codebooks(&codebooks, dimensions)?,
+    );
+    objects.push(codebook_object);
+    let (row_code_ref, row_code_object) = artifact(
+        "route-row-codes",
+        "parquet",
+        encode_bounded_row_codes(row_codes.iter().flatten().copied().collect())?,
+    );
+    objects.push(row_code_object);
+
+    let mut run_bytes = Vec::new();
+    let mut pages = Vec::new();
+    for (page, page_rows) in rows.chunks(PAGE_ROWS).enumerate() {
+        let bytes = encode_bounded_page(page_rows, &sq8, dimensions)?;
+        let start = run_bytes.len() as u64;
+        run_bytes.extend_from_slice(&bytes);
+        pages.push(NativePageRef {
+            page: page as u32,
+            object: String::new(),
+            range: start..run_bytes.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            rows: page_rows.len() as u32,
+        });
+    }
+    let (base_ref, base_object) = artifact("base-run", "arrow", run_bytes);
+    for page in &mut pages {
+        page.object.clone_from(&base_object.path);
+    }
+    objects.push(base_object);
+    let (page_directory_ref, page_directory_object) =
+        artifact("page-directory", "parquet", encode_page_directory(&pages)?);
+    objects.push(page_directory_object);
+    let (mutation_ref, mutation_object) = artifact(
+        "mutation-directory",
+        "arrow",
+        encode_mutation_directory(&[])?,
+    );
+    objects.push(mutation_object);
+    objects.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let page_count = u32::try_from(pages.len())
+        .map_err(|_| invalid("native bounded ANN page count exceeds u32"))?;
+    let max_output_pages = page_count.min(32);
+    let limits = NativeBoundedRouteLimits {
+        cpu_permits: 4,
+        cpu_waiters: 64,
+        max_summary_pages: page_count.min(128),
+        max_candidate_rows: u32::try_from(rows.len().min(4_096)).unwrap_or(4_096),
+        max_output_pages,
+        coalesce_gap_pages: 0,
+        range_concurrency: u16::try_from(max_output_pages.min(16)).unwrap_or(16),
+        response_bytes_each: 16 * 1024 * 1024,
+        decoded_cache_bytes: 64 * 1024 * 1024,
+        workspace_bytes: 64 * 1024 * 1024,
+        runtime_reserve_bytes: 512 * 1024 * 1024,
+        resident_budget_bytes: 3 * 1024 * 1024 * 1024,
+    };
+    let start = rows.iter().map(|row| row.version).min().unwrap();
+    let end = rows.iter().map(|row| row.version).max().unwrap();
+    let reference = NativeBoundedAnnRef {
+        format_version: 3,
+        generation: config.generation,
+        previous_generation_sha256: config.previous_generation_sha256,
+        source_identity: config.source_identity,
+        dimensions: config.dimensions,
+        metric: config.metric,
+        page_rows: PAGE_ROWS as u32,
+        router: NativeBoundedRouterRef {
+            pq_width: BOUNDED_PQ_WIDTH as u8,
+            summary_blocks_per_page: BOUNDED_SUMMARY_BLOCKS as u8,
+            physical_rows: rows.len() as u64,
+            page_count,
+            summaries: summary_ref,
+            codebooks: codebook_ref,
+            row_codes: row_code_ref,
+            limits,
+        },
+        sq8,
+        page_directory: page_directory_ref,
+        mutation_directory: mutation_ref,
+        base_runs: vec![NativeRunRef {
+            ordinal: 0,
+            rows: rows.len() as u64,
+            version_start: version_hex(&start),
+            version_end: version_hex(&end),
+            artifact: base_ref,
+        }],
+        delta_runs: Vec::new(),
+    };
+    reference.validate()?;
+    let root_bytes = native_bounded_ann_root_bytes(&reference)?;
+    let root_sha256 = format!("{:x}", Sha256::digest(&root_bytes));
+    let root_path = format!("native-ann/generations/{root_sha256}.json");
+    Ok(NativeBoundedBuildOutput {
+        reference,
+        root_bytes,
+        root_sha256,
+        root_path,
+        objects,
+        page_directory: pages,
+    })
+}
+
 fn read_bound_artifact(storage: &Storage, reference: &NativeArtifactRef) -> Result<Vec<u8>> {
     reference.validate(&reference.role)?;
     let uri = url::Url::parse(&reference.uri)
@@ -755,6 +1172,17 @@ pub(crate) fn build_native_delta_generation(
 }
 
 pub(crate) fn stage_native_generation(storage: &Storage, built: &NativeBuildOutput) -> Result<()> {
+    for object in &built.objects {
+        storage.write_bytes_content_addressed(&object.path, &object.bytes)?;
+    }
+    storage.write_bytes_content_addressed(&built.root_path, &built.root_bytes)?;
+    Ok(())
+}
+
+pub(crate) fn stage_native_bounded_generation(
+    storage: &Storage,
+    built: &NativeBoundedBuildOutput,
+) -> Result<()> {
     for object in &built.objects {
         storage.write_bytes_content_addressed(&object.path, &object.bytes)?;
     }

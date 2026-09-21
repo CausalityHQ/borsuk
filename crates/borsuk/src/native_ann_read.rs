@@ -18,9 +18,13 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::{BorsukError, Result},
-    native_ann::{NativeAnnRef, NativeArtifactRef, NativeBoundedRouteLimits, NativeSq8Authority},
+    native_ann::{
+        NativeAnnRef, NativeArtifactRef, NativeBoundedAnnRef, NativeBoundedRouteLimits,
+        NativeSq8Authority,
+    },
     native_ann_format::{
-        NativeBoundedRouterArtifacts, NativeRouterArtifacts, decode_native_router,
+        NativeBoundedRouterArtifacts, NativeResidentWorksheet, NativeRouterArtifacts,
+        decode_native_bounded_router, decode_native_router,
     },
     native_ann_router::{NativeRouteLimits, route_native_bounded_query, route_native_query},
     record::VectorRecord,
@@ -382,6 +386,78 @@ fn decode_page_directory(bytes: Vec<u8>, reference: &NativeAnnRef) -> Result<Vec
     Ok(pages)
 }
 
+fn decode_bounded_page_directory(
+    bytes: Vec<u8>,
+    reference: &NativeBoundedAnnRef,
+) -> Result<Vec<NativePageRef>> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))?;
+    if builder.schema().as_ref() != &page_directory_schema()
+        || builder.metadata().file_metadata().num_rows() != i64::from(reference.router.page_count)
+    {
+        return Err(invalid("native bounded ANN page-directory shape differs"));
+    }
+    let allowed_objects = reference
+        .base_runs
+        .iter()
+        .map(|run| artifact_path(&run.artifact))
+        .collect::<Result<BTreeSet<_>>>()?;
+    let mut pages = Vec::with_capacity(reference.router.page_count as usize);
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 6 || batch.columns().iter().any(|array| array.null_count() != 0) {
+            return Err(invalid("native bounded ANN page-directory batch differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("native bounded ANN page ordinal differs"))?;
+        let objects = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid("native bounded ANN page object differs"))?;
+        let offsets = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("native bounded ANN page offset differs"))?;
+        let lengths = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("native bounded ANN page length differs"))?;
+        let digests = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid("native bounded ANN page digest differs"))?;
+        let rows = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("native bounded ANN page rows differs"))?;
+        for row in 0..batch.num_rows() {
+            let object = objects.value(row);
+            let start = offsets.value(row);
+            let end = start
+                .checked_add(lengths.value(row))
+                .ok_or_else(|| invalid("native bounded ANN page range overflows"))?;
+            if !allowed_objects.contains(object) {
+                return Err(invalid("native bounded ANN page run binding differs"));
+            }
+            pages.push(NativePageRef {
+                page: ordinals.value(row),
+                object: object.to_owned(),
+                range: start..end,
+                sha256: digests.value(row).to_owned(),
+                rows: rows.value(row),
+            });
+        }
+    }
+    Ok(pages)
+}
+
 fn mutation_directory_schema() -> Schema {
     Schema::new(vec![
         Field::new("id", DataType::Binary, false),
@@ -496,6 +572,108 @@ pub(crate) fn load_native_ann_snapshot(
             },
             range_concurrency: DEFAULT_RANGE_CONCURRENCY,
             fetch_admission,
+        },
+    )
+}
+
+pub(crate) fn load_native_bounded_ann_snapshot(
+    storage: Storage,
+    reference: &NativeBoundedAnnRef,
+    fetch_admission: Option<Arc<ByteAdmissionGate>>,
+) -> Result<NativeBoundedAnnSnapshot> {
+    reference.validate()?;
+    let dimensions = u64::from(reference.dimensions);
+    let physical_rows = reference.router.physical_rows;
+    let page_count = u64::from(reference.router.page_count);
+    let pq_width = u64::from(reference.router.pq_width);
+    let codebook_values = pq_width
+        .checked_mul(256)
+        .and_then(|values| values.checked_mul(dimensions.div_ceil(pq_width)))
+        .ok_or_else(|| invalid("native bounded ANN codebook worksheet overflows"))?;
+    let summary_values = page_count
+        .checked_mul(u64::from(reference.router.summary_blocks_per_page))
+        .and_then(|values| values.checked_mul(dimensions))
+        .ok_or_else(|| invalid("native bounded ANN summary worksheet overflows"))?;
+    let row_code_values = physical_rows
+        .checked_mul(pq_width)
+        .ok_or_else(|| invalid("native bounded ANN row-code worksheet overflows"))?;
+    let delta_rows = reference.delta_runs.iter().try_fold(0_u64, |total, run| {
+        total
+            .checked_add(run.rows)
+            .ok_or_else(|| invalid("native bounded ANN delta worksheet overflows"))
+    })?;
+    NativeResidentWorksheet {
+        physical_rows,
+        page_count,
+        dimensions,
+        summary_blocks_per_page: u64::from(reference.router.summary_blocks_per_page),
+        pq_width,
+        codebook_values,
+        summary_values,
+        row_code_values,
+        sq8_scalar_values: dimensions * 2,
+        mutation_entries: delta_rows,
+        resident_delta_rows: delta_rows,
+        decoded_cache_bytes: reference.router.limits.decoded_cache_bytes,
+        response_concurrency: u64::from(reference.router.limits.range_concurrency),
+        response_bytes_each: reference.router.limits.response_bytes_each,
+        workspace_bytes: reference.router.limits.workspace_bytes,
+        runtime_reserve_bytes: reference.router.limits.runtime_reserve_bytes,
+    }
+    .validate(reference.router.limits.resident_budget_bytes)?;
+
+    let summaries = read_artifact(&storage, &reference.router.summaries)?;
+    let codebooks = read_artifact(&storage, &reference.router.codebooks)?;
+    let row_codes = read_artifact(&storage, &reference.router.row_codes)?;
+    let router = decode_native_bounded_router(
+        &reference.router,
+        reference.dimensions,
+        Bytes::from(summaries),
+        Bytes::from(codebooks),
+        Bytes::from(row_codes),
+    )?;
+    let page_directory = read_artifact(&storage, &reference.page_directory)?;
+    let pages = decode_bounded_page_directory(page_directory, reference)?;
+    let mutation_directory = read_artifact(&storage, &reference.mutation_directory)?;
+    let mutation_entries = decode_mutation_directory(mutation_directory)?;
+    let mut latest_delta_rows = BTreeMap::<Vec<u8>, NativeResidentRow>::new();
+    for run in &reference.delta_runs {
+        let bytes = read_artifact(&storage, &run.artifact)?;
+        let expected_rows = u32::try_from(run.rows)
+            .map_err(|_| invalid("native bounded ANN delta rows exceed u32"))?;
+        for row in
+            decode_native_bounded_page(&bytes, reference.dimensions, expected_rows, &reference.sq8)?
+        {
+            let resident = NativeResidentRow {
+                id: row.id,
+                sequence: row.sequence,
+                state: row.state,
+                vector: row.vector,
+            };
+            if latest_delta_rows
+                .get(&resident.id)
+                .is_none_or(|current| current.sequence < resident.sequence)
+            {
+                latest_delta_rows.insert(resident.id.clone(), resident);
+            }
+        }
+    }
+    NativeBoundedAnnSnapshot::open(
+        storage,
+        NativeBoundedSnapshotInputs {
+            generation: reference.generation,
+            dimensions: reference.dimensions,
+            router,
+            sq8: reference.sq8.clone(),
+            pages,
+            mutation_entries,
+            delta_rows: latest_delta_rows.into_values().collect(),
+            limits: reference.router.limits,
+            fetch_admission,
+            cpu_admission: Arc::new(NativeCpuAdmission::new(
+                usize::from(reference.router.limits.cpu_permits),
+                usize::from(reference.router.limits.cpu_waiters),
+            )),
         },
     )
 }
