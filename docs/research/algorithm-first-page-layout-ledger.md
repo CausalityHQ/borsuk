@@ -3154,3 +3154,65 @@ reduction may not size the next representation. Retain V99's 1,024-page,
 rerun V104/V105, consume validation/holdout, or scale beyond 1M. The one next
 representation hypothesis must change the ranking family within that envelope;
 conventional PQ widening and exact-norm correction are already rejected.
+
+## V106 result — fixed anisotropic PQ48 is decisively worse than ordinary PQ48
+
+V106 tested the one remaining representation hypothesis on the first 128
+burned ReLAION-1M development queries. It kept V102's frozen hierarchy,
+1,024-page retained envelope, 48-byte code width, page planner, 32-GET cap,
+16-MiB cap, truth, and ordinary-PQ48 control. The only challenger change was a
+single coordinate pass using the theory-derived anisotropic vector-quantization
+loss with fixed threshold 0.2, followed by inner-product ranking. No threshold,
+pass count, or query-dependent parameter was tuned. Validation and sealed
+holdout remained unread.
+
+The immutable source revision is
+`0a20bfea9b51174834728e0da5f2d5b44cdb9f28`. Its 10,801,942-byte source
+archive is at
+`s3://borsuk-bench-453182569524-euc1/research/v106-anisotropic-pq48/0a20bfea9b51174834728e0da5f2d5b44cdb9f28/source/source.tar.gz`,
+SHA-256
+`50870445b0f8f37313e3acf72c651ba8fd23d8aa20883bb7d547bbb19495d2b5`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v106-anisotropic-pq48/0a20bfea9b51174834728e0da5f2d5b44cdb9f28/runs/v106-g1-screen-20260921T023700Z-0a20bfe/a0001`.
+It ran on c7i.8xlarge Spot instance `i-0f1447401c2f5c577` in eu-central-1c;
+the instance is terminated. The terminal is complete, exit 0, and
+claim-eligible.
+
+Terminal-bound evidence is:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| result | 25,152,054 | `e46c465a9b8cbc15dd80ef7d92f901797b27b22e7db2708f6c8599811eea7d79` |
+| independent rescore | 883 | `2b049cace5030f2334823669173b1957bab1edaffa78884d5fe65a078a2ece4b` |
+| resources | 460 | `91d2cc1b8a4fab493ec1c5ea7b913ae26aab561b2ff15f55987acd639961b87d` |
+| worker log | 352 | `e5938828224b1bc67ebf9f344d94925511a0d406777ddde7e751803c137ecefc` |
+
+The independent reducer authenticated the complete result, rebuilt the
+hierarchy and fetch plan, regenerated both code planes, recomputed every sample
+and aggregate, reproduced the seed-7216 10,000-resample paired intervals, and
+verified the rejection classification.
+
+| arm | avg R@10 | avg R@100 | p05 R@100 | max GETs | max bytes |
+|---|---:|---:|---:|---:|---:|
+| ordinary PQ48 control | 98.5937% | 95.1328% | 80% | 32 | 16,777,200 |
+| anisotropic PQ48 | 97.2656% | 91.8281% | 70% | 32 | 16,777,160 |
+
+The challenger-minus-control paired 95% intervals were -2.4219 to -0.4688
+percentage points for average Recall@10, -4.2578 to -2.3984 points for average
+Recall@100, and -16 to -3 points for p05 Recall@100. Thus every quality
+interval is strictly negative, and the challenger also fails all three absolute
+quality gates. Both arms pass the fetch gates. The shared serving projection is
+1,269,504,702 resident bytes at 100M rows, below the 3-GiB cap; the immutable
+48-byte code plane remains on object storage rather than resident RAM.
+
+The Spot cell took 867 seconds, reached 11,159,856 KiB maximum process RSS,
+had zero swap and zero memory PSI, and cost an estimated $0.1156.
+
+**Ruling:** kill fixed-threshold anisotropic PQ48 immediately. Do not tune its
+threshold or pass count, do not run it on all 1,000 development queries, and do
+not consume validation/holdout. This falsifier rejects this specific
+score-aware noise-shaping construction; it does not reject every learned or
+non-centroid representation. G1 remains open at the qualified V99 1,024-page
+exact envelope, and the next work returns to the registered native
+snapshot/delta/mutation/compaction qualification rather than launching another
+representation arm.
