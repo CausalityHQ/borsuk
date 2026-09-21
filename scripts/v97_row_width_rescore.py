@@ -361,7 +361,7 @@ def validate_screen_result(
     if result["schema"] != "borsuk-v97-row-width-screen-v2":
         raise ValueError("screen result schema differs")
     if (
-        _integer(result["summary_page_limit"], "summary page limit") != 128
+        _integer(result["summary_page_limit"], "summary page limit") != 1024
         or _integer(result["shortlist_rows"], "shortlist rows") != 512
     ):
         raise ValueError("screen routing limits differ")

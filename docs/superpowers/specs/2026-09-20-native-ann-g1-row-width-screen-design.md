@@ -17,8 +17,11 @@ eligible for G2.
   treated as resident or free, and ranges never cross an object boundary.
 - Query budget: at most 32 one-page GET ranges and 16,777,216 encoded bytes.
 - Summary fence: rank all pages by the minimum ADC score of their two PQ16x8
-  block summaries and retain the best 128 pages across both tiers.
-- Row shortlist: score only rows in those 128 pages and retain the best 512 by
+  block summaries and retain the best 1,024 pages across both tiers. V104
+  killed 128, 256, and 512 pages; V105 retained 1,024 as the qualified exact
+  capacity boundary after the 768-page arm lost all three paired confidence
+  intervals against it.
+- Row shortlist: score only rows in those 1,024 pages and retain the best 512 by
   the global `(distance, feature_row_id)` order, including ties at the boundary.
 - Planner: walk ranked evidence, keep the first occurrence of each page whose
   exact encoded bytes still fit, and stop at 32 pages or 16,777,216 bytes.
@@ -56,7 +59,7 @@ zero-row-code architectural control, not an exact-f32 summary ceiling and not
 a representation-only comparison with the four row-code arms.
 
 Before the five-arm result is eligible, a fresh exact-f32 diagnostic must score
-the rows behind the same 128-page summary fence, route and charge both tiers
+the rows behind the same 1,024-page summary fence, route and charge both tiers
 under the same planner, and pass all three quality gates.
 The historical V85 exact-f32 result remains labelled base-only containment
 because its evaluator counted delta truth hits without fetching delta pages.

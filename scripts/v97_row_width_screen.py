@@ -163,7 +163,7 @@ class ScreenInputs:
     neighbors: int
     max_gets: int
     max_bytes: int
-    summary_page_limit: int = 128
+    summary_page_limit: int = 1024
     shortlist_rows: int = 512
     training_rows: int = 100_000
     training_iterations: int = 10
@@ -1162,7 +1162,7 @@ def screen_result_document(
         or neighbors <= 0
         or max_gets != 32
         or max_bytes != 16 * 1024**2
-        or summary_page_limit != 128
+        or summary_page_limit != 1024
         or shortlist_rows != 512
         or bootstrap_resamples != 10_000
     ):

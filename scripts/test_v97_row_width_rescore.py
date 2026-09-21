@@ -311,7 +311,7 @@ class RowWidthRescoreTests(unittest.TestCase):
             "queries": 2,
             "schema": "borsuk-v97-row-width-screen-v2",
             "shortlist_rows": 512,
-            "summary_page_limit": 128,
+            "summary_page_limit": 1024,
             "winner": "summary-only-pq16x8",
         }
 
@@ -366,7 +366,7 @@ class RowWidthRescoreTests(unittest.TestCase):
         changed["artifacts"]["pq32x4"]["codes"]["shape"] = []
         mutations.append((changed, "screen artifact identity differs"))
         changed = copy.deepcopy(result)
-        changed["summary_page_limit"] = 127
+        changed["summary_page_limit"] = 1023
         mutations.append((changed, "screen routing limits differ"))
         changed = copy.deepcopy(result)
         changed["shortlist_rows"] = 511
