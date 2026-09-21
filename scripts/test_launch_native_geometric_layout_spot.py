@@ -131,6 +131,7 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
         specs = build_launch_specs(plan)
         self.assertEqual(len(specs), len(DEFAULT_TARGETS))
         for spec, target in zip(specs, DEFAULT_TARGETS, strict=True):
+            self.assertLessEqual(len(spec["ClientToken"]), 64)
             self.assertEqual(spec["MaxCount"], 1)
             self.assertEqual(spec["MinCount"], 1)
             self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")

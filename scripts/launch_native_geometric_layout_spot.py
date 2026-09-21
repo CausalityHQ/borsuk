@@ -463,7 +463,7 @@ def build_launch_specs(plan: SpotLayoutPlan) -> list[dict[str, object]]:
     for target in plan.targets:
         token = hashlib.sha256(
             f"native-geometric:{plan.source_commit}:{target.availability_zone}:a0001".encode()
-        ).hexdigest()[:48]
+        ).hexdigest()[:47]
         specs.append(
             {
                 "BlockDeviceMappings": [
