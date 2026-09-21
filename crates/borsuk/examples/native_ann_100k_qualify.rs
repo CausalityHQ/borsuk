@@ -783,6 +783,9 @@ fn verify_semantic_equivalence(
         .map_err(|error| error.to_string())?;
     index.flush().map_err(|error| error.to_string())?;
 
+    let index_uri = index_uri
+        .to_str()
+        .ok_or_else(|| "bounded native index path is not UTF-8".to_owned())?;
     let mut reopened = BorsukIndex::open(index_uri).map_err(|error| error.to_string())?;
     let before_compaction = bounded_search_ids(&reopened, &mutation_query, 1)?;
     let reopen = before_compaction == [mutation_id];
