@@ -51577,3 +51577,113 @@ fn native_ann_compaction_rebuilds_one_deterministic_base_generation() {
     assert_eq!(report.hits[0].id.as_bytes(), fresh_id);
     assert_eq!(report.leaf_mode, "native-hierarchical-delta");
 }
+
+#[test]
+fn native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equivalent() {
+    fn exercise(run_count: usize) -> (Vec<(Vec<u8>, u32)>, Vec<(Vec<u8>, u32)>) {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: 16,
+            segment_max_vectors: 128,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..520)
+                    .map(|row| {
+                        VectorRecord::new_bytes(
+                            [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                            vec![row as f32 / 17.0; 16],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        for run in 0..run_count {
+            let start = run * 100 / run_count;
+            let stop = (run + 1) * 100 / run_count;
+            index
+                .upsert(
+                    (start..stop)
+                        .map(|row| {
+                            VectorRecord::new_bytes(
+                                [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                                vec![-(row as f32 + 1.0); 16],
+                            )
+                        })
+                        .collect(),
+                )
+                .unwrap();
+            index.flush().unwrap();
+        }
+        assert_eq!(
+            index
+                .manifest
+                .native_ann_ref
+                .as_ref()
+                .unwrap()
+                .delta_runs
+                .len(),
+            run_count
+        );
+        drop(index);
+
+        let mut index = BorsukIndex::open(&uri).unwrap();
+        let options = SearchOptions::approx(10, LeafMode::PqScan)
+            .with_max_segments(8)
+            .with_max_candidates_per_segment(512);
+        let before = index
+            .search_with_report(&[-100.0; 16], options.clone())
+            .unwrap();
+        assert_eq!(before.leaf_mode, "native-hierarchical-delta");
+        let before_hits = before
+            .hits
+            .iter()
+            .map(|hit| (hit.id.as_bytes().to_vec(), hit.distance.to_bits()))
+            .collect::<Vec<_>>();
+
+        index
+            .compact(CompactionOptions {
+                max_segments: None,
+                ..CompactionOptions::default()
+            })
+            .unwrap();
+        assert!(
+            index
+                .manifest
+                .native_ann_ref
+                .as_ref()
+                .unwrap()
+                .delta_runs
+                .is_empty()
+        );
+        drop(index);
+
+        let index = BorsukIndex::open(&uri).unwrap();
+        let after = index.search_with_report(&[-100.0; 16], options).unwrap();
+        assert_eq!(after.leaf_mode, "native-hierarchical-delta");
+        let after_hits = after
+            .hits
+            .iter()
+            .map(|hit| (hit.id.as_bytes().to_vec(), hit.distance.to_bits()))
+            .collect::<Vec<_>>();
+        (before_hits, after_hits)
+    }
+
+    let one = exercise(1);
+    let ten = exercise(10);
+    let one_hundred = exercise(100);
+    assert_eq!(one.0, one.1);
+    assert_eq!(ten.0, ten.1);
+    assert_eq!(one_hundred.0, one_hundred.1);
+    assert_eq!(one.0, ten.0);
+    assert_eq!(one.0, one_hundred.0);
+}

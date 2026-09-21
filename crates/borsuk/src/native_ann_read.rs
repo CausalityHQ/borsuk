@@ -7,13 +7,13 @@ use std::{
 };
 
 use arrow_array::{
-    Array, BinaryArray, FixedSizeListArray, StringArray, UInt8Array, UInt32Array, UInt64Array,
+    Array, BinaryArray, FixedSizeListArray, Float32Array, StringArray, UInt8Array, UInt32Array,
+    UInt64Array,
 };
 use arrow_ipc::reader::StreamReader;
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -65,12 +65,12 @@ pub(crate) struct NativeMutationEntry {
     pub(crate) state: NativeRowState,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeResidentRow {
     pub(crate) id: Vec<u8>,
     pub(crate) sequence: u64,
     pub(crate) state: NativeRowState,
-    pub(crate) code: Vec<u8>,
+    pub(crate) vector: Vec<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,8 +81,6 @@ pub(crate) struct NativeSnapshotInputs {
     pub(crate) pages: Vec<NativePageRef>,
     pub(crate) mutation_entries: Vec<NativeMutationEntry>,
     pub(crate) delta_rows: Vec<NativeResidentRow>,
-    pub(crate) sq8_low: Vec<f32>,
-    pub(crate) sq8_step: Vec<f32>,
     pub(crate) route_limits: NativeRouteLimits,
     pub(crate) range_concurrency: usize,
 }
@@ -104,12 +102,12 @@ pub(crate) struct NativeSearchOutcome {
     pub(crate) bytes_read: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct NativeStoredRow {
     id: Vec<u8>,
     sequence: u64,
     state: NativeRowState,
-    code: Vec<u8>,
+    vector: Vec<f32>,
 }
 
 #[derive(Clone)]
@@ -121,8 +119,6 @@ pub(crate) struct NativeAnnSnapshot {
     pages: Vec<NativePageRef>,
     mutations: BTreeMap<Vec<u8>, NativeMutationEntry>,
     delta_rows: Vec<NativeResidentRow>,
-    sq8_low: Vec<f32>,
-    sq8_step: Vec<f32>,
     route_limits: NativeRouteLimits,
     range_concurrency: usize,
     range_gate: Arc<AdmissionGate>,
@@ -181,9 +177,9 @@ fn native_page_schema(dimensions: i32) -> Schema {
         Field::new("sequence", DataType::UInt64, false),
         Field::new("state", DataType::UInt8, false),
         Field::new(
-            "code",
+            "vector",
             DataType::FixedSizeList(
-                Arc::new(Field::new("element", DataType::UInt8, false)),
+                Arc::new(Field::new("element", DataType::Float32, false)),
                 dimensions,
             ),
             false,
@@ -343,13 +339,6 @@ fn decode_mutation_directory(bytes: Vec<u8>) -> Result<Vec<NativeMutationEntry>>
     Ok(entries)
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct NativeSq8Parameters {
-    low: Vec<f32>,
-    step: Vec<f32>,
-}
-
 pub(crate) fn load_native_ann_snapshot(
     storage: Storage,
     reference: &NativeAnnRef,
@@ -379,7 +368,7 @@ pub(crate) fn load_native_ann_snapshot(
                 id: row.id,
                 sequence: row.sequence,
                 state: row.state,
-                code: row.code,
+                vector: row.vector,
             };
             if latest_delta_rows
                 .get(&resident.id)
@@ -390,15 +379,6 @@ pub(crate) fn load_native_ann_snapshot(
         }
     }
     let delta_rows = latest_delta_rows.into_values().collect::<Vec<_>>();
-    let sq8_bytes = read_artifact(&storage, &reference.sq8.parameters)?;
-    let sq8: NativeSq8Parameters = serde_json::from_slice(&sq8_bytes)
-        .map_err(|error| invalid(format!("native ANN SQ8 JSON is invalid: {error}")))?;
-    let mut canonical_sq8 = serde_json::to_vec(&sq8)
-        .map_err(|error| invalid(format!("native ANN SQ8 JSON serialization failed: {error}")))?;
-    canonical_sq8.push(b'\n');
-    if canonical_sq8 != sq8_bytes {
-        return Err(invalid("native ANN SQ8 JSON is not canonical"));
-    }
     let bytes_per_page = pages
         .iter()
         .map(|page| page.range.end - page.range.start)
@@ -413,8 +393,6 @@ pub(crate) fn load_native_ann_snapshot(
             pages,
             mutation_entries,
             delta_rows,
-            sq8_low: sq8.low,
-            sq8_step: sq8.step,
             route_limits: NativeRouteLimits {
                 max_summary_pages: DEFAULT_MAX_SUMMARY_PAGES,
                 max_candidate_rows: DEFAULT_MAX_CANDIDATE_ROWS,
@@ -475,22 +453,25 @@ fn decode_native_rows(
             .as_any()
             .downcast_ref::<UInt8Array>()
             .ok_or_else(|| invalid("native ANN page state column differs"))?;
-        let codes = batch
+        let vectors = batch
             .column(3)
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
-            .ok_or_else(|| invalid("native ANN page code column differs"))?;
-        if codes.values().null_count() != 0 {
-            return Err(invalid("native ANN page code contains nulls"));
+            .ok_or_else(|| invalid("native ANN page vector column differs"))?;
+        if vectors.values().null_count() != 0 {
+            return Err(invalid("native ANN page vector contains nulls"));
         }
         for row in 0..batch.num_rows() {
-            let code = codes.value(row);
-            let code = code
+            let vector = vectors.value(row);
+            let vector = vector
                 .as_any()
-                .downcast_ref::<UInt8Array>()
-                .ok_or_else(|| invalid("native ANN page code child differs"))?;
-            if code.len() != dimensions_usize || code.null_count() != 0 {
-                return Err(invalid("native ANN page code width differs"));
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| invalid("native ANN page vector child differs"))?;
+            if vector.len() != dimensions_usize
+                || vector.null_count() != 0
+                || vector.values().iter().any(|value| !value.is_finite())
+            {
+                return Err(invalid("native ANN page vector width or value differs"));
             }
             let sequence = sequences.value(row);
             if sequence == 0 {
@@ -500,7 +481,7 @@ fn decode_native_rows(
                 id: ids.value(row).to_vec(),
                 sequence,
                 state: NativeRowState::from_u8(states.value(row))?,
-                code: code.values().to_vec(),
+                vector: vector.values().to_vec(),
             });
         }
     }
@@ -529,13 +510,6 @@ impl NativeAnnSnapshot {
             || inputs.dimensions == 0
             || inputs.router.dimensions != inputs.dimensions
             || inputs.pages.len() != inputs.router.page_count as usize
-            || inputs.sq8_low.len() != dimensions
-            || inputs.sq8_step.len() != dimensions
-            || inputs.sq8_low.iter().any(|value| !value.is_finite())
-            || inputs
-                .sq8_step
-                .iter()
-                .any(|value| !value.is_finite() || *value <= 0.0)
             || !(1..=16).contains(&inputs.range_concurrency)
             || inputs.route_limits.max_body_bytes > MAX_PAGE_BODY_BYTES
         {
@@ -583,8 +557,8 @@ impl NativeAnnSnapshot {
             if row.sequence == 0 {
                 return Err(invalid("native ANN resident delta sequence differs"));
             }
-            if row.code.len() != dimensions {
-                return Err(invalid("native ANN resident delta code width differs"));
+            if row.vector.len() != dimensions || row.vector.iter().any(|value| !value.is_finite()) {
+                return Err(invalid("native ANN resident delta vector differs"));
             }
             if previous_id.is_some_and(|id| id >= row.id.as_slice()) {
                 return Err(invalid("native ANN resident delta order differs"));
@@ -615,8 +589,6 @@ impl NativeAnnSnapshot {
             pages: inputs.pages,
             mutations,
             delta_rows: inputs.delta_rows,
-            sq8_low: inputs.sq8_low,
-            sq8_step: inputs.sq8_step,
             route_limits: inputs.route_limits,
             range_concurrency: inputs.range_concurrency,
             range_gate: Arc::new(AdmissionGate::new(inputs.range_concurrency)),
@@ -627,8 +599,8 @@ impl NativeAnnSnapshot {
         self.generation
     }
 
-    fn score_code(&self, query: &[f32], code: &[u8]) -> Result<f32> {
-        if query.len() != self.dimensions || code.len() != self.dimensions {
+    fn score_vector(&self, query: &[f32], vector: &[f32]) -> Result<f32> {
+        if query.len() != self.dimensions || vector.len() != self.dimensions {
             return Err(BorsukError::DimensionMismatch {
                 expected: self.dimensions,
                 actual: query.len(),
@@ -636,10 +608,8 @@ impl NativeAnnSnapshot {
         }
         let distance = query
             .iter()
-            .zip(code)
-            .zip(self.sq8_low.iter().zip(&self.sq8_step))
-            .fold(0.0_f32, |distance, ((query, code), (low, step))| {
-                let value = low + step * f32::from(*code);
+            .zip(vector)
+            .fold(0.0_f32, |distance, (query, value)| {
                 let delta = query - value;
                 distance + delta * delta
             });
@@ -738,7 +708,7 @@ impl NativeAnnSnapshot {
                 winners.insert(
                     row.id.clone(),
                     SearchCandidate {
-                        distance: self.score_code(query, &row.code)?,
+                        distance: self.score_vector(query, &row.vector)?,
                         id: row.id,
                         sequence: row.sequence,
                     },
@@ -752,7 +722,7 @@ impl NativeAnnSnapshot {
             winners.insert(
                 row.id.clone(),
                 SearchCandidate {
-                    distance: self.score_code(query, &row.code)?,
+                    distance: self.score_vector(query, &row.vector)?,
                     id: row.id.clone(),
                     sequence: row.sequence,
                 },
@@ -862,21 +832,25 @@ mod tests {
     }
 
     fn encode_page<I: AsRef<[u8]>>(
-        mut rows: Vec<(I, u64, u8, Vec<u8>)>,
+        mut rows: Vec<(I, u64, u8, Vec<f32>)>,
         shape: PageShape,
     ) -> Vec<u8> {
         if shape.reverse_rows {
             rows.reverse();
         }
         let dimensions = rows.first().unwrap().3.len();
-        let child = Arc::new(Field::new("element", DataType::UInt8, shape.child_nullable));
-        let codes = Arc::new(
+        let child = Arc::new(Field::new(
+            "element",
+            DataType::Float32,
+            shape.child_nullable,
+        ));
+        let vectors = Arc::new(
             FixedSizeListArray::try_new(
                 Arc::clone(&child),
                 i32::try_from(dimensions).unwrap(),
-                Arc::new(UInt8Array::from(
+                Arc::new(Float32Array::from(
                     rows.iter()
-                        .flat_map(|(_, _, _, code)| code.iter().copied())
+                        .flat_map(|(_, _, _, vector)| vector.iter().copied())
                         .collect::<Vec<_>>(),
                 )),
                 None,
@@ -901,7 +875,7 @@ mod tests {
             Field::new("sequence", sequence.data_type().clone(), false),
             Field::new("state", DataType::UInt8, false),
             Field::new(
-                "code",
+                "vector",
                 DataType::FixedSizeList(child, i32::try_from(dimensions).unwrap()),
                 false,
             ),
@@ -918,7 +892,7 @@ mod tests {
                         .map(|(_, _, state, _)| *state)
                         .collect::<Vec<_>>(),
                 )),
-                codes,
+                vectors,
             ],
         )
         .unwrap();
@@ -946,13 +920,13 @@ mod tests {
 
     #[test]
     fn native_ann_read_uses_generic_binary_record_ids() {
-        let child = Arc::new(Field::new("element", DataType::UInt8, false));
+        let child = Arc::new(Field::new("element", DataType::Float32, false));
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Binary, false),
             Field::new("sequence", DataType::UInt64, false),
             Field::new("state", DataType::UInt8, false),
             Field::new(
-                "code",
+                "vector",
                 DataType::FixedSizeList(Arc::clone(&child), 16),
                 false,
             ),
@@ -969,7 +943,7 @@ mod tests {
                     FixedSizeListArray::try_new(
                         child,
                         16,
-                        Arc::new(UInt8Array::from(vec![7_u8; 16])),
+                        Arc::new(Float32Array::from(vec![7.0_f32; 16])),
                         None,
                     )
                     .unwrap(),
@@ -1034,22 +1008,22 @@ mod tests {
     fn fixture() -> (Storage, NativeSnapshotInputs) {
         let storage = Storage::from_uri("memory:///native-ann-read").unwrap();
         let mut first_rows = vec![
-            (b"0001".to_vec(), 1, 0, vec![1; 16]),
-            (b"0002".to_vec(), 1, 0, vec![2; 16]),
+            (b"0001".to_vec(), 1, 0, vec![1.0; 16]),
+            (b"0002".to_vec(), 1, 0, vec![2.0; 16]),
         ];
         first_rows.extend((0..254).map(|ordinal| {
             (
                 format!("{:04}", 1000 + ordinal).into_bytes(),
                 1,
                 0,
-                vec![255; 16],
+                vec![255.0; 16],
             )
         }));
         let first = encode_page(first_rows, PageShape::default());
         let second = encode_page(
             vec![
-                (b"0003".to_vec(), 1, 0, vec![3; 16]),
-                (b"0005".to_vec(), 1, 0, vec![4; 16]),
+                (b"0003".to_vec(), 1, 0, vec![3.0; 16]),
+                (b"0005".to_vec(), 1, 0, vec![4.0; 16]),
             ],
             PageShape::default(),
         );
@@ -1094,23 +1068,21 @@ mod tests {
                     id: b"0001".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Live,
-                    code: vec![0; 16],
+                    vector: vec![0.0; 16],
                 },
                 NativeResidentRow {
                     id: b"0002".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Tombstone,
-                    code: vec![0; 16],
+                    vector: vec![0.0; 16],
                 },
                 NativeResidentRow {
                     id: b"0004".to_vec(),
                     sequence: 2,
                     state: NativeRowState::Live,
-                    code: vec![1; 16],
+                    vector: vec![1.0; 16],
                 },
             ],
-            sq8_low: vec![0.0; 16],
-            sq8_step: vec![1.0; 16],
             route_limits: limits(),
             range_concurrency: 2,
         };
@@ -1183,8 +1155,8 @@ mod tests {
         ] {
             let bytes = encode_page(
                 vec![
-                    (b"0001".to_vec(), 1, 0, vec![1; 16]),
-                    (b"0002".to_vec(), 1, 0, vec![2; 16]),
+                    (b"0001".to_vec(), 1, 0, vec![1.0; 16]),
+                    (b"0002".to_vec(), 1, 0, vec![2.0; 16]),
                 ],
                 shape,
             );

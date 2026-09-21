@@ -7,7 +7,7 @@ use crate::{
     metric::VectorMetric,
 };
 
-const NATIVE_ANN_FORMAT_VERSION: u16 = 1;
+const NATIVE_ANN_FORMAT_VERSION: u16 = 2;
 const NATIVE_ANN_PAGE_ROWS: u32 = 256;
 const NATIVE_ANN_PQ_WIDTH: u8 = 16;
 const NATIVE_ANN_SUMMARY_CODES_PER_PAGE: u8 = 2;
@@ -45,14 +45,6 @@ pub(crate) struct NativeRunRef {
     pub(crate) artifact: NativeArtifactRef,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct NativeSq8Authority {
-    pub(crate) quantizer_sha256: String,
-    pub(crate) dimensions: u32,
-    pub(crate) parameters: NativeArtifactRef,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativeAnnRef {
@@ -68,7 +60,6 @@ pub(crate) struct NativeAnnRef {
     pub(crate) mutation_directory: NativeArtifactRef,
     pub(crate) base_runs: Vec<NativeRunRef>,
     pub(crate) delta_runs: Vec<NativeRunRef>,
-    pub(crate) sq8: NativeSq8Authority,
 }
 
 fn invalid(message: impl Into<String>) -> BorsukError {
@@ -204,19 +195,6 @@ impl NativeAnnRef {
         self.router.summary_codes.validate("router-summary-codes")?;
         self.page_directory.validate("page-directory")?;
         self.mutation_directory.validate("mutation-directory")?;
-        self.sq8.parameters.validate("sq8-authority")?;
-        validate_hex(
-            &self.sq8.quantizer_sha256,
-            SHA256_HEX_LEN,
-            "SQ8 quantizer SHA-256",
-        )?;
-        if self.sq8.dimensions != self.dimensions {
-            return Err(invalid("native ANN SQ8 dimensions differ"));
-        }
-        if self.sq8.quantizer_sha256 != self.sq8.parameters.sha256 {
-            return Err(invalid("native ANN SQ8 quantizer binding differs"));
-        }
-
         validate_runs(&self.base_runs, "base-run")?;
         validate_runs(&self.delta_runs, "delta-run")?;
         let base_rows = self.base_runs.iter().try_fold(0_u64, |total, run| {
@@ -239,7 +217,6 @@ impl NativeAnnRef {
             &self.router.summary_codes,
             &self.page_directory,
             &self.mutation_directory,
-            &self.sq8.parameters,
         ];
         let mut uris = BTreeSet::new();
         for artifact in artifacts.into_iter().chain(
@@ -347,7 +324,7 @@ mod tests {
 
     fn valid_authority() -> NativeAnnRef {
         NativeAnnRef {
-            format_version: 1,
+            format_version: 2,
             generation: 7,
             previous_generation_sha256: Some(DIGEST_A.to_owned()),
             source_identity: "deep-image/validation/v1".to_owned(),
@@ -393,11 +370,6 @@ mod tests {
                 run("delta-run", 0, VERSION_2, VERSION_2, DIGEST_C),
                 run("delta-run", 1, VERSION_3, VERSION_3, DIGEST_D),
             ],
-            sq8: NativeSq8Authority {
-                quantizer_sha256: DIGEST_D.to_owned(),
-                dimensions: 96,
-                parameters: artifact("sq8-authority", "sq8-authority.parquet", DIGEST_D, 1_024),
-            },
         }
     }
 
@@ -460,6 +432,9 @@ mod tests {
 
         let mut invalid = Vec::new();
         let mut changed = valid.clone();
+        changed.format_version = 1;
+        invalid.push(changed);
+        let mut changed = valid.clone();
         changed.generation = 0;
         invalid.push(changed);
         let mut changed = valid.clone();
@@ -510,14 +485,6 @@ mod tests {
         let mut changed = valid.clone();
         changed.base_runs[0].artifact.role = "delta-run".to_owned();
         invalid.push(changed);
-        let mut changed = valid.clone();
-        changed.sq8.dimensions = 95;
-        invalid.push(changed);
-        let mut changed = valid.clone();
-        changed.sq8.quantizer_sha256 = DIGEST_A.to_owned();
-        changed.sq8.parameters.sha256 = DIGEST_B.to_owned();
-        invalid.push(changed);
-
         for authority in invalid {
             assert!(native_ann_root_bytes(&authority).is_err());
         }

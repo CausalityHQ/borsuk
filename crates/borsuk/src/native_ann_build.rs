@@ -7,15 +7,13 @@ use arrow_array::{
 use arrow_ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     error::{BorsukError, Result},
     metric::VectorMetric,
     native_ann::{
-        NativeAnnRef, NativeArtifactRef, NativeRouterRef, NativeRunRef, NativeSq8Authority,
-        native_ann_root_bytes,
+        NativeAnnRef, NativeArtifactRef, NativeRouterRef, NativeRunRef, native_ann_root_bytes,
     },
     native_ann_read::{NativePageRef, NativeRowState},
     rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
@@ -61,19 +59,6 @@ pub(crate) struct NativeBuildOutput {
     pub(crate) page_directory: Vec<NativePageRef>,
 }
 
-#[derive(Serialize)]
-struct NativeSq8Parameters<'a> {
-    low: &'a [f32],
-    step: &'a [f32],
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OwnedNativeSq8Parameters {
-    low: Vec<f32>,
-    step: Vec<f32>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativeMutationBuildEntry {
     id: Vec<u8>,
@@ -84,13 +69,6 @@ struct NativeMutationBuildEntry {
 
 fn invalid(message: impl Into<String>) -> BorsukError {
     BorsukError::InvalidStorage(message.into())
-}
-
-fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut bytes = serde_json::to_vec(value)
-        .map_err(|error| invalid(format!("native ANN JSON serialization failed: {error}")))?;
-    bytes.push(b'\n');
-    Ok(bytes)
 }
 
 fn version_hex(version: &[u8; 24]) -> String {
@@ -298,14 +276,14 @@ fn encode_summary_codes(codes: Vec<u8>, pages: usize) -> Result<Vec<u8>> {
     )
 }
 
-fn encode_page(rows: &[NativeBuildRow], codes: &[u8], dimensions: usize) -> Result<Vec<u8>> {
-    let child = Arc::new(Field::new("element", DataType::UInt8, false));
+fn encode_page(rows: &[NativeBuildRow], vectors: &[f32], dimensions: usize) -> Result<Vec<u8>> {
+    let child = Arc::new(Field::new("element", DataType::Float32, false));
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Binary, false),
         Field::new("sequence", DataType::UInt64, false),
         Field::new("state", DataType::UInt8, false),
         Field::new(
-            "code",
+            "vector",
             DataType::FixedSizeList(Arc::clone(&child), dimensions as i32),
             false,
         ),
@@ -325,7 +303,7 @@ fn encode_page(rows: &[NativeBuildRow], codes: &[u8], dimensions: usize) -> Resu
             Arc::new(FixedSizeListArray::try_new(
                 child,
                 dimensions as i32,
-                Arc::new(UInt8Array::from(codes.to_vec())),
+                Arc::new(Float32Array::from(vectors.to_vec())),
                 None,
             )?),
         ],
@@ -540,30 +518,6 @@ pub(crate) fn build_native_generation<'a>(
         .map(|vector| summary_quantizer.encode(vector))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut low = vec![f32::INFINITY; dimensions];
-    let mut high = vec![f32::NEG_INFINITY; dimensions];
-    for vector in &vectors {
-        for dimension in 0..dimensions {
-            low[dimension] = low[dimension].min(vector[dimension]);
-            high[dimension] = high[dimension].max(vector[dimension]);
-        }
-    }
-    let step = low
-        .iter()
-        .zip(&high)
-        .map(|(low, high)| ((high - low) / 255.0).max(f32::MIN_POSITIVE))
-        .collect::<Vec<_>>();
-    let sq8_codes = vectors
-        .iter()
-        .map(|vector| {
-            vector
-                .iter()
-                .zip(low.iter().zip(&step))
-                .map(|(value, (low, step))| ((value - low) / step).round().clamp(0.0, 255.0) as u8)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
     let mut objects = Vec::new();
     let (codebook_ref, codebook_object) = artifact(
         "router-codebooks",
@@ -595,11 +549,11 @@ pub(crate) fn build_native_generation<'a>(
     let mut pages = Vec::new();
     for (page, (page_rows, page_codes)) in rows
         .chunks(PAGE_ROWS)
-        .zip(sq8_codes.chunks(PAGE_ROWS))
+        .zip(vectors.chunks(PAGE_ROWS))
         .enumerate()
     {
-        let codes = page_codes.iter().flatten().copied().collect::<Vec<_>>();
-        let bytes = encode_page(page_rows, &codes, dimensions)?;
+        let page_vectors = page_codes.iter().flatten().copied().collect::<Vec<_>>();
+        let bytes = encode_page(page_rows, &page_vectors, dimensions)?;
         let start = run_bytes.len() as u64;
         run_bytes.extend_from_slice(&bytes);
         pages.push(NativePageRef {
@@ -624,18 +578,12 @@ pub(crate) fn build_native_generation<'a>(
         encode_mutation_directory(&[])?,
     );
     objects.push(mutation_object);
-    let sq8_bytes = canonical_json(&NativeSq8Parameters {
-        low: &low,
-        step: &step,
-    })?;
-    let (sq8_ref, sq8_object) = artifact("sq8-authority", "json", sq8_bytes);
-    objects.push(sq8_object);
     objects.sort_by(|left, right| left.path.cmp(&right.path));
 
     let start = rows.iter().map(|row| row.version).min().unwrap();
     let end = rows.iter().map(|row| row.version).max().unwrap();
     let reference = NativeAnnRef {
-        format_version: 1,
+        format_version: 2,
         generation: config.generation,
         previous_generation_sha256: config.previous_generation_sha256,
         source_identity: config.source_identity,
@@ -661,11 +609,6 @@ pub(crate) fn build_native_generation<'a>(
             artifact: base_ref,
         }],
         delta_runs: Vec::new(),
-        sq8: NativeSq8Authority {
-            quantizer_sha256: sq8_ref.sha256.clone(),
-            dimensions: config.dimensions,
-            parameters: sq8_ref,
-        },
     };
     let root_bytes = native_ann_root_bytes(&reference)?;
     let root_sha256 = format!("{:x}", Sha256::digest(&root_bytes));
@@ -722,34 +665,16 @@ pub(crate) fn build_native_delta_generation(
         return Err(invalid("native ANN delta IDs are not unique"));
     }
 
-    let sq8_bytes = read_bound_artifact(storage, &previous.sq8.parameters)?;
-    let sq8: OwnedNativeSq8Parameters = serde_json::from_slice(&sq8_bytes)
-        .map_err(|error| invalid(format!("native ANN SQ8 JSON is invalid: {error}")))?;
-    if sq8.low.len() != dimensions
-        || sq8.step.len() != dimensions
-        || sq8.low.iter().any(|value| !value.is_finite())
-        || sq8
-            .step
-            .iter()
-            .any(|value| !value.is_finite() || *value <= 0.0)
-    {
-        return Err(invalid("native ANN SQ8 authority differs"));
-    }
-    let codes = rows
+    let vectors = rows
         .iter()
-        .flat_map(|row| {
-            row.vector
-                .iter()
-                .zip(sq8.low.iter().zip(&sq8.step))
-                .map(|(value, (low, step))| ((value - low) / step).round().clamp(0.0, 255.0) as u8)
-        })
+        .flat_map(|row| row.vector.iter().copied())
         .collect::<Vec<_>>();
 
     let mut objects = Vec::new();
     let (delta_ref, delta_object) = artifact(
         "delta-run",
         "arrow",
-        encode_page(&rows, &codes, dimensions)?,
+        encode_page(&rows, &vectors, dimensions)?,
     );
     objects.push(delta_object);
 
@@ -906,7 +831,6 @@ mod tests {
                 "router-codebooks",
                 "router-row-codes",
                 "router-summary-codes",
-                "sq8-authority",
             ])
         );
     }
