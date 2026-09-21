@@ -451,7 +451,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use crate::native_ann::{NativeArtifactRef, NativeRouterRef};
+    use crate::native_ann::{
+        NativeArtifactRef, NativeBoundedRouteLimits, NativeBoundedRouterRef, NativeRouterRef,
+    };
 
     #[derive(Clone, Copy)]
     struct CodebookShape {
@@ -682,6 +684,309 @@ mod tests {
             ),
         };
         (reference, codebooks, row_codes, summaries)
+    }
+
+    fn bounded_codebook_bytes(
+        dimensions: usize,
+        field_name: &str,
+        outer_nullable: bool,
+        child_nullable: bool,
+        nonfinite: bool,
+        reverse_last_two: bool,
+    ) -> Vec<u8> {
+        let centroid_width = dimensions.div_ceil(64);
+        let mut rows = (0_u16..64)
+            .flat_map(|subspace| (0_u16..256).map(move |codeword| (subspace, codeword)))
+            .collect::<Vec<_>>();
+        if reverse_last_two {
+            let end = rows.len();
+            rows.swap(end - 2, end - 1);
+        }
+        let mut centroids = Vec::with_capacity(rows.len() * centroid_width);
+        for (row, (subspace, _)) in rows.iter().enumerate() {
+            let start = usize::from(*subspace) * dimensions / 64;
+            let end = (usize::from(*subspace) + 1) * dimensions / 64;
+            for lane in 0..centroid_width {
+                let mut value = if lane < end - start {
+                    (row * centroid_width + lane + 1) as f32 / 65_536.0
+                } else {
+                    0.0
+                };
+                if nonfinite && row == 0 && lane == 0 {
+                    value = f32::NAN;
+                }
+                centroids.push(value);
+            }
+        }
+        let child = Arc::new(Field::new(
+            "element",
+            DataType::Float32,
+            child_nullable,
+        ));
+        let centroid = Arc::new(
+            FixedSizeListArray::try_new(
+                Arc::clone(&child),
+                i32::try_from(centroid_width).unwrap(),
+                Arc::new(Float32Array::from(centroids)),
+                None,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        parquet_bytes(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("subspace", DataType::UInt16, false),
+                    Field::new("codeword", DataType::UInt16, false),
+                    Field::new(
+                        field_name,
+                        DataType::FixedSizeList(child, i32::try_from(centroid_width).unwrap()),
+                        outer_nullable,
+                    ),
+                ])),
+                vec![
+                    Arc::new(UInt16Array::from(
+                        rows.iter().map(|(subspace, _)| *subspace).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(UInt16Array::from(
+                        rows.iter().map(|(_, codeword)| *codeword).collect::<Vec<_>>(),
+                    )),
+                    centroid,
+                ],
+            )
+            .unwrap(),
+        )
+    }
+
+    fn bounded_summary_bytes(
+        dimensions: usize,
+        field_name: &str,
+        outer_nullable: bool,
+        child_nullable: bool,
+        nonfinite: bool,
+        reordered: bool,
+    ) -> Vec<u8> {
+        let mut rows = vec![(0_u32, 0_u8), (0, 1), (1, 0), (1, 1)];
+        if reordered {
+            rows.swap(1, 2);
+        }
+        let mut values = (0..rows.len() * dimensions)
+            .map(|ordinal| (ordinal + 1) as f32 / 8_192.0)
+            .collect::<Vec<_>>();
+        if nonfinite {
+            values[0] = f32::INFINITY;
+        }
+        let child = Arc::new(Field::new(
+            "element",
+            DataType::Float32,
+            child_nullable,
+        ));
+        let summary = Arc::new(
+            FixedSizeListArray::try_new(
+                Arc::clone(&child),
+                i32::try_from(dimensions).unwrap(),
+                Arc::new(Float32Array::from(values)),
+                None,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        parquet_bytes(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("page", DataType::UInt32, false),
+                    Field::new("block", DataType::UInt8, false),
+                    Field::new(
+                        field_name,
+                        DataType::FixedSizeList(child, i32::try_from(dimensions).unwrap()),
+                        outer_nullable,
+                    ),
+                ])),
+                vec![
+                    Arc::new(UInt32Array::from(
+                        rows.iter().map(|(page, _)| *page).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(UInt8Array::from(
+                        rows.iter().map(|(_, block)| *block).collect::<Vec<_>>(),
+                    )),
+                    summary,
+                ],
+            )
+            .unwrap(),
+        )
+    }
+
+    fn bounded_fixture(
+        dimensions: usize,
+    ) -> (NativeBoundedRouterRef, Vec<u8>, Vec<u8>, Vec<u8>) {
+        let summaries = bounded_summary_bytes(dimensions, "summary", false, false, false, false);
+        let codebooks =
+            bounded_codebook_bytes(dimensions, "centroid", false, false, false, false);
+        let row_codes = fixed_u8_bytes("code", 64, 512);
+        let reference = NativeBoundedRouterRef {
+            pq_width: 64,
+            summary_blocks_per_page: 2,
+            physical_rows: 512,
+            page_count: 2,
+            summaries: identity(
+                "route-summaries",
+                "s3://fixture/route-summaries.parquet",
+                &summaries,
+            ),
+            codebooks: identity(
+                "route-codebooks",
+                "s3://fixture/route-codebooks.parquet",
+                &codebooks,
+            ),
+            row_codes: identity(
+                "route-row-codes",
+                "s3://fixture/route-row-codes.parquet",
+                &row_codes,
+            ),
+            limits: NativeBoundedRouteLimits {
+                max_summary_pages: 2,
+                max_candidate_rows: 128,
+                max_output_pages: 2,
+                coalesce_gap_pages: 1,
+                range_concurrency: 2,
+                response_bytes_each: 1_048_576,
+                decoded_cache_bytes: 2_097_152,
+                workspace_bytes: 4_194_304,
+                runtime_reserve_bytes: 8_388_608,
+                resident_budget_bytes: 67_108_864,
+            },
+        };
+        (reference, summaries, codebooks, row_codes)
+    }
+
+    #[test]
+    fn native_bounded_format_materializes_strict_97d_and_768d_artifacts() {
+        for dimensions in [97_u32, 768] {
+            let (reference, summaries, codebooks, row_codes) =
+                bounded_fixture(dimensions as usize);
+            let decoded = decode_native_bounded_router(
+                &reference,
+                dimensions,
+                Bytes::from(summaries),
+                Bytes::from(codebooks),
+                Bytes::from(row_codes),
+            )
+            .unwrap();
+            assert_eq!(decoded.physical_rows, 512);
+            assert_eq!(decoded.page_count, 2);
+            assert_eq!(decoded.row_codes.len(), 512 * 64);
+            assert_eq!(decoded.summaries.len(), 4 * dimensions as usize);
+            assert_eq!(
+                decoded.codebooks.len(),
+                64 * 256 * dimensions.div_ceil(64) as usize
+            );
+            assert!(decoded.resident_bytes <= reference.limits.resident_budget_bytes);
+        }
+    }
+
+    #[test]
+    fn native_bounded_format_rejects_schema_order_content_and_identity_drift() {
+        let dimensions = 97_u32;
+        let (reference, summaries, codebooks, row_codes) = bounded_fixture(dimensions as usize);
+        let invalid_summaries = [
+            bounded_summary_bytes(97, "vector", false, false, false, false),
+            bounded_summary_bytes(97, "summary", true, false, false, false),
+            bounded_summary_bytes(97, "summary", false, true, false, false),
+            bounded_summary_bytes(97, "summary", false, false, true, false),
+            bounded_summary_bytes(97, "summary", false, false, false, true),
+        ];
+        for bytes in invalid_summaries {
+            let mut registered = reference.clone();
+            registered.summaries = identity(
+                "route-summaries",
+                "s3://fixture/route-summaries.parquet",
+                &bytes,
+            );
+            assert!(decode_native_bounded_router(
+                &registered,
+                dimensions,
+                Bytes::from(bytes),
+                Bytes::copy_from_slice(&codebooks),
+                Bytes::copy_from_slice(&row_codes),
+            )
+            .is_err());
+        }
+        let invalid_codebooks = [
+            bounded_codebook_bytes(97, "vector", false, false, false, false),
+            bounded_codebook_bytes(97, "centroid", true, false, false, false),
+            bounded_codebook_bytes(97, "centroid", false, true, false, false),
+            bounded_codebook_bytes(97, "centroid", false, false, true, false),
+            bounded_codebook_bytes(97, "centroid", false, false, false, true),
+        ];
+        for bytes in invalid_codebooks {
+            let mut registered = reference.clone();
+            registered.codebooks = identity(
+                "route-codebooks",
+                "s3://fixture/route-codebooks.parquet",
+                &bytes,
+            );
+            assert!(decode_native_bounded_router(
+                &registered,
+                dimensions,
+                Bytes::copy_from_slice(&summaries),
+                Bytes::from(bytes),
+                Bytes::copy_from_slice(&row_codes),
+            )
+            .is_err());
+        }
+        for bytes in [
+            fixed_u8_bytes("vector", 64, 512),
+            fixed_u8_bytes("code", 32, 512),
+            fixed_u8_bytes("code", 64, 511),
+        ] {
+            let mut registered = reference.clone();
+            registered.row_codes = identity(
+                "route-row-codes",
+                "s3://fixture/route-row-codes.parquet",
+                &bytes,
+            );
+            assert!(decode_native_bounded_router(
+                &registered,
+                dimensions,
+                Bytes::copy_from_slice(&summaries),
+                Bytes::copy_from_slice(&codebooks),
+                Bytes::from(bytes),
+            )
+            .is_err());
+        }
+
+        let mut digest_drift = reference.clone();
+        digest_drift.row_codes.sha256 = "0".repeat(64);
+        assert!(decode_native_bounded_router(
+            &digest_drift,
+            dimensions,
+            Bytes::from(summaries),
+            Bytes::from(codebooks),
+            Bytes::from(row_codes),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn native_bounded_format_one_million_worksheet_is_exact_and_budgeted() {
+        let worksheet = NativeResidentWorksheet {
+            physical_rows: 1_000_000,
+            page_count: 3_907,
+            dimensions: 768,
+            summary_blocks_per_page: 2,
+            pq_width: 64,
+            codebook_values: 64 * 256 * 12,
+            summary_values: 3_907 * 2 * 768,
+            row_code_values: 1_000_000 * 64,
+            sq8_scalar_values: 2 * 768,
+            mutation_entries: 1_000,
+            resident_delta_rows: 10_000,
+            decoded_cache_bytes: 64 * 1024 * 1024,
+            response_concurrency: 8,
+            response_bytes_each: 2 * 1024 * 1024,
+            workspace_bytes: 32 * 1024 * 1024,
+            runtime_reserve_bytes: 128 * 1024 * 1024,
+        };
+        assert_eq!(worksheet.validate(348_951_424).unwrap(), 348_951_424);
+        assert!(worksheet.validate(348_951_423).is_err());
     }
 
     #[test]
