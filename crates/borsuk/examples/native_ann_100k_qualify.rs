@@ -277,21 +277,25 @@ fn percentile(sorted: &[u64], percentile: usize) -> u64 {
 }
 
 fn summarize_samples(samples: &[SampleEvidence]) -> Result<QualificationSummary, String> {
-    if samples.is_empty()
-        || samples.iter().enumerate().any(|(index, sample)| {
-            sample.query_ordinal != u32::try_from(index).unwrap_or(u32::MAX)
-                || sample.hits_at_10 > 10
-                || sample.hits_at_100 > 100
-                || sample.recall_at_10_ppm != sample.hits_at_10 * 100_000
-                || sample.recall_at_100_ppm != sample.hits_at_100 * 10_000
-                || sample.physical_gets == 0
-                || sample.pages_read == 0
-                || sample.bytes_read == 0
-                || sample.records_scored == 0
-                || sample.latency_ns == 0
-        })
-    {
-        return Err("native ANN sample evidence differs".to_owned());
+    if samples.is_empty() {
+        return Err("native ANN sample evidence is empty".to_owned());
+    }
+    for (index, sample) in samples.iter().enumerate() {
+        if sample.query_ordinal != u32::try_from(index).unwrap_or(u32::MAX)
+            || sample.hits_at_10 > 10
+            || sample.hits_at_100 > 100
+            || sample.recall_at_10_ppm != sample.hits_at_10 * 100_000
+            || sample.recall_at_100_ppm != sample.hits_at_100 * 10_000
+            || sample.physical_gets == 0
+            || sample.pages_read == 0
+            || sample.bytes_read == 0
+            || sample.records_scored == 0
+            || sample.latency_ns == 0
+        {
+            return Err(format!(
+                "native ANN sample evidence differs at row {index}: {sample:?}"
+            ));
+        }
     }
     let count = u64::try_from(samples.len()).map_err(|_| "sample count overflows".to_owned())?;
     let average_recall_at_10_ppm = rounded_ppm(
@@ -780,8 +784,8 @@ fn run() -> Result<(), String> {
         });
     }
     let query_wall_ns = elapsed_ns(query_started)?;
-    let summary = summarize_samples(&samples)?;
     write_samples(&request.samples, &samples)?;
+    let summary = summarize_samples(&samples)?;
     let (samples_sha256, samples_bytes) = sha256_file(&request.samples)?;
     let result = QualificationResult {
         schema: "borsuk-native-ann-100k-qualification-v1",
