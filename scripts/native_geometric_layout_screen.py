@@ -124,6 +124,38 @@ class MembershipRow:
     construction_sha256: bytes
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class EvaluationLimits:
+    maximum_pages: int
+    maximum_bytes: int
+
+    def __post_init__(self) -> None:
+        _concrete_int(self.maximum_pages, "maximum evaluation pages", maximum=(1 << 16) - 1)
+        _concrete_int(self.maximum_bytes, "maximum evaluation bytes", maximum=(1 << 63) - 1)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class QueryCoverageSample:
+    query_ordinal: int
+    selected_page_ordinals: tuple[int, ...]
+    hits_at_10: int
+    hits_at_100: int
+    encoded_bytes: int
+    recall_at_10_ppm: int
+    recall_at_100_ppm: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class LayoutEvaluation:
+    method: LayoutMethod
+    samples: tuple[QueryCoverageSample, ...]
+    recall_at_10_ppm: int
+    mean_recall_at_100_ppm: int
+    p05_recall_at_100_ppm: int
+    worst_recall_at_100_ppm: int
+    decision: str
+
+
 def layout_authority_from_dict(payload: Mapping[str, Any]) -> LayoutAuthority:
     if type(payload) is not dict or set(payload) != AUTHORITY_KEYS:
         raise ValueError("layout authority keys differ")
@@ -551,15 +583,256 @@ def _source_arrays(path: Path, authority: LayoutAuthority) -> tuple[tuple[bytes,
         raise ValueError("layout source artifact identity differs")
     table = pq.read_table(path, columns=["feature_row_id", "embedding"])
     id_values = table["feature_row_id"].combine_chunks().to_pylist()
-    stable_ids = tuple(
-        value if type(value) is bytes else int(value).to_bytes(16, "big")
-        for value in id_values
-    )
+    stable_ids = tuple(_stable_id(value) for value in id_values)
     embedding = table["embedding"].combine_chunks()
     vectors = np.asarray(
         embedding.values.to_numpy(zero_copy_only=False), dtype=np.float32
     ).reshape(table.num_rows, authority.dimensions)
     return stable_ids, vectors
+
+
+def _stable_id(value: object) -> bytes:
+    if type(value) is bytes and value:
+        return value
+    if type(value) is int and 0 <= value < 1 << 128:
+        return value.to_bytes(16, "big")
+    raise ValueError("stable ID differs")
+
+
+def _ground_truth(path: Path) -> tuple[tuple[bytes, ...], ...]:
+    table = pq.read_table(path, columns=["query_ordinal", "rank", "feature_row_id"])
+    query_ordinals = table["query_ordinal"].combine_chunks().to_pylist()
+    ranks = table["rank"].combine_chunks().to_pylist()
+    ids = table["feature_row_id"].combine_chunks().to_pylist()
+    if table.num_rows == 0 or table.num_rows % 100 != 0:
+        raise ValueError("layout GT100 row count differs")
+    query_count = table.num_rows // 100
+    if query_ordinals != [query for query in range(query_count) for _ in range(100)]:
+        raise ValueError("layout GT100 query order differs")
+    if ranks != list(range(100)) * query_count:
+        raise ValueError("layout GT100 rank order differs")
+    return tuple(
+        tuple(_stable_id(value) for value in ids[start : start + 100])
+        for start in range(0, len(ids), 100)
+    )
+
+
+def exact_page_coverage(
+    page_hits: Mapping[int, int],
+    page_bytes: Mapping[int, int],
+    limits: EvaluationLimits,
+    *,
+    page_hits_at_10: Mapping[int, int] | None = None,
+    query_ordinal: int = 0,
+) -> QueryCoverageSample:
+    if set(page_hits) != set(page_bytes) or (
+        page_hits_at_10 is not None and set(page_hits_at_10) != set(page_hits)
+    ):
+        raise ValueError("coverage page authority differs")
+    for page, hits in page_hits.items():
+        if type(page) is not int or page < 0 or type(hits) is not int or not 0 <= hits <= 100:
+            raise ValueError("coverage page hits differ")
+        encoded = page_bytes[page]
+        if type(encoded) is not int or encoded <= 0:
+            raise ValueError("coverage page bytes differ")
+        if page_hits_at_10 is not None:
+            top_hits = page_hits_at_10[page]
+            if type(top_hits) is not int or not 0 <= top_hits <= min(hits, 10):
+                raise ValueError("coverage top-10 hits differ")
+
+    states: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {(0, 0): (0, ())}
+    for page in sorted(page_hits):
+        additions: dict[tuple[int, int], tuple[int, tuple[int, ...]]] = {}
+        for (count, hits), (encoded, selected) in states.items():
+            if count == limits.maximum_pages:
+                continue
+            next_encoded = encoded + page_bytes[page]
+            if next_encoded > limits.maximum_bytes:
+                continue
+            key = (count + 1, min(100, hits + page_hits[page]))
+            value = (next_encoded, selected + (page,))
+            current = states.get(key)
+            pending = additions.get(key)
+            best = pending if pending is not None and (current is None or pending < current) else current
+            if best is None or value < best:
+                additions[key] = value
+        for key, value in additions.items():
+            current = states.get(key)
+            if current is None or value < current:
+                states[key] = value
+
+    candidates = [
+        (hits, -encoded, tuple(-page for page in selected), encoded, selected)
+        for (_, hits), (encoded, selected) in states.items()
+    ]
+    hits_at_100, _, _, encoded_bytes, selected_pages = max(candidates)
+    hits_at_10 = (
+        sum(page_hits_at_10[page] for page in selected_pages)
+        if page_hits_at_10 is not None
+        else 0
+    )
+    return QueryCoverageSample(
+        query_ordinal=query_ordinal,
+        selected_page_ordinals=selected_pages,
+        hits_at_10=hits_at_10,
+        hits_at_100=hits_at_100,
+        encoded_bytes=encoded_bytes,
+        recall_at_10_ppm=hits_at_10 * 100_000,
+        recall_at_100_ppm=hits_at_100 * 10_000,
+    )
+
+
+def evaluate_layout(
+    method: LayoutMethod,
+    owner_by_id: Mapping[bytes, int],
+    page_bytes: Mapping[int, int],
+    ground_truth: Sequence[Sequence[bytes]],
+    limits: EvaluationLimits,
+) -> LayoutEvaluation:
+    if not ground_truth:
+        raise ValueError("layout ground truth is empty")
+    samples: list[QueryCoverageSample] = []
+    for query_ordinal, neighbors in enumerate(ground_truth):
+        if len(neighbors) != 100 or len(set(neighbors)) != 100:
+            raise ValueError("layout GT100 order differs")
+        page_hits = {page: 0 for page in page_bytes}
+        page_hits_at_10 = {page: 0 for page in page_bytes}
+        for rank, stable_id in enumerate(neighbors):
+            try:
+                page = owner_by_id[stable_id]
+            except KeyError as error:
+                raise ValueError("layout ground truth references an unknown ID") from error
+            if page not in page_bytes:
+                raise ValueError("layout ground truth page differs")
+            page_hits[page] += 1
+            if rank < 10:
+                page_hits_at_10[page] += 1
+        samples.append(
+            exact_page_coverage(
+                page_hits,
+                page_bytes,
+                limits,
+                page_hits_at_10=page_hits_at_10,
+                query_ordinal=query_ordinal,
+            )
+        )
+
+    query_count = len(samples)
+    recall_at_10_ppm = sum(sample.hits_at_10 for sample in samples) * 1_000_000 // (
+        query_count * 10
+    )
+    mean_recall_at_100_ppm = sum(sample.hits_at_100 for sample in samples) * 1_000_000 // (
+        query_count * 100
+    )
+    ordered_recall = sorted(sample.recall_at_100_ppm for sample in samples)
+    p05_index = math.ceil(0.05 * query_count) - 1
+    p05_recall_at_100_ppm = ordered_recall[p05_index]
+    worst_recall_at_100_ppm = ordered_recall[0]
+    if method is LayoutMethod.ID_ORDER_256:
+        decision = "control"
+    elif mean_recall_at_100_ppm < 975_000 or p05_recall_at_100_ppm < 900_000:
+        decision = "killed"
+    elif mean_recall_at_100_ppm >= 990_000 and p05_recall_at_100_ppm >= 950_000:
+        decision = "advance"
+    else:
+        decision = "insufficient"
+    return LayoutEvaluation(
+        method=method,
+        samples=tuple(samples),
+        recall_at_10_ppm=recall_at_10_ppm,
+        mean_recall_at_100_ppm=mean_recall_at_100_ppm,
+        p05_recall_at_100_ppm=p05_recall_at_100_ppm,
+        worst_recall_at_100_ppm=worst_recall_at_100_ppm,
+        decision=decision,
+    )
+
+
+def finalize_layout_screen(
+    evaluations: Sequence[LayoutEvaluation],
+) -> tuple[LayoutEvaluation, ...]:
+    concrete = tuple(evaluations)
+    expected_methods = set(LayoutMethod)
+    if len(concrete) != len(expected_methods) or {item.method for item in concrete} != expected_methods:
+        raise ValueError("layout screen arm roster differs")
+    control = next(item for item in concrete if item.method is LayoutMethod.ID_ORDER_256)
+    if (
+        control.decision != "control"
+        or abs(control.mean_recall_at_100_ppm - 613_770) > 10_000
+        or abs(control.p05_recall_at_100_ppm - 470_000) > 10_000
+        or abs(control.worst_recall_at_100_ppm - 410_000) > 10_000
+    ):
+        raise ValueError("layout ID-order reproduction control differs")
+    for evaluation in concrete:
+        if evaluation.method is LayoutMethod.ID_ORDER_256:
+            continue
+        if (
+            evaluation.mean_recall_at_100_ppm < 975_000
+            or evaluation.p05_recall_at_100_ppm < 900_000
+        ):
+            expected_decision = "killed"
+        elif (
+            evaluation.mean_recall_at_100_ppm >= 990_000
+            and evaluation.p05_recall_at_100_ppm >= 950_000
+        ):
+            expected_decision = "advance"
+        else:
+            expected_decision = "insufficient"
+        if evaluation.decision != expected_decision:
+            raise ValueError("layout screen decision differs")
+    return concrete
+
+
+def coverage_schema() -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("query_ordinal", pa.uint32(), nullable=False),
+            pa.field(
+                "selected_page_ordinals",
+                pa.list_(pa.field("element", pa.uint32(), nullable=False)),
+                nullable=False,
+            ),
+            pa.field("hits_at_10", pa.uint8(), nullable=False),
+            pa.field("hits_at_100", pa.uint8(), nullable=False),
+            pa.field("encoded_bytes", pa.uint32(), nullable=False),
+            pa.field("recall_at_10_ppm", pa.uint32(), nullable=False),
+            pa.field("recall_at_100_ppm", pa.uint32(), nullable=False),
+        ]
+    )
+
+
+def write_coverage_parquet(path: Path, evaluation: LayoutEvaluation) -> ArtifactIdentity:
+    schema = coverage_schema()
+    samples = evaluation.samples
+    table = pa.Table.from_arrays(
+        [
+            pa.array([sample.query_ordinal for sample in samples], type=pa.uint32()),
+            pa.array(
+                [list(sample.selected_page_ordinals) for sample in samples],
+                type=schema.field("selected_page_ordinals").type,
+            ),
+            pa.array([sample.hits_at_10 for sample in samples], type=pa.uint8()),
+            pa.array([sample.hits_at_100 for sample in samples], type=pa.uint8()),
+            pa.array([sample.encoded_bytes for sample in samples], type=pa.uint32()),
+            pa.array([sample.recall_at_10_ppm for sample in samples], type=pa.uint32()),
+            pa.array([sample.recall_at_100_ppm for sample in samples], type=pa.uint32()),
+        ],
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        path,
+        version="2.6",
+        compression="zstd",
+        use_dictionary=False,
+        write_statistics=True,
+    )
+    payload = path.read_bytes()
+    return ArtifactIdentity(
+        role="layout-coverage-evidence",
+        uri=path.resolve().as_uri(),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        encoded_bytes=len(payload),
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -572,18 +845,55 @@ def _parser() -> argparse.ArgumentParser:
     construct.add_argument("--authority", type=Path, required=True)
     construct.add_argument("--source", type=Path, required=True)
     construct.add_argument("--output", type=Path, required=True)
+    evaluate = subcommands.add_parser(
+        "evaluate",
+        help="evaluate sealed membership against frozen GT100",
+    )
+    evaluate.add_argument("--authority", type=Path, required=True)
+    evaluate.add_argument("--source", type=Path, required=True)
+    evaluate.add_argument("--membership", type=Path, required=True)
+    evaluate.add_argument("--truth", type=Path, required=True)
+    evaluate.add_argument("--evidence", type=Path, required=True)
+    evaluate.add_argument("--result", type=Path, required=True)
     return parser
 
 
 def main() -> None:
     args = _parser().parse_args()
-    if args.command != "construct":
-        raise ValueError("layout command differs")
     authority_payload = json.loads(args.authority.read_text())
     authority = layout_authority_from_dict(authority_payload)
     stable_ids, vectors = _source_arrays(args.source, authority)
-    rows = construct_layout(authority, stable_ids, vectors)
-    identity = write_membership_parquet(args.output, authority, rows)
+    if args.command == "construct":
+        rows = construct_layout(authority, stable_ids, vectors)
+        identity = write_membership_parquet(args.output, authority, rows)
+    elif args.command == "evaluate":
+        rows = read_membership_parquet(args.membership, authority, stable_ids)
+        owner_by_id = {row.stable_id: row.page_ordinal for row in rows}
+        page_bytes = {row.page_ordinal: row.encoded_page_bytes for row in rows}
+        evaluation = evaluate_layout(
+            authority.method,
+            owner_by_id,
+            page_bytes,
+            _ground_truth(args.truth),
+            EvaluationLimits(maximum_pages=32, maximum_bytes=16_777_216),
+        )
+        identity = write_coverage_parquet(args.evidence, evaluation)
+        result = {
+            "schema": "borsuk-native-geometric-layout-result-v1",
+            "claim_eligible": False,
+            "method": evaluation.method.value,
+            "evidence": dataclasses.asdict(identity),
+            "recall_at_10_ppm": evaluation.recall_at_10_ppm,
+            "mean_recall_at_100_ppm": evaluation.mean_recall_at_100_ppm,
+            "p05_recall_at_100_ppm": evaluation.p05_recall_at_100_ppm,
+            "worst_recall_at_100_ppm": evaluation.worst_recall_at_100_ppm,
+            "decision": evaluation.decision,
+        }
+        args.result.write_text(
+            json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+    else:
+        raise ValueError("layout command differs")
     print(
         json.dumps(dataclasses.asdict(identity), sort_keys=True, separators=(",", ":"))
     )

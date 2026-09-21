@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
+import itertools
+import random
 import subprocess
 import sys
 import tempfile
@@ -13,10 +15,15 @@ import pyarrow.parquet as pq
 
 from scripts.native_geometric_layout_screen import (
     ArtifactIdentity,
+    EvaluationLimits,
     LayoutAuthority,
+    LayoutEvaluation,
     LayoutMethod,
     MembershipRow,
     construct_layout,
+    evaluate_layout,
+    exact_page_coverage,
+    finalize_layout_screen,
     layout_authority_from_dict,
     membership_schema,
     read_membership_parquet,
@@ -307,6 +314,155 @@ class QueryBlindConstructorTests(unittest.TestCase):
         )
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("unrecognized arguments: --query-path", rejected.stderr)
+
+
+class ExactCoverageTests(unittest.TestCase):
+    def test_control_drift_invalidates_every_layout_decision(self) -> None:
+        id_control = LayoutEvaluation(
+            method=LayoutMethod.ID_ORDER_256,
+            samples=(),
+            recall_at_10_ppm=0,
+            mean_recall_at_100_ppm=613_770,
+            p05_recall_at_100_ppm=470_000,
+            worst_recall_at_100_ppm=410_000,
+            decision="control",
+        )
+        arms = (
+            id_control,
+            dataclasses.replace(
+                id_control,
+                method=LayoutMethod.RANDOM_PROJECTION_256,
+                mean_recall_at_100_ppm=960_000,
+                p05_recall_at_100_ppm=900_000,
+                decision="killed",
+            ),
+            dataclasses.replace(
+                id_control,
+                method=LayoutMethod.TWO_MEANS_256,
+                mean_recall_at_100_ppm=980_000,
+                p05_recall_at_100_ppm=920_000,
+                decision="insufficient",
+            ),
+            dataclasses.replace(
+                id_control,
+                method=LayoutMethod.TWO_MEANS_480K,
+                mean_recall_at_100_ppm=995_000,
+                p05_recall_at_100_ppm=960_000,
+                decision="advance",
+            ),
+        )
+        self.assertEqual(finalize_layout_screen(arms), arms)
+        drifted = (dataclasses.replace(id_control, mean_recall_at_100_ppm=623_771),) + arms[1:]
+        with self.assertRaises(ValueError):
+            finalize_layout_screen(drifted)
+
+    def test_evaluator_cli_is_separate_from_constructor_capability(self) -> None:
+        script = Path(__file__).with_name("native_geometric_layout_screen.py")
+        result = subprocess.run(
+            [sys.executable, str(script), "evaluate", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--truth", result.stdout)
+        self.assertIn("--membership", result.stdout)
+        self.assertIn("--evidence", result.stdout)
+        self.assertIn("--result", result.stdout)
+
+    def test_equal_page_oracle_matches_literal_top_hit_counts(self) -> None:
+        sample = exact_page_coverage(
+            {0: 4, 1: 3, 2: 2, 3: 1},
+            {0: 100, 1: 100, 2: 100, 3: 100},
+            EvaluationLimits(maximum_pages=2, maximum_bytes=250),
+        )
+        self.assertEqual(sample.selected_page_ordinals, (0, 1))
+        self.assertEqual(sample.hits_at_100, 7)
+        self.assertEqual(sample.encoded_bytes, 200)
+
+    def test_variable_page_oracle_matches_bruteforce_not_greedy_ratio(self) -> None:
+        hits = {0: 9, 1: 6, 2: 5}
+        sizes = {0: 6, 1: 4, 2: 3}
+        limits = EvaluationLimits(maximum_pages=2, maximum_bytes=10)
+        sample = exact_page_coverage(hits, sizes, limits)
+        self.assertEqual(sample.selected_page_ordinals, (0, 1))
+        self.assertEqual(sample.hits_at_100, 15)
+        self.assertEqual(sample.encoded_bytes, 10)
+
+        generator = random.Random(20260921)
+        for case in range(30):
+            pages = range(6)
+            random_hits = {page: generator.randrange(0, 8) for page in pages}
+            random_sizes = {page: generator.randrange(1, 8) for page in pages}
+            random_limits = EvaluationLimits(maximum_pages=3, maximum_bytes=12)
+            candidates = []
+            for count in range(random_limits.maximum_pages + 1):
+                for selected in itertools.combinations(pages, count):
+                    encoded = sum(random_sizes[page] for page in selected)
+                    if encoded <= random_limits.maximum_bytes:
+                        candidates.append(
+                            (
+                                sum(random_hits[page] for page in selected),
+                                -encoded,
+                                tuple(-page for page in selected),
+                                selected,
+                            )
+                        )
+            expected = max(candidates)[3]
+            actual = exact_page_coverage(random_hits, random_sizes, random_limits)
+            with self.subTest(case=case):
+                self.assertEqual(actual.selected_page_ordinals, expected)
+
+    def test_oracle_ties_choose_lexicographically_smallest_page_tuple(self) -> None:
+        sample = exact_page_coverage(
+            {0: 4, 1: 4, 2: 4},
+            {0: 100, 1: 100, 2: 100},
+            EvaluationLimits(maximum_pages=2, maximum_bytes=200),
+        )
+        self.assertEqual(sample.selected_page_ordinals, (0, 1))
+        self.assertEqual(sample.hits_at_100, 8)
+
+    def test_evaluation_recomputes_r10_mean_p05_worst_and_decision(self) -> None:
+        owner_by_id: dict[bytes, int] = {}
+        queries: list[tuple[bytes, ...]] = []
+        for query_ordinal, main_hits in enumerate((100, 98, 90)):
+            neighbors = tuple(
+                f"q{query_ordinal:02d}-n{rank:03d}".encode() for rank in range(100)
+            )
+            queries.append(neighbors)
+            for rank, stable_id in enumerate(neighbors):
+                owner_by_id[stable_id] = query_ordinal * 2 + (rank >= main_hits)
+        page_bytes = {page: 100 for page in range(6)}
+        evaluation = evaluate_layout(
+            LayoutMethod.RANDOM_PROJECTION_256,
+            owner_by_id,
+            page_bytes,
+            tuple(queries),
+            EvaluationLimits(maximum_pages=1, maximum_bytes=100),
+        )
+        self.assertEqual(evaluation.recall_at_10_ppm, 1_000_000)
+        self.assertEqual(evaluation.mean_recall_at_100_ppm, 960_000)
+        self.assertEqual(evaluation.p05_recall_at_100_ppm, 900_000)
+        self.assertEqual(evaluation.worst_recall_at_100_ppm, 900_000)
+        self.assertEqual(evaluation.decision, "killed")
+        self.assertEqual(
+            [sample.hits_at_100 for sample in evaluation.samples], [100, 98, 90]
+        )
+
+        advancing_owner = dict(owner_by_id)
+        for query_ordinal, neighbors in enumerate(queries):
+            for rank, stable_id in enumerate(neighbors):
+                advancing_owner[stable_id] = query_ordinal * 2 + (rank >= 99)
+        advancing = evaluate_layout(
+            LayoutMethod.TWO_MEANS_256,
+            advancing_owner,
+            page_bytes,
+            tuple(queries),
+            EvaluationLimits(maximum_pages=1, maximum_bytes=100),
+        )
+        self.assertEqual(advancing.mean_recall_at_100_ppm, 990_000)
+        self.assertEqual(advancing.p05_recall_at_100_ppm, 990_000)
+        self.assertEqual(advancing.decision, "advance")
 
 
 if __name__ == "__main__":
