@@ -16127,12 +16127,17 @@ impl BorsukIndex {
             manifest.segments.clear();
             manifest.segments_are_global_delta = false;
         }
+        let publish_bounded_delta_metadata_only = native_bounded_delta.is_some();
         if let Some(native) = native_bounded_delta {
             manifest.native_bounded_ann_ref = Some(native);
             manifest.native_ann_ref = None;
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        let published = if paged_manifest {
+        let published = if paged_manifest && publish_bounded_delta_metadata_only {
+            self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+                manifest, &previous,
+            )?
+        } else if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
                 manifest,
                 Some(&previous),
