@@ -1003,6 +1003,7 @@ impl NativeBoundedAnnSnapshot {
         let dimensions = usize::try_from(inputs.dimensions)
             .map_err(|_| invalid("native bounded ANN snapshot dimensions exceed usize"))?;
         let limits = inputs.limits;
+        let cpu_limits = inputs.cpu_admission.snapshot();
         let response_budget = u64::from(limits.range_concurrency)
             .checked_mul(limits.response_bytes_each)
             .ok_or_else(|| invalid("native bounded ANN response budget overflows"))?;
@@ -1018,6 +1019,8 @@ impl NativeBoundedAnnSnapshot {
             || inputs.dimensions == 0
             || inputs.router.dimensions != inputs.dimensions
             || inputs.pages.len() != inputs.router.page_count as usize
+            || cpu_limits.capacity != usize::from(limits.cpu_permits)
+            || cpu_limits.waiting_capacity != Some(usize::from(limits.cpu_waiters))
             || limits.max_summary_pages == 0
             || limits.max_summary_pages > inputs.router.page_count
             || limits.max_candidate_rows == 0

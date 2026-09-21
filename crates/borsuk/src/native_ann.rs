@@ -40,6 +40,8 @@ pub(crate) struct NativeRouterRef {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativeBoundedRouteLimits {
+    pub(crate) cpu_permits: u16,
+    pub(crate) cpu_waiters: u16,
     pub(crate) max_summary_pages: u32,
     pub(crate) max_candidate_rows: u32,
     pub(crate) max_output_pages: u32,
@@ -189,7 +191,10 @@ impl NativeRunRef {
 
 impl NativeBoundedRouteLimits {
     fn validate(&self, physical_rows: u64, page_count: u32) -> Result<()> {
-        if self.max_summary_pages == 0
+        if self.cpu_permits == 0
+            || self.cpu_permits > 256
+            || self.cpu_waiters > 4096
+            || self.max_summary_pages == 0
             || self.max_summary_pages > page_count
             || self.max_candidate_rows == 0
             || u64::from(self.max_candidate_rows) > physical_rows
