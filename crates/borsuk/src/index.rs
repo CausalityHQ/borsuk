@@ -5536,7 +5536,13 @@ impl BorsukIndex {
         index.native_ann_snapshot = manifest
             .native_ann_ref
             .as_ref()
-            .map(|reference| load_native_ann_snapshot(index.storage.clone(), reference))
+            .map(|reference| {
+                load_native_ann_snapshot(
+                    index.storage.clone(),
+                    reference,
+                    index.read_runtime.transient_admission.clone(),
+                )
+            })
             .transpose()?
             .map(Arc::new);
         progress.complete();
@@ -16078,7 +16084,13 @@ impl BorsukIndex {
             .manifest
             .native_ann_ref
             .as_ref()
-            .map(|reference| load_native_ann_snapshot(self.storage.clone(), reference))
+            .map(|reference| {
+                load_native_ann_snapshot(
+                    self.storage.clone(),
+                    reference,
+                    self.read_runtime.transient_admission.clone(),
+                )
+            })
             .transpose()?
             .map(Arc::new);
         if !global_base_present {
@@ -18571,7 +18583,13 @@ impl BorsukIndex {
             .manifest
             .native_ann_ref
             .as_ref()
-            .map(|reference| load_native_ann_snapshot(self.storage.clone(), reference))
+            .map(|reference| {
+                load_native_ann_snapshot(
+                    self.storage.clone(),
+                    reference,
+                    self.read_runtime.transient_admission.clone(),
+                )
+            })
             .transpose()?
             .map(Arc::new);
         // Compaction rebuilt the (paged) cell layout; refresh the persisted cold
@@ -25415,7 +25433,13 @@ impl BorsukIndex {
             .manifest
             .native_ann_ref
             .as_ref()
-            .map(|reference| load_native_ann_snapshot(self.storage.clone(), reference))
+            .map(|reference| {
+                load_native_ann_snapshot(
+                    self.storage.clone(),
+                    reference,
+                    self.read_runtime.transient_admission.clone(),
+                )
+            })
             .transpose()?
             .map(Arc::new);
         Ok(())

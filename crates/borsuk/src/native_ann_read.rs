@@ -21,7 +21,7 @@ use crate::{
     native_ann::{NativeAnnRef, NativeArtifactRef},
     native_ann_format::{NativeRouterArtifacts, decode_native_router},
     native_ann_router::{NativeRouteLimits, route_native_query},
-    segment_cache::AdmissionGate,
+    segment_cache::{AdmissionGate, ByteAdmissionGate},
     storage::Storage,
 };
 
@@ -83,6 +83,7 @@ pub(crate) struct NativeSnapshotInputs {
     pub(crate) delta_rows: Vec<NativeResidentRow>,
     pub(crate) route_limits: NativeRouteLimits,
     pub(crate) range_concurrency: usize,
+    pub(crate) fetch_admission: Option<Arc<ByteAdmissionGate>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +123,7 @@ pub(crate) struct NativeAnnSnapshot {
     route_limits: NativeRouteLimits,
     range_concurrency: usize,
     range_gate: Arc<AdmissionGate>,
+    fetch_admission: Option<Arc<ByteAdmissionGate>>,
 }
 
 pub(crate) struct NativeAnnHandle {
@@ -342,6 +344,7 @@ fn decode_mutation_directory(bytes: Vec<u8>) -> Result<Vec<NativeMutationEntry>>
 pub(crate) fn load_native_ann_snapshot(
     storage: Storage,
     reference: &NativeAnnRef,
+    fetch_admission: Option<Arc<ByteAdmissionGate>>,
 ) -> Result<NativeAnnSnapshot> {
     reference.validate()?;
     let codebooks = read_artifact(&storage, &reference.router.codebooks)?;
@@ -401,6 +404,7 @@ pub(crate) fn load_native_ann_snapshot(
                 max_body_bytes: MAX_PAGE_BODY_BYTES,
             },
             range_concurrency: DEFAULT_RANGE_CONCURRENCY,
+            fetch_admission,
         },
     )
 }
@@ -592,6 +596,7 @@ impl NativeAnnSnapshot {
             route_limits: inputs.route_limits,
             range_concurrency: inputs.range_concurrency,
             range_gate: Arc::new(AdmissionGate::new(inputs.range_concurrency)),
+            fetch_admission: inputs.fetch_admission,
         })
     }
 
@@ -668,6 +673,15 @@ impl NativeAnnSnapshot {
             .iter()
             .map(|read| (read.object.clone(), read.range.clone()))
             .collect::<Vec<_>>();
+        let physical_bytes = requests.iter().try_fold(0_u64, |total, (_, range)| {
+            total
+                .checked_add(range.end - range.start)
+                .ok_or_else(|| invalid("native ANN physical response bytes overflow"))
+        })?;
+        let _fetch_permit = self
+            .fetch_admission
+            .as_ref()
+            .map(|gate| gate.acquire_owned(physical_bytes));
         let mut bodies = (0..physical.len()).map(|_| None).collect::<Vec<_>>();
         self.storage.for_each_range_wave_completion(
             &requests,
@@ -756,10 +770,7 @@ impl NativeAnnSnapshot {
             rows_scored,
             pages_read: selected.len(),
             physical_gets: requests.len() as u64,
-            bytes_read: requests
-                .iter()
-                .map(|(_, range)| range.end - range.start)
-                .sum(),
+            bytes_read: physical_bytes,
         })
     }
 }
@@ -807,7 +818,7 @@ mod tests {
     use super::*;
     use crate::{
         native_ann_format::NativeRouterArtifacts, native_ann_router::NativeRouteLimits,
-        storage::Storage,
+        segment_cache::ByteAdmissionGate, storage::Storage,
     };
 
     #[derive(Clone)]
@@ -1085,6 +1096,7 @@ mod tests {
             ],
             route_limits: limits(),
             range_concurrency: 2,
+            fetch_admission: Some(Arc::new(ByteAdmissionGate::new(16 * 1024 * 1024))),
         };
         (storage, inputs)
     }
@@ -1127,6 +1139,21 @@ mod tests {
         assert_eq!(outcome.physical_gets, 1);
         assert!(outcome.bytes_read <= 16 * 1024 * 1024);
         assert_eq!(storage.request_counts().delta(&before).gets, 1);
+    }
+
+    #[test]
+    fn native_ann_read_reserves_physical_response_bytes_in_collection_gate() {
+        let (storage, inputs) = fixture();
+        let gate = Arc::clone(inputs.fetch_admission.as_ref().unwrap());
+        gate.reset_peak_to_used();
+        let snapshot = NativeAnnSnapshot::open(storage, inputs).unwrap();
+
+        let outcome = snapshot.search(&[0.0; 16], 4).unwrap();
+        let admission = gate.snapshot();
+
+        assert_eq!(admission.used_bytes, 0);
+        assert_eq!(admission.peak_bytes, outcome.bytes_read);
+        assert!(admission.peak_bytes <= admission.capacity_bytes);
     }
 
     #[test]
