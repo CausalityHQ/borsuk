@@ -3344,3 +3344,61 @@ qualified V104/V105 exact path is the row nomination bound: V107 retained only
 32-GET/16-MiB planner. The next gate-correctness cell changes only that bound
 to 8,192 and must first restore the exact-f32 gate; if it does not, G1 stops
 without another representation or scale run.
+
+## V108 result — 8,192 nominations do not repair two-summary page ordering
+
+V108 was the final gate-correctness attempt for the two-summary G1 router. It
+changed only V107's row shortlist from 512 to the V104/V105-qualified 8,192;
+the 1,024-page summary fence, five registered widths, 32-GET/16-MiB planner,
+dataset, all 1,000 development queries, exact truth, seeds, and independent
+reducer were unchanged. No validation or holdout query was consumed.
+
+The immutable source revision was
+`25acd3be21524ee2b0ab4040121ccf8d7ff60902`. Its 10,805,447-byte source
+archive has SHA-256
+`e4b608216164c9ef864cc92ca7b552b1616b205bcdf1f4a79de97180e65b1e05`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v108-row-width-shortlist/25acd3be21524ee2b0ab4040121ccf8d7ff60902/runs/v108-g1-20260921T050437Z-25acd3be/a0001/`.
+It ran on c7i.8xlarge Spot instance `i-0c02bc7a8d4376a10` in
+eu-central-1c, which is terminated. The canonical 415-byte terminal is
+`complete`, exit 0, with SHA-256
+`16b981c377dc098082963dd9cb2fc84fef786d957a5d5a5b79983bfd5f0c9a75`.
+
+Terminal-bound evidence was:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| producer result | 32,622,142 | `5c2c8902bea2dd9e1344793942465204b32664ee1bc0743254bd648ffece8c68` |
+| independent rescore | 1,588 | `704cd14f371e7f64128f0ebc1c765f4bb4fd420b45de9ece4310aed7a4de6616` |
+| resources | 386 | `3642f39b6ae5a8ca62963e005587ef03f286f3cf3df435b3be4f28d7ef72b607` |
+| screen timing | 2,895 | `4d5cbe062a56383698d6379fcd6176611f6638bc3ab8e94d28baee137ab47bd8` |
+| rescore timing | 3,002 | `a46ef06bbd76db528dd79c7ffb313ae6d6121455f2dfe0a9688d4ced40e29f7f` |
+
+| representation | avg R@10 | avg R@100 | p05 / worst R@100 | max GETs | max bytes | 100M resident |
+|---|---:|---:|---:|---:|---:|---:|
+| exact f32 | **99.7100%** | **83.7470%** | **54% / 39%** | 32 | 6,427,384 | n/a |
+| PQ16x8 | 84.1600% | 71.7690% | 34% / 4% | 32 | 6,451,712 | 2,861,603,104 B |
+| PQ24x8 | 89.3500% | 74.4990% | 39% / 12% | 32 | 6,445,432 | 3,661,603,104 B |
+| PQ32x8 | **92.4200%** | **76.2860%** | **42% / 15%** | 32 | 6,277,448 | 4,461,603,104 B |
+| PQ32x4 | 81.3500% | 67.1690% | 27% / 5% | 32 | 6,451,712 | 2,860,865,824 B |
+| summary-only PQ16x8 | 65.8600% | 59.0370% | 13% / 0% | 32 | 5,059,152 | 1,260,816,672 B |
+
+The independent reducer authenticated all 1,000 samples, aggregates, budget
+maxima, paired intervals, and memory terms. The exact-f32 aggregate and every
+exact-f32 resource maximum are identical to V107. Widening nominations by 16x
+therefore cannot change the first 32 distinct pages emitted by the ranked
+evidence. Compressed changes were negligible; every arm still failed all
+three quality gates, and `winner` remained null.
+
+The screen took 644.08 seconds; the independent rescore took 8.97 seconds.
+Whole-cell elapsed time was 687 seconds, peak process RSS was 11,506,036 KiB,
+and both swap and memory PSI remained zero. At the observed eu-central-1c
+c7i.8xlarge Spot price of $0.688/hour, estimated compute cost was $0.1313.
+
+**Ruling:** close the two-summary router and its row-width line. The exact
+causal gate failed twice, and V108 falsifies the shortlist-size hypothesis:
+the summary-derived page ordering, not the nomination count or compressed row
+width, misses the Recall@100 tail before exact page scoring. Do not run V109,
+real-S3 qualification, validation, 10M, or 100M for this line. Preserve V107
+and V108 as negative evidence and proceed to release/closeout rather than
+opening another architecture or critique.
