@@ -175,7 +175,9 @@ use crate::{
 // Bumped 43 -> 44 when online flushes began retaining a bounded segment L0
 // beside the immutable global ANN base. The manifest must distinguish that
 // overlay from a complete inline segment authority.
-const CURRENT_VERSION: u16 = 47;
+// Bumped 47 -> 48 when the unreleased native v2 manifest column was removed;
+// only the bounded v3 native authority is persisted.
+const CURRENT_VERSION: u16 = 48;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -260,14 +262,6 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     // exists for this manifest. Its absence reloads as `None`, so a manifest
     // without a persisted quantizer stays byte-identical to a pre-quantizer one.
     let quantizer_ref_json = quantizer_ref_manifest_json(manifest)?;
-    let native_ann_ref_json = manifest
-        .native_ann_ref
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|error| {
-            BorsukError::InvalidStorage(format!("failed to serialize native ANN ref: {error}"))
-        })?;
     let native_bounded_ann_ref_json = manifest
         .native_bounded_ann_ref
         .as_ref()
@@ -374,7 +368,6 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     if quantizer_ref_json.is_some() {
         columns.push(array(StringArray::from_iter([quantizer_ref_json])));
     }
-    columns.push(array(StringArray::from_iter([native_ann_ref_json])));
     columns.push(array(StringArray::from_iter([native_bounded_ann_ref_json])));
     columns.push(array(StringArray::from_iter([global_ann_ref_json])));
     columns.push(array(StringArray::from_iter([
@@ -423,27 +416,6 @@ fn global_ann_ref_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
     Ok(Some(serde_json::to_string(global_ann_ref).map_err(
         |err| BorsukError::InvalidStorage(format!("failed to serialize global ANN ref: {err}")),
     )?))
-}
-
-fn manifest_native_ann_ref(batch: &RecordBatch) -> Result<Option<crate::native_ann::NativeAnnRef>> {
-    let column = batch
-        .schema()
-        .index_of("native_ann_ref_json")
-        .map_err(|_| {
-            BorsukError::InvalidStorage(
-            "manifest is missing required native_ann_ref_json column; rebuild the unreleased index"
-                .to_string(),
-        )
-        })?;
-    if batch.column(column).is_null(0) {
-        return Ok(None);
-    }
-    let reference: crate::native_ann::NativeAnnRef =
-        serde_json::from_str(string_value(batch, column, 0, "native_ann_ref_json")?).map_err(
-            |error| BorsukError::InvalidStorage(format!("failed to parse native ANN ref: {error}")),
-        )?;
-    reference.validate()?;
-    Ok(Some(reference))
 }
 
 fn manifest_native_bounded_ann_ref(
@@ -983,7 +955,7 @@ pub(crate) fn manifest_from_parquet(
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
-        native_ann_ref: manifest_native_ann_ref(&batch)?,
+        native_ann_ref: None,
         native_bounded_ann_ref: manifest_native_bounded_ann_ref(&batch)?,
         global_ann_ref: manifest_global_ann_ref(&batch)?,
         global_cell_card_ann_ref: manifest_global_cell_card_ann_ref(&batch)?,
@@ -1106,7 +1078,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
-        native_ann_ref: manifest_native_ann_ref(&batch)?,
+        native_ann_ref: None,
         native_bounded_ann_ref: manifest_native_bounded_ann_ref(&batch)?,
         global_ann_ref: manifest_global_ann_ref(&batch)?,
         global_cell_card_ann_ref: manifest_global_cell_card_ann_ref(&batch)?,
@@ -5098,7 +5070,6 @@ fn manifest_schema_with_named_vectors_and_wal(
     if include_quantizer_ref {
         fields.push(Field::new("quantizer_ref_json", DataType::Utf8, true));
     }
-    fields.push(Field::new("native_ann_ref_json", DataType::Utf8, true));
     fields.push(Field::new(
         "native_bounded_ann_ref_json",
         DataType::Utf8,
@@ -10679,7 +10650,7 @@ mod tests {
             primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version").unwrap(),
             CURRENT_VERSION
         );
-        assert_eq!(CURRENT_VERSION, 47);
+        assert_eq!(CURRENT_VERSION, 48);
         assert_eq!(
             crate::logical_cell_catalog::LOGICAL_CELL_CATALOG_FORMAT_VERSION,
             34
