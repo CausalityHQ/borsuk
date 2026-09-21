@@ -897,4 +897,70 @@ mod tests {
             "immutable staging must not create a second visibility authority"
         );
     }
+
+    #[test]
+    fn native_bounded_build_is_query_blind_deterministic_and_reopens_sq8() {
+        let storage = Storage::from_uri("memory:///native-bounded-build").unwrap();
+        let config = NativeBuildConfig {
+            generation: 1,
+            previous_generation_sha256: None,
+            source_identity: "native-bounded-build-fixture".to_owned(),
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: 64,
+        };
+        let rows = (0..520)
+            .map(|ordinal| NativeBuildRow {
+                id: format!("{ordinal:04}").into_bytes(),
+                sequence: 1,
+                version: version(1),
+                state: NativeRowState::Live,
+                vector: vec![ordinal as f32 / 17.0; 64],
+            })
+            .collect::<Vec<_>>();
+        let mut reversed = rows.clone();
+        reversed.reverse();
+
+        let first = build_native_bounded_generation(config.clone(), [rows.as_slice()]).unwrap();
+        let second = build_native_bounded_generation(config, [reversed.as_slice()]).unwrap();
+        assert_eq!(first.root_bytes, second.root_bytes);
+        assert_eq!(first.objects, second.objects);
+        assert_eq!(first.reference.format_version, 3);
+        assert_eq!(first.reference.router.pq_width, 64);
+        assert_eq!(first.reference.router.physical_rows, 520);
+        assert_eq!(first.reference.router.page_count, 3);
+        assert_eq!(first.page_directory.len(), 3);
+        assert_eq!(
+            first
+                .objects
+                .iter()
+                .map(|object| object.role.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "base-run",
+                "mutation-directory",
+                "page-directory",
+                "route-codebooks",
+                "route-row-codes",
+                "route-summaries",
+            ])
+        );
+        assert!(
+            first
+                .objects
+                .iter()
+                .all(|object| !object.path.contains("query") && !object.path.contains("truth"))
+        );
+
+        stage_native_bounded_generation(&storage, &first).unwrap();
+        let snapshot = crate::native_ann_read::load_native_bounded_ann_snapshot(
+            storage,
+            &first.reference,
+            None,
+        )
+        .unwrap();
+        let outcome = snapshot.search(&[0.0; 64], 10).unwrap();
+        assert_eq!(outcome.hits[0].id, b"0000");
+        assert!(outcome.pages_read <= first.reference.router.limits.max_output_pages as usize);
+        assert!(outcome.physical_gets <= 1);
+    }
 }
