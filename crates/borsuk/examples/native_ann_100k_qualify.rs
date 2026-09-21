@@ -391,7 +391,7 @@ fn vector_type(child_name: &str) -> DataType {
 fn source_schema() -> Schema {
     Schema::new(vec![
         Field::new("feature_row_id", DataType::UInt64, false),
-        Field::new("embedding", vector_type("item"), false),
+        Field::new("embedding", vector_type("element"), false),
     ])
 }
 
@@ -927,5 +927,16 @@ mod tests {
         let truth = std::array::from_fn(|index| index as u64);
 
         assert_eq!(recall_hits(&returned, &truth).unwrap(), (0, 1));
+    }
+
+    #[test]
+    fn native_ann_100k_source_schema_matches_authenticated_arrow_child_name() {
+        assert_eq!(
+            source_schema(),
+            Schema::new(vec![
+                Field::new("feature_row_id", DataType::UInt64, false),
+                Field::new("embedding", vector_type("element"), false),
+            ])
+        );
     }
 }
