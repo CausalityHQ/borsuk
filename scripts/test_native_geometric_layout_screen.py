@@ -21,6 +21,7 @@ from scripts.native_geometric_layout_screen import (
     LayoutMethod,
     MembershipRow,
     construct_layout,
+    encoded_sq8_page_bytes,
     evaluate_layout,
     exact_page_coverage,
     finalize_layout_screen,
@@ -201,6 +202,21 @@ class AuthorityAndMembershipTests(unittest.TestCase):
 
 
 class QueryBlindConstructorTests(unittest.TestCase):
+    def test_page_byte_cap_models_sq8_not_float32_payload(self) -> None:
+        generator = np.random.default_rng(20260921)
+        vectors = generator.standard_normal((700, 768), dtype=np.float32)
+        stable_ids = tuple(value.to_bytes(16, "big") for value in range(700))
+        within = encoded_sq8_page_bytes(
+            np.arange(599, dtype=np.int64), stable_ids, vectors
+        )
+        over = encoded_sq8_page_bytes(
+            np.arange(600, dtype=np.int64), stable_ids, vectors
+        )
+        self.assertEqual(within, 491_002)
+        self.assertEqual(over, 491_802)
+        self.assertLessEqual(within, 491_520)
+        self.assertGreater(over, 491_520)
+
     def authority(
         self,
         method: LayoutMethod,
@@ -269,6 +285,23 @@ class QueryBlindConstructorTests(unittest.TestCase):
             all(row.encoded_page_bytes <= authority.maximum_page_bytes for row in rows)
         )
         self.assertEqual(len({row.construction_sha256 for row in rows}), 1)
+
+    def test_two_means_uses_minimum_capacity_aware_leaf_count(self) -> None:
+        stable_ids = tuple(value.to_bytes(16, "big") for value in range(70))
+        vectors = np.asarray(
+            [(float(value), float((value * value) % 17)) for value in range(70)],
+            dtype=np.float32,
+        )
+        authority = self.authority(
+            LayoutMethod.TWO_MEANS_256,
+            rows=70,
+            dimensions=2,
+            maximum_page_rows=30,
+            maximum_page_bytes=491_520,
+        )
+        pages = self.pages(construct_layout(authority, stable_ids, vectors))
+        self.assertEqual(len(pages), 3)
+        self.assertEqual(sorted(map(len, pages)), [23, 23, 24])
 
     def test_two_means_rejects_nonfinite_empty_and_unsplittable_geometry(self) -> None:
         authority = self.authority(LayoutMethod.TWO_MEANS_256, rows=4)

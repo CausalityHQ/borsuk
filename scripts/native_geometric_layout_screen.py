@@ -371,23 +371,49 @@ def _srht_projection(vectors: np.ndarray, seed: int) -> np.ndarray:
     return np.ascontiguousarray(projected[:, permutation[: min(dimensions, 192)]])
 
 
-def _encoded_page_bytes(
+def encoded_sq8_page_bytes(
     source_ordinals: np.ndarray,
     stable_ids: Sequence[bytes],
     vectors: np.ndarray,
 ) -> int:
-    flat = pa.array(
-        vectors[source_ordinals].reshape(-1),
-        type=pa.float32(),
-        from_pandas=False,
+    selected = np.ascontiguousarray(vectors[source_ordinals], dtype=np.float32)
+    low = selected.min(axis=0)
+    high = selected.max(axis=0)
+    step = np.asarray((high - low) / np.float32(255.0), dtype=np.float32)
+    safe_step = np.where(step == 0.0, np.float32(1.0), step)
+    codes = np.asarray(
+        np.clip(np.rint((selected - low) / safe_step), 0, 255), dtype=np.uint8
     )
-    embeddings = pa.FixedSizeListArray.from_arrays(flat, vectors.shape[1])
+    embeddings = pa.FixedSizeListArray.from_arrays(
+        pa.array(codes.reshape(-1), type=pa.uint8()), vectors.shape[1]
+    )
+    schema = pa.schema(
+        [
+            pa.field("stable_id", pa.binary(), nullable=False),
+            pa.field("mutation_sequence", pa.uint64(), nullable=False),
+            pa.field("row_state", pa.uint8(), nullable=False),
+            pa.field(
+                "sq8_embedding",
+                pa.list_(
+                    pa.field("element", pa.uint8(), nullable=False),
+                    vectors.shape[1],
+                ),
+                nullable=False,
+            ),
+        ],
+        metadata={
+            b"sq8_low_f32_le": low.astype("<f4", copy=False).tobytes(),
+            b"sq8_step_f32_le": step.astype("<f4", copy=False).tobytes(),
+        },
+    )
     table = pa.Table.from_arrays(
         [
             pa.array([stable_ids[int(index)] for index in source_ordinals], type=pa.binary()),
+            pa.array(np.zeros(len(source_ordinals), dtype=np.uint64), type=pa.uint64()),
+            pa.array(np.zeros(len(source_ordinals), dtype=np.uint8), type=pa.uint8()),
             embeddings,
         ],
-        names=["stable_id", "embedding"],
+        schema=schema,
     )
     sink = pa.BufferOutputStream()
     with pa.ipc.new_file(sink, table.schema) as writer:
@@ -405,7 +431,7 @@ def _split_ordered_pages(
     pages: list[np.ndarray] = []
     while pending:
         page = pending.pop(0)
-        if _encoded_page_bytes(page, stable_ids, vectors) <= authority.maximum_page_bytes:
+        if encoded_sq8_page_bytes(page, stable_ids, vectors) <= authority.maximum_page_bytes:
             pages.append(page)
             continue
         if len(page) == 1:
@@ -419,6 +445,7 @@ def _two_means_order(
     row_ordinals: np.ndarray,
     projected: np.ndarray,
     stable_ids: Sequence[bytes],
+    cut: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     ids = np.asarray([stable_ids[int(index)] for index in row_ordinals])
     seed_rank = int(np.argmin(ids))
@@ -452,10 +479,37 @@ def _two_means_order(
     if not np.isfinite(scores).all() or float(np.ptp(scores)) == 0.0:
         raise ValueError("two-means split scores differ")
     ranked = np.lexsort((ids, scores))
-    cut = len(row_ordinals) // 2
     if cut == 0 or cut == len(row_ordinals):
         raise ValueError("two-means split capacity differs")
     return row_ordinals[ranked[:cut]], row_ordinals[ranked[cut:]]
+
+
+def _page_row_capacity(
+    authority: LayoutAuthority,
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+) -> int:
+    candidates = np.asarray(
+        sorted(
+            range(len(stable_ids)),
+            key=lambda index: (-len(stable_ids[index]), stable_ids[index]),
+        ),
+        dtype=np.int64,
+    )
+    low = 0
+    high = min(authority.maximum_page_rows, len(candidates))
+    while low < high:
+        middle = (low + high + 1) // 2
+        if (
+            encoded_sq8_page_bytes(candidates[:middle], stable_ids, vectors)
+            <= authority.maximum_page_bytes
+        ):
+            low = middle
+        else:
+            high = middle - 1
+    if low == 0:
+        raise ValueError("one layout row exceeds the page byte cap")
+    return low
 
 
 def _two_means_pages(
@@ -464,17 +518,23 @@ def _two_means_pages(
     stable_ids: Sequence[bytes],
     vectors: np.ndarray,
     projected: np.ndarray,
+    page_row_capacity: int,
 ) -> list[np.ndarray]:
     if (
-        len(row_ordinals) <= authority.maximum_page_rows
-        and _encoded_page_bytes(row_ordinals, stable_ids, vectors)
+        len(row_ordinals) <= page_row_capacity
+        and encoded_sq8_page_bytes(row_ordinals, stable_ids, vectors)
         <= authority.maximum_page_bytes
     ):
         inside = sorted(row_ordinals, key=lambda index: stable_ids[int(index)])
         return [np.asarray(inside, dtype=np.int64)]
-    left, right = _two_means_order(row_ordinals, projected, stable_ids)
-    return _two_means_pages(left, authority, stable_ids, vectors, projected) + _two_means_pages(
-        right, authority, stable_ids, vectors, projected
+    page_count = math.ceil(len(row_ordinals) / page_row_capacity)
+    left_page_count = page_count // 2
+    cut = len(row_ordinals) * left_page_count // page_count
+    left, right = _two_means_order(row_ordinals, projected, stable_ids, cut)
+    return _two_means_pages(
+        left, authority, stable_ids, vectors, projected, page_row_capacity
+    ) + _two_means_pages(
+        right, authority, stable_ids, vectors, projected, page_row_capacity
     )
 
 
@@ -538,12 +598,14 @@ def construct_layout(
             )
             pages = _split_ordered_pages(order, authority, stable_ids, vectors)
         elif authority.method in {LayoutMethod.TWO_MEANS_256, LayoutMethod.TWO_MEANS_480K}:
+            page_row_capacity = _page_row_capacity(authority, stable_ids, vectors)
             pages = _two_means_pages(
                 source_ordinals,
                 authority,
                 stable_ids,
                 vectors,
                 projected,
+                page_row_capacity,
             )
         else:
             raise ValueError("layout method differs")
@@ -551,7 +613,7 @@ def construct_layout(
     source_sha = bytes.fromhex(authority.source.sha256)
     rows: list[MembershipRow] = []
     for page_ordinal, page in enumerate(pages):
-        encoded_bytes = _encoded_page_bytes(page, stable_ids, vectors)
+        encoded_bytes = encoded_sq8_page_bytes(page, stable_ids, vectors)
         if encoded_bytes > authority.maximum_page_bytes:
             raise ValueError("layout page exceeds byte cap")
         for in_page_ordinal, source_ordinal in enumerate(page):
