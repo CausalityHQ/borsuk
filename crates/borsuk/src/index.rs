@@ -51588,6 +51588,47 @@ fn native_bounded_dispatch_is_the_only_approximate_serving_path_after_cutover() 
 }
 
 #[test]
+fn native_bounded_cutover_fails_closed_without_authenticated_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: directory.path().to_string_lossy().into_owned(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 64,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| VectorRecord::new(row.to_string(), vec![row as f32 / 17.0; 64]))
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    assert!(index.manifest.native_bounded_ann_ref.is_some());
+    index.native_bounded_ann_snapshot = None;
+
+    let error = index
+        .search_with_report(
+            &[0.0; 64],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("bounded native ANN snapshot is unavailable"),
+        "{error}"
+    );
+}
+
+#[test]
 fn native_bounded_flush_publishes_out_of_range_delta_without_clamping_identity() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
