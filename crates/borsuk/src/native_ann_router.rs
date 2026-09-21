@@ -177,6 +177,14 @@ pub(crate) fn route_native_query(
     {
         return Err(invalid("native ANN route limits must be nonzero"));
     }
+    let byte_limited_pages =
+        usize::try_from(limits.max_body_bytes / limits.bytes_per_page).unwrap_or(usize::MAX);
+    let output_page_limit = limits.max_output_pages.min(byte_limited_pages);
+    if output_page_limit == 0 {
+        return Err(invalid(
+            "native ANN page bytes exceed the route body budget",
+        ));
+    }
     let summary_table =
         native_ann_adc_table(&artifacts.summary_codebooks, artifacts.dimensions, query)?;
     let row_table = native_ann_adc_table(&artifacts.row_codebooks, artifacts.dimensions, query)?;
@@ -239,13 +247,13 @@ pub(crate) fn route_native_query(
         .into_iter()
         .map(|candidate| candidate.ordinal)
         .collect::<Vec<_>>();
-    let mut pages = Vec::with_capacity(limits.max_output_pages);
+    let mut pages = Vec::with_capacity(output_page_limit);
     for row in &candidate_rows {
         let page = u32::try_from(*row / PAGE_ROWS)
             .map_err(|_| invalid("native ANN selected page exceeds u32"))?;
         if !pages.contains(&page) {
             pages.push(page);
-            if pages.len() == limits.max_output_pages {
+            if pages.len() == output_page_limit {
                 break;
             }
         }
@@ -435,5 +443,23 @@ mod tests {
         ] {
             assert!(route_native_query(&artifacts, &[0.0; 16], invalid).is_err());
         }
+    }
+
+    #[test]
+    fn native_ann_router_caps_selected_pages_to_the_body_byte_budget() {
+        let artifacts = fixture(40, 16);
+        let limits = NativeRouteLimits {
+            max_summary_pages: 40,
+            max_candidate_rows: 512,
+            max_output_pages: 32,
+            bytes_per_page: 1024 * 1024,
+            max_body_bytes: 8 * 1024 * 1024,
+        };
+
+        let plan = route_native_query(&artifacts, &[0.0; 16], limits).unwrap();
+
+        assert!(!plan.pages.is_empty());
+        assert!(plan.pages.len() <= 8);
+        assert!(plan.estimated_body_bytes <= limits.max_body_bytes);
     }
 }
