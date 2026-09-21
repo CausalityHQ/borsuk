@@ -3696,3 +3696,46 @@ authenticate the exact source/query/truth and sealed artifact bytes and
 recompute every route, ranked SQ8 hit, aggregate, and decision. Any failed
 quality gate returns to a material 100k redesign. It does not authorize another
 parameter-only attempt or any 1M/10M/100M run.
+
+### Native geometric router 100k terminal — failed page selection
+
+The sole preregistered cell ran from source commit
+`67c88488fb17a9f02715c6d262a22225cf950de5` and source archive SHA-256
+`81b03af7d175f2208be89421a15654b58210f0272db8107c9b6447b77641a0f7`
+(10,964,373 bytes). The exact source/query/truth identities are listed in the
+preregistration above. Its immutable prefix is
+`s3://borsuk-bench-453182569524-euc1/research/native-geometric-router/67c88488fb17a9f02715c6d262a22225cf950de5/runs/relaion-100k-dev1000-a0001/`.
+It ran on Causality Spot `c7i.8xlarge`, instance `i-07c28c2770548c28e`
+in `eu-central-1c`; the instance is terminated. Terminal status is `complete`
+with exit 0 and 160 seconds elapsed, and the scientific result is explicitly
+`claim_eligible=false`. The canonical result SHA-256 is
+`b5753cfba5a029fba3cca5cc122d4e51c7a02d5b69bc0de2219ee0d41a5b2607`;
+per-query evidence SHA-256 is
+`9a33d86a6ce297ca61fe08d22206a2938b2660710735433103546003b8b79452`.
+The remote independent validator reauthenticated the frozen inputs and sealed
+membership/tree/page artifacts, recomputed all 1,000 query routes and ranked
+SQ8 results, and returned `killed`; its receipt SHA-256 is
+`5de489c3a94db6e9f3669f89476938e81f0290dc4a1eb870494e5372946c3a5a`.
+
+| Same frozen ReLAION development-100k split | avg R@10 | mean R@100 | p05 R@100 | worst R@100 | max pages / encoded bytes |
+|---|---:|---:|---:|---:|---:|
+| truth-aware two-means layout coverage oracle (earlier cell; not a serving route) | 99.920% | 99.844% | 100% | 88% | 32 / 16 MiB cap |
+| query-blind geometric router, exact GT page containment | 97.030% | 94.417% | 77% | 50% | 32 / 15,664,840 |
+| query-blind geometric router plus page-local SQ8 rank | 97.030% | 94.349% | 77% | 50% | 32 / 15,664,840 |
+
+The oracle-to-route mean R@100 gap is 5.427 percentage points; subsequent
+SQ8 ranking loses only 0.068 points. This decomposition identifies page
+selection as the dominant failure on the fixed layout, not page-local SQ8.
+The router misses the 97.5% mean and 90% p05 gates despite meeting the 96%
+R@10, 32-page, and 16-MiB gates. Construct/evaluate/validate wall times were
+25.22/47.93/48.50 seconds; peak process RSS was respectively
+2,390,428/1,639,400/1,637,580 KiB, with zero swaps. These are screen
+resources, not native cold-S3 serving latency or 100M memory measurements.
+
+**Decision:** kill this fixed split-plane best-first plus single page-centroid
+refinement router. Do not enlarge the frontier, reuse the scientific prefix,
+or promote to 1M. A genuinely different query-independent page-selection
+representation must first restore GT page containment under the same 32-page
+and 16-MiB budget at 100k, with paired per-query evidence. Only then recheck
+SQ8 ranking and a complete two-generation 100M resident worksheet; the
+current screen does not qualify the production store or competitive parity.
