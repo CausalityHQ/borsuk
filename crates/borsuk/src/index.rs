@@ -16032,12 +16032,19 @@ impl BorsukIndex {
             std::mem::swap(&mut segments_to_write, &mut remaining);
         }
         let new_global_delta = manifest.segments[existing_segment_count..].to_vec();
-        let mut native_delta_rows = self
+        let mut native_delta_rows = BTreeMap::<Vec<u8>, NativeBuildRow>::new();
+        for row in self
             .native_build_rows_from_summaries(&new_global_delta)?
             .into_iter()
             .flatten()
-            .map(|row| (row.id.clone(), row))
-            .collect::<BTreeMap<_, _>>();
+        {
+            if native_delta_rows
+                .get(&row.id)
+                .is_none_or(|current| current.sequence < row.sequence)
+            {
+                native_delta_rows.insert(row.id.clone(), row);
+            }
+        }
         for transaction in &selected_transactions {
             for run in &transaction.runs {
                 if run.kind != CellWalRunKind::Tombstones {
