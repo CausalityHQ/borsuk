@@ -51378,6 +51378,58 @@ fn native_ann_build_cutover_reopens_and_serves_the_native_snapshot() {
 }
 
 #[test]
+fn native_bounded_dispatch_is_the_only_approximate_serving_path_after_cutover() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 64,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 64],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    assert!(index.manifest.native_bounded_ann_ref.is_some());
+    assert!(index.manifest.native_ann_ref.is_none());
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    assert!(index.native_bounded_ann_snapshot.is_some());
+    assert!(index.native_ann_snapshot.is_none());
+    let report = index
+        .search_with_report(
+            &[0.0; 64],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert_eq!(
+        report.hits[0].id.as_bytes(),
+        [b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat()
+    );
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
+    assert!(report.bytes_read > 0);
+    assert!(report.requests.gets > 0);
+}
+
+#[test]
 fn native_ann_flush_publishes_query_visible_delta_generation() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
