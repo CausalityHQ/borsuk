@@ -164,7 +164,7 @@ class ScreenInputs:
     max_gets: int
     max_bytes: int
     summary_page_limit: int = 1024
-    shortlist_rows: int = 512
+    shortlist_rows: int = 8192
     training_rows: int = 100_000
     training_iterations: int = 10
 
@@ -1163,7 +1163,7 @@ def screen_result_document(
         or max_gets != 32
         or max_bytes != 16 * 1024**2
         or summary_page_limit != 1024
-        or shortlist_rows != 512
+        or shortlist_rows != 8192
         or bootstrap_resamples != 10_000
     ):
         raise ValueError("screen result configuration differs")

@@ -310,7 +310,7 @@ class RowWidthRescoreTests(unittest.TestCase):
             "neighbors": 2,
             "queries": 2,
             "schema": "borsuk-v97-row-width-screen-v2",
-            "shortlist_rows": 512,
+            "shortlist_rows": 8192,
             "summary_page_limit": 1024,
             "winner": "summary-only-pq16x8",
         }
@@ -369,7 +369,7 @@ class RowWidthRescoreTests(unittest.TestCase):
         changed["summary_page_limit"] = 1023
         mutations.append((changed, "screen routing limits differ"))
         changed = copy.deepcopy(result)
-        changed["shortlist_rows"] = 511
+        changed["shortlist_rows"] = 8191
         mutations.append((changed, "screen routing limits differ"))
         changed = copy.deepcopy(result)
         changed["arms"][3]["samples"][0]["truth_ids"] = [2, 1]

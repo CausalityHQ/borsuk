@@ -23,8 +23,11 @@ eligible for G2.
   confidence intervals against it. This count does not authenticate the
   distinct two-summary ranking used here; the fresh exact-f32 diagnostic below
   must do that before any width arm is eligible.
-- Row shortlist: score only rows in those 1,024 pages and retain the best 512 by
-  the global `(distance, feature_row_id)` order, including ties at the boundary.
+- Row shortlist: score only rows in those 1,024 pages and retain the best 8,192
+  by the global `(distance, feature_row_id)` order, including ties at the
+  boundary. V107 showed that 512 nominations preserve near-neighbor Recall@10
+  but truncate the Recall@100 tail; 8,192 is the unchanged qualified V104/V105
+  exact-path bound.
 - Planner: walk ranked evidence, keep the first occurrence of each page whose
   exact encoded bytes still fit, and stop at 32 pages or 16,777,216 bytes.
   Every page is one object-local range GET. This bounded shape matches the

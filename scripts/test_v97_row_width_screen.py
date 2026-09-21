@@ -440,7 +440,7 @@ class RowWidthEvaluationTests(unittest.TestCase):
             max_gets=32,
             max_bytes=16 * 1024 * 1024,
             summary_page_limit=1024,
-            shortlist_rows=512,
+            shortlist_rows=8192,
             training_rows=256,
             training_iterations=1,
         )
@@ -472,7 +472,7 @@ class RowWidthEvaluationTests(unittest.TestCase):
             max_gets=32,
             max_bytes=16 * 1024 * 1024,
             summary_page_limit=1024,
-            shortlist_rows=512,
+            shortlist_rows=8192,
             bootstrap_seed=7216,
             bootstrap_resamples=10_000,
         )
@@ -493,7 +493,9 @@ class RowWidthEvaluationTests(unittest.TestCase):
         # Break caught: reviving the 128-page summary fence that V104 killed
         # before comparing row widths inside the qualified 1,024-page envelope.
         self.assertEqual(document["summary_page_limit"], 1024)
-        self.assertEqual(document["shortlist_rows"], 512)
+        # Break caught: reviving the 512-row nomination gate that V107 showed
+        # truncates the Recall@100 tail before the bounded page planner.
+        self.assertEqual(document["shortlist_rows"], 8192)
         self.assertEqual(document["queries"], 2)
         self.assertEqual(
             set(document["artifacts"]),

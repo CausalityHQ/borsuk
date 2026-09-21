@@ -362,7 +362,7 @@ def validate_screen_result(
         raise ValueError("screen result schema differs")
     if (
         _integer(result["summary_page_limit"], "summary page limit") != 1024
-        or _integer(result["shortlist_rows"], "shortlist rows") != 512
+        or _integer(result["shortlist_rows"], "shortlist rows") != 8192
     ):
         raise ValueError("screen routing limits differ")
     artifacts = result["artifacts"]

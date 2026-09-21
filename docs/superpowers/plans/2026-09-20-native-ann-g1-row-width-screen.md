@@ -89,7 +89,8 @@ Expected: all contract tests pass.
 - [ ] **Step 1: Add synthetic RED tests**
 
 Construct one query-blind base/delta page map where all five arms have known
-rankings. Assert the shared 1,024-page fence, exact shortlist-boundary ties,
+rankings. Assert the shared 1,024-page fence, the qualified 8,192-row shortlist,
+exact shortlist-boundary ties,
 identical planner budgets, literal per-query hit IDs derived from selected-page
 membership, and a summary-only arm built from exactly two contiguous means per
 page. Leave one delta truth row on an unfetched page and assert it is a miss.
