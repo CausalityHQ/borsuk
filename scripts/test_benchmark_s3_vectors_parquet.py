@@ -70,21 +70,13 @@ class _FakeS3Vectors:
         assert isinstance(values, list)
         query = int(values[0])
         answer = self.answers[query]
-        if kwargs.get("nextToken") is None:
-            selected = answer[:60]
-            token: str | None = "page-2"
-        else:
-            selected = answer[60:]
-            token = None
         response: dict[str, object] = {
             "vectors": [
                 {"key": key, "distance": float(position)}
-                for position, key in enumerate(selected)
+                for position, key in enumerate(answer)
             ],
             "ResponseMetadata": {"HTTPHeaders": {"content-length": "123"}},
         }
-        if token is not None:
-            response["nextToken"] = token
         return response
 
     def delete_index(self, **_: object) -> None:
@@ -212,7 +204,7 @@ class MatchedS3VectorsParquetTests(unittest.TestCase):
             self.assertEqual([len(batch) for batch in fake.put_batches], [500, 500, 1])
             self.assertEqual(fake.put_batches[0][0]["key"], "10000")
             self.assertEqual(fake.deleted, ["index", "bucket"])
-            self.assertEqual(len(fake.query_calls), 8)
+            self.assertEqual(len(fake.query_calls), 4)
             self.assertEqual(
                 [row.label for row in result.passes],
                 ["fresh_index_first_pass", "immediate_repeated_pass"],
@@ -233,8 +225,8 @@ class MatchedS3VectorsParquetTests(unittest.TestCase):
                 if row["pass_label"] == "fresh_index_first_pass"
                 and row["query_ordinal"] == 0
             )
-            self.assertEqual(query_zero["response_bytes"], 246)
-            self.assertEqual(query_zero["pages"], 2)
+            self.assertEqual(query_zero["response_bytes"], 123)
+            self.assertEqual(query_zero["pages"], 1)
             self.assertEqual(query_zero["recall10_ppm"], 900_000)
             self.assertEqual(query_zero["recall100_ppm"], 990_000)
             self.assertTrue((output / "result.json").read_bytes().endswith(b"\n"))

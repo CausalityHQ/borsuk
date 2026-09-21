@@ -23,7 +23,9 @@
 ## Review Focus
 
 - Feature IDs, rather than Parquet row offsets, must be used as S3 Vectors keys and truth identities.
-- `QueryVectors` pagination must preserve ranking and latency across every page.
+- The registered `topK=100` call must return exactly one complete 100-result
+  response; a continuation token is an API-contract failure because the pinned
+  boto3 surface has no continuation input.
 - Source reading must stay bounded to one 500-row request batch.
 - R@10 must compare the first ten returned keys with the first ten truth IDs; R@100 compares the full hundred.
 - Cleanup must run after producer failure as well as success and must be recorded in terminal evidence.
@@ -42,7 +44,7 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Create synthetic source/query/truth Parquet fixtures whose feature IDs differ from row offsets. Require streaming batches of at most 500, paginated ranked results, literal R@10/R@100 values, two exact pass labels, response byte accounting, and index/bucket cleanup.
+Create synthetic source/query/truth Parquet fixtures whose feature IDs differ from row offsets. Require streaming batches of at most 500, one complete top-100 ranked response, literal R@10/R@100 values, two exact pass labels, response byte accounting, and index/bucket cleanup.
 
 - [ ] **Step 2: Verify RED**
 
@@ -50,7 +52,7 @@ Run `uv run --offline --python 3.12 --with-requirements scripts/requirements-for
 
 - [ ] **Step 3: Implement the minimal harness**
 
-Use frozen dataclasses for identities/config/results; exact PyArrow schemas; `ParquetFile.iter_batches(batch_size=500)`; a bounded five-worker upload pool; paginated `QueryVectors`; canonical JSON via `json.dumps(asdict(...), sort_keys=True, separators=(",", ":"))`; and Parquet per-query samples.
+Use frozen dataclasses for identities/config/results; exact PyArrow schemas; `ParquetFile.iter_batches(batch_size=500)`; a bounded five-worker upload pool; one complete top-100 `QueryVectors` response; canonical JSON via `json.dumps(asdict(...), sort_keys=True, separators=(",", ":"))`; and Parquet per-query samples.
 
 - [ ] **Step 4: Verify GREEN and static checks**
 

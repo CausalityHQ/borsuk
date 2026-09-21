@@ -318,36 +318,21 @@ def _query_one(
     query_ordinal: int,
 ) -> QuerySample:
     started = time.perf_counter_ns()
+    response = client.query_vectors(
+        vectorBucketName=config.vector_bucket,
+        indexName=config.index_name,
+        queryVector={"float32": query},
+        topK=config.neighbors,
+        returnDistance=True,
+    )
+    vectors = response.get("vectors")
+    if not isinstance(vectors, list) or response.get("nextToken") is not None:
+        raise ValueError("query response differs")
     keys: list[str] = []
-    pages = 0
-    response_bytes = 0
-    token: str | None = None
-    while True:
-        arguments: dict[str, object] = {
-            "vectorBucketName": config.vector_bucket,
-            "indexName": config.index_name,
-            "queryVector": {"float32": query},
-            "topK": config.neighbors,
-            "returnDistance": True,
-        }
-        if token is not None:
-            arguments["nextToken"] = token
-        response = client.query_vectors(**arguments)
-        pages += 1
-        response_bytes += _response_bytes(response)
-        vectors = response.get("vectors")
-        if not isinstance(vectors, list):
+    for vector in vectors:
+        if not isinstance(vector, Mapping) or type(vector.get("key")) is not str:
             raise ValueError("query response differs")
-        for vector in vectors:
-            if not isinstance(vector, Mapping) or type(vector.get("key")) is not str:
-                raise ValueError("query response differs")
-            keys.append(vector["key"])
-        next_token = response.get("nextToken")
-        if next_token is None:
-            break
-        if type(next_token) is not str or not next_token:
-            raise ValueError("query pagination differs")
-        token = next_token
+        keys.append(vector["key"])
     latency_ns = time.perf_counter_ns() - started
     if len(keys) != config.neighbors or len(set(keys)) != config.neighbors:
         raise ValueError("query result count differs")
@@ -360,8 +345,8 @@ def _query_one(
         latency_ns=latency_ns,
         recall10_ppm=recall10,
         recall100_ppm=recall100,
-        pages=pages,
-        response_bytes=response_bytes,
+        pages=1,
+        response_bytes=_response_bytes(response),
     )
 
 
