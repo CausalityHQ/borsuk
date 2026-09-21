@@ -3,10 +3,12 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 use crate::{
     error::{BorsukError, Result},
     metric::squared_euclidean_simd,
-    native_ann_format::NativeRouterArtifacts,
+    native_ann::NativeBoundedRouteLimits,
+    native_ann_format::{NativeBoundedRouterArtifacts, NativeRouterArtifacts},
 };
 
 const PQ_WIDTH: usize = 16;
+const BOUNDED_PQ_WIDTH: usize = 64;
 const PAGE_ROWS: u64 = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,6 +163,213 @@ fn adc_score(table: &[f32], code: &[u8]) -> f32 {
         .fold(0.0_f32, |score, (subspace, codeword)| {
             score + table[subspace * 256 + usize::from(*codeword)]
         })
+}
+
+fn validate_bounded_artifact_shape(artifacts: &NativeBoundedRouterArtifacts) -> Result<usize> {
+    if artifacts.dimensions == 0
+        || artifacts.page_count == 0
+        || artifacts.physical_rows == 0
+        || artifacts.physical_rows.div_ceil(PAGE_ROWS) != u64::from(artifacts.page_count)
+    {
+        return Err(invalid("native bounded ANN routing artifact shape differs"));
+    }
+    let dimensions = usize::try_from(artifacts.dimensions)
+        .map_err(|_| invalid("native bounded ANN dimensions exceed usize"))?;
+    let centroid_width = dimensions.div_ceil(BOUNDED_PQ_WIDTH);
+    let expected_codebooks = BOUNDED_PQ_WIDTH
+        .checked_mul(256)
+        .and_then(|rows| rows.checked_mul(centroid_width))
+        .ok_or_else(|| invalid("native bounded ANN codebook shape overflows"))?;
+    let expected_summaries = usize::try_from(artifacts.page_count)
+        .ok()
+        .and_then(|pages| pages.checked_mul(2))
+        .and_then(|summaries| summaries.checked_mul(dimensions))
+        .ok_or_else(|| invalid("native bounded ANN summary shape overflows"))?;
+    let expected_row_codes = usize::try_from(artifacts.physical_rows)
+        .ok()
+        .and_then(|rows| rows.checked_mul(BOUNDED_PQ_WIDTH))
+        .ok_or_else(|| invalid("native bounded ANN row-code shape overflows"))?;
+    let materialized_bytes = artifacts
+        .codebooks
+        .len()
+        .checked_add(artifacts.summaries.len())
+        .and_then(|values| values.checked_mul(std::mem::size_of::<f32>()))
+        .and_then(|bytes| bytes.checked_add(artifacts.row_codes.len()))
+        .ok_or_else(|| invalid("native bounded ANN resident bytes overflow"))?;
+    if artifacts.codebooks.len() != expected_codebooks
+        || artifacts.summaries.len() != expected_summaries
+        || artifacts.row_codes.len() != expected_row_codes
+        || artifacts
+            .codebooks
+            .iter()
+            .chain(artifacts.summaries.iter())
+            .any(|value| !value.is_finite())
+        || u64::try_from(materialized_bytes).ok() != Some(artifacts.resident_bytes)
+    {
+        return Err(invalid(
+            "native bounded ANN routing materialization differs",
+        ));
+    }
+    Ok(centroid_width)
+}
+
+pub(crate) fn native_bounded_adc_table(
+    codebooks: &[f32],
+    dimensions: u32,
+    query: &[f32],
+) -> Result<Box<[f32]>> {
+    let dimensions = usize::try_from(dimensions)
+        .map_err(|_| invalid("native bounded ANN query dimensions exceed usize"))?;
+    if query.len() != dimensions {
+        return Err(BorsukError::DimensionMismatch {
+            expected: dimensions,
+            actual: query.len(),
+        });
+    }
+    if query.iter().any(|value| !value.is_finite()) {
+        return Err(invalid(
+            "native bounded ANN query contains a non-finite value",
+        ));
+    }
+    let centroid_width = dimensions.div_ceil(BOUNDED_PQ_WIDTH);
+    let expected_values = BOUNDED_PQ_WIDTH
+        .checked_mul(256)
+        .and_then(|rows| rows.checked_mul(centroid_width))
+        .ok_or_else(|| invalid("native bounded ANN ADC codebook shape overflows"))?;
+    if codebooks.len() != expected_values {
+        return Err(invalid("native bounded ANN ADC codebook shape differs"));
+    }
+    let mut table = vec![0.0_f32; BOUNDED_PQ_WIDTH * 256];
+    for subspace in 0..BOUNDED_PQ_WIDTH {
+        let query_start = subspace * dimensions / BOUNDED_PQ_WIDTH;
+        let query_end = (subspace + 1) * dimensions / BOUNDED_PQ_WIDTH;
+        for codeword in 0..256 {
+            let centroid_start = (subspace * 256 + codeword) * centroid_width;
+            table[subspace * 256 + codeword] = squared_euclidean_simd(
+                &query[query_start..query_end],
+                &codebooks[centroid_start..centroid_start + query_end - query_start],
+            );
+        }
+    }
+    if table.iter().any(|value| !value.is_finite()) {
+        return Err(invalid(
+            "native bounded ANN ADC table contains a non-finite distance",
+        ));
+    }
+    Ok(table.into_boxed_slice())
+}
+
+pub(crate) fn route_native_bounded_query(
+    artifacts: &NativeBoundedRouterArtifacts,
+    query: &[f32],
+    limits: NativeBoundedRouteLimits,
+) -> Result<NativeRoutePlan> {
+    validate_bounded_artifact_shape(artifacts)?;
+    if limits.max_summary_pages == 0
+        || limits.max_summary_pages > artifacts.page_count
+        || limits.max_candidate_rows == 0
+        || u64::from(limits.max_candidate_rows) > artifacts.physical_rows
+        || limits.max_output_pages == 0
+        || limits.max_output_pages > limits.max_summary_pages
+        || limits.response_bytes_each == 0
+    {
+        return Err(invalid("native bounded ANN route limits differ"));
+    }
+    let dimensions = usize::try_from(artifacts.dimensions)
+        .map_err(|_| invalid("native bounded ANN dimensions exceed usize"))?;
+    if query.len() != dimensions || query.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("native bounded ANN query differs"));
+    }
+
+    let retained_page_count = usize::try_from(limits.max_summary_pages)
+        .map_err(|_| invalid("native bounded ANN summary-page limit exceeds usize"))?;
+    let blocks_per_page = artifacts.summaries.len()
+        / (usize::try_from(artifacts.page_count).unwrap_or(usize::MAX) * dimensions);
+    if blocks_per_page == 0 {
+        return Err(invalid("native bounded ANN summary block count is zero"));
+    }
+    let mut page_heap = BinaryHeap::with_capacity(retained_page_count);
+    for page in 0..u64::from(artifacts.page_count) {
+        let mut best = f32::INFINITY;
+        for block in 0..blocks_per_page {
+            let start = (page as usize * blocks_per_page + block) * dimensions;
+            let distance =
+                squared_euclidean_simd(query, &artifacts.summaries[start..start + dimensions]);
+            best = best.min(distance);
+        }
+        retain_best(
+            &mut page_heap,
+            retained_page_count,
+            ScoredOrdinal {
+                distance: best,
+                ordinal: page,
+            },
+        );
+    }
+    let retained_pages = page_heap.into_sorted_vec();
+    let row_table = native_bounded_adc_table(&artifacts.codebooks, artifacts.dimensions, query)?;
+    let evaluated_rows = retained_pages.iter().try_fold(0_usize, |total, page| {
+        let first = page.ordinal * PAGE_ROWS;
+        let last = (first + PAGE_ROWS).min(artifacts.physical_rows);
+        total
+            .checked_add(usize::try_from(last - first).unwrap_or(usize::MAX))
+            .ok_or_else(|| invalid("native bounded ANN evaluated row count overflows"))
+    })?;
+    let candidate_count = usize::try_from(limits.max_candidate_rows)
+        .unwrap_or(usize::MAX)
+        .min(evaluated_rows);
+    let mut row_heap = BinaryHeap::with_capacity(candidate_count);
+    for page in &retained_pages {
+        let first = page.ordinal * PAGE_ROWS;
+        let last = (first + PAGE_ROWS).min(artifacts.physical_rows);
+        for row in first..last {
+            let start = usize::try_from(row)
+                .ok()
+                .and_then(|row| row.checked_mul(BOUNDED_PQ_WIDTH))
+                .ok_or_else(|| invalid("native bounded ANN row-code offset overflows"))?;
+            retain_best(
+                &mut row_heap,
+                candidate_count,
+                ScoredOrdinal {
+                    distance: adc_score(
+                        &row_table,
+                        &artifacts.row_codes[start..start + BOUNDED_PQ_WIDTH],
+                    ),
+                    ordinal: row,
+                },
+            );
+        }
+    }
+    let candidate_rows = row_heap
+        .into_sorted_vec()
+        .into_iter()
+        .map(|candidate| candidate.ordinal)
+        .collect::<Vec<_>>();
+    let output_page_limit = usize::try_from(limits.max_output_pages)
+        .map_err(|_| invalid("native bounded ANN output-page limit exceeds usize"))?;
+    let mut pages = Vec::with_capacity(output_page_limit);
+    for row in &candidate_rows {
+        let page = u32::try_from(*row / PAGE_ROWS)
+            .map_err(|_| invalid("native bounded ANN selected page exceeds u32"))?;
+        if !pages.contains(&page) {
+            pages.push(page);
+            if pages.len() == output_page_limit {
+                break;
+            }
+        }
+    }
+    pages.sort_unstable();
+    let estimated_body_bytes = u64::try_from(pages.len())
+        .ok()
+        .and_then(|pages| pages.checked_mul(limits.response_bytes_each))
+        .ok_or_else(|| invalid("native bounded ANN selected bytes overflow"))?;
+    Ok(NativeRoutePlan {
+        pages,
+        candidate_rows,
+        estimated_body_bytes,
+        summary_scores_evaluated: artifacts.page_count as usize * blocks_per_page,
+        row_scores_evaluated: evaluated_rows,
+    })
 }
 
 pub(crate) fn route_native_query(

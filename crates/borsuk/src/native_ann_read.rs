@@ -22,7 +22,7 @@ use crate::{
     native_ann_format::{NativeRouterArtifacts, decode_native_router},
     native_ann_router::{NativeRouteLimits, route_native_query},
     record::VectorRecord,
-    segment_cache::{AdmissionGate, ByteAdmissionGate},
+    segment_cache::{AdmissionGate, AdmissionPermit, AdmissionSnapshot, ByteAdmissionGate},
     storage::Storage,
 };
 
@@ -129,6 +129,32 @@ pub(crate) struct NativeAnnSnapshot {
 
 pub(crate) struct NativeAnnHandle {
     snapshot: RwLock<Arc<NativeAnnSnapshot>>,
+}
+
+pub(crate) struct NativeCpuAdmission {
+    gate: AdmissionGate,
+}
+
+impl NativeCpuAdmission {
+    pub(crate) fn new(active: usize, waiting: usize) -> Self {
+        Self {
+            gate: AdmissionGate::new_bounded(active, waiting),
+        }
+    }
+
+    pub(crate) fn try_acquire(&self) -> Result<AdmissionPermit<'_>> {
+        self.gate.acquire_bounded().ok_or_else(|| {
+            let state = self.gate.snapshot();
+            BorsukError::Overloaded {
+                active: state.active,
+                waiting: state.waiting,
+            }
+        })
+    }
+
+    pub(crate) fn snapshot(&self) -> AdmissionSnapshot {
+        self.gate.snapshot()
+    }
 }
 
 #[derive(Clone, Debug)]
