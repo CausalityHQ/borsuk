@@ -8,6 +8,12 @@ science_pid=
 monitor_pid=
 exit_code=0
 started_epoch=$(date +%s)
+imds_token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+  http://169.254.169.254/latest/api/token)
+imds() {
+  curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" \
+    "http://169.254.169.254/latest/meta-data/$1"
+}
 
 publish_terminal() {
   exit_code=$?
@@ -15,7 +21,7 @@ publish_terminal() {
   set +e
   [ -n "$monitor_pid" ] && kill "$monitor_pid" 2>/dev/null
   [ -n "$monitor_pid" ] && wait "$monitor_pid" 2>/dev/null
-  instance_id=$(curl -fsS http://169.254.169.254/latest/meta-data/instance-id || true)
+  instance_id=$(imds instance-id || true)
   for name in result.json samples.parquet reduction.json resources.txt worker.log pressure-stop.txt swap-stop.txt interrupt-stop.txt; do
     [ -f "$name" ] && aws s3 cp "$name" "$BOUNDED_OUTPUT_PREFIX/$name" --only-show-errors
   done
@@ -91,7 +97,7 @@ manifest_sha256=$(sha256sum manifest.bin | cut -d' ' -f1)
 
 monitor() {
   while kill -0 "$science_pid" 2>/dev/null; do
-    if curl -fsS http://169.254.169.254/latest/meta-data/spot/instance-action >/dev/null 2>&1; then
+    if imds spot/instance-action >/dev/null 2>&1; then
       : >interrupt-stop.txt
       kill -TERM -- "-$science_pid" 2>/dev/null
       return

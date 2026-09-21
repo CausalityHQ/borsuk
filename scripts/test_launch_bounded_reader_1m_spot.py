@@ -84,6 +84,8 @@ class BoundedReaderSpotLauncherTests(unittest.TestCase):
             "full avg10",
             "0.50",
             "interrupt-stop",
+            "latest/api/token",
+            "X-aws-ec2-metadata-token",
             "swap-stop",
             "result.json",
             "samples.parquet",
