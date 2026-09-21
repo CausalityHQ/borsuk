@@ -3216,3 +3216,71 @@ non-centroid representation. G1 remains open at the qualified V99 1,024-page
 exact envelope, and the next work returns to the registered native
 snapshot/delta/mutation/compaction qualification rather than launching another
 representation arm.
+
+## Production-native 100k gate — exact page scoring exposes a routing failure
+
+The first production-native qualification cell built the current exact-f32
+page format, loaded the resulting snapshot through the production reader, and
+ran all 1,000 registered development queries against the frozen 100,000-row,
+768-dimensional ReLAION subset and its exact top-100 truth. This is a local
+object-store measurement on the Spot instance, not an S3 cold-latency result
+and not a competitor comparison.
+
+The immutable source revision is
+`69be0e20f74b892dce20ecfa33a865c11b55a0a3`. Its 10,801,921-byte source
+archive has SHA-256
+`092b9dd850e17cb2d09f3db4be023f2ec6ec820c9de730da399b52079944009b`.
+The sole attempt prefix is
+`s3://borsuk-bench-453182569524-euc1/research/native-ann-100k/69be0e20f74b892dce20ecfa33a865c11b55a0a3/runs/native-100k-dev1000-20260921T043822Z-69be0e20/a0001/`.
+It ran on c7i.8xlarge Spot instance `i-01143597ce44de7cd` in
+eu-central-1, which is terminated. The 393-byte terminal is `complete`, exit
+0, and has SHA-256
+`8d320c17f76cb24a12c2fc9e1d303e97ebaf81fd4165643a6c400b60aa837f55`.
+The release binary was 39,655,848 bytes with SHA-256
+`17d80b0cc68144ada6a4429586f5c28057b55fc8dff7eff9202b7cc8a8cbe893`.
+
+The authenticated inputs were:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| source | 145,121,661 | `a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d` |
+| queries | 1,544,342 | `4834cf63a50971b7d605c00f91b5142f67b049e91ea2c62c220271b50bffa6ac` |
+| exact truth | 512,093 | `ab8bfae34f753512f352581218596fc0f043354f8168192c856278b3ab5a0ce7` |
+
+Terminal-bound output evidence was:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| canonical result | 2,920 | `d29690543c637d1d50f1cdc370e68d30bcad00b766ba32b5ef484c262d5426e6` |
+| per-query samples | 399,980 | `1ac51be90f59e6319eec33be5a8a6c2afd178b50c3d32e060915005fecae55d0` |
+| resource log | 158 | `4d77cae7da16e884507fb019f1dd60d8be3d15a1deb740fd541553c5bfce3109` |
+| process timing | 2,003 | `b3cba337efa83dc2ad17dd4c845fff3a3280004fd2f63faf4b14d6c1f5626743` |
+
+| measured quantity | result |
+|---|---:|
+| average Recall@10 | **51.7200%** |
+| average Recall@100 | **33.9530%** |
+| nearest-rank p05 Recall@100 | **16.0%** |
+| warm-local query latency p50 / p95 / p99 | 19.984 / 20.765 / 21.932 ms |
+| logical GETs / pages | 16,778 / 20,000 |
+| logical bytes | 16,347,716,032 |
+| exact rows scored | 5,117,984 |
+| build / 1,000-query wall | 18.589 / 20.107 s |
+| whole science wall | 39.54 s |
+| peak process RSS | 2,315,800,576 bytes |
+
+Every query stayed within 20 logical GETs/pages and 16,354,720 bytes. The
+production index contained 19 segments and reported 320,543,803 collection
+resident bytes. The process used zero swap; the resource monitor observed zero
+memory PSI. A separate bounded recomputation authenticated all 1,000 sample
+ordinals, 100 unique returned IDs per query, every hit count, aggregate,
+latency quantile, and I/O total against the canonical result.
+
+**Ruling:** the cell is intentionally `claim_eligible=false` and fails all
+three frozen quality gates by a wide margin. Exact scoring is not the failure:
+the route exposes only 5,117.984 of 100,000 rows per query on average, so true
+pages are excluded before exact scoring. Kill this production-native routing
+configuration and do not scale it to 1M. G1 must first qualify a stronger
+bounded shortlist under the fixed 32-GET/16-MiB serving budget; its latency
+must then be measured on real S3 rather than inferred from these warm-local
+numbers.
