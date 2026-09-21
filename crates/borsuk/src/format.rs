@@ -10687,6 +10687,25 @@ mod tests {
     }
 
     #[test]
+    fn native_bounded_cutover_manifest_omits_retired_v2_authority_column() {
+        let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
+        let batch = first_batch(&bytes, "manifest").unwrap();
+
+        assert!(
+            batch
+                .schema()
+                .field_with_name("native_ann_ref_json")
+                .is_err()
+        );
+        assert!(
+            batch
+                .schema()
+                .field_with_name("native_bounded_ann_ref_json")
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn manifest_persists_only_the_bounded_logical_cell_catalog_reference() {
         let mut manifest = valid_manifest();
         let catalog = Arc::new(
