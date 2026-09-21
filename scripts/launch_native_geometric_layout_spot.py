@@ -350,7 +350,7 @@ for method in methods:
                         "sha256":hashlib.sha256(data).hexdigest(),
                         "uri":f"{{os.environ['OUTPUT_PREFIX']}}/artifacts/{{path.name}}"}})
 receipt={{"memberships":memberships,"schema":"borsuk-native-geometric-layout-membership-seal-v1"}}
-pathlib.Path("sealed-memberships.json").write_text(json.dumps(receipt,sort_keys=True,separators=(",",":"))+"\n")
+pathlib.Path("sealed-memberships.json").write_text(json.dumps(receipt,sort_keys=True,separators=(",",":"))+"\\n")
 PY
 chmod 0444 membership-*.parquet sealed-memberships.json
 
@@ -442,7 +442,7 @@ receipt={{"claim_eligible":False,"decisions":[[method.value,value] for method,va
          "result":{{"encoded_bytes":result_identity.encoded_bytes,"role":result_identity.role,
          "sha256":result_identity.sha256,"uri":result_identity.uri}},
          "schema":"borsuk-native-geometric-layout-validation-v1","source_commit":os.environ["SOURCE_COMMIT"]}}
-pathlib.Path("validation.json").write_text(json.dumps(receipt,sort_keys=True,separators=(",",":"))+"\n")
+pathlib.Path("validation.json").write_text(json.dumps(receipt,sort_keys=True,separators=(",",":"))+"\\n")
 PY
 for file in membership-*.parquet evidence-*.parquet resource-*.txt result.json sealed-memberships.json; do
   aws s3 cp "$file" "$output/artifacts/$file" --only-show-errors

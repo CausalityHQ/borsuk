@@ -126,6 +126,22 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
         self.assertIn("trap terminal EXIT", script)
         self.assertIn("shutdown -h now", script)
 
+    def test_worker_embedded_python_is_syntactically_valid(self) -> None:
+        lines = worker_script(self.valid_plan()).splitlines()
+        programs: list[str] = []
+        cursor = 0
+        while cursor < len(lines):
+            if not lines[cursor].endswith("<<'PY'"):
+                cursor += 1
+                continue
+            end = lines.index("PY", cursor + 1)
+            programs.append("\n".join(lines[cursor + 1 : end]) + "\n")
+            cursor = end + 1
+        self.assertEqual(len(programs), 5)
+        for index, program in enumerate(programs):
+            with self.subTest(index=index):
+                compile(program, f"<worker-python-{index}>", "exec")
+
     def test_launch_specs_are_serial_one_time_spot_and_delete_storage(self) -> None:
         plan = self.valid_plan()
         specs = build_launch_specs(plan)
