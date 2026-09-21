@@ -15847,7 +15847,8 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         let global_base_present = previous.global_ann_ref.is_some()
             || previous.global_cell_card_ann_ref.is_some()
-            || previous.native_ann_ref.is_some();
+            || previous.native_ann_ref.is_some()
+            || previous.native_bounded_ann_ref.is_some();
         let prior_global_delta = if previous.segments_are_global_delta {
             previous.segments.clone()
         } else {
@@ -16129,8 +16130,6 @@ impl BorsukIndex {
         if let Some(native) = native_bounded_delta {
             manifest.native_bounded_ann_ref = Some(native);
             manifest.native_ann_ref = None;
-            manifest.segments.clear();
-            manifest.segments_are_global_delta = false;
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published = if paged_manifest {
@@ -18275,6 +18274,11 @@ impl BorsukIndex {
             eligible_delta_ids.as_ref(),
         )?;
         let selected = source_selection.selected;
+        let bounded_inline_delta = (options.max_segments.is_none()
+            && self.manifest.native_bounded_ann_ref.is_some()
+            && self.manifest.segments_are_global_delta)
+            .then(|| self.manifest.segments.clone())
+            .unwrap_or_default();
         let dirty_pages = source_selection.dirty_pages;
         let mut decoded_parent_pages = source_selection.decoded_parent_pages;
         let routing_page_indexes_read = source_selection.routing_page_indexes_read;
@@ -18285,7 +18289,7 @@ impl BorsukIndex {
         let routing_object_cache_hits = source_selection.object_cache_hits;
         let routing_object_cache_misses = source_selection.object_cache_misses;
 
-        if selected.len() < options.min_segments {
+        if selected.len() < options.min_segments && bounded_inline_delta.is_empty() {
             return Ok(CompactionReport {
                 compacted: false,
                 source_level: options.source_level,
@@ -18332,7 +18336,7 @@ impl BorsukIndex {
         let mut object_cache_misses = routing_object_cache_misses;
 
         crate::build_timing::timed(crate::build_timing::Phase::CompactionSourceRead, || {
-            for summary in &selected {
+            for summary in selected.iter().chain(&bounded_inline_delta) {
                 let (segment, segment_bytes_read, segment_cache_hit, _) =
                     self.read_segment_for_rewrite(summary)?;
                 bytes_read += segment_bytes_read;
@@ -18345,7 +18349,9 @@ impl BorsukIndex {
             }
             Ok::<_, BorsukError>(())
         })?;
-        self.repopulate_sparse_named_records(&mut records, &selected)?;
+        let mut rewritten_summaries = selected.clone();
+        rewritten_summaries.extend(bounded_inline_delta.iter().cloned());
+        self.repopulate_sparse_named_records(&mut records, &rewritten_summaries)?;
         // Physically drop logically deleted rows so compaction reclaims their
         // storage. Tombstone entries are cleared only by purge(), which rewrites
         // every remaining occurrence.
@@ -18358,7 +18364,7 @@ impl BorsukIndex {
             );
         });
 
-        let selected_ids = selected
+        let selected_ids = rewritten_summaries
             .iter()
             .map(|summary| summary.id.as_str())
             .collect::<HashSet<_>>();
@@ -26999,7 +27005,6 @@ impl BorsukIndex {
             && options.filter.is_none()
             && !options.include_metadata
             && !include_vectors
-            && !self.manifest.segments_are_global_delta
             && let Some(snapshot) = &self.native_bounded_ann_snapshot
         {
             let live_wal = self.dense_live_wal_records(None)?;
