@@ -80,6 +80,8 @@ class BoundedReaderSpotLauncherTests(unittest.TestCase):
             "ulimit -v \"$BOUNDED_VIRTUAL_MEMORY_KIB\"",
             "sha256sum -c sq8.sha256",
             "/usr/bin/time -v",
+            "uv venv --python 3.12",
+            "requirements-format-bench.txt",
             "/proc/pressure/memory",
             "full avg10",
             "0.50",

@@ -52,14 +52,18 @@ PY
 trap publish_terminal EXIT
 
 phase=dependencies
-dnf install -y -q gcc python3-pip time >/dev/null
+dnf install -y -q gcc time >/dev/null
 export HOME=${HOME:-/root}
 if ! command -v cargo >/dev/null 2>&1; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
-python3 -m venv .venv
-.venv/bin/pip install --disable-pip-version-check --quiet numpy==2.4.2 pyarrow==24.0.0
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.local/bin:$PATH"
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r repo/scripts/requirements-format-bench.txt
 
 phase=input-download
 aws s3 cp "$BOUNDED_SOURCE_URI" source.parquet --only-show-errors
