@@ -26898,10 +26898,13 @@ impl BorsukIndex {
             && let Some(snapshot) = &self.native_ann_snapshot
         {
             let live_wal = self.dense_live_wal_records(None)?;
-            let shadowed_ids = live_wal
+            let mut shadowed_ids = live_wal
                 .iter()
                 .map(|record| record.id.as_bytes().to_vec())
                 .collect::<BTreeSet<_>>();
+            for summary in self.cell_wal_tombstone_summaries()? {
+                shadowed_ids.extend(self.load_tombstone_run(&summary)?.keys().cloned());
+            }
             let outcome = snapshot.search_with_overlay(
                 query,
                 options.k,
