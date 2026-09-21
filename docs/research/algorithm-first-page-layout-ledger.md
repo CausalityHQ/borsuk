@@ -2891,3 +2891,68 @@ information, but two-stage additive quantization recovers less than one point
 on this screen and remains more than five points below the 97.5% gate. It is
 not close enough for parameter tuning. G1 still has no eligible compact row
 representation; G2, real-S3 promotion, 10M, and 100M remain fenced.
+
+## V102 result — bounded S3 PQ48 refinement is feasible but misses quality
+
+V102 tested whether moving a wider row-ranking representation out of resident
+RAM and into one bounded object-storage refinement wave could close V99's
+compressed-ranking gap. It preserved the immutable V99 hierarchy and final
+ranked-gap page selection. For each query it required every one of the
+hierarchy-retained PQ48 code pages to fit a first wave of at most 32 range GETs
+and 16 MiB, scored those codes, and then retained the existing final page-data
+wave of at most 32 range GETs and 16 MiB. The two waves are reported separately;
+V102 is not represented as satisfying the original one-wave G1 budget.
+
+The immutable source revision was
+`2c560a8e70c4c5cbc55d1e6b6eebdad7a070a2da`. Its 10,753,340-byte source
+archive is at
+`s3://borsuk-bench-453182569524-euc1/research/v102-two-wave-pq48/2c560a8e70c4c5cbc55d1e6b6eebdad7a070a2da/source/source.tar.gz`, SHA-256
+`c0ef1a85e1ef108c144807bd1b3588884d9fbe60ad5adc0945d8b3b1b1097bdc`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v102-two-wave-pq48/2c560a8e70c4c5cbc55d1e6b6eebdad7a070a2da/runs/v102-g1-screen-20260921T003800Z-2c560a8/a0001`.
+It used c7i.8xlarge Spot instance `i-0895e3e26faec590a` in eu-central-1c,
+which terminated after its claim-eligible terminal. The 1,511-byte terminal has
+SHA-256 `b4b624512e9faa88bb9b5032272ab1e280e15931c847ba721959ef634e7498a7`.
+
+The fixed fail-fast cohort was again the first 128 already-burned ReLAION-1M
+development queries, with all complete frozen inputs authenticated before
+slicing. The exact evidence identities are:
+
+- result: 25,168,460 bytes, SHA-256
+  `9dc6059476bceea713aa83a373d158558e93f56091cd15e42c3d26a897d410e8`;
+- independent rescore: 883 bytes, SHA-256
+  `55d05030703e7f66760e1d7e4abc98635dd317319bf4e4d88486ee03f521e636`;
+- resources: 459 bytes, SHA-256
+  `005ec18b71581744ce3bd610a2f338f29d3a3fbe49b804f65ab20be736172dc5`;
+- worker log: 352 bytes, SHA-256
+  `0faa827d1e7507fae9d1411c57823e73c9fef5d71c6459782cdbb60b10ed3ccf`;
+- PQ48 books: 786,432 bytes, SHA-256
+  `c24b36f9808e2ce4d6ba6e6bf1c2f89e26b96ceed09eec01bd809ecb7d2b1c3a`;
+- one-million-row PQ48 code plane: 48,000,000 bytes, SHA-256
+  `9c5de9f957917b07acca7c0083d2cef614e0539f4c2b772cbdb2c42f322fc6f1`.
+
+| 128-query arm | avg Recall@10 | avg Recall@100 | p05 Recall@100 | final max GETs | final max bytes |
+|---|---:|---:|---:|---:|---:|
+| matched V99 flat PQ16 | 96.4843% | 91.3203% | 65% | 32 | 16,777,216 |
+| V102 S3-resident PQ48 | **98.5937%** | **95.1328%** | **80%** | 32 | 16,777,200 |
+
+The separate refinement-code wave reached at most 32 GETs and 12,742,320
+bytes. The paired 10,000-resample 95% interval for V102 minus flat PQ16 was
++0.9375 to +3.6719 percentage points at Recall@10, +2.7969 to +4.8828 at
+Recall@100, and +7 to +20 at p05 Recall@100. The independent reducer
+recomputed the retained hierarchy pages, both waves, every sample, aggregate,
+interval, projection, and the `two-wave-pq48-rejected` classification.
+
+The complete 100M resident projection is 1,269,504,702 bytes; row codes are
+zero resident bytes, while the immutable S3 PQ48 plane is 4,800,000,000 bytes.
+The cell took 654 seconds, reached 11,072,196 KiB peak RSS, had zero swap and
+zero memory PSI, and cost an estimated $0.087200.
+
+**Ruling:** reject V102 without a 1,000-query continuation. The bounded
+object-storage refinement wave is physically feasible and recovers 3.8125
+Recall@100 points over matched PQ16, but it remains 2.3672 points below the
+97.5% average gate and 10 points below the p05 gate. The monotone but
+diminishing PQ16/PQ24/PQ32/PQ48 evidence does not justify a PQ64 tuning ladder,
+which would also consume the full 16-MiB refinement budget before any gap
+bytes. G1 still has no eligible representation; further work must change the
+ranking objective or representation family rather than widen conventional PQ.
