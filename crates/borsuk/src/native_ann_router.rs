@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(plan.estimated_body_bytes, 2 * 1_048_576);
         assert_eq!(plan.summary_scores_evaluated, 4);
         assert_eq!(plan.row_scores_evaluated, 512);
-        assert!(plan.candidate_rows.capacity() <= limits.max_candidate_rows as usize);
+        assert!(plan.candidate_rows.len() <= limits.max_candidate_rows as usize);
     }
 
     #[test]
