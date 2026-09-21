@@ -185,6 +185,103 @@ def benchmark_rows() -> list[BenchmarkRow]:
         scaling_note="baseline row",
     )
 
+    bounded_100k = BenchmarkRow(
+        schema=SCHEMA,
+        system="BORSUK",
+        corpus="ReLAION",
+        split="development-100k",
+        n=100_000,
+        dimensions=768,
+        queries=1_000,
+        k=100,
+        mode="bounded-native-sq8-v3",
+        source_commit="8871c39d64d400a2597c8be1f9163c0c65deab75",
+        seed="bounded-pq=0x42534b33; deterministic production builder",
+        raw_result_uri=(
+            "s3://borsuk-bench-453182569524-euc1/research/native-bounded-release/"
+            "8871c39d64d400a2597c8be1f9163c0c65deab75/task5-100k-a0001/result.json"
+        ),
+        raw_samples_uri=(
+            "s3://borsuk-bench-453182569524-euc1/research/native-bounded-release/"
+            "8871c39d64d400a2597c8be1f9163c0c65deab75/task5-100k-a0001/samples.parquet"
+        ),
+        evidence_sha256="040e41653fce591a471e09275dbab4a6f0a95a605c92c8ca63cc1b704c35ff65",
+        hardware="c7a.4xlarge Spot client; local filesystem object store; eu-central-1a",
+        exact_command=(
+            "target/release/examples/native_ann_100k_qualify --source source.parquet "
+            "s3://borsuk-bench-453182569524-euc1/research/v85-pq16-page-nomination/"
+            "24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/"
+            "source-100k.parquet a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d "
+            "145121661 --queries queries.parquet s3://borsuk-bench-453182569524-euc1/research/"
+            "v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/"
+            "v85-100k-dev1000-20260920T094401Z-fb976932/a0001/inputs/queries.parquet "
+            "4834cf63a50971b7d605c00f91b5142f67b049e91ea2c62c220271b50bffa6ac "
+            "1544342 --truth truth.parquet s3://borsuk-bench-453182569524-euc1/research/"
+            "v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/"
+            "v85-100k-dev1000-20260920T094401Z-fb976932/a0001/inputs/truth-100k.parquet "
+            "ab8bfae34f753512f352581218596fc0f043354f8168192c856278b3ab5a0ce7 512093 "
+            "--index-uri index --samples samples.parquet --result result.json --source-commit "
+            "8871c39d64d400a2597c8be1f9163c0c65deab75 --execute-native-ann-100k"
+        ),
+        repetitions_ci=(
+            "one immutable attempt; 1,000 per-query samples; semantic 1/10/100 repetitions; no CI"
+        ),
+        latency_context="warm local object-store path; not S3 cold latency",
+        build_time_s=32.162726505,
+        build_status="measured",
+        index_bytes=554_398_387,
+        bytes_per_vector=5_543.98387,
+        index_status="measured",
+        peak_rss_bytes=2_115_678_208,
+        rss_status="measured",
+        cold_latency_p50_ms=MISSING_FLOAT,
+        cold_latency_p95_ms=MISSING_FLOAT,
+        cold_latency_p99_ms=MISSING_FLOAT,
+        cold_latency_status="blocked",
+        warm_latency_p50_ms=26.694726,
+        warm_latency_p95_ms=26.959755,
+        warm_latency_p99_ms=29.943296,
+        warm_latency_status="measured",
+        qps_c1=37.32425553433029,
+        qps_c1_status="measured",
+        qps_batch=MISSING_FLOAT,
+        batch_concurrency=MISSING_INT,
+        qps_batch_status="blocked",
+        get_count_mean=32.0,
+        get_count_p50=32.0,
+        get_count_status="measured",
+        service_requests_per_query=MISSING_FLOAT,
+        service_request_status="blocked",
+        bytes_query_mean=7_289_786.688,
+        bytes_query_p50=7_292_416.0,
+        bytes_query_status="measured",
+        average_recall10_ppm=697_400,
+        average_recall100_ppm=512_670,
+        p05_recall100_ppm=330_000,
+        worst_recall100_ppm=210_000,
+        quality_status="measured",
+        cost_usd=0.04485711111111111,
+        cost_scope=(
+            "estimated Spot compute for 388 s at authenticated 0.4162 USD/hour; excludes "
+            "negligible EBS and S3 charges"
+        ),
+        cost_status="estimated",
+        overall_status="measured-failed-quality-router-line-retired",
+        evidence_note=(
+            "All 1,000 queries selected exactly 32 pages. Independent validation recomputed the "
+            "quality and latency summaries; 1/10/100 repetition, mutation visibility, reopen, and "
+            "compaction equivalence passed. This router/width revision is retired before 1M."
+        ),
+        scaling_from_n=MISSING_INT,
+        scale_n_ratio=MISSING_FLOAT,
+        build_time_slope_exponent=MISSING_FLOAT,
+        index_bytes_slope_exponent=MISSING_FLOAT,
+        peak_rss_slope_exponent=MISSING_FLOAT,
+        warm_p50_slope_exponent=MISSING_FLOAT,
+        scaling_status="blocked",
+        scaling_note="100k quality gate failed; no same-revision 1M scale cell is authorized",
+    )
+
     bounded_1m = BenchmarkRow(
         schema=SCHEMA,
         system="BORSUK",
@@ -378,7 +475,7 @@ def benchmark_rows() -> list[BenchmarkRow]:
         scaling_status="blocked",
         scaling_note="no authenticated matched 100k S3 Vectors cell",
     )
-    rows = [native_100k, bounded_1m, s3_vectors]
+    rows = [native_100k, bounded_100k, bounded_1m, s3_vectors]
     validate_rows(rows)
     return rows
 
@@ -485,10 +582,11 @@ def _corpus_label(row: BenchmarkRow) -> str:
 
 
 def operator_markdown(rows: list[BenchmarkRow]) -> str:
-    by_identity = {(row.system, row.n): row for row in rows}
-    native = by_identity[("BORSUK", 100_000)]
-    bounded = by_identity[("BORSUK", 1_000_000)]
-    service = by_identity[("Amazon S3 Vectors", 1_000_000)]
+    by_identity = {(row.system, row.n, row.mode): row for row in rows}
+    previous = by_identity[("BORSUK", 100_000, "native-production-exact-page-score")]
+    native = by_identity[("BORSUK", 100_000, "bounded-native-sq8-v3")]
+    bounded = by_identity[("BORSUK", 1_000_000, "bounded-native-sq8")]
+    service = by_identity[("Amazon S3 Vectors", 1_000_000, "matched-managed-service")]
     lines = [
         "# BORSUK measured benchmark checkpoint",
         "",
@@ -533,16 +631,17 @@ def operator_markdown(rows: list[BenchmarkRow]) -> str:
             "",
             "## Decision",
             "",
-            f"- ReLAION-100k development production routing is killed: mean R@100 is {_percent(native.average_recall100_ppm)} despite exact candidate scoring.",
-            f"- The unchanged 1M bounded reader is the quality/latency baseline: mean R@100 {_percent(bounded.average_recall100_ppm)}, reused p99 {bounded.warm_latency_p99_ms:.2f} ms, peak {bounded.qps_batch:.1f} QPS.",
+            f"- Current format-v3 ReLAION-100k routing is killed: mean R@100 is {_percent(native.average_recall100_ppm)} at exactly {native.get_count_mean:.0f} page GETs/query, below the 97.5% gate.",
+            f"- It improves the prior 100k router ({_percent(previous.average_recall100_ppm)} mean R@100) but remains far below the target.",
+            f"- The historical 1M bounded reader remains non-promoted evidence: mean R@100 {_percent(bounded.average_recall100_ppm)}, reused p99 {bounded.warm_latency_p99_ms:.2f} ms, peak {bounded.qps_batch:.1f} QPS; it is a different frozen architecture.",
             f"- Matched S3 Vectors reaches mean R@100 {_percent(service.average_recall100_ppm)}; its physical GETs and index bytes are service-opaque.",
-            "- The 100k→1M slope fields are descriptive only because the two BORSUK rows use different formats, routing, and storage paths. No 10M/100M value is presented as measured.",
+            "- No same-revision 100k→1M slope exists because the current 100k quality gate failed. No 10M/100M value is presented as measured.",
             "- An exact brute-force latency cell was not run: exact GT100 already fixes the quality control, and brute-force latency would not choose between the current product integration options.",
             "- Turbopuffer is blocked: no authenticated tenant/namespace credential was available, so no matched row is emitted.",
             "",
             "## Next production gate",
             "",
-            "Bound concurrent ranged-response memory, then attach the measured bounded reader to authenticated native generations, delta merge, mutation visibility, and compaction. Qualify those semantics at 100k before any larger spend.",
+            "The authenticated generation/delta/mutation/compaction integration is verified, but its router fails quality. Redesign the routing/index representation and falsify it at 100k; do not spend on 1M/10M/100M for this revision.",
             "",
         ]
     )

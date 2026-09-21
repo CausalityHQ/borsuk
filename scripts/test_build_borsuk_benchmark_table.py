@@ -21,15 +21,21 @@ class BorsukBenchmarkTableTests(unittest.TestCase):
             [(row.system, row.n, row.mode) for row in rows],
             [
                 ("BORSUK", 100_000, "native-production-exact-page-score"),
+                ("BORSUK", 100_000, "bounded-native-sq8-v3"),
                 ("BORSUK", 1_000_000, "bounded-native-sq8"),
                 ("Amazon S3 Vectors", 1_000_000, "matched-managed-service"),
             ],
         )
-        native_100k, bounded_1m, s3_vectors = rows
+        native_100k, bounded_100k, bounded_1m, s3_vectors = rows
         self.assertEqual(native_100k.queries, 1_000)
         self.assertEqual(native_100k.k, 100)
         self.assertEqual(native_100k.average_recall100_ppm, 339_530)
         self.assertEqual(native_100k.worst_recall100_ppm, 80_000)
+        self.assertEqual(bounded_100k.average_recall100_ppm, 512_670)
+        self.assertEqual(bounded_100k.get_count_mean, 32.0)
+        self.assertEqual(
+            bounded_100k.overall_status, "measured-failed-quality-router-line-retired"
+        )
         self.assertEqual(bounded_1m.average_recall100_ppm, 990_260)
         self.assertEqual(bounded_1m.warm_latency_p99_ms, 89.746010)
         self.assertEqual(bounded_1m.qps_batch, 182.39226711391123)
@@ -55,7 +61,7 @@ class BorsukBenchmarkTableTests(unittest.TestCase):
             markdown = Path(temporary) / "table.md"
             write_artifacts(parquet, markdown)
             table = pq.read_table(parquet)
-            self.assertEqual(table.num_rows, 3)
+            self.assertEqual(table.num_rows, 4)
             self.assertEqual(table.schema.metadata[b"schema"], b"borsuk-benchmark-table-v1")
             self.assertFalse(any(field.nullable for field in table.schema))
             body = markdown.read_text()
@@ -63,6 +69,7 @@ class BorsukBenchmarkTableTests(unittest.TestCase):
             self.assertIn("ReLAION-1M development", body)
             self.assertNotIn("ReLAION-1000k", body)
             self.assertIn("99.026%", body)
+            self.assertIn("51.267%", body)
             self.assertIn("matched-workload, not paired query order", body)
             self.assertIn("Turbopuffer", body)
             self.assertIn("blocked", body)
