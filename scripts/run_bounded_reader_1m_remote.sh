@@ -22,9 +22,16 @@ publish_terminal() {
   [ -n "$monitor_pid" ] && kill "$monitor_pid" 2>/dev/null
   [ -n "$monitor_pid" ] && wait "$monitor_pid" 2>/dev/null
   instance_id=$(imds instance-id || true)
+  artifact_upload_failed=0
   for name in result.json samples.parquet reduction.json resources.txt worker.log pressure-stop.txt swap-stop.txt interrupt-stop.txt; do
-    [ -f "$name" ] && aws s3 cp "$name" "$BOUNDED_OUTPUT_PREFIX/$name" --only-show-errors
+    if [ -f "$name" ] && ! aws s3 cp "$name" "$BOUNDED_OUTPUT_PREFIX/$name" --only-show-errors; then
+      artifact_upload_failed=1
+    fi
   done
+  if [ "$artifact_upload_failed" -ne 0 ]; then
+    exit_code=96
+    phase=evidence-upload
+  fi
   ended_epoch=$(date +%s)
   python3 - "$exit_code" "$phase" "$instance_id" "$started_epoch" "$ended_epoch" >terminal.json <<'PY'
 import json, os, sys

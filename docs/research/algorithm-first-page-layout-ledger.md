@@ -3466,3 +3466,123 @@ the sole matched-service attempt produced no claim-eligible competitor result.
 Do not scale this router to validation, 10M, or 100M, and do not imply parity
 with S3 Vectors or Turbopuffer. Preserve the evidence and tag this revision as
 an architecture closeout.
+
+## Bounded-reader next result — matched ReLAION-1M evidence
+
+The next-result phase did not reopen V108 or tune its rejected router. It
+packaged the strongest already-working one-wave native SQ8 reader and measured
+it against a repaired matched Amazon S3 Vectors cell on the same frozen
+ReLAION-1M development workload: 1,000,000 source rows × 768 float32
+dimensions, all 1,000 development queries, exact Euclidean GT100, and
+`topK=100`. The source, query, and truth identities are the three authorities
+listed in the preceding closeout section.
+
+### Native bounded BORSUK reader
+
+The immutable scientific source was
+`26716f9eae90688ea0b047a83211d99855062858`. Its 10,840,876-byte source
+archive has SHA-256
+`b204ee2d5693b8f4de472595b80fd259ee8b3512c00d92fee665a1d30b54c398`.
+The sole scientific attempt was
+`s3://borsuk-bench-453182569524-euc1/research/bounded-reader-next-result/26716f9eae90688ea0b047a83211d99855062858/runs/bounded-reader-20260921T074858Z-26716f9/a0001/`.
+It ran on c7i.12xlarge Spot instance `i-018f299784382235e` in
+eu-central-1c; the instance is terminated. A preceding harness-only attempt
+under source `80ef77ba4f9b9c76381bacdbf79a5c888bca4286` failed before science
+because Amazon Linux's default Python could not install the pinned NumPy and
+PyArrow versions. It cost at most $0.0062 and its prefix was not reused.
+
+The reader authenticated the historical 780,000,000-byte SQ8 object with full
+SHA-256
+`2284f24745f964ff2b125eedb883d5cd8ff6afab0738f49f9e16e593167a318b`
+before science. It used the unchanged fixed operating point: 256 coarse
+regions, 512 shortlisted rows, gap 2, and 128 concurrent ranged GETs. It ran
+two fixed sequential passes over all queries, then a throughput ladder. The
+1,195,625-byte per-query Parquet evidence has SHA-256
+`b3455f813822dc39376c53f4dc427157f3aaa8fd9fe65854aa8d3668a574b3c0`.
+An independent reducer recomputed every feature-ID hit, aggregate, latency,
+GET, and byte statistic; its SHA-256 is
+`21186a7a1b692dc4ade80eb936919e3b2cc2fff7be7553318b1b3473af6bc8f1`.
+The producer result SHA-256 is
+`532080d202538dc252640257fb5f30eea0de3b4453b897f45eb000962989133d`;
+the terminal SHA-256 is
+`283f560c9a86e0e5a4980519ea216c20105711bf84b156ff706f6fdb79c4c76d`.
+
+| metric | first-connection pass | connection-reuse pass |
+|---|---:|---:|
+| average Recall@10 | **99.2800%** | **99.2800%** |
+| average Recall@100 | **99.0260%** | **99.0260%** |
+| p05 / worst Recall@100 | **97% / 82%** | **97% / 82%** |
+| latency p50 / p95 / p99 | 41.458 / 70.074 / 161.862 ms | **41.765 / 65.509 / 89.746 ms** |
+| GETs p50 / p95 / p99 / max | 20 / 52 / 63 / 84 | 20 / 52 / 63 / 84 |
+| bytes p50 / p95 / p99 / max | 10.474 / 22.280 / 26.089 / 33.706 MiB | same |
+
+The throughput ladder had zero errors at every point: 81.5 QPS at 8 workers,
+144.1 QPS at 32, **182.4 QPS at 128**, and 177.2 QPS at 384. The native
+process ran for 118.96 seconds and reached 11,334,412 KiB peak RSS at the
+aggressive concurrency ladder; it swapped zero pages and memory PSI remained
+zero. The full wrapper, including manifest construction, took 421 seconds and
+cost at most $0.0842 in Spot compute. S3 request charges were not preserved as
+a separate receipt, so this is not a complete serving-cost claim. The high
+throughput-ladder RSS is also not a 100M resident-memory proof; query
+concurrency and response buffers must be bounded before a scalability claim.
+
+### Matched Amazon S3 Vectors
+
+A live two-vector preflight first proved the exact boto3 1.42.97 / botocore
+1.42.97 / NumPy 2.4.2 / PyArrow 24.0.0 dependency and service lifecycle against
+API `2025-07-15`; its canonical receipt SHA-256 is
+`181876e6594b21e586d109c1e52f682f9b53bd917fcfdd23840494e25cee6549`.
+Both preflight resources were deleted before the matched launch.
+
+The matched scientific revision was
+`db47333f3ace06d0e6cb0dbd6fcf41150b5e87c2`. Evidence is under
+`s3://borsuk-bench-453182569524-euc1/research/matched-s3-vectors-next-result/db47333f3ace06d0e6cb0dbd6fcf41150b5e87c2/runs/matched-20260921T080153Z-db47333/a0001/`.
+It ran once on c7i.8xlarge Spot instance `i-0017a626222c604c0` in
+eu-central-1c. The terminal SHA-256 is
+`f502f9443b954a674a296896d138d7e039d58f37850c9f1ee46cbabd6f226488`;
+the producer result and per-query Parquet SHA-256 values are respectively
+`b6d392170152a535596bd706349e44acd64b38ed1108197e71745c317b51d009`
+and `870b24d95178f6087c762d248fec10ee7d885ac990346dfe91134e4f777aa346`.
+Independent local recomputation from the terminal-bound samples and frozen
+truth matched every aggregate below.
+
+The two products used the same 1,000 query identities and exact truth, but not
+the same query schedule: BORSUK used ascending query ordinal while the S3
+Vectors harness used one frozen deterministic permutation. Recall aggregates
+are order-independent. The latency distributions are matched-workload
+measurements, not paired per-query-order evidence, and may include different
+temporal service effects.
+
+| metric | fresh-index first pass | immediate repeated pass |
+|---|---:|---:|
+| average Recall@10 | 97.6800% | 97.7400% |
+| average Recall@100 | 90.9380% | 91.0450% |
+| p05 / worst Recall@100 | 67% / 39% | 68% / 39% |
+| latency p50 / p95 / p99 | 73.350 / 239.556 / 328.051 ms | 61.372 / 93.516 / 120.567 ms |
+
+S3 Vectors ingested 1,000,000 vectors in 848.09 seconds, or **1,179.1
+vectors/s**, through 2,000 `PutVectors` calls. The full cell took 1,113
+seconds, peaked at 551,780 KiB RSS, used no swap, and cost at most $0.2127 in
+Spot compute. This excludes S3 Vectors service charges. No concurrent query
+throughput cell was registered, so no S3 Vectors QPS comparison is claimed.
+The temporary index and vector bucket were deleted and independently confirmed
+absent; the Spot instance is terminated.
+
+### Decision
+
+On this exact matched workload, the bounded BORSUK reader is materially better
+than S3 Vectors in average and tail recall and in both observable sequential
+latency distributions. This is matched-workload product evidence, not a paired
+query-order experiment or a universal vendor claim.
+It does not qualify a release candidate: the measured reader still lacks the
+generation/delta/mutation/compaction release surface, its maximum per-query
+bytes exceeded 16 MiB, and the throughput ladder's 10.81-GiB peak RSS does not
+support the 100M sub-3-GiB target. Turbopuffer remains access-blocked, so its
+published figures remain non-matched context only.
+
+**Next-result ruling:** preserve this reader as the strongest measured 1M
+baseline and stop architecture tuning. The immediate production work is to
+bound concurrent response memory and attach this exact read path to the native
+snapshot/generation/delta/mutation/compaction API. Do not spend on 9.99M or
+100M until those semantics pass at 100k and the 100M resident worksheet is
+below 3 GiB. Publish a next-result decision tag, not a release-candidate tag.

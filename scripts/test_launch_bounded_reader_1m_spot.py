@@ -205,6 +205,17 @@ class BoundedReaderSpotLauncherTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_remote_runner_cannot_report_success_after_artifact_upload_failure(self) -> None:
+        runner = pathlib.Path(__file__).with_name("run_bounded_reader_1m_remote.sh").read_text()
+        upload_guard = '! aws s3 cp "$name" "$BOUNDED_OUTPUT_PREFIX/$name"'
+        self.assertIn(upload_guard, runner)
+        self.assertIn("artifact_upload_failed=1", runner)
+        self.assertIn('if [ "$artifact_upload_failed" -ne 0 ]; then', runner)
+        self.assertIn("exit_code=96", runner)
+        self.assertIn("phase=evidence-upload", runner)
+        self.assertLess(runner.index(upload_guard), runner.index("exit_code=96"))
+        self.assertLess(runner.index("exit_code=96"), runner.index(">terminal.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

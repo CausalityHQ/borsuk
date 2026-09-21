@@ -213,19 +213,18 @@ fn coarse_regions(
         }
         squared - 2.0 * inner
     };
-    let mut page_scores: Vec<f32> = match in_query_cpu {
+    let page_scores: Vec<f32> = match in_query_cpu {
         InQueryCpu::Rayon => (0..blocks).into_par_iter().map(score).collect(),
         InQueryCpu::Sequential => (0..blocks).map(score).collect(),
     };
     // A page scores as the best of its blocks.
     let mut best = vec![f32::INFINITY; manifest.pages];
-    for block in 0..blocks {
+    for (block, page_score) in page_scores.into_iter().enumerate() {
         let page = block / manifest.blocks_per_page;
-        if page_scores[block] < best[page] {
-            best[page] = page_scores[block];
+        if page_score < best[page] {
+            best[page] = page_score;
         }
     }
-    page_scores.clear();
     let mut ordered: Vec<usize> = (0..manifest.pages).collect();
     let take = regions.min(ordered.len());
     ordered.select_nth_unstable_by(take - 1, |a, b| best[*a].total_cmp(&best[*b]));
@@ -705,21 +704,32 @@ fn canonical_result_bytes(result: &BoundedReaderResult) -> BenchResult<Vec<u8>> 
     Ok(body)
 }
 
-async fn search(
-    store: &Arc<dyn ObjectStore>,
-    key: &ObjectPath,
-    manifest: &Manifest,
-    query: &[f32],
+#[derive(Clone, Copy)]
+struct SearchParameters {
     budget: usize,
     regions: usize,
     gap: usize,
     concurrency: usize,
     in_query_cpu: InQueryCpu,
+}
+
+async fn search(
+    store: &Arc<dyn ObjectStore>,
+    key: &ObjectPath,
+    manifest: &Manifest,
+    query: &[f32],
+    parameters: SearchParameters,
 ) -> BenchResult<QueryOutcome> {
     let row_bytes = 8 + 4 + manifest.dimensions;
     let started = Instant::now();
-    let chosen = route(manifest, query, budget, regions, in_query_cpu);
-    let ranges = coalesce(&chosen, gap);
+    let chosen = route(
+        manifest,
+        query,
+        parameters.budget,
+        parameters.regions,
+        parameters.in_query_cpu,
+    );
+    let ranges = coalesce(&chosen, parameters.gap);
     let route_ms = started.elapsed().as_secs_f64() * 1000.0;
 
     let started = Instant::now();
@@ -744,7 +754,7 @@ async fn search(
             Ok::<(usize, bytes::Bytes), object_store::Error>((range.start, payload))
         }
     }))
-    .buffer_unordered(concurrency)
+    .buffer_unordered(parameters.concurrency)
     .collect::<Vec<_>>()
     .await
     .into_iter()
@@ -782,7 +792,7 @@ async fn search(
             })
             .collect::<Vec<_>>()
     };
-    let mut best: Vec<(f32, i64)> = match in_query_cpu {
+    let best: Vec<(f32, i64)> = match parameters.in_query_cpu {
         InQueryCpu::Rayon => blobs.par_iter().flat_map_iter(score_blob).collect(),
         InQueryCpu::Sequential => blobs.iter().flat_map(score_blob).collect(),
     };
@@ -855,7 +865,7 @@ fn self_test() -> BenchResult<()> {
     if !coalesce(&[], 4).is_empty() {
         return Err("empty coalescing differs".into());
     }
-    if coalesce(&[7], 0) != vec![7..8] {
+    if coalesce(&[7], 0) != std::iter::once(7..8).collect::<Vec<_>>() {
         return Err("single-page coalescing differs".into());
     }
     // Every selected page must survive into some range, at every gap.
@@ -918,6 +928,13 @@ async fn main() -> BenchResult<()> {
     let regions = optional_usize("BORSUK_V71_REGIONS", 1024)?;
     let measured = optional_usize("BORSUK_V71_QUERIES", 200)?;
     let in_query_cpu = in_query_cpu()?;
+    let search_parameters = SearchParameters {
+        budget,
+        regions,
+        gap,
+        concurrency,
+        in_query_cpu,
+    };
 
     let manifest_sha256 = sha256_file(&manifest_path)?;
     if manifest_sha256 != expected_manifest_sha256 {
@@ -940,18 +957,7 @@ async fn main() -> BenchResult<()> {
             let offset = index * manifest.dimensions;
             let query = &manifest.query_vectors[offset..offset + manifest.dimensions];
             let started = Instant::now();
-            let outcome = search(
-                &store,
-                &key,
-                &manifest,
-                query,
-                budget,
-                regions,
-                gap,
-                concurrency,
-                in_query_cpu,
-            )
-            .await?;
+            let outcome = search(&store, &key, &manifest, query, search_parameters).await?;
             let latency_ns = u64::try_from(started.elapsed().as_nanos())?;
             let truth_offset = index * manifest.neighbors;
             let truth = &manifest.truth[truth_offset..truth_offset + manifest.neighbors];
@@ -990,18 +996,7 @@ async fn main() -> BenchResult<()> {
                         let offset = index * manifest.dimensions;
                         let query =
                             manifest.query_vectors[offset..offset + manifest.dimensions].to_vec();
-                        search(
-                            &store,
-                            &key,
-                            &manifest,
-                            &query,
-                            budget,
-                            regions,
-                            gap,
-                            concurrency,
-                            in_query_cpu,
-                        )
-                        .await
+                        search(&store, &key, &manifest, &query, search_parameters).await
                     }
                 })
                 .collect::<Vec<_>>();
