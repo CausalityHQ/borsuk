@@ -43,7 +43,7 @@ class ResultFixture:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.seed = 20260921
-        self.ids = tuple(value.to_bytes(16, "big") for value in range(100))
+        self.ids = tuple(str(value).encode() for value in range(100))
         self.source_path = root / "source.parquet"
         flat = pa.array(np.arange(200, dtype=np.float32), type=pa.float32())
         vectors = pa.FixedSizeListArray.from_arrays(flat, 2)

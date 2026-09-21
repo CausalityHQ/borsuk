@@ -21,6 +21,7 @@ from scripts.native_geometric_layout_screen import (
     LayoutMethod,
     MembershipRow,
     _ground_truth,
+    _stable_id,
     construct_layout,
     encoded_sq8_page_bytes,
     evaluate_layout,
@@ -62,8 +63,12 @@ class FrozenTruthTests(unittest.TestCase):
             )
             truth = _ground_truth(path)
             self.assertEqual(len(truth), 2)
-            self.assertEqual(truth[0][0], bytes(16))
-            self.assertEqual(truth[1][-1], (199).to_bytes(16, "big"))
+            self.assertEqual(truth[0][0], b"0")
+            self.assertEqual(truth[1][-1], b"199")
+
+    def test_integer_feature_ids_match_native_build_decimal_record_ids(self) -> None:
+        self.assertEqual(_stable_id(0), b"0")
+        self.assertEqual(_stable_id(12_345), b"12345")
 
 
 class AuthorityAndMembershipTests(unittest.TestCase):

@@ -132,7 +132,7 @@ def _stable_id(value: object) -> bytes:
     if type(value) is bytes and value:
         return value
     if type(value) is int and 0 <= value < 1 << 128:
-        return value.to_bytes(16, "big")
+        return str(value).encode()
     raise ValueError("stable ID differs")
 
 
