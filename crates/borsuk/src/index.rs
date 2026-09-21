@@ -51427,6 +51427,74 @@ fn native_ann_flush_publishes_query_visible_delta_generation() {
 }
 
 #[test]
+fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32; 16],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+
+    let committed_id = b"committed-native-delta".to_vec();
+    index
+        .add(vec![VectorRecord::new_bytes(
+            committed_id.clone(),
+            vec![-1.0; 16],
+        )])
+        .unwrap();
+    index.flush().unwrap();
+
+    let pending_id = b"pending-native-wal".to_vec();
+    index
+        .add(vec![VectorRecord::new_bytes(
+            pending_id.clone(),
+            vec![-2.0; 16],
+        )])
+        .unwrap();
+
+    let report = index
+        .search_with_report(
+            &[-2.0; 16],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+    let ids = report
+        .hits
+        .iter()
+        .map(|hit| hit.id.as_bytes())
+        .collect::<Vec<_>>();
+
+    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(ids.first().copied(), Some(pending_id.as_slice()));
+    assert!(ids.contains(&committed_id.as_slice()));
+    assert!(
+        ids.contains(&[b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat().as_slice()),
+        "pending writes must overlay rather than replace the committed native snapshot"
+    );
+}
+
+#[test]
 fn native_ann_flush_publishes_query_visible_tombstone() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
