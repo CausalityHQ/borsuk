@@ -762,7 +762,7 @@ fn verify_semantic_equivalence(
     let ten_run = repeated_query_matches(index, query, &baseline, 10)?;
     let hundred_run = repeated_query_matches(index, query, &baseline, 100)?;
 
-    let mutation_id = u64::MAX;
+    let mutation_id = 10_000_000_000_u64;
     let mutation_query = vec![-100.0_f32; query.len()];
     index
         .add(vec![VectorRecord::new(
