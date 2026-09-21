@@ -776,7 +776,7 @@ fn verify_semantic_equivalence(
         .map_err(|error| error.to_string())?;
     let pending_delete = bounded_search_ids(index, &mutation_query, 1)? != [mutation_id];
     index
-        .add(vec![VectorRecord::new(
+        .upsert(vec![VectorRecord::new(
             mutation_id.to_string(),
             mutation_query.clone(),
         )])
