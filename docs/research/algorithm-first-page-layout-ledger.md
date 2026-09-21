@@ -2956,3 +2956,69 @@ diminishing PQ16/PQ24/PQ32/PQ48 evidence does not justify a PQ64 tuning ladder,
 which would also consume the full 16-MiB refinement budget before any gap
 bytes. G1 still has no eligible representation; further work must change the
 ranking objective or representation family rather than widen conventional PQ.
+
+## V103 result — exact source norms make PQ48 ranking worse
+
+V103 tested one causal change to V102's row-ranking score while preserving the
+same V99 hierarchy, retained rows, PQ48 books and codes, page layout, and final
+ranked-gap selector. The matched control used reconstructed-vector squared L2.
+The challenger stored each row's exact source squared norm and used
+`||x||² - 2 q·PQ(x)`, eliminating the reconstructed-centroid norm term. This
+added four immutable S3 bytes per row but no resident row-code bytes.
+
+The immutable source revision was
+`48de8a004e098d26749da6a259f9cfd0921a6194`. Its 10,695,431-byte source
+archive is at
+`s3://borsuk-bench-453182569524-euc1/research/v103-metric-aware-pq48/48de8a004e098d26749da6a259f9cfd0921a6194/source/source.tar.gz`, SHA-256
+`60a107decb37a202c30d2a46f8911e15cc9dc045104a82d6fea334d41d32d469`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v103-metric-aware-pq48/48de8a004e098d26749da6a259f9cfd0921a6194/runs/v103-g1-screen-20260921T094600Z-48de8a0/a0001`.
+It used c7i.8xlarge Spot instance `i-054001a7a41a07bd5` in eu-central-1c,
+which terminated after its claim-eligible terminal. The terminal SHA-256 is
+`fa3447ac4ca8f47382782c34b101fc32617ee8b93eb8ac211ada580ad37fcbd4`.
+
+The fixed fail-fast cohort was the first 128 already-burned ReLAION-1M
+development queries. Complete frozen inputs were authenticated before slicing;
+no validation or holdout query was consumed. Terminal-bound evidence is:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| result | 25,147,316 | `e2e69b312c50c715c31b4a3dce50992fb5af3973cc3235da34cd8bae7fb3790c` |
+| independent rescore | 900 | `8469adf97803a019478b59211b13bbfefd4cb28eae860396baa56af705b3dcc6` |
+| resources | 459 | `3b590b85a09d3f7b59dcadbd38fc78af0303a152efd662554e1d10385dda9f3a` |
+| worker log | 352 | `fe1e2560c77a63ae9933c1560f2ff1acd21c9e81d747176b0f060f87b75847ea` |
+
+| 128-query arm | avg Recall@10 | avg Recall@100 | p05 Recall@100 | final max GETs | final max bytes |
+|---|---:|---:|---:|---:|---:|
+| matched V102 PQ48 L2 | **98.5937%** | **95.1328%** | **80%** | 32 | 16,777,200 |
+| V103 exact-source-norm score | 96.3281% | 92.2890% | 69% | 32 | 16,777,144 |
+
+The paired 10,000-resample 95% intervals for V103 minus the control were
+-3.6719 to -1.0156 percentage points at Recall@10, -3.7344 to -1.9922 at
+Recall@100, and -16 to -4 at p05 Recall@100. Every interval is strictly
+negative. The independent reducer authenticated and recomputed the samples,
+aggregates, intervals, physical projections, and
+`metric-aware-pq48-rejected` classification.
+
+The exact source vectors are already nearly unit normalized: one million row
+squared norms ranged from 0.9987742901 to 1.0011970997, while the 128 query
+squared norms ranged from 0.9991053343 to 1.0008934736. Removing the PQ
+reconstruction norm therefore collapses much of the ranking signal toward a
+dot-product ordering and loses substantially to ordinary L2 ADC. This result
+does not support tuning a mixture weight on the burned cohort.
+
+The first refinement wave used at most 32 GETs and 13,804,180 bytes. The final
+page wave used at most 32 GETs and 16,777,144 bytes. The complete 100M resident
+projection remains 1,269,504,702 bytes, and the immutable S3 code-plus-norm
+plane is 5,200,000,000 bytes. The attempt took 708 seconds, reached
+11,037,796 KiB peak RSS, had zero swap and zero memory PSI, and cost an
+estimated $0.0944.
+
+**Ruling:** reject V103 without retry, parameter tuning, or a 1,000-query
+continuation. Exact source norms do not correct conventional PQ's ranking
+distortion; they make it decisively worse. The V99 exact ceiling still proves
+that the hierarchy and page layout can pass, while V102 and V103 localize the
+remaining G1 blocker to compact retained-row ranking. The next experiment must
+change that representation family or reduce the retained shortlist enough to
+afford materially stronger row evidence. G2, 10M, 100M, and competitor parity
+claims remain fenced.
