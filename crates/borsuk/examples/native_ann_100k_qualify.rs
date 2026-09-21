@@ -16,8 +16,8 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    BorsukIndex, IndexConfig, IndexStats, LeafMode, SearchOptions, VectorMetric, VectorRecord,
-    recommended_segment_max_vectors,
+    BorsukIndex, IndexConfig, IndexStats, LeafMode, RequestCounts, SearchOptions, VectorMetric,
+    VectorRecord, recommended_segment_max_vectors,
 };
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
@@ -697,6 +697,13 @@ fn elapsed_ns(started: Instant) -> Result<u64, String> {
     u64::try_from(started.elapsed().as_nanos()).map_err(|_| "elapsed time overflows".to_owned())
 }
 
+fn native_route_io(requests: &RequestCounts, bytes_read: u64) -> Result<(u64, u64), String> {
+    if requests.gets == 0 || bytes_read == 0 {
+        return Err("native ANN route I/O evidence differs".to_owned());
+    }
+    Ok((requests.gets, bytes_read))
+}
+
 fn run() -> Result<(), String> {
     let request = parse_args(env::args())?;
     if request.index_uri.exists() || request.samples.exists() || request.result.exists() {
@@ -769,6 +776,7 @@ fn run() -> Result<(), String> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let (hits_at_10, hits_at_100) = recall_hits(&returned_ids, expected)?;
+        let (physical_gets, bytes_read) = native_route_io(&report.requests, report.bytes_read)?;
         samples.push(SampleEvidence {
             query_ordinal: query_ordinal as u32,
             returned_ids,
@@ -776,9 +784,9 @@ fn run() -> Result<(), String> {
             hits_at_100,
             recall_at_10_ppm: hits_at_10 * 100_000,
             recall_at_100_ppm: hits_at_100 * 10_000,
-            physical_gets: report.backing_reads,
+            physical_gets,
             pages_read: report.global_leaf_pages_read as u64,
-            bytes_read: report.backing_bytes_read,
+            bytes_read,
             records_scored: report.records_scored as u64,
             latency_ns,
         });
@@ -942,5 +950,17 @@ mod tests {
                 Field::new("embedding", vector_type("element"), false),
             ])
         );
+    }
+
+    #[test]
+    fn native_ann_100k_samples_logical_route_io_not_local_backing_cache() {
+        let requests = RequestCounts {
+            gets: 3,
+            ..RequestCounts::default()
+        };
+
+        assert_eq!(native_route_io(&requests, 123_456).unwrap(), (3, 123_456));
+        assert!(native_route_io(&RequestCounts::default(), 123_456).is_err());
+        assert!(native_route_io(&requests, 0).is_err());
     }
 }
