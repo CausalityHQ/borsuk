@@ -3586,3 +3586,84 @@ bound concurrent response memory and attach this exact read path to the native
 snapshot/generation/delta/mutation/compaction API. Do not spend on 9.99M or
 100M until those semantics pass at 100k and the 100M resident worksheet is
 below 3 GiB. Publish a next-result decision tag, not a release-candidate tag.
+
+## Native geometric page-layout development screen
+
+The pre-release architecture reset tested whether the production-quality loss
+was caused by routing alone or by the physical page layout. The frozen workload
+was ReLAION development-100k: 100,000 source rows, 768 float32 dimensions,
+Euclidean distance, all 1,000 development queries, and exact GT100. The source
+Parquet is 145,121,661 bytes with SHA-256
+`a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d`;
+the truth Parquet is 512,093 bytes with SHA-256
+`ab8bfae34f753512f352581218596fc0f043354f8168192c856278b3ab5a0ce7`.
+Construction was query- and truth-blind. Evaluation computed the exact best
+GT100 coverage subject jointly to at most 32 pages and 16 MiB of encoded page
+bodies. These values are therefore page-layout headroom, not a deployable
+query-time router, ranking, latency, throughput, or release measurement.
+
+The final scientific source was
+`f7a09ea5df975fb6c2e36a53ed56f53492b334fd`. Its 10,944,487-byte source
+archive has SHA-256
+`a0b45a1fb68e77c1d95d90a26a35160fa10976fda087fdfd3275661b75824809`.
+The sole cell for that revision ran on c7i.8xlarge Spot instance
+`i-006452984d4d83798` in eu-central-1c. Evidence is under
+`s3://borsuk-bench-453182569524-euc1/research/native-geometric-layout/f7a09ea5df975fb6c2e36a53ed56f53492b334fd/runs/relaion-100k-dev1000-a0001/`.
+The instance is terminated.
+
+| query-blind physical layout | average R@10 | mean R@100 | p05 R@100 | worst R@100 | decision |
+|---|---:|---:|---:|---:|---|
+| decimal-ID order, 256 rows | 63.720% | 61.377% | 47% | 41% | control |
+| balanced random projection, 256 rows | 50.340% | 49.548% | 42% | 35% | killed |
+| balanced two-means, 256 rows | 99.060% | 98.460% | 89% | 75% | killed: p05 below 90% |
+| balanced two-means, actual 480-KiB SQ8 page cap | **99.920%** | **99.844%** | **100%** | **88%** | advance to router falsification |
+
+The canonical result is 4,379 bytes with SHA-256
+`ee936fdba1dde54a1126cdd2cb09cc38a9d53a3f53acedfb9a7fa8c562d2497a`.
+The four membership SHA-256 values, in table order, are
+`633dc52514ac0c15d3deb881db965ad433433354bbf9ffba3c89ea2504f2e2e7`,
+`9e07406a0ca7658caaa329d0194d56fa8400636805bbd6378b99c4aca9d76c5e`,
+`dc3e6ee05a4f9f30a295b9a47ac348905a9e37cd8d4d60e0445a11b6b1deb518`,
+and `f72b80f1341bd64599e51a69e627f0b9a2280be4f5235a6c5995fef8eacd866c`.
+The corresponding per-query evidence SHA-256 values are
+`66b15c2441cf3fd814310e2b97ec854c404abfabbdfe463c6891e4f2e4e217d1`,
+`4f4c433ab4b140f4a3800a6f2447e4125bbd5d4f7f257ec74e459c347a65da6d`,
+`056221506947b263e559e0f0128aecce7558762b94a8407d60f523afe9aa93ac`,
+and `4e154efb50df6dda1079e0becebc9ad207c544d8b3d6e57f84e34a01bf92bd32`.
+
+Arm wall times were respectively 2:20.45, 1:40.72, 3:20.67, and
+1:24.65. Peak arm RSS ranged from 1,536,028 to 1,536,536 KiB. The terminal
+recorded 629 seconds; launch through verified termination was approximately
+647 seconds, costing at most $0.1233 at the recorded $0.6861/hour Spot rate,
+excluding negligible request/storage charges. The canonical terminal is 264
+bytes with SHA-256
+`8f56dddf85b18661ca4619c8e23e8f847516b542d6ba2e72e149cda5cf759ad7`.
+
+The remote terminal is explicitly `failed`, `claim_eligible=false`, at
+`phase=validate`, exit 255. All scientific membership, evidence, result,
+resource, and seal objects were already immutable, but the worker did not
+upload `validation.json`; therefore this is not represented as a complete
+remote receipt. No scientific rerun was made. A controller-side independent
+replay re-authenticated the frozen source, truth, four memberships, four
+per-query evidence files, and canonical result; it independently recomputed
+all 1,000 samples and aggregates and reproduced `control`, `killed`, `killed`,
+`advance` exactly. The replay exited zero in 17:25.71, used 230,984 KiB peak
+RSS, and used zero swap; its PID and explicit scratch were cleared.
+
+Three earlier immutable revisions exposed harness defects before this valid
+decision: EC2 user data was double-base64 encoded, two embedded Python
+programs contained a newline-escaping syntax error, and the evaluator assumed
+a row-expanded truth schema instead of the authenticated fixed-list GT100
+schema. A later diagnostic used numeric binary IDs instead of the native
+builder's lexicographically sorted decimal record IDs. Each defect was covered
+by a focused regression before the next clean revision; no failed prefix was
+reused.
+
+**Decision:** the ID-ordered production layout is rejected and the 480-KiB
+balanced two-means layout has enough physical containment headroom to justify
+one bounded query-independent router falsifier. This does not promote the
+layout to production and does not authorize 1M, 9.99M, or 100M. The next gate
+must prove that a resident router can select the same useful pages without
+truth, then measure SQ8 ranking and the complete 32-GET/16-MiB read path at
+100k. A failure closes or materially redesigns that router; it must not be
+hidden by another truth-aware layout score.
