@@ -18,9 +18,11 @@ eligible for G2.
 - Query budget: at most 32 one-page GET ranges and 16,777,216 encoded bytes.
 - Summary fence: rank all pages by the minimum ADC score of their two PQ16x8
   block summaries and retain the best 1,024 pages across both tiers. V104
-  killed 128, 256, and 512 pages; V105 retained 1,024 as the qualified exact
-  capacity boundary after the 768-page arm lost all three paired confidence
-  intervals against it.
+  killed 128, 256, and 512 pages in the V99 hierarchy; V105 retained 1,024 as
+  the qualified capacity boundary after the 768-page arm lost all three paired
+  confidence intervals against it. This count does not authenticate the
+  distinct two-summary ranking used here; the fresh exact-f32 diagnostic below
+  must do that before any width arm is eligible.
 - Row shortlist: score only rows in those 1,024 pages and retain the best 512 by
   the global `(distance, feature_row_id)` order, including ties at the boundary.
 - Planner: walk ranked evidence, keep the first occurrence of each page whose

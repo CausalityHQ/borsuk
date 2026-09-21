@@ -4,7 +4,7 @@
 
 **Goal:** Produce one independently validated, immutable 1M development cell that selects the G2 routing bytes/row without changing production code.
 
-**Architecture:** A new V97 research harness reuses V85's authenticated dataset/page loading but reproduces the bounded native two-stage route: one shared two-summary 1,024-page fence, row scoring within that fence, and at most 32 one-page GETs. V104/V105 independently killed the stale 128-page fence and retained 1,024 as the qualified exact capacity boundary. The harness implements generic 8-bit and packed 4-bit PQ arms plus a summary-only control. A separate rescorer treats the result as untrusted and recomputes samples, aggregates, paired confidence intervals, memory eligibility, and the winner.
+**Architecture:** A new V97 research harness reuses V85's authenticated dataset/page loading but reproduces the bounded native two-stage route: one shared two-summary 1,024-page fence, row scoring within that fence, and at most 32 one-page GETs. V104/V105 independently killed smaller retained capacities in the V99 hierarchy and retained 1,024 as the qualified capacity boundary; they did not authenticate this distinct two-summary ranker, so its fresh exact-f32 diagnostic remains a mandatory fail-fast gate. The harness implements generic 8-bit and packed 4-bit PQ arms plus a summary-only control. A separate rescorer treats the result as untrusted and recomputes samples, aggregates, paired confidence intervals, memory eligibility, and the winner.
 
 **Tech Stack:** Python 3.12, NumPy, PyArrow/Parquet/Arrow IPC, boto3 launch wrapper, canonical JSON evidence.
 
