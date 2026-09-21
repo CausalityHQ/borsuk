@@ -1930,6 +1930,8 @@ mod tests {
             + codebooks.len() * size_of::<f32>()
             + row_codes.len()) as u64;
         let limits = NativeBoundedRouteLimits {
+            cpu_permits: 1,
+            cpu_waiters: 0,
             max_summary_pages: 2,
             max_candidate_rows: 4,
             max_output_pages: 2,

@@ -1205,6 +1205,8 @@ mod tests {
                 &row_codes,
             ),
             limits: NativeBoundedRouteLimits {
+                cpu_permits: 2,
+                cpu_waiters: 8,
                 max_summary_pages: 2,
                 max_candidate_rows: 128,
                 max_output_pages: 2,

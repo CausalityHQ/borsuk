@@ -744,6 +744,8 @@ mod tests {
                     32_768,
                 ),
                 limits: NativeBoundedRouteLimits {
+                    cpu_permits: 2,
+                    cpu_waiters: 8,
                     max_summary_pages: 2,
                     max_candidate_rows: 128,
                     max_output_pages: 2,
@@ -826,6 +828,9 @@ mod tests {
         invalid.push(changed);
         let mut changed = canonical.clone();
         changed.router.row_codes.uri = changed.router.codebooks.uri.clone();
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.limits.cpu_permits = 0;
         invalid.push(changed);
         let mut changed = canonical.clone();
         changed.router.limits.max_summary_pages = 0;

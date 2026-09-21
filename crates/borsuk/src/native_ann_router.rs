@@ -711,6 +711,8 @@ mod tests {
                 resident_bytes: (4 * 64 * 4 + 64 * 256 * 4 + 512 * 64) as u64,
             },
             NativeBoundedRouteLimits {
+                cpu_permits: 2,
+                cpu_waiters: 8,
                 max_summary_pages: 2,
                 max_candidate_rows: 3,
                 max_output_pages: 2,
