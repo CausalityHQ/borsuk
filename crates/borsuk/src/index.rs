@@ -51711,6 +51711,63 @@ fn native_bounded_flush_publishes_out_of_range_delta_without_clamping_identity()
 }
 
 #[test]
+fn native_bounded_flush_of_257_rows_reopens_without_publishing_unloadable_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 64,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/base/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 64],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+
+    let delta_ids = (0..257)
+        .map(|row| [b"tenant/delta/".as_slice(), &(row as u64).to_be_bytes()].concat())
+        .collect::<Vec<_>>();
+    index
+        .add(
+            delta_ids
+                .iter()
+                .enumerate()
+                .map(|(row, id)| VectorRecord::new_bytes(id.clone(), vec![-(row as f32) - 1.0; 64]))
+                .collect(),
+        )
+        .unwrap();
+    index.flush().unwrap();
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    let report = index
+        .search_with_report(
+            &[-257.0; 64],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id.as_bytes(), delta_ids[256]);
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
+}
+
+#[test]
 fn native_bounded_compaction_rebuilds_delta_into_one_deterministic_base() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();

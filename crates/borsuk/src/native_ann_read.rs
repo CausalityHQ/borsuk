@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::{BorsukError, Result},
+    manifest::MAX_GLOBAL_DELTA_ROWS,
     native_ann::{
         NativeAnnRef, NativeArtifactRef, NativeBoundedAnnRef, NativeBoundedRouteLimits,
         NativeSq8Authority,
@@ -641,9 +642,13 @@ pub(crate) fn load_native_bounded_ann_snapshot(
         let bytes = read_artifact(&storage, &run.artifact)?;
         let expected_rows = u32::try_from(run.rows)
             .map_err(|_| invalid("native bounded ANN delta rows exceed u32"))?;
-        for row in
-            decode_native_bounded_page(&bytes, reference.dimensions, expected_rows, &run.sq8)?
-        {
+        for row in decode_native_bounded_rows(
+            &bytes,
+            reference.dimensions,
+            expected_rows,
+            MAX_GLOBAL_DELTA_ROWS as u64,
+            &run.sq8,
+        )? {
             let resident = NativeResidentRow {
                 id: row.id,
                 sequence: row.sequence,
@@ -774,13 +779,23 @@ fn decode_native_bounded_page(
     expected_rows: u32,
     sq8: &NativeSq8Authority,
 ) -> Result<Vec<NativeStoredRow>> {
+    decode_native_bounded_rows(bytes, dimensions, expected_rows, PAGE_ROWS, sq8)
+}
+
+fn decode_native_bounded_rows(
+    bytes: &[u8],
+    dimensions: u32,
+    expected_rows: u32,
+    maximum_rows: u64,
+    sq8: &NativeSq8Authority,
+) -> Result<Vec<NativeStoredRow>> {
     let dimensions_usize = usize::try_from(dimensions)
         .map_err(|_| invalid("native bounded ANN page dimensions exceed usize"))?;
     let dimensions_i32 = i32::try_from(dimensions)
         .map_err(|_| invalid("native bounded ANN page dimensions exceed i32"))?;
     if dimensions == 0
         || expected_rows == 0
-        || u64::from(expected_rows) > PAGE_ROWS
+        || u64::from(expected_rows) > maximum_rows
         || sq8.low.len() != dimensions_usize
         || sq8.step.len() != dimensions_usize
         || sq8.low.iter().any(|value| !value.is_finite())
