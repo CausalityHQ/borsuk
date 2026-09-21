@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::{BorsukError, Result},
-    native_ann::{NativeArtifactRef, NativeRouterRef},
+    native_ann::{NativeArtifactRef, NativeBoundedRouterRef, NativeRouterRef},
 };
 
 const PQ_WIDTH: usize = 16;
@@ -20,6 +20,7 @@ const SUMMARY_CODES_PER_PAGE: usize = 2;
 const MUTATION_DIRECTORY_BYTES_PER_ENTRY: u64 = 96;
 const DELTA_ROW_FIXED_BYTES: u64 = 72;
 const THREE_GIB: u64 = 3 * 1024 * 1024 * 1024;
+const BOUNDED_PQ_WIDTH: usize = 64;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeRouterArtifacts {
@@ -32,14 +33,31 @@ pub(crate) struct NativeRouterArtifacts {
     pub(crate) physical_rows: u64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeBoundedRouterArtifacts {
+    pub(crate) dimensions: u32,
+    pub(crate) summaries: Box<[f32]>,
+    pub(crate) codebooks: Box<[f32]>,
+    pub(crate) row_codes: Box<[u8]>,
+    pub(crate) page_count: u32,
+    pub(crate) physical_rows: u64,
+    pub(crate) resident_bytes: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct NativeResidentWorksheet {
     pub(crate) physical_rows: u64,
     pub(crate) page_count: u64,
     pub(crate) dimensions: u64,
-    pub(crate) codebook_and_sq8_bytes: u64,
+    pub(crate) summary_blocks_per_page: u64,
+    pub(crate) pq_width: u64,
+    pub(crate) codebook_values: u64,
+    pub(crate) summary_values: u64,
+    pub(crate) row_code_values: u64,
+    pub(crate) sq8_scalar_values: u64,
     pub(crate) mutation_entries: u64,
     pub(crate) resident_delta_rows: u64,
+    pub(crate) decoded_cache_bytes: u64,
     pub(crate) response_concurrency: u64,
     pub(crate) response_bytes_each: u64,
     pub(crate) workspace_bytes: u64,
@@ -59,13 +77,21 @@ fn checked_product(values: &[u64], name: &str) -> Result<u64> {
 }
 
 impl NativeResidentWorksheet {
-    pub(crate) fn validate_under_3_gib(self) -> Result<u64> {
+    pub(crate) fn validate(self, configured_budget_bytes: u64) -> Result<u64> {
         if self.physical_rows == 0
             || self.page_count == 0
             || self.dimensions == 0
+            || self.summary_blocks_per_page == 0
+            || self.pq_width == 0
+            || self.codebook_values == 0
+            || self.summary_values == 0
+            || self.row_code_values == 0
+            || self.sq8_scalar_values == 0
+            || self.decoded_cache_bytes == 0
             || self.response_concurrency == 0
             || self.response_bytes_each == 0
             || self.runtime_reserve_bytes == 0
+            || configured_budget_bytes == 0
         {
             return Err(invalid(
                 "native ANN resident worksheet contains a zero bound",
@@ -75,17 +101,39 @@ impl NativeResidentWorksheet {
         if expected_pages != self.page_count {
             return Err(invalid("native ANN resident worksheet page count differs"));
         }
+        let expected_codebook_values = checked_product(
+            &[
+                self.pq_width,
+                CODEWORDS_PER_SUBSPACE as u64,
+                self.dimensions.div_ceil(self.pq_width),
+            ],
+            "bounded codebook values",
+        )?;
+        let expected_summary_values = checked_product(
+            &[
+                self.page_count,
+                self.summary_blocks_per_page,
+                self.dimensions,
+            ],
+            "bounded summary values",
+        )?;
+        let expected_row_code_values = checked_product(
+            &[self.physical_rows, self.pq_width],
+            "bounded row-code values",
+        )?;
+        if self.pq_width != BOUNDED_PQ_WIDTH as u64
+            || self.codebook_values != expected_codebook_values
+            || self.summary_values != expected_summary_values
+            || self.row_code_values != expected_row_code_values
+            || self.sq8_scalar_values != self.dimensions * 2
+        {
+            return Err(invalid("native ANN resident worksheet shape differs"));
+        }
         let terms = [
-            checked_product(&[self.physical_rows, PQ_WIDTH as u64], "row codes")?,
-            checked_product(
-                &[
-                    self.page_count,
-                    SUMMARY_CODES_PER_PAGE as u64,
-                    PQ_WIDTH as u64,
-                ],
-                "summary codes",
-            )?,
-            self.codebook_and_sq8_bytes,
+            self.row_code_values,
+            checked_product(&[self.summary_values, 4], "summary bytes")?,
+            checked_product(&[self.codebook_values, 4], "codebook bytes")?,
+            checked_product(&[self.sq8_scalar_values, 4], "SQ8 scalar bytes")?,
             checked_product(
                 &[self.mutation_entries, MUTATION_DIRECTORY_BYTES_PER_ENTRY],
                 "mutation directory",
@@ -99,6 +147,7 @@ impl NativeResidentWorksheet {
                 ],
                 "resident delta",
             )?,
+            self.decoded_cache_bytes,
             checked_product(
                 &[self.response_concurrency, self.response_bytes_each],
                 "response buffers",
@@ -111,10 +160,10 @@ impl NativeResidentWorksheet {
                 .checked_add(*term)
                 .ok_or_else(|| invalid("native ANN resident worksheet total overflows"))
         })?;
-        if total >= THREE_GIB {
+        if total > configured_budget_bytes {
             return Err(BorsukError::RamBudgetExceeded {
                 resident_bytes: total,
-                budget_bytes: THREE_GIB - 1,
+                budget_bytes: configured_budget_bytes,
             });
         }
         Ok(total)
@@ -385,6 +434,327 @@ fn decode_summary_codes(bytes: Bytes, page_count: u32) -> Result<Box<[u8]>> {
         return Err(invalid("native ANN summary-code materialization differs"));
     }
     Ok(codes.into_boxed_slice())
+}
+
+fn bounded_codebook_schema(centroid_width: i32) -> Schema {
+    Schema::new(vec![
+        Field::new("subspace", DataType::UInt16, false),
+        Field::new("codeword", DataType::UInt16, false),
+        Field::new(
+            "centroid",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                centroid_width,
+            ),
+            false,
+        ),
+    ])
+}
+
+fn bounded_summary_schema(dimensions: i32) -> Schema {
+    Schema::new(vec![
+        Field::new("page", DataType::UInt32, false),
+        Field::new("block", DataType::UInt8, false),
+        Field::new(
+            "summary",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                dimensions,
+            ),
+            false,
+        ),
+    ])
+}
+
+fn bounded_row_code_schema() -> Schema {
+    Schema::new(vec![Field::new(
+        "code",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::UInt8, false)),
+            BOUNDED_PQ_WIDTH as i32,
+        ),
+        false,
+    )])
+}
+
+fn decode_bounded_codebooks(bytes: Bytes, dimensions: u32) -> Result<Box<[f32]>> {
+    let dimensions = usize::try_from(dimensions)
+        .map_err(|_| invalid("native bounded ANN dimensions exceed usize"))?;
+    let centroid_width = dimensions.div_ceil(BOUNDED_PQ_WIDTH);
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+    if builder.schema().as_ref()
+        != &bounded_codebook_schema(
+            i32::try_from(centroid_width)
+                .map_err(|_| invalid("native bounded ANN centroid width exceeds i32"))?,
+        )
+    {
+        return Err(invalid(
+            "native bounded ANN codebook physical schema differs",
+        ));
+    }
+    let expected_rows = BOUNDED_PQ_WIDTH * CODEWORDS_PER_SUBSPACE;
+    metadata_rows(&builder, expected_rows as u64, "bounded codebook")?;
+    let expected_values = expected_rows
+        .checked_mul(centroid_width)
+        .ok_or_else(|| invalid("native bounded ANN codebook allocation overflows"))?;
+    let mut values = Vec::with_capacity(expected_values);
+    let mut ordinal = 0_usize;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 3 || batch.columns().iter().any(|array| array.null_count() != 0) {
+            return Err(invalid("native bounded ANN codebook batch differs"));
+        }
+        let subspaces = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .ok_or_else(|| invalid("native bounded ANN codebook subspace differs"))?;
+        let codewords = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .ok_or_else(|| invalid("native bounded ANN codebook codeword differs"))?;
+        let centroids = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("native bounded ANN codebook centroid differs"))?;
+        if centroids.values().null_count() != 0 {
+            return Err(invalid(
+                "native bounded ANN codebook centroid contains nulls",
+            ));
+        }
+        let centroid_values = centroids
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("native bounded ANN centroid values differ"))?;
+        for row in 0..batch.num_rows() {
+            let expected_subspace = ordinal / CODEWORDS_PER_SUBSPACE;
+            let expected_codeword = ordinal % CODEWORDS_PER_SUBSPACE;
+            if usize::from(subspaces.value(row)) != expected_subspace
+                || usize::from(codewords.value(row)) != expected_codeword
+            {
+                return Err(invalid(
+                    "native bounded ANN codebook rows are not canonical",
+                ));
+            }
+            let active = ((expected_subspace + 1) * dimensions / BOUNDED_PQ_WIDTH)
+                - (expected_subspace * dimensions / BOUNDED_PQ_WIDTH);
+            let start = row * centroid_width;
+            let row_values = &centroid_values.values()[start..start + centroid_width];
+            if row_values.iter().any(|value| !value.is_finite())
+                || row_values[active..]
+                    .iter()
+                    .any(|value| value.to_bits() != 0)
+            {
+                return Err(invalid(
+                    "native bounded ANN codebook values or padding differ",
+                ));
+            }
+            values.extend_from_slice(row_values);
+            ordinal += 1;
+        }
+    }
+    if ordinal != expected_rows || values.len() != expected_values {
+        return Err(invalid(
+            "native bounded ANN codebook materialization differs",
+        ));
+    }
+    Ok(values.into_boxed_slice())
+}
+
+fn decode_bounded_summaries(
+    bytes: Bytes,
+    dimensions: u32,
+    page_count: u32,
+    blocks_per_page: u8,
+) -> Result<Box<[f32]>> {
+    let dimensions = usize::try_from(dimensions)
+        .map_err(|_| invalid("native bounded ANN dimensions exceed usize"))?;
+    let expected_rows = usize::try_from(page_count)
+        .ok()
+        .and_then(|pages| pages.checked_mul(usize::from(blocks_per_page)))
+        .ok_or_else(|| invalid("native bounded ANN summary row count overflows"))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+    if builder.schema().as_ref()
+        != &bounded_summary_schema(
+            i32::try_from(dimensions)
+                .map_err(|_| invalid("native bounded ANN dimensions exceed i32"))?,
+        )
+    {
+        return Err(invalid(
+            "native bounded ANN summary physical schema differs",
+        ));
+    }
+    metadata_rows(&builder, expected_rows as u64, "bounded summary")?;
+    let expected_values = expected_rows
+        .checked_mul(dimensions)
+        .ok_or_else(|| invalid("native bounded ANN summary allocation overflows"))?;
+    let mut values = Vec::with_capacity(expected_values);
+    let mut ordinal = 0_usize;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 3 || batch.columns().iter().any(|array| array.null_count() != 0) {
+            return Err(invalid("native bounded ANN summary batch differs"));
+        }
+        let pages = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("native bounded ANN summary page differs"))?;
+        let blocks = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(|| invalid("native bounded ANN summary block differs"))?;
+        let summaries = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("native bounded ANN summary vector differs"))?;
+        if summaries.values().null_count() != 0 {
+            return Err(invalid("native bounded ANN summary contains nulls"));
+        }
+        let summary_values = summaries
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("native bounded ANN summary values differ"))?;
+        for row in 0..batch.num_rows() {
+            if usize::try_from(pages.value(row)).ok()
+                != Some(ordinal / usize::from(blocks_per_page))
+                || usize::from(blocks.value(row)) != ordinal % usize::from(blocks_per_page)
+            {
+                return Err(invalid("native bounded ANN summary rows are not canonical"));
+            }
+            let start = row * dimensions;
+            let row_values = &summary_values.values()[start..start + dimensions];
+            if row_values.iter().any(|value| !value.is_finite()) {
+                return Err(invalid("native bounded ANN summary is non-finite"));
+            }
+            values.extend_from_slice(row_values);
+            ordinal += 1;
+        }
+    }
+    if ordinal != expected_rows || values.len() != expected_values {
+        return Err(invalid(
+            "native bounded ANN summary materialization differs",
+        ));
+    }
+    Ok(values.into_boxed_slice())
+}
+
+fn decode_bounded_row_codes(bytes: Bytes, physical_rows: u64) -> Result<Box<[u8]>> {
+    let expected_rows = usize::try_from(physical_rows)
+        .map_err(|_| invalid("native bounded ANN row count exceeds usize"))?;
+    let expected_values = expected_rows
+        .checked_mul(BOUNDED_PQ_WIDTH)
+        .ok_or_else(|| invalid("native bounded ANN row-code allocation overflows"))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+    if builder.schema().as_ref() != &bounded_row_code_schema() {
+        return Err(invalid(
+            "native bounded ANN row-code physical schema differs",
+        ));
+    }
+    metadata_rows(&builder, physical_rows, "bounded row-code")?;
+    let mut values = Vec::with_capacity(expected_values);
+    let mut rows = 0_usize;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 1 || batch.column(0).null_count() != 0 {
+            return Err(invalid("native bounded ANN row-code batch differs"));
+        }
+        let codes = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("native bounded ANN row-code column differs"))?;
+        if codes.values().null_count() != 0 {
+            return Err(invalid("native bounded ANN row-code contains nulls"));
+        }
+        let code_values = codes
+            .values()
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(|| invalid("native bounded ANN row-code values differ"))?;
+        values.extend_from_slice(code_values.values());
+        rows += batch.num_rows();
+    }
+    if rows != expected_rows || values.len() != expected_values {
+        return Err(invalid(
+            "native bounded ANN row-code materialization differs",
+        ));
+    }
+    Ok(values.into_boxed_slice())
+}
+
+pub(crate) fn decode_native_bounded_router(
+    reference: &NativeBoundedRouterRef,
+    dimensions: u32,
+    summary_bytes: Bytes,
+    codebook_bytes: Bytes,
+    row_code_bytes: Bytes,
+) -> Result<NativeBoundedRouterArtifacts> {
+    if dimensions == 0
+        || reference.pq_width != BOUNDED_PQ_WIDTH as u8
+        || reference.summary_blocks_per_page == 0
+        || reference.physical_rows == 0
+        || reference.page_count == 0
+        || reference.physical_rows.div_ceil(256) != u64::from(reference.page_count)
+    {
+        return Err(invalid("native bounded ANN router reference shape differs"));
+    }
+    authenticate(&reference.summaries, "route-summaries", &summary_bytes)?;
+    authenticate(&reference.codebooks, "route-codebooks", &codebook_bytes)?;
+    authenticate(&reference.row_codes, "route-row-codes", &row_code_bytes)?;
+    let summaries = decode_bounded_summaries(
+        summary_bytes,
+        dimensions,
+        reference.page_count,
+        reference.summary_blocks_per_page,
+    )?;
+    let codebooks = decode_bounded_codebooks(codebook_bytes, dimensions)?;
+    let row_codes = decode_bounded_row_codes(row_code_bytes, reference.physical_rows)?;
+    let resident_bytes = u64::try_from(row_codes.len())
+        .ok()
+        .and_then(|bytes| {
+            u64::try_from(summaries.len())
+                .ok()
+                .and_then(|values| values.checked_mul(4))
+                .and_then(|summary_bytes| bytes.checked_add(summary_bytes))
+        })
+        .and_then(|bytes| {
+            u64::try_from(codebooks.len())
+                .ok()
+                .and_then(|values| values.checked_mul(4))
+                .and_then(|codebook_bytes| bytes.checked_add(codebook_bytes))
+        })
+        .ok_or_else(|| invalid("native bounded ANN resident bytes overflow"))?;
+    let fixed_runtime = u64::from(reference.limits.range_concurrency)
+        .checked_mul(reference.limits.response_bytes_each)
+        .and_then(|bytes| bytes.checked_add(reference.limits.decoded_cache_bytes))
+        .and_then(|bytes| bytes.checked_add(reference.limits.workspace_bytes))
+        .and_then(|bytes| bytes.checked_add(reference.limits.runtime_reserve_bytes))
+        .ok_or_else(|| invalid("native bounded ANN fixed runtime bytes overflow"))?;
+    let admitted = resident_bytes
+        .checked_add(fixed_runtime)
+        .ok_or_else(|| invalid("native bounded ANN admitted bytes overflow"))?;
+    if admitted > reference.limits.resident_budget_bytes {
+        return Err(BorsukError::RamBudgetExceeded {
+            resident_bytes: admitted,
+            budget_bytes: reference.limits.resident_budget_bytes,
+        });
+    }
+    Ok(NativeBoundedRouterArtifacts {
+        dimensions,
+        summaries,
+        codebooks,
+        row_codes,
+        page_count: reference.page_count,
+        physical_rows: reference.physical_rows,
+        resident_bytes,
+    })
 }
 
 pub(crate) fn decode_native_router(
@@ -718,11 +1088,7 @@ mod tests {
                 centroids.push(value);
             }
         }
-        let child = Arc::new(Field::new(
-            "element",
-            DataType::Float32,
-            child_nullable,
-        ));
+        let child = Arc::new(Field::new("element", DataType::Float32, child_nullable));
         let centroid = Arc::new(
             FixedSizeListArray::try_new(
                 Arc::clone(&child),
@@ -745,10 +1111,14 @@ mod tests {
                 ])),
                 vec![
                     Arc::new(UInt16Array::from(
-                        rows.iter().map(|(subspace, _)| *subspace).collect::<Vec<_>>(),
+                        rows.iter()
+                            .map(|(subspace, _)| *subspace)
+                            .collect::<Vec<_>>(),
                     )),
                     Arc::new(UInt16Array::from(
-                        rows.iter().map(|(_, codeword)| *codeword).collect::<Vec<_>>(),
+                        rows.iter()
+                            .map(|(_, codeword)| *codeword)
+                            .collect::<Vec<_>>(),
                     )),
                     centroid,
                 ],
@@ -775,11 +1145,7 @@ mod tests {
         if nonfinite {
             values[0] = f32::INFINITY;
         }
-        let child = Arc::new(Field::new(
-            "element",
-            DataType::Float32,
-            child_nullable,
-        ));
+        let child = Arc::new(Field::new("element", DataType::Float32, child_nullable));
         let summary = Arc::new(
             FixedSizeListArray::try_new(
                 Arc::clone(&child),
@@ -814,12 +1180,9 @@ mod tests {
         )
     }
 
-    fn bounded_fixture(
-        dimensions: usize,
-    ) -> (NativeBoundedRouterRef, Vec<u8>, Vec<u8>, Vec<u8>) {
+    fn bounded_fixture(dimensions: usize) -> (NativeBoundedRouterRef, Vec<u8>, Vec<u8>, Vec<u8>) {
         let summaries = bounded_summary_bytes(dimensions, "summary", false, false, false, false);
-        let codebooks =
-            bounded_codebook_bytes(dimensions, "centroid", false, false, false, false);
+        let codebooks = bounded_codebook_bytes(dimensions, "centroid", false, false, false, false);
         let row_codes = fixed_u8_bytes("code", 64, 512);
         let reference = NativeBoundedRouterRef {
             pq_width: 64,
@@ -860,8 +1223,7 @@ mod tests {
     #[test]
     fn native_bounded_format_materializes_strict_97d_and_768d_artifacts() {
         for dimensions in [97_u32, 768] {
-            let (reference, summaries, codebooks, row_codes) =
-                bounded_fixture(dimensions as usize);
+            let (reference, summaries, codebooks, row_codes) = bounded_fixture(dimensions as usize);
             let decoded = decode_native_bounded_router(
                 &reference,
                 dimensions,
@@ -900,14 +1262,16 @@ mod tests {
                 "s3://fixture/route-summaries.parquet",
                 &bytes,
             );
-            assert!(decode_native_bounded_router(
-                &registered,
-                dimensions,
-                Bytes::from(bytes),
-                Bytes::copy_from_slice(&codebooks),
-                Bytes::copy_from_slice(&row_codes),
-            )
-            .is_err());
+            assert!(
+                decode_native_bounded_router(
+                    &registered,
+                    dimensions,
+                    Bytes::from(bytes),
+                    Bytes::copy_from_slice(&codebooks),
+                    Bytes::copy_from_slice(&row_codes),
+                )
+                .is_err()
+            );
         }
         let invalid_codebooks = [
             bounded_codebook_bytes(97, "vector", false, false, false, false),
@@ -923,14 +1287,16 @@ mod tests {
                 "s3://fixture/route-codebooks.parquet",
                 &bytes,
             );
-            assert!(decode_native_bounded_router(
-                &registered,
-                dimensions,
-                Bytes::copy_from_slice(&summaries),
-                Bytes::from(bytes),
-                Bytes::copy_from_slice(&row_codes),
-            )
-            .is_err());
+            assert!(
+                decode_native_bounded_router(
+                    &registered,
+                    dimensions,
+                    Bytes::copy_from_slice(&summaries),
+                    Bytes::from(bytes),
+                    Bytes::copy_from_slice(&row_codes),
+                )
+                .is_err()
+            );
         }
         for bytes in [
             fixed_u8_bytes("vector", 64, 512),
@@ -943,26 +1309,30 @@ mod tests {
                 "s3://fixture/route-row-codes.parquet",
                 &bytes,
             );
-            assert!(decode_native_bounded_router(
-                &registered,
-                dimensions,
-                Bytes::copy_from_slice(&summaries),
-                Bytes::copy_from_slice(&codebooks),
-                Bytes::from(bytes),
-            )
-            .is_err());
+            assert!(
+                decode_native_bounded_router(
+                    &registered,
+                    dimensions,
+                    Bytes::copy_from_slice(&summaries),
+                    Bytes::copy_from_slice(&codebooks),
+                    Bytes::from(bytes),
+                )
+                .is_err()
+            );
         }
 
         let mut digest_drift = reference.clone();
         digest_drift.row_codes.sha256 = "0".repeat(64);
-        assert!(decode_native_bounded_router(
-            &digest_drift,
-            dimensions,
-            Bytes::from(summaries),
-            Bytes::from(codebooks),
-            Bytes::from(row_codes),
-        )
-        .is_err());
+        assert!(
+            decode_native_bounded_router(
+                &digest_drift,
+                dimensions,
+                Bytes::from(summaries),
+                Bytes::from(codebooks),
+                Bytes::from(row_codes),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1176,24 +1546,25 @@ mod tests {
     }
 
     #[test]
-    fn native_ann_format_100m_resident_worksheet_is_exact_and_bounded() {
+    fn native_bounded_format_100m_resident_worksheet_rejects_pq64_bound() {
         let worksheet = NativeResidentWorksheet {
             physical_rows: 100_000_000,
             page_count: 390_625,
             dimensions: 768,
-            codebook_and_sq8_bytes: 4_000_000,
+            summary_blocks_per_page: 2,
+            pq_width: 64,
+            codebook_values: 64 * 256 * 12,
+            summary_values: 390_625 * 2 * 768,
+            row_code_values: 100_000_000 * 64,
+            sq8_scalar_values: 2 * 768,
             mutation_entries: 1_000_000,
             resident_delta_rows: 100_000,
+            decoded_cache_bytes: 256 * 1024 * 1024,
             response_concurrency: 16,
             response_bytes_each: 16 * 1024 * 1024,
             workspace_bytes: 128_000_000,
             runtime_reserve_bytes: 512 * 1024 * 1024,
         };
-
-        assert_eq!(worksheet.validate_under_3_gib().unwrap(), 2_729_806_368);
-
-        let mut oversized = worksheet;
-        oversized.workspace_bytes += 512 * 1024 * 1024;
-        assert!(oversized.validate_under_3_gib().is_err());
+        assert!(worksheet.validate(THREE_GIB - 1).is_err());
     }
 }

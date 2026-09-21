@@ -11,6 +11,8 @@ const NATIVE_ANN_FORMAT_VERSION: u16 = 2;
 const NATIVE_ANN_PAGE_ROWS: u32 = 256;
 const NATIVE_ANN_PQ_WIDTH: u8 = 16;
 const NATIVE_ANN_SUMMARY_CODES_PER_PAGE: u8 = 2;
+const NATIVE_BOUNDED_FORMAT_VERSION: u16 = 3;
+const NATIVE_BOUNDED_PQ_WIDTH: u8 = 64;
 const SHA256_HEX_LEN: usize = 64;
 const MUTATION_KEY_HEX_LEN: usize = 48;
 
@@ -35,6 +37,41 @@ pub(crate) struct NativeRouterRef {
     pub(crate) summary_codes: NativeArtifactRef,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeBoundedRouteLimits {
+    pub(crate) max_summary_pages: u32,
+    pub(crate) max_candidate_rows: u32,
+    pub(crate) max_output_pages: u32,
+    pub(crate) coalesce_gap_pages: u32,
+    pub(crate) range_concurrency: u16,
+    pub(crate) response_bytes_each: u64,
+    pub(crate) decoded_cache_bytes: u64,
+    pub(crate) workspace_bytes: u64,
+    pub(crate) runtime_reserve_bytes: u64,
+    pub(crate) resident_budget_bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeBoundedRouterRef {
+    pub(crate) pq_width: u8,
+    pub(crate) summary_blocks_per_page: u8,
+    pub(crate) physical_rows: u64,
+    pub(crate) page_count: u32,
+    pub(crate) summaries: NativeArtifactRef,
+    pub(crate) codebooks: NativeArtifactRef,
+    pub(crate) row_codes: NativeArtifactRef,
+    pub(crate) limits: NativeBoundedRouteLimits,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeSq8Authority {
+    pub(crate) low: Vec<f32>,
+    pub(crate) step: Vec<f32>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativeRunRef {
@@ -56,6 +93,24 @@ pub(crate) struct NativeAnnRef {
     pub(crate) metric: VectorMetric,
     pub(crate) page_rows: u32,
     pub(crate) router: NativeRouterRef,
+    pub(crate) page_directory: NativeArtifactRef,
+    pub(crate) mutation_directory: NativeArtifactRef,
+    pub(crate) base_runs: Vec<NativeRunRef>,
+    pub(crate) delta_runs: Vec<NativeRunRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeBoundedAnnRef {
+    pub(crate) format_version: u16,
+    pub(crate) generation: u64,
+    pub(crate) previous_generation_sha256: Option<String>,
+    pub(crate) source_identity: String,
+    pub(crate) dimensions: u32,
+    pub(crate) metric: VectorMetric,
+    pub(crate) page_rows: u32,
+    pub(crate) router: NativeBoundedRouterRef,
+    pub(crate) sq8: NativeSq8Authority,
     pub(crate) page_directory: NativeArtifactRef,
     pub(crate) mutation_directory: NativeArtifactRef,
     pub(crate) base_runs: Vec<NativeRunRef>,
@@ -129,6 +184,147 @@ impl NativeRunRef {
             return Err(invalid("native ANN run mutation range is reversed"));
         }
         self.artifact.validate(expected_role)
+    }
+}
+
+impl NativeBoundedRouteLimits {
+    fn validate(&self, physical_rows: u64, page_count: u32) -> Result<()> {
+        if self.max_summary_pages == 0
+            || self.max_summary_pages > page_count
+            || self.max_candidate_rows == 0
+            || u64::from(self.max_candidate_rows) > physical_rows
+            || self.max_output_pages == 0
+            || self.max_output_pages > self.max_summary_pages
+            || self.range_concurrency == 0
+            || self.range_concurrency > 64
+            || self.response_bytes_each == 0
+            || self.decoded_cache_bytes == 0
+            || self.workspace_bytes == 0
+            || self.runtime_reserve_bytes == 0
+            || self.resident_budget_bytes == 0
+        {
+            return Err(invalid("native bounded ANN route limits differ"));
+        }
+        let response_bytes = u64::from(self.range_concurrency)
+            .checked_mul(self.response_bytes_each)
+            .ok_or_else(|| invalid("native bounded ANN response budget overflows"))?;
+        let fixed_runtime = response_bytes
+            .checked_add(self.decoded_cache_bytes)
+            .and_then(|bytes| bytes.checked_add(self.workspace_bytes))
+            .and_then(|bytes| bytes.checked_add(self.runtime_reserve_bytes))
+            .ok_or_else(|| invalid("native bounded ANN fixed runtime budget overflows"))?;
+        if fixed_runtime > self.resident_budget_bytes {
+            return Err(invalid(
+                "native bounded ANN fixed runtime exceeds resident budget",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl NativeBoundedAnnRef {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.format_version != NATIVE_BOUNDED_FORMAT_VERSION
+            || self.generation == 0
+            || self.source_identity.is_empty()
+            || self.dimensions == 0
+            || self.metric != VectorMetric::SquaredEuclidean
+            || self.page_rows != NATIVE_ANN_PAGE_ROWS
+            || self.router.pq_width != NATIVE_BOUNDED_PQ_WIDTH
+            || self.router.summary_blocks_per_page == 0
+            || self.router.physical_rows == 0
+            || self.router.page_count == 0
+        {
+            return Err(invalid("native bounded ANN scalar authority differs"));
+        }
+        match (self.generation, self.previous_generation_sha256.as_deref()) {
+            (1, None) => {}
+            (1, Some(_)) => {
+                return Err(invalid(
+                    "native bounded ANN first generation names a predecessor",
+                ));
+            }
+            (_, Some(digest)) => validate_hex(
+                digest,
+                SHA256_HEX_LEN,
+                "bounded previous generation SHA-256",
+            )?,
+            (_, None) => {
+                return Err(invalid(
+                    "native bounded ANN generation is missing its predecessor",
+                ));
+            }
+        }
+        if self
+            .router
+            .physical_rows
+            .div_ceil(u64::from(self.page_rows))
+            != u64::from(self.router.page_count)
+        {
+            return Err(invalid(
+                "native bounded ANN page count differs from physical rows",
+            ));
+        }
+        self.router
+            .limits
+            .validate(self.router.physical_rows, self.router.page_count)?;
+        let dimensions = usize::try_from(self.dimensions)
+            .map_err(|_| invalid("native bounded ANN dimensions exceed usize"))?;
+        if self.sq8.low.len() != dimensions
+            || self.sq8.step.len() != dimensions
+            || self.sq8.low.iter().any(|value| !value.is_finite())
+            || self
+                .sq8
+                .step
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(invalid("native bounded ANN SQ8 authority differs"));
+        }
+        self.router.summaries.validate("route-summaries")?;
+        self.router.codebooks.validate("route-codebooks")?;
+        self.router.row_codes.validate("route-row-codes")?;
+        self.page_directory.validate("page-directory")?;
+        self.mutation_directory.validate("mutation-directory")?;
+        validate_runs(&self.base_runs, "base-run")?;
+        validate_runs(&self.delta_runs, "delta-run")?;
+        let base_rows = self.base_runs.iter().try_fold(0_u64, |total, run| {
+            total
+                .checked_add(run.rows)
+                .ok_or_else(|| invalid("native bounded ANN base row count overflows"))
+        })?;
+        if base_rows != self.router.physical_rows {
+            return Err(invalid(
+                "native bounded ANN physical rows differ from base runs",
+            ));
+        }
+        if let (Some(base), Some(delta)) = (self.base_runs.last(), self.delta_runs.first())
+            && base.version_end >= delta.version_start
+        {
+            return Err(invalid(
+                "native bounded ANN base and delta mutation ranges overlap",
+            ));
+        }
+        let mut uris = BTreeSet::new();
+        for artifact in [
+            &self.router.summaries,
+            &self.router.codebooks,
+            &self.router.row_codes,
+            &self.page_directory,
+            &self.mutation_directory,
+        ]
+        .into_iter()
+        .chain(
+            self.base_runs
+                .iter()
+                .chain(self.delta_runs.iter())
+                .map(|run| &run.artifact),
+        ) {
+            if !uris.insert(artifact.uri.as_str()) {
+                return Err(invalid("native bounded ANN artifact URIs must be unique"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -278,6 +474,31 @@ pub(crate) fn native_ann_root_from_bytes(bytes: &[u8]) -> Result<NativeAnnRef> {
     let canonical = native_ann_root_bytes(&reference)?;
     if canonical != bytes {
         return Err(invalid("native ANN root JSON is not canonical"));
+    }
+    Ok(reference)
+}
+
+pub(crate) fn native_bounded_ann_root_bytes(reference: &NativeBoundedAnnRef) -> Result<Vec<u8>> {
+    reference.validate()?;
+    let value = serde_json::to_value(reference).map_err(|error| {
+        invalid(format!(
+            "native bounded ANN root serialization failed: {error}"
+        ))
+    })?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+        invalid(format!(
+            "native bounded ANN root serialization failed: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub(crate) fn native_bounded_ann_root_from_bytes(bytes: &[u8]) -> Result<NativeBoundedAnnRef> {
+    let reference: NativeBoundedAnnRef = serde_json::from_slice(bytes)
+        .map_err(|error| invalid(format!("native bounded ANN root JSON is invalid: {error}")))?;
+    if native_bounded_ann_root_bytes(&reference)? != bytes {
+        return Err(invalid("native bounded ANN root JSON is not canonical"));
     }
     Ok(reference)
 }
@@ -490,59 +711,79 @@ mod tests {
         }
     }
 
-    fn valid_bounded_authority() -> NativeAnnRef {
-        let mut authority = valid_authority();
-        authority.format_version = 3;
-        authority.metric = VectorMetric::SquaredEuclidean;
-        authority.router = NativeBoundedRouterRef {
-            pq_width: 64,
-            summary_blocks_per_page: 2,
-            physical_rows: 512,
-            page_count: 2,
-            summaries: artifact(
-                "route-summaries",
-                "route-summaries.parquet",
-                DIGEST_D,
-                24_576,
-            ),
-            codebooks: artifact(
-                "route-codebooks",
-                "route-codebooks.parquet",
-                DIGEST_B,
-                393_216,
-            ),
-            row_codes: artifact(
-                "route-row-codes",
-                "route-row-codes.parquet",
-                DIGEST_C,
-                32_768,
-            ),
-            limits: NativeBoundedRouteLimits {
-                max_summary_pages: 2,
-                max_candidate_rows: 128,
-                max_output_pages: 2,
-                coalesce_gap_pages: 1,
-                range_concurrency: 2,
-                response_bytes_each: 1_048_576,
-                decoded_cache_bytes: 2_097_152,
-                workspace_bytes: 4_194_304,
-                runtime_reserve_bytes: 8_388_608,
-                resident_budget_bytes: 67_108_864,
+    fn valid_bounded_authority() -> NativeBoundedAnnRef {
+        NativeBoundedAnnRef {
+            format_version: 3,
+            generation: 7,
+            previous_generation_sha256: Some(DIGEST_A.to_owned()),
+            source_identity: "re-laion-1m/development/v1".to_owned(),
+            dimensions: 96,
+            metric: VectorMetric::SquaredEuclidean,
+            page_rows: 256,
+            router: NativeBoundedRouterRef {
+                pq_width: 64,
+                summary_blocks_per_page: 2,
+                physical_rows: 512,
+                page_count: 2,
+                summaries: artifact(
+                    "route-summaries",
+                    "route-summaries.parquet",
+                    DIGEST_D,
+                    24_576,
+                ),
+                codebooks: artifact(
+                    "route-codebooks",
+                    "route-codebooks.parquet",
+                    DIGEST_B,
+                    393_216,
+                ),
+                row_codes: artifact(
+                    "route-row-codes",
+                    "route-row-codes.parquet",
+                    DIGEST_C,
+                    32_768,
+                ),
+                limits: NativeBoundedRouteLimits {
+                    max_summary_pages: 2,
+                    max_candidate_rows: 128,
+                    max_output_pages: 2,
+                    coalesce_gap_pages: 1,
+                    range_concurrency: 2,
+                    response_bytes_each: 1_048_576,
+                    decoded_cache_bytes: 2_097_152,
+                    workspace_bytes: 4_194_304,
+                    runtime_reserve_bytes: 8_388_608,
+                    resident_budget_bytes: 67_108_864,
+                },
             },
-        };
-        authority.sq8 = NativeSq8Authority {
-            low: vec![-1.0; 96],
-            step: vec![0.01; 96],
-        };
-        authority
+            sq8: NativeSq8Authority {
+                low: vec![-1.0; 96],
+                step: vec![0.01; 96],
+            },
+            page_directory: artifact("page-directory", "page-directory.parquet", DIGEST_C, 1_024),
+            mutation_directory: artifact(
+                "mutation-directory",
+                "mutation-directory.arrow",
+                DIGEST_D,
+                2_048,
+            ),
+            base_runs: vec![
+                run("base-run", 0, VERSION_1, VERSION_1, DIGEST_B),
+                run("base-run", 1, VERSION_2, VERSION_2, DIGEST_C),
+            ],
+            delta_runs: vec![run("delta-run", 0, VERSION_3, VERSION_3, DIGEST_D)],
+        }
     }
 
     #[test]
     fn native_bounded_authority_round_trips_canonical_format_v3() {
         let canonical = valid_bounded_authority();
-        let bytes = native_ann_root_bytes(&canonical).unwrap();
+        let bytes = native_bounded_ann_root_bytes(&canonical).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));
-        assert_eq!(native_ann_root_from_bytes(&bytes).unwrap(), canonical);
+        assert_eq!(
+            native_bounded_ann_root_from_bytes(&bytes).unwrap(),
+            canonical
+        );
     }
 
     #[test]
@@ -612,7 +853,7 @@ mod tests {
         invalid.push(changed);
 
         for authority in invalid {
-            assert!(native_ann_root_bytes(&authority).is_err());
+            assert!(native_bounded_ann_root_bytes(&authority).is_err());
         }
     }
 }
