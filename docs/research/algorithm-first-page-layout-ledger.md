@@ -3087,3 +3087,70 @@ and its average Recall@100 is significantly below the 1,024-page control. Run
 only the 768-page arm over all 1,000 frozen development queries before using
 its capacity to choose a stronger compact representation. Do not rerun the
 ladder, consume validation/holdout, or scale beyond 1M.
+
+## V105 result — full development confirms the point gate but rejects 768-page non-inferiority
+
+V105 evaluated only V104's preregistered 768-page arm on all 1,000 frozen
+ReLAION-1M development queries. It changed no hierarchy, exposed-page order,
+exact scorer, final ranked-gap planner, truth, or 32-GET/16-MiB resource cap.
+No validation or sealed-holdout query was read.
+
+The immutable source revision was
+`e43219e8ba2da1c71c11660513bec0bc1fa782e2`. Its 10,772,785-byte source
+archive is at
+`s3://borsuk-bench-453182569524-euc1/research/v105-exact-retention-confirmation/e43219e8ba2da1c71c11660513bec0bc1fa782e2/source/source.tar.gz`,
+SHA-256
+`89b88c3a94bd533276bd698a07e37fed3a4ed326a992b2805c34cc2933e4a1f5`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v105-exact-retention-confirmation/e43219e8ba2da1c71c11660513bec0bc1fa782e2/runs/v105-g1-confirm-20260921T015504Z-e43219e/a0001`.
+It ran on c7i.8xlarge Spot instance `i-056cc69cc2a4e9ada` in eu-central-1c,
+which is terminated. The canonical 1,575-byte terminal is `complete`, exit 0,
+and claim-eligible, with SHA-256
+`0458f8bdd5ff1988d034773f334164304ad6ed5b60efcba6395906af804232a3`.
+
+Terminal-bound evidence is:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| result | 13,749,782 | `89b2990c5f0fa9dff25e76e4f09bf9a88b156cfca5e74ac4b9a0d9136f420e12` |
+| independent rescore | 522 | `5c57d338c5340df934204a710dfe5e7cfba64d35e843aebafb28e394fcadea88` |
+| resources | 461 | `3bb335e4df1f54b50638f008c314bb01b0344345425176eabb75bfd99c6fcdda` |
+| worker log | 352 | `2063161c4eae6adffa5c5f5e9f4a24b7985ad06a0b8b70b6d8fa80d49deef394` |
+
+The independent reducer authenticated the complete result and recomputed all
+1,000 query fences, selected ranges, truth hits, resource maxima, aggregates,
+and the `exact-retention-confirmed` point-gate classification. The 768-page
+arm reached 98.6200% average Recall@10, 97.9960% average Recall@100, and
+90% nearest-rank p05 Recall@100, with at most 32 GETs, 16,777,216 bytes, and
+107,933 observed scored rows. It therefore passes the three absolute quality
+gates and both resource gates.
+
+Paired comparison source `44253e35538c517e6df3e9c74a4e7ff8a13e2c80`
+then authenticated this result and V99's immutable 129,153,048-byte exact
+1,024-page control result, SHA-256
+`a122e673dd005c8ec40e311aa3fe32391d8506db2ac732401bd090fcb863bad6`.
+It paired all 1,000 query ordinals, truth IDs and truth pages and reused the
+registered seed-7216 10,000-resample matrix, SHA-256
+`8146b2c781e73f07293b293e11b31e6d923c3d456491a417d0ec847ac4ec8d28`.
+The canonical 701-byte comparison receipt is stored at
+`s3://borsuk-bench-453182569524-euc1/research/v105-exact-retention-confirmation/e43219e8ba2da1c71c11660513bec0bc1fa782e2/runs/v105-g1-confirm-20260921T015504Z-e43219e/a0001/posthoc/44253e35538c517e6df3e9c74a4e7ff8a13e2c80/comparison.json`
+with SHA-256
+`b5d297454e8fe34c8dce39f953c843679dd2d663eee9997450d1ea5853c7409e`.
+Against the 1,024-page control, the paired 95% intervals were -0.4000 to
+-0.1300 percentage points for average Recall@10, -0.5190 to -0.3460 points
+for average Recall@100, and -3 to -1 points for p05 Recall@100. Every interval
+is strictly negative.
+
+The Spot cell took 1,532 seconds, reached 11,031,512 KiB maximum process RSS,
+had zero swap and zero memory PSI, and cost an estimated $0.204267. The local
+paired reducer took 3.61 seconds, reached 1,366,524 KiB maximum RSS, had zero
+swap, and left memory PSI at zero. All downloaded scratch objects were
+authenticated before interpretation.
+
+**Ruling:** the 768-page arm is an absolute-gate survivor but is killed for
+promotion by the standing paired-CI non-inferiority rule. Its apparent capacity
+reduction may not size the next representation. Retain V99's 1,024-page,
+142,799-observed-row exact envelope as the qualified capacity boundary. Do not
+rerun V104/V105, consume validation/holdout, or scale beyond 1M. The one next
+representation hypothesis must change the ranking family within that envelope;
+conventional PQ widening and exact-norm correction are already rejected.
