@@ -149,24 +149,29 @@ def _read_source(path: Path, expected: ArtifactIdentity, rows: int) -> tuple[byt
 
 def _read_truth(path: Path, expected: ArtifactIdentity) -> tuple[tuple[bytes, ...], ...]:
     _authenticate(path, expected)
-    table = pq.read_table(path)
-    if table.column_names != ["query_ordinal", "rank", "feature_row_id"]:
-        raise ValueError("layout truth schema differs")
-    if table.num_rows == 0 or table.num_rows % 100:
-        raise ValueError("layout truth rows differ")
-    query_count = table.num_rows // 100
-    queries = table["query_ordinal"].combine_chunks().to_pylist()
-    ranks = table["rank"].combine_chunks().to_pylist()
-    if queries != [query for query in range(query_count) for _ in range(100)]:
-        raise ValueError("layout truth query order differs")
-    if ranks != list(range(100)) * query_count:
-        raise ValueError("layout truth rank order differs")
-    ids = table["feature_row_id"].combine_chunks().to_pylist()
-    result = tuple(
-        tuple(_stable_id(value) for value in ids[start : start + 100])
-        for start in range(0, len(ids), 100)
+    schema = pa.schema(
+        [
+            pa.field("query", pa.uint32(), nullable=False),
+            pa.field(
+                "neighbors",
+                pa.list_(pa.field("element", pa.int64(), nullable=False), 100),
+                nullable=False,
+            ),
+        ]
     )
-    if any(len(set(query)) != 100 for query in result):
+    if pq.read_schema(path) != schema:
+        raise ValueError("layout truth schema differs")
+    table = pq.read_table(path)
+    if table.num_rows == 0:
+        raise ValueError("layout truth rows differ")
+    queries = table["query"].combine_chunks().to_pylist()
+    if queries != list(range(table.num_rows)):
+        raise ValueError("layout truth query order differs")
+    result = tuple(
+        tuple(_stable_id(value) for value in neighbors)
+        for neighbors in table["neighbors"].combine_chunks().to_pylist()
+    )
+    if any(len(query) != 100 or len(set(query)) != 100 for query in result):
         raise ValueError("layout truth neighbor identity differs")
     return result
 

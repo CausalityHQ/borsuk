@@ -662,21 +662,31 @@ def _stable_id(value: object) -> bytes:
 
 
 def _ground_truth(path: Path) -> tuple[tuple[bytes, ...], ...]:
-    table = pq.read_table(path, columns=["query_ordinal", "rank", "feature_row_id"])
-    query_ordinals = table["query_ordinal"].combine_chunks().to_pylist()
-    ranks = table["rank"].combine_chunks().to_pylist()
-    ids = table["feature_row_id"].combine_chunks().to_pylist()
-    if table.num_rows == 0 or table.num_rows % 100 != 0:
-        raise ValueError("layout GT100 row count differs")
-    query_count = table.num_rows // 100
-    if query_ordinals != [query for query in range(query_count) for _ in range(100)]:
-        raise ValueError("layout GT100 query order differs")
-    if ranks != list(range(100)) * query_count:
-        raise ValueError("layout GT100 rank order differs")
-    return tuple(
-        tuple(_stable_id(value) for value in ids[start : start + 100])
-        for start in range(0, len(ids), 100)
+    schema = pa.schema(
+        [
+            pa.field("query", pa.uint32(), nullable=False),
+            pa.field(
+                "neighbors",
+                pa.list_(pa.field("element", pa.int64(), nullable=False), 100),
+                nullable=False,
+            ),
+        ]
     )
+    if pq.read_schema(path) != schema:
+        raise ValueError("layout GT100 schema differs")
+    table = pq.read_table(path)
+    if table.num_rows == 0:
+        raise ValueError("layout GT100 row count differs")
+    query_ordinals = table["query"].combine_chunks().to_pylist()
+    if query_ordinals != list(range(table.num_rows)):
+        raise ValueError("layout GT100 query order differs")
+    neighbor_rows = table["neighbors"].combine_chunks().to_pylist()
+    result = tuple(
+        tuple(_stable_id(value) for value in neighbors) for neighbors in neighbor_rows
+    )
+    if any(len(neighbors) != 100 or len(set(neighbors)) != 100 for neighbors in result):
+        raise ValueError("layout GT100 neighbor identity differs")
+    return result
 
 
 def exact_page_coverage(

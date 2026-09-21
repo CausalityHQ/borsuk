@@ -20,6 +20,7 @@ from scripts.native_geometric_layout_screen import (
     LayoutEvaluation,
     LayoutMethod,
     MembershipRow,
+    _ground_truth,
     construct_layout,
     encoded_sq8_page_bytes,
     evaluate_layout,
@@ -30,6 +31,39 @@ from scripts.native_geometric_layout_screen import (
     read_membership_parquet,
     write_membership_parquet,
 )
+
+
+class FrozenTruthTests(unittest.TestCase):
+    def test_reads_authenticated_query_and_fixed_gt100_shape(self) -> None:
+        schema = pa.schema(
+            [
+                pa.field("query", pa.uint32(), nullable=False),
+                pa.field(
+                    "neighbors",
+                    pa.list_(pa.field("element", pa.int64(), nullable=False), 100),
+                    nullable=False,
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "truth.parquet"
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array([0, 1], type=pa.uint32()),
+                        pa.array(
+                            [list(range(100)), list(range(100, 200))],
+                            type=schema.field("neighbors").type,
+                        ),
+                    ],
+                    schema=schema,
+                ),
+                path,
+            )
+            truth = _ground_truth(path)
+            self.assertEqual(len(truth), 2)
+            self.assertEqual(truth[0][0], bytes(16))
+            self.assertEqual(truth[1][-1], (199).to_bytes(16, "big"))
 
 
 class AuthorityAndMembershipTests(unittest.TestCase):

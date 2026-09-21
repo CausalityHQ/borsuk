@@ -57,14 +57,26 @@ class ResultFixture:
         self.source = artifact(self.source_path, "source")
 
         self.truth_path = root / "truth.parquet"
+        truth_schema = pa.schema(
+            [
+                pa.field("query", pa.uint32(), nullable=False),
+                pa.field(
+                    "neighbors",
+                    pa.list_(pa.field("element", pa.int64(), nullable=False), 100),
+                    nullable=False,
+                ),
+            ]
+        )
         pq.write_table(
             pa.Table.from_arrays(
                 [
-                    pa.array([0] * 100, type=pa.uint32()),
-                    pa.array(range(100), type=pa.uint16()),
-                    pa.array(self.ids, type=pa.binary()),
+                    pa.array([0], type=pa.uint32()),
+                    pa.array(
+                        [list(range(100))],
+                        type=truth_schema.field("neighbors").type,
+                    ),
                 ],
-                names=["query_ordinal", "rank", "feature_row_id"],
+                schema=truth_schema,
             ),
             self.truth_path,
         )
