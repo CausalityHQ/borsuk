@@ -27049,6 +27049,15 @@ impl BorsukIndex {
         if options.k > 0
             && matches!(&options.mode, SearchMode::Approx { .. })
             && !options.guaranteed_recall
+            && self.manifest.native_bounded_ann_ref.is_some()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "bounded native ANN snapshot is unavailable".to_string(),
+            ));
+        }
+        if options.k > 0
+            && matches!(&options.mode, SearchMode::Approx { .. })
+            && !options.guaranteed_recall
             && options.filter.is_none()
             && !options.include_metadata
             && !include_vectors
