@@ -27,12 +27,27 @@
 //! 69 for 99.185%.
 
 use std::{
-    env, error::Error, fs, future::Future, ops::Range, path::PathBuf, sync::Arc, time::Instant,
+    collections::HashSet,
+    env,
+    error::Error,
+    fs::{self, File},
+    future::Future,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
 };
 
+use arrow_array::{
+    ArrayRef, FixedSizeListArray, Int64Array, RecordBatch, StringArray, UInt32Array, UInt64Array,
+};
+use arrow_schema::{DataType, Field, Schema};
 use futures_util::stream::{self, StreamExt};
 use object_store::{GetOptions, GetRange, ObjectStore, parse_url_opts, path::Path as ObjectPath};
+use parquet::arrow::ArrowWriter;
 use rayon::prelude::*;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use url::Url;
 use wide::f32x8;
 
@@ -323,6 +338,373 @@ struct QueryOutcome {
     scan_ms: f64,
 }
 
+const PASS_LABELS: [&str; 2] = ["first_connection_pass", "connection_reuse_pass"];
+
+#[derive(Clone, Debug, Serialize)]
+struct QueryEvidence {
+    pass_label: String,
+    query_ordinal: u32,
+    latency_ns: u64,
+    recall10_ppm: u32,
+    recall100_ppm: u32,
+    requests: u32,
+    bytes: u64,
+    returned_feature_row_ids: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct PassAggregate {
+    label: String,
+    queries: u32,
+    average_recall10_ppm: u32,
+    average_recall100_ppm: u32,
+    p05_recall100_ppm: u32,
+    worst_recall100_ppm: u32,
+    latency_p50_ns: u64,
+    latency_p95_ns: u64,
+    latency_p99_ns: u64,
+    requests_total: u64,
+    requests_mean_milli: u64,
+    requests_p50: u32,
+    requests_p95: u32,
+    requests_p99: u32,
+    requests_max: u32,
+    bytes_total: u64,
+    bytes_mean: u64,
+    bytes_p50: u64,
+    bytes_p95: u64,
+    bytes_p99: u64,
+    bytes_max: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ThroughputCell {
+    workers: usize,
+    queries: usize,
+    errors: usize,
+    elapsed_seconds: f64,
+    qps: f64,
+    latency_p50_ms: f64,
+    latency_p99_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BoundedReaderResult {
+    schema: String,
+    claim_eligible: bool,
+    evidence_kind: String,
+    storage: String,
+    cpu_path: String,
+    in_query_cpu: String,
+    source_commit: String,
+    manifest_sha256: String,
+    sq8_sha256: String,
+    rows: usize,
+    dimensions: usize,
+    page_rows: usize,
+    shortlist_rows: usize,
+    coarse_regions: usize,
+    gap_pages: usize,
+    concurrency: usize,
+    queries_per_pass: usize,
+    passes: Vec<PassAggregate>,
+    throughput: Vec<ThroughputCell>,
+    samples_sha256: String,
+    samples_bytes: u64,
+}
+
+#[cfg(test)]
+impl BoundedReaderResult {
+    fn test_fixture(throughput: Vec<ThroughputCell>) -> Self {
+        let aggregate = PassAggregate {
+            label: "first_connection_pass".to_owned(),
+            queries: 1,
+            average_recall10_ppm: 1_000_000,
+            average_recall100_ppm: 1_000_000,
+            p05_recall100_ppm: 1_000_000,
+            worst_recall100_ppm: 1_000_000,
+            latency_p50_ns: 1,
+            latency_p95_ns: 1,
+            latency_p99_ns: 1,
+            requests_total: 1,
+            requests_mean_milli: 1_000,
+            requests_p50: 1,
+            requests_p95: 1,
+            requests_p99: 1,
+            requests_max: 1,
+            bytes_total: 1,
+            bytes_mean: 1,
+            bytes_p50: 1,
+            bytes_p95: 1,
+            bytes_p99: 1,
+            bytes_max: 1,
+        };
+        let mut reused = aggregate.clone();
+        reused.label = "connection_reuse_pass".to_owned();
+        Self {
+            schema: "borsuk-bounded-reader-result-v1".to_owned(),
+            claim_eligible: false,
+            evidence_kind: "test".to_owned(),
+            storage: "test".to_owned(),
+            cpu_path: "test".to_owned(),
+            in_query_cpu: "rayon".to_owned(),
+            source_commit: "1".repeat(40),
+            manifest_sha256: "2".repeat(64),
+            sq8_sha256: "3".repeat(64),
+            rows: 1,
+            dimensions: 1,
+            page_rows: 1,
+            shortlist_rows: 1,
+            coarse_regions: 1,
+            gap_pages: 0,
+            concurrency: 1,
+            queries_per_pass: 1,
+            passes: vec![aggregate, reused],
+            throughput,
+            samples_sha256: "4".repeat(64),
+            samples_bytes: 1,
+        }
+    }
+}
+
+fn query_evidence(
+    pass_label: &str,
+    query_ordinal: usize,
+    latency_ns: u64,
+    requests: usize,
+    bytes: usize,
+    returned: Vec<i64>,
+    truth: &[i64],
+) -> BenchResult<QueryEvidence> {
+    if !matches!(
+        pass_label,
+        "first_connection_pass" | "connection_reuse_pass"
+    ) || returned.len() != 100
+        || truth.len() < 100
+        || returned.iter().collect::<HashSet<_>>().len() != returned.len()
+        || latency_ns == 0
+        || requests == 0
+        || bytes == 0
+    {
+        return Err("bounded query evidence differs".into());
+    }
+    let hits10 = returned[..10]
+        .iter()
+        .filter(|identifier| truth[..10].contains(identifier))
+        .count();
+    let hits100 = returned
+        .iter()
+        .filter(|identifier| truth[..100].contains(identifier))
+        .count();
+    Ok(QueryEvidence {
+        pass_label: pass_label.to_owned(),
+        query_ordinal: u32::try_from(query_ordinal)?,
+        latency_ns,
+        recall10_ppm: u32::try_from(hits10 * 100_000)?,
+        recall100_ppm: u32::try_from(hits100 * 10_000)?,
+        requests: u32::try_from(requests)?,
+        bytes: u64::try_from(bytes)?,
+        returned_feature_row_ids: returned,
+    })
+}
+
+fn integer_percentile(values: &[u64], quantile_ppm: u64) -> u64 {
+    let mut ordered = values.to_vec();
+    ordered.sort_unstable();
+    let numerator = (ordered.len() as u64 - 1) * quantile_ppm;
+    let index = (numerator + 500_000) / 1_000_000;
+    ordered[index as usize]
+}
+
+fn aggregate_pass(label: &str, samples: &[QueryEvidence]) -> BenchResult<PassAggregate> {
+    let selected = samples
+        .iter()
+        .filter(|sample| sample.pass_label == label)
+        .collect::<Vec<_>>();
+    if selected.is_empty() || selected.len() != samples.len() {
+        return Err("bounded pass evidence differs".into());
+    }
+    let count = u64::try_from(selected.len())?;
+    let recall10 = selected
+        .iter()
+        .map(|sample| u64::from(sample.recall10_ppm))
+        .collect::<Vec<_>>();
+    let recall100 = selected
+        .iter()
+        .map(|sample| u64::from(sample.recall100_ppm))
+        .collect::<Vec<_>>();
+    let latencies = selected
+        .iter()
+        .map(|sample| sample.latency_ns)
+        .collect::<Vec<_>>();
+    let requests = selected
+        .iter()
+        .map(|sample| u64::from(sample.requests))
+        .collect::<Vec<_>>();
+    let bytes = selected
+        .iter()
+        .map(|sample| sample.bytes)
+        .collect::<Vec<_>>();
+    let requests_total = requests.iter().sum::<u64>();
+    let bytes_total = bytes.iter().sum::<u64>();
+    Ok(PassAggregate {
+        label: label.to_owned(),
+        queries: u32::try_from(count)?,
+        average_recall10_ppm: u32::try_from(recall10.iter().sum::<u64>() / count)?,
+        average_recall100_ppm: u32::try_from(recall100.iter().sum::<u64>() / count)?,
+        p05_recall100_ppm: u32::try_from(integer_percentile(&recall100, 50_000))?,
+        worst_recall100_ppm: u32::try_from(*recall100.iter().min().expect("nonempty"))?,
+        latency_p50_ns: integer_percentile(&latencies, 500_000),
+        latency_p95_ns: integer_percentile(&latencies, 950_000),
+        latency_p99_ns: integer_percentile(&latencies, 990_000),
+        requests_total,
+        requests_mean_milli: requests_total * 1_000 / count,
+        requests_p50: u32::try_from(integer_percentile(&requests, 500_000))?,
+        requests_p95: u32::try_from(integer_percentile(&requests, 950_000))?,
+        requests_p99: u32::try_from(integer_percentile(&requests, 990_000))?,
+        requests_max: u32::try_from(*requests.iter().max().expect("nonempty"))?,
+        bytes_total,
+        bytes_mean: bytes_total / count,
+        bytes_p50: integer_percentile(&bytes, 500_000),
+        bytes_p95: integer_percentile(&bytes, 950_000),
+        bytes_p99: integer_percentile(&bytes, 990_000),
+        bytes_max: *bytes.iter().max().expect("nonempty"),
+    })
+}
+
+fn sha256_file(path: &Path) -> BenchResult<String> {
+    let mut hasher = Sha256::new();
+    let mut file = File::open(path)?;
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn write_samples(path: &Path, samples: &[QueryEvidence]) -> BenchResult<()> {
+    if samples.is_empty()
+        || samples
+            .iter()
+            .any(|sample| sample.returned_feature_row_ids.len() != 100)
+    {
+        return Err("bounded query samples differ".into());
+    }
+    let returned_values = samples
+        .iter()
+        .flat_map(|sample| sample.returned_feature_row_ids.iter().copied())
+        .collect::<Vec<_>>();
+    let item = Arc::new(Field::new("item", DataType::Int64, false));
+    let returned = FixedSizeListArray::try_new(
+        item.clone(),
+        100,
+        Arc::new(Int64Array::from(returned_values)),
+        None,
+    )?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("pass_label", DataType::Utf8, false),
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("latency_ns", DataType::UInt64, false),
+        Field::new("recall10_ppm", DataType::UInt32, false),
+        Field::new("recall100_ppm", DataType::UInt32, false),
+        Field::new("requests", DataType::UInt32, false),
+        Field::new("bytes", DataType::UInt64, false),
+        Field::new(
+            "returned_feature_row_ids",
+            DataType::FixedSizeList(item, 100),
+            false,
+        ),
+    ]));
+    let arrays: Vec<ArrayRef> = vec![
+        Arc::new(StringArray::from(
+            samples
+                .iter()
+                .map(|sample| sample.pass_label.as_str())
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(UInt32Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.query_ordinal)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(UInt64Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.latency_ns)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(UInt32Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.recall10_ppm)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(UInt32Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.recall100_ppm)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(UInt32Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.requests)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(UInt64Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.bytes)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(returned),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+    let mut writer = ArrowWriter::try_new(File::create(path)?, schema, None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
+}
+
+fn select_top_neighbors(mut scored: Vec<(f32, i64)>, take: usize) -> Vec<i64> {
+    let take = take.min(scored.len());
+    if take == 0 {
+        return Vec::new();
+    }
+    scored.select_nth_unstable_by(take - 1, |left, right| {
+        left.0.total_cmp(&right.0).then(left.1.cmp(&right.1))
+    });
+    scored.truncate(take);
+    scored.sort_unstable_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+    scored
+        .into_iter()
+        .map(|(_, identifier)| identifier)
+        .collect()
+}
+
+fn canonical_result_bytes(result: &BoundedReaderResult) -> BenchResult<Vec<u8>> {
+    if result.schema != "borsuk-bounded-reader-result-v1"
+        || result.claim_eligible
+        || result.source_commit.len() != 40
+        || result.manifest_sha256.len() != 64
+        || result.sq8_sha256.len() != 64
+        || result.samples_sha256.len() != 64
+        || result.samples_bytes == 0
+        || result.passes.len() != 2
+        || result.throughput.iter().any(|cell| {
+            !cell.elapsed_seconds.is_finite()
+                || !cell.qps.is_finite()
+                || !cell.latency_p50_ms.is_finite()
+                || !cell.latency_p99_ms.is_finite()
+                || cell.elapsed_seconds <= 0.0
+                || cell.qps < 0.0
+        })
+    {
+        return Err("bounded reader result differs".into());
+    }
+    let mut body = serde_json::to_vec(result)?;
+    body.push(b'\n');
+    Ok(body)
+}
+
 async fn search(
     store: &Arc<dyn ObjectStore>,
     key: &ObjectPath,
@@ -404,12 +786,7 @@ async fn search(
         InQueryCpu::Rayon => blobs.par_iter().flat_map_iter(score_blob).collect(),
         InQueryCpu::Sequential => blobs.iter().flat_map(score_blob).collect(),
     };
-    let take = manifest.neighbors.min(best.len());
-    if take > 0 {
-        best.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
-        best.truncate(take);
-    }
-    let returned = best.into_iter().map(|(_, id)| id).collect();
+    let returned = select_top_neighbors(best, manifest.neighbors);
     let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
 
     Ok(QueryOutcome {
@@ -531,6 +908,10 @@ async fn main() -> BenchResult<()> {
     let region = required("BORSUK_V71_REGION")?;
     let manifest_path = PathBuf::from(required("BORSUK_V71_MANIFEST")?);
     let output = PathBuf::from(required("BORSUK_V71_OUTPUT")?);
+    let samples_path = PathBuf::from(required("BORSUK_V71_SAMPLES")?);
+    let source_commit = required("BORSUK_SOURCE_COMMIT")?;
+    let expected_manifest_sha256 = required("BORSUK_MANIFEST_SHA256")?;
+    let sq8_sha256 = required("BORSUK_SQ8_SHA256")?;
     let budget = optional_usize("BORSUK_V71_SHORTLIST", 512)?;
     let gap = optional_usize("BORSUK_V71_GAP", 8)?;
     let concurrency = optional_usize("BORSUK_V71_CONCURRENCY", 64)?;
@@ -538,52 +919,58 @@ async fn main() -> BenchResult<()> {
     let measured = optional_usize("BORSUK_V71_QUERIES", 200)?;
     let in_query_cpu = in_query_cpu()?;
 
+    let manifest_sha256 = sha256_file(&manifest_path)?;
+    if manifest_sha256 != expected_manifest_sha256 {
+        return Err("manifest SHA-256 differs".into());
+    }
     let manifest = Arc::new(load_manifest(&manifest_path)?);
+    if manifest.neighbors != 100 {
+        return Err("bounded reader requires GT100".into());
+    }
     let url = Url::parse(&uri)?;
     let (store, key) = parse_url_opts(&url, [("region".to_string(), region.clone())])?;
     let store: Arc<dyn ObjectStore> = Arc::from(store);
 
     let measured = measured.min(manifest.queries);
-    let mut totals = Vec::with_capacity(measured);
-    let mut io = Vec::with_capacity(measured);
-    let mut scan = Vec::with_capacity(measured);
-    let mut route_times = Vec::with_capacity(measured);
-    let mut requests = Vec::with_capacity(measured);
-    let mut bytes_seen = Vec::with_capacity(measured);
-    let mut hits = 0usize;
-    let mut worst = manifest.neighbors;
-
-    for index in 0..measured {
-        let offset = index * manifest.dimensions;
-        let query = &manifest.query_vectors[offset..offset + manifest.dimensions];
-        let outcome = search(
-            &store,
-            &key,
-            &manifest,
-            query,
-            budget,
-            regions,
-            gap,
-            concurrency,
-            in_query_cpu,
-        )
-        .await?;
-        let truth_offset = index * manifest.neighbors;
-        let truth = &manifest.truth[truth_offset..truth_offset + manifest.neighbors];
-        let found = outcome
-            .returned
-            .iter()
-            .filter(|identifier| truth.contains(identifier))
-            .count();
-        hits += found;
-        worst = worst.min(found);
-        totals.push(outcome.route_ms + outcome.io_ms + outcome.scan_ms);
-        io.push(outcome.io_ms);
-        scan.push(outcome.scan_ms);
-        route_times.push(outcome.route_ms);
-        requests.push(outcome.requests as f64);
-        bytes_seen.push(outcome.bytes as f64);
+    let mut samples = Vec::with_capacity(measured * PASS_LABELS.len());
+    let mut passes = Vec::with_capacity(PASS_LABELS.len());
+    for pass_label in PASS_LABELS {
+        let mut pass_samples = Vec::with_capacity(measured);
+        for index in 0..measured {
+            let offset = index * manifest.dimensions;
+            let query = &manifest.query_vectors[offset..offset + manifest.dimensions];
+            let started = Instant::now();
+            let outcome = search(
+                &store,
+                &key,
+                &manifest,
+                query,
+                budget,
+                regions,
+                gap,
+                concurrency,
+                in_query_cpu,
+            )
+            .await?;
+            let latency_ns = u64::try_from(started.elapsed().as_nanos())?;
+            let truth_offset = index * manifest.neighbors;
+            let truth = &manifest.truth[truth_offset..truth_offset + manifest.neighbors];
+            pass_samples.push(query_evidence(
+                pass_label,
+                index,
+                latency_ns,
+                outcome.requests,
+                outcome.bytes,
+                outcome.returned,
+                truth,
+            )?);
+        }
+        passes.push(aggregate_pass(pass_label, &pass_samples)?);
+        samples.extend(pass_samples);
     }
+    write_samples(&samples_path, &samples)?;
+    let samples_sha256 = sha256_file(&samples_path)?;
+    let samples_bytes = fs::metadata(&samples_path)?.len();
 
     // Throughput pass: the per-index ceiling has been asserted from S3's
     // documented per-prefix request rate but never measured. Driving many
@@ -627,60 +1014,62 @@ async fn main() -> BenchResult<()> {
                     Ok(Err(_)) | Err(_) => errors += 1,
                 }
             }
-            throughput.push(serde_json::json!({
-                "workers": workers,
-                "queries": workers * 8,
-                "errors": errors,
-                "elapsed_seconds": elapsed,
-                "qps": successful_qps(latencies.len(), elapsed),
-                "latency_p50_ms": if latencies.is_empty() { 0.0 } else { percentile(&latencies, 0.50) },
-                "latency_p99_ms": if latencies.is_empty() { 0.0 } else { percentile(&latencies, 0.99) },
-            }));
-            println!("{}", throughput.last().expect("just pushed"));
+            throughput.push(ThroughputCell {
+                workers,
+                queries: workers * 8,
+                errors,
+                elapsed_seconds: elapsed,
+                qps: successful_qps(latencies.len(), elapsed),
+                latency_p50_ms: if latencies.is_empty() {
+                    0.0
+                } else {
+                    percentile(&latencies, 0.50)
+                },
+                latency_p99_ms: if latencies.is_empty() {
+                    0.0
+                } else {
+                    percentile(&latencies, 0.99)
+                },
+            });
+            println!(
+                "{}",
+                serde_json::to_string(throughput.last().expect("just pushed"))?
+            );
         }
     }
-    let report = serde_json::json!({
-        "schema": "borsuk-v73-row-router-reader-result-v1",
-        "throughput": throughput,
-        "claim_eligible": false,
-        "evidence_kind": "measured-native-single-round-trip-sq8-with-resident-row-router",
-        "storage": "real-object-store-ranged-gets-no-local-cache",
-        "cpu_path": "safe-rust-simd-scan-and-adc-router",
-        "in_query_cpu": in_query_cpu.label(),
-        "rows": manifest.rows,
-        "dimensions": manifest.dimensions,
-        "page_rows": manifest.page_rows,
-        "shortlist_rows": budget,
-        "coarse_regions": regions,
-        "gap_pages": gap,
-        "concurrency": concurrency,
-        "queries": measured,
-        "recall": {
-            "aggregate_ppm": (hits as f64 * 1_000_000.0
-                / (measured * manifest.neighbors) as f64).round() as u64,
-            "worst_ppm": (worst * 10_000) as u64,
-        },
-        "latency_ms": {
-            "total_p50": percentile(&totals, 0.50),
-            "total_p95": percentile(&totals, 0.95),
-            "total_p99": percentile(&totals, 0.99),
-            "io_p50": percentile(&io, 0.50),
-            "io_p95": percentile(&io, 0.95),
-            "scan_p50": percentile(&scan, 0.50),
-            "route_p50": percentile(&route_times, 0.50),
-        },
-        "requests_p50": percentile(&requests, 0.50),
-        "requests_p95": percentile(&requests, 0.95),
-        "bytes_p50": percentile(&bytes_seen, 0.50),
-    });
-    fs::write(&output, format!("{report}\n"))?;
-    println!("{report}");
+    let report = BoundedReaderResult {
+        schema: "borsuk-bounded-reader-result-v1".to_owned(),
+        claim_eligible: false,
+        evidence_kind: "measured-native-bounded-sq8-reader".to_owned(),
+        storage: "real-object-store-ranged-gets-no-local-cache".to_owned(),
+        cpu_path: "safe-rust-simd-scan-and-adc-router".to_owned(),
+        in_query_cpu: in_query_cpu.label().to_owned(),
+        source_commit,
+        manifest_sha256,
+        sq8_sha256,
+        rows: manifest.rows,
+        dimensions: manifest.dimensions,
+        page_rows: manifest.page_rows,
+        shortlist_rows: budget,
+        coarse_regions: regions,
+        gap_pages: gap,
+        concurrency,
+        queries_per_pass: measured,
+        passes,
+        throughput,
+        samples_sha256,
+        samples_bytes,
+    };
+    let report_bytes = canonical_result_bytes(&report)?;
+    fs::write(&output, &report_bytes)?;
+    print!("{}", String::from_utf8(report_bytes)?);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
+        fs::File,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -688,7 +1077,13 @@ mod tests {
         time::Duration,
     };
 
-    use super::{InQueryCpu, Manifest, route, run_spawned_bounded, successful_qps};
+    use parquet::file::reader::FileReader;
+
+    use super::{
+        BoundedReaderResult, InQueryCpu, Manifest, PASS_LABELS, ThroughputCell, aggregate_pass,
+        canonical_result_bytes, query_evidence, route, run_spawned_bounded, select_top_neighbors,
+        successful_qps, write_samples,
+    };
 
     fn routing_fixture() -> Manifest {
         let dimensions = 4;
@@ -718,6 +1113,118 @@ mod tests {
             query_vectors: Vec::new(),
             truth: Vec::new(),
         }
+    }
+
+    fn returned_with_hits(hits: usize, top_ten_hits: usize) -> Vec<i64> {
+        let mut returned = (0..top_ten_hits as i64).collect::<Vec<_>>();
+        returned.extend((0..10 - top_ten_hits).map(|index| 10_000 + index as i64));
+        returned.extend(10..10 + (hits - top_ten_hits) as i64);
+        while returned.len() < 100 {
+            returned.push(20_000 + returned.len() as i64);
+        }
+        returned
+    }
+
+    #[test]
+    fn bounded_evidence_aggregates_recall_distribution_latency_and_io() {
+        let truth = (0..100).collect::<Vec<i64>>();
+        let samples = vec![
+            query_evidence(
+                "first_connection_pass",
+                0,
+                100,
+                2,
+                1_000,
+                returned_with_hits(90, 10),
+                &truth,
+            )
+            .unwrap(),
+            query_evidence(
+                "first_connection_pass",
+                1,
+                300,
+                4,
+                3_000,
+                returned_with_hits(80, 8),
+                &truth,
+            )
+            .unwrap(),
+        ];
+
+        let aggregate = aggregate_pass("first_connection_pass", &samples).unwrap();
+
+        assert_eq!(aggregate.queries, 2);
+        assert_eq!(aggregate.average_recall10_ppm, 900_000);
+        assert_eq!(aggregate.average_recall100_ppm, 850_000);
+        assert_eq!(aggregate.p05_recall100_ppm, 800_000);
+        assert_eq!(aggregate.worst_recall100_ppm, 800_000);
+        assert_eq!(aggregate.latency_p50_ns, 300);
+        assert_eq!(aggregate.latency_p95_ns, 300);
+        assert_eq!(aggregate.latency_p99_ns, 300);
+        assert_eq!(aggregate.requests_total, 6);
+        assert_eq!(aggregate.requests_p50, 4);
+        assert_eq!(aggregate.bytes_total, 4_000);
+        assert_eq!(aggregate.bytes_p50, 3_000);
+    }
+
+    #[test]
+    fn bounded_evidence_serializer_rejects_nonfinite_throughput() {
+        let result = BoundedReaderResult::test_fixture(vec![ThroughputCell {
+            workers: 8,
+            queries: 64,
+            errors: 0,
+            elapsed_seconds: 1.0,
+            qps: f64::NAN,
+            latency_p50_ms: 1.0,
+            latency_p99_ms: 2.0,
+        }]);
+
+        assert!(canonical_result_bytes(&result).is_err());
+    }
+
+    #[test]
+    fn bounded_evidence_writes_ranked_ids_to_parquet_for_two_fixed_passes() {
+        assert_eq!(
+            PASS_LABELS,
+            ["first_connection_pass", "connection_reuse_pass"]
+        );
+        let truth = (0..100).collect::<Vec<i64>>();
+        let samples = PASS_LABELS
+            .iter()
+            .enumerate()
+            .map(|(ordinal, label)| {
+                query_evidence(
+                    label,
+                    ordinal,
+                    100,
+                    2,
+                    1_000,
+                    returned_with_hits(90, 10),
+                    &truth,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("samples.parquet");
+
+        write_samples(&path, &samples).unwrap();
+
+        let metadata =
+            parquet::file::reader::SerializedFileReader::new(File::open(path).unwrap()).unwrap();
+        assert_eq!(metadata.metadata().file_metadata().num_rows(), 2);
+        assert_eq!(
+            metadata.metadata().file_metadata().schema_descr().columns()[7]
+                .path()
+                .string(),
+            "returned_feature_row_ids.list.item"
+        );
+    }
+
+    #[test]
+    fn bounded_evidence_top_ten_is_exactly_ranked_with_stable_ties() {
+        let selected = select_top_neighbors(vec![(3.0, 30), (1.0, 20), (1.0, 10)], 2);
+        assert_eq!(selected, vec![10, 20]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
