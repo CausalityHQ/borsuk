@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BinaryHeap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     io::Cursor,
     ops::Range,
     sync::{Arc, RwLock},
@@ -21,6 +21,7 @@ use crate::{
     native_ann::{NativeAnnRef, NativeArtifactRef},
     native_ann_format::{NativeRouterArtifacts, decode_native_router},
     native_ann_router::{NativeRouteLimits, route_native_query},
+    record::VectorRecord,
     segment_cache::{AdmissionGate, ByteAdmissionGate},
     storage::Storage,
 };
@@ -651,8 +652,37 @@ impl NativeAnnSnapshot {
     }
 
     pub(crate) fn search(&self, query: &[f32], k: usize) -> Result<NativeSearchOutcome> {
+        self.search_with_overlay(query, k, &[], &BTreeSet::new())
+    }
+
+    pub(crate) fn search_with_overlay(
+        &self,
+        query: &[f32],
+        k: usize,
+        overlay: &[VectorRecord],
+        shadowed_ids: &BTreeSet<Vec<u8>>,
+    ) -> Result<NativeSearchOutcome> {
         if k == 0 || query.len() != self.dimensions || query.iter().any(|v| !v.is_finite()) {
             return Err(invalid("native ANN search query or k differs"));
+        }
+        let mut overlay_candidates = BTreeMap::new();
+        for record in overlay {
+            let id = record.id.as_bytes().to_vec();
+            let stamp = record
+                .mutation_stamp()
+                .ok_or_else(|| invalid("native ANN WAL overlay mutation stamp is absent"))?;
+            if id.is_empty() || !shadowed_ids.contains(&id) || overlay_candidates.contains_key(&id)
+            {
+                return Err(invalid("native ANN WAL overlay identity differs"));
+            }
+            overlay_candidates.insert(
+                id.clone(),
+                SearchCandidate {
+                    distance: self.score_vector(query, &record.vector)?,
+                    id,
+                    sequence: stamp.version().hlc(),
+                },
+            );
         }
         let route = route_native_query(&self.router, query, self.route_limits)?;
         let selected = route
@@ -710,7 +740,7 @@ impl NativeAnnSnapshot {
                 return Err(invalid("native ANN page checksum differs"));
             }
             for row in decode_native_page(&body, self.dimensions as u32, reference.rows)? {
-                if row.state == NativeRowState::Tombstone {
+                if row.state == NativeRowState::Tombstone || shadowed_ids.contains(&row.id) {
                     continue;
                 }
                 if let Some(mutation) = self.mutations.get(&row.id) {
@@ -730,7 +760,7 @@ impl NativeAnnSnapshot {
             }
         }
         for row in &self.delta_rows {
-            if row.state == NativeRowState::Tombstone {
+            if row.state == NativeRowState::Tombstone || shadowed_ids.contains(&row.id) {
                 continue;
             }
             winners.insert(
@@ -742,6 +772,7 @@ impl NativeAnnSnapshot {
                 },
             );
         }
+        winners.extend(overlay_candidates);
         let rows_scored = winners.len();
         let mut heap = BinaryHeap::with_capacity(k);
         for candidate in winners.into_values() {

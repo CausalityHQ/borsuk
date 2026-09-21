@@ -26894,11 +26894,23 @@ impl BorsukIndex {
             && options.filter.is_none()
             && !options.include_metadata
             && !include_vectors
-            && self.cell_wal_snapshot.is_empty()
             && !self.manifest.segments_are_global_delta
             && let Some(snapshot) = &self.native_ann_snapshot
         {
-            let outcome = snapshot.search(query, options.k)?;
+            let live_wal = self.dense_live_wal_records(None)?;
+            let mut shadowed_ids = live_wal
+                .iter()
+                .map(|record| record.id.as_bytes().to_vec())
+                .collect::<BTreeSet<_>>();
+            for summary in self.cell_wal_tombstone_summaries()? {
+                shadowed_ids.extend(self.load_tombstone_run(&summary)?.keys().cloned());
+            }
+            let outcome = snapshot.search_with_overlay(
+                query,
+                options.k,
+                live_wal.as_slice(),
+                &shadowed_ids,
+            )?;
             let page_count = self
                 .manifest
                 .native_ann_ref
@@ -51489,7 +51501,11 @@ fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
     assert_eq!(ids.first().copied(), Some(pending_id.as_slice()));
     assert!(ids.contains(&committed_id.as_slice()));
     assert!(
-        ids.contains(&[b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat().as_slice()),
+        ids.contains(
+            &[b"tenant/".as_slice(), &0_u64.to_be_bytes()]
+                .concat()
+                .as_slice()
+        ),
         "pending writes must overlay rather than replace the committed native snapshot"
     );
 }
