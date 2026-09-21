@@ -18,9 +18,11 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::{BorsukError, Result},
-    native_ann::{NativeAnnRef, NativeArtifactRef},
-    native_ann_format::{NativeRouterArtifacts, decode_native_router},
-    native_ann_router::{NativeRouteLimits, route_native_query},
+    native_ann::{NativeAnnRef, NativeArtifactRef, NativeBoundedRouteLimits, NativeSq8Authority},
+    native_ann_format::{
+        NativeBoundedRouterArtifacts, NativeRouterArtifacts, decode_native_router,
+    },
+    native_ann_router::{NativeRouteLimits, route_native_bounded_query, route_native_query},
     record::VectorRecord,
     segment_cache::{AdmissionGate, AdmissionPermit, AdmissionSnapshot, ByteAdmissionGate},
     storage::Storage,
@@ -87,6 +89,20 @@ pub(crate) struct NativeSnapshotInputs {
     pub(crate) fetch_admission: Option<Arc<ByteAdmissionGate>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct NativeBoundedSnapshotInputs {
+    pub(crate) generation: u64,
+    pub(crate) dimensions: u32,
+    pub(crate) router: NativeBoundedRouterArtifacts,
+    pub(crate) sq8: NativeSq8Authority,
+    pub(crate) pages: Vec<NativePageRef>,
+    pub(crate) mutation_entries: Vec<NativeMutationEntry>,
+    pub(crate) delta_rows: Vec<NativeResidentRow>,
+    pub(crate) limits: NativeBoundedRouteLimits,
+    pub(crate) fetch_admission: Option<Arc<ByteAdmissionGate>>,
+    pub(crate) cpu_admission: Arc<NativeCpuAdmission>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeSearchHit {
     pub(crate) id: Vec<u8>,
@@ -99,6 +115,18 @@ pub(crate) struct NativeSearchOutcome {
     pub(crate) generation: u64,
     pub(crate) hits: Vec<NativeSearchHit>,
     pub(crate) rows_scored: usize,
+    pub(crate) pages_read: usize,
+    pub(crate) physical_gets: u64,
+    pub(crate) bytes_read: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeBoundedSearchOutcome {
+    pub(crate) generation: u64,
+    pub(crate) hits: Vec<NativeSearchHit>,
+    pub(crate) rows_scored: usize,
+    pub(crate) summary_scores_evaluated: usize,
+    pub(crate) row_scores_evaluated: usize,
     pub(crate) pages_read: usize,
     pub(crate) physical_gets: u64,
     pub(crate) bytes_read: u64,
@@ -129,6 +157,26 @@ pub(crate) struct NativeAnnSnapshot {
 
 pub(crate) struct NativeAnnHandle {
     snapshot: RwLock<Arc<NativeAnnSnapshot>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct NativeBoundedAnnSnapshot {
+    storage: Storage,
+    generation: u64,
+    dimensions: usize,
+    router: NativeBoundedRouterArtifacts,
+    sq8: NativeSq8Authority,
+    pages: Vec<NativePageRef>,
+    mutations: BTreeMap<Vec<u8>, NativeMutationEntry>,
+    delta_rows: Vec<NativeResidentRow>,
+    limits: NativeBoundedRouteLimits,
+    range_gate: Arc<AdmissionGate>,
+    fetch_admission: Option<Arc<ByteAdmissionGate>>,
+    cpu_admission: Arc<NativeCpuAdmission>,
+}
+
+pub(crate) struct NativeBoundedAnnHandle {
+    snapshot: RwLock<Arc<NativeBoundedAnnSnapshot>>,
 }
 
 pub(crate) struct NativeCpuAdmission {
@@ -209,6 +257,22 @@ fn native_page_schema(dimensions: i32) -> Schema {
             "vector",
             DataType::FixedSizeList(
                 Arc::new(Field::new("element", DataType::Float32, false)),
+                dimensions,
+            ),
+            false,
+        ),
+    ])
+}
+
+fn native_bounded_page_schema(dimensions: i32) -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Binary, false),
+        Field::new("sequence", DataType::UInt64, false),
+        Field::new("state", DataType::UInt8, false),
+        Field::new(
+            "code",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::UInt8, false)),
                 dimensions,
             ),
             false,
@@ -526,6 +590,108 @@ fn decode_native_rows(
     Ok(rows)
 }
 
+fn decode_native_bounded_page(
+    bytes: &[u8],
+    dimensions: u32,
+    expected_rows: u32,
+    sq8: &NativeSq8Authority,
+) -> Result<Vec<NativeStoredRow>> {
+    let dimensions_usize = usize::try_from(dimensions)
+        .map_err(|_| invalid("native bounded ANN page dimensions exceed usize"))?;
+    let dimensions_i32 = i32::try_from(dimensions)
+        .map_err(|_| invalid("native bounded ANN page dimensions exceed i32"))?;
+    if dimensions == 0
+        || expected_rows == 0
+        || u64::from(expected_rows) > PAGE_ROWS
+        || sq8.low.len() != dimensions_usize
+        || sq8.step.len() != dimensions_usize
+        || sq8.low.iter().any(|value| !value.is_finite())
+        || sq8
+            .step
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(invalid("native bounded ANN page or SQ8 shape differs"));
+    }
+    let mut reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &native_bounded_page_schema(dimensions_i32) {
+        return Err(invalid("native bounded ANN page physical schema differs"));
+    }
+    let mut rows = Vec::with_capacity(expected_rows as usize);
+    for batch in &mut reader {
+        let batch = batch?;
+        if batch.num_columns() != 4 || batch.columns().iter().any(|array| array.null_count() != 0) {
+            return Err(invalid("native bounded ANN page batch shape differs"));
+        }
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| invalid("native bounded ANN page id column differs"))?;
+        let sequences = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("native bounded ANN page sequence column differs"))?;
+        let states = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(|| invalid("native bounded ANN page state column differs"))?;
+        let codes = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("native bounded ANN page code column differs"))?;
+        if codes.values().null_count() != 0 {
+            return Err(invalid("native bounded ANN page code contains nulls"));
+        }
+        for row in 0..batch.num_rows() {
+            let code = codes.value(row);
+            let code = code
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .ok_or_else(|| invalid("native bounded ANN page code child differs"))?;
+            if code.len() != dimensions_usize || code.null_count() != 0 {
+                return Err(invalid("native bounded ANN page code width differs"));
+            }
+            let sequence = sequences.value(row);
+            if sequence == 0 {
+                return Err(invalid("native bounded ANN page sequence must be nonzero"));
+            }
+            let vector = code
+                .values()
+                .iter()
+                .enumerate()
+                .map(|(dimension, value)| {
+                    sq8.low[dimension] + sq8.step[dimension] * f32::from(*value)
+                })
+                .collect::<Vec<_>>();
+            if vector.iter().any(|value| !value.is_finite()) {
+                return Err(invalid(
+                    "native bounded ANN decoded SQ8 value is non-finite",
+                ));
+            }
+            rows.push(NativeStoredRow {
+                id: ids.value(row).to_vec(),
+                sequence,
+                state: NativeRowState::from_u8(states.value(row))?,
+                vector,
+            });
+        }
+    }
+    if rows.len() != expected_rows as usize
+        || rows.windows(2).any(|pair| {
+            (pair[0].id.as_slice(), pair[0].sequence) >= (pair[1].id.as_slice(), pair[1].sequence)
+        })
+    {
+        return Err(invalid(
+            "native bounded ANN page row order or count differs",
+        ));
+    }
+    Ok(rows)
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -829,6 +995,374 @@ impl NativeAnnSnapshot {
             physical_gets: requests.len() as u64,
             bytes_read: physical_bytes,
         })
+    }
+}
+
+impl NativeBoundedAnnSnapshot {
+    pub(crate) fn open(storage: Storage, inputs: NativeBoundedSnapshotInputs) -> Result<Self> {
+        let dimensions = usize::try_from(inputs.dimensions)
+            .map_err(|_| invalid("native bounded ANN snapshot dimensions exceed usize"))?;
+        let limits = inputs.limits;
+        let response_budget = u64::from(limits.range_concurrency)
+            .checked_mul(limits.response_bytes_each)
+            .ok_or_else(|| invalid("native bounded ANN response budget overflows"))?;
+        let admitted_bytes = inputs
+            .router
+            .resident_bytes
+            .checked_add(response_budget)
+            .and_then(|bytes| bytes.checked_add(limits.decoded_cache_bytes))
+            .and_then(|bytes| bytes.checked_add(limits.workspace_bytes))
+            .and_then(|bytes| bytes.checked_add(limits.runtime_reserve_bytes))
+            .ok_or_else(|| invalid("native bounded ANN resident budget overflows"))?;
+        if inputs.generation == 0
+            || inputs.dimensions == 0
+            || inputs.router.dimensions != inputs.dimensions
+            || inputs.pages.len() != inputs.router.page_count as usize
+            || limits.max_summary_pages == 0
+            || limits.max_summary_pages > inputs.router.page_count
+            || limits.max_candidate_rows == 0
+            || u64::from(limits.max_candidate_rows) > inputs.router.physical_rows
+            || limits.max_output_pages == 0
+            || limits.max_output_pages > limits.max_summary_pages
+            || !(1..=16).contains(&limits.range_concurrency)
+            || limits.response_bytes_each == 0
+            || admitted_bytes > limits.resident_budget_bytes
+            || inputs.sq8.low.len() != dimensions
+            || inputs.sq8.step.len() != dimensions
+            || inputs.sq8.low.iter().any(|value| !value.is_finite())
+            || inputs
+                .sq8
+                .step
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(invalid("native bounded ANN snapshot shape differs"));
+        }
+
+        let mut expected_start = BTreeMap::<&str, u64>::new();
+        let mut page_rows = 0_u64;
+        for (ordinal, page) in inputs.pages.iter().enumerate() {
+            let expected_rows = if ordinal + 1 == inputs.pages.len() {
+                inputs.router.physical_rows - page_rows
+            } else {
+                PAGE_ROWS
+            };
+            if page.page as usize != ordinal
+                || page.object.is_empty()
+                || page.range.start >= page.range.end
+                || page.range.end - page.range.start > limits.response_bytes_each
+                || !valid_sha256(&page.sha256)
+                || u64::from(page.rows) != expected_rows
+                || expected_start
+                    .get(page.object.as_str())
+                    .is_some_and(|end| page.range.start < *end)
+            {
+                return Err(invalid("native bounded ANN page reference differs"));
+            }
+            expected_start.insert(page.object.as_str(), page.range.end);
+            page_rows = page_rows
+                .checked_add(u64::from(page.rows))
+                .ok_or_else(|| invalid("native bounded ANN page rows overflow"))?;
+        }
+        if page_rows != inputs.router.physical_rows {
+            return Err(invalid("native bounded ANN page rows differ from router"));
+        }
+
+        let mut mutations = BTreeMap::new();
+        for entry in &inputs.mutation_entries {
+            if entry.id.is_empty()
+                || entry.sequence == 0
+                || mutations.insert(entry.id.clone(), entry.clone()).is_some()
+            {
+                return Err(invalid(
+                    "native bounded ANN mutation directory is not unique",
+                ));
+            }
+        }
+        let mut previous_id = None;
+        for row in &inputs.delta_rows {
+            if row.id.is_empty()
+                || row.sequence == 0
+                || row.vector.len() != dimensions
+                || row.vector.iter().any(|value| !value.is_finite())
+                || previous_id.is_some_and(|id| id >= row.id.as_slice())
+            {
+                return Err(invalid("native bounded ANN resident delta differs"));
+            }
+            let entry = mutations
+                .get(&row.id)
+                .ok_or_else(|| invalid("native bounded ANN resident delta ID is absent"))?;
+            if entry.sequence != row.sequence || entry.state != row.state {
+                return Err(invalid("native bounded ANN resident delta binding differs"));
+            }
+            previous_id = Some(row.id.as_slice());
+        }
+        if mutations.len() != inputs.delta_rows.len() {
+            return Err(invalid(
+                "native bounded ANN mutation directory contains a missing delta row",
+            ));
+        }
+
+        Ok(Self {
+            storage,
+            generation: inputs.generation,
+            dimensions,
+            router: inputs.router,
+            sq8: inputs.sq8,
+            pages: inputs.pages,
+            mutations,
+            delta_rows: inputs.delta_rows,
+            limits,
+            range_gate: Arc::new(AdmissionGate::new(usize::from(limits.range_concurrency))),
+            fetch_admission: inputs.fetch_admission,
+            cpu_admission: inputs.cpu_admission,
+        })
+    }
+
+    pub(crate) const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn score_vector(&self, query: &[f32], vector: &[f32]) -> Result<f32> {
+        if query.len() != self.dimensions || vector.len() != self.dimensions {
+            return Err(BorsukError::DimensionMismatch {
+                expected: self.dimensions,
+                actual: query.len(),
+            });
+        }
+        let distance = query
+            .iter()
+            .zip(vector)
+            .fold(0.0_f32, |distance, (query, value)| {
+                let delta = query - value;
+                distance + delta * delta
+            });
+        if !distance.is_finite() {
+            return Err(invalid("native bounded ANN row score is non-finite"));
+        }
+        Ok(distance)
+    }
+
+    fn physical_reads(&self, selected: &[NativePageRef]) -> Result<Vec<PhysicalPageRead>> {
+        let mut reads = Vec::<PhysicalPageRead>::new();
+        for (page_index, page) in selected.iter().enumerate() {
+            let page_len = usize::try_from(page.range.end - page.range.start)
+                .map_err(|_| invalid("native bounded ANN page range exceeds usize"))?;
+            if let Some(last) = reads.last_mut()
+                && last.object == page.object
+                && last.range.end == page.range.start
+                && last.range.end - last.range.start + page_len as u64
+                    <= self.limits.response_bytes_each
+            {
+                let slice_start = usize::try_from(page.range.start - last.range.start)
+                    .map_err(|_| invalid("native bounded ANN page offset exceeds usize"))?;
+                last.range.end = page.range.end;
+                last.slices
+                    .push((page_index, slice_start..slice_start + page_len));
+            } else {
+                reads.push(PhysicalPageRead {
+                    object: page.object.clone(),
+                    range: page.range.clone(),
+                    slices: vec![(page_index, 0..page_len)],
+                });
+            }
+        }
+        Ok(reads)
+    }
+
+    pub(crate) fn search(&self, query: &[f32], k: usize) -> Result<NativeBoundedSearchOutcome> {
+        self.search_with_overlay(query, k, &[], &BTreeSet::new())
+    }
+
+    pub(crate) fn search_with_overlay(
+        &self,
+        query: &[f32],
+        k: usize,
+        overlay: &[VectorRecord],
+        shadowed_ids: &BTreeSet<Vec<u8>>,
+    ) -> Result<NativeBoundedSearchOutcome> {
+        if k == 0 || query.len() != self.dimensions || query.iter().any(|v| !v.is_finite()) {
+            return Err(invalid("native bounded ANN search query or k differs"));
+        }
+        let _cpu_permit = self.cpu_admission.try_acquire()?;
+        let mut overlay_candidates = BTreeMap::new();
+        for record in overlay {
+            let id = record.id.as_bytes().to_vec();
+            let stamp = record
+                .mutation_stamp()
+                .ok_or_else(|| invalid("native bounded ANN WAL mutation stamp is absent"))?;
+            if id.is_empty() || !shadowed_ids.contains(&id) || overlay_candidates.contains_key(&id)
+            {
+                return Err(invalid("native bounded ANN WAL overlay identity differs"));
+            }
+            overlay_candidates.insert(
+                id.clone(),
+                SearchCandidate {
+                    distance: self.score_vector(query, &record.vector)?,
+                    id,
+                    sequence: stamp.version().hlc(),
+                },
+            );
+        }
+
+        let route = route_native_bounded_query(&self.router, query, self.limits)?;
+        let selected = route
+            .pages
+            .iter()
+            .map(|page| self.pages[*page as usize].clone())
+            .collect::<Vec<_>>();
+        let physical = self.physical_reads(&selected)?;
+        let requests = physical
+            .iter()
+            .map(|read| (read.object.clone(), read.range.clone()))
+            .collect::<Vec<_>>();
+        let physical_bytes = requests.iter().try_fold(0_u64, |total, (_, range)| {
+            total
+                .checked_add(range.end - range.start)
+                .ok_or_else(|| invalid("native bounded ANN physical bytes overflow"))
+        })?;
+        let response_budget = u64::from(self.limits.range_concurrency)
+            .checked_mul(self.limits.response_bytes_each)
+            .ok_or_else(|| invalid("native bounded ANN response budget overflows"))?;
+        if physical.len() > usize::from(self.limits.range_concurrency)
+            || physical_bytes > response_budget
+            || physical
+                .iter()
+                .any(|read| read.range.end - read.range.start > self.limits.response_bytes_each)
+        {
+            return Err(invalid("native bounded ANN response budget differs"));
+        }
+        let _fetch_permit = self
+            .fetch_admission
+            .as_ref()
+            .map(|gate| gate.acquire_owned(physical_bytes));
+        let mut bodies = (0..physical.len()).map(|_| None).collect::<Vec<_>>();
+        self.storage.for_each_range_wave_completion(
+            &requests,
+            usize::from(self.limits.range_concurrency),
+            Some(&self.range_gate),
+            |index, result| bodies[index] = Some(result),
+        );
+        let mut page_bodies = (0..selected.len()).map(|_| None).collect::<Vec<_>>();
+        for (read, body) in physical.iter().zip(bodies) {
+            let body =
+                body.ok_or_else(|| invalid("native bounded ANN range completion is absent"))??;
+            for (page_index, slice) in &read.slices {
+                if slice.end > body.len() {
+                    return Err(invalid("native bounded ANN page slice escapes response"));
+                }
+                page_bodies[*page_index] = Some(body[slice.clone()].to_vec());
+            }
+        }
+
+        let mut winners = BTreeMap::<Vec<u8>, SearchCandidate>::new();
+        for (reference, body) in selected.iter().zip(page_bodies) {
+            let body = body.ok_or_else(|| invalid("native bounded ANN page body is absent"))?;
+            if format!("{:x}", Sha256::digest(&body)) != reference.sha256 {
+                return Err(invalid("native bounded ANN page checksum differs"));
+            }
+            for row in decode_native_bounded_page(
+                &body,
+                self.dimensions as u32,
+                reference.rows,
+                &self.sq8,
+            )? {
+                if row.state == NativeRowState::Tombstone || shadowed_ids.contains(&row.id) {
+                    continue;
+                }
+                if let Some(mutation) = self.mutations.get(&row.id) {
+                    if mutation.sequence < row.sequence {
+                        return Err(invalid("native bounded ANN mutation directory is stale"));
+                    }
+                    continue;
+                }
+                winners.insert(
+                    row.id.clone(),
+                    SearchCandidate {
+                        distance: self.score_vector(query, &row.vector)?,
+                        id: row.id,
+                        sequence: row.sequence,
+                    },
+                );
+            }
+        }
+        for row in &self.delta_rows {
+            if row.state == NativeRowState::Tombstone || shadowed_ids.contains(&row.id) {
+                continue;
+            }
+            winners.insert(
+                row.id.clone(),
+                SearchCandidate {
+                    distance: self.score_vector(query, &row.vector)?,
+                    id: row.id.clone(),
+                    sequence: row.sequence,
+                },
+            );
+        }
+        winners.extend(overlay_candidates);
+        let rows_scored = winners.len();
+        let mut heap = BinaryHeap::with_capacity(k);
+        for candidate in winners.into_values() {
+            if heap.len() < k {
+                heap.push(candidate);
+            } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+                heap.pop();
+                heap.push(candidate);
+            }
+        }
+        let hits = heap
+            .into_sorted_vec()
+            .into_iter()
+            .map(|candidate| NativeSearchHit {
+                id: candidate.id,
+                sequence: candidate.sequence,
+                distance: candidate.distance,
+            })
+            .collect();
+        Ok(NativeBoundedSearchOutcome {
+            generation: self.generation,
+            hits,
+            rows_scored,
+            summary_scores_evaluated: route.summary_scores_evaluated,
+            row_scores_evaluated: route.row_scores_evaluated,
+            pages_read: selected.len(),
+            physical_gets: physical.len() as u64,
+            bytes_read: physical_bytes,
+        })
+    }
+}
+
+impl NativeBoundedAnnHandle {
+    pub(crate) fn new(snapshot: Arc<NativeBoundedAnnSnapshot>) -> Self {
+        Self {
+            snapshot: RwLock::new(snapshot),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> Arc<NativeBoundedAnnSnapshot> {
+        Arc::clone(
+            &self
+                .snapshot
+                .read()
+                .unwrap_or_else(|error| error.into_inner()),
+        )
+    }
+
+    pub(crate) fn replace_if_newer(
+        &self,
+        replacement: Arc<NativeBoundedAnnSnapshot>,
+    ) -> Result<bool> {
+        let mut current = self
+            .snapshot
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        if replacement.generation <= current.generation {
+            return Err(invalid(
+                "native bounded ANN replacement generation is not newer",
+            ));
+        }
+        *current = replacement;
+        Ok(true)
     }
 }
 
