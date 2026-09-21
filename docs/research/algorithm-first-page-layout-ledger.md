@@ -2833,3 +2833,61 @@ no eligible compact representation; 10M/100M, G2 promotion, and competitor
 parity claims remain fenced. Do not reinterpret this as failure of the exact
 hierarchy/range layout, whose V99 exact ceiling remains above every quality
 gate.
+
+## V101 result — two-stage residual PQ improves flat PQ16 but fails fast
+
+V101 tested one same-width alternative to flat PQ16: two query-blind PQ8
+stages over each row, where the second stage quantizes the first stage's
+residual. Serving evaluates the exact reconstructed squared distance with
+two 8-byte code planes and resident `2*c1·c2` cross-term tables. This keeps the
+row representation at 16 bytes and changes neither V98 hierarchy exposure nor
+V99 adjacent-range selection.
+
+The immutable source revision was
+`9ea8cec9299e5f2d67e832d6245c4b28cb7534e4`. Its source archive was
+`s3://borsuk-bench-453182569524-euc1/research/v101-two-stage-residual-pq/9ea8cec9299e5f2d67e832d6245c4b28cb7534e4/source/source.tar.gz`, SHA-256
+`cf760cee4484eee6767ba67fab72781054bd115b0eb25adce03bf3ec4069f51d`,
+10,733,490 bytes. The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v101-two-stage-residual-pq/9ea8cec9299e5f2d67e832d6245c4b28cb7534e4/runs/v101-g1-screen-20260921T001446Z-9ea8cec/a0001`.
+It used c7i.8xlarge Spot instance `i-0b8ac9facd94241db` in eu-central-1c,
+terminated after its claim-eligible terminal. The terminal is 1,542 bytes,
+SHA-256 `645441283cd1a08972734c02e47ab7026210d6e682baef2fb99ee1ccb0592570`.
+
+The fail-fast cohort was the fixed first 128 ordinals of the already-burned
+ReLAION-1M development query/truth objects; all six complete frozen input
+objects were authenticated before slicing. No validation or holdout query was
+opened. Exact evidence identities are:
+
+- result: 3,535,908 bytes, SHA-256
+  `5862c940910e6dffc015702824a72738fd81f2ed47da1b62b2007cfcf077e3d1`;
+- independent rescore: 841 bytes, SHA-256
+  `5f10869ce49f73faeeb970a0adabdcf8f7ca3b6f441f232a4c5c91a91bbedb2e`;
+- resources: 459 bytes, SHA-256
+  `eedcfc70a44cbe423df313c86fea5a9020eb12775870ada5b4ffccfcf64763b0`;
+- worker log: 352 bytes, SHA-256
+  `661ee4c40c226f1b7de2fd28807865d19df968c533f829cddb1b0c4c1460e3be`;
+- query-independent two-stage artifact: SHA-256
+  `cb3976b6e95dc34d1e55eb73d5de0c4561a340b52b6e1d9f876c534d2b464815`.
+
+| 128-query arm | avg Recall@10 | avg Recall@100 | p05 Recall@100 | max GETs | max bytes | quality | resources |
+|---|---:|---:|---:|---:|---:|---|---|
+| matched V99 flat PQ16 | 96.4843% | 91.3203% | 65% | 32 | 16,777,216 | fail | pass |
+| V101 two-stage residual PQ8+PQ8 | **97.3437%** | **92.2109%** | **70%** | 32 | 16,777,208 | **fail** | pass |
+
+The paired 10,000-resample 95% interval for V101 minus flat PQ16 is -0.1562
+to +2.1094 percentage points at Recall@10, +0.2031 to +1.6016 at
+Recall@100, and -3 to +10 at p05 Recall@100. The independent reducer exactly
+recomputed every sample, aggregate, interval, projection, and the
+`two-stage-residual-pq-rejected` classification.
+
+The complete 100M resident projection is 2,872,388,286 bytes, including the
+786,432-byte second codebooks and 2,097,152-byte cross-term tables, so the
+memory gate passes. The attempt took 363 seconds, reached 11,161,764 KiB peak
+RSS, had zero swap and zero memory PSI, and cost an estimated $0.048400.
+
+**Ruling:** reject V101 without a 1,000-query continuation. The positive paired
+Recall@100 delta confirms that flat PQ16's wide subspaces lose ranking
+information, but two-stage additive quantization recovers less than one point
+on this screen and remains more than five points below the 97.5% gate. It is
+not close enough for parameter tuning. G1 still has no eligible compact row
+representation; G2, real-S3 promotion, 10M, and 100M remain fenced.
