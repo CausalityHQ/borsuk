@@ -247,6 +247,7 @@ impl NativeBoundedRouteLimits {
             || self.max_output_pages > self.max_summary_pages
             || self.range_concurrency == 0
             || self.range_concurrency > 64
+            || u32::from(self.range_concurrency) != self.max_output_pages
             || self.response_bytes_each == 0
             || self.decoded_cache_bytes == 0
             || self.workspace_bytes == 0

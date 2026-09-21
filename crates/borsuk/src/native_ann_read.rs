@@ -1205,7 +1205,8 @@ impl NativeBoundedAnnSnapshot {
             || u64::from(limits.max_candidate_rows) > inputs.router.physical_rows
             || limits.max_output_pages == 0
             || limits.max_output_pages > limits.max_summary_pages
-            || !(1..=16).contains(&limits.range_concurrency)
+            || !(1..=64).contains(&limits.range_concurrency)
+            || u32::from(limits.range_concurrency) != limits.max_output_pages
             || limits.response_bytes_each == 0
             || admitted_bytes > limits.resident_budget_bytes
             || inputs.sq8.low.len() != dimensions

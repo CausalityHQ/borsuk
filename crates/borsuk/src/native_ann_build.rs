@@ -27,6 +27,8 @@ const PQ_WIDTH: usize = 16;
 const CODEWORDS: usize = 256;
 const BOUNDED_PQ_WIDTH: usize = 64;
 const BOUNDED_SUMMARY_BLOCKS: usize = 2;
+const BOUNDED_MAX_OUTPUT_PAGES: u32 = 32;
+const BOUNDED_MAX_QUERY_BODY_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeBuildRow {
@@ -979,7 +981,25 @@ pub(crate) fn build_native_bounded_generation<'a>(
 
     let page_count = u32::try_from(pages.len())
         .map_err(|_| invalid("native bounded ANN page count exceeds u32"))?;
-    let max_output_pages = page_count.min(32);
+    let response_bytes_each = pages
+        .iter()
+        .map(|page| page.range.end - page.range.start)
+        .max()
+        .ok_or_else(|| invalid("native bounded ANN page response size is absent"))?;
+    let byte_limited_pages = u32::try_from(
+        BOUNDED_MAX_QUERY_BODY_BYTES
+            .checked_div(response_bytes_each)
+            .ok_or_else(|| invalid("native bounded ANN page response size is zero"))?,
+    )
+    .unwrap_or(u32::MAX);
+    let max_output_pages = page_count
+        .min(BOUNDED_MAX_OUTPUT_PAGES)
+        .min(byte_limited_pages);
+    if max_output_pages == 0 {
+        return Err(invalid(
+            "native bounded ANN page exceeds the query response budget",
+        ));
+    }
     let limits = NativeBoundedRouteLimits {
         cpu_permits: 4,
         cpu_waiters: 64,
@@ -987,8 +1007,9 @@ pub(crate) fn build_native_bounded_generation<'a>(
         max_candidate_rows: u32::try_from(rows.len().min(4_096)).unwrap_or(4_096),
         max_output_pages,
         coalesce_gap_pages: 0,
-        range_concurrency: u16::try_from(max_output_pages.min(16)).unwrap_or(16),
-        response_bytes_each: 16 * 1024 * 1024,
+        range_concurrency: u16::try_from(max_output_pages)
+            .map_err(|_| invalid("native bounded ANN range concurrency exceeds u16"))?,
+        response_bytes_each,
         decoded_cache_bytes: 64 * 1024 * 1024,
         workspace_bytes: 64 * 1024 * 1024,
         runtime_reserve_bytes: 512 * 1024 * 1024,
