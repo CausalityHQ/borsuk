@@ -16,8 +16,8 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    BorsukIndex, IndexConfig, IndexStats, LeafMode, RequestCounts, SearchOptions, VectorMetric,
-    VectorRecord, recommended_segment_max_vectors,
+    BorsukIndex, CompactionOptions, IndexConfig, IndexStats, LeafMode, RequestCounts,
+    SearchOptions, VectorMetric, VectorRecord, recommended_segment_max_vectors,
 };
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
@@ -35,6 +35,7 @@ const BULK_LOAD_BATCH_ROWS: usize = 4_096;
 const AVERAGE_RECALL_AT_10_GATE_PPM: u32 = 960_000;
 const AVERAGE_RECALL_AT_100_GATE_PPM: u32 = 975_000;
 const P05_RECALL_AT_100_GATE_PPM: u32 = 900_000;
+const RESULT_SCHEMA: &str = "borsuk-bounded-native-100k-qualification-v1";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct ArtifactAuthority {
@@ -107,6 +108,7 @@ struct QualificationSummary {
     average_recall_at_10_ppm: u32,
     average_recall_at_100_ppm: u32,
     p05_recall_at_100_ppm: u32,
+    worst_recall_at_100_ppm: u32,
     p50_latency_ns: u64,
     p95_latency_ns: u64,
     p99_latency_ns: u64,
@@ -115,6 +117,17 @@ struct QualificationSummary {
     total_bytes: u64,
     total_records_scored: u64,
     passed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct SemanticEquivalence {
+    one_run: bool,
+    ten_run: bool,
+    hundred_run: bool,
+    pending_put: bool,
+    pending_delete: bool,
+    reopen: bool,
+    compaction: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +156,7 @@ struct QualificationResult {
     peak_rss_bytes: u64,
     index_stats: IndexStats,
     summary: QualificationSummary,
+    equivalence: SemanticEquivalence,
 }
 
 fn valid_hex(value: &str, length: usize) -> bool {
@@ -318,6 +332,7 @@ fn summarize_samples(samples: &[SampleEvidence]) -> Result<QualificationSummary,
         .collect::<Vec<_>>();
     recall_at_100.sort_unstable();
     let p05_recall_at_100_ppm = recall_at_100[(samples.len() * 5).div_ceil(100).saturating_sub(1)];
+    let worst_recall_at_100_ppm = recall_at_100[0];
     let mut latencies = samples
         .iter()
         .map(|sample| sample.latency_ns)
@@ -331,6 +346,7 @@ fn summarize_samples(samples: &[SampleEvidence]) -> Result<QualificationSummary,
         average_recall_at_10_ppm,
         average_recall_at_100_ppm,
         p05_recall_at_100_ppm,
+        worst_recall_at_100_ppm,
         p50_latency_ns: percentile(&latencies, 50),
         p95_latency_ns: percentile(&latencies, 95),
         p99_latency_ns: percentile(&latencies, 99),
@@ -704,6 +720,89 @@ fn native_route_io(requests: &RequestCounts, bytes_read: u64) -> Result<(u64, u6
     Ok((requests.gets, bytes_read))
 }
 
+fn bounded_search_ids(index: &BorsukIndex, query: &[f32], k: usize) -> Result<Vec<u64>, String> {
+    let report = index
+        .search_with_report(query, SearchOptions::approx(k, LeafMode::PqScan))
+        .map_err(|error| error.to_string())?;
+    if report.leaf_mode != "native-bounded-sq8" || report.hits.len() != k {
+        return Err("bounded native semantic dispatch differs".to_owned());
+    }
+    report
+        .hits
+        .iter()
+        .map(|hit| {
+            hit.id
+                .parse::<u64>()
+                .map_err(|_| "bounded native semantic result ID differs".to_owned())
+        })
+        .collect()
+}
+
+fn repeated_query_matches(
+    index: &BorsukIndex,
+    query: &[f32],
+    expected: &[u64],
+    repetitions: usize,
+) -> Result<bool, String> {
+    for _ in 0..repetitions {
+        if bounded_search_ids(index, query, expected.len())? != expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn verify_semantic_equivalence(
+    index: &mut BorsukIndex,
+    query: &[f32],
+    index_uri: &Path,
+) -> Result<SemanticEquivalence, String> {
+    let baseline = bounded_search_ids(index, query, NEIGHBORS.min(100))?;
+    let one_run = repeated_query_matches(index, query, &baseline, 1)?;
+    let ten_run = repeated_query_matches(index, query, &baseline, 10)?;
+    let hundred_run = repeated_query_matches(index, query, &baseline, 100)?;
+
+    let mutation_id = u64::MAX;
+    let mutation_query = vec![-100.0_f32; query.len()];
+    index
+        .add(vec![VectorRecord::new(
+            mutation_id.to_string(),
+            mutation_query.clone(),
+        )])
+        .map_err(|error| error.to_string())?;
+    let pending_put = bounded_search_ids(index, &mutation_query, 1)? == [mutation_id];
+    index
+        .delete([mutation_id.to_string()])
+        .map_err(|error| error.to_string())?;
+    let pending_delete = bounded_search_ids(index, &mutation_query, 1)? != [mutation_id];
+    index
+        .add(vec![VectorRecord::new(
+            mutation_id.to_string(),
+            mutation_query.clone(),
+        )])
+        .map_err(|error| error.to_string())?;
+    index.flush().map_err(|error| error.to_string())?;
+
+    let mut reopened = BorsukIndex::open(index_uri).map_err(|error| error.to_string())?;
+    let before_compaction = bounded_search_ids(&reopened, &mutation_query, 1)?;
+    let reopen = before_compaction == [mutation_id];
+    let report = reopened
+        .compact(CompactionOptions::default())
+        .map_err(|error| error.to_string())?;
+    let after_compaction = bounded_search_ids(&reopened, &mutation_query, 1)?;
+    let compaction = report.compacted && after_compaction == before_compaction;
+
+    Ok(SemanticEquivalence {
+        one_run,
+        ten_run,
+        hundred_run,
+        pending_put,
+        pending_delete,
+        reopen,
+        compaction,
+    })
+}
+
 fn run() -> Result<(), String> {
     let request = parse_args(env::args())?;
     if request.index_uri.exists() || request.samples.exists() || request.result.exists() {
@@ -763,7 +862,7 @@ fn run() -> Result<(), String> {
             .search_with_report(query, SearchOptions::approx(NEIGHBORS, LeafMode::PqScan))
             .map_err(|error| error.to_string())?;
         let latency_ns = elapsed_ns(started)?;
-        if report.leaf_mode != "native-hierarchical-delta" || report.hits.len() != NEIGHBORS {
+        if report.leaf_mode != "native-bounded-sq8" || report.hits.len() != NEIGHBORS {
             return Err("native ANN dispatch or result cardinality differs".to_owned());
         }
         let returned_ids = report
@@ -794,9 +893,16 @@ fn run() -> Result<(), String> {
     let query_wall_ns = elapsed_ns(query_started)?;
     write_samples(&request.samples, &samples)?;
     let summary = summarize_samples(&samples)?;
+    let equivalence = verify_semantic_equivalence(
+        &mut index,
+        queries
+            .first()
+            .ok_or_else(|| "query authority is empty".to_owned())?,
+        &request.index_uri,
+    )?;
     let (samples_sha256, samples_bytes) = sha256_file(&request.samples)?;
     let result = QualificationResult {
-        schema: "borsuk-native-ann-100k-qualification-v1",
+        schema: RESULT_SCHEMA,
         claim_eligible: false,
         source_commit: request.source_commit,
         rows: request.rows,
@@ -817,8 +923,10 @@ fn run() -> Result<(), String> {
         peak_rss_bytes: peak_rss_bytes()?,
         index_stats: index.stats(),
         summary,
+        equivalence,
     };
-    let mut bytes = serde_json::to_vec(&result).map_err(|error| error.to_string())?;
+    let canonical = serde_json::to_value(&result).map_err(|error| error.to_string())?;
+    let mut bytes = serde_json::to_vec(&canonical).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     fs::File::create(&request.result)
         .and_then(|mut file| file.write_all(&bytes).and_then(|()| file.sync_all()))
