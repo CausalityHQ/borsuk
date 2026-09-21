@@ -120,7 +120,7 @@ use crate::{
     native_ann::{NativeAnnRef, native_ann_root_bytes},
     native_ann_build::{
         NativeBuildConfig, NativeBuildRow, build_native_delta_generation, build_native_generation,
-        publish_native_generation,
+        stage_native_generation,
     },
     native_ann_read::{NativeAnnSnapshot, NativeRowState, load_native_ann_snapshot},
     observability,
@@ -16022,10 +16022,7 @@ impl BorsukIndex {
                 native,
                 native_delta_rows.into_values().collect(),
             )?;
-            let expected_head = self
-                .storage
-                .read_coordination_object("native-ann/HEAD.json")?;
-            publish_native_generation(&self.storage, &built, expected_head.as_ref())?;
+            stage_native_generation(&self.storage, &built)?;
             Some(built.reference)
         } else {
             None
@@ -25478,10 +25475,7 @@ impl BorsukIndex {
             },
             runs.iter().map(Vec::as_slice),
         )?;
-        let expected_head = self
-            .storage
-            .read_coordination_object("native-ann/HEAD.json")?;
-        publish_native_generation(&self.storage, &built, expected_head.as_ref())?;
+        stage_native_generation(&self.storage, &built)?;
         Ok(built.reference)
     }
 
@@ -51263,6 +51257,40 @@ fn native_ann_build_cutover_publishes_one_generic_dense_authority() {
     assert_eq!(native.router.page_count, 3);
     assert!(index.manifest.global_ann_ref.is_none());
     assert!(index.manifest.global_cell_card_ann_ref.is_none());
+}
+
+#[test]
+fn native_ann_build_cutover_uses_collection_snapshot_as_sole_visibility_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: directory.path().to_string_lossy().into_owned(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..256)
+                .map(|row| VectorRecord::new(row.to_string(), vec![row as f32; 16]))
+                .collect(),
+        )
+        .unwrap();
+
+    index.finish_bulk_load().unwrap();
+
+    assert!(index.manifest.native_ann_ref.is_some());
+    assert!(
+        index
+            .storage
+            .read_object_fresh("native-ann/HEAD.json")
+            .unwrap()
+            .is_none(),
+        "the collection snapshot CAS must be the only mutable visibility authority"
+    );
 }
 
 #[test]

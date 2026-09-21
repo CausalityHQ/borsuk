@@ -19,7 +19,7 @@ use crate::{
     },
     native_ann_read::{NativePageRef, NativeRowState},
     rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
-    storage::{CoordinationObject, Storage},
+    storage::Storage,
 };
 
 const PAGE_ROWS: usize = 256;
@@ -59,20 +59,6 @@ pub(crate) struct NativeBuildOutput {
     pub(crate) root_path: String,
     pub(crate) objects: Vec<NativeBuildObject>,
     pub(crate) page_directory: Vec<NativePageRef>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NativePublicationReceipt {
-    pub(crate) generation: u64,
-    pub(crate) root_sha256: String,
-    pub(crate) head_bytes: Vec<u8>,
-}
-
-#[derive(Serialize)]
-struct NativeHead<'a> {
-    generation: u64,
-    root_path: &'a str,
-    root_sha256: &'a str,
 }
 
 #[derive(Serialize)]
@@ -843,36 +829,12 @@ pub(crate) fn build_native_delta_generation(
     })
 }
 
-pub(crate) fn publish_native_generation(
-    storage: &Storage,
-    built: &NativeBuildOutput,
-    expected: Option<&CoordinationObject>,
-) -> Result<NativePublicationReceipt> {
+pub(crate) fn stage_native_generation(storage: &Storage, built: &NativeBuildOutput) -> Result<()> {
     for object in &built.objects {
         storage.write_bytes_content_addressed(&object.path, &object.bytes)?;
     }
     storage.write_bytes_content_addressed(&built.root_path, &built.root_bytes)?;
-    let head_bytes = canonical_json(&NativeHead {
-        generation: built.reference.generation,
-        root_path: &built.root_path,
-        root_sha256: &built.root_sha256,
-    })?;
-    storage.write_coordination_object(
-        "native-ann/HEAD.json",
-        &head_bytes,
-        expected.map(|head| head.version.clone()),
-    )?;
-    let observed = storage
-        .read_object_fresh("native-ann/HEAD.json")?
-        .ok_or_else(|| invalid("native ANN published head is absent"))?;
-    if observed != head_bytes {
-        return Err(invalid("native ANN published head differs"));
-    }
-    Ok(NativePublicationReceipt {
-        generation: built.reference.generation,
-        root_sha256: built.root_sha256.clone(),
-        head_bytes,
-    })
+    Ok(())
 }
 
 #[cfg(test)]
@@ -990,38 +952,25 @@ mod tests {
     }
 
     #[test]
-    fn native_ann_build_publication_acknowledges_only_the_winning_head() {
-        let storage = Storage::from_uri("memory:///native-ann-build").unwrap();
+    fn native_ann_build_staging_is_immutable_and_does_not_publish_visibility() {
+        let storage = Storage::from_uri("memory:///native-ann-stage").unwrap();
         let built = build_native_generation(config(1), [[row(1, 1, 1.0)].as_slice()]).unwrap();
 
-        let first = publish_native_generation(&storage, &built, None).unwrap();
-        assert_eq!(first.generation, 1);
-        assert_eq!(first.root_sha256, built.root_sha256);
-        assert_eq!(
-            storage
-                .read_object_fresh("native-ann/HEAD.json")
-                .unwrap()
-                .unwrap(),
-            first.head_bytes
-        );
-        for object in &built.objects {
-            assert_eq!(
-                storage.read_object_fresh(&object.path).unwrap().unwrap(),
-                object.bytes
-            );
-        }
+        stage_native_generation(&storage, &built).unwrap();
 
-        let error = publish_native_generation(&storage, &built, None)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("concurrent modification"), "{error}");
         assert_eq!(
+            storage
+                .read_object_fresh(&built.root_path)
+                .unwrap()
+                .unwrap(),
+            built.root_bytes
+        );
+        assert!(
             storage
                 .read_object_fresh("native-ann/HEAD.json")
                 .unwrap()
-                .unwrap(),
-            first.head_bytes,
-            "a losing publisher must not become visible"
+                .is_none(),
+            "immutable staging must not create a second visibility authority"
         );
     }
 }
