@@ -24,8 +24,12 @@ RESULT_KEYS = {
     "average_recall_at_10_gate_ppm",
     "average_recall_at_100_gate_ppm",
     "p05_recall_at_100_gate_ppm",
-    "truth",
+    "inputs",
     "samples",
+    "build_wall_ns",
+    "query_wall_ns",
+    "peak_rss_bytes",
+    "index_stats",
     "summary",
     "equivalence",
 }
@@ -74,6 +78,20 @@ def _identity(value: Any, role: str, path: Path) -> None:
     _require(type(value["sha256"]) is str and len(value["sha256"]) == 64, f"{role} digest differs")
     _require(type(value["encoded_bytes"]) is int and value["encoded_bytes"] > 0, f"{role} length differs")
     _require((_sha256(path), path.stat().st_size) == (value["sha256"], value["encoded_bytes"]), f"{role} bytes differ")
+
+
+def _input_identities(value: Any, truth_path: Path) -> None:
+    _require(type(value) is list and len(value) == 3, "input identities differ")
+    keys = {"role", "path", "uri", "sha256", "encoded_bytes"}
+    for authority, role in zip(value, ["source", "queries", "truth"], strict=True):
+        _require(type(authority) is dict and set(authority) == keys, f"{role} input schema differs")
+        _require(authority["role"] == role, f"{role} input role differs")
+        _require(type(authority["path"]) is str and authority["path"], f"{role} input path differs")
+        _require(type(authority["uri"]) is str and "://" in authority["uri"], f"{role} input URI differs")
+        _require(type(authority["sha256"]) is str and len(authority["sha256"]) == 64, f"{role} input digest differs")
+        _require(type(authority["encoded_bytes"]) is int and authority["encoded_bytes"] > 0, f"{role} input length differs")
+    truth = value[2]
+    _require((_sha256(truth_path), truth_path.stat().st_size) == (truth["sha256"], truth["encoded_bytes"]), "truth bytes differ")
 
 
 def _fixed_list(name: str, value_type: pa.DataType, width: int) -> pa.Field:
@@ -152,8 +170,11 @@ def validate_bounded_native_result(
 
     query_count = result["query_count"]
     neighbors = result["neighbors"]
-    _identity(result["truth"], "truth", truth_path)
+    _input_identities(result["inputs"], truth_path)
     _identity(result["samples"], "per-query-samples", samples_path)
+    for field in ["build_wall_ns", "query_wall_ns", "peak_rss_bytes"]:
+        _require(type(result[field]) is int and result[field] > 0, f"{field} differs")
+    _require(type(result["index_stats"]) is dict and result["index_stats"], "index stats differ")
     truth = _read_table(truth_path, _truth_schema(neighbors), query_count, "truth")
     samples = _read_table(samples_path, _samples_schema(neighbors), query_count, "samples")
 

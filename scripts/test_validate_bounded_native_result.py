@@ -98,6 +98,29 @@ class BoundedNativeResultValidatorTests(unittest.TestCase):
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _result(self) -> dict[str, object]:
+        inputs = [
+            {
+                "role": "source",
+                "path": "/input/source.parquet",
+                "uri": "s3://authority/source.parquet",
+                "sha256": "1" * 64,
+                "encoded_bytes": 1,
+            },
+            {
+                "role": "queries",
+                "path": "/input/queries.parquet",
+                "uri": "s3://authority/queries.parquet",
+                "sha256": "2" * 64,
+                "encoded_bytes": 1,
+            },
+            {
+                "role": "truth",
+                "path": str(self.truth_path),
+                "uri": "s3://authority/truth.parquet",
+                "sha256": self._sha256(self.truth_path),
+                "encoded_bytes": self.truth_path.stat().st_size,
+            },
+        ]
         return {
             "schema": "borsuk-bounded-native-100k-qualification-v1",
             "claim_eligible": False,
@@ -109,11 +132,7 @@ class BoundedNativeResultValidatorTests(unittest.TestCase):
             "average_recall_at_10_gate_ppm": 800_000,
             "average_recall_at_100_gate_ppm": 800_000,
             "p05_recall_at_100_gate_ppm": 600_000,
-            "truth": {
-                "role": "truth",
-                "sha256": self._sha256(self.truth_path),
-                "encoded_bytes": self.truth_path.stat().st_size,
-            },
+            "inputs": inputs,
             "samples": {
                 "role": "per-query-samples",
                 "sha256": self._sha256(self.samples_path),
@@ -133,6 +152,10 @@ class BoundedNativeResultValidatorTests(unittest.TestCase):
                 "total_records_scored": 100,
                 "passed": True,
             },
+            "build_wall_ns": 1,
+            "query_wall_ns": 2,
+            "peak_rss_bytes": 3,
+            "index_stats": {"manifest_version": 1},
             "equivalence": {
                 "one_run": True,
                 "ten_run": True,
