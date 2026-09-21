@@ -874,8 +874,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        native_ann_format::NativeRouterArtifacts, native_ann_router::NativeRouteLimits,
-        segment_cache::ByteAdmissionGate, storage::Storage,
+        mutation::{MutationStamp, MutationVersion},
+        native_ann::{NativeBoundedRouteLimits, NativeSq8Authority},
+        native_ann_format::{NativeBoundedRouterArtifacts, NativeRouterArtifacts},
+        native_ann_router::NativeRouteLimits,
+        segment_cache::ByteAdmissionGate,
+        storage::Storage,
     };
 
     #[derive(Clone)]
@@ -1279,6 +1283,295 @@ mod tests {
         assert!(handle.replace_if_newer(replacement).unwrap());
         assert_eq!(handle.snapshot().generation(), 8);
         assert!(handle.replace_if_newer(first).is_err());
+        assert_eq!(handle.snapshot().generation(), 8);
+    }
+
+    fn bounded_codebooks(dimensions: usize) -> Box<[f32]> {
+        let width = dimensions.div_ceil(64);
+        let mut values = vec![0.0_f32; 64 * 256 * width];
+        for subspace in 0..64 {
+            let active = ((subspace + 1) * dimensions / 64) - subspace * dimensions / 64;
+            for codeword in 0..256 {
+                let start = (subspace * 256 + codeword) * width;
+                values[start..start + active].fill(codeword as f32);
+            }
+        }
+        values.into_boxed_slice()
+    }
+
+    fn encode_bounded_sq8_page<I: AsRef<[u8]>>(
+        rows: Vec<(I, u64, u8, Vec<u8>)>,
+        vector_name: &str,
+        child_name: &str,
+    ) -> Vec<u8> {
+        let dimensions = rows.first().unwrap().3.len();
+        let child = Arc::new(Field::new(child_name, DataType::UInt8, false));
+        let codes = Arc::new(
+            FixedSizeListArray::try_new(
+                Arc::clone(&child),
+                i32::try_from(dimensions).unwrap(),
+                Arc::new(UInt8Array::from(
+                    rows.iter()
+                        .flat_map(|(_, _, _, code)| code.iter().copied())
+                        .collect::<Vec<_>>(),
+                )),
+                None,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Binary, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("state", DataType::UInt8, false),
+            Field::new(
+                vector_name,
+                DataType::FixedSizeList(child, i32::try_from(dimensions).unwrap()),
+                false,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(BinaryArray::from_iter_values(
+                    rows.iter().map(|(id, _, _, _)| id.as_ref()),
+                )),
+                Arc::new(UInt64Array::from(
+                    rows.iter()
+                        .map(|(_, sequence, _, _)| *sequence)
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt8Array::from(
+                    rows.iter()
+                        .map(|(_, _, state, _)| *state)
+                        .collect::<Vec<_>>(),
+                )),
+                codes,
+            ],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        bytes
+    }
+
+    fn bounded_snapshot_fixture() -> (Storage, NativeBoundedSnapshotInputs) {
+        let dimensions = 64_u32;
+        let storage = Storage::from_uri("memory:///native-bounded-snapshot").unwrap();
+        let mut first_rows = vec![
+            (b"0001".to_vec(), 1, 0, vec![1_u8; 64]),
+            (b"0002".to_vec(), 1, 0, vec![2_u8; 64]),
+        ];
+        first_rows.extend((0..254).map(|ordinal| {
+            (
+                format!("{:04}", 1000 + ordinal).into_bytes(),
+                1,
+                0,
+                vec![255_u8; 64],
+            )
+        }));
+        let first = encode_bounded_sq8_page(first_rows, "code", "element");
+        let second = encode_bounded_sq8_page(
+            vec![
+                (b"0003".to_vec(), 1, 0, vec![3_u8; 64]),
+                (b"0005".to_vec(), 1, 0, vec![4_u8; 64]),
+            ],
+            "code",
+            "element",
+        );
+        let mut object = first.clone();
+        object.extend_from_slice(&second);
+        storage.write_bytes("bounded/base.arrow", &object).unwrap();
+        let first_len = first.len() as u64;
+
+        let mut row_codes = vec![255_u8; 258 * 64];
+        row_codes[0..64].fill(1);
+        row_codes[64..128].fill(2);
+        row_codes[256 * 64..257 * 64].fill(3);
+        row_codes[257 * 64..258 * 64].fill(4);
+        let summaries = vec![0.0_f32; 2 * 2 * dimensions as usize];
+        let codebooks = bounded_codebooks(dimensions as usize);
+        let resident_bytes = (summaries.len() * size_of::<f32>()
+            + codebooks.len() * size_of::<f32>()
+            + row_codes.len()) as u64;
+        let limits = NativeBoundedRouteLimits {
+            max_summary_pages: 2,
+            max_candidate_rows: 4,
+            max_output_pages: 2,
+            coalesce_gap_pages: 0,
+            range_concurrency: 2,
+            response_bytes_each: 8 * 1024 * 1024,
+            decoded_cache_bytes: 2 * 1024 * 1024,
+            workspace_bytes: 2 * 1024 * 1024,
+            runtime_reserve_bytes: 8 * 1024 * 1024,
+            resident_budget_bytes: 64 * 1024 * 1024,
+        };
+        let inputs = NativeBoundedSnapshotInputs {
+            generation: 7,
+            dimensions,
+            router: NativeBoundedRouterArtifacts {
+                dimensions,
+                summaries: summaries.into_boxed_slice(),
+                codebooks,
+                row_codes: row_codes.into_boxed_slice(),
+                page_count: 2,
+                physical_rows: 258,
+                resident_bytes,
+            },
+            sq8: NativeSq8Authority {
+                low: vec![0.0; dimensions as usize],
+                step: vec![1.0; dimensions as usize],
+            },
+            pages: vec![
+                page_ref(0, "bounded/base.arrow", 0..first_len, &first, 256),
+                page_ref(
+                    1,
+                    "bounded/base.arrow",
+                    first_len..object.len() as u64,
+                    &second,
+                    2,
+                ),
+            ],
+            mutation_entries: vec![
+                NativeMutationEntry {
+                    id: b"0001".to_vec(),
+                    sequence: 2,
+                    state: NativeRowState::Live,
+                },
+                NativeMutationEntry {
+                    id: b"0002".to_vec(),
+                    sequence: 2,
+                    state: NativeRowState::Tombstone,
+                },
+                NativeMutationEntry {
+                    id: b"0004".to_vec(),
+                    sequence: 2,
+                    state: NativeRowState::Live,
+                },
+            ],
+            delta_rows: vec![
+                NativeResidentRow {
+                    id: b"0001".to_vec(),
+                    sequence: 2,
+                    state: NativeRowState::Live,
+                    vector: vec![0.0; dimensions as usize],
+                },
+                NativeResidentRow {
+                    id: b"0002".to_vec(),
+                    sequence: 2,
+                    state: NativeRowState::Tombstone,
+                    vector: vec![0.0; dimensions as usize],
+                },
+                NativeResidentRow {
+                    id: b"0004".to_vec(),
+                    sequence: 2,
+                    state: NativeRowState::Live,
+                    vector: vec![1.0; dimensions as usize],
+                },
+            ],
+            limits,
+            fetch_admission: Some(Arc::new(ByteAdmissionGate::new(16 * 1024 * 1024))),
+            cpu_admission: Arc::new(NativeCpuAdmission::new(1, 0)),
+        };
+        (storage, inputs)
+    }
+
+    #[test]
+    fn native_bounded_snapshot_scores_sq8_and_merges_latest_wins_in_one_wave() {
+        let (storage, inputs) = bounded_snapshot_fixture();
+        let before = storage.request_counts();
+        let snapshot = NativeBoundedAnnSnapshot::open(storage.clone(), inputs).unwrap();
+        let mut pending = VectorRecord::new("0006", vec![0.0; 64]);
+        pending.set_mutation_stamp(MutationStamp::new(
+            MutationVersion::from_parts(3, [3; 16]),
+            [3; 32],
+        ));
+        let shadowed = BTreeSet::from([b"0003".to_vec(), b"0006".to_vec()]);
+
+        let outcome = snapshot
+            .search_with_overlay(&[0.0; 64], 4, &[pending], &shadowed)
+            .unwrap();
+
+        assert_eq!(
+            outcome.hits,
+            vec![
+                NativeSearchHit {
+                    id: b"0001".to_vec(),
+                    sequence: 2,
+                    distance: 0.0,
+                },
+                NativeSearchHit {
+                    id: b"0006".to_vec(),
+                    sequence: 3,
+                    distance: 0.0,
+                },
+                NativeSearchHit {
+                    id: b"0004".to_vec(),
+                    sequence: 2,
+                    distance: 64.0,
+                },
+                NativeSearchHit {
+                    id: b"0005".to_vec(),
+                    sequence: 1,
+                    distance: 1024.0,
+                },
+            ]
+        );
+        assert_eq!(outcome.summary_scores_evaluated, 4);
+        assert_eq!(outcome.row_scores_evaluated, 258);
+        assert_eq!(outcome.pages_read, 2);
+        assert_eq!(outcome.physical_gets, 1);
+        assert_eq!(storage.request_counts().delta(&before).gets, 1);
+    }
+
+    #[test]
+    fn native_bounded_snapshot_rejects_sq8_schema_checksum_and_quantizer_drift() {
+        let malformed = encode_bounded_sq8_page(
+            vec![(b"0001".to_vec(), 1, 0, vec![1_u8; 64])],
+            "vector",
+            "item",
+        );
+        let authority = NativeSq8Authority {
+            low: vec![0.0; 64],
+            step: vec![1.0; 64],
+        };
+        assert!(decode_native_bounded_page(&malformed, 64, 1, &authority).is_err());
+
+        let (storage, mut checksum_drift) = bounded_snapshot_fixture();
+        checksum_drift.pages[0].sha256 = "0".repeat(64);
+        let snapshot = NativeBoundedAnnSnapshot::open(storage, checksum_drift).unwrap();
+        assert!(snapshot.search(&[0.0; 64], 4).is_err());
+
+        let (storage, mut quantizer_drift) = bounded_snapshot_fixture();
+        quantizer_drift.sq8.step[0] = 0.0;
+        assert!(NativeBoundedAnnSnapshot::open(storage, quantizer_drift).is_err());
+    }
+
+    #[test]
+    fn native_bounded_snapshot_refresh_is_atomic_and_cpu_saturation_is_typed() {
+        let (storage, inputs) = bounded_snapshot_fixture();
+        let first =
+            Arc::new(NativeBoundedAnnSnapshot::open(storage.clone(), inputs.clone()).unwrap());
+        let handle = NativeBoundedAnnHandle::new(Arc::clone(&first));
+
+        let held = inputs.cpu_admission.try_acquire().unwrap();
+        assert!(matches!(
+            first.search(&[0.0; 64], 4),
+            Err(BorsukError::Overloaded { .. })
+        ));
+        drop(held);
+
+        let mut invalid = inputs.clone();
+        invalid.generation = 8;
+        invalid.sq8.low.pop();
+        assert!(NativeBoundedAnnSnapshot::open(storage.clone(), invalid).is_err());
+        assert_eq!(handle.snapshot().generation(), 7);
+
+        let mut newer = inputs;
+        newer.generation = 8;
+        let replacement = Arc::new(NativeBoundedAnnSnapshot::open(storage, newer).unwrap());
+        assert!(handle.replace_if_newer(replacement).unwrap());
         assert_eq!(handle.snapshot().generation(), 8);
     }
 }
