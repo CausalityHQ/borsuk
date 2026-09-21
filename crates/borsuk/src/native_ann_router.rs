@@ -279,7 +279,11 @@ pub(crate) fn route_native_query(
 
 #[cfg(test)]
 mod tests {
-    use crate::native_ann_format::NativeRouterArtifacts;
+    use crate::{
+        native_ann::NativeBoundedRouteLimits,
+        native_ann_format::{NativeBoundedRouterArtifacts, NativeRouterArtifacts},
+        native_ann_read::NativeCpuAdmission,
+    };
 
     use super::*;
 
@@ -461,5 +465,131 @@ mod tests {
         assert!(!plan.pages.is_empty());
         assert!(plan.pages.len() <= 8);
         assert!(plan.estimated_body_bytes <= limits.max_body_bytes);
+    }
+
+    fn bounded_codebooks(dimensions: usize) -> Box<[f32]> {
+        let width = dimensions.div_ceil(64);
+        let mut codebooks = vec![0.0_f32; 64 * 256 * width];
+        for subspace in 0..64 {
+            let active = ((subspace + 1) * dimensions / 64) - (subspace * dimensions / 64);
+            for codeword in 0..256 {
+                let start = (subspace * 256 + codeword) * width;
+                for lane in 0..active {
+                    codebooks[start + lane] = codeword as f32;
+                }
+            }
+        }
+        codebooks.into_boxed_slice()
+    }
+
+    fn bounded_fixture() -> (NativeBoundedRouterArtifacts, NativeBoundedRouteLimits) {
+        let dimensions = 64_u32;
+        let mut summaries = vec![0.0_f32; 2 * 2 * dimensions as usize];
+        summaries[2 * dimensions as usize..].fill(1.0);
+        let mut row_codes = vec![200_u8; 512 * 64];
+        row_codes[0..64].fill(1);
+        row_codes[64..128].fill(3);
+        row_codes[256 * 64..257 * 64].fill(0);
+        row_codes[257 * 64..258 * 64].fill(2);
+        (
+            NativeBoundedRouterArtifacts {
+                dimensions,
+                summaries: summaries.into_boxed_slice(),
+                codebooks: bounded_codebooks(dimensions as usize),
+                row_codes: row_codes.into_boxed_slice(),
+                page_count: 2,
+                physical_rows: 512,
+                resident_bytes: (4 * 64 * 4 + 64 * 256 * 4 + 512 * 64) as u64,
+            },
+            NativeBoundedRouteLimits {
+                max_summary_pages: 2,
+                max_candidate_rows: 3,
+                max_output_pages: 2,
+                coalesce_gap_pages: 1,
+                range_concurrency: 2,
+                response_bytes_each: 1_048_576,
+                decoded_cache_bytes: 2_097_152,
+                workspace_bytes: 4_194_304,
+                runtime_reserve_bytes: 8_388_608,
+                resident_budget_bytes: 67_108_864,
+            },
+        )
+    }
+
+    fn scalar_bounded_adc(codebooks: &[f32], dimensions: usize, query: &[f32]) -> Vec<f32> {
+        let width = dimensions.div_ceil(64);
+        let mut table = vec![0.0_f32; 64 * 256];
+        for subspace in 0..64 {
+            let query_start = subspace * dimensions / 64;
+            let query_end = (subspace + 1) * dimensions / 64;
+            for codeword in 0..256 {
+                let centroid_start = (subspace * 256 + codeword) * width;
+                table[subspace * 256 + codeword] = query[query_start..query_end]
+                    .iter()
+                    .zip(&codebooks[centroid_start..centroid_start + query_end - query_start])
+                    .map(|(left, right)| {
+                        let delta = left - right;
+                        delta * delta
+                    })
+                    .sum();
+            }
+        }
+        table
+    }
+
+    #[test]
+    fn native_bounded_router_matches_hand_computed_order_and_stays_bounded() {
+        let (artifacts, limits) = bounded_fixture();
+        let plan = route_native_bounded_query(&artifacts, &[0.0; 64], limits).unwrap();
+        assert_eq!(plan.candidate_rows, vec![256, 0, 257]);
+        assert_eq!(plan.pages, vec![0, 1]);
+        assert_eq!(plan.estimated_body_bytes, 2 * 1_048_576);
+        assert_eq!(plan.summary_scores_evaluated, 4);
+        assert_eq!(plan.row_scores_evaluated, 512);
+        assert!(plan.candidate_rows.capacity() <= limits.max_candidate_rows as usize);
+    }
+
+    #[test]
+    fn native_bounded_router_simd_matches_scalar_for_ragged_ties_and_subnormals() {
+        let mut seed = 0x9e37_79b9_u32;
+        for dimensions in [64_u32, 97, 768] {
+            let codebooks = bounded_codebooks(dimensions as usize);
+            let query = (0..dimensions)
+                .map(|ordinal| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    match ordinal {
+                        0 => -0.0,
+                        1 => f32::from_bits(1),
+                        _ => (seed % 1024) as f32 / 1024.0,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let expected = scalar_bounded_adc(&codebooks, dimensions as usize, &query);
+            let actual = native_bounded_adc_table(&codebooks, dimensions, &query).unwrap();
+            assert_eq!(actual.len(), expected.len());
+            for (left, right) in actual.iter().zip(expected) {
+                assert!((left - right).abs() <= 2.0e-4 * right.abs().max(1.0));
+            }
+        }
+
+        let (mut tied, limits) = bounded_fixture();
+        tied.codebooks.fill(0.0);
+        tied.summaries.fill(0.0);
+        tied.row_codes.fill(0);
+        let plan = route_native_bounded_query(&tied, &[0.0; 64], limits).unwrap();
+        assert_eq!(plan.candidate_rows, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn native_bounded_router_cpu_admission_rejects_beyond_active_and_waiting_bound() {
+        let admission = NativeCpuAdmission::new(1, 0);
+        let held = admission.try_acquire().unwrap();
+        assert!(admission.try_acquire().is_err());
+        let snapshot = admission.snapshot();
+        assert_eq!(snapshot.active, 1);
+        assert_eq!(snapshot.waiting, 0);
+        assert_eq!(snapshot.rejected, 1);
+        drop(held);
+        assert!(admission.try_acquire().is_ok());
     }
 }
