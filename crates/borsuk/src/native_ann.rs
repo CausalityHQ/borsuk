@@ -489,4 +489,130 @@ mod tests {
             assert!(native_ann_root_bytes(&authority).is_err());
         }
     }
+
+    fn valid_bounded_authority() -> NativeAnnRef {
+        let mut authority = valid_authority();
+        authority.format_version = 3;
+        authority.metric = VectorMetric::SquaredEuclidean;
+        authority.router = NativeBoundedRouterRef {
+            pq_width: 64,
+            summary_blocks_per_page: 2,
+            physical_rows: 512,
+            page_count: 2,
+            summaries: artifact(
+                "route-summaries",
+                "route-summaries.parquet",
+                DIGEST_D,
+                24_576,
+            ),
+            codebooks: artifact(
+                "route-codebooks",
+                "route-codebooks.parquet",
+                DIGEST_B,
+                393_216,
+            ),
+            row_codes: artifact(
+                "route-row-codes",
+                "route-row-codes.parquet",
+                DIGEST_C,
+                32_768,
+            ),
+            limits: NativeBoundedRouteLimits {
+                max_summary_pages: 2,
+                max_candidate_rows: 128,
+                max_output_pages: 2,
+                coalesce_gap_pages: 1,
+                range_concurrency: 2,
+                response_bytes_each: 1_048_576,
+                decoded_cache_bytes: 2_097_152,
+                workspace_bytes: 4_194_304,
+                runtime_reserve_bytes: 8_388_608,
+                resident_budget_bytes: 67_108_864,
+            },
+        };
+        authority.sq8 = NativeSq8Authority {
+            low: vec![-1.0; 96],
+            step: vec![0.01; 96],
+        };
+        authority
+    }
+
+    #[test]
+    fn native_bounded_authority_round_trips_canonical_format_v3() {
+        let canonical = valid_bounded_authority();
+        let bytes = native_ann_root_bytes(&canonical).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(native_ann_root_from_bytes(&bytes).unwrap(), canonical);
+    }
+
+    #[test]
+    fn native_bounded_authority_rejects_every_identity_shape_and_budget_drift() {
+        let canonical = valid_bounded_authority();
+        let mut invalid = Vec::new();
+
+        let mut changed = canonical.clone();
+        changed.format_version = 2;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.previous_generation_sha256 = None;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.metric = VectorMetric::InnerProduct;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.page_rows = 128;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.pq_width = 16;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.summary_blocks_per_page = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.physical_rows = 513;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.summaries.role = "route-row-codes".to_owned();
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.summaries.uri = "route-summaries.parquet".to_owned();
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.summaries.sha256 = "A".repeat(64);
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.summaries.encoded_bytes = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.row_codes.uri = changed.router.codebooks.uri.clone();
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.limits.max_summary_pages = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.limits.max_candidate_rows = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.limits.max_output_pages = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.limits.range_concurrency = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.limits.response_bytes_each = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.router.limits.resident_budget_bytes = 0;
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.sq8.low.pop();
+        invalid.push(changed);
+        let mut changed = canonical.clone();
+        changed.sq8.step[0] = 0.0;
+        invalid.push(changed);
+
+        for authority in invalid {
+            assert!(native_ann_root_bytes(&authority).is_err());
+        }
+    }
 }
