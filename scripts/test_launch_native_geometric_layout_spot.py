@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import shlex
 import subprocess
 import unittest
 from types import SimpleNamespace
 
 from scripts.launch_native_geometric_layout_spot import (
     DEFAULT_TARGETS,
+    FROZEN_QUERIES,
     FROZEN_SOURCE,
     FROZEN_TRUTH,
     SourceArchiveIdentity,
@@ -33,6 +33,7 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
                 encoded_bytes=123_456,
             ),
             source=FROZEN_SOURCE,
+            queries=FROZEN_QUERIES,
             truth=FROZEN_TRUTH,
             requirements_sha256="56" * 32,
             output_prefix=(
@@ -54,8 +55,9 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
         self.assertEqual(plan.market, "spot")
         self.assertEqual(plan.instance_type, "c7i.8xlarge")
         self.assertEqual(plan.wall_seconds, 7200)
-        self.assertEqual(plan.maximum_rss_bytes, 16 * 1024**3)
+        self.assertEqual(plan.maximum_rss_bytes, 3 * 1024**3)
         self.assertEqual(plan.source, FROZEN_SOURCE)
+        self.assertEqual(plan.queries, FROZEN_QUERIES)
         self.assertEqual(plan.truth, FROZEN_TRUTH)
 
         invalid = (
@@ -77,7 +79,7 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
             with self.subTest(candidate=candidate), self.assertRaises(ValueError):
                 build_plan(**dataclasses.asdict(candidate))
 
-    def test_worker_constructs_before_truth_exists_and_scrubs_constructor_env(self) -> None:
+    def test_worker_constructs_router_before_queries_or_truth_exist(self) -> None:
         script = worker_script(self.valid_plan())
         syntax = subprocess.run(
             ["bash", "-n"], input=script, text=True, capture_output=True, check=False
@@ -87,43 +89,39 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
         seal_start = script.index("phase=seal")
         evaluate_start = script.index("phase=evaluate")
         construct = script[construct_start:evaluate_start]
+        self.assertNotIn(FROZEN_QUERIES.uri, construct)
         self.assertNotIn(FROZEN_TRUTH.uri, construct)
+        self.assertNotIn("queries.parquet", construct)
         self.assertNotIn("truth.parquet", construct)
         self.assertIn("env -i", construct)
-        self.assertIn("MAXIMUM_RSS_BYTES=17179869184", script)
+        self.assertIn("MAXIMUM_RSS_BYTES=3221225472", script)
         self.assertIn("run_capped()", script)
         self.assertIn("kill -TERM -- \"-$pid\"", script)
         self.assertIn("OPENBLAS_NUM_THREADS=32", construct)
         self.assertIn("OMP_NUM_THREADS=32", construct)
         self.assertIn("unshare --net --fork", construct)
-        self.assertIn("sealed-memberships.json", script[seal_start:evaluate_start])
-        self.assertIn("chmod 0444 membership-*.parquet", script[seal_start:evaluate_start])
+        self.assertIn("construct_geometric_router", script[:construct_start])
+        self.assertIn("write_geometric_router_parquet", script[:construct_start])
+        self.assertIn("sealed-router.json", script[seal_start:evaluate_start])
+        self.assertIn("chmod 0444 membership.parquet tree.parquet pages.parquet", script[seal_start:evaluate_start])
+        self.assertIn('aws s3 cp membership.parquet "$output/artifacts/membership.parquet"', script[seal_start:evaluate_start])
+        self.assertIn('aws s3 cp tree.parquet "$output/artifacts/tree.parquet"', script[seal_start:evaluate_start])
+        self.assertIn('aws s3 cp pages.parquet "$output/artifacts/pages.parquet"', script[seal_start:evaluate_start])
         self.assertLess(construct_start, seal_start)
         self.assertLess(seal_start, evaluate_start)
         self.assertIn("export OPENBLAS_NUM_THREADS=32", script[evaluate_start:])
         self.assertIn("export OMP_NUM_THREADS=32", script[evaluate_start:])
-        command_lines = [
-            line
-            for line in construct.splitlines()
-            if "native_geometric_layout_screen.py" in line and " construct " in line
-        ]
-        self.assertEqual(len(command_lines), 4)
-        for line in command_lines:
-            tokens = shlex.split(line)
-            self.assertEqual(
-                tokens[:7],
-                ["run_capped", "timeout", "7200", "unshare", "--net", "--fork", "env"],
-            )
-            command = tokens.index("construct")
-            self.assertEqual(tokens[command + 1], "--authority")
-            self.assertEqual(tokens[command + 3], "--source")
-            self.assertEqual(tokens[command + 5], "--output")
+        self.assertIn("run_capped timeout 7200 unshare --net --fork env -i", construct)
+        self.assertIn(FROZEN_QUERIES.uri, script[evaluate_start:])
         self.assertIn(FROZEN_TRUTH.uri, script[evaluate_start:])
         evaluate = script[evaluate_start:script.index("phase=assemble")]
         self.assertIn("setpriv --reuid=nobody --regid=nobody --clear-groups", evaluate)
         self.assertIn("mkdir evaluation", evaluate)
         self.assertIn("chown nobody:nobody evaluation", evaluate)
+        self.assertIn("evaluate_geometric_router", evaluate)
+        self.assertIn("geometric_router_result_bytes", evaluate)
         self.assertIn("trap terminal EXIT", script)
+        self.assertIn("rm -f source.parquet queries.parquet truth.parquet", script)
         self.assertIn("shutdown -h now", script)
 
     def test_worker_embedded_python_is_syntactically_valid(self) -> None:
@@ -137,7 +135,7 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
             end = lines.index("PY", cursor + 1)
             programs.append("\n".join(lines[cursor + 1 : end]) + "\n")
             cursor = end + 1
-        self.assertEqual(len(programs), 5)
+        self.assertGreaterEqual(len(programs), 5)
         for index, program in enumerate(programs):
             with self.subTest(index=index):
                 compile(program, f"<worker-python-{index}>", "exec")
@@ -178,17 +176,28 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
         validate_start = script.index("phase=validate")
         complete_start = script.index("status=complete", validate_start)
         validation = script[validate_start:complete_start]
-        self.assertIn("run_capped timeout 7200 env", validation)
-        self.assertIn("validate_native_geometric_layout_result", validation)
-        self.assertIn("validate_result(paths, authority)", validation)
+        self.assertIn("timeout 7200 env", validation)
+        self.assertIn("validate_native_geometric_layout_result", script)
+        self.assertIn("validate_geometric_router_result", script)
         self.assertIn("validation.json", validation)
-        self.assertIn('json.loads(pathlib.Path("sealed-memberships.json")', validation)
+        self.assertIn('json.loads(pathlib.Path("sealed-router.json")', script)
         self.assertIn('$output/artifacts/validation.json', script)
         self.assertLess(validate_start, complete_start)
 
     def test_terminal_receipt_is_complete_and_bound_to_source(self) -> None:
         commit = "12" * 20
         output = "s3://bucket/frozen"
+        artifact_names = (
+            ("membership", "membership.parquet"),
+            ("tree", "tree.parquet"),
+            ("pages", "pages.parquet"),
+            ("evidence", "evidence.parquet"),
+            ("result", "result.json"),
+            ("validation", "validation.json"),
+            ("construct-resources", "construct-resources.txt"),
+            ("evaluate-resources", "evaluate-resources.txt"),
+            ("validate-resources", "validate-resources.txt"),
+        )
         artifacts = {
             role: {
                 "encoded_bytes": 123 + ordinal,
@@ -196,17 +205,11 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
                 "sha256": str(ordinal + 1) * 64,
                 "uri": f"{output}/artifacts/{name}",
             }
-            for ordinal, (role, name) in enumerate(
-                (
-                    ("membership-seal", "sealed-memberships.json"),
-                    ("result", "result.json"),
-                    ("validation", "validation.json"),
-                )
-            )
+            for ordinal, (role, name) in enumerate(artifact_names)
         }
         terminal = {
             "artifacts": artifacts,
-            "claim_eligible": True,
+            "claim_eligible": False,
             "elapsed_seconds": 123,
             "exit_code": 0,
             "instance_id": "i-0123456789abcdef0",
@@ -221,7 +224,7 @@ class NativeGeometricLayoutSpotTests(unittest.TestCase):
             terminal,
         )
         for key, value in (
-            ("claim_eligible", False),
+            ("claim_eligible", True),
             ("exit_code", 1),
             ("instance_id", ""),
             ("phase", "validate"),

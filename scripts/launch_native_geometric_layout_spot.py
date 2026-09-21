@@ -33,6 +33,18 @@ FROZEN_SOURCE = FrozenInput(
     encoded_bytes=145_121_661,
     rows=100_000,
 )
+FROZEN_QUERIES = FrozenInput(
+    role="queries",
+    uri=(
+        "s3://borsuk-bench-453182569524-euc1/research/"
+        "v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/"
+        "runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/inputs/"
+        "queries.parquet"
+    ),
+    sha256="4834cf63a50971b7d605c00f91b5142f67b049e91ea2c62c220271b50bffa6ac",
+    encoded_bytes=1_544_342,
+    rows=1_000,
+)
 FROZEN_TRUTH = FrozenInput(
     role="truth",
     uri=(
@@ -73,6 +85,7 @@ class SpotLayoutPlan:
     source_commit: str
     source_archive: SourceArchiveIdentity
     source: FrozenInput
+    queries: FrozenInput
     truth: FrozenInput
     requirements_sha256: str
     output_prefix: str
@@ -84,7 +97,7 @@ class SpotLayoutPlan:
     market: Literal["spot"] = "spot"
     instance_type: str = "c7i.8xlarge"
     wall_seconds: int = 7_200
-    maximum_rss_bytes: int = 16 * 1024**3
+    maximum_rss_bytes: int = 3 * 1024**3
     volume_gib: int = 100
 
 
@@ -124,6 +137,7 @@ def build_plan(**values: object) -> SpotLayoutPlan:
     concrete = dict(values)
     concrete["source_archive"] = _coerce_archive(concrete.get("source_archive"))
     concrete["source"] = _coerce_input(concrete.get("source"))
+    concrete["queries"] = _coerce_input(concrete.get("queries"))
     concrete["truth"] = _coerce_input(concrete.get("truth"))
     concrete["targets"] = _coerce_targets(concrete.get("targets"))
     try:
@@ -138,6 +152,7 @@ def build_plan(**values: object) -> SpotLayoutPlan:
         or not _sha256(plan.source_archive.sha256)
         or plan.source_archive.encoded_bytes <= 0
         or plan.source != FROZEN_SOURCE
+        or plan.queries != FROZEN_QUERIES
         or plan.truth != FROZEN_TRUTH
         or not _sha256(plan.requirements_sha256)
         or not plan.output_prefix.startswith("s3://")
@@ -146,13 +161,18 @@ def build_plan(**values: object) -> SpotLayoutPlan:
         or plan.market != "spot"
         or plan.instance_type != "c7i.8xlarge"
         or plan.wall_seconds != 7_200
-        or plan.maximum_rss_bytes != 16 * 1024**3
+        or plan.maximum_rss_bytes != 3 * 1024**3
         or plan.volume_gib != 100
         or not plan.image_id.startswith("ami-")
         or not plan.security_group_id.startswith("sg-")
         or not plan.instance_profile_arn.startswith("arn:aws:iam::")
         or plan.targets != DEFAULT_TARGETS
-        or any("1m" in item.uri.lower() or "10m" in item.uri.lower() or "100m" in item.uri.lower() for item in (plan.source, plan.truth))
+        or any(
+            "1m" in item.uri.lower()
+            or "10m" in item.uri.lower()
+            or "100m" in item.uri.lower()
+            for item in (plan.source, plan.queries, plan.truth)
+        )
     ):
         raise ValueError("layout Spot plan differs")
     return plan
@@ -186,9 +206,15 @@ def _validate_terminal_bytes(
     }:
         raise ValueError("layout terminal canonical bytes differ")
     artifact_names = {
-        "membership-seal": "sealed-memberships.json",
+        "membership": "membership.parquet",
+        "tree": "tree.parquet",
+        "pages": "pages.parquet",
+        "evidence": "evidence.parquet",
         "result": "result.json",
         "validation": "validation.json",
+        "construct-resources": "construct-resources.txt",
+        "evaluate-resources": "evaluate-resources.txt",
+        "validate-resources": "validate-resources.txt",
     }
     artifacts = terminal["artifacts"]
     if type(artifacts) is not dict or set(artifacts) != set(artifact_names):
@@ -207,7 +233,7 @@ def _validate_terminal_bytes(
             raise ValueError("layout terminal artifact identity differs")
     if (
         terminal["schema"] != "borsuk-native-geometric-layout-terminal-v1"
-        or terminal["claim_eligible"] is not True
+        or terminal["claim_eligible"] is not False
         or type(terminal["elapsed_seconds"]) is not int
         or terminal["elapsed_seconds"] < 0
         or type(terminal["exit_code"]) is not int
@@ -223,30 +249,7 @@ def _validate_terminal_bytes(
 
 
 def worker_script(plan: SpotLayoutPlan) -> str:
-    methods = (
-        ("id-order-256", 256, 491_520),
-        ("balanced-random-projection-256", 256, 491_520),
-        ("balanced-two-means-256", 256, 491_520),
-        ("balanced-two-means-480k", 65_535, 491_520),
-    )
-    construct_commands = "\n".join(
-        f"run_capped timeout {plan.wall_seconds} unshare --net --fork env -i "
-        "PATH=\"$PATH\" PYTHONPATH=\"$root/repo\" "
-        "OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "
-        "\"$root/.venv/bin/python\" \"$root/repo/scripts/"
-        "native_geometric_layout_screen.py\" construct "
-        f"--authority authority-{method}.json --source source.parquet "
-        f"--output membership-{method}.parquet >identity-{method}.json"
-        for method, _, _ in methods
-    )
-    method_rows = json.dumps(
-        [
-            {"method": method, "maximum_page_rows": rows, "maximum_page_bytes": size}
-            for method, rows, size in methods
-        ],
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+    """Build the single-cell geometric-router worker program."""
     script = f"""#!/bin/bash
 set -euo pipefail
 root=/mnt/native-geometric-layout
@@ -257,59 +260,36 @@ started=$(date +%s)
 MAXIMUM_RSS_BYTES={_q(plan.maximum_rss_bytes)}
 mkdir -p "$root" && cd "$root"
 run_capped() {{
-  setsid "$@" &
-  pid=$!
+  setsid "$@" & pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     rss_bytes=$(ps -eo pgid=,rss= | awk -v pgid="$pid" '$1 == pgid {{ total += $2 }} END {{ printf "%.0f", total * 1024 }}')
     if [ "${{rss_bytes:-0}}" -gt "$MAXIMUM_RSS_BYTES" ]; then
-      kill -TERM -- "-$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      return 137
+      kill -TERM -- "-$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; return 137
     fi
     sleep 1
   done
-  rc=0
-  wait "$pid" || rc=$?
-  return "$rc"
+  rc=0; wait "$pid" || rc=$?; return "$rc"
 }}
 terminal() {{
-  rc=$?
-  trap - EXIT
-  ended=$(date +%s)
-  imds_token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
-    http://169.254.169.254/latest/api/token 2>/dev/null || true)
-  instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" \
-    http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
-  STATUS="$status" PHASE="$phase" EXIT_CODE="$rc" STARTED="$started" ENDED="$ended" \
-    SOURCE_COMMIT={_q(plan.source_commit)} INSTANCE_ID="$instance_id" OUTPUT_PREFIX="$output" \
-    python3 - <<'PY'
-import hashlib, json, os, pathlib
+  rc=$?; trap - EXIT; ended=$(date +%s)
+  token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null || true)
+  instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
+  STATUS="$status" PHASE="$phase" EXIT_CODE="$rc" STARTED="$started" ENDED="$ended" SOURCE_COMMIT={_q(plan.source_commit)} INSTANCE_ID="$instance_id" OUTPUT_PREFIX="$output" python3 - <<'PY'
+import hashlib,json,os,pathlib
+def ident(path,role):
+ d=pathlib.Path(path).read_bytes(); return {{"encoded_bytes":len(d),"role":role,"sha256":hashlib.sha256(d).hexdigest(),"uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}}
+files=(("membership","membership.parquet"),("tree","tree.parquet"),("pages","pages.parquet"),("evidence","evidence.parquet"),("result","result.json"),("validation","validation.json"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
-def identity(path, role):
-    data=pathlib.Path(path).read_bytes()
-    return {{"encoded_bytes":len(data),"role":role,"sha256":hashlib.sha256(data).hexdigest(),
-            "uri":f"{{os.environ['OUTPUT_PREFIX']}}/artifacts/{{path}}"}}
-artifacts={{}}
-if complete:
-    artifacts={{"membership-seal":identity("sealed-memberships.json","membership-seal"),
-               "result":identity("result.json","result"),
-               "validation":identity("validation.json","validation")}}
-value={{"artifacts":artifacts,"claim_eligible":complete,
-"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),
-"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID", ""),
-"phase":os.environ["PHASE"],"schema":"borsuk-native-geometric-layout-terminal-v1",
-"source_commit":os.environ["SOURCE_COMMIT"],"status":os.environ["STATUS"]}}
-pathlib.Path("terminal.json").write_text(json.dumps(value,sort_keys=True,separators=(",",":"))+"\\n")
+v={{"artifacts":{{r:ident(p,r) for r,p in files}} if complete else {{}},"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-native-geometric-layout-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"status":os.environ["STATUS"]}}
+pathlib.Path("terminal.json").write_text(json.dumps(v,sort_keys=True,separators=(",",":"))+"\\n")
 PY
   aws s3 cp terminal.json "$output/terminal.json" --only-show-errors || true
-  sudo shutdown -h now || true
-  exit "$rc"
+  rm -f source.parquet queries.parquet truth.parquet membership.parquet tree.parquet pages.parquet evidence.parquet result.json sealed-router.json authority.json construct.py evaluate.py validate.py
+  sudo shutdown -h now || true; exit "$rc"
 }}
 trap terminal EXIT
-
 phase=install
 dnf install -y -q python3.12 python3.12-pip tar gzip time util-linux >install.log 2>&1
-
 phase=source
 aws s3 cp {_q(plan.source_archive.uri)} source.tar.gz --only-show-errors
 [ "$(stat -c%s source.tar.gz)" = {_q(plan.source_archive.encoded_bytes)} ]
@@ -319,135 +299,67 @@ mkdir repo && tar -xzf source.tar.gz -C repo
 printf '%s  repo/scripts/requirements-format-bench.txt\n' {_q(plan.requirements_sha256)} | sha256sum -c -
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --disable-pip-version-check --quiet -r repo/scripts/requirements-format-bench.txt
-
 aws s3 cp {_q(plan.source.uri)} source.parquet --only-show-errors
 [ "$(stat -c%s source.parquet)" = {_q(plan.source.encoded_bytes)} ]
 printf '%s  source.parquet\n' {_q(plan.source.sha256)} | sha256sum -c -
-
+SOURCE_URI={_q(plan.source.uri)} SOURCE_SHA={_q(plan.source.sha256)} SOURCE_BYTES={_q(plan.source.encoded_bytes)} .venv/bin/python - <<'PY'
+import json,os,pathlib
+v={{"dimensions":768,"maximum_page_bytes":491520,"maximum_page_rows":65535,"method":"balanced-two-means-480k","metric":"l2","rows":100000,"schema":"borsuk-native-geometric-layout-authority-v1","seed":20260921,"source":{{"encoded_bytes":int(os.environ["SOURCE_BYTES"]),"role":"source","sha256":os.environ["SOURCE_SHA"],"uri":os.environ["SOURCE_URI"]}}}}
+pathlib.Path("authority.json").write_text(json.dumps(v,sort_keys=True,separators=(",",":"))+"\\n")
+PY
+cat >construct.py <<'PY'
+import dataclasses,json,os,pathlib
+from scripts.native_geometric_layout_screen import _source_arrays,construct_geometric_router,layout_authority_from_dict,write_geometric_router_parquet,write_membership_parquet
+a=layout_authority_from_dict(json.loads(pathlib.Path("authority.json").read_text())); ids,x=_source_arrays(pathlib.Path("source.parquet"),a); m,r=construct_geometric_router(a,ids,x)
+mi=dataclasses.replace(write_membership_parquet(pathlib.Path("membership.parquet"),a,m),role="geometric-membership",uri=os.environ["OUTPUT_PREFIX"]+"/artifacts/membership.parquet")
+ti,pi=write_geometric_router_parquet(pathlib.Path("tree.parquet"),pathlib.Path("pages.parquet"),a,m,r); ti=dataclasses.replace(ti,uri=os.environ["OUTPUT_PREFIX"]+"/artifacts/tree.parquet"); pi=dataclasses.replace(pi,uri=os.environ["OUTPUT_PREFIX"]+"/artifacts/pages.parquet")
+v={{"membership":dataclasses.asdict(mi),"pages":dataclasses.asdict(pi),"schema":"borsuk-native-geometric-router-seal-v1","tree":dataclasses.asdict(ti)}}; pathlib.Path("sealed-router.json").write_text(json.dumps(v,sort_keys=True,separators=(",",":"))+"\\n")
+PY
 phase=construct
-METHOD_ROWS={_q(method_rows)} SOURCE_URI={_q(plan.source.uri)} SOURCE_SHA={_q(plan.source.sha256)} SOURCE_BYTES={_q(plan.source.encoded_bytes)} \
-  .venv/bin/python - <<'PY'
-import json, os, pathlib
-for arm in json.loads(os.environ["METHOD_ROWS"]):
-    value={{"dimensions":768,"maximum_page_bytes":arm["maximum_page_bytes"],
-    "maximum_page_rows":arm["maximum_page_rows"],"method":arm["method"],"metric":"l2",
-    "rows":100000,"schema":"borsuk-native-geometric-layout-authority-v1","seed":20260921,
-    "source":{{"encoded_bytes":int(os.environ["SOURCE_BYTES"]),"role":"source",
-    "sha256":os.environ["SOURCE_SHA"],"uri":os.environ["SOURCE_URI"]}}}}
-    pathlib.Path(f"authority-{{arm['method']}}.json").write_text(json.dumps(value,sort_keys=True,separators=(",",":"))+"\\n")
-PY
-{construct_commands}
-
+run_capped timeout {_q(plan.wall_seconds)} unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 OUTPUT_PREFIX="$output" /usr/bin/time -v -o construct-resources.txt "$root/.venv/bin/python" construct.py
 phase=seal
-OUTPUT_PREFIX="$output" .venv/bin/python - <<'PY'
-import hashlib, json, os, pathlib
-methods=("id-order-256","balanced-random-projection-256","balanced-two-means-256","balanced-two-means-480k")
-memberships=[]
-for method in methods:
-    path=pathlib.Path(f"membership-{{method}}.parquet")
-    data=path.read_bytes()
-    memberships.append({{"encoded_bytes":len(data),"role":f"membership:{{method}}",
-                        "sha256":hashlib.sha256(data).hexdigest(),
-                        "uri":f"{{os.environ['OUTPUT_PREFIX']}}/artifacts/{{path.name}}"}})
-receipt={{"memberships":memberships,"schema":"borsuk-native-geometric-layout-membership-seal-v1"}}
-pathlib.Path("sealed-memberships.json").write_text(json.dumps(receipt,sort_keys=True,separators=(",",":"))+"\\n")
-PY
-chmod 0444 membership-*.parquet sealed-memberships.json
-
+chmod 0444 membership.parquet tree.parquet pages.parquet sealed-router.json
+aws s3 cp membership.parquet "$output/artifacts/membership.parquet" --only-show-errors
+aws s3 cp tree.parquet "$output/artifacts/tree.parquet" --only-show-errors
+aws s3 cp pages.parquet "$output/artifacts/pages.parquet" --only-show-errors
+aws s3 cp sealed-router.json "$output/artifacts/sealed-router.json" --only-show-errors
+aws s3 cp construct-resources.txt "$output/artifacts/construct-resources.txt" --only-show-errors
 phase=evaluate
 export OPENBLAS_NUM_THREADS=32
 export OMP_NUM_THREADS=32
-truth_uri={_q(plan.truth.uri)}
-aws s3 cp "$truth_uri" truth.parquet --only-show-errors
-[ "$(stat -c%s truth.parquet)" = {_q(plan.truth.encoded_bytes)} ]
-printf '%s  truth.parquet\n' {_q(plan.truth.sha256)} | sha256sum -c -
-chmod 0444 source.parquet truth.parquet membership-*.parquet sealed-memberships.json
-mkdir evaluation
-chown nobody:nobody evaluation
-for method in id-order-256 balanced-random-projection-256 balanced-two-means-256 balanced-two-means-480k; do
-  run_capped /usr/bin/time -v -o "evaluation/resource-$method.txt" timeout {_q(plan.wall_seconds)} \
-    setpriv --reuid=nobody --regid=nobody --clear-groups env \
-    PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 \
-    "$root/.venv/bin/python" "$root/repo/scripts/native_geometric_layout_screen.py" evaluate \
-    --authority "authority-$method.json" --source source.parquet \
-    --membership "membership-$method.parquet" --truth truth.parquet \
-    --evidence "evaluation/evidence-$method.parquet" --result "evaluation/arm-$method.json" \
-    >"evaluation/evidence-identity-$method.json"
-done
-mv evaluation/* .
-rmdir evaluation
-
+aws s3 cp {_q(plan.queries.uri)} queries.parquet --only-show-errors
+[ "$(stat -c%s queries.parquet)" = {_q(plan.queries.encoded_bytes)} ] && printf '%s  queries.parquet\n' {_q(plan.queries.sha256)} | sha256sum -c -
+aws s3 cp {_q(plan.truth.uri)} truth.parquet --only-show-errors
+[ "$(stat -c%s truth.parquet)" = {_q(plan.truth.encoded_bytes)} ] && printf '%s  truth.parquet\n' {_q(plan.truth.sha256)} | sha256sum -c -
+chmod 0444 source.parquet queries.parquet truth.parquet membership.parquet tree.parquet pages.parquet sealed-router.json
+mkdir evaluation && chown nobody:nobody evaluation
+cat >evaluate.py <<'PY'
+import dataclasses,json,os,pathlib
+from scripts.native_geometric_layout_screen import ArtifactIdentity,EvaluationLimits,_ground_truth,_source_arrays,evaluate_geometric_router,geometric_router_result_bytes,layout_authority_from_dict,read_geometric_router_parquet,read_membership_parquet,write_geometric_router_evidence
+from scripts.validate_native_geometric_layout_result import _read_geometric_queries
+a=layout_authority_from_dict(json.loads(pathlib.Path("authority.json").read_text())); ids,x=_source_arrays(pathlib.Path("source.parquet"),a); s=json.loads(pathlib.Path("sealed-router.json").read_text()); mi=ArtifactIdentity(**s["membership"]); ti=ArtifactIdentity(**s["tree"]); pi=ArtifactIdentity(**s["pages"]); m=read_membership_parquet(pathlib.Path("membership.parquet"),a,ids); r=read_geometric_router_parquet(pathlib.Path("tree.parquet"),pathlib.Path("pages.parquet"),a,m,ti,pi)
+qi=ArtifactIdentity("queries",os.environ["QUERIES_URI"],os.environ["QUERIES_SHA"],int(os.environ["QUERIES_BYTES"])); gi=ArtifactIdentity("truth",os.environ["TRUTH_URI"],os.environ["TRUTH_SHA"],int(os.environ["TRUTH_BYTES"])); q=_read_geometric_queries(pathlib.Path("queries.parquet"),qi,a.dimensions); g=_ground_truth(pathlib.Path("truth.parquet")); limits=EvaluationLimits(32,16777216); e=evaluate_geometric_router(r,m,ids,x,q,g,leaf_frontier=128,limits=limits); ei=dataclasses.replace(write_geometric_router_evidence(pathlib.Path("evaluation/evidence.parquet"),e),uri=os.environ["OUTPUT_PREFIX"]+"/artifacts/evidence.parquet"); pathlib.Path("evaluation/result.json").write_bytes(geometric_router_result_bytes(authority=a,queries=qi,truth=gi,membership=mi,tree=ti,pages=pi,evidence=ei,evaluation=e,leaf_frontier=128,limits=limits))
+PY
+run_capped /usr/bin/time -v -o evaluate-resources.txt timeout {_q(plan.wall_seconds)} setpriv --reuid=nobody --regid=nobody --clear-groups env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 OUTPUT_PREFIX="$output" QUERIES_URI={_q(plan.queries.uri)} QUERIES_SHA={_q(plan.queries.sha256)} QUERIES_BYTES={_q(plan.queries.encoded_bytes)} TRUTH_URI={_q(plan.truth.uri)} TRUTH_SHA={_q(plan.truth.sha256)} TRUTH_BYTES={_q(plan.truth.encoded_bytes)} "$root/.venv/bin/python" evaluate.py
+mv evaluation/evidence.parquet evidence.parquet; mv evaluation/result.json result.json; rmdir evaluation
+aws s3 cp evidence.parquet "$output/artifacts/evidence.parquet" --only-show-errors
+aws s3 cp result.json "$output/artifacts/result.json" --only-show-errors
+aws s3 cp evaluate-resources.txt "$output/artifacts/evaluate-resources.txt" --only-show-errors
 phase=assemble
-OUTPUT_PREFIX="$output" SOURCE_URI={_q(plan.source.uri)} SOURCE_SHA={_q(plan.source.sha256)} SOURCE_BYTES={_q(plan.source.encoded_bytes)} \
-TRUTH_URI={_q(plan.truth.uri)} TRUTH_SHA={_q(plan.truth.sha256)} TRUTH_BYTES={_q(plan.truth.encoded_bytes)} \
-  .venv/bin/python - <<'PY'
-import hashlib, json, os, pathlib
-methods=("id-order-256","balanced-random-projection-256","balanced-two-means-256","balanced-two-means-480k")
-def identity(path, role):
-    data=pathlib.Path(path).read_bytes()
-    return {{"encoded_bytes":len(data),"role":role,"sha256":hashlib.sha256(data).hexdigest(),
-            "uri":f"{{os.environ['OUTPUT_PREFIX']}}/artifacts/{{path}}"}}
-arms=[]
-for method in methods:
-    arm=json.loads(pathlib.Path(f"arm-{{method}}.json").read_text())
-    arms.append({{"decision":arm["decision"],"evidence":identity(f"evidence-{{method}}.parquet",f"evidence:{{method}}"),
-    "mean_recall_at_100_ppm":arm["mean_recall_at_100_ppm"],
-    "membership":identity(f"membership-{{method}}.parquet",f"membership:{{method}}"),"method":method,
-    "p05_recall_at_100_ppm":arm["p05_recall_at_100_ppm"],"recall_at_10_ppm":arm["recall_at_10_ppm"],
-    "worst_recall_at_100_ppm":arm["worst_recall_at_100_ppm"]}})
-result={{"arms":arms,"claim_eligible":False,"dimensions":768,
-"limits":{{"maximum_bytes":16777216,"maximum_pages":32}},"metric":"l2","rows":100000,
-"schema":"borsuk-native-geometric-layout-screen-result-v1","seed":20260921,
-"source":{{"encoded_bytes":int(os.environ["SOURCE_BYTES"]),"role":"source","sha256":os.environ["SOURCE_SHA"],"uri":os.environ["SOURCE_URI"]}},
-"truth":{{"encoded_bytes":int(os.environ["TRUTH_BYTES"]),"role":"truth","sha256":os.environ["TRUTH_SHA"],"uri":os.environ["TRUTH_URI"]}}}}
-pathlib.Path("result.json").write_text(json.dumps(result,sort_keys=True,separators=(",",":"))+"\\n")
+cat >validate.py <<'PY'
+import hashlib,json,os,pathlib
+from scripts.native_geometric_layout_screen import ArtifactIdentity,EvaluationLimits,LayoutMethod
+from scripts.validate_native_geometric_layout_result import GeometricRouterScreenAuthority,GeometricRouterValidationPaths,validate_geometric_router_result
+def ident(p,r):
+ d=pathlib.Path(p).read_bytes(); return ArtifactIdentity(r,os.environ["OUTPUT_PREFIX"]+"/artifacts/"+p,hashlib.sha256(d).hexdigest(),len(d))
+s=json.loads(pathlib.Path("sealed-router.json").read_text()); e=ident("evidence.parquet","geometric-router-evidence"); result=ident("result.json","result")
+a=GeometricRouterScreenAuthority("borsuk-native-geometric-router-screen-authority-v1",ArtifactIdentity("source",os.environ["SOURCE_URI"],os.environ["SOURCE_SHA"],int(os.environ["SOURCE_BYTES"])),ArtifactIdentity("queries",os.environ["QUERIES_URI"],os.environ["QUERIES_SHA"],int(os.environ["QUERIES_BYTES"])),ArtifactIdentity("truth",os.environ["TRUTH_URI"],os.environ["TRUTH_SHA"],int(os.environ["TRUTH_BYTES"])),ArtifactIdentity(**s["membership"]),ArtifactIdentity(**s["tree"]),ArtifactIdentity(**s["pages"]),e,result,100000,768,"l2",20260921,LayoutMethod.TWO_MEANS_480K,65535,491520,128,EvaluationLimits(32,16777216))
+p=GeometricRouterValidationPaths(*(pathlib.Path(x) for x in ("source.parquet","queries.parquet","truth.parquet","membership.parquet","tree.parquet","pages.parquet","evidence.parquet","result.json"))); decision=validate_geometric_router_result(p,a); v={{"claim_eligible":False,"decision":decision,"schema":"borsuk-native-geometric-router-validation-v1","source_commit":os.environ["SOURCE_COMMIT"]}}; pathlib.Path("validation.json").write_text(json.dumps(v,sort_keys=True,separators=(",",":"))+"\\n")
 PY
-
 phase=validate
-run_capped timeout {_q(plan.wall_seconds)} env OUTPUT_PREFIX="$output" SOURCE_URI={_q(plan.source.uri)} SOURCE_SHA={_q(plan.source.sha256)} SOURCE_BYTES={_q(plan.source.encoded_bytes)} \
-TRUTH_URI={_q(plan.truth.uri)} TRUTH_SHA={_q(plan.truth.sha256)} TRUTH_BYTES={_q(plan.truth.encoded_bytes)} \
-SOURCE_COMMIT={_q(plan.source_commit)} PYTHONPATH="$root/repo" .venv/bin/python - <<'PY'
-import hashlib, json, os, pathlib
-from scripts.native_geometric_layout_screen import ArtifactIdentity, EvaluationLimits, LayoutMethod
-from scripts.validate_native_geometric_layout_result import LayoutScreenAuthority, ValidationPaths, validate_result
-
-methods=tuple(LayoutMethod)
-def identity(path, role):
-    data=pathlib.Path(path).read_bytes()
-    return ArtifactIdentity(role=role,uri=f"{{os.environ['OUTPUT_PREFIX']}}/artifacts/{{path}}",
-                            sha256=hashlib.sha256(data).hexdigest(),encoded_bytes=len(data))
-sealed=json.loads(pathlib.Path("sealed-memberships.json").read_text())
-if type(sealed) is not dict or set(sealed) != {{"memberships","schema"}} or sealed["schema"] != "borsuk-native-geometric-layout-membership-seal-v1":
-    raise ValueError("layout membership seal differs")
-memberships=tuple(ArtifactIdentity(**item) for item in sealed["memberships"])
-evidence=tuple(identity(f"evidence-{{method.value}}.parquet",f"evidence:{{method.value}}") for method in methods)
-result_identity=identity("result.json","result")
-authority=LayoutScreenAuthority(
-    schema="borsuk-native-geometric-layout-screen-authority-v1",
-    source=ArtifactIdentity("source",os.environ["SOURCE_URI"],os.environ["SOURCE_SHA"],int(os.environ["SOURCE_BYTES"])),
-    truth=ArtifactIdentity("truth",os.environ["TRUTH_URI"],os.environ["TRUTH_SHA"],int(os.environ["TRUTH_BYTES"])),
-    memberships=memberships,evidence=evidence,result=result_identity,rows=100000,dimensions=768,
-    metric="l2",seed=20260921,limits=EvaluationLimits(maximum_pages=32,maximum_bytes=16777216),
-    expected_control_mean_ppm=613770,expected_control_p05_ppm=470000,
-    expected_control_worst_ppm=410000,control_tolerance_ppm=10000)
-paths=ValidationPaths(
-    source=pathlib.Path("source.parquet"),truth=pathlib.Path("truth.parquet"),
-    memberships=tuple((method,pathlib.Path(f"membership-{{method.value}}.parquet")) for method in methods),
-    evidence=tuple((method,pathlib.Path(f"evidence-{{method.value}}.parquet")) for method in methods),
-    result=pathlib.Path("result.json"))
-decision=validate_result(paths, authority)
-receipt={{"claim_eligible":False,"decisions":[[method.value,value] for method,value in decision.decisions],
-         "evidence":[{{"encoded_bytes":item.encoded_bytes,"role":item.role,"sha256":item.sha256,"uri":item.uri}} for item in evidence],
-         "memberships":[{{"encoded_bytes":item.encoded_bytes,"role":item.role,"sha256":item.sha256,"uri":item.uri}} for item in memberships],
-         "result":{{"encoded_bytes":result_identity.encoded_bytes,"role":result_identity.role,
-         "sha256":result_identity.sha256,"uri":result_identity.uri}},
-         "schema":"borsuk-native-geometric-layout-validation-v1","source_commit":os.environ["SOURCE_COMMIT"]}}
-pathlib.Path("validation.json").write_text(json.dumps(receipt,sort_keys=True,separators=(",",":"))+"\\n")
-PY
-for file in membership-*.parquet evidence-*.parquet resource-*.txt result.json sealed-memberships.json; do
-  aws s3 cp "$file" "$output/artifacts/$file" --only-show-errors
-done
+run_capped /usr/bin/time -v -o validate-resources.txt timeout {_q(plan.wall_seconds)} env OUTPUT_PREFIX="$output" SOURCE_URI={_q(plan.source.uri)} SOURCE_SHA={_q(plan.source.sha256)} SOURCE_BYTES={_q(plan.source.encoded_bytes)} QUERIES_URI={_q(plan.queries.uri)} QUERIES_SHA={_q(plan.queries.sha256)} QUERIES_BYTES={_q(plan.queries.encoded_bytes)} TRUTH_URI={_q(plan.truth.uri)} TRUTH_SHA={_q(plan.truth.sha256)} TRUTH_BYTES={_q(plan.truth.encoded_bytes)} SOURCE_COMMIT={_q(plan.source_commit)} PYTHONPATH="$root/repo" .venv/bin/python validate.py
 aws s3 cp validation.json "$output/artifacts/validation.json" --only-show-errors
+aws s3 cp validate-resources.txt "$output/artifacts/validate-resources.txt" --only-show-errors
 status=complete
 phase=complete
 """
@@ -641,6 +553,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SpotLayoutPlan:
             encoded_bytes=args.source_archive_bytes,
         ),
         source=FROZEN_SOURCE,
+        queries=FROZEN_QUERIES,
         truth=FROZEN_TRUTH,
         requirements_sha256=args.requirements_sha256,
         output_prefix=args.output_prefix,

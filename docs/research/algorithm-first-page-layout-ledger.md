@@ -3667,3 +3667,32 @@ must prove that a resident router can select the same useful pages without
 truth, then measure SQ8 ranking and the complete 32-GET/16-MiB read path at
 100k. A failure closes or materially redesigns that router; it must not be
 hidden by another truth-aware layout score.
+
+### Native geometric router 100k decision preregistration
+
+This is plan **Task 3**, not algorithm version V3. Historical experiment labels
+such as V98 and the frozen Publication V3 schema use independent namespaces and
+do not identify this architecture.
+
+Exactly one immutable ReLAION development-100k Spot cell is authorized for the
+query-independent balanced-two-means 480-KiB layout plus its geometric tree,
+full-dimensional page-centroid refinement, and page-local SQ8 ranking. The cell
+uses all 1,000 frozen development queries. Its source, query, and GT100 SHA-256
+values are respectively
+`a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d`,
+`4834cf63a50971b7d605c00f91b5142f67b049e91ea2c62c220271b50bffa6ac`,
+and `ab8bfae34f753512f352581218596fc0f043354f8168192c856278b3ab5a0ce7`.
+Construction cannot access queries, truth, or the network. Membership, tree,
+and page-representative artifacts are authenticated, made read-only, and
+uploaded before the evaluator receives query or truth capability.
+
+The fixed serving envelope is a 128-leaf frontier, at most 32 selected pages,
+at most 16 MiB of encoded page bodies per query, a 3-GiB process-group RSS cap,
+and a 7,200-second wall cap. Advancement requires average Recall@10 at least
+96%, average Recall@100 at least 97.5%, p05 Recall@100 at least 90%, and a
+complete two-generation 100M resident-memory worksheet below 3 GiB. The
+producer result remains `claim_eligible=false`; an independent validator must
+authenticate the exact source/query/truth and sealed artifact bytes and
+recompute every route, ranked SQ8 hit, aggregate, and decision. Any failed
+quality gate returns to a material 100k redesign. It does not authorize another
+parameter-only attempt or any 1M/10M/100M run.
