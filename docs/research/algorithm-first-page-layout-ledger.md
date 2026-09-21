@@ -3022,3 +3022,68 @@ remaining G1 blocker to compact retained-row ranking. The next experiment must
 change that representation family or reduce the retained shortlist enough to
 afford materially stronger row evidence. G2, 10M, 100M, and competitor parity
 claims remain fenced.
+
+## V104 result — 768 retained pages are the first exact fail-fast survivor
+
+V104 measured how far the unchanged V99 hierarchy could shrink its retained
+row envelope before exact-f32 row ranking lost the registered quality gates.
+It changed no representation, hierarchy summary, exposed-page ordering, page
+layout, final ranked-gap planner, truth, or resource cap. One hierarchy route
+was computed per query, and the registered 128/256/512/768/1,024-page arms
+used deterministic prefixes of that same page-score order.
+
+The immutable source revision was
+`472bd3ffc0dcd1a1409fc338bd42eef60ddf0e8b`. Its 10,766,022-byte archive is at
+`s3://borsuk-bench-453182569524-euc1/research/v104-exact-retention-ladder/472bd3ffc0dcd1a1409fc338bd42eef60ddf0e8b/source/source.tar.gz`, SHA-256
+`900cb2d7272082e6cca750da47d3fc2888cc5a4b967fb4ec9f4b63be44aaffd0`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/v104-exact-retention-ladder/472bd3ffc0dcd1a1409fc338bd42eef60ddf0e8b/runs/v104-g1-screen-20260921T013150Z-472bd3f/a0001`.
+It ran on c7i.8xlarge Spot instance `i-0d63e18af0a850744` in eu-central-1c,
+which is terminated. The canonical terminal SHA-256 is
+`32db3242b277f79ea599ff151d428a59c5d24968cb709ec52240aea1bf4f831a`.
+
+The fixed cohort was the first 128 already-burned ReLAION-1M development
+queries. No validation or holdout query was consumed. Terminal-bound evidence
+is:
+
+| role | bytes | SHA-256 |
+|---|---:|---|
+| result | 8,808,332 | `b54c1a3daef19dd0cc256b8d2f90744e527d6bc6a09a7ac374ccdef5e331c8b3` |
+| independent rescore | 1,720 | `a1488f162126e36de589a4102deb4141decfa64f8954cc646e0f7fc887f1d419` |
+| resources | 459 | `bd17f2e1de884b3a41d01aa01265b36ed9d2116dc0ff6de925465f128ac27110` |
+| worker log | 352 | `9774a9c9a0d955a5013a1fe0330d15becd9d2c5c9f7dce8c0bd20118b33abae0` |
+
+| retained pages | max observed rows | avg R@10 | avg R@100 | p05 R@100 | max GETs | max bytes | gate |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 128 | 19,024 | 91.7968% | 87.1796% | 55% | 32 | 15,018,040 | fail |
+| 256 | 36,528 | 95.8593% | 93.1640% | 74% | 32 | 16,777,216 | fail |
+| 512 | 72,432 | 98.4375% | 96.8125% | 85% | 32 | 16,777,200 | fail |
+| 768 | 107,933 | **99.1406%** | **97.8750%** | **90%** | 32 | 16,777,200 | **pass** |
+| 1,024 | 142,799 | **99.1406%** | **98.3515%** | **91%** | 32 | 16,777,200 | **pass** |
+
+The independent reducer rebuilt the hierarchy, recomputed each arm's retained
+fence, authenticated every range endpoint and interior gap, recomputed every
+hit, aggregate, resource maximum, and the `exact-retention-survivor`
+classification. A separately committed posthoc reducer at
+`44a40d16d8a516a50bc3cb83f73855e668d25614` computed shared-seed paired
+10,000-resample intervals from the immutable result. Its 891-byte receipt has
+SHA-256 `9ddf3a59cf98b4777b73aa0988fc52214246acb03db17daff54d41593c6cf544`
+and is stored below the attempt at
+`posthoc/44a40d16d8a516a50bc3cb83f73855e668d25614/ci.json`.
+
+Against the 1,024-page control, the 768-page arm's 95% intervals were exactly
+0 to 0 percentage points at average Recall@10, -0.7500 to -0.2500 points at
+average Recall@100, and -8 to 0 points at p05 Recall@100. The smaller arms were
+strictly worse on average Recall@10 and Recall@100; the 512-page arm, for
+example, lost 2.0703 to 1.0547 Recall@100 points and 10 to 2 p05 points.
+
+The attempt took 738 seconds, reached 11,096,908 KiB maximum RSS, had zero
+swap and zero memory PSI, and cost an estimated $0.0984.
+
+**Ruling:** kill 128, 256, and 512 retained pages. The 768-page arm is the
+smallest provisional survivor and reduces the worst observed exact-scoring
+set from 142,799 to 107,933 rows, but its first-128 p05 is exactly on the gate
+and its average Recall@100 is significantly below the 1,024-page control. Run
+only the 768-page arm over all 1,000 frozen development queries before using
+its capacity to choose a stronger compact representation. Do not rerun the
+ladder, consume validation/holdout, or scale beyond 1M.
