@@ -193,7 +193,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
 dnf install -y -q python3.12 python3.12-pip tar gzip time >/dev/null 2>&1 || exit 91
 python3.12 -m venv .venv || exit 91
-.venv/bin/pip install -q pyarrow==24.0.0 boto3==1.42.97 || exit 91
+.venv/bin/pip install -q -r repo/scripts/requirements-s3-vectors-match.txt || exit 91
 
 for role in source queries truth; do
   upper=${role^^}
