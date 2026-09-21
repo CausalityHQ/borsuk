@@ -642,7 +642,7 @@ pub(crate) fn load_native_bounded_ann_snapshot(
         let expected_rows = u32::try_from(run.rows)
             .map_err(|_| invalid("native bounded ANN delta rows exceed u32"))?;
         for row in
-            decode_native_bounded_page(&bytes, reference.dimensions, expected_rows, &reference.sq8)?
+            decode_native_bounded_page(&bytes, reference.dimensions, expected_rows, &run.sq8)?
         {
             let resident = NativeResidentRow {
                 id: row.id,

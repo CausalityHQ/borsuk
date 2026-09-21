@@ -13,9 +13,9 @@ use crate::{
     error::{BorsukError, Result},
     metric::VectorMetric,
     native_ann::{
-        NativeAnnRef, NativeArtifactRef, NativeBoundedAnnRef, NativeBoundedRouteLimits,
-        NativeBoundedRouterRef, NativeRouterRef, NativeRunRef, NativeSq8Authority,
-        native_ann_root_bytes, native_bounded_ann_root_bytes,
+        NativeAnnRef, NativeArtifactRef, NativeBoundedAnnRef, NativeBoundedDeltaRunRef,
+        NativeBoundedRouteLimits, NativeBoundedRouterRef, NativeRouterRef, NativeRunRef,
+        NativeSq8Authority, native_ann_root_bytes, native_bounded_ann_root_bytes,
     },
     native_ann_read::{NativePageRef, NativeRowState},
     rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
@@ -1162,6 +1162,123 @@ pub(crate) fn build_native_delta_generation(
     let root_sha256 = format!("{:x}", Sha256::digest(&root_bytes));
     let root_path = format!("native-ann/generations/{root_sha256}.json");
     Ok(NativeBuildOutput {
+        reference,
+        root_bytes,
+        root_sha256,
+        root_path,
+        objects,
+        page_directory: Vec::new(),
+    })
+}
+
+pub(crate) fn build_native_bounded_delta_generation(
+    storage: &Storage,
+    previous: &NativeBoundedAnnRef,
+    mut rows: Vec<NativeBuildRow>,
+) -> Result<NativeBoundedBuildOutput> {
+    previous.validate()?;
+    let dimensions = usize::try_from(previous.dimensions)
+        .map_err(|_| invalid("native bounded ANN delta dimensions exceed usize"))?;
+    if rows.is_empty()
+        || rows.iter().any(|row| {
+            row.id.is_empty()
+                || row.sequence == 0
+                || row.vector.len() != dimensions
+                || row.vector.iter().any(|value| !value.is_finite())
+        })
+    {
+        return Err(invalid("native bounded ANN delta rows differ"));
+    }
+    rows.sort_by(|left, right| left.id.cmp(&right.id));
+    if rows.windows(2).any(|pair| pair[0].id == pair[1].id) {
+        return Err(invalid("native bounded ANN delta IDs are not unique"));
+    }
+
+    let sq8 = sq8_authority(&rows, dimensions);
+    let mut objects = Vec::new();
+    let (delta_ref, delta_object) = artifact(
+        "delta-run",
+        "arrow",
+        encode_bounded_page(&rows, &sq8, dimensions)?,
+    );
+    objects.push(delta_object);
+
+    let previous_directory = read_bound_artifact(storage, &previous.mutation_directory)?;
+    let mut mutations = decode_mutation_directory(&previous_directory)?
+        .into_iter()
+        .map(|entry| (entry.id.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+    for row in &rows {
+        let entry = NativeMutationBuildEntry {
+            id: row.id.clone(),
+            sequence: row.sequence,
+            version: row.version,
+            state: row.state,
+        };
+        if mutations
+            .get(&entry.id)
+            .is_some_and(|current| current.sequence >= entry.sequence)
+        {
+            return Err(invalid("native bounded ANN delta mutation order differs"));
+        }
+        mutations.insert(entry.id.clone(), entry);
+    }
+    let (mutation_directory, mutation_object) = artifact(
+        "mutation-directory",
+        "arrow",
+        encode_mutation_directory(&mutations.into_values().collect::<Vec<_>>())?,
+    );
+    objects.push(mutation_object);
+    objects.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let version_start = rows.iter().map(|row| row.version).min().unwrap();
+    let version_end = rows.iter().map(|row| row.version).max().unwrap();
+    let version_start_hex = version_hex(&version_start);
+    if previous
+        .base_runs
+        .last()
+        .map(|run| run.version_end.as_str())
+        .into_iter()
+        .chain(
+            previous
+                .delta_runs
+                .last()
+                .map(|run| run.version_end.as_str()),
+        )
+        .any(|end| end >= version_start_hex.as_str())
+    {
+        return Err(invalid(
+            "native bounded ANN delta mutation range is not newer",
+        ));
+    }
+    let previous_root = native_bounded_ann_root_bytes(previous)?;
+    let previous_root_sha256 = format!("{:x}", Sha256::digest(&previous_root));
+    let mut source_hasher = blake3::Hasher::new();
+    source_hasher.update(b"borsuk-native-bounded-ann-delta-v3\0");
+    source_hasher.update(previous.source_identity.as_bytes());
+    source_hasher.update(delta_ref.sha256.as_bytes());
+
+    let mut reference = previous.clone();
+    reference.generation = previous
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| invalid("native bounded ANN generation overflows"))?;
+    reference.previous_generation_sha256 = Some(previous_root_sha256);
+    reference.source_identity = source_hasher.finalize().to_hex().to_string();
+    reference.mutation_directory = mutation_directory;
+    reference.delta_runs.push(NativeBoundedDeltaRunRef {
+        ordinal: reference.delta_runs.len() as u32,
+        rows: rows.len() as u64,
+        version_start: version_start_hex,
+        version_end: version_hex(&version_end),
+        artifact: delta_ref,
+        sq8,
+    });
+    reference.validate()?;
+    let root_bytes = native_bounded_ann_root_bytes(&reference)?;
+    let root_sha256 = format!("{:x}", Sha256::digest(&root_bytes));
+    let root_path = format!("native-ann/generations/{root_sha256}.json");
+    Ok(NativeBoundedBuildOutput {
         reference,
         root_bytes,
         root_sha256,

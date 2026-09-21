@@ -121,8 +121,9 @@ use crate::{
         NativeAnnRef, NativeBoundedAnnRef, native_ann_root_bytes, native_bounded_ann_root_bytes,
     },
     native_ann_build::{
-        NativeBuildConfig, NativeBuildRow, build_native_bounded_generation,
-        build_native_delta_generation, stage_native_bounded_generation, stage_native_generation,
+        NativeBuildConfig, NativeBuildRow, build_native_bounded_delta_generation,
+        build_native_bounded_generation, build_native_delta_generation,
+        stage_native_bounded_generation, stage_native_generation,
     },
     native_ann_read::{
         NativeAnnSnapshot, NativeBoundedAnnSnapshot, NativeRowState, load_native_ann_snapshot,
@@ -16070,9 +16071,22 @@ impl BorsukIndex {
             let built = build_native_delta_generation(
                 &self.storage,
                 native,
-                native_delta_rows.into_values().collect(),
+                native_delta_rows.values().cloned().collect(),
             )?;
             stage_native_generation(&self.storage, &built)?;
+            Some(built.reference)
+        } else {
+            None
+        };
+        let native_bounded_delta = if let Some(native) = previous.native_bounded_ann_ref.as_ref()
+            && !native_delta_rows.is_empty()
+        {
+            let built = build_native_bounded_delta_generation(
+                &self.storage,
+                native,
+                native_delta_rows.into_values().collect(),
+            )?;
+            stage_native_bounded_generation(&self.storage, &built)?;
             Some(built.reference)
         } else {
             None
@@ -16112,6 +16126,12 @@ impl BorsukIndex {
             manifest.segments.clear();
             manifest.segments_are_global_delta = false;
         }
+        if let Some(native) = native_bounded_delta {
+            manifest.native_bounded_ann_ref = Some(native);
+            manifest.native_ann_ref = None;
+            manifest.segments.clear();
+            manifest.segments_are_global_delta = false;
+        }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published = if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
@@ -16130,6 +16150,19 @@ impl BorsukIndex {
             .as_ref()
             .map(|reference| {
                 load_native_ann_snapshot(
+                    self.storage.clone(),
+                    reference,
+                    self.read_runtime.transient_admission.clone(),
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
+        self.native_bounded_ann_snapshot = self
+            .manifest
+            .native_bounded_ann_ref
+            .as_ref()
+            .map(|reference| {
+                load_native_bounded_ann_snapshot(
                     self.storage.clone(),
                     reference,
                     self.read_runtime.transient_admission.clone(),

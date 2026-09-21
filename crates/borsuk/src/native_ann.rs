@@ -86,6 +86,17 @@ pub(crate) struct NativeRunRef {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct NativeBoundedDeltaRunRef {
+    pub(crate) ordinal: u32,
+    pub(crate) rows: u64,
+    pub(crate) version_start: String,
+    pub(crate) version_end: String,
+    pub(crate) artifact: NativeArtifactRef,
+    pub(crate) sq8: NativeSq8Authority,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct NativeAnnRef {
     pub(crate) format_version: u16,
     pub(crate) generation: u64,
@@ -116,7 +127,7 @@ pub(crate) struct NativeBoundedAnnRef {
     pub(crate) page_directory: NativeArtifactRef,
     pub(crate) mutation_directory: NativeArtifactRef,
     pub(crate) base_runs: Vec<NativeRunRef>,
-    pub(crate) delta_runs: Vec<NativeRunRef>,
+    pub(crate) delta_runs: Vec<NativeBoundedDeltaRunRef>,
 }
 
 fn invalid(message: impl Into<String>) -> BorsukError {
@@ -186,6 +197,40 @@ impl NativeRunRef {
             return Err(invalid("native ANN run mutation range is reversed"));
         }
         self.artifact.validate(expected_role)
+    }
+}
+
+impl NativeBoundedDeltaRunRef {
+    fn validate(&self, dimensions: usize, expected_ordinal: usize) -> Result<()> {
+        if usize::try_from(self.ordinal).ok() != Some(expected_ordinal)
+            || self.rows == 0
+            || self.version_start > self.version_end
+        {
+            return Err(invalid("native bounded ANN delta run shape differs"));
+        }
+        validate_hex(
+            &self.version_start,
+            MUTATION_KEY_HEX_LEN,
+            "bounded delta start mutation key",
+        )?;
+        validate_hex(
+            &self.version_end,
+            MUTATION_KEY_HEX_LEN,
+            "bounded delta end mutation key",
+        )?;
+        self.artifact.validate("delta-run")?;
+        if self.sq8.low.len() != dimensions
+            || self.sq8.step.len() != dimensions
+            || self.sq8.low.iter().any(|value| !value.is_finite())
+            || self
+                .sq8
+                .step
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(invalid("native bounded ANN delta SQ8 authority differs"));
+        }
+        Ok(())
     }
 }
 
@@ -292,7 +337,14 @@ impl NativeBoundedAnnRef {
         self.page_directory.validate("page-directory")?;
         self.mutation_directory.validate("mutation-directory")?;
         validate_runs(&self.base_runs, "base-run")?;
-        validate_runs(&self.delta_runs, "delta-run")?;
+        for (ordinal, run) in self.delta_runs.iter().enumerate() {
+            run.validate(dimensions, ordinal)?;
+            if ordinal > 0 && self.delta_runs[ordinal - 1].version_end >= run.version_start {
+                return Err(invalid(
+                    "native bounded ANN delta mutation ranges overlap or are unordered",
+                ));
+            }
+        }
         let base_rows = self.base_runs.iter().try_fold(0_u64, |total, run| {
             total
                 .checked_add(run.rows)
@@ -319,13 +371,14 @@ impl NativeBoundedAnnRef {
             &self.mutation_directory,
         ]
         .into_iter()
-        .chain(
-            self.base_runs
-                .iter()
-                .chain(self.delta_runs.iter())
-                .map(|run| &run.artifact),
-        ) {
+        .chain(self.base_runs.iter().map(|run| &run.artifact))
+        {
             if !uris.insert(artifact.uri.as_str()) {
+                return Err(invalid("native bounded ANN artifact URIs must be unique"));
+            }
+        }
+        for run in &self.delta_runs {
+            if !uris.insert(run.artifact.uri.as_str()) {
                 return Err(invalid("native bounded ANN artifact URIs must be unique"));
             }
         }
@@ -545,6 +598,30 @@ mod tests {
             version_start: version_start.to_owned(),
             version_end: version_end.to_owned(),
             artifact: artifact(role, &format!("{role}-{ordinal}.arrow"), digest, 4_096),
+        }
+    }
+
+    fn bounded_delta_run(
+        ordinal: u32,
+        version_start: &str,
+        version_end: &str,
+        digest: &str,
+    ) -> NativeBoundedDeltaRunRef {
+        NativeBoundedDeltaRunRef {
+            ordinal,
+            rows: 256,
+            version_start: version_start.to_owned(),
+            version_end: version_end.to_owned(),
+            artifact: artifact(
+                "delta-run",
+                &format!("delta-run-{ordinal}.arrow"),
+                digest,
+                4_096,
+            ),
+            sq8: NativeSq8Authority {
+                low: vec![-2.0; 96],
+                step: vec![0.02; 96],
+            },
         }
     }
 
@@ -778,7 +855,7 @@ mod tests {
                 run("base-run", 0, VERSION_1, VERSION_1, DIGEST_B),
                 run("base-run", 1, VERSION_2, VERSION_2, DIGEST_C),
             ],
-            delta_runs: vec![run("delta-run", 0, VERSION_3, VERSION_3, DIGEST_D)],
+            delta_runs: vec![bounded_delta_run(0, VERSION_3, VERSION_3, DIGEST_D)],
         }
     }
 
