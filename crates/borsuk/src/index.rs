@@ -51545,6 +51545,72 @@ fn native_bounded_dispatch_is_the_only_approximate_serving_path_after_cutover() 
 }
 
 #[test]
+fn native_bounded_flush_publishes_out_of_range_delta_without_clamping_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 64,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..520)
+                .map(|row| {
+                    VectorRecord::new_bytes(
+                        [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
+                        vec![row as f32 / 17.0; 64],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    let base_generation = index
+        .manifest
+        .native_bounded_ann_ref
+        .as_ref()
+        .unwrap()
+        .generation;
+
+    let fresh_id = b"\0bounded-out-of-range".to_vec();
+    index
+        .add(vec![VectorRecord::new_bytes(
+            fresh_id.clone(),
+            vec![-100.0; 64],
+        )])
+        .unwrap();
+    index.flush().unwrap();
+
+    let delta_authority = index
+        .manifest
+        .native_bounded_ann_ref
+        .as_ref()
+        .expect("flush must advance bounded native authority");
+    assert_eq!(delta_authority.generation, base_generation + 1);
+    assert_eq!(delta_authority.delta_runs.len(), 1);
+    drop(index);
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    let report = index
+        .search_with_report(
+            &[-100.0; 64],
+            SearchOptions::approx(10, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(512),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id.as_bytes(), fresh_id);
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
+}
+
+#[test]
 fn native_ann_flush_publishes_query_visible_delta_generation() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
