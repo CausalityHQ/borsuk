@@ -1508,4 +1508,33 @@ mod tests {
         assert!(outcome.pages_read <= first.reference.router.limits.max_output_pages as usize);
         assert!(outcome.physical_gets <= 1);
     }
+
+    #[test]
+    fn native_bounded_build_registers_all_output_pages_in_one_bounded_fetch_wave() {
+        let config = NativeBuildConfig {
+            generation: 1,
+            previous_generation_sha256: None,
+            source_identity: "native-bounded-response-fixture".to_owned(),
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: 64,
+        };
+        let rows = (0..8_192)
+            .map(|ordinal| NativeBuildRow {
+                id: format!("{ordinal:05}").into_bytes(),
+                sequence: 1,
+                version: version(1),
+                state: NativeRowState::Live,
+                vector: vec![ordinal as f32 / 257.0; 64],
+            })
+            .collect::<Vec<_>>();
+
+        let built = build_native_bounded_generation(config, [rows.as_slice()]).unwrap();
+        let limits = built.reference.router.limits;
+
+        assert_eq!(limits.max_output_pages, 32);
+        assert_eq!(u32::from(limits.range_concurrency), limits.max_output_pages);
+        assert!(
+            u64::from(limits.range_concurrency) * limits.response_bytes_each <= 16 * 1024 * 1024
+        );
+    }
 }
