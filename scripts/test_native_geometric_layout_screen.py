@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import itertools
 import random
 import subprocess
@@ -19,6 +20,7 @@ from scripts.native_geometric_layout_screen import (
     GeometricChild,
     GeometricRoutePlan,
     GeometricRouterArtifacts,
+    GeometricRouterEvaluation,
     LayoutAuthority,
     LayoutEvaluation,
     LayoutMethod,
@@ -29,14 +31,21 @@ from scripts.native_geometric_layout_screen import (
     construct_geometric_router,
     construct_layout,
     encoded_sq8_page_bytes,
+    evaluate_geometric_router,
     evaluate_layout,
     exact_page_coverage,
     finalize_layout_screen,
+    geometric_page_schema,
+    geometric_router_evidence_schema,
+    geometric_tree_schema,
     layout_authority_from_dict,
     membership_schema,
+    read_geometric_router_parquet,
     read_membership_parquet,
     route_geometric_query,
     validate_geometric_router,
+    write_geometric_router_evidence,
+    write_geometric_router_parquet,
     write_membership_parquet,
 )
 
@@ -569,6 +578,106 @@ class GeometricRouterTests(unittest.TestCase):
                     query,
                     leaf_frontier=leaf_frontier,
                     limits=limits,
+                )
+
+
+class GeometricRouterArtifactTests(unittest.TestCase):
+    def test_tree_pages_and_evidence_are_strict_and_sq8_is_ranked(self) -> None:
+        row_count = 120
+        stable_ids = tuple(f"{119 - value:03d}".encode() for value in range(row_count))
+        vectors = np.zeros((row_count, 2), dtype=np.float32)
+        vectors[:118, 0] = np.arange(118, dtype=np.float32) / np.float32(1000.0)
+        vectors[118:, 0] = (100.0, 101.0)
+        authority = LayoutAuthority(
+            schema="borsuk-native-geometric-layout-authority-v1",
+            source=ArtifactIdentity("source", "s3://frozen/source.parquet", "44" * 32, 9999),
+            rows=row_count,
+            dimensions=2,
+            metric="l2",
+            seed=20260921,
+            method=LayoutMethod.TWO_MEANS_480K,
+            maximum_page_rows=60,
+            maximum_page_bytes=65_536,
+        )
+        membership, router = construct_geometric_router(authority, stable_ids, vectors)
+        query = np.zeros((1, 2), dtype=np.float32)
+        truth = (stable_ids[:100],)
+        evaluation = evaluate_geometric_router(
+            router,
+            membership,
+            stable_ids,
+            vectors,
+            query,
+            truth,
+            leaf_frontier=128,
+            limits=EvaluationLimits(maximum_pages=32, maximum_bytes=16 * 1024 * 1024),
+        )
+        self.assertIsInstance(evaluation, GeometricRouterEvaluation)
+        self.assertEqual(evaluation.samples[0].containment_hits_at_100, 100)
+        self.assertLess(evaluation.samples[0].ranked_sq8_hits_at_100, 100)
+        self.assertEqual(evaluation.samples[0].selected_page_ordinals, (0, 1))
+        self.assertEqual(evaluation.max_pages, 2)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tree_path = root / "tree.parquet"
+            pages_path = root / "pages.parquet"
+            tree_identity, page_identity = write_geometric_router_parquet(
+                tree_path,
+                pages_path,
+                authority,
+                membership,
+                router,
+            )
+            self.assertEqual(pq.read_schema(tree_path), geometric_tree_schema(2))
+            self.assertEqual(pq.read_schema(pages_path), geometric_page_schema(2))
+            self.assertEqual(tree_identity.role, "geometric-router-tree")
+            self.assertEqual(page_identity.role, "geometric-page-representatives")
+            self.assertEqual(
+                read_geometric_router_parquet(
+                    tree_path,
+                    pages_path,
+                    authority,
+                    membership,
+                    tree_identity,
+                    page_identity,
+                ),
+                router,
+            )
+
+            evidence_path = root / "evidence.parquet"
+            write_geometric_router_evidence(evidence_path, evaluation)
+            self.assertEqual(
+                pq.read_schema(evidence_path),
+                geometric_router_evidence_schema(),
+            )
+
+            tree_table = pq.read_table(tree_path)
+            wrong_tree_schema = tree_table.schema.set(
+                3,
+                pa.field("left_ordinal", pa.uint64(), nullable=False),
+            )
+            wrong_columns = list(tree_table.columns)
+            wrong_columns[3] = pa.array(
+                tree_table.column(3).combine_chunks().to_pylist(),
+                type=pa.uint64(),
+            )
+            pq.write_table(
+                pa.Table.from_arrays(wrong_columns, schema=wrong_tree_schema),
+                tree_path,
+            )
+            with self.assertRaises(ValueError):
+                read_geometric_router_parquet(
+                    tree_path,
+                    pages_path,
+                    authority,
+                    membership,
+                    dataclasses.replace(
+                        tree_identity,
+                        sha256=hashlib.sha256(tree_path.read_bytes()).hexdigest(),
+                        encoded_bytes=tree_path.stat().st_size,
+                    ),
+                    page_identity,
                 )
 
 

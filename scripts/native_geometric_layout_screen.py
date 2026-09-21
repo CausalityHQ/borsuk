@@ -11,6 +11,7 @@ import heapq
 import json
 import math
 import struct
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -210,6 +211,36 @@ class GeometricRoutePlan:
     retained_leaf_pages: tuple[int, ...]
     encoded_bytes: int
     internal_nodes_visited: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricRouterSample:
+    query_ordinal: int
+    internal_nodes_visited: int
+    retained_leaf_pages: tuple[int, ...]
+    selected_page_ordinals: tuple[int, ...]
+    encoded_bytes: int
+    containment_hits_at_10: int
+    containment_hits_at_100: int
+    ranked_sq8_hits_at_10: int
+    ranked_sq8_hits_at_100: int
+    routing_nanoseconds: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricRouterEvaluation:
+    samples: tuple[GeometricRouterSample, ...]
+    containment_recall_at_10_ppm: int
+    containment_mean_recall_at_100_ppm: int
+    containment_p05_recall_at_100_ppm: int
+    containment_worst_recall_at_100_ppm: int
+    ranked_sq8_recall_at_10_ppm: int
+    ranked_sq8_mean_recall_at_100_ppm: int
+    ranked_sq8_p05_recall_at_100_ppm: int
+    ranked_sq8_worst_recall_at_100_ppm: int
+    max_pages: int
+    max_bytes: int
+    decision: str
 
 
 def layout_authority_from_dict(payload: Mapping[str, Any]) -> LayoutAuthority:
@@ -981,6 +1012,551 @@ def route_geometric_query(
         encoded_bytes=encoded_bytes,
         internal_nodes_visited=internal_nodes_visited,
     )
+
+
+def geometric_tree_schema(projected_dimensions: int) -> pa.Schema:
+    _concrete_int(
+        projected_dimensions,
+        "geometric router projected dimensions",
+        maximum=(1 << 16) - 1,
+    )
+    return pa.schema(
+        [
+            pa.field("node_ordinal", pa.uint32(), nullable=False),
+            pa.field("left_is_leaf", pa.bool_(), nullable=False),
+            pa.field("right_is_leaf", pa.bool_(), nullable=False),
+            pa.field("left_ordinal", pa.uint32(), nullable=False),
+            pa.field("right_ordinal", pa.uint32(), nullable=False),
+            pa.field(
+                "normal",
+                pa.list_(
+                    pa.field("item", pa.float32(), nullable=False),
+                    projected_dimensions,
+                ),
+                nullable=False,
+            ),
+            pa.field("adjusted_offset", pa.float32(), nullable=False),
+            pa.field("normal_norm_squared", pa.float32(), nullable=False),
+            pa.field("source_sha256", pa.binary(32), nullable=False),
+            pa.field("seed", pa.uint64(), nullable=False),
+            pa.field("dimensions", pa.uint32(), nullable=False),
+            pa.field("metric", pa.string(), nullable=False),
+            pa.field("projected_dimensions", pa.uint16(), nullable=False),
+            pa.field("construction_sha256", pa.binary(32), nullable=False),
+            pa.field("root_is_leaf", pa.bool_(), nullable=False),
+            pa.field("root_ordinal", pa.uint32(), nullable=False),
+        ]
+    )
+
+
+def geometric_page_schema(dimensions: int) -> pa.Schema:
+    _concrete_int(dimensions, "geometric router dimensions", maximum=(1 << 16) - 1)
+    return pa.schema(
+        [
+            pa.field("page_ordinal", pa.uint32(), nullable=False),
+            pa.field("encoded_page_bytes", pa.uint32(), nullable=False),
+            pa.field(
+                "centroid",
+                pa.list_(pa.field("item", pa.float32(), nullable=False), dimensions),
+                nullable=False,
+            ),
+            pa.field("source_sha256", pa.binary(32), nullable=False),
+            pa.field("seed", pa.uint64(), nullable=False),
+            pa.field("dimensions", pa.uint32(), nullable=False),
+            pa.field("metric", pa.string(), nullable=False),
+            pa.field("projected_dimensions", pa.uint16(), nullable=False),
+            pa.field("construction_sha256", pa.binary(32), nullable=False),
+        ]
+    )
+
+
+def _parquet_identity(path: Path, role: str) -> ArtifactIdentity:
+    payload = path.read_bytes()
+    return ArtifactIdentity(
+        role=role,
+        uri=path.resolve().as_uri(),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        encoded_bytes=len(payload),
+    )
+
+
+def _authenticate_file(path: Path, expected: ArtifactIdentity, role: str) -> None:
+    payload = path.read_bytes()
+    if (
+        expected.role != role
+        or len(payload) != expected.encoded_bytes
+        or hashlib.sha256(payload).hexdigest() != expected.sha256
+    ):
+        raise ValueError(f"{role} artifact identity differs")
+
+
+def write_geometric_router_parquet(
+    tree_path: Path,
+    page_path: Path,
+    authority: LayoutAuthority,
+    membership: Sequence[MembershipRow],
+    router: GeometricRouterArtifacts,
+) -> tuple[ArtifactIdentity, ArtifactIdentity]:
+    validate_geometric_router(authority, membership, router)
+    node_count = len(router.nodes)
+    tree_schema = geometric_tree_schema(router.projected_dimensions)
+    normal_values = pa.array(
+        [value for node in router.nodes for value in node.normal],
+        type=pa.float32(),
+    )
+    tree = pa.Table.from_arrays(
+        [
+            pa.array([node.ordinal for node in router.nodes], type=pa.uint32()),
+            pa.array([node.left.is_leaf for node in router.nodes], type=pa.bool_()),
+            pa.array([node.right.is_leaf for node in router.nodes], type=pa.bool_()),
+            pa.array([node.left.ordinal for node in router.nodes], type=pa.uint32()),
+            pa.array([node.right.ordinal for node in router.nodes], type=pa.uint32()),
+            pa.FixedSizeListArray.from_arrays(normal_values, router.projected_dimensions),
+            pa.array([node.adjusted_offset for node in router.nodes], type=pa.float32()),
+            pa.array(
+                [node.normal_norm_squared for node in router.nodes], type=pa.float32()
+            ),
+            pa.array([router.source_sha256] * node_count, type=pa.binary(32)),
+            pa.array([router.seed] * node_count, type=pa.uint64()),
+            pa.array([router.dimensions] * node_count, type=pa.uint32()),
+            pa.array([router.metric] * node_count, type=pa.string()),
+            pa.array(
+                [router.projected_dimensions] * node_count,
+                type=pa.uint16(),
+            ),
+            pa.array([router.construction_sha256] * node_count, type=pa.binary(32)),
+            pa.array([router.root.is_leaf] * node_count, type=pa.bool_()),
+            pa.array([router.root.ordinal] * node_count, type=pa.uint32()),
+        ],
+        schema=tree_schema,
+    )
+    page_count = len(router.pages)
+    page_schema = geometric_page_schema(router.dimensions)
+    centroid_values = pa.array(
+        [value for page in router.pages for value in page.centroid],
+        type=pa.float32(),
+    )
+    pages = pa.Table.from_arrays(
+        [
+            pa.array([page.page_ordinal for page in router.pages], type=pa.uint32()),
+            pa.array(
+                [page.encoded_page_bytes for page in router.pages], type=pa.uint32()
+            ),
+            pa.FixedSizeListArray.from_arrays(centroid_values, router.dimensions),
+            pa.array([router.source_sha256] * page_count, type=pa.binary(32)),
+            pa.array([router.seed] * page_count, type=pa.uint64()),
+            pa.array([router.dimensions] * page_count, type=pa.uint32()),
+            pa.array([router.metric] * page_count, type=pa.string()),
+            pa.array(
+                [router.projected_dimensions] * page_count,
+                type=pa.uint16(),
+            ),
+            pa.array([router.construction_sha256] * page_count, type=pa.binary(32)),
+        ],
+        schema=page_schema,
+    )
+    for table, path in ((tree, tree_path), (pages, page_path)):
+        pq.write_table(
+            table,
+            path,
+            version="2.6",
+            compression="zstd",
+            use_dictionary=False,
+            write_statistics=True,
+        )
+    return (
+        _parquet_identity(tree_path, "geometric-router-tree"),
+        _parquet_identity(page_path, "geometric-page-representatives"),
+    )
+
+
+def read_geometric_router_parquet(
+    tree_path: Path,
+    page_path: Path,
+    authority: LayoutAuthority,
+    membership: Sequence[MembershipRow],
+    tree_identity: ArtifactIdentity,
+    page_identity: ArtifactIdentity,
+) -> GeometricRouterArtifacts:
+    _authenticate_file(tree_path, tree_identity, "geometric-router-tree")
+    _authenticate_file(page_path, page_identity, "geometric-page-representatives")
+    projected_dimensions = min(authority.dimensions, 192)
+    if pq.read_schema(tree_path) != geometric_tree_schema(projected_dimensions):
+        raise ValueError("geometric router tree physical schema differs")
+    if pq.read_schema(page_path) != geometric_page_schema(authority.dimensions):
+        raise ValueError("geometric router page physical schema differs")
+    tree = pq.read_table(tree_path)
+    pages = pq.read_table(page_path)
+    if tree.num_rows == 0 or pages.num_rows == 0:
+        raise ValueError("geometric router artifact rows differ")
+
+    def column(table: pa.Table, name: str) -> list[Any]:
+        return table[name].combine_chunks().to_pylist()
+
+    tree_columns = {name: column(tree, name) for name in tree.column_names}
+    page_columns = {name: column(pages, name) for name in pages.column_names}
+    try:
+        nodes = tuple(
+            GeometricTreeNode(
+                ordinal=tree_columns["node_ordinal"][index],
+                left=GeometricChild(
+                    tree_columns["left_is_leaf"][index],
+                    tree_columns["left_ordinal"][index],
+                ),
+                right=GeometricChild(
+                    tree_columns["right_is_leaf"][index],
+                    tree_columns["right_ordinal"][index],
+                ),
+                normal=tuple(tree_columns["normal"][index]),
+                adjusted_offset=tree_columns["adjusted_offset"][index],
+                normal_norm_squared=tree_columns["normal_norm_squared"][index],
+            )
+            for index in range(tree.num_rows)
+        )
+        representatives = tuple(
+            GeometricPageRepresentative(
+                page_ordinal=page_columns["page_ordinal"][index],
+                encoded_page_bytes=page_columns["encoded_page_bytes"][index],
+                centroid=tuple(page_columns["centroid"][index]),
+            )
+            for index in range(pages.num_rows)
+        )
+        source_sha256 = tree_columns["source_sha256"][0]
+        seed = tree_columns["seed"][0]
+        dimensions = tree_columns["dimensions"][0]
+        metric = tree_columns["metric"][0]
+        projected = tree_columns["projected_dimensions"][0]
+        construction = tree_columns["construction_sha256"][0]
+        root = GeometricChild(
+            tree_columns["root_is_leaf"][0], tree_columns["root_ordinal"][0]
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("geometric router artifact payload differs") from error
+    repeated_tree = {
+        "source_sha256": source_sha256,
+        "seed": seed,
+        "dimensions": dimensions,
+        "metric": metric,
+        "projected_dimensions": projected,
+        "construction_sha256": construction,
+        "root_is_leaf": root.is_leaf,
+        "root_ordinal": root.ordinal,
+    }
+    if any(
+        any(value != expected for value in tree_columns[name])
+        for name, expected in repeated_tree.items()
+    ):
+        raise ValueError("geometric router repeated tree authority differs")
+    repeated_pages = {
+        "source_sha256": source_sha256,
+        "seed": seed,
+        "dimensions": dimensions,
+        "metric": metric,
+        "projected_dimensions": projected,
+        "construction_sha256": construction,
+    }
+    if any(
+        any(value != expected for value in page_columns[name])
+        for name, expected in repeated_pages.items()
+    ):
+        raise ValueError("geometric router repeated page authority differs")
+    router = GeometricRouterArtifacts(
+        schema="borsuk-native-geometric-router-v1",
+        source_sha256=source_sha256,
+        seed=seed,
+        dimensions=dimensions,
+        metric=metric,
+        projected_dimensions=projected,
+        root=root,
+        nodes=nodes,
+        pages=representatives,
+        construction_sha256=construction,
+    )
+    validate_geometric_router(authority, membership, router)
+    return router
+
+
+def _page_sq8_rows(
+    source_ordinals: Sequence[int],
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+) -> tuple[tuple[bytes, ...], np.ndarray]:
+    selected = np.ascontiguousarray(vectors[list(source_ordinals)], dtype=np.float32)
+    low = selected.min(axis=0)
+    high = selected.max(axis=0)
+    step = np.asarray((high - low) / np.float32(255.0), dtype=np.float32)
+    safe_step = np.where(step == 0.0, np.float32(1.0), step)
+    codes = np.asarray(
+        np.clip(np.rint((selected - low) / safe_step), 0, 255),
+        dtype=np.uint8,
+    )
+    reconstructed = np.asarray(low + codes.astype(np.float32) * step, dtype=np.float32)
+    return tuple(stable_ids[index] for index in source_ordinals), reconstructed
+
+
+def _recall_aggregates(values: Sequence[int], denominator: int) -> tuple[int, int, int]:
+    if not values or denominator <= 0:
+        raise ValueError("geometric router recall samples differ")
+    recalls = sorted(value * 1_000_000 // denominator for value in values)
+    return (
+        sum(values) * 1_000_000 // (len(values) * denominator),
+        recalls[math.ceil(0.05 * len(recalls)) - 1],
+        recalls[0],
+    )
+
+
+def evaluate_geometric_router(
+    router: GeometricRouterArtifacts,
+    membership: Sequence[MembershipRow],
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+    queries: np.ndarray,
+    truth: Sequence[Sequence[bytes]],
+    *,
+    leaf_frontier: int,
+    limits: EvaluationLimits,
+) -> GeometricRouterEvaluation:
+    if (
+        router.metric != "l2"
+        or type(vectors) is not np.ndarray
+        or vectors.dtype != np.float32
+        or vectors.shape != (len(stable_ids), router.dimensions)
+        or type(queries) is not np.ndarray
+        or queries.dtype != np.float32
+        or queries.ndim != 2
+        or queries.shape[1] != router.dimensions
+        or queries.shape[0] != len(truth)
+        or not np.isfinite(vectors).all()
+        or not np.isfinite(queries).all()
+    ):
+        raise ValueError("geometric router evaluation inputs differ")
+    page_sources: dict[int, list[int]] = {}
+    owner_by_id: dict[bytes, int] = {}
+    for row in membership:
+        if row.stable_id != stable_ids[row.source_ordinal]:
+            raise ValueError("geometric router evaluation membership differs")
+        page_sources.setdefault(row.page_ordinal, []).append(row.source_ordinal)
+        owner_by_id[row.stable_id] = row.page_ordinal
+    if set(page_sources) != set(range(len(router.pages))):
+        raise ValueError("geometric router evaluation page roster differs")
+    page_rows = {
+        page: _page_sq8_rows(ordinals, stable_ids, vectors)
+        for page, ordinals in page_sources.items()
+    }
+    samples: list[GeometricRouterSample] = []
+    for query_ordinal, query in enumerate(queries):
+        expected = tuple(truth[query_ordinal])
+        if len(expected) != 100 or len(set(expected)) != 100 or any(
+            stable_id not in owner_by_id for stable_id in expected
+        ):
+            raise ValueError("geometric router truth differs")
+        started = time.perf_counter_ns()
+        plan = route_geometric_query(
+            router,
+            query,
+            leaf_frontier=leaf_frontier,
+            limits=limits,
+        )
+        elapsed = time.perf_counter_ns() - started
+        selected = set(plan.pages)
+        containment10 = sum(owner_by_id[stable_id] in selected for stable_id in expected[:10])
+        containment100 = sum(owner_by_id[stable_id] in selected for stable_id in expected)
+        ranked: list[tuple[float, bytes]] = []
+        query64 = query.astype(np.float64)
+        for page in plan.pages:
+            ids, reconstructed = page_rows[page]
+            delta = reconstructed.astype(np.float64) - query64
+            distances = np.einsum("ij,ij->i", delta, delta)
+            ranked.extend(
+                (float(distance), stable_id)
+                for distance, stable_id in zip(distances, ids, strict=True)
+            )
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        returned = tuple(stable_id for _, stable_id in ranked[:100])
+        returned_set = set(returned)
+        samples.append(
+            GeometricRouterSample(
+                query_ordinal=query_ordinal,
+                internal_nodes_visited=plan.internal_nodes_visited,
+                retained_leaf_pages=plan.retained_leaf_pages,
+                selected_page_ordinals=plan.pages,
+                encoded_bytes=plan.encoded_bytes,
+                containment_hits_at_10=containment10,
+                containment_hits_at_100=containment100,
+                ranked_sq8_hits_at_10=sum(
+                    stable_id in returned_set for stable_id in expected[:10]
+                ),
+                ranked_sq8_hits_at_100=sum(
+                    stable_id in returned_set for stable_id in expected
+                ),
+                routing_nanoseconds=elapsed,
+            )
+        )
+    containment10, _, _ = _recall_aggregates(
+        [sample.containment_hits_at_10 for sample in samples], 10
+    )
+    containment100, containment_p05, containment_worst = _recall_aggregates(
+        [sample.containment_hits_at_100 for sample in samples], 100
+    )
+    ranked10, _, _ = _recall_aggregates(
+        [sample.ranked_sq8_hits_at_10 for sample in samples], 10
+    )
+    ranked100, ranked_p05, ranked_worst = _recall_aggregates(
+        [sample.ranked_sq8_hits_at_100 for sample in samples], 100
+    )
+    max_pages = max(len(sample.selected_page_ordinals) for sample in samples)
+    max_bytes = max(sample.encoded_bytes for sample in samples)
+    decision = (
+        "pass"
+        if ranked10 >= 960_000 and ranked100 >= 975_000 and ranked_p05 >= 900_000
+        else "killed"
+    )
+    return GeometricRouterEvaluation(
+        samples=tuple(samples),
+        containment_recall_at_10_ppm=containment10,
+        containment_mean_recall_at_100_ppm=containment100,
+        containment_p05_recall_at_100_ppm=containment_p05,
+        containment_worst_recall_at_100_ppm=containment_worst,
+        ranked_sq8_recall_at_10_ppm=ranked10,
+        ranked_sq8_mean_recall_at_100_ppm=ranked100,
+        ranked_sq8_p05_recall_at_100_ppm=ranked_p05,
+        ranked_sq8_worst_recall_at_100_ppm=ranked_worst,
+        max_pages=max_pages,
+        max_bytes=max_bytes,
+        decision=decision,
+    )
+
+
+def geometric_router_evidence_schema() -> pa.Schema:
+    page_list = pa.list_(pa.field("element", pa.uint32(), nullable=False))
+    return pa.schema(
+        [
+            pa.field("query_ordinal", pa.uint32(), nullable=False),
+            pa.field("internal_nodes_visited", pa.uint32(), nullable=False),
+            pa.field("retained_leaf_pages", page_list, nullable=False),
+            pa.field("selected_page_ordinals", page_list, nullable=False),
+            pa.field("encoded_bytes", pa.uint64(), nullable=False),
+            pa.field("containment_hits_at_10", pa.uint8(), nullable=False),
+            pa.field("containment_hits_at_100", pa.uint8(), nullable=False),
+            pa.field("ranked_sq8_hits_at_10", pa.uint8(), nullable=False),
+            pa.field("ranked_sq8_hits_at_100", pa.uint8(), nullable=False),
+            pa.field("routing_nanoseconds", pa.uint64(), nullable=False),
+        ]
+    )
+
+
+def write_geometric_router_evidence(
+    path: Path, evaluation: GeometricRouterEvaluation
+) -> ArtifactIdentity:
+    schema = geometric_router_evidence_schema()
+    samples = evaluation.samples
+    table = pa.Table.from_arrays(
+        [
+            pa.array([sample.query_ordinal for sample in samples], type=pa.uint32()),
+            pa.array(
+                [sample.internal_nodes_visited for sample in samples], type=pa.uint32()
+            ),
+            pa.array(
+                [sample.retained_leaf_pages for sample in samples],
+                type=schema.field("retained_leaf_pages").type,
+            ),
+            pa.array(
+                [sample.selected_page_ordinals for sample in samples],
+                type=schema.field("selected_page_ordinals").type,
+            ),
+            pa.array([sample.encoded_bytes for sample in samples], type=pa.uint64()),
+            pa.array(
+                [sample.containment_hits_at_10 for sample in samples], type=pa.uint8()
+            ),
+            pa.array(
+                [sample.containment_hits_at_100 for sample in samples], type=pa.uint8()
+            ),
+            pa.array(
+                [sample.ranked_sq8_hits_at_10 for sample in samples], type=pa.uint8()
+            ),
+            pa.array(
+                [sample.ranked_sq8_hits_at_100 for sample in samples], type=pa.uint8()
+            ),
+            pa.array([sample.routing_nanoseconds for sample in samples], type=pa.uint64()),
+        ],
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        path,
+        version="2.6",
+        compression="zstd",
+        use_dictionary=False,
+        write_statistics=True,
+    )
+    return _parquet_identity(path, "geometric-router-evidence")
+
+
+def _evaluation_payload(evaluation: GeometricRouterEvaluation) -> dict[str, object]:
+    return {
+        "containment_mean_recall_at_100_ppm": evaluation.containment_mean_recall_at_100_ppm,
+        "containment_p05_recall_at_100_ppm": evaluation.containment_p05_recall_at_100_ppm,
+        "containment_recall_at_10_ppm": evaluation.containment_recall_at_10_ppm,
+        "containment_worst_recall_at_100_ppm": evaluation.containment_worst_recall_at_100_ppm,
+        "decision": evaluation.decision,
+        "max_bytes": evaluation.max_bytes,
+        "max_pages": evaluation.max_pages,
+        "query_count": len(evaluation.samples),
+        "ranked_sq8_mean_recall_at_100_ppm": evaluation.ranked_sq8_mean_recall_at_100_ppm,
+        "ranked_sq8_p05_recall_at_100_ppm": evaluation.ranked_sq8_p05_recall_at_100_ppm,
+        "ranked_sq8_recall_at_10_ppm": evaluation.ranked_sq8_recall_at_10_ppm,
+        "ranked_sq8_worst_recall_at_100_ppm": evaluation.ranked_sq8_worst_recall_at_100_ppm,
+    }
+
+
+def geometric_router_result_bytes(
+    *,
+    authority: LayoutAuthority,
+    queries: ArtifactIdentity,
+    truth: ArtifactIdentity,
+    membership: ArtifactIdentity,
+    tree: ArtifactIdentity,
+    pages: ArtifactIdentity,
+    evidence: ArtifactIdentity,
+    evaluation: GeometricRouterEvaluation,
+    leaf_frontier: int,
+    limits: EvaluationLimits,
+) -> bytes:
+    expected_roles = (
+        (queries, "queries"),
+        (truth, "truth"),
+        (membership, "geometric-membership"),
+        (tree, "geometric-router-tree"),
+        (pages, "geometric-page-representatives"),
+        (evidence, "geometric-router-evidence"),
+    )
+    if any(identity.role != role for identity, role in expected_roles):
+        raise ValueError("geometric router result artifact roster differs")
+    payload = {
+        "claim_eligible": False,
+        "dimensions": authority.dimensions,
+        "evidence": dataclasses.asdict(evidence),
+        "leaf_frontier": leaf_frontier,
+        "layout_method": authority.method.value,
+        "limits": {
+            "maximum_bytes": limits.maximum_bytes,
+            "maximum_pages": limits.maximum_pages,
+        },
+        "maximum_page_bytes": authority.maximum_page_bytes,
+        "maximum_page_rows": authority.maximum_page_rows,
+        "membership": dataclasses.asdict(membership),
+        "metric": authority.metric,
+        "pages": dataclasses.asdict(pages),
+        "queries": dataclasses.asdict(queries),
+        "result": _evaluation_payload(evaluation),
+        "rows": authority.rows,
+        "schema": "borsuk-native-geometric-router-screen-result-v1",
+        "seed": authority.seed,
+        "source": dataclasses.asdict(authority.source),
+        "tree": dataclasses.asdict(tree),
+        "truth": dataclasses.asdict(truth),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
 def construct_layout(

@@ -17,14 +17,22 @@ from scripts.native_geometric_layout_screen import (
     LayoutAuthority,
     LayoutMethod,
     MembershipRow,
+    construct_geometric_router,
+    evaluate_geometric_router,
     evaluate_layout,
+    geometric_router_result_bytes,
     write_coverage_parquet,
+    write_geometric_router_evidence,
+    write_geometric_router_parquet,
     write_membership_parquet,
 )
 from scripts.validate_native_geometric_layout_result import (
+    GeometricRouterScreenAuthority,
+    GeometricRouterValidationPaths,
     LayoutScreenAuthority,
     ValidatedLayoutDecision,
     ValidationPaths,
+    validate_geometric_router_result,
     validate_result,
 )
 
@@ -240,6 +248,312 @@ class NativeGeometricResultValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_result(fixture.paths, fixture.expected)
 
+
+class GeometricRouterValidationTests(unittest.TestCase):
+    def test_recomputes_samples_aggregates_decision_and_identity_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = 120
+            dimensions = 2
+            source_ids = tuple(range(rows - 1, -1, -1))
+            stable_ids = tuple(str(value).encode() for value in source_ids)
+            vectors = np.zeros((rows, dimensions), dtype=np.float32)
+            vectors[:118, 0] = np.arange(118, dtype=np.float32) / np.float32(1000.0)
+            vectors[118:, 0] = (100.0, 101.0)
+
+            source_path = root / "source.parquet"
+            source_schema = pa.schema(
+                [
+                    pa.field("feature_row_id", pa.uint64(), nullable=False),
+                    pa.field(
+                        "embedding",
+                        pa.list_(pa.field("item", pa.float32(), nullable=False), dimensions),
+                        nullable=False,
+                    ),
+                ]
+            )
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array(source_ids, type=pa.uint64()),
+                        pa.FixedSizeListArray.from_arrays(
+                            pa.array(vectors.reshape(-1), type=pa.float32()), dimensions
+                        ),
+                    ],
+                    schema=source_schema,
+                ),
+                source_path,
+            )
+            source = artifact(source_path, "source")
+            authority = LayoutAuthority(
+                schema="borsuk-native-geometric-layout-authority-v1",
+                source=source,
+                rows=rows,
+                dimensions=dimensions,
+                metric="l2",
+                seed=20260921,
+                method=LayoutMethod.TWO_MEANS_480K,
+                maximum_page_rows=60,
+                maximum_page_bytes=65_536,
+            )
+            membership, router = construct_geometric_router(authority, stable_ids, vectors)
+            membership_path = root / "membership.parquet"
+            membership_identity = dataclasses.replace(
+                write_membership_parquet(membership_path, authority, membership),
+                role="geometric-membership",
+                uri="s3://frozen/membership.parquet",
+            )
+            tree_path = root / "tree.parquet"
+            pages_path = root / "pages.parquet"
+            tree_identity, pages_identity = write_geometric_router_parquet(
+                tree_path, pages_path, authority, membership, router
+            )
+            tree_identity = dataclasses.replace(tree_identity, uri="s3://frozen/tree.parquet")
+            pages_identity = dataclasses.replace(
+                pages_identity, uri="s3://frozen/pages.parquet"
+            )
+
+            query_path = root / "queries.parquet"
+            query_schema = pa.schema(
+                [
+                    pa.field("query", pa.uint32(), nullable=False),
+                    pa.field(
+                        "vector",
+                        pa.list_(pa.field("element", pa.float32(), nullable=False), dimensions),
+                        nullable=False,
+                    )
+                ]
+            )
+            queries = np.zeros((1, dimensions), dtype=np.float32)
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array([0], type=pa.uint32()),
+                        pa.FixedSizeListArray.from_arrays(
+                            pa.array(queries.reshape(-1), type=pa.float32()), dimensions
+                        )
+                    ],
+                    schema=query_schema,
+                ),
+                query_path,
+            )
+            queries_identity = artifact(query_path, "queries")
+
+            truth_path = root / "truth.parquet"
+            truth_schema = pa.schema(
+                [
+                    pa.field("query", pa.uint32(), nullable=False),
+                    pa.field(
+                        "neighbors",
+                        pa.list_(pa.field("element", pa.int64(), nullable=False), 100),
+                        nullable=False,
+                    ),
+                ]
+            )
+            truth = (stable_ids[:100],)
+            pq.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array([0], type=pa.uint32()),
+                        pa.array(
+                            [[int(value) for value in source_ids[:100]]],
+                            type=truth_schema.field("neighbors").type,
+                        ),
+                    ],
+                    schema=truth_schema,
+                ),
+                truth_path,
+            )
+            truth_identity = artifact(truth_path, "truth")
+            limits = EvaluationLimits(maximum_pages=32, maximum_bytes=16 * 1024 * 1024)
+            evaluation = evaluate_geometric_router(
+                router,
+                membership,
+                stable_ids,
+                vectors,
+                queries,
+                truth,
+                leaf_frontier=128,
+                limits=limits,
+            )
+            evidence_path = root / "evidence.parquet"
+            evidence_identity = dataclasses.replace(
+                write_geometric_router_evidence(evidence_path, evaluation),
+                uri="s3://frozen/evidence.parquet",
+            )
+            result_path = root / "result.json"
+            result_path.write_bytes(
+                geometric_router_result_bytes(
+                    authority=authority,
+                    queries=queries_identity,
+                    truth=truth_identity,
+                    membership=membership_identity,
+                    tree=tree_identity,
+                    pages=pages_identity,
+                    evidence=evidence_identity,
+                    evaluation=evaluation,
+                    leaf_frontier=128,
+                    limits=limits,
+                )
+            )
+            result_identity = artifact(result_path, "result")
+            expected = GeometricRouterScreenAuthority(
+                schema="borsuk-native-geometric-router-screen-authority-v1",
+                source=source,
+                queries=queries_identity,
+                truth=truth_identity,
+                membership=membership_identity,
+                tree=tree_identity,
+                pages=pages_identity,
+                evidence=evidence_identity,
+                result=result_identity,
+                rows=rows,
+                dimensions=dimensions,
+                metric="l2",
+                seed=20260921,
+                method=LayoutMethod.TWO_MEANS_480K,
+                maximum_page_rows=60,
+                maximum_page_bytes=65_536,
+                leaf_frontier=128,
+                limits=limits,
+            )
+            paths = GeometricRouterValidationPaths(
+                source=source_path,
+                queries=query_path,
+                truth=truth_path,
+                membership=membership_path,
+                tree=tree_path,
+                pages=pages_path,
+                evidence=evidence_path,
+                result=result_path,
+            )
+            self.assertEqual(
+                validate_geometric_router_result(paths, expected),
+                evaluation.decision,
+            )
+            valid_result = result_path.read_bytes()
+
+            for label, mutate in (
+                ("aggregate", lambda value: value["result"].__setitem__("max_pages", 1)),
+                ("decision", lambda value: value["result"].__setitem__("decision", "pass")),
+                ("layout", lambda value: value.__setitem__("maximum_page_rows", 61)),
+                ("identity", lambda value: value["queries"].__setitem__("uri", "s3://frozen/other-queries.parquet")),
+            ):
+                with self.subTest(result_mutation=label):
+                    changed = json.loads(valid_result)
+                    mutate(changed)
+                    result_path.write_text(
+                        json.dumps(changed, sort_keys=True, separators=(",", ":")) + "\n"
+                    )
+                    changed_expected = dataclasses.replace(
+                        expected, result=artifact(result_path, "result")
+                    )
+                    with self.assertRaises(ValueError):
+                        validate_geometric_router_result(paths, changed_expected)
+            result_path.write_bytes(valid_result)
+
+            valid_evidence = evidence_path.read_bytes()
+            evidence_table = pq.read_table(evidence_path)
+            for label, column, replacement in (
+                (
+                    "selected-page-order",
+                    "selected_page_ordinals",
+                    [list(reversed(evaluation.samples[0].selected_page_ordinals))],
+                ),
+                (
+                    "ranked-hit-count",
+                    "ranked_sq8_hits_at_100",
+                    [max(0, evaluation.samples[0].ranked_sq8_hits_at_100 - 1)],
+                ),
+            ):
+                with self.subTest(evidence_mutation=label):
+                    columns = list(evidence_table.columns)
+                    ordinal = evidence_table.schema.get_field_index(column)
+                    columns[ordinal] = pa.array(
+                        replacement, type=evidence_table.schema.field(column).type
+                    )
+                    pq.write_table(
+                        pa.Table.from_arrays(columns, schema=evidence_table.schema),
+                        evidence_path,
+                    )
+                    changed_evidence = dataclasses.replace(
+                        artifact(evidence_path, "geometric-router-evidence"),
+                        uri=expected.evidence.uri,
+                    )
+                    changed = json.loads(valid_result)
+                    changed["evidence"] = dataclasses.asdict(changed_evidence)
+                    result_path.write_text(
+                        json.dumps(changed, sort_keys=True, separators=(",", ":")) + "\n"
+                    )
+                    changed_expected = dataclasses.replace(
+                        expected,
+                        evidence=changed_evidence,
+                        result=artifact(result_path, "result"),
+                    )
+                    with self.assertRaises(ValueError):
+                        validate_geometric_router_result(paths, changed_expected)
+            evidence_path.write_bytes(valid_evidence)
+            result_path.write_bytes(valid_result)
+
+            valid_tree = tree_path.read_bytes()
+            tree_table = pq.read_table(tree_path)
+            tree_columns = list(tree_table.columns)
+            left_ordinal = tree_table.schema.get_field_index("left_ordinal")
+            tree_columns[left_ordinal] = pa.array(
+                tree_table["right_ordinal"].combine_chunks().to_pylist(), type=pa.uint32()
+            )
+            pq.write_table(pa.Table.from_arrays(tree_columns, schema=tree_table.schema), tree_path)
+            changed_tree = dataclasses.replace(
+                artifact(tree_path, "geometric-router-tree"), uri=expected.tree.uri
+            )
+            changed = json.loads(valid_result)
+            changed["tree"] = dataclasses.asdict(changed_tree)
+            result_path.write_text(
+                json.dumps(changed, sort_keys=True, separators=(",", ":")) + "\n"
+            )
+            with self.assertRaises(ValueError):
+                validate_geometric_router_result(
+                    paths,
+                    dataclasses.replace(
+                        expected,
+                        tree=changed_tree,
+                        result=artifact(result_path, "result"),
+                    ),
+                )
+            tree_path.write_bytes(valid_tree)
+            result_path.write_bytes(valid_result)
+
+            valid_pages = pages_path.read_bytes()
+            page_table = pq.read_table(pages_path)
+            page_columns = list(page_table.columns)
+            page_bytes_column = page_table.schema.get_field_index("encoded_page_bytes")
+            changed_page_bytes = page_table["encoded_page_bytes"].combine_chunks().to_pylist()
+            changed_page_bytes[0] += 1
+            page_columns[page_bytes_column] = pa.array(changed_page_bytes, type=pa.uint32())
+            pq.write_table(pa.Table.from_arrays(page_columns, schema=page_table.schema), pages_path)
+            changed_pages = dataclasses.replace(
+                artifact(pages_path, "geometric-page-representatives"),
+                uri=expected.pages.uri,
+            )
+            changed = json.loads(valid_result)
+            changed["pages"] = dataclasses.asdict(changed_pages)
+            result_path.write_text(
+                json.dumps(changed, sort_keys=True, separators=(",", ":")) + "\n"
+            )
+            with self.assertRaises(ValueError):
+                validate_geometric_router_result(
+                    paths,
+                    dataclasses.replace(
+                        expected,
+                        pages=changed_pages,
+                        result=artifact(result_path, "result"),
+                    ),
+                )
+            pages_path.write_bytes(valid_pages)
+            result_path.write_bytes(valid_result)
+
+
+class NativeGeometricResultValidationMutationTests(unittest.TestCase):
     def test_rejects_result_samples_aggregates_decisions_and_claim_drift(self) -> None:
         mutations = (
             ("claim", lambda result: result.__setitem__("claim_eligible", True)),

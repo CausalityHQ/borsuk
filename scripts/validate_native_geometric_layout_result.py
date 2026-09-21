@@ -5,19 +5,26 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import heapq
 import json
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.native_geometric_layout_screen import (
     ArtifactIdentity,
     EvaluationLimits,
+    GeometricRouterArtifacts,
+    LayoutAuthority,
     LayoutMethod,
+    geometric_router_evidence_schema,
+    read_geometric_router_parquet,
+    read_membership_parquet,
 )
 
 
@@ -81,6 +88,71 @@ class ValidationPaths:
 @dataclasses.dataclass(frozen=True, slots=True)
 class ValidatedLayoutDecision:
     decisions: tuple[tuple[LayoutMethod, str], ...]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricRouterScreenAuthority:
+    schema: str
+    source: ArtifactIdentity
+    queries: ArtifactIdentity
+    truth: ArtifactIdentity
+    membership: ArtifactIdentity
+    tree: ArtifactIdentity
+    pages: ArtifactIdentity
+    evidence: ArtifactIdentity
+    result: ArtifactIdentity
+    rows: int
+    dimensions: int
+    metric: str
+    seed: int
+    method: LayoutMethod
+    maximum_page_rows: int
+    maximum_page_bytes: int
+    leaf_frontier: int
+    limits: EvaluationLimits
+
+    def __post_init__(self) -> None:
+        roles = (
+            (self.source, "source"),
+            (self.queries, "queries"),
+            (self.truth, "truth"),
+            (self.membership, "geometric-membership"),
+            (self.tree, "geometric-router-tree"),
+            (self.pages, "geometric-page-representatives"),
+            (self.evidence, "geometric-router-evidence"),
+            (self.result, "result"),
+        )
+        if (
+            self.schema != "borsuk-native-geometric-router-screen-authority-v1"
+            or any(identity.role != role for identity, role in roles)
+            or type(self.rows) is not int
+            or self.rows <= 0
+            or type(self.dimensions) is not int
+            or self.dimensions <= 0
+            or self.metric != "l2"
+            or type(self.seed) is not int
+            or self.seed <= 0
+            or self.method is not LayoutMethod.TWO_MEANS_480K
+            or type(self.maximum_page_rows) is not int
+            or self.maximum_page_rows <= 0
+            or type(self.maximum_page_bytes) is not int
+            or self.maximum_page_bytes <= 0
+            or type(self.leaf_frontier) is not int
+            or self.leaf_frontier <= 0
+        ):
+            raise ValueError("geometric router screen authority differs")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricRouterValidationPaths:
+    source: Path
+    queries: Path
+    truth: Path
+    membership: Path
+    tree: Path
+    pages: Path
+    evidence: Path
+    result: Path
 
 
 def _membership_schema() -> pa.Schema:
@@ -427,3 +499,422 @@ def validate_result(
     ):
         raise ValueError("layout reproduction control differs")
     return ValidatedLayoutDecision(decisions=tuple(decisions))
+
+
+def _geometric_source_schema(dimensions: int) -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("feature_row_id", pa.uint64(), nullable=False),
+            pa.field(
+                "embedding",
+                pa.list_(pa.field("item", pa.float32(), nullable=False), dimensions),
+                nullable=False,
+            ),
+        ]
+    )
+
+
+def _geometric_query_schema(dimensions: int) -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("query", pa.uint32(), nullable=False),
+            pa.field(
+                "vector",
+                pa.list_(pa.field("element", pa.float32(), nullable=False), dimensions),
+                nullable=False,
+            ),
+        ]
+    )
+
+
+def _read_geometric_source(
+    path: Path,
+    expected: ArtifactIdentity,
+    rows: int,
+    dimensions: int,
+) -> tuple[tuple[bytes, ...], np.ndarray]:
+    _authenticate(path, expected)
+    if pq.read_schema(path) != _geometric_source_schema(dimensions):
+        raise ValueError("geometric router source physical schema differs")
+    table = pq.read_table(path)
+    ids = table["feature_row_id"].combine_chunks()
+    embeddings = table["embedding"].combine_chunks()
+    if (
+        table.num_rows != rows
+        or ids.null_count != 0
+        or embeddings.null_count != 0
+        or embeddings.values.null_count != 0
+    ):
+        raise ValueError("geometric router source shape differs")
+    stable_ids = tuple(_stable_id(value) for value in ids.to_pylist())
+    vectors = np.asarray(
+        embeddings.values.to_numpy(zero_copy_only=False), dtype=np.float32
+    ).reshape(rows, dimensions)
+    if len(set(stable_ids)) != rows or not np.isfinite(vectors).all():
+        raise ValueError("geometric router source values differ")
+    return stable_ids, vectors
+
+
+def _read_geometric_queries(
+    path: Path,
+    expected: ArtifactIdentity,
+    dimensions: int,
+) -> np.ndarray:
+    _authenticate(path, expected)
+    if pq.read_schema(path) != _geometric_query_schema(dimensions):
+        raise ValueError("geometric router query physical schema differs")
+    table = pq.read_table(path)
+    ordinals = table["query"].combine_chunks()
+    vectors = table["vector"].combine_chunks()
+    if (
+        table.num_rows == 0
+        or ordinals.null_count != 0
+        or vectors.null_count != 0
+        or vectors.values.null_count != 0
+        or ordinals.to_pylist() != list(range(table.num_rows))
+    ):
+        raise ValueError("geometric router query shape differs")
+    matrix = np.asarray(
+        vectors.values.to_numpy(zero_copy_only=False), dtype=np.float32
+    ).reshape(table.num_rows, dimensions)
+    if not np.isfinite(matrix).all():
+        raise ValueError("geometric router query values differ")
+    return matrix
+
+
+def _validator_projection_token(seed: int, index: int) -> bytes:
+    return hashlib.sha256(
+        seed.to_bytes(8, "little") + index.to_bytes(4, "little")
+    ).digest()
+
+
+def _validator_srht(query: np.ndarray, seed: int, output_dimensions: int) -> np.ndarray:
+    dimensions = len(query)
+    padded_dimensions = 1 << (dimensions - 1).bit_length()
+    projected = np.zeros(padded_dimensions, dtype=np.float32)
+    projected[:dimensions] = query
+    signs = np.asarray(
+        [
+            1.0 if _validator_projection_token(seed, index)[0] & 1 == 0 else -1.0
+            for index in range(padded_dimensions)
+        ],
+        dtype=np.float32,
+    )
+    projected *= signs
+    width = 1
+    while width < padded_dimensions:
+        for start in range(0, padded_dimensions, width * 2):
+            left = projected[start : start + width].copy()
+            right = projected[start + width : start + width * 2].copy()
+            projected[start : start + width] = left + right
+            projected[start + width : start + width * 2] = left - right
+        width *= 2
+    projected *= np.float32(1.0 / math.sqrt(padded_dimensions))
+    permutation = sorted(
+        range(padded_dimensions),
+        key=lambda index: (
+            int.from_bytes(_validator_projection_token(seed, index)[1:9], "little"),
+            index,
+        ),
+    )
+    return np.ascontiguousarray(projected[permutation[:output_dimensions]])
+
+
+def _independent_route(
+    router: GeometricRouterArtifacts,
+    query: np.ndarray,
+    *,
+    leaf_frontier: int,
+    limits: EvaluationLimits,
+) -> tuple[tuple[int, ...], tuple[int, ...], int, int]:
+    projected = _validator_srht(query, router.seed, router.projected_dimensions)
+    frontier: list[tuple[float, int, int]] = [
+        (0.0, int(router.root.is_leaf), router.root.ordinal)
+    ]
+    retained: list[int] = []
+    internal_nodes = 0
+    retained_limit = min(leaf_frontier, len(router.pages))
+    while frontier and len(retained) < retained_limit:
+        penalty, is_leaf, ordinal = heapq.heappop(frontier)
+        if is_leaf:
+            retained.append(ordinal)
+            continue
+        node = router.nodes[ordinal]
+        signed = math.fsum(
+            coefficient * float(projected[index])
+            for index, coefficient in enumerate(node.normal)
+        ) + node.adjusted_offset
+        if not math.isfinite(signed) or node.normal_norm_squared <= 0.0:
+            raise ValueError("geometric router split score differs")
+        near, far = (node.left, node.right) if signed <= 0.0 else (node.right, node.left)
+        heapq.heappush(frontier, (penalty, int(near.is_leaf), near.ordinal))
+        heapq.heappush(
+            frontier,
+            (
+                max(penalty, signed * signed / node.normal_norm_squared),
+                int(far.is_leaf),
+                far.ordinal,
+            ),
+        )
+        internal_nodes += 1
+    if len(retained) != retained_limit or len(set(retained)) != retained_limit:
+        raise ValueError("geometric router retained leaf evidence differs")
+    query64 = query.astype(np.float64)
+    ranked_pages = []
+    for page_ordinal in retained:
+        centroid = np.asarray(router.pages[page_ordinal].centroid, dtype=np.float64)
+        delta = query64 - centroid
+        distance = float(np.dot(delta, delta))
+        if not math.isfinite(distance):
+            raise ValueError("geometric router page score differs")
+        ranked_pages.append((distance, page_ordinal))
+    ranked_pages.sort()
+    selected: list[int] = []
+    encoded_bytes = 0
+    for _, page_ordinal in ranked_pages:
+        page_bytes = router.pages[page_ordinal].encoded_page_bytes
+        if encoded_bytes + page_bytes > limits.maximum_bytes:
+            continue
+        selected.append(page_ordinal)
+        encoded_bytes += page_bytes
+        if len(selected) == limits.maximum_pages:
+            break
+    if not selected:
+        raise ValueError("geometric router independent route selected no page")
+    return tuple(sorted(selected)), tuple(retained), encoded_bytes, internal_nodes
+
+
+def _independent_sq8_page(
+    source_ordinals: Sequence[int],
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+) -> tuple[tuple[bytes, ...], np.ndarray]:
+    selected = np.ascontiguousarray(vectors[list(source_ordinals)], dtype=np.float32)
+    low = selected.min(axis=0)
+    high = selected.max(axis=0)
+    step = np.asarray((high - low) / np.float32(255.0), dtype=np.float32)
+    safe_step = np.where(step == 0.0, np.float32(1.0), step)
+    codes = np.asarray(
+        np.clip(np.rint((selected - low) / safe_step), 0, 255), dtype=np.uint8
+    )
+    reconstructed = np.asarray(
+        low + codes.astype(np.float32) * step, dtype=np.float32
+    )
+    return tuple(stable_ids[index] for index in source_ordinals), reconstructed
+
+
+def _read_geometric_evidence(
+    path: Path, expected: ArtifactIdentity
+) -> list[dict[str, Any]]:
+    _authenticate(path, expected)
+    if pq.read_schema(path) != geometric_router_evidence_schema():
+        raise ValueError("geometric router evidence physical schema differs")
+    table = pq.read_table(path)
+    columns = {name: table[name].combine_chunks().to_pylist() for name in table.column_names}
+    rows = [
+        {name: columns[name][index] for name in table.column_names}
+        for index in range(table.num_rows)
+    ]
+    for ordinal, row in enumerate(rows):
+        if (
+            row["query_ordinal"] != ordinal
+            or type(row["routing_nanoseconds"]) is not int
+            or row["routing_nanoseconds"] <= 0
+        ):
+            raise ValueError("geometric router evidence timing or order differs")
+    return rows
+
+
+def _aggregate_hits(values: Sequence[int], denominator: int) -> tuple[int, int, int]:
+    if not values:
+        raise ValueError("geometric router aggregate evidence is empty")
+    recalls = sorted(value * 1_000_000 // denominator for value in values)
+    return (
+        sum(values) * 1_000_000 // (len(values) * denominator),
+        recalls[math.ceil(0.05 * len(recalls)) - 1],
+        recalls[0],
+    )
+
+
+def validate_geometric_router_result(
+    paths: GeometricRouterValidationPaths,
+    expected: GeometricRouterScreenAuthority,
+) -> str:
+    stable_ids, vectors = _read_geometric_source(
+        paths.source, expected.source, expected.rows, expected.dimensions
+    )
+    queries = _read_geometric_queries(paths.queries, expected.queries, expected.dimensions)
+    truth = _read_truth(paths.truth, expected.truth)
+    if len(truth) != len(queries):
+        raise ValueError("geometric router query/truth cardinality differs")
+    layout_authority = LayoutAuthority(
+        schema="borsuk-native-geometric-layout-authority-v1",
+        source=expected.source,
+        rows=expected.rows,
+        dimensions=expected.dimensions,
+        metric=expected.metric,
+        seed=expected.seed,
+        method=expected.method,
+        maximum_page_rows=expected.maximum_page_rows,
+        maximum_page_bytes=expected.maximum_page_bytes,
+    )
+    _authenticate(paths.membership, expected.membership)
+    membership = read_membership_parquet(paths.membership, layout_authority, stable_ids)
+    router = read_geometric_router_parquet(
+        paths.tree,
+        paths.pages,
+        layout_authority,
+        membership,
+        expected.tree,
+        expected.pages,
+    )
+    observed = _read_geometric_evidence(paths.evidence, expected.evidence)
+    if len(observed) != len(queries):
+        raise ValueError("geometric router evidence row count differs")
+
+    page_sources: dict[int, list[int]] = {}
+    owner_by_id: dict[bytes, int] = {}
+    for row in membership:
+        page_sources.setdefault(row.page_ordinal, []).append(row.source_ordinal)
+        owner_by_id[row.stable_id] = row.page_ordinal
+    page_rows = {
+        page: _independent_sq8_page(ordinals, stable_ids, vectors)
+        for page, ordinals in page_sources.items()
+    }
+    recomputed: list[dict[str, Any]] = []
+    for query_ordinal, query in enumerate(queries):
+        neighbors = truth[query_ordinal]
+        if any(stable_id not in owner_by_id for stable_id in neighbors):
+            raise ValueError("geometric router truth references unknown source ID")
+        pages, retained, encoded_bytes, internal_nodes = _independent_route(
+            router,
+            query,
+            leaf_frontier=expected.leaf_frontier,
+            limits=expected.limits,
+        )
+        selected = set(pages)
+        ranked: list[tuple[float, bytes]] = []
+        query64 = query.astype(np.float64)
+        for page in pages:
+            ids, reconstructed = page_rows[page]
+            delta = reconstructed.astype(np.float64) - query64
+            distances = np.einsum("ij,ij->i", delta, delta)
+            ranked.extend(
+                (float(distance), stable_id)
+                for distance, stable_id in zip(distances, ids, strict=True)
+            )
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        returned = {stable_id for _, stable_id in ranked[:100]}
+        row = {
+            "query_ordinal": query_ordinal,
+            "internal_nodes_visited": internal_nodes,
+            "retained_leaf_pages": list(retained),
+            "selected_page_ordinals": list(pages),
+            "encoded_bytes": encoded_bytes,
+            "containment_hits_at_10": sum(
+                owner_by_id[stable_id] in selected for stable_id in neighbors[:10]
+            ),
+            "containment_hits_at_100": sum(
+                owner_by_id[stable_id] in selected for stable_id in neighbors
+            ),
+            "ranked_sq8_hits_at_10": sum(
+                stable_id in returned for stable_id in neighbors[:10]
+            ),
+            "ranked_sq8_hits_at_100": sum(
+                stable_id in returned for stable_id in neighbors
+            ),
+        }
+        if {
+            key: value
+            for key, value in observed[query_ordinal].items()
+            if key != "routing_nanoseconds"
+        } != row:
+            raise ValueError("geometric router per-query evidence differs")
+        recomputed.append(row)
+
+    containment10, _, _ = _aggregate_hits(
+        [row["containment_hits_at_10"] for row in recomputed], 10
+    )
+    containment100, containment_p05, containment_worst = _aggregate_hits(
+        [row["containment_hits_at_100"] for row in recomputed], 100
+    )
+    ranked10, _, _ = _aggregate_hits(
+        [row["ranked_sq8_hits_at_10"] for row in recomputed], 10
+    )
+    ranked100, ranked_p05, ranked_worst = _aggregate_hits(
+        [row["ranked_sq8_hits_at_100"] for row in recomputed], 100
+    )
+    decision = (
+        "pass"
+        if ranked10 >= 960_000 and ranked100 >= 975_000 and ranked_p05 >= 900_000
+        else "killed"
+    )
+    aggregate = {
+        "containment_mean_recall_at_100_ppm": containment100,
+        "containment_p05_recall_at_100_ppm": containment_p05,
+        "containment_recall_at_10_ppm": containment10,
+        "containment_worst_recall_at_100_ppm": containment_worst,
+        "decision": decision,
+        "max_bytes": max(row["encoded_bytes"] for row in recomputed),
+        "max_pages": max(len(row["selected_page_ordinals"]) for row in recomputed),
+        "query_count": len(recomputed),
+        "ranked_sq8_mean_recall_at_100_ppm": ranked100,
+        "ranked_sq8_p05_recall_at_100_ppm": ranked_p05,
+        "ranked_sq8_recall_at_10_ppm": ranked10,
+        "ranked_sq8_worst_recall_at_100_ppm": ranked_worst,
+    }
+
+    raw_result = _authenticate(paths.result, expected.result)
+    try:
+        result = json.loads(raw_result)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("geometric router result JSON differs") from error
+    canonical = json.dumps(result, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if raw_result != canonical or type(result) is not dict or set(result) != {
+        "claim_eligible",
+        "dimensions",
+        "evidence",
+        "leaf_frontier",
+        "layout_method",
+        "limits",
+        "maximum_page_bytes",
+        "maximum_page_rows",
+        "membership",
+        "metric",
+        "pages",
+        "queries",
+        "result",
+        "rows",
+        "schema",
+        "seed",
+        "source",
+        "tree",
+        "truth",
+    }:
+        raise ValueError("geometric router result schema differs")
+    if result != {
+        "claim_eligible": False,
+        "dimensions": expected.dimensions,
+        "evidence": _identity_payload(expected.evidence),
+        "leaf_frontier": expected.leaf_frontier,
+        "layout_method": expected.method.value,
+        "limits": {
+            "maximum_bytes": expected.limits.maximum_bytes,
+            "maximum_pages": expected.limits.maximum_pages,
+        },
+        "maximum_page_bytes": expected.maximum_page_bytes,
+        "maximum_page_rows": expected.maximum_page_rows,
+        "membership": _identity_payload(expected.membership),
+        "metric": expected.metric,
+        "pages": _identity_payload(expected.pages),
+        "queries": _identity_payload(expected.queries),
+        "result": aggregate,
+        "rows": expected.rows,
+        "schema": "borsuk-native-geometric-router-screen-result-v1",
+        "seed": expected.seed,
+        "source": _identity_payload(expected.source),
+        "tree": _identity_payload(expected.tree),
+        "truth": _identity_payload(expected.truth),
+    }:
+        raise ValueError("geometric router result evidence differs")
+    return decision
