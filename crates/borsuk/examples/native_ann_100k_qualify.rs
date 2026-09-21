@@ -963,4 +963,44 @@ mod tests {
         assert!(native_route_io(&RequestCounts::default(), 123_456).is_err());
         assert!(native_route_io(&requests, 0).is_err());
     }
+
+    #[test]
+    fn native_ann_100k_semantic_gate_proves_repetition_mutation_reopen_and_compaction() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: 64,
+            segment_max_vectors: 128,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..520)
+                    .map(|row| VectorRecord::new(row.to_string(), vec![row as f32 / 17.0; 64]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let evidence =
+            verify_semantic_equivalence(&mut index, &[0.0; 64], directory.path()).unwrap();
+
+        assert_eq!(
+            evidence,
+            SemanticEquivalence {
+                one_run: true,
+                ten_run: true,
+                hundred_run: true,
+                pending_put: true,
+                pending_delete: true,
+                reopen: true,
+                compaction: true,
+            }
+        );
+        assert_eq!(RESULT_SCHEMA, "borsuk-bounded-native-100k-qualification-v1");
+    }
 }
