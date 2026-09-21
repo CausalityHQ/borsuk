@@ -117,12 +117,17 @@ use crate::{
         CanonicalMutation, MutationClock, MutationOperation, MutationStamp, MutationState,
         MutationVersion,
     },
-    native_ann::{NativeAnnRef, native_ann_root_bytes},
-    native_ann_build::{
-        NativeBuildConfig, NativeBuildRow, build_native_delta_generation, build_native_generation,
-        stage_native_generation,
+    native_ann::{
+        NativeAnnRef, NativeBoundedAnnRef, native_ann_root_bytes, native_bounded_ann_root_bytes,
     },
-    native_ann_read::{NativeAnnSnapshot, NativeRowState, load_native_ann_snapshot},
+    native_ann_build::{
+        NativeBuildConfig, NativeBuildRow, build_native_bounded_generation,
+        build_native_delta_generation, stage_native_bounded_generation, stage_native_generation,
+    },
+    native_ann_read::{
+        NativeAnnSnapshot, NativeBoundedAnnSnapshot, NativeRowState, load_native_ann_snapshot,
+        load_native_bounded_ann_snapshot,
+    },
     observability,
     positioned_candidate::{
         LexicalDeltaAuthority, MaterializationArtifactRef, MaterializationArtifactRole,
@@ -792,6 +797,29 @@ fn native_search_report(
         wal_records_examined: 0,
         wal_snapshot_retries: 0,
     }
+}
+
+fn native_bounded_search_report(
+    outcome: crate::native_ann_read::NativeBoundedSearchOutcome,
+    page_count: usize,
+    resident_bytes_estimate: u64,
+    elapsed_ms: u64,
+) -> SearchReport {
+    let mut report = native_search_report(
+        crate::native_ann_read::NativeSearchOutcome {
+            generation: outcome.generation,
+            hits: outcome.hits,
+            rows_scored: outcome.rows_scored,
+            pages_read: outcome.pages_read,
+            physical_gets: outcome.physical_gets,
+            bytes_read: outcome.bytes_read,
+        },
+        page_count,
+        resident_bytes_estimate,
+        elapsed_ms,
+    );
+    report.leaf_mode = "native-bounded-sq8".to_string();
+    report
 }
 
 #[derive(Default)]
@@ -1642,6 +1670,8 @@ pub struct BorsukIndex {
     resident_global_ann_pins: Option<ResidentGlobalAnnPins>,
     /// Authenticated native dense snapshot pinned to this collection manifest.
     native_ann_snapshot: Option<Arc<NativeAnnSnapshot>>,
+    /// Authenticated format-v3 bounded dense snapshot pinned to this manifest.
+    native_bounded_ann_snapshot: Option<Arc<NativeBoundedAnnSnapshot>>,
     /// Compact term-range roots loaded before serving; postings remain paged.
     resident_lexical_roots: ResidentLexicalRoots,
     admission: Arc<AdmissionGate>,
@@ -5079,6 +5109,7 @@ impl BorsukIndex {
             )),
             resident_global_ann_pins: None,
             native_ann_snapshot: None,
+            native_bounded_ann_snapshot: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: Arc::clone(&read_runtime.admission),
             leaf_read_width: read_runtime.leaf_read_width,
@@ -5455,6 +5486,7 @@ impl BorsukIndex {
             )),
             resident_global_ann_pins: None,
             native_ann_snapshot: None,
+            native_bounded_ann_snapshot: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: Arc::clone(&read_runtime.admission),
             leaf_read_width: read_runtime.leaf_read_width,
@@ -5538,6 +5570,18 @@ impl BorsukIndex {
             .as_ref()
             .map(|reference| {
                 load_native_ann_snapshot(
+                    index.storage.clone(),
+                    reference,
+                    index.read_runtime.transient_admission.clone(),
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
+        index.native_bounded_ann_snapshot = manifest
+            .native_bounded_ann_ref
+            .as_ref()
+            .map(|reference| {
+                load_native_bounded_ann_snapshot(
                     index.storage.clone(),
                     reference,
                     index.read_runtime.transient_admission.clone(),
@@ -18398,8 +18442,9 @@ impl BorsukIndex {
             };
             global_ann_summaries.retain(|summary| !selected_ids.contains(summary.id.as_str()));
             global_ann_summaries.extend(new_lexical_summaries.iter().cloned());
-            manifest.native_ann_ref =
+            manifest.native_bounded_ann_ref =
                 Some(self.publish_native_generation_from_summaries(&global_ann_summaries)?);
+            manifest.native_ann_ref = None;
             manifest.global_ann_ref = None;
             manifest.global_cell_card_ann_ref = None;
         }
@@ -18585,6 +18630,19 @@ impl BorsukIndex {
             .as_ref()
             .map(|reference| {
                 load_native_ann_snapshot(
+                    self.storage.clone(),
+                    reference,
+                    self.read_runtime.transient_admission.clone(),
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
+        self.native_bounded_ann_snapshot = self
+            .manifest
+            .native_bounded_ann_ref
+            .as_ref()
+            .map(|reference| {
+                load_native_bounded_ann_snapshot(
                     self.storage.clone(),
                     reference,
                     self.read_runtime.transient_admission.clone(),
@@ -25423,7 +25481,8 @@ impl BorsukIndex {
         let native = self.publish_native_generation_from_summaries(summaries)?;
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
-        manifest.native_ann_ref = Some(native);
+        manifest.native_bounded_ann_ref = Some(native);
+        manifest.native_ann_ref = None;
         manifest.global_ann_ref = None;
         manifest.global_cell_card_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
@@ -25442,13 +25501,26 @@ impl BorsukIndex {
             })
             .transpose()?
             .map(Arc::new);
+        self.native_bounded_ann_snapshot = self
+            .manifest
+            .native_bounded_ann_ref
+            .as_ref()
+            .map(|reference| {
+                load_native_bounded_ann_snapshot(
+                    self.storage.clone(),
+                    reference,
+                    self.read_runtime.transient_admission.clone(),
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
         Ok(())
     }
 
     fn publish_native_generation_from_summaries(
         &self,
         summaries: &[SegmentSummary],
-    ) -> Result<NativeAnnRef> {
+    ) -> Result<NativeBoundedAnnRef> {
         let mut source_summaries = summaries
             .iter()
             .map(|summary| {
@@ -25462,7 +25534,7 @@ impl BorsukIndex {
             .collect::<Vec<_>>();
         source_summaries.sort_unstable();
         let mut source_hasher = blake3::Hasher::new();
-        source_hasher.update(b"borsuk-native-ann-source-v1\0");
+        source_hasher.update(b"borsuk-native-bounded-ann-source-v3\0");
         for (id, path, checksum, rows) in source_summaries {
             for value in [id, path, checksum] {
                 source_hasher.update(&(value.len() as u64).to_le_bytes());
@@ -25475,17 +25547,17 @@ impl BorsukIndex {
 
         let generation = self
             .manifest
-            .native_ann_ref
+            .native_bounded_ann_ref
             .as_ref()
             .map_or(1, |reference| reference.generation.saturating_add(1));
         let previous_generation_sha256 = self
             .manifest
-            .native_ann_ref
+            .native_bounded_ann_ref
             .as_ref()
-            .map(native_ann_root_bytes)
+            .map(native_bounded_ann_root_bytes)
             .transpose()?
             .map(|bytes| format!("{:x}", Sha256::digest(bytes)));
-        let built = build_native_generation(
+        let built = build_native_bounded_generation(
             NativeBuildConfig {
                 generation,
                 previous_generation_sha256,
@@ -25499,7 +25571,7 @@ impl BorsukIndex {
             },
             runs.iter().map(Vec::as_slice),
         )?;
-        stage_native_generation(&self.storage, &built)?;
+        stage_native_bounded_generation(&self.storage, &built)?;
         Ok(built.reference)
     }
 
@@ -26888,6 +26960,49 @@ impl BorsukIndex {
 
         let requests_before = self.storage.request_counts();
         let started = Instant::now();
+        if options.k > 0
+            && matches!(&options.mode, SearchMode::Approx { .. })
+            && !options.guaranteed_recall
+            && options.filter.is_none()
+            && !options.include_metadata
+            && !include_vectors
+            && !self.manifest.segments_are_global_delta
+            && let Some(snapshot) = &self.native_bounded_ann_snapshot
+        {
+            let live_wal = self.dense_live_wal_records(None)?;
+            let mut shadowed_ids = live_wal
+                .iter()
+                .map(|record| record.id.as_bytes().to_vec())
+                .collect::<BTreeSet<_>>();
+            for summary in self.cell_wal_tombstone_summaries()? {
+                shadowed_ids.extend(self.load_tombstone_run(&summary)?.keys().cloned());
+            }
+            let outcome = snapshot.search_with_overlay(
+                query,
+                options.k,
+                live_wal.as_slice(),
+                &shadowed_ids,
+            )?;
+            let page_count = self
+                .manifest
+                .native_bounded_ann_ref
+                .as_ref()
+                .map_or(0, |reference| reference.router.page_count as usize);
+            let mut execution = SearchExecution {
+                report: native_bounded_search_report(
+                    outcome,
+                    page_count,
+                    self.manifest.resident_bytes_estimate(),
+                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                ),
+                vectors: Vec::new(),
+            };
+            if resident_global_latency_expired(&options, started) {
+                execution.report.termination_reason = SearchTerminationReason::MaxLatency;
+            }
+            observability::record_search_report(&span, &execution.report);
+            return Ok(execution);
+        }
         if options.k > 0
             && matches!(&options.mode, SearchMode::Approx { .. })
             && !options.guaranteed_recall
