@@ -344,7 +344,10 @@ def canonical_terminal_bytes(
         or status not in {"complete", "failed", "interrupted"}
         or type(exit_code) is not int
         or (status == "complete" and (exit_code != 0 or set(evidence) != required))
-        or (status != "complete" and (exit_code == 0 or evidence))
+        or (
+            status != "complete"
+            and (exit_code == 0 or not set(evidence).issubset(required))
+        )
     ):
         raise ValueError("terminal differs")
     terminal = AttemptTerminal(

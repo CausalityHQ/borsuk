@@ -14,6 +14,7 @@ from scripts.launch_matched_s3_vectors_1m_spot import (
     build_plan,
     canonical_terminal_bytes,
     monitor_and_terminate,
+    validate_terminal_bytes,
     worker_script,
 )
 
@@ -150,6 +151,29 @@ class MatchedS3VectorsSpotLauncherTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--source-commit", result.stdout)
+
+    def test_failed_terminal_binds_available_diagnostic_evidence(self) -> None:
+        plan = self._plan()
+        evidence = {
+            role: _identity(role, character)
+            for role, character in (
+                ("cleanup", "4"),
+                ("resources", "5"),
+                ("worker_log", "8"),
+            )
+        }
+
+        body = canonical_terminal_bytes(
+            plan,
+            instance_id="i-0123456789abcdef0",
+            status="failed",
+            exit_code=94,
+            evidence=evidence,
+        )
+        terminal = validate_terminal_bytes(body, plan, "i-0123456789abcdef0")
+
+        self.assertFalse(terminal.claim_eligible)
+        self.assertEqual(set(terminal.evidence), set(evidence))
 
 
 if __name__ == "__main__":

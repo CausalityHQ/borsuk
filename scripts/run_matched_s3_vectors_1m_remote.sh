@@ -55,7 +55,98 @@ finish() {
   [ -n "$watcher_pid" ] && kill "$watcher_pid" 2>/dev/null
   cd "$root" 2>/dev/null || true
   local iid=unknown finished_epoch pressure_end swap_end_kib max_rss_kib status
+  local cleanup_ok=1 upload_ok=1 location evidence_bucket evidence_prefix receipt_python
+  local -a evidence_specs=()
   iid=$(instance_id) || true
+  receipt_python=$(command -v python3.12 || command -v python3)
+
+  if [ -x .venv/bin/python ] && [ -f repo/scripts/benchmark_s3_vectors_parquet.py ]; then
+    PYTHONPATH="$root/repo" MATCHED_VECTOR_BUCKET="$MATCHED_VECTOR_BUCKET" \
+      .venv/bin/python - <<'PY'
+import json
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+import boto3
+from botocore.exceptions import ClientError
+
+from scripts.benchmark_s3_vectors_parquet import delete_service_resources
+
+
+@dataclass(frozen=True, slots=True)
+class Cleanup:
+    schema: str
+    vector_bucket: str
+    index_name: str
+    service_mutation_possible: bool
+    index_deleted: bool
+    bucket_deleted: bool
+
+
+bucket = os.environ["MATCHED_VECTOR_BUCKET"]
+client = boto3.client("s3vectors", region_name="eu-central-1")
+delete_service_resources(client, bucket, "vectors")
+try:
+    client.get_vector_bucket(vectorBucketName=bucket)
+except ClientError as error:
+    code = str(error.response.get("Error", {}).get("Code", ""))
+    if code not in {"NotFoundException", "404", "NotFound"}:
+        raise
+else:
+    raise RuntimeError("temporary S3 Vectors bucket still exists")
+value = Cleanup(
+    schema="borsuk-matched-s3-vectors-cleanup-v1",
+    vector_bucket=bucket,
+    index_name="vectors",
+    service_mutation_possible=True,
+    index_deleted=True,
+    bucket_deleted=True,
+)
+Path("cleanup.json").write_bytes(
+    json.dumps(asdict(value), allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+    + b"\n"
+)
+PY
+    [ "$?" -eq 0 ] || cleanup_ok=0
+  else
+    MATCHED_VECTOR_BUCKET="$MATCHED_VECTOR_BUCKET" "$receipt_python" - <<'PY'
+import json
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True, slots=True)
+class Cleanup:
+    schema: str
+    vector_bucket: str
+    index_name: str
+    service_mutation_possible: bool
+    index_deleted: bool
+    bucket_deleted: bool
+
+
+value = Cleanup(
+    schema="borsuk-matched-s3-vectors-cleanup-v1",
+    vector_bucket=os.environ["MATCHED_VECTOR_BUCKET"],
+    index_name="vectors",
+    service_mutation_possible=False,
+    index_deleted=False,
+    bucket_deleted=False,
+)
+Path("cleanup.json").write_bytes(
+    json.dumps(asdict(value), allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+    + b"\n"
+)
+PY
+    [ "$?" -eq 0 ] || cleanup_ok=0
+  fi
+  if [ "$cleanup_ok" -ne 1 ]; then
+    code=95
+    interrupted=0
+  fi
+
   finished_epoch=$(date +%s)
   pressure_end=$(tr '\n' ';' </proc/pressure/memory)
   swap_end_kib=$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{print t-f}' /proc/meminfo)
@@ -68,7 +159,7 @@ finish() {
     MAX_RSS_KIB="$max_rss_kib" PRESSURE_START="$pressure_start" \
     PRESSURE_END="$pressure_end" SWAP_START_KIB="$swap_start_kib" \
     SWAP_END_KIB="$swap_end_kib" SPOT_PRICE_MICROS="$MATCHED_SPOT_PRICE_MICROS" \
-    python3.12 - <<'PY'
+    "$receipt_python" - <<'PY'
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -111,10 +202,29 @@ Path("resources.json").write_bytes(
 )
 PY
   cp worker.log worker-evidence.log 2>/dev/null || : >worker-evidence.log
-  for name in result/result.json result/samples.parquet cleanup.json resources.json benchmark.time worker-evidence.log hashes.txt pressure-stop.txt; do
-    [ -f "$name" ] && aws s3 cp "$name" "$output_prefix/evidence/${name##*/}" --only-show-errors
+  upload_evidence() {
+    local role=$1 name=$2
+    [ -f "$name" ] || return 0
+    if aws s3 cp "$name" "$output_prefix/evidence/${name##*/}" --only-show-errors; then
+      evidence_specs+=("$role:$name")
+    else
+      upload_ok=0
+    fi
+  }
+  upload_evidence result result/result.json
+  upload_evidence samples result/samples.parquet
+  upload_evidence cleanup cleanup.json
+  upload_evidence resources resources.json
+  upload_evidence worker_log worker-evidence.log
+  for name in benchmark.time hashes.txt pressure-stop.txt; do
+    [ -f "$name" ] && aws s3 cp "$name" "$output_prefix/evidence/${name##*/}" --only-show-errors || true
   done
-  STATUS="$status" EXIT_CODE="$code" INSTANCE_ID="$iid" python3.12 - <<'PY'
+  if [ "$status" = complete ] && { [ "$upload_ok" -ne 1 ] || [ "${#evidence_specs[@]}" -ne 5 ]; }; then
+    status=failed
+    code=96
+  fi
+  EVIDENCE_SPECS="$(IFS=';'; printf '%s' "${evidence_specs[*]}")" \
+    STATUS="$status" EXIT_CODE="$code" INSTANCE_ID="$iid" "$receipt_python" - <<'PY'
 import hashlib
 import json
 import os
@@ -145,22 +255,16 @@ class Terminal:
 
 status = os.environ["STATUS"]
 evidence = {}
-if status == "complete":
-    for role, filename in (
-        ("cleanup", "cleanup.json"),
-        ("resources", "resources.json"),
-        ("result", "result/result.json"),
-        ("samples", "result/samples.parquet"),
-        ("worker_log", "worker-evidence.log"),
-    ):
-        path = Path(filename)
-        body = path.read_bytes()
-        evidence[role] = Identity(
-            role=role,
-            uri=f'{os.environ["MATCHED_OUTPUT_PREFIX"]}/evidence/{path.name}',
-            sha256=hashlib.sha256(body).hexdigest(),
-            bytes=len(body),
-        )
+for spec in filter(None, os.environ["EVIDENCE_SPECS"].split(";")):
+    role, filename = spec.split(":", 1)
+    path = Path(filename)
+    body = path.read_bytes()
+    evidence[role] = Identity(
+        role=role,
+        uri=f'{os.environ["MATCHED_OUTPUT_PREFIX"]}/evidence/{path.name}',
+        sha256=hashlib.sha256(body).hexdigest(),
+        bytes=len(body),
+    )
 terminal = Terminal(
     schema="borsuk-matched-s3-vectors-terminal-v1",
     attempt=1,
@@ -177,7 +281,15 @@ Path("terminal.json").write_bytes(
     + b"\n"
 )
 PY
-  aws s3 cp terminal.json "$output_prefix/terminal.json" --only-show-errors
+  location=${output_prefix#s3://}
+  evidence_bucket=${location%%/*}
+  evidence_prefix=${location#*/}
+  aws s3api put-object \
+    --bucket "$evidence_bucket" \
+    --key "$evidence_prefix/terminal.json" \
+    --body terminal.json \
+    --content-type application/json \
+    --if-none-match '*' >/dev/null || true
   shutdown -h now || true
   exit "$code"
 }
@@ -224,45 +336,3 @@ sha256sum -c hashes.txt || exit 93
     --vector-bucket "$MATCHED_VECTOR_BUCKET" \
     --source-commit "$MATCHED_SOURCE_COMMIT" \
     --settle-seconds 60 || exit 94
-
-MATCHED_VECTOR_BUCKET="$MATCHED_VECTOR_BUCKET" .venv/bin/python - <<'PY' || exit 95
-import json
-import os
-from dataclasses import asdict, dataclass
-from pathlib import Path
-
-import boto3
-from botocore.exceptions import ClientError
-
-
-@dataclass(frozen=True, slots=True)
-class Cleanup:
-    schema: str
-    vector_bucket: str
-    index_name: str
-    index_deleted: bool
-    bucket_deleted: bool
-
-
-bucket = os.environ["MATCHED_VECTOR_BUCKET"]
-client = boto3.client("s3vectors", region_name="eu-central-1")
-try:
-    client.get_vector_bucket(vectorBucketName=bucket)
-except ClientError as error:
-    code = str(error.response.get("Error", {}).get("Code", ""))
-    if code not in {"NotFoundException", "404", "NotFound"}:
-        raise
-else:
-    raise RuntimeError("temporary S3 Vectors bucket still exists")
-value = Cleanup(
-    schema="borsuk-matched-s3-vectors-cleanup-v1",
-    vector_bucket=bucket,
-    index_name="vectors",
-    index_deleted=True,
-    bucket_deleted=True,
-)
-Path("cleanup.json").write_bytes(
-    json.dumps(asdict(value), allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
-    + b"\n"
-)
-PY

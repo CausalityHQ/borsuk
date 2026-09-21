@@ -94,6 +94,7 @@ class QuerySample:
     recall100_ppm: int
     pages: int
     response_bytes: int
+    returned_feature_row_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +337,14 @@ def _query_one(
     latency_ns = time.perf_counter_ns() - started
     if len(keys) != config.neighbors or len(set(keys)) != config.neighbors:
         raise ValueError("query result count differs")
+    try:
+        returned_ids = tuple(int(key) for key in keys)
+    except ValueError as error:
+        raise ValueError("query feature identifiers differ") from error
+    if any(value < 0 or value > (1 << 64) - 1 for value in returned_ids) or any(
+        str(value) != key for value, key in zip(returned_ids, keys, strict=True)
+    ):
+        raise ValueError("query feature identifiers differ")
     recall10 = len(set(keys[:10]).intersection(truth[:10])) * 100_000
     recall100 = len(set(keys).intersection(truth)) * 10_000
     return QuerySample(
@@ -347,6 +356,7 @@ def _query_one(
         recall100_ppm=recall100,
         pages=1,
         response_bytes=_response_bytes(response),
+        returned_feature_row_ids=returned_ids,
     )
 
 
@@ -386,6 +396,11 @@ def _write_samples(path: Path, samples: list[QuerySample]) -> None:
                 pa.field("recall100_ppm", pa.uint32(), nullable=False),
                 pa.field("pages", pa.uint16(), nullable=False),
                 pa.field("response_bytes", pa.uint64(), nullable=False),
+                pa.field(
+                    "returned_feature_row_ids",
+                    pa.list_(pa.field("item", pa.uint64(), nullable=False), 100),
+                    nullable=False,
+                ),
             ]
         ),
     )
@@ -405,6 +420,38 @@ def _wait_for_index(client: object, config: BenchmarkConfig) -> None:
             if time.monotonic() >= deadline:
                 raise TimeoutError("S3 Vectors index was not ready") from error
             time.sleep(2)
+
+
+def _service_error_code(error: Exception) -> str:
+    return str(getattr(error, "response", {}).get("Error", {}).get("Code", ""))
+
+
+def delete_service_resources(client: object, bucket: str, index: str) -> None:
+    """Attempt both service deletions and report the first real failure."""
+
+    first_error: Exception | None = None
+    try:
+        client.delete_index(vectorBucketName=bucket, indexName=index)
+    except Exception as error:
+        if _service_error_code(error) not in {"404", "NotFound", "NotFoundException"}:
+            first_error = error
+    deadline = time.monotonic() + 300
+    while True:
+        try:
+            client.delete_vector_bucket(vectorBucketName=bucket)
+            break
+        except Exception as error:
+            code = _service_error_code(error)
+            if code in {"404", "NotFound", "NotFoundException"}:
+                break
+            if code in {"Conflict", "ConflictException"} and time.monotonic() < deadline:
+                time.sleep(2)
+                continue
+            if first_error is None:
+                first_error = error
+            break
+    if first_error is not None:
+        raise first_error
 
 
 def run_matched_benchmark(config: BenchmarkConfig, client: object) -> BenchmarkResult:
@@ -469,21 +516,12 @@ def run_matched_benchmark(config: BenchmarkConfig, client: object) -> BenchmarkR
                     )
                 )
     finally:
-        if created_index:
-            client.delete_index(
-                vectorBucketName=config.vector_bucket,
-                indexName=config.index_name,
+        if created_index or created_bucket:
+            delete_service_resources(
+                client,
+                config.vector_bucket,
+                config.index_name,
             )
-        if created_bucket:
-            deadline = time.monotonic() + 300
-            while True:
-                try:
-                    client.delete_vector_bucket(vectorBucketName=config.vector_bucket)
-                    break
-                except client.exceptions.ConflictException:
-                    if time.monotonic() >= deadline:
-                        raise
-                    time.sleep(2)
 
     samples_path = config.output_dir / "samples.parquet"
     _write_samples(samples_path, samples)

@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 from scripts.benchmark_s3_vectors_parquet import (
     BenchmarkConfig,
     ObjectIdentity,
+    delete_service_resources,
     run_matched_benchmark,
 )
 
@@ -87,6 +88,23 @@ class _FakeS3Vectors:
 
 
 class MatchedS3VectorsParquetTests(unittest.TestCase):
+    def test_cleanup_attempts_bucket_after_index_delete_failure(self) -> None:
+        class FailingCleanupClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def delete_index(self, **_: object) -> None:
+                self.calls.append("index")
+                raise RuntimeError("index deletion failed")
+
+            def delete_vector_bucket(self, **_: object) -> None:
+                self.calls.append("bucket")
+
+        client = FailingCleanupClient()
+        with self.assertRaisesRegex(RuntimeError, "index deletion failed"):
+            delete_service_resources(client, "bucket", "index")
+        self.assertEqual(client.calls, ["index", "bucket"])
+
     def test_streams_feature_ids_and_recomputable_two_pass_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -229,6 +247,10 @@ class MatchedS3VectorsParquetTests(unittest.TestCase):
             self.assertEqual(query_zero["pages"], 1)
             self.assertEqual(query_zero["recall10_ppm"], 900_000)
             self.assertEqual(query_zero["recall100_ppm"], 990_000)
+            self.assertEqual(
+                query_zero["returned_feature_row_ids"],
+                [int(value) for value in first_answer],
+            )
             self.assertTrue((output / "result.json").read_bytes().endswith(b"\n"))
 
     def test_rejects_changed_authenticated_input_before_service_mutation(self) -> None:
