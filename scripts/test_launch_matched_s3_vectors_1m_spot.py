@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import base64
 import io
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from scripts.benchmark_s3_vectors_parquet import ObjectIdentity
 from scripts.launch_matched_s3_vectors_1m_spot import (
@@ -134,6 +138,19 @@ class MatchedS3VectorsSpotLauncherTests(unittest.TestCase):
                 exit_code=0,
                 evidence={role: value for role, value in evidence.items() if role != "cleanup"},
             )
+
+    def test_direct_script_help_resolves_repository_imports(self) -> None:
+        script = Path(__file__).with_name("launch_matched_s3_vectors_1m_spot.py")
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(script), "--help"],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--source-commit", result.stdout)
 
 
 if __name__ == "__main__":

@@ -7,10 +7,15 @@ import argparse
 import base64
 import hashlib
 import json
+import pathlib
 import shlex
+import sys
 import time
 from dataclasses import asdict, dataclass
 from typing import Literal, Mapping, Sequence
+
+if not __package__:  # Direct ``python scripts/...`` execution.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from scripts.benchmark_s3_vectors_parquet import ObjectIdentity
 
