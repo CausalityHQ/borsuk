@@ -16,12 +16,17 @@ import pyarrow.parquet as pq
 from scripts.native_geometric_layout_screen import (
     ArtifactIdentity,
     EvaluationLimits,
+    GeometricChild,
+    GeometricRoutePlan,
+    GeometricRouterArtifacts,
     LayoutAuthority,
     LayoutEvaluation,
     LayoutMethod,
     MembershipRow,
     _ground_truth,
     _stable_id,
+    _two_means_split_authority,
+    construct_geometric_router,
     construct_layout,
     encoded_sq8_page_bytes,
     evaluate_layout,
@@ -30,6 +35,8 @@ from scripts.native_geometric_layout_screen import (
     layout_authority_from_dict,
     membership_schema,
     read_membership_parquet,
+    route_geometric_query,
+    validate_geometric_router,
     write_membership_parquet,
 )
 
@@ -386,6 +393,183 @@ class QueryBlindConstructorTests(unittest.TestCase):
         )
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("unrecognized arguments: --query-path", rejected.stderr)
+
+
+class GeometricRouterTests(unittest.TestCase):
+    def test_capacity_cut_tree_authority_is_exact_and_query_blind(self) -> None:
+        projected = np.asarray(((0.0,), (1.0,), (2.0,), (100.0,)), dtype=np.float32)
+        stable_ids = (b"a", b"b", b"c", b"d")
+        split = _two_means_split_authority(
+            np.arange(4, dtype=np.int64), projected, stable_ids, 2
+        )
+        self.assertEqual(split.left_source_ordinals, (3, 2))
+        self.assertEqual(split.right_source_ordinals, (1, 0))
+        self.assertEqual(split.normal, (-198.0,))
+        self.assertEqual(split.adjusted_offset, 297.0)
+        self.assertEqual(split.normal_norm_squared, 39_204.0)
+
+        authority = LayoutAuthority(
+            schema="borsuk-native-geometric-layout-authority-v1",
+            source=ArtifactIdentity(
+                role="source",
+                uri="s3://frozen/source.parquet",
+                sha256="11" * 32,
+                encoded_bytes=1234,
+            ),
+            rows=4,
+            dimensions=1,
+            metric="l2",
+            seed=20260921,
+            method=LayoutMethod.TWO_MEANS_480K,
+            maximum_page_rows=2,
+            maximum_page_bytes=4096,
+        )
+        rows, router = construct_geometric_router(authority, stable_ids, projected)
+        validate_geometric_router(authority, rows, router)
+        self.assertEqual(router.root, GeometricChild(is_leaf=False, ordinal=0))
+        self.assertEqual(len(router.nodes), 1)
+        self.assertEqual(len(router.pages), 2)
+
+        node = router.nodes[0]
+        mutations = (
+            dataclasses.replace(
+                router,
+                nodes=(dataclasses.replace(node, adjusted_offset=node.adjusted_offset + 1.0),),
+            ),
+            dataclasses.replace(
+                router,
+                nodes=(dataclasses.replace(node, normal=(0.0,)),),
+            ),
+            dataclasses.replace(
+                router,
+                nodes=(
+                    dataclasses.replace(
+                        node,
+                        normal_norm_squared=node.normal_norm_squared + 1.0,
+                    ),
+                ),
+            ),
+            dataclasses.replace(
+                router,
+                nodes=(
+                    dataclasses.replace(
+                        node,
+                        left=GeometricChild(is_leaf=False, ordinal=node.left.ordinal),
+                    ),
+                ),
+            ),
+            dataclasses.replace(
+                router,
+                nodes=(
+                    dataclasses.replace(
+                        node,
+                        left=GeometricChild(is_leaf=True, ordinal=99),
+                    ),
+                ),
+            ),
+            dataclasses.replace(router, pages=router.pages[:-1]),
+        )
+        for mutation in mutations:
+            self.assertIsInstance(mutation, GeometricRouterArtifacts)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                validate_geometric_router(authority, rows, mutation)
+
+    def test_bounded_tree_route_matches_exhaustive_page_refinement(self) -> None:
+        stable_ids = tuple(f"id-{value:02d}".encode() for value in range(16))
+        vectors = np.arange(-8, 8, dtype=np.float32).reshape(16, 1)
+        authority = LayoutAuthority(
+            schema="borsuk-native-geometric-layout-authority-v1",
+            source=ArtifactIdentity("source", "s3://frozen/source.parquet", "22" * 32, 4321),
+            rows=16,
+            dimensions=1,
+            metric="l2",
+            seed=20260921,
+            method=LayoutMethod.TWO_MEANS_480K,
+            maximum_page_rows=2,
+            maximum_page_bytes=4096,
+        )
+        _, router = construct_geometric_router(authority, stable_ids, vectors)
+        limits = EvaluationLimits(maximum_pages=3, maximum_bytes=12_288)
+        queries = (
+            np.asarray((-7.5,), dtype=np.float32),
+            np.asarray((0.0,), dtype=np.float32),
+            np.asarray((6.5,), dtype=np.float32),
+            np.asarray((np.nextafter(np.float32(0.0), np.float32(1.0)),), dtype=np.float32),
+        )
+        for query in queries:
+            expected = []
+            encoded = 0
+            ranked = sorted(
+                router.pages,
+                key=lambda page: (
+                    sum((float(query[index]) - page.centroid[index]) ** 2 for index in range(1)),
+                    page.page_ordinal,
+                ),
+            )
+            for page in ranked:
+                if encoded + page.encoded_page_bytes <= limits.maximum_bytes:
+                    expected.append(page.page_ordinal)
+                    encoded += page.encoded_page_bytes
+                    if len(expected) == limits.maximum_pages:
+                        break
+            actual = route_geometric_query(
+                router,
+                query,
+                leaf_frontier=len(router.pages),
+                limits=limits,
+            )
+            self.assertIsInstance(actual, GeometricRoutePlan)
+            self.assertEqual(actual.pages, tuple(sorted(expected)))
+            self.assertEqual(actual.encoded_bytes, encoded)
+            self.assertEqual(len(actual.retained_leaf_pages), len(router.pages))
+            self.assertEqual(len(set(actual.retained_leaf_pages)), len(router.pages))
+
+        near_right = route_geometric_query(
+            router,
+            np.asarray((7.0,), dtype=np.float32),
+            leaf_frontier=4,
+            limits=EvaluationLimits(maximum_pages=2, maximum_bytes=8192),
+        )
+        page_by_source = {
+            row.source_ordinal: row.page_ordinal
+            for row in construct_geometric_router(authority, stable_ids, vectors)[0]
+        }
+        self.assertEqual(
+            set(near_right.pages),
+            {page_by_source[12], page_by_source[14]},
+        )
+        self.assertLessEqual(near_right.internal_nodes_visited, len(router.nodes))
+
+    def test_bounded_tree_route_rejects_invalid_queries_and_limits(self) -> None:
+        stable_ids = (b"a", b"b", b"c", b"d")
+        vectors = np.asarray(((0.0,), (1.0,), (2.0,), (3.0,)), dtype=np.float32)
+        authority = LayoutAuthority(
+            schema="borsuk-native-geometric-layout-authority-v1",
+            source=ArtifactIdentity("source", "s3://frozen/source.parquet", "33" * 32, 1234),
+            rows=4,
+            dimensions=1,
+            metric="l2",
+            seed=20260921,
+            method=LayoutMethod.TWO_MEANS_480K,
+            maximum_page_rows=2,
+            maximum_page_bytes=4096,
+        )
+        _, router = construct_geometric_router(authority, stable_ids, vectors)
+        fixtures = (
+            (np.asarray((np.nan,), dtype=np.float32), 2, EvaluationLimits(1, 4096)),
+            (np.asarray((0.0, 1.0), dtype=np.float32), 2, EvaluationLimits(1, 4096)),
+            (np.asarray((0.0,), dtype=np.float32), 0, EvaluationLimits(1, 4096)),
+        )
+        for query, leaf_frontier, limits in fixtures:
+            with self.subTest(query=query, leaf_frontier=leaf_frontier), self.assertRaises(
+                ValueError
+            ):
+                route_geometric_query(
+                    router,
+                    query,
+                    leaf_frontier=leaf_frontier,
+                    limits=limits,
+                )
 
 
 class ExactCoverageTests(unittest.TestCase):

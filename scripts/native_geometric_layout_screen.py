@@ -7,8 +7,10 @@ import argparse
 import dataclasses
 import enum
 import hashlib
+import heapq
 import json
 import math
+import struct
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -154,6 +156,60 @@ class LayoutEvaluation:
     p05_recall_at_100_ppm: int
     worst_recall_at_100_ppm: int
     decision: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TwoMeansSplitAuthority:
+    left_source_ordinals: tuple[int, ...]
+    right_source_ordinals: tuple[int, ...]
+    normal: tuple[float, ...]
+    adjusted_offset: float
+    normal_norm_squared: float
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricChild:
+    is_leaf: bool
+    ordinal: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricTreeNode:
+    ordinal: int
+    left: GeometricChild
+    right: GeometricChild
+    normal: tuple[float, ...]
+    adjusted_offset: float
+    normal_norm_squared: float
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricPageRepresentative:
+    page_ordinal: int
+    encoded_page_bytes: int
+    centroid: tuple[float, ...]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricRouterArtifacts:
+    schema: str
+    source_sha256: bytes
+    seed: int
+    dimensions: int
+    metric: str
+    projected_dimensions: int
+    root: GeometricChild
+    nodes: tuple[GeometricTreeNode, ...]
+    pages: tuple[GeometricPageRepresentative, ...]
+    construction_sha256: bytes
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GeometricRoutePlan:
+    pages: tuple[int, ...]
+    retained_leaf_pages: tuple[int, ...]
+    encoded_bytes: int
+    internal_nodes_visited: int
 
 
 def layout_authority_from_dict(payload: Mapping[str, Any]) -> LayoutAuthority:
@@ -441,12 +497,12 @@ def _split_ordered_pages(
     return pages
 
 
-def _two_means_order(
+def _two_means_split_authority(
     row_ordinals: np.ndarray,
     projected: np.ndarray,
     stable_ids: Sequence[bytes],
     cut: int,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> TwoMeansSplitAuthority:
     ids = np.asarray([stable_ids[int(index)] for index in row_ordinals])
     seed_rank = int(np.argmin(ids))
     first = projected[int(row_ordinals[seed_rank])].astype(np.float64)
@@ -481,7 +537,45 @@ def _two_means_order(
     ranked = np.lexsort((ids, scores))
     if cut == 0 or cut == len(row_ordinals):
         raise ValueError("two-means split capacity differs")
-    return row_ordinals[ranked[:cut]], row_ordinals[ranked[cut:]]
+    lower = float(scores[ranked[cut - 1]])
+    upper = float(scores[ranked[cut]])
+    threshold = lower + (upper - lower) / 2.0
+    normal = np.asarray(2.0 * (centroids[0] - centroids[1]), dtype=np.float32)
+    adjusted_offset = np.float32(
+        np.dot(centroids[1], centroids[1])
+        - np.dot(centroids[0], centroids[0])
+        - threshold
+    )
+    normal_norm_squared = np.float32(
+        np.dot(normal.astype(np.float64), normal.astype(np.float64))
+    )
+    if (
+        not np.isfinite(normal).all()
+        or not math.isfinite(float(adjusted_offset))
+        or not math.isfinite(float(normal_norm_squared))
+        or normal_norm_squared <= 0.0
+    ):
+        raise ValueError("two-means split authority differs")
+    return TwoMeansSplitAuthority(
+        left_source_ordinals=tuple(int(value) for value in row_ordinals[ranked[:cut]]),
+        right_source_ordinals=tuple(int(value) for value in row_ordinals[ranked[cut:]]),
+        normal=tuple(float(value) for value in normal),
+        adjusted_offset=float(adjusted_offset),
+        normal_norm_squared=float(normal_norm_squared),
+    )
+
+
+def _two_means_order(
+    row_ordinals: np.ndarray,
+    projected: np.ndarray,
+    stable_ids: Sequence[bytes],
+    cut: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    split = _two_means_split_authority(row_ordinals, projected, stable_ids, cut)
+    return (
+        np.asarray(split.left_source_ordinals, dtype=np.int64),
+        np.asarray(split.right_source_ordinals, dtype=np.int64),
+    )
 
 
 def _page_row_capacity(
@@ -556,6 +650,337 @@ def _construction_digest(
         digest.update(row.page_rows.to_bytes(2, "little"))
         digest.update(row.encoded_page_bytes.to_bytes(4, "little"))
     return digest.digest()
+
+
+def _router_digest(
+    authority: LayoutAuthority,
+    membership_sha256: bytes,
+    root: GeometricChild,
+    nodes: Sequence[GeometricTreeNode],
+    pages: Sequence[GeometricPageRepresentative],
+    projected_dimensions: int,
+) -> bytes:
+    digest = hashlib.sha256()
+    digest.update(b"borsuk-native-geometric-router-v1")
+    digest.update(bytes.fromhex(authority.source.sha256))
+    digest.update(authority.seed.to_bytes(8, "little"))
+    digest.update(authority.dimensions.to_bytes(4, "little"))
+    digest.update(authority.metric.encode())
+    digest.update(projected_dimensions.to_bytes(4, "little"))
+    digest.update(bytes((root.is_leaf,)))
+    digest.update(root.ordinal.to_bytes(4, "little"))
+    digest.update(membership_sha256)
+    for node in nodes:
+        digest.update(node.ordinal.to_bytes(4, "little"))
+        for child in (node.left, node.right):
+            digest.update(bytes((child.is_leaf,)))
+            digest.update(child.ordinal.to_bytes(4, "little"))
+        for value in node.normal:
+            digest.update(struct.pack("<f", value))
+        digest.update(struct.pack("<f", node.adjusted_offset))
+        digest.update(struct.pack("<f", node.normal_norm_squared))
+    for page in pages:
+        digest.update(page.page_ordinal.to_bytes(4, "little"))
+        digest.update(page.encoded_page_bytes.to_bytes(4, "little"))
+        for value in page.centroid:
+            digest.update(struct.pack("<f", value))
+    return digest.digest()
+
+
+def validate_geometric_router(
+    authority: LayoutAuthority,
+    membership: Sequence[MembershipRow],
+    router: GeometricRouterArtifacts,
+) -> None:
+    concrete = _validate_membership(authority, membership)
+    if (
+        authority.method not in {LayoutMethod.TWO_MEANS_256, LayoutMethod.TWO_MEANS_480K}
+        or router.schema != "borsuk-native-geometric-router-v1"
+        or router.source_sha256 != bytes.fromhex(authority.source.sha256)
+        or router.seed != authority.seed
+        or router.dimensions != authority.dimensions
+        or router.metric != authority.metric
+        or router.projected_dimensions != min(authority.dimensions, 192)
+        or len(router.construction_sha256) != 32
+        or router.construction_sha256 == bytes(32)
+        or not router.nodes
+        or not router.pages
+    ):
+        raise ValueError("geometric router authority differs")
+    if tuple(node.ordinal for node in router.nodes) != tuple(range(len(router.nodes))):
+        raise ValueError("geometric router node ordinals differ")
+    if tuple(page.page_ordinal for page in router.pages) != tuple(range(len(router.pages))):
+        raise ValueError("geometric router page ordinals differ")
+    page_rows: dict[int, list[MembershipRow]] = {}
+    for row in concrete:
+        page_rows.setdefault(row.page_ordinal, []).append(row)
+    if set(page_rows) != set(range(len(router.pages))):
+        raise ValueError("geometric router membership pages differ")
+    for page in router.pages:
+        rows = page_rows[page.page_ordinal]
+        if (
+            page.encoded_page_bytes != rows[0].encoded_page_bytes
+            or not 0 < page.encoded_page_bytes <= authority.maximum_page_bytes
+            or len(page.centroid) != authority.dimensions
+            or any(not math.isfinite(value) for value in page.centroid)
+        ):
+            raise ValueError("geometric router page authority differs")
+    for node in router.nodes:
+        norm = math.fsum(value * value for value in node.normal)
+        if (
+            len(node.normal) != router.projected_dimensions
+            or any(not math.isfinite(value) for value in node.normal)
+            or not math.isfinite(node.adjusted_offset)
+            or not math.isfinite(node.normal_norm_squared)
+            or node.normal_norm_squared <= 0.0
+            or not math.isclose(norm, node.normal_norm_squared, rel_tol=1e-6, abs_tol=1e-6)
+        ):
+            raise ValueError("geometric router split authority differs")
+
+    visited_nodes: set[int] = set()
+    visited_pages: list[int] = []
+    active: set[int] = set()
+
+    def visit(child: GeometricChild) -> None:
+        if type(child.is_leaf) is not bool or type(child.ordinal) is not int or child.ordinal < 0:
+            raise ValueError("geometric router child authority differs")
+        if child.is_leaf:
+            if child.ordinal >= len(router.pages):
+                raise ValueError("geometric router leaf differs")
+            visited_pages.append(child.ordinal)
+            return
+        if child.ordinal >= len(router.nodes) or child.ordinal in active:
+            raise ValueError("geometric router topology differs")
+        if child.ordinal in visited_nodes:
+            raise ValueError("geometric router node has multiple parents")
+        active.add(child.ordinal)
+        visited_nodes.add(child.ordinal)
+        node = router.nodes[child.ordinal]
+        visit(node.left)
+        visit(node.right)
+        active.remove(child.ordinal)
+
+    visit(router.root)
+    if visited_nodes != set(range(len(router.nodes))) or sorted(visited_pages) != list(
+        range(len(router.pages))
+    ):
+        raise ValueError("geometric router tree coverage differs")
+    membership_sha256 = concrete[0].construction_sha256
+    expected_digest = _router_digest(
+        authority,
+        membership_sha256,
+        router.root,
+        router.nodes,
+        router.pages,
+        router.projected_dimensions,
+    )
+    if router.construction_sha256 != expected_digest:
+        raise ValueError("geometric router construction identity differs")
+
+
+def construct_geometric_router(
+    authority: LayoutAuthority,
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+) -> tuple[list[MembershipRow], GeometricRouterArtifacts]:
+    if authority.method not in {LayoutMethod.TWO_MEANS_256, LayoutMethod.TWO_MEANS_480K}:
+        raise ValueError("geometric router layout method differs")
+    if (
+        len(stable_ids) != authority.rows
+        or len(set(stable_ids)) != authority.rows
+        or any(type(stable_id) is not bytes or not stable_id for stable_id in stable_ids)
+        or type(vectors) is not np.ndarray
+        or vectors.dtype != np.float32
+        or vectors.shape != (authority.rows, authority.dimensions)
+        or not np.isfinite(vectors).all()
+    ):
+        raise ValueError("geometric router source differs")
+    geometry = vectors
+    if authority.metric == "cosine":
+        norms = np.linalg.norm(vectors.astype(np.float64), axis=1)
+        if np.any(norms == 0.0) or not np.isfinite(norms).all():
+            raise ValueError("geometric router cosine norms differ")
+        geometry = np.asarray(vectors / norms[:, None], dtype=np.float32)
+    projected = _srht_projection(geometry, authority.seed)
+    page_capacity = _page_row_capacity(authority, stable_ids, vectors)
+    nodes: list[GeometricTreeNode | None] = []
+    page_ordinals: list[np.ndarray] = []
+    page_representatives: list[GeometricPageRepresentative] = []
+
+    def build(row_ordinals: np.ndarray) -> GeometricChild:
+        if (
+            len(row_ordinals) <= page_capacity
+            and encoded_sq8_page_bytes(row_ordinals, stable_ids, vectors)
+            <= authority.maximum_page_bytes
+        ):
+            ordered = np.asarray(
+                sorted(row_ordinals, key=lambda index: stable_ids[int(index)]),
+                dtype=np.int64,
+            )
+            page_ordinal = len(page_ordinals)
+            encoded_bytes = encoded_sq8_page_bytes(ordered, stable_ids, vectors)
+            centroid = np.asarray(geometry[ordered].mean(axis=0), dtype=np.float32)
+            page_ordinals.append(ordered)
+            page_representatives.append(
+                GeometricPageRepresentative(
+                    page_ordinal=page_ordinal,
+                    encoded_page_bytes=encoded_bytes,
+                    centroid=tuple(float(value) for value in centroid),
+                )
+            )
+            return GeometricChild(is_leaf=True, ordinal=page_ordinal)
+        page_count = math.ceil(len(row_ordinals) / page_capacity)
+        left_page_count = page_count // 2
+        cut = len(row_ordinals) * left_page_count // page_count
+        split = _two_means_split_authority(row_ordinals, projected, stable_ids, cut)
+        node_ordinal = len(nodes)
+        nodes.append(None)
+        left = build(np.asarray(split.left_source_ordinals, dtype=np.int64))
+        right = build(np.asarray(split.right_source_ordinals, dtype=np.int64))
+        nodes[node_ordinal] = GeometricTreeNode(
+            ordinal=node_ordinal,
+            left=left,
+            right=right,
+            normal=split.normal,
+            adjusted_offset=split.adjusted_offset,
+            normal_norm_squared=split.normal_norm_squared,
+        )
+        return GeometricChild(is_leaf=False, ordinal=node_ordinal)
+
+    root = build(np.arange(authority.rows, dtype=np.int64))
+    source_sha256 = bytes.fromhex(authority.source.sha256)
+    rows: list[MembershipRow] = []
+    for page_ordinal, source_ordinals in enumerate(page_ordinals):
+        encoded_bytes = page_representatives[page_ordinal].encoded_page_bytes
+        for in_page_ordinal, source_ordinal in enumerate(source_ordinals):
+            rows.append(
+                MembershipRow(
+                    stable_id=stable_ids[int(source_ordinal)],
+                    source_ordinal=int(source_ordinal),
+                    page_ordinal=page_ordinal,
+                    in_page_ordinal=in_page_ordinal,
+                    page_rows=len(source_ordinals),
+                    encoded_page_bytes=encoded_bytes,
+                    method=authority.method,
+                    source_sha256=source_sha256,
+                    seed=authority.seed,
+                    construction_sha256=bytes(32),
+                )
+            )
+    membership_sha256 = _construction_digest(authority, rows)
+    rows = [dataclasses.replace(row, construction_sha256=membership_sha256) for row in rows]
+    concrete_nodes = tuple(node for node in nodes if node is not None)
+    digest = _router_digest(
+        authority,
+        membership_sha256,
+        root,
+        concrete_nodes,
+        page_representatives,
+        projected.shape[1],
+    )
+    router = GeometricRouterArtifacts(
+        schema="borsuk-native-geometric-router-v1",
+        source_sha256=source_sha256,
+        seed=authority.seed,
+        dimensions=authority.dimensions,
+        metric=authority.metric,
+        projected_dimensions=projected.shape[1],
+        root=root,
+        nodes=concrete_nodes,
+        pages=tuple(page_representatives),
+        construction_sha256=digest,
+    )
+    validate_geometric_router(authority, rows, router)
+    return rows, router
+
+
+def route_geometric_query(
+    router: GeometricRouterArtifacts,
+    query: np.ndarray,
+    *,
+    leaf_frontier: int,
+    limits: EvaluationLimits,
+) -> GeometricRoutePlan:
+    if (
+        type(query) is not np.ndarray
+        or query.dtype != np.float32
+        or query.shape != (router.dimensions,)
+        or not np.isfinite(query).all()
+    ):
+        raise ValueError("geometric router query differs")
+    if type(leaf_frontier) is not int or not 0 < leaf_frontier <= (1 << 32) - 1:
+        raise ValueError("geometric router leaf frontier differs")
+    geometry = query
+    if router.metric == "cosine":
+        norm = float(np.linalg.norm(query.astype(np.float64)))
+        if not math.isfinite(norm) or norm == 0.0:
+            raise ValueError("geometric router query norm differs")
+        geometry = np.asarray(query / np.float32(norm), dtype=np.float32)
+    elif router.metric != "l2":
+        raise ValueError("geometric router metric differs")
+    projected = _srht_projection(geometry.reshape(1, -1), router.seed)[0]
+    if projected.shape != (router.projected_dimensions,):
+        raise ValueError("geometric router query projection differs")
+
+    frontier: list[tuple[float, int, int]] = [
+        (0.0, int(router.root.is_leaf), router.root.ordinal)
+    ]
+    retained: list[int] = []
+    internal_nodes_visited = 0
+    retained_limit = min(leaf_frontier, len(router.pages))
+    while frontier and len(retained) < retained_limit:
+        penalty, leaf_kind, ordinal = heapq.heappop(frontier)
+        if leaf_kind:
+            if ordinal >= len(router.pages):
+                raise ValueError("geometric router leaf differs")
+            retained.append(ordinal)
+            continue
+        if ordinal >= len(router.nodes):
+            raise ValueError("geometric router node differs")
+        node = router.nodes[ordinal]
+        signed = math.fsum(
+            value * float(projected[index]) for index, value in enumerate(node.normal)
+        ) + node.adjusted_offset
+        if not math.isfinite(signed) or node.normal_norm_squared <= 0.0:
+            raise ValueError("geometric router split score differs")
+        near, far = (node.left, node.right) if signed <= 0.0 else (node.right, node.left)
+        far_penalty = max(penalty, signed * signed / node.normal_norm_squared)
+        heapq.heappush(frontier, (penalty, int(near.is_leaf), near.ordinal))
+        heapq.heappush(frontier, (far_penalty, int(far.is_leaf), far.ordinal))
+        internal_nodes_visited += 1
+    if len(retained) != retained_limit or len(set(retained)) != retained_limit:
+        raise ValueError("geometric router retained leaves differ")
+
+    ranked_pages = []
+    query64 = geometry.astype(np.float64)
+    for page_ordinal in retained:
+        page = router.pages[page_ordinal]
+        centroid = np.asarray(page.centroid, dtype=np.float64)
+        delta = query64 - centroid
+        distance = float(np.dot(delta, delta))
+        if not math.isfinite(distance):
+            raise ValueError("geometric router page score differs")
+        ranked_pages.append((distance, page_ordinal))
+    ranked_pages.sort()
+
+    selected: list[int] = []
+    encoded_bytes = 0
+    for _, page_ordinal in ranked_pages:
+        page_bytes = router.pages[page_ordinal].encoded_page_bytes
+        if encoded_bytes + page_bytes > limits.maximum_bytes:
+            continue
+        selected.append(page_ordinal)
+        encoded_bytes += page_bytes
+        if len(selected) == limits.maximum_pages:
+            break
+    if not selected:
+        raise ValueError("geometric router byte budget admits no page")
+    return GeometricRoutePlan(
+        pages=tuple(sorted(selected)),
+        retained_leaf_pages=tuple(retained),
+        encoded_bytes=encoded_bytes,
+        internal_nodes_visited=internal_nodes_visited,
+    )
 
 
 def construct_layout(
