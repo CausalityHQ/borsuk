@@ -603,6 +603,8 @@ fn validate_manifest_global_ann_authority(manifest: &Manifest) -> Result<()> {
     if manifest.segments_are_global_delta
         && manifest.global_ann_ref.is_none()
         && manifest.global_cell_card_ann_ref.is_none()
+        && manifest.native_ann_ref.is_none()
+        && manifest.native_bounded_ann_ref.is_none()
     {
         return Err(BorsukError::InvalidStorage(
             "manifest global segment delta has no pinned ANN base".to_string(),
