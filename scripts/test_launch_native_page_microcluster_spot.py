@@ -68,6 +68,15 @@ class MicroclusterSpotTests(unittest.TestCase):
             "run_capped /usr/bin/time -v -o evaluate-resources.txt timeout 7200 setpriv",
             script,
         )
+        terminal_body = script[
+            script.index("terminal() {") : script.index("trap terminal EXIT")
+        ]
+        terminal_python = terminal_body.split("python3 - <<'PY'\n", 1)[1].split(
+            "\nPY", 1
+        )[0]
+        compile(terminal_python, "<Spot terminal>", "exec")
+        self.assertIn("set +e", terminal_body)
+        self.assertIn('chmod -R a+rX "$root/repo"', script)
         self.assertLess(len(script.encode()), 16_384)
 
     def test_launch_specs_are_one_time_spot_with_new_client_token(self) -> None:

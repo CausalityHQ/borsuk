@@ -91,7 +91,7 @@ run_capped() {
   return "$rc"
 }
 terminal() {
-  rc=$?; trap - EXIT; ended=$(date +%s)
+  rc=$?; trap - EXIT; set +e; ended=$(date +%s)
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null || true)
   instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
   STATUS="$status" PHASE="$phase" EXIT_CODE="$rc" STARTED="$started" ENDED="$ended" SOURCE_COMMIT=@COMMIT@ INSTANCE_ID="$instance_id" OUTPUT_PREFIX="$output" ATTEMPT=@ATTEMPT@ python3 - <<'PY'
@@ -102,7 +102,7 @@ def ident(path,role):
 files=(("representatives","representatives.parquet"),("sealed","sealed.json"),("evidence","evidence.parquet"),("result","result.json"),("validation","validation.json"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
 value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":int(os.environ["ATTEMPT"]),"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-page-microcluster-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"status":os.environ["STATUS"]}
-pathlib.Path("terminal.json").write_text(json.dumps(value,sort_keys=True,separators=(",",":"))+"\n")
+pathlib.Path("terminal.json").write_text(json.dumps(value,sort_keys=True,separators=(",",":"))+"\\n")
 PY
   aws s3 cp terminal.json "$output/terminal.json" --only-show-errors || true
   rm -f source.parquet membership.parquet queries.parquet truth.parquet
@@ -120,6 +120,7 @@ printf '%s  source.tar.gz\n' @ARCHIVE_SHA@ | sha256sum -c -
 mkdir repo && tar -xzf source.tar.gz -C repo
 [ "$(cat repo/.borsuk-source-commit)" = @COMMIT@ ]
 printf '%s  repo/scripts/requirements-format-bench.txt\n' @REQUIREMENTS_SHA@ | sha256sum -c -
+chmod -R a+rX "$root/repo"
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --disable-pip-version-check --quiet -r repo/scripts/requirements-format-bench.txt
 aws s3 cp @SOURCE_URI@ source.parquet --only-show-errors

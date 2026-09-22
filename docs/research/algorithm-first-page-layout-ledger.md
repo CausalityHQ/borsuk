@@ -3815,3 +3815,22 @@ a negative router result. The same prefix will not be reused. A regression
 now requires that newly created instance IDs missing during EC2 propagation
 remain in the same monitor loop; the next attempt uses a new source archive
 and `a0002` prefix. No 1M promotion is authorized by this failure.
+
+The second infrastructure attempt used source commit
+`5b6757411eb989acd9e7271b3de0f14e066d2c98`, source archive SHA-256
+`1a1cfbd70ce7333c41517fe0d3f980aa6544a7572ba8523dcedc9dceedd6f5b2`
+(11,069,106 bytes), and immutable `a0002` prefix under that commit. Spot
+instance `i-05b7bbce9faf90a87` in `eu-central-1c` reached healthy running
+state. Its EC2 console, used solely for infrastructure diagnosis, showed
+source and membership authentication, construction, then query and truth
+authentication. The non-root evaluator could not import the `scripts` package;
+a non-traversable extracted source path reproduced the exact error locally.
+The failure trap's embedded Python contained an escaped-newline syntax error, so no
+terminal marker was written; `set -e` then prevented its shutdown command.
+The controller terminated the instance at 21:58:25 UTC after that conclusive
+worker failure. No complete scientific result or measured decision exists for
+`a0002`; its prefix is closed. A local restrictive-permissions reproduction
+matched the import error, and generated-user-data tests now compile the
+terminal program, require source readability for the non-root evaluator, and
+require failure cleanup to run even when terminal assembly fails. The next
+attempt must use a new source archive and `a0003` prefix.
