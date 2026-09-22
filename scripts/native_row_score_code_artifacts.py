@@ -116,6 +116,12 @@ def _canonical(value: dict[str, object]) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def _physical_order_sha256(ordinals: Sequence[int]) -> str:
+    if any(type(ordinal) is not int or not 0 <= ordinal < 1 << 32 for ordinal in ordinals):
+        raise ValueError("code physical order differs")
+    return hashlib.sha256(np.asarray(ordinals, dtype="<u4").tobytes(order="C")).hexdigest()
+
+
 def write_code_artifacts(
     root: Path, artifacts: CodeArtifacts, source_sha: bytes, membership_sha: bytes
 ) -> CodeIdentities:
@@ -143,6 +149,7 @@ def write_code_artifacts(
         "rows": len(artifacts.source_ordinals),
         "dimensions": artifacts.books.shape[0] * artifacts.books.shape[2],
         "page_row_counts": list(artifacts.page_row_counts),
+        "physical_order_sha256": _physical_order_sha256(artifacts.source_ordinals),
         "books_sha256": books.sha256,
         "codes_sha256": codes.sha256,
     }
@@ -182,6 +189,8 @@ def read_code_artifacts(
         seal = json.loads(seal_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("code seal differs") from error
+    if type(seal) is not dict or seal.get("physical_order_sha256") != _physical_order_sha256(ordinals):
+        raise ValueError("code physical order differs")
     expected = {
         "schema": SCHEMA,
         "source_sha256": source_sha.hex(),
@@ -190,6 +199,7 @@ def read_code_artifacts(
         "rows": len(ids),
         "dimensions": dimensions,
         "page_row_counts": list(counts),
+        "physical_order_sha256": _physical_order_sha256(ordinals),
         "books_sha256": identities.books.sha256,
         "codes_sha256": identities.codes.sha256,
     }

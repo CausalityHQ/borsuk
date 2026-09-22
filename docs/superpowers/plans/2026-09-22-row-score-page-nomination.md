@@ -25,6 +25,7 @@
 - Duplicate, missing, or misordered stable IDs must fail code construction before sealing.
 - Equal row scores and equal page nominations must use source ordinal and page ordinal respectively.
 - Mutated codebooks, codes, tree, membership, evidence, or source identity must fail independent replay.
+- A supplied membership with the same claimed hash but a changed physical ordinal order must fail seal verification.
 - A failed worker validation must write a failed terminal and terminate compute; controller replay must never recast it as remotely complete.
 
 ---
@@ -44,11 +45,12 @@
 
 **Files:** Create `scripts/native_row_score_cell.py`, `scripts/validate_native_row_score_result.py`, and focused test modules; reuse `scripts/v102_two_wave_pq48_refinement.py` for fixed PQ48 training and encoding.
 
-**Interfaces:** Construction emits source/membership-bound codebooks and page-ordered code plane identities. Evaluation emits per-query retained pages, code blocks/GETs/bytes, exact-control and PQ48 selected pages and GT hits, data bytes, and aggregate decision. Validation reads sealed identities and independently recomputes all 1,000 routes and results.
+**Interfaces:** Construction emits source/membership-bound codebooks and page-ordered code plane identities. Evaluation emits per-query retained pages, authenticated S3 code ranges/GETs/bytes, retained and restricted-oracle GT hits, exact-control and PQ48 selected pages and GT hits, data bytes, and aggregate decision. Validation reads sealed identities and independently recomputes all 1,000 routes and results.
 
-- [ ] Write failing tests for source-only construction, canonical code-plane length/order, one changed code byte, one changed route, and one changed aggregate.
+- [ ] Write failing tests for source-only construction, canonical code-plane length/order, substituted membership, one changed code byte, one changed route, and one changed aggregate.
 - [ ] Implement source-only PQ48 training and encoding with the frozen layout seed; seal codebooks and codes before query/truth access.
-- [ ] Implement evaluator with exact-control row scores and PQ48 scores over the same retained leaves; emit both arms and the two independent wave budgets.
+- [ ] Implement evaluator with exact-control row scores and PQ48 scores over the same retained leaves; emit retained-set and restricted best-32 oracle hits, both arms, and the two independent wave budgets.
+- [ ] Issue and authenticate actual S3 Range GETs for each planned code block in the worker; record returned bytes and latency without reporting a local full-plane replay as a cold-read measurement.
 - [ ] Implement independent artifact authentication, reconstruction, and 1,000-query replay without invoking the producer's nomination function.
 - [ ] Run focused tests and Ruff; commit the evidence slice.
 
@@ -60,4 +62,4 @@
 - [ ] Implement a capped worker and controller using the repaired microcluster launcher pattern; code construction uploads before evaluate, remote validation follows evaluation, and terminal sync precedes shutdown.
 - [ ] Run focused tests, Ruff, `git diff --check`, and one full repository assurance gate when the diff is stable. Check the original full Cargo test process and reuse its final result rather than launch another overlapping copy.
 - [ ] Freeze and push source only after checking `origin/main` is an ancestor; check EC2 and the target S3 prefix for active work before launching one Spot cell.
-- [ ] Monitor terminal markers and instance health only during the incomplete cell. After terminal, terminate compute, independently read and hash artifacts, record paired metrics, and either authorize SQ8/cold-S3 100k checks or reject the architecture with a root-cause decision.
+- [ ] Monitor terminal markers and instance health only during the incomplete cell. After terminal, terminate compute, independently read and hash artifacts, record paired metrics, and either authorize SQ8/cold-S3 100k checks or reject the architecture with a root-cause decision. A quality pass still requires a separate 1M code-wave locality gate before architecture freeze.

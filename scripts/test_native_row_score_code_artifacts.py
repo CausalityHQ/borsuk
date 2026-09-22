@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import tempfile
 import unittest
@@ -74,6 +75,24 @@ class CodeArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "code identity"):
                 read_code_artifacts(
                     root, identities, ids, membership, source_sha,
+                    hashlib.sha256(b"membership").digest(), dimensions=48, seed=7,
+                )
+
+    def test_substituted_membership_order_is_rejected(self) -> None:
+        ids, vectors, membership, source_sha = self.fixture()
+        artifacts = construct_code_artifacts(ids, vectors, membership, seed=7, iterations=1)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identities = write_code_artifacts(
+                root, artifacts, source_sha, hashlib.sha256(b"membership").digest()
+            )
+            changed = list(membership)
+            a, b = changed[128], changed[129]
+            changed[128] = dataclasses.replace(a, in_page_ordinal=1)
+            changed[129] = dataclasses.replace(b, in_page_ordinal=0)
+            with self.assertRaisesRegex(ValueError, "physical order"):
+                read_code_artifacts(
+                    root, identities, ids, changed, source_sha,
                     hashlib.sha256(b"membership").digest(), dimensions=48, seed=7,
                 )
 

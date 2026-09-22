@@ -3894,6 +3894,9 @@ their codebooks are separate digest-bound artifacts. Pack 16 consecutive
 physical pages per code block. Fetch the union of blocks containing retained
 leaves in a first code wave, capped at 32 range GETs and 16 MiB; a planning
 failure is a failed cell, never an invitation to silently drop retained pages.
+The worker must issue those S3 Range GETs and authenticate each response
+against the sealed code-plane bytes; a local full-plane quality replay alone
+cannot claim the code-wave I/O or latency gate.
 Keep the final data wave capped at 32 pages and 16 MiB. At 100M, row codes
 remain on object storage; only tree, directory, and codebooks may be resident.
 
@@ -3903,15 +3906,19 @@ source ordinal. Nominate pages by descending number of those 100 rows, then
 by their lowest row score and page ordinal. Fill any remaining data-page budget
 from the lowest-score remaining pages, without exceeding bytes. The same
 nomination rule with exact source-vector distances is an **optimistic control**
-over the identical 128 leaves: if it fails, the tree/nomination objective is
-responsible; if only PQ48 fails, code distortion is responsible. Neither arm
+over the identical 128 leaves. Separately, after route selection, compute a
+truth-aware best-32-page oracle **restricted to those leaves**. The sequence
+of retained-leaf containment, restricted oracle, exact nomination, and PQ48
+nomination separates tree loss, nomination loss, and code distortion. Neither arm
 may access GT during routing. The earlier one-centroid and eight-microcluster
 routes are paired controls, not retrained competitors.
 
 On the already-complete geometric-router evidence, the 128 retained leaves
 occupy at most 11 such code blocks across all 1,000 queries at 100k (block
-counts p50 10, p95 11). This is a read-planning check on **this** layout,
-not proof for 1M or 100M. Both code and data wave GET/byte limits, all 1,000
+counts p50 10, p95 11). The entire 100k index has only 11 blocks and 4.8 MB
+of codes, so this code-budget check cannot test locality at scale. A separate
+1M code-wave locality gate is required before freezing the architecture, even
+if 100k quality passes. Both code and data wave GET/byte limits, all 1,000
 GT100 containment samples, R@10, p05, worst query, resource use, and a
 conservative two-generation 100M resident-memory worksheet must be reported
 and independently replayed from authenticated artifacts. Advancement requires
