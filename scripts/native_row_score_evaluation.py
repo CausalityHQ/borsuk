@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -48,6 +48,7 @@ def evaluate_row_score_query(
     truth_ids: Sequence[bytes],
     page_byte_sizes: Sequence[int],
     limits: EvaluationLimits,
+    read_code_range: Callable[[int, int], bytes],
     owner_by_id: Mapping[bytes, int] | None = None,
 ) -> RowScoreSample:
     """Score retained rows, nominate pages, then count frozen GT containment."""
@@ -84,7 +85,22 @@ def evaluate_row_score_query(
         for page in retained_pages
         for _ in range(artifacts.page_row_counts[page])
     )
-    codes = np.ascontiguousarray(artifacts.codes[positions])
+    codes = np.empty((len(positions), 48), dtype=np.uint8)
+    filled = np.zeros(len(positions), dtype=np.bool_)
+    sealed_plane = artifacts.codes.reshape(-1)
+    for _, _, offset, length in code_plan.blocks:
+        payload = read_code_range(offset, length)
+        expected = sealed_plane[offset : offset + length].tobytes(order="C")
+        if type(payload) is not bytes or payload != expected:
+            raise ValueError("code range identity differs")
+        first_row = offset // 48
+        last_row = (offset + length) // 48
+        in_block = (positions >= first_row) & (positions < last_row)
+        block_codes = np.frombuffer(payload, dtype=np.uint8).reshape(-1, 48)
+        codes[in_block] = block_codes[positions[in_block] - first_row]
+        filled[in_block] = True
+    if not filled.all():
+        raise ValueError("code range coverage differs")
     pq_scores = adc_scores(query, artifacts.books, codes, PQ48X8)
     selected_vectors = vectors[list(source_ordinals)].astype(np.float64)
     delta = selected_vectors - query.astype(np.float64)
