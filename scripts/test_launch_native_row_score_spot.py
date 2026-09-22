@@ -14,14 +14,31 @@ from scripts.launch_native_geometric_layout_spot import (
     SourceArchiveIdentity,
 )
 from scripts.launch_native_row_score_spot import (
+    PRIOR_PAGES,
+    PRIOR_TREE,
     _validate_terminal_bytes,
     build_launch_specs,
     build_plan,
     worker_script,
 )
+from scripts.native_row_score_cell import PRIOR_PAGES as CELL_PAGES
+from scripts.native_row_score_cell import PRIOR_TREE as CELL_TREE
 
 
 class RowScoreSpotTests(unittest.TestCase):
+    def test_controller_import_needs_no_science_dependencies(self) -> None:
+        result = subprocess.run(
+            ["/usr/bin/python3", "-c", "import scripts.launch_native_row_score_spot"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_worker_and_cell_bind_the_same_frozen_router_artifacts(self) -> None:
+        for worker, cell in ((PRIOR_TREE, CELL_TREE), (PRIOR_PAGES, CELL_PAGES)):
+            self.assertEqual(worker.uri, cell.uri)
+            self.assertEqual(worker.sha256, cell.sha256)
+            self.assertEqual(worker.encoded_bytes, cell.encoded_bytes)
+
     @staticmethod
     def plan():
         return build_plan(

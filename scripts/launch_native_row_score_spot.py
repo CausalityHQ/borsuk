@@ -29,7 +29,6 @@ from scripts.launch_native_geometric_layout_spot import (
 from scripts.launch_native_geometric_layout_spot import (
     build_plan as geometric_build_plan,
 )
-from scripts.native_row_score_cell import PRIOR_PAGES, PRIOR_TREE
 
 PRIOR_MEMBERSHIP = FrozenInput(
     role="geometric-membership",
@@ -41,6 +40,28 @@ PRIOR_MEMBERSHIP = FrozenInput(
     sha256="f72b80f1341bd64599e51a69e627f0b9a2280be4f5235a6c5995fef8eacd866c",
     encoded_bytes=762_442,
     rows=100_000,
+)
+PRIOR_TREE = FrozenInput(
+    role="geometric-router-tree",
+    uri=(
+        "s3://borsuk-bench-453182569524-euc1/research/native-geometric-router/"
+        "67c88488fb17a9f02715c6d262a22225cf950de5/"
+        "runs/relaion-100k-dev1000-a0001/artifacts/tree.parquet"
+    ),
+    sha256="e38f7e7385147eef0bd101aa510fb15579edbd07d7516505d70eb17b7326c974",
+    encoded_bytes=123_743,
+    rows=165,
+)
+PRIOR_PAGES = FrozenInput(
+    role="geometric-page-representatives",
+    uri=(
+        "s3://borsuk-bench-453182569524-euc1/research/native-geometric-router/"
+        "67c88488fb17a9f02715c6d262a22225cf950de5/"
+        "runs/relaion-100k-dev1000-a0001/artifacts/pages.parquet"
+    ),
+    sha256="f7c3c5b39a6a0e7c7a3fd05082599283d94c3960e26a33d90c862303506a7476",
+    encoded_bytes=476_403,
+    rows=166,
 )
 
 
