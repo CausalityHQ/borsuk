@@ -3799,3 +3799,19 @@ two-generation 100M memory accounting, and native cold-S3 latency at 100k.
 Those tests must pass before any 1M promotion. Eight full-dimensional means
 per page are a geometry diagnostic; their 100M resident cost is not asserted
 to fit the 3-GiB production cap.
+
+The first infrastructure attempt for this falsifier used source commit
+`aad4a6ded79f3f7a968bd5b9a621f5aeea5345bb` and immutable source archive
+SHA-256 `6c7dad41841cb2296cd23abb8d7576f5af11ee3221a387fbe7bc3fb9f299822c`
+(11,071,181 bytes). Prefix
+`s3://borsuk-bench-453182569524-euc1/research/native-page-microcluster/aad4a6ded79f3f7a968bd5b9a621f5aeea5345bb/runs/relaion-100k-dev1000-a0001/`
+contains only its reservation. Spot instance `i-0301cbe600ae1c9b1` in
+`eu-central-1c` was terminated one second after launch, before worker startup
+or any scientific output. The controller treated EC2's temporary
+`InvalidInstanceID.NotFound` on its first post-launch `DescribeInstances` as
+fatal and entered its unconditional termination path; EC2 records the state
+transition as user initiated. This is an infrastructure-invalid attempt, not
+a negative router result. The same prefix will not be reused. A regression
+now requires that newly created instance IDs missing during EC2 propagation
+remain in the same monitor loop; the next attempt uses a new source archive
+and `a0002` prefix. No 1M promotion is authorized by this failure.

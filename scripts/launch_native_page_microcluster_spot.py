@@ -288,6 +288,18 @@ def _validate_terminal_bytes(
     return terminal
 
 
+def _instance_state(ec2_client: object, instance_id: str) -> str | None:
+    """Return None while a newly launched instance is propagating in EC2."""
+    try:
+        response = ec2_client.describe_instances(InstanceIds=[instance_id])
+    except Exception as error:
+        code = str(getattr(error, "response", {}).get("Error", {}).get("Code", ""))
+        if code == "InvalidInstanceID.NotFound":
+            return None
+        raise
+    return response["Reservations"][0]["Instances"][0]["State"]["Name"]
+
+
 def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
     import boto3
 
@@ -344,9 +356,7 @@ def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
                 )
                 if code not in {"404", "NoSuchKey", "NotFound"}:
                     raise
-                state = ec2.describe_instances(InstanceIds=[instance_id])[
-                    "Reservations"
-                ][0]["Instances"][0]["State"]["Name"]
+                state = _instance_state(ec2, instance_id)
                 if state in {"terminated", "shutting-down", "stopped"}:
                     raise RuntimeError(
                         f"microcluster instance {instance_id} ended without terminal"

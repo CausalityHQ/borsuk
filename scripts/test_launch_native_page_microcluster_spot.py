@@ -16,6 +16,7 @@ from scripts.launch_native_geometric_layout_spot import (
 )
 from scripts.launch_native_page_microcluster_spot import (
     PRIOR_MEMBERSHIP,
+    _instance_state,
     _validate_terminal_bytes,
     build_launch_specs,
     build_plan,
@@ -153,6 +154,18 @@ class MicroclusterSpotTests(unittest.TestCase):
             json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n"
         ).encode()
         self.assertEqual(_validate_terminal_bytes(body, plan, instance_id), terminal)
+
+    def test_new_ec2_instance_not_yet_visible_is_transient(self) -> None:
+        class NotVisible(Exception):
+            response = {"Error": {"Code": "InvalidInstanceID.NotFound"}}
+
+        class FreshEC2:
+            def describe_instances(self, *, InstanceIds):
+                if InstanceIds != ["i-0123456789abcdef0"]:
+                    raise AssertionError("wrong instance handle")
+                raise NotVisible()
+
+        self.assertIsNone(_instance_state(FreshEC2(), "i-0123456789abcdef0"))
 
 
 if __name__ == "__main__":
