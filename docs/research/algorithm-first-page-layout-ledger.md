@@ -3739,3 +3739,25 @@ representation must first restore GT page containment under the same 32-page
 and 16-MiB budget at 100k, with paired per-query evidence. Only then recheck
 SQ8 ranking and a complete two-generation 100M resident worksheet; the
 current screen does not qualify the production store or competitive parity.
+
+A bounded read-only decomposition then authenticated only the sealed
+membership (`f72b80f1…`), pages (`f7c3c5b3…`), evidence (`9a33d86a…`), frozen
+truth (`ab8bfae3…`), and queries (`4834cf63…`) listed above. It recomputed
+page ownership from 100,000 stable IDs and compared the same 1,000 queries:
+
+| fixed page set under unchanged layout | mean GT100 containment | p05 | worst |
+|---|---:|---:|---:|
+| exact best 32 pages, truth-aware oracle | 99.844% | 100% | 88% |
+| all 128 tree-retained leaves, before 32-page choice | 98.644% | 92% | 65% |
+| selected 32 leaves, one full-dimensional centroid | 94.417% | 77% | 50% |
+| all 166 pages scored by that same centroid, top 32 | 94.995% | 78% | 50% |
+
+The tree omits on average 1.2 GT100 neighbors per query relative to the
+oracle; centroid-based reduction from retained leaves to 32 pages omits a
+further 4.227. There were 319 queries for which the 128-leaf shortlist could
+not reach the exact oracle and 604 for which the subsequent centroid selection
+lost hits already present in that shortlist. Scoring all 166 centroids still
+fails the 97.5% mean gate, proving that merely widening this tree cannot fix
+the one-centroid page score. No source-vector body or new scientific run was
+used; the five explicit diagnostic scratch files and their directory were
+removed after the read-only calculation.
