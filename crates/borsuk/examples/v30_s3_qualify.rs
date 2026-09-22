@@ -753,6 +753,7 @@ fn diagnostic_bytes(
                 V32RoutingStopReason::AllLeaves => "all-leaves",
                 V32RoutingStopReason::LeafLimit => "leaf-limit",
                 V32RoutingStopReason::ScanBudget => "scan-budget",
+                V32RoutingStopReason::ExplicitLeafSet => "explicit-leaf-set",
             },
             "total_routing_leaves": diagnostic.total_routing_leaves,
         },
