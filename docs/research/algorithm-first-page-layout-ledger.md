@@ -3761,3 +3761,41 @@ fails the 97.5% mean gate, proving that merely widening this tree cannot fix
 the one-centroid page score. No source-vector body or new scientific run was
 used; the five explicit diagnostic scratch files and their directory were
 removed after the read-only calculation.
+
+### Next 100k decision: page-local microcluster representatives
+
+The diagnostic separates two losses. Removing the tree can recover at most
+1.2 mean GT100 hits per query relative to the page oracle. Even with all 166
+pages eligible, the one-centroid score is 2.505 percentage points below the
+97.5% mean gate. The next experiment therefore
+changes the resident page-selection representation, not the tree frontier or
+the physical page layout. This is a falsifier for page routing, not a production
+format selection or authorization to scale.
+
+For each of the 166 sealed physical pages, partition its own source rows into
+eight deterministic, balanced two-means microclusters without access to
+queries or truth. Store one full-dimensional mean for each microcluster in a
+new, digest-bound representative artifact. At query time score **all** pages
+by the minimum squared L2 distance to their eight means, sort by score then
+page ordinal, and admit pages in that order under the unchanged 32-page and
+16-MiB limits. This removes both the split-plane shortlist and the single
+centroid reduction. The page bodies, stable-ID membership, source, frozen
+1,000 development queries, and GT100 remain identical to the rejected cell.
+No number of representatives, aggregation rule, or byte budget is swept after
+seeing the result.
+
+The one scientific decision is whether this query-independent, page-local
+representation restores containment on the unchanged layout: mean GT100
+containment must reach at least 97.5%, p05 at least 90%, and R@10 at least
+96%, with paired per-query evidence against the rejected 94.417% route and the
+99.844% oracle. The producer must seal membership and representatives before
+receiving query/truth access, record every page choice and resource count, and
+remain `claim_eligible=false` until an independent validator authenticates
+all inputs and recomputes all 1,000 routes. A miss rejects this representation
+and requires a different routing or layout architecture; it does not authorize
+another microcluster count or scoring tweak. A pass permits only a follow-up
+test of quantized resident representatives, page-local SQ8 ranking, full
+two-generation 100M memory accounting, and native cold-S3 latency at 100k.
+Those tests must pass before any 1M promotion. Eight full-dimensional means
+per page are a geometry diagnostic; their 100M resident cost is not asserted
+to fit the 3-GiB production cap.
