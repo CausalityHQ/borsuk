@@ -220,7 +220,7 @@ fn population_selection() -> V36PrefixPopulationSelection {
 fn v36_prefix_checkpoint_selected_phase_binds_complete_window_and_selection() {
     let selection = population_selection();
     let phase = V36PrefixCheckpointPhase::Selected {
-        selection: selection.clone(),
+        selection: Box::new(selection.clone()),
     };
     let value = serde_json::to_value(&phase).unwrap();
     assert_eq!(value["kind"], "selected");
@@ -231,7 +231,7 @@ fn v36_prefix_checkpoint_selected_phase_binds_complete_window_and_selection() {
 fn v36_prefix_checkpoint_selected_phase_requires_complete_reconciled_selection() {
     let mut manifest = population_manifest();
     manifest.phase = V36PrefixCheckpointPhase::Selected {
-        selection: population_selection(),
+        selection: Box::new(population_selection()),
     };
     validate_v36_prefix_checkpoint_manifest_with_context(&checkpoint_context(80), &manifest)
         .unwrap();
@@ -248,7 +248,7 @@ fn v36_prefix_checkpoint_selected_phase_requires_complete_reconciled_selection()
     let mut incomplete = population_manifest();
     incomplete.population.selected_object_count = 2;
     incomplete.phase = V36PrefixCheckpointPhase::Selected {
-        selection: population_selection(),
+        selection: Box::new(population_selection()),
     };
     let mut context = checkpoint_context(80);
     context.selected_object_count = 2;
@@ -269,7 +269,7 @@ fn v36_prefix_checkpoint_selection_binds_cohort_exclusion_evidence() {
     invalid_a.excluded_rows = 1;
     invalid_a.excluded_population_identity = Some(exclusion.clone());
     cohort_a.phase = V36PrefixCheckpointPhase::Selected {
-        selection: invalid_a,
+        selection: Box::new(invalid_a),
     };
     assert!(
         validate_v36_prefix_checkpoint_manifest_with_context(&checkpoint_context(80), &cohort_a)
@@ -284,7 +284,9 @@ fn v36_prefix_checkpoint_selection_binds_cohort_exclusion_evidence() {
     let mut valid_b = population_selection();
     valid_b.excluded_rows = 20;
     valid_b.excluded_population_identity = Some(exclusion.clone());
-    cohort_b.phase = V36PrefixCheckpointPhase::Selected { selection: valid_b };
+    cohort_b.phase = V36PrefixCheckpointPhase::Selected {
+        selection: Box::new(valid_b),
+    };
     let mut context = checkpoint_context(80);
     context.cohort_ordinal = 1;
     context.excluded_population_identity = Some(exclusion);
@@ -353,9 +355,9 @@ fn v36_prefix_checkpoint_gt_binds_complete_all_query_source_prefix() {
         'a',
     ));
     manifest.phase = V36PrefixCheckpointPhase::GroundTruth {
-        selection: population_selection(),
-        materialized: materialized_artifacts(),
-        heaps: artifact("gt-heaps", "gt-heaps-00001024.arrow", 'b'),
+        selection: Box::new(population_selection()),
+        materialized: Box::new(materialized_artifacts()),
+        heaps: Box::new(artifact("gt-heaps", "gt-heaps-00001024.arrow", 'b')),
         next_source_ordinal: 48,
     };
     let context = checkpoint_context(80);
@@ -384,7 +386,7 @@ fn v36_prefix_checkpoint_generic_dependency_closure_is_exact_and_ordered() {
     let selection = population_selection();
     let mut selected = population.clone();
     selected.phase = V36PrefixCheckpointPhase::Selected {
-        selection: selection.clone(),
+        selection: Box::new(selection.clone()),
     };
     assert_eq!(
         plan_v36_prefix_checkpoint_dependency_closure(&selected).unwrap(),
@@ -402,8 +404,8 @@ fn v36_prefix_checkpoint_generic_dependency_closure_is_exact_and_ordered() {
     ];
     let mut materialized_manifest = population.clone();
     materialized_manifest.phase = V36PrefixCheckpointPhase::Materialized {
-        artifacts: materialized.clone(),
-        selection: selection.clone(),
+        artifacts: Box::new(materialized.clone()),
+        selection: Box::new(selection.clone()),
     };
     let mut expected = vec![population_run.clone(), selection.selected_ids.clone()];
     expected.extend(materialized_dependencies.clone());
@@ -415,10 +417,10 @@ fn v36_prefix_checkpoint_generic_dependency_closure_is_exact_and_ordered() {
     let heaps = artifact("gt-heaps", "gt-heaps-00000048.arrow", 'b');
     let mut ground_truth = population;
     ground_truth.phase = V36PrefixCheckpointPhase::GroundTruth {
-        heaps: heaps.clone(),
-        materialized,
+        heaps: Box::new(heaps.clone()),
+        materialized: Box::new(materialized),
         next_source_ordinal: 48,
-        selection: selection.clone(),
+        selection: Box::new(selection.clone()),
     };
     let mut expected = vec![population_run, selection.selected_ids];
     expected.extend(materialized_dependencies);
@@ -477,15 +479,15 @@ fn v36_prefix_checkpoint_transition_is_monotonic_across_attempts() {
     next.producer_attempt_id = "v36-prefix-screen-fixture-attempt-0001".into();
     next.producer_attempt_ordinal = 1;
     next.phase = V36PrefixCheckpointPhase::Selected {
-        selection: population_selection(),
+        selection: Box::new(population_selection()),
     };
     validate_v36_prefix_checkpoint_transition(&context, &previous, &next).unwrap();
 
     let mut skipped_materialization = next.clone();
     skipped_materialization.phase = V36PrefixCheckpointPhase::GroundTruth {
-        selection: population_selection(),
-        heaps: artifact("gt-heaps", "gt-heaps-00000032.arrow", 'd'),
-        materialized: materialized_artifacts(),
+        selection: Box::new(population_selection()),
+        heaps: Box::new(artifact("gt-heaps", "gt-heaps-00000032.arrow", 'd')),
+        materialized: Box::new(materialized_artifacts()),
         next_source_ordinal: 32,
     };
     assert!(
@@ -509,14 +511,14 @@ fn v36_prefix_checkpoint_transition_requires_selected_phase_and_selection_lineag
     selected.generation = 1;
     selected.previous_checkpoint = Some(checkpoint_identity(&population));
     selected.phase = V36PrefixCheckpointPhase::Selected {
-        selection: population_selection(),
+        selection: Box::new(population_selection()),
     };
     validate_v36_prefix_checkpoint_transition(&context, &population, &selected).unwrap();
 
     let mut skipped = selected.clone();
     skipped.phase = V36PrefixCheckpointPhase::Materialized {
-        selection: population_selection(),
-        artifacts: materialized_artifacts(),
+        selection: Box::new(population_selection()),
+        artifacts: Box::new(materialized_artifacts()),
     };
     assert!(validate_v36_prefix_checkpoint_transition(&context, &population, &skipped).is_err());
 
@@ -524,8 +526,8 @@ fn v36_prefix_checkpoint_transition_requires_selected_phase_and_selection_lineag
     materialized.generation = 2;
     materialized.previous_checkpoint = Some(checkpoint_identity(&selected));
     materialized.phase = V36PrefixCheckpointPhase::Materialized {
-        selection: population_selection(),
-        artifacts: materialized_artifacts(),
+        selection: Box::new(population_selection()),
+        artifacts: Box::new(materialized_artifacts()),
     };
     validate_v36_prefix_checkpoint_transition(&context, &selected, &materialized).unwrap();
 
@@ -543,9 +545,9 @@ fn v36_prefix_checkpoint_transition_requires_selected_phase_and_selection_lineag
     ground_truth.generation = 3;
     ground_truth.previous_checkpoint = Some(checkpoint_identity(&materialized));
     ground_truth.phase = V36PrefixCheckpointPhase::GroundTruth {
-        selection: population_selection(),
-        materialized: materialized_artifacts(),
-        heaps: artifact("gt-heaps", "gt-heaps-00000016.arrow", 'c'),
+        selection: Box::new(population_selection()),
+        materialized: Box::new(materialized_artifacts()),
+        heaps: Box::new(artifact("gt-heaps", "gt-heaps-00000016.arrow", 'c')),
         next_source_ordinal: 16,
     };
     validate_v36_prefix_checkpoint_transition(&context, &materialized, &ground_truth).unwrap();
@@ -579,8 +581,8 @@ fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
     next.previous_checkpoint = Some(previous_identity);
     let mut skipped_selection = next.clone();
     skipped_selection.phase = V36PrefixCheckpointPhase::Materialized {
-        selection: population_selection(),
-        artifacts: materialized_artifacts(),
+        selection: Box::new(population_selection()),
+        artifacts: Box::new(materialized_artifacts()),
     };
     assert!(
         plan_v36_prefix_checkpoint_publication(
@@ -592,7 +594,7 @@ fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
         .is_err()
     );
     next.phase = V36PrefixCheckpointPhase::Selected {
-        selection: population_selection(),
+        selection: Box::new(population_selection()),
     };
     let plan = plan_v36_prefix_checkpoint_publication(
         &context,
