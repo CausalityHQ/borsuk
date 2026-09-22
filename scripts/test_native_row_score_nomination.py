@@ -30,6 +30,22 @@ class RowScoreNominationTests(unittest.TestCase):
                 maximum_bytes=2_000,
             )
 
+    def test_code_plan_charges_residual_row_width(self) -> None:
+        plan = plan_code_blocks(
+            retained_pages=(0, 17),
+            page_row_counts=(2,) * 20,
+            code_row_bytes=72,
+            maximum_bytes=2_880,
+        )
+        self.assertEqual(plan.blocks, ((0, 16, 0, 2_304), (16, 20, 2_304, 576)))
+        with self.assertRaisesRegex(ValueError, "code wave budget"):
+            plan_code_blocks(
+                retained_pages=(0, 17),
+                page_row_counts=(2,) * 20,
+                code_row_bytes=72,
+                maximum_bytes=2_879,
+            )
+
     def test_top100_counts_nominate_page_with_more_near_rows(self) -> None:
         # Page 0 has the nearest individual row, while page 1 owns more of
         # the best 100. A count-first selector must choose page 1.

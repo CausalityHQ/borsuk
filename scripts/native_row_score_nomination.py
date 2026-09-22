@@ -26,6 +26,7 @@ def plan_code_blocks(
     page_row_counts: Sequence[int],
     *,
     block_pages: int = 16,
+    code_row_bytes: int = CODE_ROW_BYTES,
     maximum_gets: int = 32,
     maximum_bytes: int = 16_777_216,
 ) -> CodePlan:
@@ -36,6 +37,8 @@ def plan_code_blocks(
         or not retained_pages
         or type(block_pages) is not int
         or block_pages <= 0
+        or type(code_row_bytes) is not int
+        or code_row_bytes <= 0
         or type(maximum_gets) is not int
         or maximum_gets <= 0
         or type(maximum_bytes) is not int
@@ -47,7 +50,7 @@ def plan_code_blocks(
         raise ValueError("code wave authority differs")
     offsets = [0]
     for count in page_row_counts:
-        offsets.append(offsets[-1] + count * CODE_ROW_BYTES)
+        offsets.append(offsets[-1] + count * code_row_bytes)
     blocks = tuple(
         (
             first,
