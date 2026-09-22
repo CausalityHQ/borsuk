@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Callable, Mapping, Sequence
 
 import numpy as np
@@ -35,6 +36,62 @@ class RowScoreSample:
     exact_data_bytes: int
     exact_hits_at_10: int
     exact_hits_at_100: int
+
+
+def aggregate_samples(samples: Sequence[RowScoreSample]) -> dict[str, int | str]:
+    """Derive the fixed quality and two-wave resource decision from samples."""
+    if (
+        not samples
+        or [sample.query_ordinal for sample in samples] != list(range(len(samples)))
+        or any(
+            any(
+                not 0 <= getattr(sample, field) <= maximum
+                for field, maximum in (
+                    ("retained_hits_at_10", 10),
+                    ("retained_hits_at_100", 100),
+                    ("restricted_oracle_hits_at_10", 10),
+                    ("restricted_oracle_hits_at_100", 100),
+                    ("pq_hits_at_10", 10),
+                    ("pq_hits_at_100", 100),
+                    ("exact_hits_at_10", 10),
+                    ("exact_hits_at_100", 100),
+                )
+            )
+            or not 0 < sample.code_gets <= 32
+            or not 0 < sample.code_bytes <= 16_777_216
+            or not 0 < len(sample.pq_pages) <= 32
+            or not 0 < sample.pq_data_bytes <= 16_777_216
+            or not 0 < len(sample.exact_pages) <= 32
+            or not 0 < sample.exact_data_bytes <= 16_777_216
+            for sample in samples
+        )
+    ):
+        raise ValueError("row-score aggregate evidence differs")
+    result: dict[str, int | str] = {"query_count": len(samples)}
+    for arm, field in (
+        ("retained", "retained_hits_at_100"),
+        ("restricted_oracle", "restricted_oracle_hits_at_100"),
+        ("pq", "pq_hits_at_100"),
+        ("exact", "exact_hits_at_100"),
+    ):
+        hits = sorted(getattr(sample, field) for sample in samples)
+        result[f"{arm}_mean_recall_at_100_ppm"] = sum(hits) * 10_000 // len(hits)
+        result[f"{arm}_p05_recall_at_100_ppm"] = hits[math.ceil(0.05 * len(hits)) - 1] * 10_000
+        result[f"{arm}_worst_recall_at_100_ppm"] = hits[0] * 10_000
+    result["pq_recall_at_10_ppm"] = sum(sample.pq_hits_at_10 for sample in samples) * 100_000 // len(samples)
+    result["exact_recall_at_10_ppm"] = sum(sample.exact_hits_at_10 for sample in samples) * 100_000 // len(samples)
+    result["max_code_gets"] = max(sample.code_gets for sample in samples)
+    result["max_code_bytes"] = max(sample.code_bytes for sample in samples)
+    result["max_data_pages"] = max(len(sample.pq_pages) for sample in samples)
+    result["max_data_bytes"] = max(sample.pq_data_bytes for sample in samples)
+    result["decision"] = (
+        "quality-advance-memory-pending"
+        if result["pq_recall_at_10_ppm"] >= 960_000
+        and result["pq_mean_recall_at_100_ppm"] >= 975_000
+        and result["pq_p05_recall_at_100_ppm"] >= 900_000
+        else "killed"
+    )
+    return result
 
 
 def evaluate_row_score_query(

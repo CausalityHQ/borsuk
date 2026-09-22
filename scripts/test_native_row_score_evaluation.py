@@ -13,10 +13,33 @@ from scripts.native_geometric_layout_screen import (
     MembershipRow,
 )
 from scripts.native_row_score_code_artifacts import construct_code_artifacts
-from scripts.native_row_score_evaluation import evaluate_row_score_query
+from scripts.native_row_score_evaluation import (
+    RowScoreSample,
+    aggregate_samples,
+    evaluate_row_score_query,
+)
 
 
 class RowScoreEvaluationTests(unittest.TestCase):
+    def test_aggregate_fails_tail_gate_even_when_mean_passes(self) -> None:
+        def sample(ordinal: int, hits: int) -> RowScoreSample:
+            return RowScoreSample(
+                query_ordinal=ordinal, retained_pages=(0,),
+                code_blocks=((0, 1, 0, 48),), code_gets=1, code_bytes=48,
+                retained_hits_at_10=10, retained_hits_at_100=100,
+                restricted_oracle_pages=(0,), restricted_oracle_hits_at_10=10,
+                restricted_oracle_hits_at_100=100,
+                pq_pages=(0,), pq_data_bytes=100,
+                pq_hits_at_10=10, pq_hits_at_100=hits,
+                exact_pages=(0,), exact_data_bytes=100,
+                exact_hits_at_10=10, exact_hits_at_100=100,
+            )
+
+        result = aggregate_samples(tuple(sample(i, 80 if i == 0 else 100) for i in range(20)))
+        self.assertEqual(result["pq_mean_recall_at_100_ppm"], 990_000)
+        self.assertEqual(result["pq_p05_recall_at_100_ppm"], 800_000)
+        self.assertEqual(result["decision"], "killed")
+
     def test_same_retained_pages_feed_exact_and_pq48_arms(self) -> None:
         ids = tuple(index.to_bytes(4, "little") for index in range(256))
         vectors = np.repeat(np.arange(256, dtype=np.float32)[:, None], 48, axis=1)
