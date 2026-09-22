@@ -3882,3 +3882,42 @@ with a measured two-generation resident-memory bound; a compact per-row
 ranking signal is one candidate, not an adopted format. No 1M promotion is
 authorized until a materially different query-blind route meets the frozen
 quality and read gates, then passes the SQ8 and native cold-S3 serving checks.
+
+### Next 100k decision: row-score page nomination behind a code read
+
+The next falsifier changes the page-selection information, not the physical
+layout or quality thresholds. Preserve the sealed 480-KiB two-means membership
+and the geometric tree's fixed 128-leaf shortlist. Build a query-blind,
+page-ordered PQ48x8 code plane from the same authenticated 100k source, using
+source-only training and the frozen layout seed. The 48-byte row codes and
+their codebooks are separate digest-bound artifacts. Pack 16 consecutive
+physical pages per code block. Fetch the union of blocks containing retained
+leaves in a first code wave, capped at 32 range GETs and 16 MiB; a planning
+failure is a failed cell, never an invitation to silently drop retained pages.
+Keep the final data wave capped at 32 pages and 16 MiB. At 100M, row codes
+remain on object storage; only tree, directory, and codebooks may be resident.
+
+For each query, score every row in the retained pages with the fixed PQ48
+lookup. Take the 100 lowest approximate row scores, breaking ties by stable
+source ordinal. Nominate pages by descending number of those 100 rows, then
+by their lowest row score and page ordinal. Fill any remaining data-page budget
+from the lowest-score remaining pages, without exceeding bytes. The same
+nomination rule with exact source-vector distances is an **optimistic control**
+over the identical 128 leaves: if it fails, the tree/nomination objective is
+responsible; if only PQ48 fails, code distortion is responsible. Neither arm
+may access GT during routing. The earlier one-centroid and eight-microcluster
+routes are paired controls, not retrained competitors.
+
+On the already-complete geometric-router evidence, the 128 retained leaves
+occupy at most 11 such code blocks across all 1,000 queries at 100k (block
+counts p50 10, p95 11). This is a read-planning check on **this** layout,
+not proof for 1M or 100M. Both code and data wave GET/byte limits, all 1,000
+GT100 containment samples, R@10, p05, worst query, resource use, and a
+conservative two-generation 100M resident-memory worksheet must be reported
+and independently replayed from authenticated artifacts. Advancement requires
+mean GT100 containment at least 97.5%, p05 at least 90%, R@10 at least 96%,
+both wave budgets, and projected resident memory below 3 GiB. The result
+remains `claim_eligible=false` until validation. A pass authorizes page-local
+SQ8 and cold-S3 timing at 100k; only those passing results can freeze an
+architecture for 1M. A miss rejects this row-score nomination design and
+requires a diagnosed, material redesign, not a PQ-width or block-size sweep.
