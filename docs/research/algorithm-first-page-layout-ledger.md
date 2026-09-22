@@ -3834,3 +3834,51 @@ matched the import error, and generated-user-data tests now compile the
 terminal program, require source readability for the non-root evaluator, and
 require failure cleanup to run even when terminal assembly fails. The next
 attempt must use a new source archive and `a0003` prefix.
+
+The third attempt used source commit
+`6d9109ccff27f6134c8ff97dad754d88514161e9`, source archive SHA-256
+`0a09e7c1501dc4a83ce726b5d9802b8b3abb109b44e5158e9a59cb667e3af4a6`
+(11,069,330 bytes), and immutable prefix
+`s3://borsuk-bench-453182569524-euc1/research/native-page-microcluster/6d9109ccff27f6134c8ff97dad754d88514161e9/runs/relaion-100k-dev1000-a0003/`.
+Spot instance `i-098d90697db52e61a` in `eu-central-1c` is terminated.
+Construction and evaluation uploaded their sealed artifacts, but the remote
+terminal is **failed** in `validate` with exit 1 after 65 seconds, SHA-256
+`2ed41e2a013562b4d4f5002385a07356e3ca38dda4cea895469801b5143c4b9c`.
+The validator launch omitted `PYTHONPATH`, so this attempt has no remotely
+complete validation and `claim_eligible=false`. The launcher now supplies
+that path and its generated-script test checks it. The failed prefix stays
+closed; its terminal and artifacts were not rewritten.
+
+An independent controller replay used **the exact archived a0003 source**,
+NumPy 2.4.2, and PyArrow 24.0.0. It authenticated the source, membership,
+queries, truth, representative artifact, sealed result, and all 1,000
+per-query routes against their published SHA-256 identities. Replay validation
+SHA-256 is `4a80ef50a833b43599e191eb96f1a05dfe7405bdbe17d04182b992b702e8bb16`;
+the canonical receipt SHA-256 is
+`fe4c382eb7b95f0d54aaf83b513530ba74ec18c9fcd6f34cf5fdee445d708efe`.
+Both are stored separately under
+`s3://borsuk-bench-453182569524-euc1/research/native-page-microcluster/6d9109ccff27f6134c8ff97dad754d88514161e9/replays/a0003-controller-v1/`.
+Readback matched both hashes. This is authenticated **negative scientific
+evidence**, not a completed remote attempt or production claim.
+
+| Same 1,000 frozen development queries | mean GT100 containment | p05 | worst | R@10 | max pages / encoded bytes |
+|---|---:|---:|---:|---:|---:|
+| prior geometric router | 94.417% | 77% | 50% | 97.03% | 32 / 15,664,840 |
+| eight microclusters per page, all 166 pages eligible | 95.462% | 79% | 48% | 97.45% | 32 / 15,664,904 |
+| truth-aware page oracle | 99.844% | 100% | 88% | 99.92% | 32 / 16 MiB cap |
+
+The microcluster route gains 1,045 GT100 hits across the 1,000 queries over
+the strongest prior measured query-blind route: 407 queries improve, 188
+worsen, and 405 tie. It still misses the 97.5% mean gate by 2.038 percentage
+points and the 90% p05 gate by 11 points. Its gap to the same-layout oracle is
+4.382 points. Removing the tree and increasing each page to eight full-vector
+representatives did not cure page selection under the fixed read budget.
+
+**Decision:** kill this representative/scoring architecture and do not rerun
+the same scientific cell merely to repair the remote validation wrapper.
+Do not sweep microcluster counts or scoring rules. The next 100k falsifier must
+change the information available to page selection or the physical layout,
+with a measured two-generation resident-memory bound; a compact per-row
+ranking signal is one candidate, not an adopted format. No 1M promotion is
+authorized until a materially different query-blind route meets the frozen
+quality and read gates, then passes the SQ8 and native cold-S3 serving checks.

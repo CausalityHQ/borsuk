@@ -153,7 +153,7 @@ aws s3 cp evidence.parquet "$output/artifacts/evidence.parquet" --only-show-erro
 aws s3 cp result.json "$output/artifacts/result.json" --only-show-errors
 aws s3 cp evaluate-resources.txt "$output/artifacts/evaluate-resources.txt" --only-show-errors
 phase=validate
-run_capped timeout @WALL@ /usr/bin/time -v -o validate-resources.txt "$root/.venv/bin/python" -m scripts.native_page_microcluster_cell validate --root "$root" --output-prefix "$output" --source-commit @COMMIT@
+run_capped /usr/bin/time -v -o validate-resources.txt timeout @WALL@ env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_page_microcluster_cell validate --root "$root" --output-prefix "$output" --source-commit @COMMIT@
 aws s3 cp validation.json "$output/artifacts/validation.json" --only-show-errors
 aws s3 cp validate-resources.txt "$output/artifacts/validate-resources.txt" --only-show-errors
 status=complete

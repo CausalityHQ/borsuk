@@ -77,6 +77,8 @@ class MicroclusterSpotTests(unittest.TestCase):
         compile(terminal_python, "<Spot terminal>", "exec")
         self.assertIn("set +e", terminal_body)
         self.assertIn('chmod -R a+rX "$root/repo"', script)
+        validate_phase = script[script.index("phase=validate") :]
+        self.assertIn('env PYTHONPATH="$root/repo"', validate_phase)
         self.assertLess(len(script.encode()), 16_384)
 
     def test_launch_specs_are_one_time_spot_with_new_client_token(self) -> None:
