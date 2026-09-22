@@ -5,16 +5,26 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
 
-from scripts.native_geometric_layout_screen import ArtifactIdentity, MembershipRow
+from scripts.native_geometric_layout_screen import (
+    ArtifactIdentity,
+    EvaluationLimits,
+    MembershipRow,
+)
 from scripts.native_row_score_code_artifacts import (
+    CodeArtifacts,
     CodeIdentities,
     construct_code_artifacts,
     write_code_artifacts,
+)
+from scripts.native_row_score_evaluation import (
+    RowScoreSample,
+    aggregate_samples,
+    evaluate_row_score_query,
 )
 
 SEAL_SCHEMA = "borsuk-row-score-cell-seal-v1"
@@ -109,3 +119,56 @@ def read_cell_seal(
         ):
             raise ValueError("row-score cell artifact URI differs")
     return identities
+
+
+def evaluate_routes(
+    *,
+    queries: np.ndarray,
+    truth: Sequence[Sequence[bytes]],
+    retained_by_query: Sequence[Sequence[int]],
+    artifacts: CodeArtifacts,
+    stable_ids: Sequence[bytes],
+    vectors: np.ndarray,
+    page_byte_sizes: Sequence[int],
+    limits: EvaluationLimits,
+    read_code_range: Callable[[int, int], bytes],
+) -> tuple[tuple[RowScoreSample, ...], dict[str, int | str]]:
+    """Evaluate the same sealed rows and route shortlist for every query."""
+    if (
+        type(queries) is not np.ndarray
+        or queries.dtype != np.float32
+        or queries.ndim != 2
+        or queries.shape[0] == 0
+        or queries.shape[0] != len(truth)
+        or queries.shape[0] != len(retained_by_query)
+        or not np.isfinite(queries).all()
+    ):
+        raise ValueError("row-score query cohort differs")
+    owner_by_id: dict[bytes, int] = {}
+    offset = 0
+    for page, count in enumerate(artifacts.page_row_counts):
+        for source_ordinal in artifacts.source_ordinals[offset : offset + count]:
+            stable_id = stable_ids[source_ordinal]
+            if stable_id in owner_by_id:
+                raise ValueError("row-score owner authority differs")
+            owner_by_id[stable_id] = page
+        offset += count
+    if len(owner_by_id) != len(stable_ids):
+        raise ValueError("row-score owner authority differs")
+    samples = tuple(
+        evaluate_row_score_query(
+            query_ordinal=ordinal,
+            query=query,
+            retained_pages=retained_by_query[ordinal],
+            artifacts=artifacts,
+            stable_ids=stable_ids,
+            vectors=vectors,
+            truth_ids=truth[ordinal],
+            page_byte_sizes=page_byte_sizes,
+            limits=limits,
+            read_code_range=read_code_range,
+            owner_by_id=owner_by_id,
+        )
+        for ordinal, query in enumerate(queries)
+    )
+    return samples, aggregate_samples(samples)

@@ -9,8 +9,17 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.native_geometric_layout_screen import LayoutMethod, MembershipRow
-from scripts.native_row_score_cell import construct_cell, read_cell_seal
+from scripts.native_geometric_layout_screen import (
+    EvaluationLimits,
+    LayoutMethod,
+    MembershipRow,
+)
+from scripts.native_row_score_cell import (
+    construct_cell,
+    evaluate_routes,
+    read_cell_seal,
+)
+from scripts.native_row_score_code_artifacts import read_code_artifacts
 
 
 class RowScoreCellTests(unittest.TestCase):
@@ -44,6 +53,24 @@ class RowScoreCellTests(unittest.TestCase):
             )
             self.assertFalse((root / "queries.parquet").exists())
             self.assertFalse((root / "truth.parquet").exists())
+            artifacts = read_code_artifacts(
+                root, identities, ids, membership, source_sha, membership_sha,
+                dimensions=48, seed=7,
+            )
+            plane = (root / "codes.bin").read_bytes()
+            samples, metrics = evaluate_routes(
+                queries=vectors[180:181],
+                truth=(tuple(ids[index] for index in range(128, 228)),),
+                retained_by_query=((0, 1),),
+                artifacts=artifacts,
+                stable_ids=ids,
+                vectors=vectors,
+                page_byte_sizes=(1000, 1000),
+                limits=EvaluationLimits(1, 1000),
+                read_code_range=lambda offset, length: plane[offset : offset + length],
+            )
+            self.assertEqual(samples[0].pq_hits_at_100, 100)
+            self.assertEqual(metrics["decision"], "quality-advance-memory-pending")
 
 
 if __name__ == "__main__":
