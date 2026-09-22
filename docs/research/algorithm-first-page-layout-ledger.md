@@ -3928,3 +3928,55 @@ remains `claim_eligible=false` until validation. A pass authorizes page-local
 SQ8 and cold-S3 timing at 100k; only those passing results can freeze an
 architecture for 1M. A miss rejects this row-score nomination design and
 requires a diagnosed, material redesign, not a PQ-width or block-size sweep.
+
+### Row-score a0001: PQ48 distortion rejects the code representation
+
+The preregistered cell ran from source commit
+`b19e9cc236dedd6fa832df97021502b34adc9137`, source archive SHA-256
+`fb0090a950d74af795333599252cddda6bc6023be966adde807d25d2ef829812`
+(10,997,840 bytes), under immutable prefix
+`s3://borsuk-bench-453182569524-euc1/research/native-row-score/b19e9cc236dedd6fa832df97021502b34adc9137/runs/relaion-100k-dev1000-a0001/`.
+The one-time `c7i.8xlarge` Spot instance `i-0ccd276fa25915dca` in
+`eu-central-1c` is terminated. The complete terminal is SHA-256
+`6161c044a5d019a6df3694c5ef547799b7cb9d03e466d320410198afe59463b5`,
+reports 1,367 seconds and `claim_eligible=false`, and names ten immutable
+artifacts. Controller readback matched every terminal artifact length and
+SHA-256. The result, evidence and independent validation hashes are respectively
+`2eaa29c115f91bd032235d57158b9372d7d29c49e8fb36725ad0ac871b7e465b`,
+`503032b1669af105f8101ff1d528b75712736cb9c7b2f513fed5ddbc7655a619`,
+and `50bf68aacdaa9c6a3f09828c0992b8e0bba9533fdd011f37c34e258353fa2dae`.
+The source-only PQ48 codebooks and 4,800,000-byte page-ordered code plane have
+SHA-256 `0c427d7e3c7a8ed3743139a6f66b325e1366adccfa123db339952ff053eb23ba`
+and `366abfc36037c42cce4bb1877e2fe1422cec2d205950d2776f672174de910e67`.
+
+| Same 1,000 frozen development queries | mean GT100 containment | p05 | worst | R@10 |
+|---|---:|---:|---:|---:|
+| prior geometric router | 94.417% | 77% | 50% | 97.03% |
+| eight microclusters per page | 95.462% | 79% | 48% | 97.45% |
+| retained 128 leaves, before page nomination | 98.644% | 92% | 65% | — |
+| restricted truth-aware best-32-page oracle | 98.557% | 91% | 65% | — |
+| exact-distance row-score nomination | 98.556% | 91% | 65% | 99.59% |
+| PQ48 row-score nomination | **97.184%** | **87%** | **50%** | **99.39%** |
+
+PQ48 is 1.722 percentage points above the strongest prior query-blind route
+but misses the frozen 97.5% mean gate by 0.316 points and the 90% p05 gate by
+three points. Exact row scoring gains 1,372 GT100 hits over PQ48 on the paired
+queries: 305 improve, none worsen, and 695 tie. Exact nomination is only one
+GT100 hit below the restricted oracle across all queries. Retained-leaf loss
+and page nomination are therefore small at 100k; row-score quantization is the
+responsible layer. The actual authenticated S3 code wave used 8–11 Range GETs
+and at most 4,800,000 bytes; the final data wave used at most 32 pages and
+15,665,624 encoded bytes. These are 100k wave measurements, not 1M locality
+or native cold-S3 serving latency. Construct, evaluate and validate peaked at
+1,682,784, 2,289,196 and 2,519,484 KiB RSS, respectively, with zero swaps.
+The evaluator's 13:19 wall time includes code GETs and scoring; it is not an
+end-to-end production query latency sample.
+
+**Decision:** kill the single-stage PQ48 row-score representation. Do not
+promote this result to 1M, SQ8 serving or a production format. The exact arm
+shows enough headroom to test a materially richer *source-only row code* on
+the same fixed tree and page layout, with the same frozen query set and gates.
+A residual quantizer with a second code stage is the next candidate; it must
+remain within both code-wave limits and show a separate 1M locality path before
+any architecture freeze. The two-generation 100M resident-memory worksheet is
+still pending; this negative cell makes no memory-qualification claim.
