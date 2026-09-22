@@ -35,10 +35,10 @@
 
 **Interfaces:** `plan_code_blocks(retained_pages, page_row_counts, block_pages=16, maximum_gets=32, maximum_bytes=16_777_216) -> CodePlan`; `nominate_pages(row_scores, row_source_ordinals, row_page_ordinals, page_byte_sizes, limits) -> tuple[int, ...]`.
 
-- [ ] Write failing tests for a straddled code block, an over-budget plan, exact ties, top-100 page counts, and byte-cap skipping. Run `uv run --no-project --with numpy==2.4.2 --with pyarrow==24.0.0 python -m unittest scripts.test_native_row_score_nomination` and confirm the expected failures.
-- [ ] Implement the planner using page-ordered 48-byte row offsets and contiguous 16-page blocks. Count complete fetched blocks, including their unretained rows, in GET and byte totals.
-- [ ] Implement the fixed top-100 nomination rule with source-ordinal row ties, page-count ranking, minimum-score and page-ordinal ties, then fill remaining page slots by minimum row score.
-- [ ] Run focused tests, Ruff, and `git diff --check`; commit the deterministic core.
+- [x] Write failing tests for a straddled code block, an over-budget plan, exact ties, top-100 page counts, and byte-cap skipping. Run `uv run --no-project --with numpy==2.4.2 --with pyarrow==24.0.0 python -m unittest scripts.test_native_row_score_nomination` and confirm the expected failures.
+- [x] Implement the planner using page-ordered 48-byte row offsets and contiguous 16-page blocks. Count complete fetched blocks, including their unretained rows, in GET and byte totals.
+- [x] Implement the fixed top-100 nomination rule with source-ordinal row ties, page-count ranking, minimum-score and page-ordinal ties, then fill remaining page slots by minimum row score.
+- [x] Run focused tests, Ruff, and `git diff --check`; commit the deterministic core.
 
 ### Task 2: Authenticated 100k cell and independent replay
 
