@@ -7,6 +7,7 @@ import dataclasses
 import hashlib
 import math
 import struct
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -42,6 +43,28 @@ class PageMicroclusters:
             for mean in self.means
         ):
             raise ValueError("microcluster geometry differs")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class MicroclusterSample:
+    query_ordinal: int
+    selected_page_ordinals: tuple[int, ...]
+    encoded_bytes: int
+    hits_at_10: int
+    hits_at_100: int
+    routing_nanoseconds: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class MicroclusterEvaluation:
+    samples: tuple[MicroclusterSample, ...]
+    recall_at_10_ppm: int
+    mean_recall_at_100_ppm: int
+    p05_recall_at_100_ppm: int
+    worst_recall_at_100_ppm: int
+    max_pages: int
+    max_bytes: int
+    decision: str
 
 
 def construct_representatives(
@@ -301,3 +324,145 @@ def route_query(
     if not selected:
         raise ValueError("microcluster byte budget admits no page")
     return tuple(sorted(selected))
+
+
+def evaluate_representatives(
+    pages: Sequence[PageMicroclusters],
+    membership: Sequence[MembershipRow],
+    queries: np.ndarray,
+    truth: Sequence[Sequence[bytes]],
+    limits: EvaluationLimits,
+) -> MicroclusterEvaluation:
+    """Record per-query physical containment without opening page bodies."""
+    if not pages:
+        raise ValueError("microcluster evaluation pages differ")
+    if (
+        type(queries) is not np.ndarray
+        or queries.dtype != np.float32
+        or queries.ndim != 2
+        or queries.shape != (len(truth), len(pages[0].means[0]))
+        or not np.isfinite(queries).all()
+        or not truth
+    ):
+        raise ValueError("microcluster evaluation queries differ")
+    owner_by_id: dict[bytes, int] = {}
+    page_roster: set[int] = set()
+    for row in membership:
+        if row.stable_id in owner_by_id or not 0 <= row.page_ordinal < len(pages):
+            raise ValueError("microcluster evaluation membership differs")
+        owner_by_id[row.stable_id] = row.page_ordinal
+        page_roster.add(row.page_ordinal)
+    if page_roster != set(range(len(pages))):
+        raise ValueError("microcluster evaluation page roster differs")
+    samples: list[MicroclusterSample] = []
+    for query_ordinal, query in enumerate(queries):
+        expected = tuple(truth[query_ordinal])
+        if (
+            len(expected) != 100
+            or len(set(expected)) != 100
+            or any(stable_id not in owner_by_id for stable_id in expected)
+        ):
+            raise ValueError("microcluster evaluation truth differs")
+        started = time.perf_counter_ns()
+        selected_pages = route_query(pages, query, limits)
+        elapsed = time.perf_counter_ns() - started
+        selected = set(selected_pages)
+        samples.append(
+            MicroclusterSample(
+                query_ordinal=query_ordinal,
+                selected_page_ordinals=selected_pages,
+                encoded_bytes=sum(
+                    pages[page].encoded_page_bytes for page in selected_pages
+                ),
+                hits_at_10=sum(
+                    owner_by_id[stable_id] in selected for stable_id in expected[:10]
+                ),
+                hits_at_100=sum(
+                    owner_by_id[stable_id] in selected for stable_id in expected
+                ),
+                routing_nanoseconds=elapsed,
+            )
+        )
+    mean10 = (
+        sum(sample.hits_at_10 for sample in samples) * 1_000_000 // (10 * len(samples))
+    )
+    mean100 = (
+        sum(sample.hits_at_100 for sample in samples)
+        * 1_000_000
+        // (100 * len(samples))
+    )
+    sorted100 = sorted(sample.hits_at_100 for sample in samples)
+    p05 = sorted100[math.ceil(0.05 * len(samples)) - 1] * 10_000
+    decision = (
+        "advance"
+        if mean10 >= 960_000 and mean100 >= 975_000 and p05 >= 900_000
+        else "killed"
+    )
+    return MicroclusterEvaluation(
+        samples=tuple(samples),
+        recall_at_10_ppm=mean10,
+        mean_recall_at_100_ppm=mean100,
+        p05_recall_at_100_ppm=p05,
+        worst_recall_at_100_ppm=sorted100[0] * 10_000,
+        max_pages=max(len(sample.selected_page_ordinals) for sample in samples),
+        max_bytes=max(sample.encoded_bytes for sample in samples),
+        decision=decision,
+    )
+
+
+def microcluster_evidence_schema() -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("query_ordinal", pa.uint32(), nullable=False),
+            pa.field(
+                "selected_page_ordinals",
+                pa.list_(pa.field("element", pa.uint32(), nullable=False)),
+                nullable=False,
+            ),
+            pa.field("encoded_bytes", pa.uint32(), nullable=False),
+            pa.field("hits_at_10", pa.uint8(), nullable=False),
+            pa.field("hits_at_100", pa.uint8(), nullable=False),
+            pa.field("routing_nanoseconds", pa.uint64(), nullable=False),
+        ]
+    )
+
+
+def write_evidence(path: Path, evaluation: MicroclusterEvaluation) -> ArtifactIdentity:
+    """Write one canonical row for every frozen development query."""
+    samples = evaluation.samples
+    if not samples or [sample.query_ordinal for sample in samples] != list(
+        range(len(samples))
+    ):
+        raise ValueError("microcluster evidence query ordinals differ")
+    schema = microcluster_evidence_schema()
+    table = pa.Table.from_arrays(
+        [
+            pa.array([sample.query_ordinal for sample in samples], type=pa.uint32()),
+            pa.array(
+                [sample.selected_page_ordinals for sample in samples],
+                type=schema.field("selected_page_ordinals").type,
+            ),
+            pa.array([sample.encoded_bytes for sample in samples], type=pa.uint32()),
+            pa.array([sample.hits_at_10 for sample in samples], type=pa.uint8()),
+            pa.array([sample.hits_at_100 for sample in samples], type=pa.uint8()),
+            pa.array(
+                [sample.routing_nanoseconds for sample in samples], type=pa.uint64()
+            ),
+        ],
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        path,
+        version="2.6",
+        compression="zstd",
+        use_dictionary=False,
+        write_statistics=True,
+    )
+    payload = path.read_bytes()
+    return ArtifactIdentity(
+        role="page-microcluster-evidence",
+        uri=path.resolve().as_uri(),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        encoded_bytes=len(payload),
+    )

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from scripts.native_geometric_layout_screen import (
     EvaluationLimits,
@@ -15,12 +18,18 @@ from scripts.native_geometric_layout_screen import (
     MembershipRow,
 )
 from scripts.native_page_microcluster_router import (
+    MicroclusterEvaluation,
+    MicroclusterSample,
     PageMicroclusters,
     construct_representatives,
+    evaluate_representatives,
+    microcluster_evidence_schema,
     read_representatives,
     route_query,
+    write_evidence,
     write_representatives,
 )
+from scripts.validate_native_page_microcluster_result import validate_evidence
 
 
 class PageMicroclusterRouteTests(unittest.TestCase):
@@ -145,6 +154,130 @@ class PageMicroclusterRouteTests(unittest.TestCase):
             path.write_bytes(path.read_bytes() + b"tampered")
             with self.assertRaisesRegex(ValueError, "identity"):
                 read_representatives(path, identity, source_sha, membership_sha)
+
+    def test_evaluation_records_exact_gt_page_containment(self) -> None:
+        stable_ids = tuple(f"id-{ordinal:03d}".encode() for ordinal in range(100))
+        membership = tuple(
+            MembershipRow(
+                stable_id=stable_ids[ordinal],
+                source_ordinal=ordinal,
+                page_ordinal=ordinal // 50,
+                in_page_ordinal=ordinal % 50,
+                page_rows=50,
+                encoded_page_bytes=80,
+                method=LayoutMethod.TWO_MEANS_480K,
+                source_sha256=bytes.fromhex("11" * 32),
+                seed=20260921,
+                construction_sha256=bytes.fromhex("22" * 32),
+            )
+            for ordinal in range(100)
+        )
+        pages = (
+            PageMicroclusters(0, 80, ((0.0,),) * 8),
+            PageMicroclusters(1, 80, ((10.0,),) * 8),
+        )
+        result = evaluate_representatives(
+            pages,
+            membership,
+            np.asarray(((0.0,),), dtype=np.float32),
+            (stable_ids,),
+            EvaluationLimits(maximum_pages=1, maximum_bytes=80),
+        )
+        self.assertEqual(result.samples[0].selected_page_ordinals, (0,))
+        self.assertEqual(result.samples[0].hits_at_10, 10)
+        self.assertEqual(result.samples[0].hits_at_100, 50)
+        self.assertEqual(result.mean_recall_at_100_ppm, 500_000)
+        self.assertEqual(result.decision, "killed")
+
+    def test_evaluation_rejects_empty_page_roster(self) -> None:
+        with self.assertRaisesRegex(ValueError, "pages"):
+            evaluate_representatives(
+                (),
+                (),
+                np.zeros((1, 1), dtype=np.float32),
+                (tuple(f"id-{ordinal}".encode() for ordinal in range(100)),),
+                EvaluationLimits(maximum_pages=1, maximum_bytes=80),
+            )
+
+    def test_evidence_records_per_query_route_and_hits(self) -> None:
+        evaluation = MicroclusterEvaluation(
+            samples=(MicroclusterSample(0, (1, 2), 160, 8, 70, 42),),
+            recall_at_10_ppm=800_000,
+            mean_recall_at_100_ppm=700_000,
+            p05_recall_at_100_ppm=700_000,
+            worst_recall_at_100_ppm=700_000,
+            max_pages=2,
+            max_bytes=160,
+            decision="killed",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.parquet"
+            identity = write_evidence(path, evaluation)
+            self.assertEqual(identity.role, "page-microcluster-evidence")
+            self.assertEqual(pq.read_schema(path), microcluster_evidence_schema())
+            row = pq.read_table(path).to_pylist()[0]
+            self.assertEqual(row["selected_page_ordinals"], [1, 2])
+            self.assertEqual(row["hits_at_100"], 70)
+
+    def test_independent_replay_rejects_rehashed_false_page_choice(self) -> None:
+        stable_ids = tuple(f"id-{ordinal:03d}".encode() for ordinal in range(100))
+        membership = tuple(
+            MembershipRow(
+                stable_id=stable_ids[ordinal],
+                source_ordinal=ordinal,
+                page_ordinal=ordinal // 50,
+                in_page_ordinal=ordinal % 50,
+                page_rows=50,
+                encoded_page_bytes=80,
+                method=LayoutMethod.TWO_MEANS_480K,
+                source_sha256=bytes.fromhex("11" * 32),
+                seed=20260921,
+                construction_sha256=bytes.fromhex("22" * 32),
+            )
+            for ordinal in range(100)
+        )
+        pages = (
+            PageMicroclusters(0, 80, ((0.0,),) * 8),
+            PageMicroclusters(1, 80, ((10.0,),) * 8),
+        )
+        queries = np.asarray(((0.0,),), dtype=np.float32)
+        truth = (stable_ids,)
+        limits = EvaluationLimits(maximum_pages=1, maximum_bytes=80)
+        evaluation = evaluate_representatives(pages, membership, queries, truth, limits)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.parquet"
+            identity = write_evidence(path, evaluation)
+            replay = validate_evidence(
+                path, identity, pages, membership, queries, truth, limits
+            )
+            self.assertEqual(replay["mean_recall_at_100_ppm"], 500_000)
+            self.assertEqual(replay["decision"], "killed")
+
+            table = pq.read_table(path)
+            columns = [
+                pa.array([[1]], type=table.schema.field("selected_page_ordinals").type)
+                if name == "selected_page_ordinals"
+                else table[name].combine_chunks()
+                for name in table.column_names
+            ]
+            pq.write_table(
+                pa.Table.from_arrays(columns, schema=table.schema),
+                path,
+                version="2.6",
+                compression="zstd",
+                use_dictionary=False,
+                write_statistics=True,
+            )
+            body = path.read_bytes()
+            false_identity = dataclasses.replace(
+                identity,
+                sha256=hashlib.sha256(body).hexdigest(),
+                encoded_bytes=len(body),
+            )
+            with self.assertRaisesRegex(ValueError, "route"):
+                validate_evidence(
+                    path, false_identity, pages, membership, queries, truth, limits
+                )
 
 
 if __name__ == "__main__":
