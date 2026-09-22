@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import dataclasses
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from scripts.native_geometric_layout_screen import EvaluationLimits, LayoutMethod, MembershipRow
+from scripts.native_geometric_layout_screen import (
+    EvaluationLimits,
+    LayoutMethod,
+    MembershipRow,
+)
 from scripts.native_page_microcluster_router import (
     PageMicroclusters,
     construct_representatives,
+    read_representatives,
     route_query,
+    write_representatives,
 )
 
 
@@ -37,11 +45,15 @@ class PageMicroclusterRouteTests(unittest.TestCase):
     def test_builds_eight_query_blind_means_for_each_sealed_page(self) -> None:
         stable_ids = tuple(f"id-{ordinal:02d}".encode() for ordinal in range(16))
         vectors = np.asarray(
-            [(float(ordinal),) if ordinal < 8 else (float(ordinal + 20),)
-             for ordinal in range(16)],
+            [
+                (float(ordinal),) if ordinal < 8 else (float(ordinal + 20),)
+                for ordinal in range(16)
+            ],
             dtype=np.float32,
         )
-        pages = construct_representatives(self.membership(stable_ids), stable_ids, vectors)
+        pages = construct_representatives(
+            self.membership(stable_ids), stable_ids, vectors
+        )
         self.assertEqual([page.page_ordinal for page in pages], [0, 1])
         self.assertEqual([len(page.means) for page in pages], [8, 8])
         self.assertEqual(
@@ -103,6 +115,36 @@ class PageMicroclusterRouteTests(unittest.TestCase):
         constant_first_page[:8] = 0.0
         with self.assertRaisesRegex(ValueError, "unsplittable"):
             construct_representatives(membership, stable_ids, constant_first_page)
+
+    def test_representatives_round_trip_with_source_and_membership_binding(
+        self,
+    ) -> None:
+        pages = (
+            PageMicroclusters(0, 80, tuple((float(value),) for value in range(8))),
+            PageMicroclusters(1, 80, tuple((float(value),) for value in range(8, 16))),
+        )
+        source_sha = bytes.fromhex("11" * 32)
+        membership_sha = bytes.fromhex("22" * 32)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "representatives.parquet"
+            identity = write_representatives(path, pages, source_sha, membership_sha)
+            self.assertEqual(
+                read_representatives(path, identity, source_sha, membership_sha), pages
+            )
+            remote_identity = dataclasses.replace(
+                identity, uri="s3://sealed-cell/artifacts/representatives.parquet"
+            )
+            self.assertEqual(
+                read_representatives(path, remote_identity, source_sha, membership_sha),
+                pages,
+            )
+            with self.assertRaisesRegex(ValueError, "membership"):
+                read_representatives(
+                    path, identity, source_sha, bytes.fromhex("33" * 32)
+                )
+            path.write_bytes(path.read_bytes() + b"tampered")
+            with self.assertRaisesRegex(ValueError, "identity"):
+                read_representatives(path, identity, source_sha, membership_sha)
 
 
 if __name__ == "__main__":
