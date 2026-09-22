@@ -3980,3 +3980,40 @@ A residual quantizer with a second code stage is the next candidate; it must
 remain within both code-wave limits and show a separate 1M locality path before
 any architecture freeze. The two-generation 100M resident-memory worksheet is
 still pending; this negative cell makes no memory-qualification claim.
+
+### Next 100k falsifier: two-stage residual row codes
+
+Keep the a0001 authenticated source, frozen development queries and truth,
+two-means page membership, 128-leaf tree shortlist, exact control, restricted
+oracle, and 32-page/16-MiB data wave. Change only the source-trained row
+representation: encode each 768-dimensional source row first with the fixed
+PQ48x8 stage, reconstruct it, train one PQ24x8 stage on the resulting source
+residuals, and encode those residuals. Interleave the 48 first-stage and 24
+second-stage bytes for each row in physical page order. Train both stages before
+the worker can read queries or truth. Fix the original seed, 100,000 source
+training rows and ten iterations per stage; do not sweep widths, iterations,
+block sizes or nomination rules. Bind both codebooks, the 72-byte row plane,
+membership order and source digests in a new format seal.
+
+For each query, fetch the same union of 16-page code blocks with actual S3
+Range GETs, authenticate the returned bytes against the sealed plane, and
+score every retained row by squared distance to its two-code reconstruction.
+Use a numerically specified lookup implementation whose cross-stage terms
+match a direct reconstruction control, then apply the unchanged top-100-row
+and page nomination order. At 100k the complete plane is 7,200,000 bytes,
+so the measured code wave must remain at most 11 GETs and 7,200,000 bytes;
+the standing 32-GET/16-MiB cap remains authoritative. Record all 1,000
+per-query outcomes, physical range plans, actual GET/byte counts, resource
+use, and an independent replay from authenticated artifacts.
+
+This single cell asks whether residual code fidelity recovers the 1,372
+GT100 hits lost to single-stage PQ48 sufficiently to pass mean containment
+97.5%, p05 90% and R@10 96% under both wave budgets. Its strongest current
+query-blind 100k control is PQ48 at 97.184%/87%/99.39%; the exact arm at
+98.556%/91%/99.59% is an optimistic ceiling. A 100k pass is only
+`quality-advance-memory-pending`: require a conservative two-generation 100M
+resident-memory worksheet, a separate 1M code-block locality gate, and
+page-local SQ8 plus native cold-S3 timing before format selection. At 100M,
+the 7.2-GB row-code plane must remain on object storage, not resident RAM.
+If residual codes miss the 100k quality gate, reject this representation and
+revisit representation or routing rather than tuning another width.
