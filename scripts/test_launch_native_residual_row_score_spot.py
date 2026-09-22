@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 from scripts.launch_native_geometric_layout_spot import (
     DEFAULT_TARGETS,
@@ -91,9 +93,34 @@ class ResidualRowScoreSpotTests(unittest.TestCase):
             "attempt": 1, "claim_eligible": False, "elapsed_seconds": 12,
             "exit_code": 0, "instance_id": "i-0123456789abcdef0",
             "phase": "complete", "source_commit": plan.source_commit,
+            "source_archive": {
+                "uri": plan.source_archive.uri,
+                "sha256": plan.source_archive.sha256,
+                "encoded_bytes": plan.source_archive.encoded_bytes,
+            },
+            "requirements_sha256": plan.requirements_sha256,
             "status": "complete",
         }, sort_keys=True, separators=(",", ":")) + "\n").encode()
         with self.assertRaisesRegex(ValueError, "artifact roster"):
+            _validate_terminal_bytes(body, plan, "i-0123456789abcdef0")
+
+    def test_failed_terminal_binds_the_executed_source_archive(self) -> None:
+        plan = self.plan()
+        value = {
+            "schema": "borsuk-residual-row-score-terminal-v1", "artifacts": {},
+            "attempt": 1, "claim_eligible": False, "elapsed_seconds": 12,
+            "exit_code": 1, "instance_id": "i-0123456789abcdef0",
+            "phase": "source", "source_commit": plan.source_commit,
+            "source_archive": {
+                "uri": plan.source_archive.uri,
+                "sha256": "00" * 32,
+                "encoded_bytes": plan.source_archive.encoded_bytes,
+            },
+            "requirements_sha256": plan.requirements_sha256,
+            "status": "failed",
+        }
+        body = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        with self.assertRaisesRegex(ValueError, "source archive"):
             _validate_terminal_bytes(body, plan, "i-0123456789abcdef0")
 
     def test_launch_specs_use_one_time_spot_client_tokens(self) -> None:
@@ -103,6 +130,24 @@ class ResidualRowScoreSpotTests(unittest.TestCase):
             self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")
             self.assertIn("native-residual-row-score", spec["ClientToken"])
             self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
+
+    def test_worker_rejects_resource_peak_above_rss_cap(self) -> None:
+        script = worker_script(self.plan())
+        function = script.split("check_peak_rss() {", 1)[1].split("terminal() {", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "resources.txt"
+            path.write_text("Maximum resident set size (kbytes): 3145729\n")
+            result = subprocess.run(
+                ["bash", "-c", "MAXIMUM_RSS_BYTES=3221225472\ncheck_peak_rss() {" + function + "\ncheck_peak_rss \"$1\"", "bash", str(path)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            path.write_text("Maximum resident set size (kbytes): 3145728\n")
+            accepted = subprocess.run(
+                ["bash", "-c", "MAXIMUM_RSS_BYTES=3221225472\ncheck_peak_rss() {" + function + "\ncheck_peak_rss \"$1\"", "bash", str(path)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
 
 if __name__ == "__main__":

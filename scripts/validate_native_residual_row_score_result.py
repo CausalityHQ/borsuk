@@ -109,7 +109,9 @@ def validate_residual_samples(
             left = query64[lo:mid] - first_left - second[:, :width]
             right = query64[mid:hi] - first_right - second[:, width:]
             scores += np.einsum("ij,ij->i", left, left) + np.einsum("ij,ij->i", right, right)
-        selected = _select_pages(scores, sources, pages, page_byte_sizes, limits)
+        selected = _select_pages(
+            scores.astype(np.float32), sources, pages, page_byte_sizes, limits
+        )
         selected_set = set(selected)
         targets = truth[ordinal]
         expected.append(

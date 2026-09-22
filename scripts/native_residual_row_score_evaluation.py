@@ -105,7 +105,9 @@ def residual_scores(
             + cross_terms[group, 0, left_code, second_code]
             + cross_terms[group, 1, right_code, second_code]
         )
-    return scores
+    # Quantize once after float64 accumulation so equivalent two-code
+    # reconstructions have the same stable nomination order in replay.
+    return scores.astype(np.float32)
 
 
 def evaluate_residual_query(
@@ -157,6 +159,13 @@ def evaluate_residual_query(
     plan = plan_code_blocks(
         retained_pages, artifacts.page_row_counts, code_row_bytes=72
     )
+    before_gets = getattr(read_code_range, "gets", None)
+    before_bytes = getattr(read_code_range, "bytes", None)
+    if (before_gets is None) != (before_bytes is None) or (
+        before_gets is not None
+        and (type(before_gets) is not int or type(before_bytes) is not int)
+    ):
+        raise ValueError("residual observed code wave counters differ")
     offsets = np.concatenate(([0], np.cumsum(artifacts.page_row_counts, dtype=np.int64)))
     positions = np.concatenate(
         [np.arange(offsets[page], offsets[page + 1]) for page in retained_pages]
@@ -164,8 +173,12 @@ def evaluate_residual_query(
     codes = np.empty((len(positions), 72), dtype=np.uint8)
     filled = np.zeros(len(positions), dtype=np.bool_)
     sealed_plane = artifacts.codes.reshape(-1)
+    called_gets = 0
+    called_bytes = 0
     for _, _, offset, length in plan.blocks:
         payload = read_code_range(offset, length)
+        called_gets += 1
+        called_bytes += len(payload) if type(payload) is bytes else 0
         expected = sealed_plane[offset : offset + length].tobytes(order="C")
         if type(payload) is not bytes or payload != expected:
             raise ValueError("residual code range identity differs")
@@ -177,6 +190,13 @@ def evaluate_residual_query(
         filled[within] = True
     if not filled.all():
         raise ValueError("residual code range coverage differs")
+    if before_gets is None:
+        observed_gets, observed_bytes = called_gets, called_bytes
+    else:
+        observed_gets = read_code_range.gets - before_gets
+        observed_bytes = read_code_range.bytes - before_bytes
+    if (observed_gets, observed_bytes) != (plan.gets, plan.bytes):
+        raise ValueError("residual observed code wave differs")
     scores = residual_scores(
         query, artifacts.first_books, artifacts.residual_books, codes,
         cross_terms=cross_terms,
@@ -201,8 +221,8 @@ def evaluate_residual_query(
         query_ordinal=query_ordinal,
         baseline=baseline,
         code_blocks=plan.blocks,
-        code_gets=plan.gets,
-        code_bytes=plan.bytes,
+        code_gets=observed_gets,
+        code_bytes=observed_bytes,
         residual_pages=pages,
         residual_data_bytes=sum(page_byte_sizes[page] for page in pages),
         residual_hits_at_10=sum(owners[stable_id] in page_set for stable_id in truth_ids[:10]),

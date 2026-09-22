@@ -20,6 +20,7 @@ from scripts.native_residual_row_score_evaluation import (
     residual_scores,
 )
 from scripts.native_row_score_evaluation import RowScoreSample
+from scripts.native_row_score_nomination import nominate_pages
 
 
 class ResidualScoreTests(unittest.TestCase):
@@ -61,6 +62,7 @@ class ResidualScoreTests(unittest.TestCase):
         codes[0, 0] = 1
         codes[0, 48] = 1
         scores = residual_scores(query, first_books, residual_books, codes)
+        self.assertEqual(scores.dtype, np.float32)
         np.testing.assert_allclose(scores, [1.0, 16.0], rtol=0, atol=1e-10)
 
     def test_lookup_matches_direct_random_reconstruction(self) -> None:
@@ -80,7 +82,29 @@ class ResidualScoreTests(unittest.TestCase):
             delta = query.astype(np.float64) - reconstruction - residual
             expected.append(float(delta @ delta))
         actual = residual_scores(query, first_books, residual_books, codes)
-        np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-8)
+        np.testing.assert_array_equal(actual, np.asarray(expected, dtype=np.float32))
+
+    def test_cancellation_tie_uses_source_ordinal_for_page_nomination(self) -> None:
+        first_books = np.zeros((48, 256, 1), dtype=np.float32)
+        residual_books = np.zeros((24, 256, 2), dtype=np.float32)
+        first_books[0, 1, 0] = -0.8785834312438965
+        residual_books[0, 1, 0] = 1.2411892414093018
+        first_books[0, 2, 0] = 0.3626058101654053
+        query = np.zeros(48, dtype=np.float32)
+        query[0] = 0.028249051421880722
+        codes = np.zeros((2, 72), dtype=np.uint8)
+        codes[0, 0] = 1
+        codes[0, 48] = 1
+        codes[1, 0] = 2
+        scores = residual_scores(query, first_books, residual_books, codes)
+        self.assertEqual(scores[0], scores[1])
+        self.assertEqual(
+            nominate_pages(
+                scores, (0, 1), (0, 1), (100, 100),
+                EvaluationLimits(maximum_pages=1, maximum_bytes=100), top_rows=1,
+            ),
+            (0,),
+        )
 
     def test_sealed_72_byte_ranges_feed_same_paired_pages(self) -> None:
         ids = tuple(index.to_bytes(4, "little") for index in range(256))
@@ -121,6 +145,18 @@ class ResidualScoreTests(unittest.TestCase):
             evaluate_residual_query(
                 **inputs, read_code_range=lambda offset, length: bytes(length)
             )
+
+        class MismatchedCounters:
+            gets = 0
+            bytes = 0
+
+            def __call__(self, offset: int, length: int) -> bytes:
+                self.gets += 2
+                self.bytes += length
+                return plane[offset : offset + length]
+
+        with self.assertRaisesRegex(ValueError, "observed code wave"):
+            evaluate_residual_query(**inputs, read_code_range=MismatchedCounters())
 
 
 if __name__ == "__main__":

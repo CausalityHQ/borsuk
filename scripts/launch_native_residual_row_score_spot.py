@@ -112,18 +112,24 @@ run_capped() {
   rc=0; wait "$pid" || rc=$?
   return "$rc"
 }
+check_peak_rss() {
+  local peak_kib
+  peak_kib=$(awk -F: 'index($1,"Maximum resident set size") {gsub(/[[:space:]]/,"",$2); print $2}' "$1")
+  [[ "$peak_kib" =~ ^[0-9]+$ ]] || return 1
+  (( peak_kib * 1024 <= MAXIMUM_RSS_BYTES ))
+}
 terminal() {
   rc=$?; trap - EXIT; set +e; ended=$(date +%s)
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null || true)
   instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
-  STATUS="$status" PHASE="$phase" EXIT_CODE="$rc" STARTED="$started" ENDED="$ended" SOURCE_COMMIT=@COMMIT@ INSTANCE_ID="$instance_id" OUTPUT_PREFIX="$output" ATTEMPT=@ATTEMPT@ python3 - <<'PY'
+  STATUS="$status" PHASE="$phase" EXIT_CODE="$rc" STARTED="$started" ENDED="$ended" SOURCE_COMMIT=@COMMIT@ SOURCE_ARCHIVE_URI=@ARCHIVE_URI@ SOURCE_ARCHIVE_SHA256=@ARCHIVE_SHA@ SOURCE_ARCHIVE_BYTES=@ARCHIVE_BYTES@ REQUIREMENTS_SHA256=@REQUIREMENTS_SHA@ INSTANCE_ID="$instance_id" OUTPUT_PREFIX="$output" ATTEMPT=@ATTEMPT@ python3 - <<'PY'
 import hashlib,json,os,pathlib
 def ident(path,role):
  body=pathlib.Path(path).read_bytes()
  return {"encoded_bytes":len(body),"role":role,"sha256":hashlib.sha256(body).hexdigest(),"uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
 files=(("books","books.bin"),("codes","codes.bin"),("code-seal","seal.json"),("sealed","sealed.json"),("evidence","evidence.json"),("result","result.json"),("validation","validation.json"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
-value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":int(os.environ["ATTEMPT"]),"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-residual-row-score-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"status":os.environ["STATUS"]}
+value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":int(os.environ["ATTEMPT"]),"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-residual-row-score-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
 pathlib.Path("terminal.json").write_text(json.dumps(value,sort_keys=True,separators=(",",":"))+"\\n")
 PY
   aws s3 cp terminal.json "$output/terminal.json" --only-show-errors || true
@@ -175,7 +181,7 @@ aws s3 cp @TRUTH_URI@ truth.parquet --only-show-errors
 printf '%s  truth.parquet\n' @TRUTH_SHA@ | sha256sum -c -
 chmod 0444 tree.parquet pages.parquet queries.parquet truth.parquet
 mkdir evaluation && chown nobody:nobody evaluation
-run_capped /usr/bin/time -v -o evaluate-resources.txt timeout @WALL@ setpriv --reuid=nobody --regid=nobody --clear-groups env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_residual_row_score_cell evaluate --root "$root" --out "$root/evaluation" --output-prefix "$output"
+run_capped /usr/bin/time -v -o evaluate-resources.txt timeout @WALL@ setpriv --reuid=nobody --regid=nobody --clear-groups env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_residual_row_score_cell evaluate --root "$root" --out "$root/evaluation" --output-prefix "$output" --source-archive-uri @ARCHIVE_URI@ --source-archive-sha256 @ARCHIVE_SHA@ --source-archive-bytes @ARCHIVE_BYTES@ --requirements-sha256 @REQUIREMENTS_SHA@
 mv evaluation/evidence.json evidence.json
 mv evaluation/result.json result.json
 rmdir evaluation
@@ -183,9 +189,13 @@ aws s3 cp evidence.json "$output/artifacts/evidence.json" --only-show-errors
 aws s3 cp result.json "$output/artifacts/result.json" --only-show-errors
 aws s3 cp evaluate-resources.txt "$output/artifacts/evaluate-resources.txt" --only-show-errors
 phase=validate
-run_capped /usr/bin/time -v -o validate-resources.txt timeout @WALL@ env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_residual_row_score_cell validate --root "$root" --out "$root" --output-prefix "$output" --source-commit @COMMIT@
+run_capped /usr/bin/time -v -o validate-resources.txt timeout @WALL@ env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_residual_row_score_cell validate --root "$root" --out "$root" --output-prefix "$output" --source-commit @COMMIT@ --source-archive-uri @ARCHIVE_URI@ --source-archive-sha256 @ARCHIVE_SHA@ --source-archive-bytes @ARCHIVE_BYTES@ --requirements-sha256 @REQUIREMENTS_SHA@
 aws s3 cp validation.json "$output/artifacts/validation.json" --only-show-errors
 aws s3 cp validate-resources.txt "$output/artifacts/validate-resources.txt" --only-show-errors
+phase=resource-gate
+for resource in construct-resources.txt evaluate-resources.txt validate-resources.txt; do
+  check_peak_rss "$resource"
+done
 status=complete
 phase=complete
 """
@@ -266,6 +276,8 @@ def _validate_terminal_bytes(
             "phase",
             "schema",
             "source_commit",
+            "source_archive",
+            "requirements_sha256",
             "status",
         }
     ):
@@ -275,12 +287,15 @@ def _validate_terminal_bytes(
         or terminal["attempt"] != plan.attempt
         or terminal["claim_eligible"] is not False
         or terminal["source_commit"] != plan.source_commit
+        or terminal["requirements_sha256"] != plan.requirements_sha256
         or terminal["instance_id"] != instance_id
         or type(terminal["elapsed_seconds"]) is not int
         or terminal["elapsed_seconds"] < 0
         or type(terminal["exit_code"]) is not int
     ):
         raise ValueError("residual row-score terminal authority differs")
+    if terminal["source_archive"] != dataclasses.asdict(plan.source_archive):
+        raise ValueError("residual row-score source archive differs")
     complete = (
         terminal["status"] == terminal["phase"] == "complete"
         and terminal["exit_code"] == 0
@@ -359,6 +374,8 @@ def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
         "schema": "borsuk-residual-row-score-reservation-v1",
         "attempt": plan.attempt,
         "source_commit": plan.source_commit,
+        "source_archive": dataclasses.asdict(plan.source_archive),
+        "requirements_sha256": plan.requirements_sha256,
         "prior_membership_sha256": PRIOR_MEMBERSHIP.sha256,
     }
     _atomic_put(

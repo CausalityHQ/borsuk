@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from scripts.launch_native_geometric_layout_spot import SourceArchiveIdentity
 from scripts.native_geometric_layout_screen import (
     ArtifactIdentity,
     EvaluationLimits,
@@ -71,6 +72,7 @@ class ResidualRowScoreCellTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            archive = SourceArchiveIdentity("s3://bucket/source.tar.gz", "ab" * 32, 1234)
             with patch("scripts.native_residual_row_score_cell._read_inputs", return_value=(ids, vectors, membership)):
                 run_construct_phase(root, "s3://bucket/run", inputs)
             self.assertTrue((root / "sealed.json").exists())
@@ -92,9 +94,12 @@ class ResidualRowScoreCellTests(unittest.TestCase):
                 run_evaluate_phase(
                     root, root / "evaluation", "s3://bucket/run", inputs,
                     code_reader=lambda offset, length: plane[offset : offset + length],
+                    source_archive=archive, requirements_sha256="cd" * 32,
                 )
             result = json.loads((root / "evaluation" / "result.json").read_bytes())
             self.assertEqual(result["metrics"]["residual_mean_recall_at_100_ppm"], 1_000_000)
+            self.assertEqual(result["source_archive"]["sha256"], "ab" * 32)
+            self.assertEqual(result["requirements_sha256"], "cd" * 32)
             with (
                 patch("scripts.native_residual_row_score_cell._read_inputs", return_value=(ids, vectors, membership)),
                 patch("scripts.native_residual_row_score_cell._read_queries_truth", return_value=(
@@ -106,9 +111,19 @@ class ResidualRowScoreCellTests(unittest.TestCase):
                 )),
             ):
                 validation = run_validate_phase(
-                    root, root / "evaluation", "s3://bucket/run", "ab" * 20, inputs
+                    root, root / "evaluation", "s3://bucket/run", "ab" * 20, inputs,
+                    source_archive=archive, requirements_sha256="cd" * 32,
                 )
             self.assertEqual(validation["decision"], "quality-advance-memory-pending")
+            with (
+                patch("scripts.native_residual_row_score_cell._read_inputs", return_value=(ids, vectors, membership)),
+                self.assertRaisesRegex(ValueError, "result authority"),
+            ):
+                run_validate_phase(
+                    root, root / "evaluation", "s3://bucket/run", "ab" * 20, inputs,
+                    source_archive=dataclasses.replace(archive, sha256="ef" * 32),
+                    requirements_sha256="cd" * 32,
+                )
 
     def test_construct_seals_codes_without_query_or_truth_inputs(self) -> None:
         ids = tuple(index.to_bytes(4, "little") for index in range(256))

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.launch_native_geometric_layout_spot import SourceArchiveIdentity
 from scripts.native_geometric_layout_screen import (
     ArtifactIdentity,
     EvaluationLimits,
@@ -235,6 +236,8 @@ def run_evaluate_phase(
     inputs: CellInputs = FROZEN_INPUTS,
     *,
     code_reader: Callable[[int, int], bytes] | None = None,
+    source_archive: SourceArchiveIdentity | None = None,
+    requirements_sha256: str | None = None,
 ) -> dict[str, object]:
     """Route frozen queries using sealed codes and verified S3 code ranges."""
     ids, vectors, membership = _read_inputs(root, inputs)
@@ -252,9 +255,14 @@ def run_evaluate_phase(
     queries, truth = _read_queries_truth(root, inputs)
     if code_reader is None:
         import boto3
+        from botocore.config import Config
 
         code_reader = S3CodeRangeReader(
-            boto3.client("s3", region_name="eu-central-1"),
+            boto3.client(
+                "s3",
+                region_name="eu-central-1",
+                config=Config(retries={"mode": "standard", "total_max_attempts": 1}),
+            ),
             identities.codes.uri,
             object_bytes=identities.codes.encoded_bytes,
         )
@@ -293,6 +301,8 @@ def run_evaluate_phase(
         "limits": dataclasses.asdict(inputs.limits),
         "metrics": metrics,
         "output_prefix": prefix.rstrip("/"),
+        "source_archive": dataclasses.asdict(source_archive) if source_archive else None,
+        "requirements_sha256": requirements_sha256,
     }
     (out / "result.json").write_bytes(_canonical(result))
     return result
@@ -304,6 +314,9 @@ def run_validate_phase(
     prefix: str,
     source_commit: str,
     inputs: CellInputs = FROZEN_INPUTS,
+    *,
+    source_archive: SourceArchiveIdentity | None = None,
+    requirements_sha256: str | None = None,
 ) -> dict[str, object]:
     """Rebuild codes and independently replay every frozen query and hit."""
     if (
@@ -323,6 +336,7 @@ def run_validate_phase(
         "schema", "claim_eligible", "source", "membership", "tree", "pages",
         "books", "codes", "code_seal", "queries", "truth", "evidence",
         "limits", "metrics", "output_prefix",
+        "source_archive", "requirements_sha256",
     }
     if (
         type(result) is not dict
@@ -341,6 +355,10 @@ def run_validate_phase(
         or result["truth"] != dataclasses.asdict(inputs.truth)
         or result["limits"] != dataclasses.asdict(inputs.limits)
         or result["output_prefix"] != prefix.rstrip("/")
+        or result["source_archive"] != (
+            dataclasses.asdict(source_archive) if source_archive else None
+        )
+        or result["requirements_sha256"] != requirements_sha256
     ):
         raise ValueError("residual row-score result authority differs")
     try:
@@ -387,6 +405,8 @@ def run_validate_phase(
         "source_commit": source_commit,
         "decision": replay["decision"],
         "metrics": replay,
+        "source_archive": dataclasses.asdict(source_archive) if source_archive else None,
+        "requirements_sha256": requirements_sha256,
     }
     (root / "validation.json").write_bytes(_canonical(validation))
     return validation
@@ -399,18 +419,41 @@ def main() -> None:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--source-commit")
+    parser.add_argument("--source-archive-uri")
+    parser.add_argument("--source-archive-sha256")
+    parser.add_argument("--source-archive-bytes", type=int)
+    parser.add_argument("--requirements-sha256")
     args = parser.parse_args()
+    archive_values = (
+        args.source_archive_uri,
+        args.source_archive_sha256,
+        args.source_archive_bytes,
+        args.requirements_sha256,
+    )
+    if any(value is None for value in archive_values) and any(
+        value is not None for value in archive_values
+    ):
+        parser.error("complete source archive authority is required")
+    source_archive = (
+        SourceArchiveIdentity(*archive_values[:3]) if archive_values[0] else None
+    )
     if args.phase == "construct":
         run_construct_phase(args.root, args.output_prefix)
     elif args.phase == "evaluate":
         if args.out is None:
             parser.error("--out is required for evaluate")
-        run_evaluate_phase(args.root, args.out, args.output_prefix)
+        run_evaluate_phase(
+            args.root, args.out, args.output_prefix,
+            source_archive=source_archive,
+            requirements_sha256=args.requirements_sha256,
+        )
     else:
         if args.out is None or args.source_commit is None:
             parser.error("--out and --source-commit are required for validate")
         run_validate_phase(
-            args.root, args.out, args.output_prefix, args.source_commit
+            args.root, args.out, args.output_prefix, args.source_commit,
+            source_archive=source_archive,
+            requirements_sha256=args.requirements_sha256,
         )
 
 

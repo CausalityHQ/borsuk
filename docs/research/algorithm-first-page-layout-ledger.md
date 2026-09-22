@@ -3999,12 +3999,21 @@ For each query, fetch the same union of 16-page code blocks with actual S3
 Range GETs, authenticate the returned bytes against the sealed plane, and
 score every retained row by squared distance to its two-code reconstruction.
 Use a numerically specified lookup implementation whose cross-stage terms
-match a direct reconstruction control, then apply the unchanged top-100-row
+match a direct reconstruction control. Accumulate in float64 and cast once to
+float32 before ranking, in both producer and independent replay, so numerical
+cancellation cannot change the tie order. Apply the unchanged top-100-row
 and page nomination order. At 100k the complete plane is 7,200,000 bytes,
 so the measured code wave must remain at most 11 GETs and 7,200,000 bytes;
 the standing 32-GET/16-MiB cap remains authoritative. Record all 1,000
-per-query outcomes, physical range plans, actual GET/byte counts, resource
+per-query outcomes, physical range plans, executed successful S3 GET/byte
+counter deltas, resource
 use, and an independent replay from authenticated artifacts.
+Disable SDK retries for the measurement reads so an executed logical range
+corresponds to one HTTP attempt; any failed attempt fails the cell. The
+worker must also reject a phase if `/usr/bin/time -v` reports a peak over
+the 3-GiB cap, in addition to its live process-group RSS monitor. Bind the
+source archive URI, SHA-256 and byte length plus the requirements digest in
+the reservation, result, validation and terminal.
 
 This single cell asks whether residual code fidelity recovers the 1,372
 GT100 hits lost to single-stage PQ48 sufficiently to pass mean containment
