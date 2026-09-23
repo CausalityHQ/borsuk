@@ -40,6 +40,20 @@ ARTIFACTS = {
 
 
 def artifact_names(kind: str) -> dict[str, str]:
+    if kind == "progressive_code_wave":
+        return {
+            "page-map": "page-map.bin", "page-groups": "page-groups.bin",
+            "page-bytes": "page-bytes.bin", "seal": "seal.json",
+            "progressive-code-wave-plans": "progressive-code-wave-plans.json",
+            "progressive-code-wave-plan-seal": "progressive-code-wave-plan-seal.json",
+            "progressive-code-wave-evidence": "progressive-code-wave-evidence.json",
+            "progressive-code-wave-result": "progressive-code-wave-result.json",
+            "progressive-code-wave-validation": "progressive-code-wave-validation.json",
+            "construct-resources": "construct-resources.txt",
+            "plan-resources": "plan-resources.txt",
+            "evaluate-resources": "evaluate-resources.txt",
+            "validate-resources": "validate-resources.txt",
+        }
     if kind == "two_bit_code_wave":
         return {
             "page-map": "page-map.bin", "page-groups": "page-groups.bin",
@@ -150,7 +164,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range", "source_range", "two_bit_code_wave"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range", "source_range", "two_bit_code_wave", "progressive_code_wave"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-hundred-thousand-opq8-paired/"
@@ -202,6 +216,8 @@ def _download_commands(identities: dict[str, object], names: dict[str, str]) -> 
 
 
 def _terminal_schema(kind: str) -> str:
+    if kind == "progressive_code_wave":
+        return "borsuk-one-million-progressive-code-wave-terminal-v1"
     if kind == "two_bit_code_wave":
         return "borsuk-one-million-two-bit-code-wave-terminal-v1"
     if kind == "source_range":
@@ -224,6 +240,12 @@ def _terminal_schema(kind: str) -> str:
 
 def worker_script(plan: SelectorSpotPlan) -> str:
     """Generate a compact phase-separated worker with durable failure logs."""
+    if plan.selector_kind == "progressive_code_wave":
+        from scripts.native_one_million_progressive_code_projection_worker import (
+            progressive_code_wave_worker_script,
+        )
+
+        return progressive_code_wave_worker_script(plan)
     if plan.selector_kind == "two_bit_code_wave":
         from scripts.native_one_million_two_bit_code_projection_worker import (
             two_bit_code_wave_worker_script,
@@ -618,7 +640,7 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
             **{role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()},
             "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
         }
-    elif plan.selector_kind in {"page_oracle", "two_bit_code_wave"}:
+    elif plan.selector_kind in {"page_oracle", "two_bit_code_wave", "progressive_code_wave"}:
         from scripts.native_one_million_page_oracle_cell import PRIOR, PRIOR_PREFIX
 
         source_inputs = {
@@ -626,8 +648,11 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
             **{f"prior-{role}": {"uri": f"{PRIOR_PREFIX}{details[0]}", "sha256": details[1], "bytes": details[2]}
                for role, details in PRIOR.items()},
         }
-        if plan.selector_kind == "two_bit_code_wave":
-            import scripts.native_one_million_two_bit_code_projection_cell as code_wave
+        if plan.selector_kind in {"two_bit_code_wave", "progressive_code_wave"}:
+            if plan.selector_kind == "two_bit_code_wave":
+                import scripts.native_one_million_two_bit_code_projection_cell as code_wave
+            else:
+                import scripts.native_one_million_progressive_code_projection_cell as code_wave
 
             source_inputs.update({
                 role: {"uri": code_wave.PRIOR_PREFIX + path, "sha256": digest, "bytes": size}
@@ -776,7 +801,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range", "source_range", "two_bit_code_wave"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range", "source_range", "two_bit_code_wave", "progressive_code_wave"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(
