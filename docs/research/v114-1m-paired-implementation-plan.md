@@ -58,23 +58,23 @@ same-run exact oracle with the new planner is the paired comparator.
 
 ## Task 1: source-only 1M mirror
 
-- [ ] Write a tiny Parquet fixture with `feature_row_id, embedding`, a
+- [x] Write a tiny Parquet fixture with `feature_row_id, embedding`, a
   two-block SQ8 file and a reordered source layout. Assert the mirror's
   row bytes and sidecar hashes match the source-only inputs and that
   changed source/SQ8 hashes fail. Run the test and observe the expected
   failure before implementing.
-- [ ] Implement `seal_existing_sq8`. Use the V70 source-derived quantizer
+- [x] Implement `seal_existing_sq8`. Use the V70 source-derived quantizer
   rule `low=min(source)`, `span=max(max(source)-low,1e-12)`,
   `step=span/255` in f32. Verify that rule against the regenerated V77
   manifest in Task 2. Retain the existing SQ8 object path; do not copy
   780,000,000 bytes into a second file. Bind a generation marker and
   `max_nominees=512` without switching placement at a row threshold.
-- [ ] Run the narrow fixture test and mirror Rust tests. Commit and push
+- [x] Run the narrow fixture test and mirror Rust tests. Commit and push
   only after byte geometry and hashes pass.
 
 ## Task 2: paired offline returned-recall pipeline
 
-- [ ] Write a tiny deterministic 256-row, 64-D fixture for the generic
+- [x] Write a tiny deterministic 256-row, 64-D fixture for the generic
   roster, exact score, page-vote and returned-hit functions called by
   `prepare`/`reduce`. Keep the frozen 1M input wrapper separate from
   these geometry-driven functions. Assert V109 and exact arms see identical nominated
@@ -82,7 +82,7 @@ same-run exact oracle with the new planner is the paired comparator.
   only after routes and returned IDs are fixed, and that a Rust primary
   or range mismatch fails before reporting quality. Observe failing
   tests first.
-- [ ] Implement query preparation with V77's 1,024-region PQ64
+- [x] Implement query preparation with V77's 1,024-region PQ64
   nomination on the frozen 1M corpus. Keep row count, dimension, page
   geometry and budget explicit so the method can be tested on another
   corpus. Feed the Rust CLI one ordered JSONL request per query and
@@ -90,33 +90,33 @@ same-run exact oracle with the new planner is the paired comparator.
   V114 tie/byte planner for the oracle, and the V109 capped admission
   function for the paired baseline. Do not use historical V112 plans as
   the new oracle.
-- [ ] Implement returned scoring over the same fetched SQ8 page ranges
+- [x] Implement returned scoring over the same fetched SQ8 page ranges
   and `(score, ID)` final top 100 for all arms. Record per-query ordered
   returned IDs, GT hits, primary/page/range equality, GETs/bytes and
   score-bit parity. Reject any query with a primary, route or cap mismatch.
-- [ ] Run the fixture and focused Rust checks. Commit/push the pipeline.
+- [x] Run the fixture and focused Rust checks. Commit/push the pipeline.
 
 ## Task 3: one frozen Spot cell and decision
 
-- [ ] Add launcher/runner tests for source archive hash, immutable
+- [x] Add launcher/runner tests for source archive hash, immutable
   reservation, `c7i.12xlarge` Spot launch, terminal and termination.
   Run `bash -n` and `shellcheck -S warning`. Register current regional
   Spot price observations, 100-GiB-plus input storage need, interruption
   handling and instance identity before launch.
-- [ ] Archive the exact pushed revision; upload it with an S3
+- [x] Archive the exact pushed revision; upload it with an S3
   `If-None-Match: *` condition. On Spot, download and check frozen source,
   layout and SQ8 first. Seal the mirror with query/GT paths unavailable.
   Download and check query/GT only afterward, regenerate the V77
   manifest and verify its low/step exactly matches the sealed mirror.
-- [ ] Run a 200-query paired prefix. Require V109's historical 19,739
+- [x] Run a 200-query paired prefix. Require V109's historical 19,739
   GT hits and zero cap violations, exact RAM/file/reference score and
   route parity, and no source/query/GT identity drift. A failed prefix
   closes the attempt without promoting to 1,000. A passing prefix runs
   the same frozen implementation for all 1,000.
-- [ ] Independently validate terminal-listed artifacts by streaming
+- [x] Independently validate terminal-listed artifacts by streaming
   SHA-256 and byte counts after the terminal exists. Confirm EC2
   termination. Never read incomplete measurement files.
-- [ ] Promote to live S3 only if the all-1,000 production arm returns
+- [x] Promote to live S3 only if the all-1,000 production arm returns
   at least 99,000/100,000 GT hits, p05 is at least both 90 and the
   stronger of V109 p05 and paired exact-oracle p05 minus one, sub-90
   queries do not exceed paired V109, and all physical caps and exact

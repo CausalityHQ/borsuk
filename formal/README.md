@@ -9,6 +9,12 @@ tested against exhaustive small layouts. The proof does not establish
 query-time recall, live S3 latency or 100M memory peaks.
 It also proves that V112's 513-to-1 vote encoding ranks any gain of one
 precise nominee above at most 512 secondary votes.
+The generic vote theorem replaces 513 with `secondaryBudget + 1`: for any
+bounded secondary roster, one additional primary vote outweighs every
+possible secondary vote. This is an arithmetic design rule for a future
+larger shortlist, not evidence that such a shortlist meets recall or cost
+targets. The current V114 implementation still uses the frozen 512-row
+operating point; changing that point requires a new paired campaign.
 
 `NomineePrimaryStability.lean` proves a conditional V113 certificate: if
 each nominee has an authenticated score-error bound and the precise

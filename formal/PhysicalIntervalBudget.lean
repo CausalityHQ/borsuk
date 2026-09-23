@@ -66,4 +66,23 @@ theorem one_primary_vote_dominates_all_secondary_votes
   simp only [encodedVotes]
   omega
 
+/-! The vote factor is a function of the admitted secondary roster size,
+not of the corpus or embedding family. The fixed V112 factor 513 is its
+specialization to a shortlist of at most 512 rows. -/
+
+def genericEncodedVotes (secondaryBudget primary secondary : Nat) : Nat :=
+  (secondaryBudget + 1) * primary + secondary
+
+theorem one_primary_dominates_any_bounded_secondary_roster
+    (secondaryBudget primaryA primaryB secondaryA secondaryB : Nat)
+    (betterPrimary : primaryB < primaryA)
+    (boundedSecondary : secondaryB ≤ secondaryBudget) :
+    genericEncodedVotes secondaryBudget primaryB secondaryB <
+      genericEncodedVotes secondaryBudget primaryA secondaryA := by
+  have nextPrimary : primaryB + 1 ≤ primaryA := by omega
+  have weightedNext := Nat.mul_le_mul_left (secondaryBudget + 1) nextPrimary
+  simp only [Nat.mul_succ] at weightedNext
+  simp only [genericEncodedVotes]
+  omega
+
 end Borsuk.PhysicalIntervalBudget
