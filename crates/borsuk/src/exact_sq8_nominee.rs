@@ -1,30 +1,43 @@
 //! Exact local SQ8 nominee scoring over the authenticated D+12 row layout.
 
 use std::collections::HashSet;
+#[cfg(test)]
 use std::fs::File;
+#[cfg(test)]
 use std::os::unix::fs::FileExt;
 
 /// Physical SQ8 row geometry supplied by a generation manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sq8Geometry {
+    /// Number of physical SQ8 records.
     pub rows: usize,
+    /// Number of code bytes after each ID and norm.
     pub dimensions: usize,
 }
 
 /// A nominee score and its stable physical row identity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScoredNominee {
+    /// Physical record index in the generation object.
     pub ordinal: usize,
+    /// Stable vector identifier stored with the record.
     pub id: i64,
+    /// Squared-L2 score in the generation's SQ8 scale.
     pub score: f32,
 }
 
+/// Rejected exact-score input or local read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sq8ScoreError {
+    /// Row geometry cannot be represented or is empty.
     InvalidGeometry,
+    /// Object bytes or record fields violate the geometry.
     InvalidPlane,
+    /// Query or quantization coefficients are malformed.
     InvalidQuery,
+    /// Candidate ordinals or IDs are duplicated or out of bounds.
     InvalidRoster,
+    /// A positioned local read failed or ended short.
     IoFailure,
 }
 
@@ -104,7 +117,8 @@ pub fn score_nominees(
 
 /// Read exactly the nominated local rows; the caller must authenticate the
 /// immutable file before making it visible to serving queries.
-pub fn score_nominees_file(
+#[cfg(test)]
+pub(crate) fn score_nominees_file(
     file: &File,
     geometry: Sq8Geometry,
     ordinals: &[usize],

@@ -24,8 +24,13 @@ An immutable generation stores one SQ8 row object in V63 physical order:
 an authenticated mirror of the corresponding S3 object, not a second
 encoding. Its manifest binds the SHA-256 of all bytes, row count, dimension,
 low/step vectors, PQ64 codebook and row ordinals, layout permutation and
-generation ID. Hydration verifies the full object hash before publishing
-the generation for reads. A pinned old generation remains readable until
+generation ID and maximum nominee count for bounded per-query scratch.
+For disk placement, a source-only sidecar contains the
+SHA-256 of each consecutive 4,096-byte block of the exact SQ8 object,
+including the short final block. Its own full SHA-256 is in the generation
+manifest. Hydration verifies the full object and sidecar hashes before
+publishing the generation; each block read for a nominee is checked against
+its authenticated digest before its bytes are scored. A pinned old generation remains readable until
 its queries drain. Append and compaction publish a fresh authenticated
 generation; a partial or mismatched local mirror is never visible.
 
@@ -42,7 +47,10 @@ concurrent throughput. The exact SQ8 payload is `N × (D + 12) × G` bytes
 for `G` full pinned generations: 156 billion bytes for 100M rows at
 `D=768, G=2`, before metadata and allocation overhead. A disk placement
 uses the same payload on local storage but its charged RAM is measured,
-not assumed small.
+not assumed small. A 4-KiB SHA-256 sidecar adds approximately 610 million
+digest bytes per 78-billion-byte generation before allocator overhead;
+candidate rows may cross block boundaries, so local reads per query are
+measured rather than assumed to equal 512.
 
 `M(N,D,R,C,G)` is the measured least-cost frontier among qualified
 placements and representations. Requested recall and concurrency may

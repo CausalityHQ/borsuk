@@ -12,8 +12,11 @@ returned recall. It prepares the paired 1M gate in the design document.
 ## File boundaries
 
 - `crates/borsuk/src/exact_sq8_nominee.rs`: exact row geometry, bounds,
-  digest-checked local loading, placement choice, candidate score and
-  `(score, ID)` ranking. No S3 client or research dataset constants.
+  candidate score and `(score, ID)` ranking over RAM or positioned local
+  reads. No S3 client or research dataset constants.
+- `crates/borsuk/src/exact_sq8_mirror.rs`: generation-bound full-object
+  and 4-KiB block-digest verification, explicit RAM/file placement and
+  fail-closed read wrapper around the pure scorer.
 - `crates/borsuk/src/lib.rs`: export the module.
 - `scripts/v114_exact_local_100k.py`: frozen 100k two-phase gate. It writes
   a source-only authenticated SQ8 plane, then reads development queries
@@ -31,17 +34,21 @@ returned recall. It prepares the paired 1M gate in the design document.
 1. Write focused Rust tests first for a 3-row, 4-coordinate SQ8 object in
    the existing `id<i8>, norm<f4>, code[D]` little-endian layout. Check
    record offsets, deterministic score/ID tie order, a short final row,
-   invalid ordinals, short/corrupt files, wrong dimension, wrong SHA-256,
-   nonfinite query/norm and identical RAM/file outputs. The scorer must
+   invalid ordinals, short files, wrong dimension, nonfinite query/norm
+   and identical RAM/file outputs. The scorer must
    accept an explicit placement enum; it cannot switch on row count.
 2. Run only those tests. Confirm the new tests fail for the absent module.
-3. Implement the small module. Stream SHA-256 once before exposing a
-   generation. For RAM, hold verified bytes. For file placement, retain a
-   verified file descriptor and use positioned reads; keep bytes and row
-   scratch bounded by `512 × (D+12)` for a query. Bind the caller's
-   generation marker and SQ8 object hash to the opened handle. Reject a
-   file that changes between verification and use; the experiment may
-   ensure this by copying to a private, immutable local path before open.
+3. Implement the pure scorer. In the mirror wrapper, stream SHA-256 once
+   before exposing a generation. Bind the caller's generation marker,
+   maximum nominee count, SQ8 object hash and 4-KiB digest-sidecar hash
+   to the opened handle.
+   For RAM, hold verified bytes. For file placement, retain the verified
+   descriptor and digest table, read every 4-KiB block intersecting a
+   nominated row, and verify each block hash before scoring. Include the
+   short final block. Reject a changed or corrupt block. Keep row scratch
+   bounded by the 512-nominee roster and block scratch bounded by its
+   intersecting blocks. The hash table is a deliberate measured memory
+   cost, not an unaccounted cache.
 4. Run the focused tests and direct `rustc --test` check if Cargo would
    raise devbox memory pressure. Run `cargo fmt --check` for touched Rust
    files. Commit the coherent scorer slice.
@@ -86,8 +93,9 @@ returned recall. It prepares the paired 1M gate in the design document.
 
 ## Review focus
 
-- A verified file can be mutated after SHA-256 validation: the reader
-  needs a private immutable path or a repeated identity check.
+- A verified file can be mutated after whole-object SHA-256 validation:
+  authenticate each local 4-KiB block at query time against a
+  manifest-bound digest table.
 - Rust scalar `f32` accumulation can differ from NumPy matrix products:
   the 100k gate compares primary sets, records score differences, and
   uses one canonical operation order for both placements.
