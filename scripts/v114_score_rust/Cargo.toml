@@ -1,0 +1,10 @@
+[package]
+name = "borsuk-v114-score-gate"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+serde_json = "1.0"
+sha2 = "0.10"
