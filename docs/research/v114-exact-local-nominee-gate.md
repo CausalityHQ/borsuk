@@ -1,15 +1,17 @@
 # V114 exact local nominee tier: design and preregistered gates
 
-Status: source-frozen 100k correctness gate passed; paired 1M development
-and live S3 gates pending. See
-[the terminal-bound 100k closeout](v114-exact-local-100k-closeout.md).
+Status: source-frozen 100k correctness and paired 1M development gates passed;
+live S3 and cross-corpus gates pending. See
+[the terminal-bound 100k closeout](v114-exact-local-100k-closeout.md) and
+[paired 1M closeout](v114-1m-paired-closeout.md).
 V113's terminal ReLAION-100k
 development screen rejected a 16-byte resident residual plane: mean/p05
 SQ8-primary overlap 74.037/62 against the frozen 95/90 gate. It did not
 measure returned recall or serving latency. The candidate here changes
 **placement**, retaining the exact SQ8 nominee scores that produced V112's
-99.234% offline returned Recall@100 on ReLAION-1M development. That V112
-number is historical context, not a paired V114 measurement.
+99.234% offline returned Recall@100 on ReLAION-1M development. V114 now has
+its own paired, validated 99.234% offline result; V112 remains historical
+context, not the paired control.
 
 ## Intended outcome and architecture
 
@@ -25,9 +27,12 @@ dataset branch, or arbitrary vector-count knee.
 An immutable generation stores one SQ8 row object in V63 physical order:
 8-byte ID, 4-byte norm and `D` code bytes per row. The local score tier is
 an authenticated mirror of the corresponding S3 object, not a second
-encoding. Its manifest binds the SHA-256 of all bytes, row count, dimension,
-low/step vectors, PQ64 codebook and row ordinals, layout permutation and
-generation ID and maximum nominee count for bounded per-query scratch.
+encoding. The implemented mirror manifest binds the SHA-256 of all bytes,
+row count, dimension, low/step vectors, generation ID and maximum nominee
+count for bounded per-query scratch. The frozen V77 manifest separately
+binds PQ64 codebooks, codes, summaries, queries and truth; the 1M gate
+checks its whole-file SHA-256. A unified production generation authority
+must bind the router/layout and mirror together before release.
 For disk placement, a source-only sidecar contains the
 SHA-256 of each consecutive 4,096-byte block of the exact SQ8 object,
 including the short final block. Its own full SHA-256 is in the generation
