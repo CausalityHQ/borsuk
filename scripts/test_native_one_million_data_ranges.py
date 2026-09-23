@@ -1,5 +1,7 @@
 """Small exact cases for the query-only 1M data-range planner."""
 
+from itertools import combinations
+
 import pytest
 
 from scripts.native_one_million_data_ranges import admit_ranked_pages, minimum_cover
@@ -29,6 +31,25 @@ def test_distinct_roles_never_merge() -> None:
         1,
     )
     assert cover is None
+
+
+def test_minimum_cover_matches_exhaustive_four_page_covers() -> None:
+    lengths = (3, 9, 2, 7)
+    intervals = tuple((start, end) for start in range(4) for end in range(start + 1, 5))
+    for target_count in range(1, 5):
+        for targets in combinations(range(4), target_count):
+            for maximum_gets in range(1, 5):
+                actual = minimum_cover(
+                    {"base": lengths}, tuple(("base", page) for page in targets), maximum_gets
+                )
+                assert actual is not None
+                expected = min(
+                    sum(sum(lengths[start:end]) for start, end in choice)
+                    for count in range(1, maximum_gets + 1)
+                    for choice in combinations(intervals, count)
+                    if all(any(start <= page < end for start, end in choice) for page in targets)
+                )
+                assert actual.bytes == expected
 
 
 def test_admission_skips_expensive_page_and_counts_bridge() -> None:

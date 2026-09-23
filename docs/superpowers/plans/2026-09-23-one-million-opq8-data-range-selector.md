@@ -38,7 +38,7 @@
 - [x] Run only the focused pytest target; confirm initial import failure.
 - [x] Implement the minimum-byte cover and admission with exact integer accounting.
 - [x] Run the same focused tests and scoped Ruff check.
-- [ ] Commit the independently reviewable planner.
+- [x] Commit the independently reviewable planner.
 
 ### Task 2: Phase-separated 1M source-only cell
 
