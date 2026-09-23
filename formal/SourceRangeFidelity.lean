@@ -72,6 +72,41 @@ theorem query_stays_at_least_ninety
   have accounting := source_hits_le_compressed_plus_lost pairs
   omega
 
+/-! A per-query source score and a certified bound on lost truth positions
+identify which queries could fall below 90. Counting those at-risk queries
+is enough to establish the lower-tail gate without assuming the compressed
+tail result separately. -/
+
+def belowNinetyQueries (queries : List (List (Bool × Bool))) : Nat :=
+  (queries.filter fun pairs => compressedHits pairs < 90).length
+
+def atRiskQueries (queries : List (List (Bool × Bool))) : Nat :=
+  (queries.filter fun pairs => sourceHits pairs < 90 + lostHits pairs).length
+
+theorem below_ninety_le_at_risk
+    (queries : List (List (Bool × Bool))) :
+    belowNinetyQueries queries ≤ atRiskQueries queries := by
+  induction queries with
+  | nil => simp [belowNinetyQueries, atRiskQueries]
+  | cons pairs rest ih =>
+      have accounting := source_hits_le_compressed_plus_lost pairs
+      by_cases low : compressedHits pairs < 90
+      · have risk : sourceHits pairs < 90 + lostHits pairs := by omega
+        simp [belowNinetyQueries, atRiskQueries, low, risk] at *
+        omega
+      · by_cases risk : sourceHits pairs < 90 + lostHits pairs
+        · simp [belowNinetyQueries, atRiskQueries, low, risk] at *
+          omega
+        · simp [belowNinetyQueries, atRiskQueries, low, risk] at *
+          omega
+
+theorem lower_tail_gate_of_at_risk_certificate
+    (queries : List (List (Bool × Bool)))
+    (at_risk : atRiskQueries queries ≤ 49) :
+    belowNinetyQueries queries ≤ 49 := by
+  have bound := below_ninety_le_at_risk queries
+  omega
+
 /-! A 96-byte sign record has 752 bits and one binary16 scale. The same
 arithmetic applies to PQ96, though its scorer has different CPU work.
 Headers, IDs, authentication data and source vectors are not row bytes. -/

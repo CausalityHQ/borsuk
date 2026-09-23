@@ -39,6 +39,11 @@ latency or parallel-wave scheduling from source code alone.
 `SourceRangeFidelity.lean` adds paired finite-cohort hit accounting:
 authenticated source/compressed hit pairs and bounded lost hits imply
 the 100k and 1M aggregate fidelity floors. It separately proves the
+number of compressed-score queries below 90 GT100 cannot exceed the
+number of source-score queries at risk after charging their certified
+lost hits. A certificate of at most 49 at-risk queries therefore proves
+the 1M sub-90 gate. This still needs authenticated per-query hit/loss data.
+The file also proves the
 96-byte sign/PQ record arithmetic, a conditional 16-MiB **code** payload
 row bound, 94 sign or 96 PQ table lookups per fetched row, and 9.6 billion
 PQ lookups for a full 100M-row scan. It proves page-minimum score order
