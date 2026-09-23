@@ -138,3 +138,11 @@ development object. The builder cannot see query bytes before the mirror
 and provenance record are sealed. A Spot interruption makes the attempt
 invalid: sync the terminal artifacts, discard the interrupted cell, and
 reserve a new immutable attempt prefix before rerunning.
+
+The first attempt (`584f456e`, `a0001`, instance
+`i-0e4c6ea2388d800c0`) ended with a terminal `exit_code=1` in the
+install phase after 16 seconds and was terminated. Its completed install
+log identifies an Amazon Linux `curl` versus installed `curl-minimal`
+package conflict. It produced no mirror, queries or quality measurement.
+The next source revision removes the redundant `curl` install and uses a
+new immutable run prefix.
