@@ -58,12 +58,17 @@ this layout without constructing a code plane. No width, priority, merge
 rule or threshold may be tuned against this reused development cohort.
 
 If it passes, run one frozen 1M source-only paired scoring cell on precisely
-the mirrored cover. Compare bit-exact reconstructed two-bit scores against
-exact source scores on the same rows, and report the historical 98,920
+the mirrored cover. Rejoin the two-bit records bit for bit, then compare
+their frozen float32 batched-matrix scores against exact source scores on
+the same rows. The batched matrix reduction can round differently from
+the historical per-row scorer; this paired cell measures that arithmetic.
+Report the historical 98,920
 GT100/p05 94 full-group exact-source diagnostic separately. The final
 numerical gate is GT100 ≥98,151, GT10 ≥9,928, p05 GT100 ≥90, at most
 49 sub-90 queries, and ≤32 GETs/16 MiB for each code and data wave. A pass
-still requires authenticated actual S3 reads and an untouched query cohort
+also requires net paired GT100 loss from the same-cover exact-source arm
+of at most 300 positions; gross lost and recovered positions are reported.
+A pass still requires authenticated actual S3 reads and an untouched query cohort
 before any serving claim, then a frozen 10M/100M scale gate.
 
 Use Causality Spot, an exact pushed source archive and one immutable attempt
@@ -81,6 +86,9 @@ ceiling for concurrent code waves followed by the data wave. A production
 claim additionally needs byte-level Python refinement, authenticated
 page-cover certificates, checked physical range offsets, measured service
 times and held-out recall. None is inferred from the formal arithmetic.
+The paired cell's independent validator checks all rejoined page payloads,
+code-wave/data-wave geometry and truth masks; it does not independently
+recompute every floating-point score priority.
 
 ## Closed 1M projection decision
 

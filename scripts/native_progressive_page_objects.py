@@ -110,11 +110,14 @@ def write_page_objects(
     return seal
 
 
-def read_authenticated_page(root: Path, seal: dict[str, object], page: int) -> np.ndarray:
-    """Read matching local page ranges after authenticating each payload."""
+def read_authenticated_page(
+    root: Path, seal: dict[str, object], page: int, *, authenticated_seal: bool = False,
+) -> np.ndarray:
+    """Read local page ranges; a skipped seal read requires caller authentication."""
     if (
         type(seal) is not dict or seal.get("schema") != SCHEMA
-        or (root / "progressive-code-seal.json").read_bytes() != _canonical(seal)
+        or (not authenticated_seal and
+            (root / "progressive-code-seal.json").read_bytes() != _canonical(seal))
         or type(page) is not int or not 0 <= page < len(seal["page_row_counts"])
     ):
         raise ValueError("progressive page seal differs")
