@@ -1,6 +1,9 @@
 # V114 exact local nominee tier: design and preregistered gates
 
-Status: unimplemented candidate, 2026-09-23. V113's terminal ReLAION-100k
+Status: source-frozen 100k correctness gate passed; paired 1M development
+and live S3 gates pending. See
+[the terminal-bound 100k closeout](v114-exact-local-100k-closeout.md).
+V113's terminal ReLAION-100k
 development screen rejected a 16-byte resident residual plane: mean/p05
 SQ8-primary overlap 74.037/62 against the frozen 95/90 gate. It did not
 measure returned recall or serving latency. The candidate here changes
