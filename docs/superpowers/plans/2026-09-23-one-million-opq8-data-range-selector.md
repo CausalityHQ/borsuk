@@ -50,7 +50,7 @@
 - [x] Run the core tests red, implement phase boundaries and deterministic ranking, then run focused tests green.
 - [x] Complete historical-plan mismatch and resource-boundary regression coverage before launch.
 - [x] Add phase and resource receipts; label the result as source-only.
-- [ ] Commit the cell and validator after scoped lint and focused tests.
+- [x] Commit the cell and validator after scoped lint and focused tests.
 
 ### Task 3: Spot execution and independent closeout
 
@@ -58,7 +58,7 @@
 
 - [x] Add create-only source/terminal upload, readback authentication, Causality Spot default, zero-swap/3-GiB resource gate and terminal-driven shutdown.
 - [x] Test the worker and launcher using a tiny synthetic fixture; run scoped Ruff.
-- [ ] Commit and fast-forward push to `origin/main` before creating the archive.
-- [ ] Check durable consultation and instance lists for an existing attempt; launch only if none is active.
-- [ ] Monitor terminal and instance health without opening incomplete measurement files.
-- [ ] Authenticate terminal-listed artifacts, independently recompute all page hit masks and budget counts, record the decision, and stop compute.
+- [x] Commit and fast-forward push to `origin/main` before creating the archive.
+- [x] Check durable consultation and instance lists for an existing attempt; launch only if none is active.
+- [x] Monitor terminal and instance health without opening incomplete measurement files.
+- [x] Authenticate terminal-listed artifacts, independently recompute all page hit masks and budget counts, record the decision, and stop compute.

@@ -1,6 +1,10 @@
 # ReLAION-1M OPQ8 query-only data-range selector gate
 
-Status: design for the next source-only decision. No outcome is claimed.
+Status: preregistration completed. The sole terminal-closed attempt
+`relaion-1m-dev1000-a0001` failed the fixed gate and killed this selector;
+the immutable result and independent closeout are recorded in
+`docs/research/algorithm-first-page-layout-ledger.md`. The frozen method
+below remains the preregistered method, not a revised proposal.
 
 ## Decision
 

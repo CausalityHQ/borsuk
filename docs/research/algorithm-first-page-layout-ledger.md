@@ -4949,3 +4949,81 @@ queries. This post-closeout diagnostic is an existence witness, not a
 query-only quality result or a promotion gate. The next architecture
 decision tests score-driven interval selection over the existing page
 layout before any 96-byte row-code campaign.
+
+### ReLAION-1M OPQ8 score-driven data ranges a0001: selector killed
+
+The preregistered query-only data-range gate in
+`docs/superpowers/specs/2026-09-23-one-million-opq8-data-range-selector-design.md`
+reused the exact terminal-closed candidate and page-centroid group plans,
+the authenticated 8-byte OPQ8 physical code plane, and the original
+base/delta page order. For each query it ranked pages from OPQ8 row ADC
+scores, then greedily admitted priority pages under a minimum-byte cover
+of at most 32 contiguous same-role GET ranges and 16,777,216 encoded
+bytes. Both arm plans were sealed and uploaded before truth was fetched.
+This was a source-only decision: it performed no query data-page reads
+and measured no serving latency.
+
+Pushed source `d9dd64ac00920eabd2200078291666757b2d25df` was sealed
+in an 11,227,897-byte create-only archive with SHA-256
+`fe0d1973b88e4e198904f0ed872e8ae61bd42e2623a36bff676d9017905b3abd`.
+The sole attempt was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-data-range-selector/d9dd64ac00920eabd2200078291666757b2d25df/runs/relaion-1m-dev1000-a0001/`.
+Its complete terminal SHA-256 is
+`ce0bf33bf97ab390e011474b180ea7c419f47ad1ea0c61d2c47ca4593fe725b5`.
+The original controller exited zero; Causality Spot
+`i-083d95a0fb2091307` (`c7i.8xlarge`) was confirmed terminated.
+The 15 terminal-listed artifacts were separately downloaded and
+authenticated. Independent closeout checked the terminal, reservation,
+read-back source archive, every artifact and zero-swap resource receipt,
+then recounted all 1,000 truth-owner masks and range bytes from the
+sealed plans. The 40,009,368-byte plans, 2,726,248-byte evidence,
+result and validation SHA-256 values were
+`327b5739e67b6417664af545592bbe5d14448713d26ff8f8bd9ceee670b8e86d`,
+`0784a5aeb63beb294544a82db73068945a4f62754f6abf6b64c486e639c5eaf8`,
+`22705b5fb2fd62a2db23ff41dce775104dabb08b681206219ba63c811943438a`
+and `c4becfb3a6cacd45c9ca1432ba1c037a6612375e287b1bb39e87a3e666465c84`.
+
+| Frozen 1M plans, 1,000 development queries | Page-centroid control | OPQ8 route | fixed candidate gate |
+|---|---:|---:|---:|
+| selected-group GT100 | 98,151 / 100,000 | 98,985 / 100,000 | historical route result |
+| final-range GT100 | **91,541 / 100,000** | 91,282 / 100,000 | ≥98,151 |
+| final-range GT10 | **9,590 / 10,000** | 9,569 / 10,000 | ≥9,928 |
+| final-range p05 GT100 | **65 / 100** | 64 / 100 | ≥90 |
+| final-range queries below 90 GT100 | **276** | 281 | ≤49 |
+| maximum data GET ranges | 32 | 32 | ≤32 |
+| maximum encoded data bytes | 16,777,216 | 16,777,208 | ≤16,777,216 |
+
+Paired GT100 query outcomes were 92 candidate better, 187 control
+better and 721 tied. Candidate group-to-range loss was 7,703 GT100
+positions versus 6,610 for control; the 834-position group advantage
+became a 259-position final-range deficit. Of the candidate's 8,718
+final misses, 1,015 truth positions had owner pages outside selected groups
+and 7,703 had owner pages inside them. Among in-group missed truth positions,
+9 ranked 33–64,
+2,307 ranked 65–128, 3,822 ranked 129–256, 1,486 ranked 257–512
+and 79 ranked 513–1,024 in the sealed score-only page priority. The
+median candidate priority list had 975 pages, while the median admitted
+range included 125 pages. All 91,282 candidate hits were on admitted
+target pages; bridged pages produced no extra hits. These closed-cohort
+diagnostics show a score-priority/admission loss under the saturated
+data-wave budget, but do not yet distinguish OPQ8 score distortion from
+the greedy range schedule. The earlier truth-aware interval witness
+shows the frozen layout and I/O caps can in principle retain 98,935
+GT100 positions; it uses truth and is not a production selector.
+
+Construct, plan, evaluate and validate maximum RSS were 1,127,492,
+696,140, 855,868 and 1,126,820 KiB; sampled process-tree peaks were
+609,865,728, 674,476,032, 874,627,072 and 860,778,496 bytes.
+Every phase recorded zero swaps and passed the 3-GiB-with-margin cap.
+The complete terminal elapsed 582 seconds.
+
+**Decision:** `data-range-selector-killed`. Do not promote this 8-byte
+OPQ8 score-driven page nomination or build the old PQ96/32-page code
+object under the failed rule. The next diagnostic holds the exact sealed
+group plans, physical page layout, range planner and I/O caps fixed,
+and substitutes source-vector row distances for OPQ8 scores. A pass
+would assign material loss to score representation and justify a
+larger row-code candidate; a miss would implicate page ranking/scheduling
+or locality and require a revised final-wave architecture. This same
+1,000-query cohort is development evidence; any later actual-read
+qualification must include a fresh untouched query cohort.
