@@ -40,6 +40,10 @@ It also gives a conditional **three-wave** ceiling for separate sign,
 magnitude and data GET waves, each capped at 32 requests and 16 MiB.
 The third wave can increase actual latency; only measured service-time
 bounds can make the theorem a useful numerical SLO certificate.
+For matching sign and magnitude page covers issued concurrently, a
+separate theorem bounds latency by the slower code wave plus the data
+wave, conditional on a joint-completion service premise. It does not
+establish that the S3 client or network actually achieves that overlap.
 
 `SourceRangeFidelity.lean` adds paired finite-cohort hit accounting:
 authenticated source/compressed hit pairs and bounded lost hits imply
@@ -83,6 +87,11 @@ contain at most 161,319 rows and the magnitude wave at most 174,762.
 These statements establish neither coverage of the sealed 1M group
 plan at the new 104-byte width nor fidelity of rows fetched from only
 the first plane. Both need a frozen source-only gate before promotion.
+If both planes fetch the same pages, Lean additionally proves the
+96-byte magnitude payload cannot exceed the 104-byte sign payload;
+the sign wave's 16-MiB payload cap therefore suffices for the mirrored
+magnitude payload. The GET-count relationship assumes matching page
+intervals and requires a reader/planner refinement certificate.
 
 For the proposed page-local code object, a further theorem proves that
 the exact payload of the pages in a physical code cover is 200 times

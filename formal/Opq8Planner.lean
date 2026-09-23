@@ -408,6 +408,45 @@ theorem bounded_three_wave_latency
   have dataTransferBound := Nat.mul_le_mul_right dataByteTime dataBytesBound
   omega
 
+/-! Mirrored sign and magnitude pages can be requested together because
+the second page list does not depend on the first wave's scores. A bound
+on their *joint* completion time by the slower of the two individual
+service bounds is an explicit concurrency premise, not an S3 guarantee. -/
+
+def parallelCodeDataLatencyBound
+    (localTime signRequestTime signByteTime magnitudeRequestTime
+      magnitudeByteTime dataRequestTime dataByteTime : Nat) : Nat :=
+  localTime + max
+    (32 * signRequestTime + 16777216 * signByteTime)
+    (32 * magnitudeRequestTime + 16777216 * magnitudeByteTime) +
+    32 * dataRequestTime + 16777216 * dataByteTime
+
+theorem bounded_parallel_code_data_latency
+    (signGets signBytes magnitudeGets magnitudeBytes dataGets dataBytes
+      localTime signRequestTime signByteTime magnitudeRequestTime
+      magnitudeByteTime dataRequestTime dataByteTime observedTime : Nat)
+    (signGetsBound : signGets ≤ 32)
+    (signBytesBound : signBytes ≤ 16777216)
+    (magnitudeGetsBound : magnitudeGets ≤ 32)
+    (magnitudeBytesBound : magnitudeBytes ≤ 16777216)
+    (dataGetsBound : dataGets ≤ 32)
+    (dataBytesBound : dataBytes ≤ 16777216)
+    (serviceBound : observedTime ≤ localTime + max
+      (signGets * signRequestTime + signBytes * signByteTime)
+      (magnitudeGets * magnitudeRequestTime + magnitudeBytes * magnitudeByteTime) +
+      dataGets * dataRequestTime + dataBytes * dataByteTime) :
+    observedTime ≤ parallelCodeDataLatencyBound localTime signRequestTime
+      signByteTime magnitudeRequestTime magnitudeByteTime dataRequestTime
+      dataByteTime := by
+  unfold parallelCodeDataLatencyBound
+  have signRequestBound := Nat.mul_le_mul_right signRequestTime signGetsBound
+  have signTransferBound := Nat.mul_le_mul_right signByteTime signBytesBound
+  have magnitudeRequestBound := Nat.mul_le_mul_right magnitudeRequestTime magnitudeGetsBound
+  have magnitudeTransferBound := Nat.mul_le_mul_right magnitudeByteTime magnitudeBytesBound
+  have dataRequestBound := Nat.mul_le_mul_right dataRequestTime dataGetsBound
+  have dataTransferBound := Nat.mul_le_mul_right dataByteTime dataBytesBound
+  omega
+
 def regionTableLookups (visitedRows : Nat) : Nat := 8 * visitedRows
 
 theorem region_lookup_bound (visitedRows regionCap : Nat)

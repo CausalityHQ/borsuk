@@ -223,6 +223,29 @@ theorem magnitude_plane_wave_row_budget
   simp only [magnitudePlaneRecordBytes] at budget
   omega
 
+def selectedSignPlaneBytes (rowCounts : List Nat) : Nat :=
+  (rowCounts.map (fun rows => signPlaneRecordBytes * rows)).sum
+
+def selectedMagnitudePlaneBytes (rowCounts : List Nat) : Nat :=
+  (rowCounts.map (fun rows => magnitudePlaneRecordBytes * rows)).sum
+
+theorem magnitude_payload_le_sign_payload (rowCounts : List Nat) :
+    selectedMagnitudePlaneBytes rowCounts ≤ selectedSignPlaneBytes rowCounts := by
+  induction rowCounts with
+  | nil => simp [selectedMagnitudePlaneBytes, selectedSignPlaneBytes]
+  | cons rows rest ih =>
+      simp only [selectedMagnitudePlaneBytes, selectedSignPlaneBytes,
+        List.map_cons, List.sum_cons] at *
+      simp only [magnitudePlaneRecordBytes, signPlaneRecordBytes] at *
+      omega
+
+theorem mirrored_magnitude_wave_within_budget
+    (rowCounts : List Nat)
+    (signBudget : selectedSignPlaneBytes rowCounts ≤ 16777216) :
+    selectedMagnitudePlaneBytes rowCounts ≤ 16777216 := by
+  have smaller := magnitude_payload_le_sign_payload rowCounts
+  omega
+
 theorem hundred_million_two_bit_code_bytes :
     twoBitRecordBytes * 100000000 = 20000000000 := by decide
 
