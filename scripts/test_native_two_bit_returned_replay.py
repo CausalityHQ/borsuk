@@ -58,22 +58,26 @@ class SelectedPositionsTests(unittest.TestCase):
             source_ordinals=(0, 1, 2),
         )
         sample = SimpleNamespace(group_ranges=codes.group_ranges, code_gets=1,
-                                 code_bytes=608, query_ordinal=0)
+                                 code_bytes=608, query_ordinal=0,
+                                 grouped_hits_at_100=2)
         result = replay.replay_query(
             sample, codes, vectors[0], vectors,
             (b"a", b"b", b"c"), (b"a", b"b"), top_k=2,
         )
         self.assertEqual(result["candidate_rows"], 3)
+        self.assertEqual(result["grouped_hits"], 2)
         self.assertEqual(result["exact_hits"], 2)
         self.assertEqual(result["two_bit_hits"], 2)
 
     def test_summary_keeps_paired_loss_separate_from_marginal_tail(self) -> None:
         cases = [
             {"query_ordinal": 0, "candidate_rows": 3, "code_gets": 1,
-             "code_bytes": 608, "exact_hits": 2, "two_bit_hits": 1,
+             "code_bytes": 608, "grouped_hits": 2,
+             "exact_hits": 2, "two_bit_hits": 1,
              "paired_loss": 1},
             {"query_ordinal": 1, "candidate_rows": 3, "code_gets": 1,
-             "code_bytes": 608, "exact_hits": 1, "two_bit_hits": 1,
+             "code_bytes": 608, "grouped_hits": 1,
+             "exact_hits": 1, "two_bit_hits": 1,
              "paired_loss": 0},
         ]
         summary = replay.summarize_results(cases, expected_queries=2, top_k=2)
@@ -81,6 +85,10 @@ class SelectedPositionsTests(unittest.TestCase):
         self.assertEqual(summary["exact_recall_at_k_ppm"], 750_000)
         self.assertEqual(summary["two_bit_p05_hits"], 1)
         self.assertEqual(summary["p95_paired_loss_hits"], 1)
+        cases[0]["exact_hits"] = 0
+        cases[0]["paired_loss"] = -1
+        with self.assertRaisesRegex(ValueError, "exact control"):
+            replay.summarize_results(cases, expected_queries=2, top_k=2)
 
     def test_terminal_receipt_binds_closed_artifact_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -118,7 +126,8 @@ class SelectedPositionsTests(unittest.TestCase):
             source_ordinals=(0, 1, 2),
         )
         sample = SimpleNamespace(group_ranges=codes.group_ranges, code_gets=1,
-                                 code_bytes=608, query_ordinal=0)
+                                 code_bytes=608, query_ordinal=0,
+                                 grouped_hits_at_100=2)
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)
             summary = replay.replay_loaded(

@@ -113,6 +113,13 @@ def replay_query(
     ):
         raise ValueError("returned query authority differs")
     sources = tuple(codes.source_ordinals[position] for position in positions)
+    grouped_ids = {stable_ids[source] for source in sources}
+    grouped_hits = sum(value in grouped_ids for value in truth_ids)
+    if (
+        type(getattr(sample, "grouped_hits_at_100", None)) is not int
+        or grouped_hits != sample.grouped_hits_at_100
+    ):
+        raise ValueError("returned closed group-containment authority differs")
     primary, _ = score_records(
         query, codes.mean, codes.records[list(positions)],
         rotation_seed=codes.rotation_seed,
@@ -120,11 +127,14 @@ def replay_query(
     exact = exact_scores(query, vectors, sources)
     two_bit_hits = ranked_hits(primary, sources, stable_ids, truth_ids, top_k=top_k)
     exact_hits = ranked_hits(exact, sources, stable_ids, truth_ids, top_k=top_k)
+    if two_bit_hits > grouped_hits or exact_hits > grouped_hits:
+        raise ValueError("returned hit exceeds fetched truth authority")
     return {
         "query_ordinal": sample.query_ordinal,
         "candidate_rows": len(positions),
         "code_gets": sample.code_gets,
         "code_bytes": sample.code_bytes,
+        "grouped_hits": grouped_hits,
         "two_bit_hits": two_bit_hits,
         "exact_hits": exact_hits,
         "paired_loss": exact_hits - two_bit_hits,
@@ -137,7 +147,7 @@ def summarize_results(
     """Keep returned mean, marginal tail and paired loss as distinct metrics."""
     fields = {
         "query_ordinal", "candidate_rows", "code_gets", "code_bytes",
-        "two_bit_hits", "exact_hits", "paired_loss",
+        "grouped_hits", "two_bit_hits", "exact_hits", "paired_loss",
     }
     if (
         type(expected_queries) is not int or expected_queries <= 0
@@ -153,8 +163,9 @@ def summarize_results(
             or case["candidate_rows"] < top_k
             or not 0 < case["code_gets"] <= 32
             or not 0 < case["code_bytes"] <= 16_777_216
-            or not 0 <= case["two_bit_hits"] <= top_k
-            or not 0 <= case["exact_hits"] <= top_k
+            or not 0 <= case["grouped_hits"] <= top_k
+            or not 0 <= case["two_bit_hits"] <= case["grouped_hits"]
+            or not 0 <= case["exact_hits"] <= case["grouped_hits"]
             or case["paired_loss"] != case["exact_hits"] - case["two_bit_hits"]
         ):
             raise ValueError("returned per-query authority differs")
@@ -163,6 +174,15 @@ def summarize_results(
     primary = sorted(case["two_bit_hits"] for case in cases)
     exact = sorted(case["exact_hits"] for case in cases)
     losses = sorted(case["paired_loss"] for case in cases)
+    exact_shortfall = sum(case["grouped_hits"] - case["exact_hits"] for case in cases)
+    exact_mismatch_count = sum(
+        case["grouped_hits"] != case["exact_hits"] for case in cases
+    )
+    if (
+        exact_shortfall > max(1, math.ceil(expected_queries * 0.01))
+        or exact_mismatch_count > max(1, math.ceil(expected_queries * 0.01))
+    ):
+        raise ValueError("returned exact control differs from closed containment")
     return {
         "query_count": expected_queries,
         "top_k": top_k,
@@ -172,6 +192,9 @@ def summarize_results(
         "exact_p05_hits": exact[percentile05],
         "p95_paired_loss_hits": losses[percentile95],
         "net_paired_loss_hits": sum(losses),
+        "grouped_truth_hits": sum(case["grouped_hits"] for case in cases),
+        "exact_shortfall_from_grouped_hits": exact_shortfall,
+        "exact_grouped_mismatch_queries": exact_mismatch_count,
         "two_bit_sub90_count": sum(value < math.ceil(top_k * 0.9) for value in primary),
         "exact_sub90_count": sum(value < math.ceil(top_k * 0.9) for value in exact),
         "maximum_code_gets": max(case["code_gets"] for case in cases),
@@ -228,8 +251,8 @@ def replay_loaded(
     return summary
 
 
-def run_closed_replay(root: Path, out: Path) -> dict[str, int]:
-    """Load only pinned closed artifacts before evaluating returned recall."""
+def load_closed_inputs(root: Path) -> tuple[object, ...]:
+    """Authenticate old terminal, source, code, plans, queries and truth."""
     from scripts.native_geometric_layout_screen import ArtifactIdentity
     from scripts.native_page_microcluster_cell import (
         FROZEN_INPUTS,
@@ -274,10 +297,15 @@ def run_closed_replay(root: Path, out: Path) -> dict[str, int]:
     queries, truth = _read_queries_truth(root, inputs)
     if len(samples) != 1000 or len(queries) != 1000:
         raise ValueError("returned closed query roster differs")
-    return replay_loaded(
+    return (
         queries, vectors, tuple(ids), tuple(tuple(values) for values in truth),
-        codes, samples, out,
+        codes, samples,
     )
+
+
+def run_closed_replay(root: Path, out: Path) -> dict[str, int]:
+    """Load only pinned closed artifacts before evaluating returned recall."""
+    return replay_loaded(*load_closed_inputs(root), out)
 
 
 def main() -> None:
