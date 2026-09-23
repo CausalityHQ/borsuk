@@ -194,6 +194,17 @@ lower bound. These are plan bytes, not observed S3 transfer or a measured
 rate. Parallel code GETs can overlap in time but cannot remove their
 aggregate network demand.
 
+The repository certificate
+[`progressive-transfer-floor-certificate.json`](progressive-transfer-floor-certificate.json)
+is reproducible with `scripts/certify_native_progressive_transfer_floor.py`.
+It checks canonical terminal JSON against the recorded terminal SHA-256s,
+authenticates both complete terminal artifact receipts, matches the paired
+plan to its predecessor, checks all 1,000 query ordinals and mirrored page
+covers, then recomputes per-wave and combined plan-byte minima. The script
+does not replay the physical S3 range geometry, which the closed remote
+validators checked separately. Its 49,013,672-byte floor is a finite
+development-cohort premise for Lean, not a claim about future queries.
+
 **Paired-cell decision:** `advance-to-actual-read-and-held-out-gate` under the frozen
 paired rule. Authenticate actual S3 range reads of both code planes and
 the SQ8 data wave, measure returned neighbor recall after reranking,
