@@ -59,7 +59,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
@@ -220,6 +220,8 @@ phase=complete
     replacements = {
         "@OUTPUT@": _q(plan.output_prefix.rstrip("/")),
         "@CELL_MODULE@": (
+            "scripts.native_one_million_byte_ceiling_cell" if plan.selector_kind == "byte"
+            else
             "scripts.native_one_million_range_selector_cell" if plan.selector_kind == "range"
             else "scripts.native_one_million_page_selector_cell" if plan.selector_kind == "page"
             else "scripts.native_one_million_selector_cell"
@@ -463,7 +465,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(

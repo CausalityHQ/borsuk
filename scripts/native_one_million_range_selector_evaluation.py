@@ -19,6 +19,8 @@ from scripts.v97_row_width_screen import ObjectIdentity, _canonical_json_bytes
 
 SCHEMA = "borsuk-one-million-range-selector-result-v1"
 EVIDENCE_SCHEMA = "borsuk-one-million-range-selector-evidence-v1"
+BYTE_SCHEMA = "borsuk-one-million-byte-ceiling-result-v1"
+BYTE_EVIDENCE_SCHEMA = "borsuk-one-million-byte-ceiling-evidence-v1"
 MAXIMUM_GETS = 32
 MAXIMUM_BYTES = 16_777_216
 
@@ -73,7 +75,9 @@ def plan_group_ranges(
     return tuple(ordered), tuple(intervals), gets, bytes_used
 
 
-def aggregate_range_samples(samples: list[dict[str, object]]) -> dict[str, int | str]:
+def aggregate_range_samples(
+    samples: list[dict[str, object]], *, byte_only: bool = False,
+) -> dict[str, int | str]:
     if not samples or any(sample["query_ordinal"] != i for i, sample in enumerate(samples)):
         raise ValueError("range-selector samples differ")
     count = len(samples)
@@ -90,14 +94,16 @@ def aggregate_range_samples(samples: list[dict[str, object]]) -> dict[str, int |
         "max_code_gets": max(int(sample["projected_code_gets"]) for sample in samples),
         "max_groups_selected": max(len(sample["selected_groups"]) for sample in samples),
     }
-    metrics["decision"] = (
-        "adjacent-code-range-selector-feasible"
-        if metrics["mean_recall_at_100_ppm"] >= 975000
+    quality_pass = (
+        metrics["mean_recall_at_100_ppm"] >= 975000
         and metrics["p05_recall_at_100_ppm"] >= 900000
         and metrics["mean_recall_at_10_ppm"] >= 960000
         and metrics["max_projected_code_bytes"] <= MAXIMUM_BYTES
-        and metrics["max_code_gets"] <= MAXIMUM_GETS
-        else "adjacent-code-range-selector-killed"
+    )
+    metrics["decision"] = (
+        ("score-ranked-byte-ceiling-feasible" if quality_pass else "score-ranked-byte-ceiling-fails")
+        if byte_only else
+        ("adjacent-code-range-selector-feasible" if quality_pass and metrics["max_code_gets"] <= MAXIMUM_GETS else "adjacent-code-range-selector-killed")
     )
     return metrics
 
@@ -105,6 +111,7 @@ def aggregate_range_samples(samples: list[dict[str, object]]) -> dict[str, int |
 def evaluate_range_selector(
     artifact: PageSelectorArtifact, queries: Path, truth: Path, out: Path,
     identities: Mapping[str, ObjectIdentity], *, query_count: int = 1000,
+    byte_only: bool = False,
 ) -> dict[str, object]:
     vectors, truth_ids = _query_truth(queries, truth, identities, query_count=query_count)
     positions = np.searchsorted(artifact.membership_ids, truth_ids)
@@ -114,7 +121,10 @@ def evaluate_range_selector(
     samples: list[dict[str, object]] = []
     for ordinal, query in enumerate(vectors):
         ranked = rank_page_groups(query, artifact)
-        selected, intervals, gets, bytes_used = plan_group_ranges(artifact.groups, ranked)
+        selected, intervals, gets, bytes_used = plan_group_ranges(
+            artifact.groups, ranked,
+            maximum_gets=len(artifact.groups) if byte_only else MAXIMUM_GETS,
+        )
         chosen = set(selected)
         row = owners[ordinal]
         samples.append({
@@ -126,13 +136,14 @@ def evaluate_range_selector(
             "hits_at_10": sum(int(value) in chosen for value in row[:10]),
             "hits_at_100": sum(int(value) in chosen for value in row),
         })
-    metrics = aggregate_range_samples(samples)
-    evidence = {"schema": EVIDENCE_SCHEMA, "samples": samples, "metrics": metrics}
+    metrics = aggregate_range_samples(samples, byte_only=byte_only)
+    evidence = {"schema": BYTE_EVIDENCE_SCHEMA if byte_only else EVIDENCE_SCHEMA, "samples": samples, "metrics": metrics}
     out.mkdir(parents=True, exist_ok=True)
     evidence_body = _canonical_json_bytes(evidence)
     (out / "evidence.json").write_bytes(evidence_body)
     result: dict[str, object] = {
-        "schema": SCHEMA, "decision": metrics["decision"], "claim_eligible": False,
+        "schema": BYTE_SCHEMA if byte_only else SCHEMA,
+        "decision": metrics["decision"], "claim_eligible": False,
         "query_identity": dataclasses.asdict(identities["queries"]),
         "truth_identity": dataclasses.asdict(identities["truth"]),
         "selector_seal_sha256": hashlib.sha256(_canonical_json_bytes(artifact.seal)).hexdigest(),

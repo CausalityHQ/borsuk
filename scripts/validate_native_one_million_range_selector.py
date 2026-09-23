@@ -38,6 +38,7 @@ def _intervals(groups: tuple, selected: set[int]) -> list[list[object]]:
 def replay_range_evidence(
     artifact: PageSelectorArtifact, queries: Path, truth: Path, evidence_dir: Path,
     identities: Mapping[str, ObjectIdentity], *, query_count: int = 1000,
+    byte_only: bool = False,
 ) -> dict[str, object]:
     if set(identities) != {"queries", "truth"} or query_count <= 0:
         raise ValueError("independent range query contract differs")
@@ -86,7 +87,7 @@ def replay_range_evidence(
             if next_bytes > 16_777_216:
                 continue
             candidate = chosen | {index}
-            if len(_intervals(artifact.groups, candidate)) > 32:
+            if not byte_only and len(_intervals(artifact.groups, candidate)) > 32:
                 continue
             chosen = candidate
             admitted.append(index)
@@ -110,7 +111,11 @@ def replay_range_evidence(
     result = json.loads(result_body)
     if evidence_body != _canonical(evidence) or result_body != _canonical(result):
         raise ValueError("independent range evidence canonical bytes differ")
-    if evidence.get("schema") != "borsuk-one-million-range-selector-evidence-v1" or evidence.get("samples") != samples:
+    expected_evidence_schema = (
+        "borsuk-one-million-byte-ceiling-evidence-v1" if byte_only
+        else "borsuk-one-million-range-selector-evidence-v1"
+    )
+    if evidence.get("schema") != expected_evidence_schema or evidence.get("samples") != samples:
         raise ValueError("independent range samples differ")
     hits100 = [sample["hits_at_100"] for sample in samples]
     hits10 = [sample["hits_at_10"] for sample in samples]
@@ -123,20 +128,26 @@ def replay_range_evidence(
         "max_code_gets": max(sample["projected_code_gets"] for sample in samples),
         "max_groups_selected": max(len(sample["selected_groups"]) for sample in samples),
     }
-    metrics["decision"] = (
-        "adjacent-code-range-selector-feasible"
-        if metrics["mean_recall_at_100_ppm"] >= 975000
+    quality_pass = (
+        metrics["mean_recall_at_100_ppm"] >= 975000
         and metrics["p05_recall_at_100_ppm"] >= 900000
         and metrics["mean_recall_at_10_ppm"] >= 960000
         and metrics["max_projected_code_bytes"] <= 16777216
-        and metrics["max_code_gets"] <= 32
-        else "adjacent-code-range-selector-killed"
+    )
+    metrics["decision"] = (
+        ("score-ranked-byte-ceiling-feasible" if quality_pass else "score-ranked-byte-ceiling-fails")
+        if byte_only else
+        ("adjacent-code-range-selector-feasible" if quality_pass and metrics["max_code_gets"] <= 32 else "adjacent-code-range-selector-killed")
+    )
+    expected_result_schema = (
+        "borsuk-one-million-byte-ceiling-result-v1" if byte_only
+        else "borsuk-one-million-range-selector-result-v1"
     )
     if (
         evidence.get("metrics") != metrics
         or result.get("metrics") != metrics
         or result.get("decision") != metrics["decision"]
-        or result.get("schema") != "borsuk-one-million-range-selector-result-v1"
+        or result.get("schema") != expected_result_schema
         or result.get("claim_eligible") is not False
         or result.get("evidence_sha256") != hashlib.sha256(evidence_body).hexdigest()
         or result.get("selector_seal_sha256") != hashlib.sha256(_canonical(artifact.seal)).hexdigest()
@@ -151,6 +162,7 @@ def validate_range_selector(
     root: Path, selector_dir: Path, evidence_dir: Path, out: Path,
     source_identities: Mapping[str, ObjectIdentity],
     development_identities: Mapping[str, ObjectIdentity], *, query_count: int = 1000,
+    byte_only: bool = False,
 ) -> dict[str, object]:
     artifact = read_page_selector(selector_dir, source_identities)
     centroids, membership, page_groups, page_order_sha, groups = rebuild_page_arrays(root, source_identities)
@@ -164,10 +176,13 @@ def validate_range_selector(
         raise ValueError("independent range source replay differs")
     metrics = replay_range_evidence(
         artifact, root / "queries.parquet", root / "truth.parquet", evidence_dir,
-        development_identities, query_count=query_count,
+        development_identities, query_count=query_count, byte_only=byte_only,
     )
     validation: dict[str, object] = {
-        "schema": "borsuk-one-million-range-selector-validation-v1",
+        "schema": (
+            "borsuk-one-million-byte-ceiling-validation-v1" if byte_only
+            else "borsuk-one-million-range-selector-validation-v1"
+        ),
         "decision": metrics["decision"], "metrics": metrics,
         "selector_seal_sha256": hashlib.sha256((selector_dir / "seal.json").read_bytes()).hexdigest(),
         "evidence_sha256": hashlib.sha256((evidence_dir / "evidence.json").read_bytes()).hexdigest(),

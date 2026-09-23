@@ -15,16 +15,21 @@ from scripts.launch_native_one_million_selector_spot import (
     worker_script,
 )
 from scripts.native_one_million_group_selector import Group
+from scripts.native_one_million_page_selector import build_page_selector
 from scripts.native_one_million_range_selector_cell import (
     run_construct,
     run_evaluate,
     run_validate,
 )
-from scripts.native_one_million_range_selector_evaluation import plan_group_ranges
+from scripts.native_one_million_range_selector_evaluation import (
+    evaluate_range_selector,
+    plan_group_ranges,
+)
 from scripts.test_native_one_million_group_selector import _fixture as source_fixture
 from scripts.test_native_one_million_selector_evaluation import (
     _fixture as development_fixture,
 )
+from scripts.validate_native_one_million_range_selector import validate_range_selector
 
 
 class OneMillionRangeSelectorTests(unittest.TestCase):
@@ -44,6 +49,33 @@ class OneMillionRangeSelectorTests(unittest.TestCase):
         self.assertEqual(chosen, (0, 1))
         self.assertEqual(intervals, (("base", 0, 1), ("delta", 0, 1)))
         self.assertEqual((gets, bytes_used), (2, 408))
+
+    def test_byte_only_plan_ignores_intermediate_get_count(self) -> None:
+        groups = tuple(Group("base", i, i, i + 1, 1, 204) for i in range(70))
+        ranked = tuple(range(0, 70, 2)) + tuple(range(1, 70, 2))
+        chosen, intervals, gets, bytes_used = plan_group_ranges(
+            groups, ranked, maximum_gets=len(groups), maximum_bytes=70 * 204,
+        )
+        self.assertEqual(chosen, ranked)
+        self.assertEqual(intervals, (("base", 0, 70),))
+        self.assertEqual((gets, bytes_used), (1, 70 * 204))
+
+    def test_byte_only_diagnostic_replays_without_get_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identities = source_fixture(root, base_rows=256)
+            artifact = build_page_selector(root, root, identities)
+            _, development = development_fixture(root)
+            result = evaluate_range_selector(
+                artifact, root / "queries.parquet", root / "truth.parquet", root,
+                development, query_count=1, byte_only=True,
+            )
+            validation = validate_range_selector(
+                root, root, root, root, identities, development,
+                query_count=1, byte_only=True,
+            )
+            self.assertEqual(result["metrics"], validation["metrics"])
+            self.assertEqual(result["decision"], "score-ranked-byte-ceiling-feasible")
 
     def test_fixed_source_seal_matches_previous_screen(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
