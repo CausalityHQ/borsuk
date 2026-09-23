@@ -1,7 +1,7 @@
 # Progressive two-bit mirrored page-wave contract
 
-Status: 1M source-only projection and paired scorer cell passed; actual-read
-and held-out qualification remain pending.
+Status: 1M source-only projection and paired scorer cell passed; the
+mirrored schedule was then stopped at an analytical throughput gate.
 This is one architecture decision after
 the rejected page-local 200-byte code-wave projection. Historical artifacts
 and their source commits remain immutable.
@@ -60,7 +60,8 @@ rule or threshold may be tuned against this reused development cohort.
 
 If it passes, run one frozen 1M source-only paired scoring cell on precisely
 the mirrored cover. Rejoin the two-bit records bit for bit, then compare
-their frozen float32 batched-matrix scores against exact source scores on
+their frozen float64 rotated dot-product scores (cast to float32 for page
+ranking) against exact source scores on
 the same rows. The batched matrix reduction can round differently from
 the historical per-row scorer; this paired cell measures that arithmetic.
 Report the historical 98,920
@@ -120,7 +121,9 @@ terminated. No local all-query replay was run under host swap pressure.
 
 The sign and magnitude covers are identical. The 104-byte first plane
 recovers 518 more GT100 positions and four p05 points than the rejected
-200-byte page-local code wave. It also includes one bridged truth owner
+200-byte page-local code wave by spending a second 16-MiB code-wave
+budget. The split does not compress the 200-byte record or save total
+code bytes; it adds up to 32 code GETs. It also includes one bridged truth owner
 beyond the historical 98,985 selected-group containment. All 1,000 sign
 plans use 32 GETs, leaving only 40 bytes under the maximum observed
 sign-wave cap. Construct, plan, evaluate and validate maximum RSS were
@@ -191,10 +194,44 @@ lower bound. These are plan bytes, not observed S3 transfer or a measured
 rate. Parallel code GETs can overlap in time but cannot remove their
 aggregate network demand.
 
-**Decision:** `advance-to-actual-read-and-held-out-gate` under the frozen
+**Paired-cell decision:** `advance-to-actual-read-and-held-out-gate` under the frozen
 paired rule. Authenticate actual S3 range reads of both code planes and
 the SQ8 data wave, measure returned neighbor recall after reranking,
 end-to-end latency, throughput and request cost, and use untouched queries
 for quality. Freeze a new source/configuration
 revision before a 10M and 100M scale campaign. This development-cohort
 result cannot establish unseen-query recall or production latency.
+
+## Post-paired analytical throughput stop
+
+The later plan-byte audit supplies a cheaper decisive systems gate before
+launching another Spot read campaign. [AWS lists](https://aws.amazon.com/ec2/instance-types/c7i/)
+12.5 Gbit/s network bandwidth for `c7i.8xlarge` and 18.75 Gbit/s for
+`c7i.12xlarge`. Even if their entire nominal bandwidth carries useful
+S3 response bytes with no protocol overhead, the 49,013,672-byte
+per-query floor caps this exact mirrored schedule at **31 QPS** on
+`c7i.8xlarge` and **47 QPS** on `c7i.12xlarge`. The checked Lean theorems
+`mirrored_c7i8_qps_ceiling` and `mirrored_c7i12_qps_ceiling` prove the
+integer arithmetic given the published network caps and sealed plan
+minima. This is an upper bound, not observed throughput. Any retries,
+other traffic, hashing, routing or SQ8 reranking can only lower it.
+
+The strongest measured bounded BORSUK reader on the same 1M development
+workload reached 182.4 QPS on `c7i.12xlarge` with 99,026 returned
+GT100 hits and 65.509 ms reused-connection p95, although its 10.81-GiB
+throughput RSS and 33.706-MiB maximum query payload fail the eventual
+100M resource/byte goals (ledger V108). This mirrored design has a
+98,728 GT100 **containment ceiling**, requires at least 49.0 MB/query,
+and cannot approach that reader's per-node throughput on the same
+instance class. The old reader is not a production solution either;
+it is the required strongest measured comparison.
+
+**Architecture decision:** `stop-mirrored-104-96-serving-line` before an
+actual-read campaign. The paired gate pass remains a valid result; the
+newly checked transfer bound disqualifies this schedule for the
+competitive serving objective. A material next design must reduce
+bytes and GETs, rather than move the same 200-byte code into separately
+budgeted waves. Revisit hierarchical page routing and compact summaries
+from V66/V77, then run a fresh 100k quality and read-cost gate before
+promoting to 1M. Do not carry this development-cohort score threshold
+into a new architecture as if it were untouched validation evidence.

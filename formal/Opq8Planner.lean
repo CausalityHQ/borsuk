@@ -461,6 +461,31 @@ theorem mirrored_plan_byte_floor
     49013672 ≤ signBytes + magnitudeBytes + dataBytes := by
   omega
 
+def mirroredCohortBytes (cases : List (Nat × Nat × Nat)) : Nat :=
+  (cases.map fun wave => wave.1 + wave.2.1 + wave.2.2).sum
+
+theorem mirrored_cohort_byte_floor
+    (cases : List (Nat × Nat × Nat))
+    (minimum : ∀ wave ∈ cases,
+      16773536 ≤ wave.1 ∧ 15483264 ≤ wave.2.1 ∧
+      16756872 ≤ wave.2.2) :
+    49013672 * cases.length ≤ mirroredCohortBytes cases := by
+  induction cases with
+  | nil => simp [mirroredCohortBytes]
+  | cons wave rest ih =>
+      have current := minimum wave (by simp)
+      have tail : ∀ next ∈ rest,
+          16773536 ≤ next.1 ∧ 15483264 ≤ next.2.1 ∧
+          16756872 ≤ next.2.2 := by
+        intro next member
+        exact minimum next (by simp [member])
+      have remaining := ih tail
+      have first := mirrored_plan_byte_floor wave.1 wave.2.1 wave.2.2
+        current.1 current.2.1 current.2.2
+      simp only [mirroredCohortBytes, List.map_cons, List.sum_cons,
+        List.length_cons] at *
+      omega
+
 theorem mirrored_plan_misses_target_of_transfer_cap
     (signBytes magnitudeBytes dataBytes maximumBytesPerUnit
       observedTime targetTime : Nat)
@@ -478,6 +503,51 @@ theorem mirrored_plan_misses_target_of_transfer_cap
   · have timeBound : observedTime ≤ targetTime := by omega
     have rateBound := Nat.mul_le_mul_left maximumBytesPerUnit timeBound
     omega
+
+/-! The EC2 c7i.8xlarge specification lists 12.5 decimal gigabits of
+network bandwidth per second, or 1,562,500,000 bytes/second. If all
+three waves traverse that one instance interface, every query follows
+the sealed development plan's byte floor, and this is a hard maximum
+aggregate rate, then no ideal transfer-only implementation reaches
+32 completed queries/second. The cloud specification and deployment
+mapping are external premises; no S3 service time is inferred. -/
+
+theorem mirrored_c7i8_qps_ceiling
+    (completedQueriesPerSecond : Nat)
+    (networkCap : completedQueriesPerSecond * 49013672 ≤ 1562500000) :
+    completedQueriesPerSecond ≤ 31 := by
+  omega
+
+theorem mirrored_c7i8_cohort_ceiling
+    (completedInOneSecond : List (Nat × Nat × Nat))
+    (minimum : ∀ wave ∈ completedInOneSecond,
+      16773536 ≤ wave.1 ∧ 15483264 ≤ wave.2.1 ∧
+      16756872 ≤ wave.2.2)
+    (networkCap : mirroredCohortBytes completedInOneSecond ≤ 1562500000) :
+    completedInOneSecond.length ≤ 31 := by
+  have floor := mirrored_cohort_byte_floor completedInOneSecond minimum
+  exact mirrored_c7i8_qps_ceiling completedInOneSecond.length (by omega)
+
+theorem mirrored_c7i8_cannot_reach_one_hundred_qps :
+    1562500000 < 100 * 49013672 := by decide
+
+/-! The corresponding nominal c7i.12xlarge cap is 18.75 Gbit/s. -/
+
+theorem mirrored_c7i12_qps_ceiling
+    (completedQueriesPerSecond : Nat)
+    (networkCap : completedQueriesPerSecond * 49013672 ≤ 2343750000) :
+    completedQueriesPerSecond ≤ 47 := by
+  omega
+
+theorem mirrored_c7i12_cohort_ceiling
+    (completedInOneSecond : List (Nat × Nat × Nat))
+    (minimum : ∀ wave ∈ completedInOneSecond,
+      16773536 ≤ wave.1 ∧ 15483264 ≤ wave.2.1 ∧
+      16756872 ≤ wave.2.2)
+    (networkCap : mirroredCohortBytes completedInOneSecond ≤ 2343750000) :
+    completedInOneSecond.length ≤ 47 := by
+  have floor := mirrored_cohort_byte_floor completedInOneSecond minimum
+  exact mirrored_c7i12_qps_ceiling completedInOneSecond.length (by omega)
 
 def regionTableLookups (visitedRows : Nat) : Nat := 8 * visitedRows
 

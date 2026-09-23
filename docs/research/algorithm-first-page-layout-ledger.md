@@ -5310,7 +5310,9 @@ replayed all 1,000 admissions, mirrors and ordered truth masks. Spot
 | maximum second-code GETs / bytes | absent | 32 / 15,486,624 | ≤32 / ≤16,777,216 |
 
 The 104-byte sign wave gains 518 GT100 positions and four p05 points over
-the 200-byte page wave. All 1,000 first-code plans use 32 GETs. One
+the 200-byte page wave by using a second 16-MiB code budget. It does not
+reduce the 200-byte record size and adds up to 32 code GETs. All 1,000
+first-code plans use 32 GETs. One
 bridged truth owner makes the page cover one hit above the historical
 98,985 OPQ8 selected-group containment. Construct, plan, evaluate and
 validate maximum RSS were 968,724, 1,034,608, 1,723,160 and 1,720,040
@@ -5370,3 +5372,33 @@ architecture qualification must authenticate and time S3 range reads of
 both code planes and final SQ8 data, return reranked neighbors, then test
 quality on untouched queries.
 Freeze the selected configuration before 10M and 100M scale studies.
+
+### Mirrored split post-paired transfer bound: stop before actual reads
+
+An arithmetic audit of the sealed plans found 49,018,864–49,040,992
+planned bytes per query and median 96 GETs across the sign, magnitude
+and SQ8 data waves. Separately certified per-wave minima sum to a
+conservative 49,013,672-byte floor. Under [AWS's published](https://aws.amazon.com/ec2/instance-types/c7i/)
+12.5 Gbit/s `c7i.8xlarge` or 18.75 Gbit/s `c7i.12xlarge` network
+bandwidth, the exact schedule permits at most 31 or 47 ideal
+completed queries/s per instance. `formal/Opq8Planner.lean` checks the
+conditional integer bound. It assumes the three response waves traverse
+that instance interface and that the plan minima persist; it does not
+measure S3 service latency.
+
+The historical V108 bounded reader measured 182.4 QPS on a
+`c7i.12xlarge`, 99,026 returned GT100 hits and 65.509 ms repeated-read
+p95, but failed the 100M memory and per-query byte constraints. The new
+mirrored line's best possible returned GT100 on these same development
+queries is only 98,728 because that is its data-page containment ceiling.
+It also transfers at least 49.0 MB/query. The 518-position code-cover
+gain over the single 200-byte wave is purchased with a second 16-MiB
+code budget and as many as 32 extra GETs, rather than compression.
+
+**Decision:** `stop-mirrored-104-96-serving-line`. The preregistered
+paired quality gate passed, then this independent hard transfer bound
+ruled out competitive per-node throughput before an actual-read campaign.
+The next 100k candidate must materially reduce network demand using
+hierarchical page routing and compact page summaries; the historical
+V66/V77 evidence is a starting point, not proof that such a new
+architecture will satisfy the 1M or 100M gates.

@@ -136,6 +136,12 @@ that a target latency is impossible if a **certified maximum aggregate
 transfer rate** cannot carry that many bytes by the target time. The
 plan minima and rate cap remain external assumptions; this is a
 necessary bandwidth condition, not measured or sufficient latency.
+AWS publishes nominal c7i.8xlarge and c7i.12xlarge network bandwidth
+of 12.5 and 18.75 Gbit/s. If all sealed-plan response bytes traverse
+one such instance interface, the checked integer arithmetic caps the
+mirrored schedule at respectively 31 and 47 ideal completed queries
+per second per instance. The proof does not turn those published caps
+into observed S3 throughput, nor apply to a different byte schedule.
 
 A second finite-query theorem bounds recall loss for a **fixed score
 threshold** by the authenticated truth count of pages whose true scores
