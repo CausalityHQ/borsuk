@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from scripts.launch_native_geometric_layout_spot import SourceArchiveIdentity
 from scripts.launch_native_one_million_selector_spot import (
+    _readback_artifacts,
     _validate_terminal_bytes,
     build_launch_specs,
     build_plan,
@@ -122,6 +123,21 @@ class OneMillionSelectorSpotTests(unittest.TestCase):
         with patch.dict(sys.modules, {"boto3": SimpleNamespace(Session=lambda **kwargs: session)}):
             with self.assertRaisesRegex(ValueError, "immutable attempt"):
                 launch_and_monitor(self.plan())
+
+    def test_complete_terminal_requires_artifact_readback(self) -> None:
+        class S3:
+            def get_object(self, **_kwargs):
+                return {"Body": SimpleNamespace(read=lambda: b"changed")}
+
+        identities = {
+            role: {"encoded_bytes": 4, "sha256": "12" * 32}
+            for role in (
+                "centroids", "membership", "seal", "evidence", "result", "validation",
+                "construct-resources", "evaluate-resources", "validate-resources",
+            )
+        }
+        with self.assertRaisesRegex(ValueError, "readback differs"):
+            _readback_artifacts(S3(), "bucket", "prefix", {"status": "complete", "artifacts": identities})
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch one immutable ReLAION-1M centroid-selector screen on Causality Spot."""
+"""Launch one immutable ReLAION-1M source-only selector on Causality Spot."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import hashlib
 import json
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from scripts.launch_native_geometric_layout_spot import (
     DEFAULT_TARGETS,
@@ -44,6 +45,7 @@ class SelectorSpotPlan:
     source_archive: SourceArchiveIdentity
     requirements_sha256: str
     output_prefix: str
+    selector_kind: str = "group"
     profile: str = "causality"
     attempt: int = 1
     image_id: str = "ami-06121aa3085b6f918"
@@ -57,16 +59,18 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
+    if plan.selector_kind not in {"group", "page"}:
+        raise ValueError("one-million selector kind differs")
     expected = (
-        f"s3://{BUCKET}/research/native-one-million-group-selector/"
-        f"{plan.source_commit}/runs/relaion-1m-dev1000-a0001"
+        f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
+        f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
     )
     if (
         len(plan.source_commit) != 40
         or any(character not in "0123456789abcdef" for character in plan.source_commit)
         or plan.output_prefix.rstrip("/") != expected
         or plan.profile != "causality"
-        or plan.attempt != 1
+        or not 1 <= plan.attempt <= 9999
         or len(plan.requirements_sha256) != 64
         or any(character not in "0123456789abcdef" for character in plan.requirements_sha256)
         or plan.wall_seconds != 7_200
@@ -147,7 +151,7 @@ def ident(path,role):
  return {"encoded_bytes":len(body),"role":role,"sha256":hashlib.sha256(body).hexdigest(),"uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
 files=(("centroids","centroids.bin"),("membership","membership.bin"),("seal","seal.json"),("evidence","evidence.json"),("result","result.json"),("validation","validation.json"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
-value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":1,"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-one-million-selector-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
+value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":@ATTEMPT@,"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"@TERMINAL_SCHEMA@","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
 pathlib.Path("terminal.json").write_bytes(json.dumps(value,sort_keys=True,separators=(",",":")).encode()+bytes([10]))
 PY
   aws s3 cp terminal.json "$output/terminal.json" --only-show-errors || true
@@ -173,7 +177,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install --disable-pip-version-check --quiet -r repo/scripts/requirements-format-bench.txt
 @SOURCE_COMMANDS@
 phase=construct
-run_capped /usr/bin/time -v -o construct-resources.txt timeout @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_one_million_selector_cell construct --root "$root"
+run_capped /usr/bin/time -v -o construct-resources.txt timeout @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m @CELL_MODULE@ construct --root "$root"
 phase=seal
 chmod 0444 source.parquet generation.json base.arrow delta.arrow router.arrow centroids.bin membership.bin seal.json
 publish_artifact centroids.bin
@@ -184,7 +188,7 @@ phase=evaluate
 @DEVELOPMENT_COMMANDS@
 chmod 0444 queries.parquet truth.parquet
 mkdir evaluation && chown nobody:nobody evaluation
-run_capped /usr/bin/time -v -o evaluate-resources.txt timeout @WALL@ unshare --net --fork setpriv --reuid=nobody --regid=nobody --clear-groups env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_one_million_selector_cell evaluate --root "$root" --out "$root/evaluation"
+run_capped /usr/bin/time -v -o evaluate-resources.txt timeout @WALL@ unshare --net --fork setpriv --reuid=nobody --regid=nobody --clear-groups env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m @CELL_MODULE@ evaluate --root "$root" --out "$root/evaluation"
 mv evaluation/evidence.json evidence.json
 mv evaluation/result.json result.json
 rmdir evaluation
@@ -192,7 +196,7 @@ publish_artifact evidence.json
 publish_artifact result.json
 publish_artifact evaluate-resources.txt
 phase=validate
-run_capped /usr/bin/time -v -o validate-resources.txt timeout @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_one_million_selector_cell validate --root "$root" --out "$root"
+run_capped /usr/bin/time -v -o validate-resources.txt timeout @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m @CELL_MODULE@ validate --root "$root" --out "$root"
 publish_artifact validation.json
 publish_artifact validate-resources.txt
 phase=resource-gate
@@ -208,6 +212,9 @@ phase=complete
     development_names = {"queries": "queries.parquet", "truth": "truth.parquet"}
     replacements = {
         "@OUTPUT@": _q(plan.output_prefix.rstrip("/")),
+        "@CELL_MODULE@": "scripts.native_one_million_page_selector_cell" if plan.selector_kind == "page" else "scripts.native_one_million_selector_cell",
+        "@TERMINAL_SCHEMA@": "borsuk-one-million-page-selector-terminal-v1" if plan.selector_kind == "page" else "borsuk-one-million-selector-terminal-v1",
+        "@ATTEMPT@": str(plan.attempt),
         "@BUCKET@": _q(BUCKET),
         "@ARTIFACT_KEY@": _q(_s3_location(plan.output_prefix)[1] + "/artifacts"),
         "@RSS@": str(plan.maximum_rss_bytes),
@@ -232,14 +239,14 @@ def build_launch_specs(plan: SelectorSpotPlan) -> list[dict[str, object]]:
     specs = []
     for target in DEFAULT_TARGETS:
         token = hashlib.sha256(
-            f"one-million-selector:{plan.source_commit}:{target.availability_zone}:a0001".encode()
+            f"one-million-{plan.selector_kind}-selector:{plan.source_commit}:{target.availability_zone}:a{plan.attempt:04d}".encode()
         ).hexdigest()[:32]
         specs.append({
             "BlockDeviceMappings": [{"DeviceName": "/dev/xvda", "Ebs": {
                 "DeleteOnTermination": True, "Encrypted": True,
                 "VolumeSize": plan.volume_gib, "VolumeType": "gp3",
             }}],
-            "ClientToken": "native-one-million-selector-" + token,
+            "ClientToken": f"native-1m-{plan.selector_kind}-" + token,
             "IamInstanceProfile": {"Arn": plan.instance_profile_arn},
             "ImageId": plan.image_id,
             "InstanceInitiatedShutdownBehavior": "terminate",
@@ -253,8 +260,8 @@ def build_launch_specs(plan: SelectorSpotPlan) -> list[dict[str, object]]:
                 "Groups": [plan.security_group_id], "SubnetId": target.subnet_id,
             }],
             "TagSpecifications": [{"ResourceType": "instance", "Tags": [
-                {"Key": "Name", "Value": "borsuk-native-one-million-selector"},
-                {"Key": "BorsukAttempt", "Value": "a0001"},
+                {"Key": "Name", "Value": f"borsuk-native-one-million-{plan.selector_kind}-selector"},
+                {"Key": "BorsukAttempt", "Value": f"a{plan.attempt:04d}"},
             ]}],
             "UserData": user_data,
         })
@@ -272,8 +279,8 @@ def _validate_terminal_bytes(
         body != (json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n").encode()
         or type(terminal) is not dict
         or set(terminal) != {"artifacts", "attempt", "claim_eligible", "elapsed_seconds", "exit_code", "instance_id", "phase", "schema", "source_commit", "source_archive", "requirements_sha256", "status"}
-        or terminal["schema"] != "borsuk-one-million-selector-terminal-v1"
-        or terminal["attempt"] != 1
+        or terminal["schema"] != ("borsuk-one-million-page-selector-terminal-v1" if plan.selector_kind == "page" else "borsuk-one-million-selector-terminal-v1")
+        or terminal["attempt"] != plan.attempt
         or terminal["claim_eligible"] is not False
         or terminal["source_commit"] != plan.source_commit
         or terminal["source_archive"] != dataclasses.asdict(plan.source_archive)
@@ -309,6 +316,32 @@ def _validate_terminal_bytes(
     return terminal
 
 
+def _readback_artifacts(s3: object, bucket: str, prefix: str, terminal: dict[str, object]) -> None:
+    if terminal["status"] != "complete":
+        return
+    for role, filename in ARTIFACTS.items():
+        identity = terminal["artifacts"][role]
+        body = s3.get_object(Bucket=bucket, Key=f"{prefix}/artifacts/{filename}")["Body"].read()
+        if len(body) != identity["encoded_bytes"] or hashlib.sha256(body).hexdigest() != identity["sha256"]:
+            raise ValueError("selector " + role + " readback differs")
+
+
+def _controller_terminal(plan: SelectorSpotPlan, instance_id: str) -> dict[str, object]:
+    """Record an interrupted or boot-failed attempt with no worker terminal."""
+    return {
+        "artifacts": {}, "attempt": plan.attempt, "claim_eligible": False,
+        "elapsed_seconds": 0, "exit_code": 1, "instance_id": instance_id,
+        "phase": "controller", "schema": (
+            "borsuk-one-million-page-selector-terminal-v1" if plan.selector_kind == "page"
+            else "borsuk-one-million-selector-terminal-v1"
+        ),
+        "source_commit": plan.source_commit,
+        "source_archive": dataclasses.asdict(plan.source_archive),
+        "requirements_sha256": plan.requirements_sha256,
+        "status": "failed",
+    }
+
+
 def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
     import boto3
 
@@ -320,8 +353,8 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
     if existing.get("KeyCount", 0) or existing.get("Contents"):
         raise ValueError("selector immutable attempt already exists")
     reservation = {
-        "schema": "borsuk-one-million-selector-reservation-v1",
-        "attempt": 1, "source_commit": plan.source_commit,
+        "schema": f"borsuk-one-million-{plan.selector_kind}-selector-reservation-v1",
+        "attempt": plan.attempt, "source_commit": plan.source_commit,
         "source_archive": dataclasses.asdict(plan.source_archive),
         "requirements_sha256": plan.requirements_sha256,
         "source_inputs": {role: dataclasses.asdict(value) for role, value in SOURCE_IDENTITIES.items()},
@@ -345,6 +378,7 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
     if instance_id is None:
         raise RuntimeError("one-million selector Spot capacity unavailable")
     deadline = time.monotonic() + plan.wall_seconds + 900
+    terminated = False
     try:
         while True:
             try:
@@ -360,9 +394,42 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
                     raise TimeoutError("selector terminal deadline exceeded") from error
                 time.sleep(15)
                 continue
-            return _validate_terminal_bytes(body, plan, instance_id)
+            terminal = _validate_terminal_bytes(body, plan, instance_id)
+            _readback_artifacts(s3, bucket, prefix, terminal)
+            return terminal
+    except Exception as error:
+        if isinstance(error, TimeoutError) or "ended without terminal" in str(error):
+            _terminate_and_wait(ec2, instance_id)
+            terminated = True
+            terminal = _controller_terminal(plan, instance_id)
+            try:
+                _atomic_put(
+                    s3, bucket=bucket, key=f"{prefix}/terminal.json",
+                    body=(json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+                )
+            except Exception:
+                pass
+        failure = {
+            "schema": "borsuk-one-million-selector-controller-failure-v1",
+            "source_commit": plan.source_commit,
+            "selector_kind": plan.selector_kind,
+            "attempt": plan.attempt,
+            "instance_id": instance_id,
+            "observed_at": datetime.now(UTC).isoformat(),
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+        try:
+            _atomic_put(
+                s3, bucket=bucket, key=f"{prefix}/controller-failure.json",
+                body=(json.dumps(failure, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+            )
+        except Exception:
+            pass
+        raise
     finally:
-        _terminate_and_wait(ec2, instance_id)
+        if not terminated:
+            _terminate_and_wait(ec2, instance_id)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
@@ -373,6 +440,8 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--selector-kind", choices=("group", "page"), default="group")
+    parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(
         source_commit=args.source_commit,
@@ -381,6 +450,8 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
         ),
         requirements_sha256=args.requirements_sha256,
         output_prefix=args.output_prefix,
+        selector_kind=args.selector_kind,
+        attempt=args.attempt,
     )
 
 
