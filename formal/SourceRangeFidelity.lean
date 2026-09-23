@@ -129,6 +129,33 @@ theorem pq_code_payload_lookup_budget
   simp only [pqTableLookups]
   omega
 
+/-! The historical rotated two-bit record uses 192 packed bytes, one
+float32 scale and one float32 norm. Its 100M-row plane is larger than
+the 96-byte variants; a streaming reader need not hold that plane in RAM.
+The coordinate count measures decode/score work, not CPU time. -/
+
+def twoBitRecordBytes : Nat := 192 + 4 + 4
+
+def twoBitGroupBytes (pages rows : Nat) : Nat :=
+  4 + 4 * pages + twoBitRecordBytes * rows
+
+def twoBitCoordinateWork (rows : Nat) : Nat := 768 * rows
+
+theorem two_bit_record_is_two_hundred : twoBitRecordBytes = 200 := by decide
+
+theorem hundred_million_two_bit_code_bytes :
+    twoBitRecordBytes * 100000000 = 20000000000 := by decide
+
+theorem hundred_million_two_bit_coordinate_work :
+    twoBitCoordinateWork 100000000 = 76800000000 := by decide
+
+theorem two_bit_code_payload_row_budget
+    (pages rows : Nat)
+    (budget : twoBitGroupBytes pages rows ≤ 16777216) :
+    rows ≤ 83886 := by
+  simp only [twoBitGroupBytes, twoBitRecordBytes] at budget
+  omega
+
 /-! Uniform per-row score-error bounds also bound a page's minimum score.
 This supports a non-recall-based premise for page-order certificates. -/
 

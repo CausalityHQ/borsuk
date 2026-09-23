@@ -51,3 +51,10 @@ truth-owner counts and error bounds must be authenticated, and a concrete
 quota/range planner must be proved to implement the threshold model.
 It cannot certify the failed sign96 or PQ96 development runs merely from
 their aggregate error statistics.
+
+For the historical 200-byte rotated two-bit format, Lean proves a
+20,000,000,000-byte code plane at 100M rows, 76,800,000,000 coordinate
+decode/score operations for a full scan, and at most 83,886 row records
+in a 16-MiB code payload with group framing. These are exact arithmetic
+for the modeled format; streaming memory, observed latency, throughput,
+and recall depend on the implementation and data.
