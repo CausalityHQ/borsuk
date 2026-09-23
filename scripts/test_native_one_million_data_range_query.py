@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from scripts.native_one_million_data_range_query import plan_query
+from scripts.native_one_million_data_range_query import plan_query, plan_ranked_pages
 
 
 def test_query_plan_bridges_cheap_gap_and_keeps_role_coordinates() -> None:
@@ -25,6 +25,10 @@ def test_query_plan_bridges_cheap_gap_and_keeps_role_coordinates() -> None:
     assert result["included_pages"] == [["base", 0], ["base", 1], ["base", 2]]
     assert result["gets"] == 1
     assert result["encoded_bytes"] == 22
+    assert plan_ranked_pages(
+        (0, 2, 1), {"base": (10, 2, 10), "delta": (8,)},
+        maximum_gets=1, maximum_bytes=22,
+    ) == result
 
 
 def test_query_plan_cannot_bridge_roles() -> None:
