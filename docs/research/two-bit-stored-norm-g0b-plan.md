@@ -1,6 +1,7 @@
 # G0b: stored-norm returned-ranking diagnostic
 
-Status: preregistered before opening G0b output. This is a new score using
+Status: complete, failed; see `docs/research/two-bit-stored-norm-g0b-closeout.md`.
+This was preregistered before opening G0b output. It is a new score using
 already sealed bytes, not a rerun of the failed G0 primary score and not an
 S3 query-path benchmark.
 

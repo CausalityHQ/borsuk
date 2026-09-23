@@ -1,7 +1,7 @@
 # Two-bit returned-recall G0 closeout
 
-Status: complete, **stop the 200-byte rotated two-bit code as the sole final
-scorer**. This is an offline representation test, not a serving latency or
+Status: complete, **stop the reconstructed-norm two-bit score as the sole final
+scorer**. This is an offline scoring test, not a serving latency or
 throughput measurement and not a new product baseline.
 
 ## Authority and method

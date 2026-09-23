@@ -1,11 +1,12 @@
 # Single-wave code serving: falsifiable architecture candidate
 
-Status: **stopped at G0**. The 200-byte two-bit record failed as the sole
-returned scorer on ReLAION-100k development; see
-`docs/research/two-bit-returned-g0-closeout.md`. This is not a qualified
+Status: **stopped after G0 and G0b**. Both the reconstructed-norm and
+stored-norm 200-byte two-bit final scores failed on ReLAION-100k development;
+see `docs/research/two-bit-returned-g0-closeout.md` and
+`docs/research/two-bit-stored-norm-g0b-closeout.md`. This is not a qualified
 reader or frozen production format. The 1M route gate below is suspended
-until a materially revised representation passes a new 100k returned-ranking
-gate.
+until a materially revised representation and route pass new returned-ranking
+and physical-plan gates.
 This is a material alternative to the stopped mirrored 104/96 code waves. It
 must be rejected at the earliest decisive failed gate. The next action is an
 offline sealed replay before building new code objects or launching reads.
