@@ -22,6 +22,13 @@ lookup array coexist, their `32N` bytes exceed the 3-GiB campaign cap
 with its 64-MiB allowance at 100M rows. It excludes allocator and
 metadata overhead; it is not a latency theorem.
 
+For a full OPQ8 route scan at 100M rows, a checked theorem counts exactly
+800,000,000 modeled table lookups. Another theorem says that if a certified
+upper hardware rate cannot complete those lookups within a target time,
+the full-scan implementation misses that target. This is a conditional
+scalability and latency *lower* bound; it needs a defensible hardware rate
+and does not apply to a route that visits fewer rows.
+
 For a future data-range implementation, a separate conditional theorem
 combines a 32-GET/16-MiB plan with certified per-GET, per-byte and local
 compute upper bounds into a sequential latency ceiling. A region-work

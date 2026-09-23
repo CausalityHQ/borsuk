@@ -449,6 +449,29 @@ theorem bounded_parallel_code_data_latency
 
 def regionTableLookups (visitedRows : Nat) : Nat := 8 * visitedRows
 
+theorem hundred_million_full_route_lookups :
+    regionTableLookups 100000000 = 800000000 := by decide
+
+/-! An implementation that scores all 100M OPQ8 rows must perform the
+modeled 800M table lookups. If a certified hardware upper rate cannot
+cover that work within a target time, the full-scan route cannot meet
+that target. This gives a conditional latency *lower* bound; it does not
+provide the actual hardware rate or prove that a selective route scans
+all rows. -/
+
+theorem full_route_misses_target_of_rate_cap
+    (maximumLookupsPerUnit observedTime targetTime : Nat)
+    (rateCap : regionTableLookups 100000000 ≤
+      maximumLookupsPerUnit * observedTime)
+    (insufficient : maximumLookupsPerUnit * targetTime < 800000000) :
+    targetTime < observedTime := by
+  have work := hundred_million_full_route_lookups
+  by_cases meets : targetTime < observedTime
+  · exact meets
+  · have timeBound : observedTime ≤ targetTime := by omega
+    have rateBound := Nat.mul_le_mul_left maximumLookupsPerUnit timeBound
+    omega
+
 theorem region_lookup_bound (visitedRows regionCap : Nat)
     (visitedBound : visitedRows ≤ regionCap) :
     regionTableLookups visitedRows ≤ 8 * regionCap := by
