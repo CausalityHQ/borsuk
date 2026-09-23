@@ -42,8 +42,17 @@ exact-score pass and is not a free pre-build check from that file.
 
 **Primary sign96:** apply the already specified three-block signed
 256-point normalized Hadamard transform to each mean-centered source row.
-Pin the same per-corpus mean calculation and SHA-256 sign derivation as the
-two-bit family, including rotation seed `20260923`. Retain rotated
+Use the two-bit family's SHA-256 sign derivation and rotation seed
+`20260923`. Fit the per-corpus mean in a separate externally authenticated
+source pass: traverse source rows in Parquet order in **exactly 4,096-row
+batches with only the last batch shorter**,
+sum each batch in float64, add batch sums in traversal order, divide by
+the exact row count and store once as little-endian float32. The
+mean receipt binds its hash, row count, batch size and SHA-256 of the
+raw source-vector stream. The encoding pass verifies the same stream
+hash before sealing groups and uses only that stored mean. This streaming
+reduction is a new format rule and may differ in low bits from the
+historical full-array two-bit mean. Retain rotated
 coordinate `j` exactly when `j % 48 != 47`, leaving 752 coordinates and
 omitting 16 evenly spaced positions. Seal that coordinate rule. Encode one
 sign bit per retained coordinate, with zero taking positive sign, packed
@@ -73,8 +82,15 @@ projection count as PQ96 row-score evidence.
 
 Write each arm in authenticated four-page groups with per-page row-count
 headers, a versioned format marker, source/order/mean/model hashes and
-complete group SHA-256 identities. A reader must reject an unknown format
-or any identity mismatch. The sign96 kernel accepts at most 4,096 materialized
+complete group SHA-256 identities. Seal a hash of the coordinate, bit,
+scale, rotation and scoring rules. The writer returns the seal hash from
+its in-memory canonical bytes; the campaign manifest must authenticate
+that hash independently of later disk reads. A reader must receive the
+independently authenticated seal SHA-256 and reject an unknown format,
+seal or group identity mismatch. The caller must authenticate source
+Parquet bytes, membership, physical order and count inputs before using
+the artifact writer; those claimed hashes are not verified by the writer
+itself. The sign96 kernel accepts at most 4,096 materialized
 source rows per encoding call; its caller must stream source batches into
 that interface. Score in 2,048-row batches and measure process-tree RSS;
 no code path may materialize the whole 1M source matrix.
