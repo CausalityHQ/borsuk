@@ -24,7 +24,9 @@ from scripts.native_hundred_thousand_opq8_router import (
     _farthest_first,
     _lloyd,
     encode_opq8,
+    encode_opq8_rows,
     rank_opq8_groups,
+    rank_opq8_row_groups,
     read_opq8_model,
     row_adc_scores,
     training_ordinals,
@@ -86,11 +88,23 @@ class Opq8RouterTests(unittest.TestCase):
             order = np.arange(8, dtype=np.int64)
             codes = encode_opq8(vectors, order, loaded)
             self.assertEqual(codes.shape, (8, SUBSPACES))
+            self.assertTrue(np.array_equal(codes, encode_opq8_rows(vectors, loaded)))
+            reversed_order = np.arange(7, -1, -1, dtype=np.int64)
+            self.assertTrue(np.array_equal(
+                encode_opq8(vectors, reversed_order, loaded),
+                encode_opq8_rows(vectors[reversed_order], loaded),
+            ))
             query = np.zeros(DIMENSIONS, dtype=np.float32)
             scores = row_adc_scores(query, loaded, codes)
             self.assertTrue(np.all(scores[:4] == 0))
             self.assertTrue(np.all(scores[4:] == 4))
             self.assertEqual(rank_opq8_groups(scores, (1,) * 8), (0, 1))
+            self.assertEqual(
+                rank_opq8_row_groups(scores, (4, 4), (("base", 0), ("delta", 0))),
+                (0, 1),
+            )
+            with self.assertRaises(ValueError):
+                rank_opq8_row_groups(np.array([0.0, np.nan], dtype=np.float32), (1, 1), (("base", 0), ("base", 1)))
             with path.open("ab") as stream:
                 stream.write(b"x")
             with self.assertRaises(ValueError):

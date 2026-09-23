@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -141,16 +142,31 @@ def encode_opq8(
     ):
         raise ValueError("OPQ8 physical source order differs")
     codes = np.empty((len(source_vectors), SUBSPACES), dtype=np.uint8)
-    width = DIMENSIONS // SUBSPACES
     for first in range(0, len(codes), 4096):
         last = min(first + 4096, len(codes))
-        centered = source_vectors[physical_ordinals[first:last]].astype(np.float64) - model.mean.astype(np.float64)
-        rotated = centered @ model.rotation.astype(np.float64)
-        for subspace in range(SUBSPACES):
-            lo = subspace * width
-            codes[first:last, subspace] = _assign(
-                rotated[:, lo:lo + width], model.books[subspace].astype(np.float64),
-            )
+        codes[first:last] = encode_opq8_rows(source_vectors[physical_ordinals[first:last]], model)
+    return codes
+
+
+def encode_opq8_rows(source_vectors: np.ndarray, model: Opq8Model) -> np.ndarray:
+    """Encode one source-order batch without retaining the full source table."""
+    if (
+        source_vectors.dtype != np.float32
+        or source_vectors.ndim != 2
+        or source_vectors.shape[1] != DIMENSIONS
+        or not 1 <= len(source_vectors) <= 4096
+        or not np.isfinite(source_vectors).all()
+    ):
+        raise ValueError("OPQ8 source batch differs")
+    centered = source_vectors.astype(np.float64) - model.mean.astype(np.float64)
+    rotated = centered @ model.rotation.astype(np.float64)
+    codes = np.empty((len(source_vectors), SUBSPACES), dtype=np.uint8)
+    width = DIMENSIONS // SUBSPACES
+    for subspace in range(SUBSPACES):
+        lo = subspace * width
+        codes[:, subspace] = _assign(
+            rotated[:, lo:lo + width], model.books[subspace].astype(np.float64),
+        )
     return codes
 
 
@@ -209,13 +225,37 @@ def rank_opq8_groups(
 ) -> tuple[int, ...]:
     if scores.dtype != np.float32 or sum(page_row_counts) != len(scores) or group_pages != 4:
         raise ValueError("OPQ8 group score shape differs")
-    offsets = np.concatenate(([0], np.cumsum(page_row_counts)))
-    ranked: list[tuple[float, float, int]] = []
-    for group in range((len(page_row_counts) + group_pages - 1) // group_pages):
-        first = int(offsets[group * group_pages])
-        last = int(offsets[min((group + 1) * group_pages, len(page_row_counts))])
+    group_counts = tuple(
+        sum(page_row_counts[first:first + group_pages])
+        for first in range(0, len(page_row_counts), group_pages)
+    )
+    return rank_opq8_row_groups(
+        scores, group_counts, tuple(("base", group) for group in range(len(group_counts))),
+    )
+
+
+def rank_opq8_row_groups(
+    scores: np.ndarray, group_row_counts: Sequence[int], tie_keys: Sequence[tuple[str, int]],
+) -> tuple[int, ...]:
+    """Order physical groups by the four best ADC rows, then stable identity."""
+    if (
+        scores.ndim != 1
+        or scores.dtype != np.float32
+        or not np.isfinite(scores).all()
+        or not group_row_counts
+        or len(group_row_counts) != len(tie_keys)
+        or any(type(count) is not int or count <= 0 for count in group_row_counts)
+        or sum(group_row_counts) != len(scores)
+        or len(set(tie_keys)) != len(tie_keys)
+    ):
+        raise ValueError("OPQ8 group score shape differs")
+    offsets = np.concatenate(([0], np.cumsum(group_row_counts)))
+    ranked: list[tuple[float, float, str, int, int]] = []
+    for group, key in enumerate(tie_keys):
+        first = int(offsets[group])
+        last = int(offsets[group + 1])
         candidates = scores[first:last]
         selected = np.lexsort((np.arange(first, last), candidates))[:min(4, len(candidates))]
         values = candidates[selected].astype(np.float64)
-        ranked.append((float(np.mean(values, dtype=np.float64)), float(values[0]), group))
-    return tuple(item[2] for item in sorted(ranked))
+        ranked.append((float(np.mean(values, dtype=np.float64)), float(values[0]), key[0], key[1], group))
+    return tuple(item[4] for item in sorted(ranked))

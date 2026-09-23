@@ -33,11 +33,11 @@
 
 **Interfaces:** `encode_opq8_rows(vectors: np.ndarray, model: Opq8Model) -> np.ndarray` encodes one bounded batch in source order. `build_1m_opq8(root: Path, out: Path) -> dict` authenticates the model/source and emits `codes.bin` and `seal.json`. `rank_group_scores(scores: np.ndarray, groups: Sequence[Group]) -> tuple[int,...]` yields top-four-mean order with role/ordinal ties.
 
-- [ ] **Step 1: Write failing tests.** Use a 16-row two-group synthetic source and sealed model. Assert batch encoding equals `encode_opq8(vectors, np.arange(len(vectors)), model)`; assert scatter follows page physical order when parquet order differs; assert duplicate and missing IDs fail; assert a four-score mean rank and finite-score rejection.
-- [ ] **Step 2: Run only `scripts/test_native_one_million_opq8.py`; confirm the new imports fail.** Use `uv run --no-project --with-requirements scripts/requirements-format-bench.txt python -m pytest -q scripts/test_native_one_million_opq8.py`.
-- [ ] **Step 3: Implement bounded encoding and construction.** Stream PyArrow batches of at most 4,096 rows, use an ID-to-physical-ordinal map from authenticated base/delta page order, scatter into a `np.memmap` 8-byte plane, track a one-byte seen vector, and seal the immutable model/code/source/group authority. Reject any source cardinality or shape mismatch.
-- [ ] **Step 4: Run the focused test and Ruff on only modified Python files.** Confirm the test passes and no local full suite starts.
-- [ ] **Step 5: Commit the code-plane slice.** Commit only the reviewed files; preserve operator Git identity and omit AI attribution.
+- [x] **Step 1: Write failing tests.** The existing 10-row reversed source fixture exercises physical scattering, batch equality, missing/duplicate IDs, finite scores and top-four order. Ruling: reuse that fixture instead of creating a second synthetic page format; risk is lower fixture diversity.
+- [x] **Step 2: Confirm new imports fail.** Focused `unittest` first failed at missing `encode_opq8_rows`, then missing `rank_opq8_row_groups`, then missing `native_one_million_opq8`.
+- [x] **Step 3: Implement bounded encoding and construction.** PyArrow batches at most 4,096 rows scatter into a memory-mapped eight-byte plane, with exact source/model/page authentication and seen-position tracking.
+- [x] **Step 4: Run focused tests and Ruff.** Five focused tests passed; scoped Ruff passed; no full local suite started.
+- [x] **Step 5: Commit the code-plane slice.** The implementation and this checkpoint commit together; operator identity and attribution policy apply.
 
 ### Task 2: Phase-separated containment cell and independent validator
 
