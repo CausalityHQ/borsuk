@@ -10,6 +10,8 @@ mod pq64_nominee;
 mod pq64_router_artifact;
 #[path = "../../../crates/borsuk/src/returned_sq8.rs"]
 mod returned_sq8;
+#[path = "../../../crates/borsuk/src/sq8_page_authority.rs"]
+mod sq8_page_authority;
 #[path = "../../../crates/borsuk/src/physical_interval.rs"]
 mod physical_interval;
 
