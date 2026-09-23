@@ -189,6 +189,56 @@ theorem separated_page_minima_keep_order
     stateBUpper stateBLower rowsBErrors
   omega
 
+/-! A threshold can represent the score boundary of a fixed page quota.
+Each page carries an authenticated number of truth positions it owns.
+If every true page score is separated from the threshold by more than the
+error allowance, approximate scores make exactly the same admission
+decisions. The premise concerns *all* pages competing for admission; it
+is not established by an aggregate error percentile. -/
+
+structure ThresholdPage where
+  trueScore : Int
+  routedScore : Int
+  truthCount : Nat
+
+def sourceAdmitted (pages : List ThresholdPage) (threshold : Int) :
+    List ThresholdPage :=
+  pages.filter (fun page => page.trueScore < threshold)
+
+def routedAdmitted (pages : List ThresholdPage) (threshold : Int) :
+    List ThresholdPage :=
+  pages.filter (fun page => page.routedScore < threshold)
+
+def admittedTruthHits (pages : List ThresholdPage) : Nat :=
+  (pages.map ThresholdPage.truthCount).sum
+
+theorem threshold_admission_and_hits_stable
+    (pages : List ThresholdPage) (threshold error : Int)
+    (scoreErrors : ∀ page ∈ pages,
+      page.routedScore ≤ page.trueScore + error ∧
+      page.trueScore ≤ page.routedScore + error)
+    (boundaryMargins : ∀ page ∈ pages,
+      page.trueScore + error < threshold ∨
+      threshold + error ≤ page.trueScore) :
+    routedAdmitted pages threshold = sourceAdmitted pages threshold ∧
+    admittedTruthHits (routedAdmitted pages threshold) =
+      admittedTruthHits (sourceAdmitted pages threshold) := by
+  have same : routedAdmitted pages threshold =
+      sourceAdmitted pages threshold := by
+    unfold routedAdmitted sourceAdmitted
+    apply List.filter_congr
+    intro page member
+    have bounds := scoreErrors page member
+    have margin := boundaryMargins page member
+    rcases margin with inside | outside
+    · have routedInside : page.routedScore < threshold := by omega
+      have sourceInside : page.trueScore < threshold := by omega
+      simp [routedInside, sourceInside]
+    · have routedOutside : ¬ page.routedScore < threshold := by omega
+      have sourceOutside : ¬ page.trueScore < threshold := by omega
+      simp [routedOutside, sourceOutside]
+  exact ⟨same, congrArg admittedTruthHits same⟩
+
 /-! The p05 and sub-90 conditions concern the per-query distribution.
 Aggregate hit-loss bounds alone do not establish them. -/
 

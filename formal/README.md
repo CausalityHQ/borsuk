@@ -41,3 +41,13 @@ by more than twice that bound. Actual hit pairs, score-error bounds,
 Python refinement, S3 service times and unseen-query recall are explicit
 external premises. In particular the checked lookup count is a work
 bound, not a latency or scalability claim.
+
+The threshold-admission theorem also proves exact equality of the
+admitted page list and its truth-hit count when every competing page
+has a certified absolute score-error bound and its true score lies
+outside that error band around a fixed admission threshold. This is a
+conditional finite-query recall certificate: the threshold, page scores,
+truth-owner counts and error bounds must be authenticated, and a concrete
+quota/range planner must be proved to implement the threshold model.
+It cannot certify the failed sign96 or PQ96 development runs merely from
+their aggregate error statistics.
