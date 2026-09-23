@@ -188,4 +188,88 @@ theorem hundred_million_two_code_planes :
     codePlaneBytes 100000000 + codePlaneBytes 100000000 = 1600000000 := by
   decide
 
+/-! At 1M, one GET may cover several adjacent selected groups. The
+physical list and predecessor relation are sealed layout inputs. A group
+starts a GET exactly when it is selected and its same-role predecessor is
+absent. This is an abstract recounting model; proving the Python
+incremental `gets + 1 - left - right` implementation refines it remains
+separate work. -/
+
+def mergedGets (physical selected : List Nat)
+    (predecessor : Nat → Option Nat) : Nat :=
+  (physical.filter fun group =>
+    decide (group ∈ selected) &&
+      match predecessor group with
+      | none => true
+      | some previous => !decide (previous ∈ selected)).length
+
+def admitMerged (physical : List Nat) (predecessor : Nat → Option Nat)
+    (length : Nat → Nat) (maxGets maxBytes : Nat)
+    (state : Plan) (group : Nat) : Plan :=
+  let selected := state.selected ++ [group]
+  let used := state.bytes + length group
+  if mergedGets physical selected predecessor ≤ maxGets ∧ used ≤ maxBytes then
+    ⟨selected, used⟩
+  else
+    state
+
+def planMerged (physical : List Nat) (predecessor : Nat → Option Nat)
+    (length : Nat → Nat) (maxGets maxBytes : Nat)
+    (ranked : List Nat) : Plan :=
+  ranked.foldl (admitMerged physical predecessor length maxGets maxBytes) ⟨[], 0⟩
+
+theorem admitMerged_bounds (physical : List Nat) (predecessor : Nat → Option Nat)
+    (length : Nat → Nat) (maxGets maxBytes : Nat) (state : Plan) (group : Nat)
+    (hGets : mergedGets physical state.selected predecessor ≤ maxGets)
+    (hBytes : state.bytes ≤ maxBytes) :
+    mergedGets physical
+      (admitMerged physical predecessor length maxGets maxBytes state group).selected
+      predecessor ≤ maxGets ∧
+    (admitMerged physical predecessor length maxGets maxBytes state group).bytes ≤ maxBytes := by
+  by_cases h : mergedGets physical (state.selected ++ [group]) predecessor ≤ maxGets ∧
+      state.bytes + length group ≤ maxBytes
+  · simp [admitMerged, h]
+  · simpa [admitMerged, h] using And.intro hGets hBytes
+
+theorem foldMerged_bounds (physical : List Nat) (predecessor : Nat → Option Nat)
+    (length : Nat → Nat) (maxGets maxBytes : Nat) (ranked : List Nat) (state : Plan)
+    (hGets : mergedGets physical state.selected predecessor ≤ maxGets)
+    (hBytes : state.bytes ≤ maxBytes) :
+    mergedGets physical
+      (ranked.foldl (admitMerged physical predecessor length maxGets maxBytes) state).selected
+      predecessor ≤ maxGets ∧
+    (ranked.foldl (admitMerged physical predecessor length maxGets maxBytes) state).bytes ≤ maxBytes := by
+  induction ranked generalizing state with
+  | nil => exact ⟨hGets, hBytes⟩
+  | cons group rest ih =>
+      simp only [List.foldl_cons]
+      obtain ⟨nextGets, nextBytes⟩ :=
+        admitMerged_bounds physical predecessor length maxGets maxBytes state group hGets hBytes
+      exact ih (admitMerged physical predecessor length maxGets maxBytes state group)
+        nextGets nextBytes
+
+theorem merged_wave_bounds (physical : List Nat) (predecessor : Nat → Option Nat)
+    (length : Nat → Nat) (ranked : List Nat) :
+    mergedGets physical
+      (planMerged physical predecessor length 32 16777216 ranked).selected
+      predecessor ≤ 32 ∧
+    (planMerged physical predecessor length 32 16777216 ranked).bytes ≤ 16777216 := by
+  apply foldMerged_bounds physical predecessor length 32 16777216 ranked ⟨[], 0⟩
+  · induction physical with
+    | nil => simp [mergedGets]
+    | cons group rest ih => simpa [mergedGets] using ih
+  · simp
+
+private def threeGroupPredecessor : Nat → Option Nat
+  | 0 => none
+  | group + 1 => some group
+
+example :
+    (planMerged [0, 1, 2] threeGroupPredecessor (fun _ => 100)
+      2 300 [0, 2, 1]).selected = [0, 2, 1] ∧
+    mergedGets [0, 1, 2]
+      (planMerged [0, 1, 2] threeGroupPredecessor (fun _ => 100)
+        2 300 [0, 2, 1]).selected threeGroupPredecessor = 1 := by
+  decide
+
 end Borsuk.OPQ8

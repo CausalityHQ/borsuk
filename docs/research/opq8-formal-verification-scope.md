@@ -112,9 +112,12 @@ preserves input order and uniqueness, and accounts for exactly the selected
 group lengths. It also proves a pairwise integer interval order lemma,
 counting lemmas conditional on already certified truth-owner coverage,
 and the 8N/16N code-plane arithmetic. The structural `List.foldl`
-consumes one ranked group per recursive step. The 1M planner merges
-adjacent selected groups into GET intervals; its GET bound and its
-composition with routing/recall have not been mechanized.
+consumes one ranked group per recursive step. A second abstract model
+counts 1M merged GETs as selected groups whose same-role physical
+predecessor is absent. It proves a 32-GET/16-MiB bound and checks a
+three-group bridging example. The supplied physical predecessor map and
+the Python planner's incremental count still need a refinement proof.
+Neither model has been composed with routing and recall.
 
 The proof has no `sorry`, but the refinement from production Python to the
 Lean model, the top-four score error bound, plan stability, page

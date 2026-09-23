@@ -9,6 +9,9 @@ accounting and the 32-read/16-MiB caps. It also proves one pairwise
 fixed-point score-order lemma, truth-owner counting lemmas conditional on
 the owners already being certified as selected, and 8-byte code-plane
 arithmetic. It assumes valid group lengths and an authenticated ranking.
-The 1M planner merges adjacent groups and has a different GET count;
-its proof, Python refinement, and numerical certificates for actual
-queries are separate work.
+The file also proves the budget bound for an abstract 1M planner that
+recounts merged GETs from sealed physical predecessors, including a
+bridging example where three groups need one GET. It does not prove that
+the Python incremental merge counter equals this recount, or that the
+predecessor map was constructed correctly. Python refinement and
+numerical certificates for actual queries remain separate work.
