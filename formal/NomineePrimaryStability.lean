@@ -69,7 +69,36 @@ theorem hundred_primary_votes_stable
   rw [same] at hundred ⊢
   exact ⟨hundred, fun _ => rfl⟩
 
+/-! A fixed deterministic downstream route receives the same primary list
+when the authenticated margin premise holds. A fixed truth roster therefore
+has identical returned hits. This is a conditional equivalence, not a lower
+bound on either route's unknown recall. -/
+
+def returnedHits (truth returned : List Nat) : Nat :=
+  (truth.filter (fun row => row ∈ returned)).length
+
+theorem returned_hits_stable_under_fixed_route
+    (rows truth : List Nat) (trueScore approximateScore error : Nat → Int)
+    (threshold : Int) (route : List Nat → List Nat)
+    (bounds : ∀ row ∈ rows,
+      0 ≤ error row ∧
+      approximateScore row ≤ trueScore row + error row ∧
+      trueScore row ≤ approximateScore row + error row ∧
+      (trueScore row + error row < threshold ∨
+       threshold + error row ≤ trueScore row)) :
+    returnedHits truth (route (primary rows trueScore threshold)) =
+      returnedHits truth (route (primary rows approximateScore threshold)) := by
+  rw [primary_stable_of_boundary_margin rows trueScore approximateScore
+    error threshold bounds]
+
+def residentPayloadBytes (rows generations : Nat) : Nat :=
+  rows * 16 * generations
+
+theorem resident_payload_exact_for_any_scale (rows generations : Nat) :
+    residentPayloadBytes rows generations = rows * (16 * generations) := by
+  simp [residentPayloadBytes, Nat.mul_assoc]
+
 theorem hundred_million_two_generation_r16_payload :
-    100_000_000 * 16 * 2 = 3_200_000_000 := by decide
+    residentPayloadBytes 100_000_000 2 = 3_200_000_000 := by decide
 
 end Borsuk.NomineePrimary

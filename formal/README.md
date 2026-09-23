@@ -18,6 +18,11 @@ function. It also checks that a 16-byte plane across two complete 100M
 generations occupies 3.2 billion payload bytes. Neither statement is a
 measured recall, latency, or charged-memory result. Run
 `lean NomineePrimaryStability.lean` from this directory to check it.
+The fixed-route corollary proves equal returned GT hits when the margin
+premise makes the entire primary roster identical and every other route
+input is held fixed. The generic payload law is `16 × rows × generations`
+bytes; it has no vector-count knee or memory cap. A charged-memory claim
+still needs measured allocator, codebook, layout and concurrency overhead.
 
 Run `lean Opq8Planner.lean` from this directory with the pinned Lean
 toolchain. The file imports only `Std` and contains no admitted theorems.
