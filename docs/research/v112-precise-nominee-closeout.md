@@ -84,13 +84,16 @@ page-selection gap even for this nondeployable diagnostic.
 
 ## Production decision and next gate
 
+The concrete resident-plane hypothesis and paired 100k screening rule are
+preregistered in `v113-resident-nominee-gate.md`.
+
 Promote **the route concept**, not this diagnostic reader. Build one
 resident finer row representation trained only from corpus rows, use
 it to rerank V77's fixed PQ64 top-512 nominees, then apply the same
 100-primary/412-secondary page votes, physical DP and SQ8 final scorer.
 Start with a preregistered 16-byte-per-row residual code in addition
-to PQ64; if its paired development gate fails because row ordering is
-insufficient, compare one 32-byte width before changing the design.
+to PQ64; a 32-byte width is conditional on the V113 scalar-only ablation
+showing that residual bytes actually improve row ordering.
 Do not optimize weights or thresholds on the now fully observed
 development split. A candidate must reproduce both physical caps,
 reach at least 99.0% returned Recall@100 and p05 at least 90 on the

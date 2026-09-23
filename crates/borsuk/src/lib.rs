@@ -58,6 +58,7 @@ mod native_ann_read;
 mod native_ann_router;
 mod observability;
 mod parallel;
+pub mod physical_interval;
 mod physical_layout;
 mod positioned_candidate;
 mod positioned_log;
