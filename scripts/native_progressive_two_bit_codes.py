@@ -13,7 +13,7 @@ SYMBOLS = 768
 
 def _records(value: np.ndarray, width: int) -> bool:
     return (
-        type(value) is np.ndarray
+        isinstance(value, np.ndarray)
         and value.dtype == np.uint8
         and value.ndim == 2
         and value.shape[1] == width
