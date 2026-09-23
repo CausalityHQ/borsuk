@@ -244,11 +244,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _fixed_vectors(path: Path, rows: int, dimensions: int) -> np.ndarray:
+def _fixed_vectors(
+    path: Path, rows: int, dimensions: int, column: str,
+) -> np.ndarray:
     import pyarrow.parquet as pq
 
-    table = pq.read_table(path, columns=["embedding"])
-    values = table["embedding"].combine_chunks().values.to_numpy(zero_copy_only=False)
+    table = pq.read_table(path, columns=[column])
+    values = table[column].combine_chunks().values.to_numpy(zero_copy_only=False)
     result = np.asarray(values, dtype=np.float32).reshape(rows, dimensions).copy()
     if not np.isfinite(result).all():
         raise ValueError("nonfinite V113 source/query embedding")
@@ -267,7 +269,7 @@ def build_from_source(
 
     if _sha256_file(source) != source_sha256:
         raise ValueError("V113 source hash differs")
-    vectors = _fixed_vectors(source, rows, dimensions)
+    vectors = _fixed_vectors(source, rows, dimensions, "embedding")
     ids = pq.read_table(source, columns=["feature_row_id"])[
         "feature_row_id"
     ].combine_chunks().to_numpy(zero_copy_only=False)
@@ -303,7 +305,7 @@ def score_from_artifact(
     )
     if built.ids.size != rows or built.low.size != dimensions:
         raise ValueError("V113 100k score screen geometry differs")
-    query_vectors = _fixed_vectors(queries, query_count, dimensions)
+    query_vectors = _fixed_vectors(queries, query_count, dimensions, "vector")
     temporary = output.with_suffix(output.suffix + ".tmp")
     resident_hits: list[int] = []
     scalar_hits: list[int] = []

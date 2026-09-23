@@ -98,7 +98,7 @@ class ScoreScreenTests(unittest.TestCase):
                 ),
             }), source)
             pq.write_table(pa.table({
-                "embedding": pa.FixedSizeListArray.from_arrays(
+                "vector": pa.FixedSizeListArray.from_arrays(
                     pa.array(queries.ravel()), 64,
                 ),
             }), query_path)

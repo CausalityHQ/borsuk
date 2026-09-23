@@ -24,8 +24,8 @@ def _hash(path: Path) -> str:
 def _queries(path: Path, count: int, dimensions: int) -> np.ndarray:
     import pyarrow.parquet as pq
 
-    table = pq.read_table(path, columns=["embedding"])
-    values = table["embedding"].combine_chunks().values.to_numpy(zero_copy_only=False)
+    table = pq.read_table(path, columns=["vector"])
+    values = table["vector"].combine_chunks().values.to_numpy(zero_copy_only=False)
     result = np.asarray(values, dtype=np.float32).reshape(count, dimensions)
     if not np.isfinite(result).all():
         raise ValueError("validator query roster differs")
