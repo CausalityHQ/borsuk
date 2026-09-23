@@ -49,6 +49,17 @@ class OneMillionOpq8Tests(unittest.TestCase):
             self.assertTrue(np.array_equal(first.codes, encode_opq8_rows(physical, first.model)))
             self.assertEqual(first.membership_groups.tolist(), [0] * 8 + [1, 2])
             self.assertEqual(read_1m_opq8(root / "first", inputs, model).seal, first.seal)
+            code_path = root / "first/codes.bin"
+            original = code_path.read_bytes()
+            code_path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+            with self.assertRaisesRegex(ValueError, "codes identity"):
+                read_1m_opq8(root / "first", inputs, model)
+            code_path.write_bytes(original)
+            model_path = root / "first/model.bin"
+            original_model = model_path.read_bytes()
+            model_path.write_bytes(original_model[:-1] + bytes([original_model[-1] ^ 1]))
+            with self.assertRaisesRegex(ValueError, "model identity"):
+                read_1m_opq8(root / "first", inputs, model)
 
     def test_missing_or_duplicate_source_row_rejects_before_seal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

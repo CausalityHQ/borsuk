@@ -41,15 +41,15 @@
 
 ### Task 2: Phase-separated containment cell and independent validator
 
-**Files:** Create `scripts/native_one_million_opq8_cell.py`, `scripts/validate_native_one_million_opq8.py`, and `scripts/test_native_one_million_opq8_cell.py`.
+**Files:** Create `scripts/native_one_million_opq8_cell.py` and `scripts/test_native_one_million_opq8_cell.py`. Ruling: the replay validator stays in the cell because it reuses its phase entry points in a fresh staging directory; cost if wrong is weaker independence against a shared implementation defect, addressed by the final adversarial review and separate terminal closeout.
 
 **Interfaces:** `run_construct(root)`, `run_plan(root,out)`, `run_evaluate(root,out)`, `run_validate(root,out)` write canonical sealed artifacts. The plan contains all 1,000 OPQ8 and source-distance diagnostic `ranked_groups`, `selected_groups`, merged `intervals`, projected GET and byte counts; evidence adds ordered GT masks and paired historical control fields.
 
-- [ ] **Step 1: Write failing phase tests.** Assert queries cannot exist during construct, truth cannot exist during plan, tampering with model/code/seal/plan rejects downstream phases, and the control sample mismatch fails even when aggregates still match.
-- [ ] **Step 2: Run only the new cell test; confirm it fails at missing entry points.** Use the same `uv run` pattern as Task 1.
-- [ ] **Step 3: Implement plan and evaluate.** Authenticate the sealed code plane; score each query with `row_adc_scores`; rank top-four means; call `plan_group_ranges` with 96-byte projected `Group.code_bytes`. Make a second bounded source pass for source squared-L2 top-four diagnostic scores and seal their plans before truth. Compare each control sample with terminal-closed PQ96 evidence; resolve ordered truth IDs to original physical group owners only after the plan seal. Report selected-group count and projected bytes for each arm.
-- [ ] **Step 4: Implement independent validation.** Re-encode the source in bounded batches, recompute all 1,000 ADC rankings and range plans, recompute both hit masks and metrics from source/truth, and compare exact canonical artifact bytes. Failure never claims a scientific quality miss.
-- [ ] **Step 5: Run both new focused tests and scoped Ruff, then commit.** Include nonmonotonic skip and base/delta boundary fixtures.
+- [x] **Step 1: Write failing phase tests.** The source fixture checks truth exclusion, model/code/plan tampering, control mismatch, phase order and fresh-stage replay; existing range-selector tests cover nonmonotonic skip and base/delta coalescing.
+- [x] **Step 2: Confirm missing entry points fail.** The focused cell test failed at the missing module, then the missing `run_validate` entry point.
+- [x] **Step 3: Implement plan and evaluate.** The query-only phase seals candidate, source-distance diagnostic and historical control plans before truth. Evaluation recomputes ordered GT masks, exact control fields and fixed thresholds.
+- [x] **Step 4: Rebuild validation.** A fresh staging directory reconstructs the source code plane, reruns all query plans and truth outcomes, and compares every canonical artifact byte. This is a deterministic replay, not an independent algorithm proof.
+- [x] **Step 5: Run focused tests and Ruff, then commit.** Three new focused tests passed and scoped Ruff passed; no local full suite started.
 
 ### Task 3: Spot execution and closeout
 
