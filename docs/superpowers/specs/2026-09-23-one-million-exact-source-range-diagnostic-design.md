@@ -1,6 +1,10 @@
 # ReLAION-1M source-vector final-range diagnostic
 
-Status: preregistered design; no result or production quality claim.
+Status: preregistration completed. The sole terminal-closed attempt
+`relaion-1m-dev1000-a0001` passed the fixed source-only diagnostic;
+the immutable result and independent closeout are recorded in
+`docs/research/algorithm-first-page-layout-ledger.md`. The method
+below remains the preregistered method, not a production claim.
 
 ## Decision
 

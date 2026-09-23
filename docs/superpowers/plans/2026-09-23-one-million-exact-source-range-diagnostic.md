@@ -24,15 +24,15 @@ group plans, page layout and range rule, meet the fixed final-range gate.
   pass rule and paired OPQ8/control comparisons.
 - [x] Independently validate source identities, score replay, plan seals,
   resource receipts and every truth hit mask on the execution host.
-- [ ] Run focused tests and scoped lint; commit and fast-forward push.
+- [x] Run focused tests and scoped lint; commit and fast-forward push.
 
 ## Task 3: Causality Spot closeout
 
-- [ ] Check active jobs and EC2 instances, create/read back the immutable
+- [x] Check active jobs and EC2 instances, create/read back the immutable
   source archive and launch one create-only Spot attempt.
-- [ ] Monitor terminal and instance health only, collect terminal status,
+- [x] Monitor terminal and instance health only, collect terminal status,
   and confirm immediate compute termination.
-- [ ] Independently authenticate and recount terminal artifacts off-host,
+- [x] Independently authenticate and recount terminal artifacts off-host,
   record the decision and update the architecture contract.
 - [ ] Run final proportional verification and fast-forward push the
   closed evidence to `origin/main`.

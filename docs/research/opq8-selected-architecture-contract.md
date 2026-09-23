@@ -1,8 +1,9 @@
 # Selected 1M routing architecture and final-wave diagnostic
 
 Status: routing decision selected from terminal-closed 100k actual reads and
-1M source-only evidence. This is a research contract, not a released index
-format or a claim that 1M final-page quality has passed.
+1M source-only evidence. Source-vector scoring passed the 1M final-range
+diagnostic, but no compressed production row scorer or end-to-end 1M read
+has passed. This is a research contract, not a released index format.
 
 ## Sealed route
 
@@ -23,7 +24,8 @@ format or a claim that 1M final-page quality has passed.
   Selection may skip a group that does not fit and continue.
 - For every query, authenticate planned code-object ranges against a sealed
   manifest and decode rows in exact physical page order. Final data-range
-  planning remains an open decision gate, not an established 1M outcome.
+  planning is established only for source-vector scores; production row-score
+  quality and actual reads remain open gates.
 
 At 1M, source-only OPQ8 containment was 98,985/100,000 GT100 positions
 with p05 95, against 98,151 and p05 89 for the paired page-centroid route.
@@ -34,8 +36,8 @@ actual-read win used a 200-byte two-bit scorer; it does not validate a
 ## Deferred physical code object
 
 The passed 1M planner budgeted a possible 96-byte-per-row PQ96 object.
-Construction remains deferred after the OPQ8 score-driven data-range selector
-failed its source-only gate. The proposed candidate is 96
+Construction remains deferred until its compressed-score gate is frozen.
+The proposed candidate is 96
 eight-bit codes for 96 contiguous eight-dimensional subspaces of a
 768-dimensional vector, with one source-trained 256-centroid book per
 subspace. Train without development queries or truth. The group body is a
@@ -48,8 +50,8 @@ route decision.
 
 If that future gate passes, use the same row-code bytes and data-range
 rule for OPQ8 and page-centroid arms. Only code-group selection changes.
-Any source-vector diagnostic must be separately specified and cannot
-promote a failing production scorer.
+The closed source-vector diagnostic is an upper-quality target for that
+compressed scorer; it does not promote the failed 8-byte row scorer.
 
 ## Scale and proof boundary
 
@@ -98,14 +100,25 @@ immutable attempt identity are in
 truth-aware interval witness reached 98,935 GT100, p05 94 and 19 sub-90
 queries under the same caps; this remains an existence witness only.
 
-The next cheapest diagnostic holds group plans, layout, interval planner,
-and I/O caps fixed and substitutes source-vector row distances for OPQ8
-scores. It must seal query-only priorities and ranges before truth, use a
-preregistered score implementation and fixed stop rule, and independently
-close out a single Causality Spot attempt. If exact-source ranking still
-fails, investigate page priority, greedy admission and locality before
-constructing a larger row code. If it passes, a larger compressed row
-representation becomes a candidate for its own paired gate. This
-development cohort cannot qualify an actual-read system; that gate needs
-a fresh untouched query cohort, followed by measured serving latency,
-throughput and resource checks.
+The terminal-closed source-vector diagnostic held those plans, layout,
+interval rule and caps fixed and reached 98,920/100,000 GT100, GT10
+9,956/10,000, p05 94 and 19 sub-90 queries. The paired control reached
+98,140 GT100. Independent closeout authenticated all 15 artifacts and
+recounted every truth mask; the complete attempt is in the ledger.
+Only 65 candidate truth positions inside selected groups missed final
+ranges, versus 7,703 with OPQ8 row scores. This identifies row-score
+fidelity as the dominant loss under this frozen planner. The source
+scan itself is not a production candidate: it reads the entire source
+corpus and measured no serving latency.
+
+The next gate is a single preregistered PQ96 row-score candidate. First
+reject inadequate score fidelity on a cheap 100k source-only screen;
+then, only if it survives, use the frozen 1M group plans, original page
+layout, page-priority and 32-range/16-MiB rule for a paired source-only
+score gate against this source-vector result and the failed OPQ8 score
+baseline. Do not substitute the old 32-page cap. A passing compressed
+scorer can proceed to actual authenticated code and data reads on a
+fresh untouched query cohort, then measured serving latency,
+throughput and resource checks. At 10M/100M, replace the linear full
+route scan with a measured hierarchical or region route before scale
+qualification.

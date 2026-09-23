@@ -5027,3 +5027,81 @@ larger row-code candidate; a miss would implicate page ranking/scheduling
 or locality and require a revised final-wave architecture. This same
 1,000-query cohort is development evidence; any later actual-read
 qualification must include a fresh untouched query cohort.
+
+### ReLAION-1M source-vector final ranges a0001: score representation isolated
+
+The preregistered source-vector diagnostic in
+`docs/superpowers/specs/2026-09-23-one-million-exact-source-range-diagnostic-design.md`
+changed only row scores. It reused the exact sealed OPQ8 candidate and
+page-centroid control group plans, original physical page layout,
+top-100-row page-priority rule, greedy minimum-byte 32-range admission,
+and 16,777,216-byte limit. Authenticated float32 source coordinates
+were converted to float64 and scored with the frozen squared-L2
+norm-plus-dot rule. Both arms' query-only plans were sealed before
+truth. This was a source-only development-cohort diagnostic: no
+query data-page reads, serving latency or unseen-query recall was
+measured.
+
+Pushed source `d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f` was sealed
+in an 11,245,110-byte create-only archive with SHA-256
+`9d84c88425363e67583c39ac75ce6a01a0055c694577265f3d50ad3aae799f28`.
+Its sole attempt was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-source-range-diagnostic/d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f/runs/relaion-1m-dev1000-a0001/`.
+The complete terminal SHA-256 is
+`c77f38f7bbd47b75c61297b511a33e7ac9e53766a705a55e878dd58d29c51b9c`.
+The original controller exited zero; Causality Spot
+`i-04bea022d226ef4d3` (`c7i.8xlarge`) was confirmed terminated.
+All 15 terminal-listed artifacts were separately downloaded and
+authenticated. Independent closeout checked the terminal,
+reservation, read-back source archive, artifact roster, source-score
+plan seal, zero-swap resource receipts, and all 1,000 truth-owner
+masks and range bytes. The 39,917,754-byte plans, 2,716,755-byte
+evidence, result and validation SHA-256 values were
+`265f70544f2094743b4746ffaa6ecc2ca43a482156aef9db0393920a8fb24b9e`,
+`c3cfc18c78a4974b31f6592bf13358f953864ebc450dbd5b83aec77f2e85eb09`,
+`b0eba3fd383aa56ede28f2de44be9b6974c2d738a3765a90709fdfe4cb42d2c9`
+and `feef8d4bb320e6a437e62b6555cd1cce30a07dbed6dfeeee53dbb3e0fdc48c3f`.
+
+| Frozen 1M plans, 1,000 development queries | Page-centroid control | OPQ8 route | fixed candidate gate |
+|---|---:|---:|---:|
+| selected-group GT100 | 98,151 / 100,000 | 98,985 / 100,000 | historical route result |
+| source-score final-range GT100 | 98,140 / 100,000 | **98,920 / 100,000** | ≥98,151 |
+| source-score final-range GT10 | 9,928 / 10,000 | **9,956 / 10,000** | ≥9,928 |
+| source-score final-range p05 GT100 | 89 / 100 | **94 / 100** | ≥90 |
+| source-score final-range queries below 90 GT100 | 51 | **19** | ≤49 |
+| maximum data GET ranges | 32 | 32 | ≤32 |
+| maximum encoded data bytes | 16,777,216 | 16,777,216 | ≤16,777,216 |
+
+The candidate passed every fixed source-only diagnostic gate. Candidate
+and control were paired: 219 queries favored the candidate, 64 the
+control and 717 tied. Relative to the authenticated OPQ8 score-driven
+range plans on these same queries, source scores recovered 7,638
+candidate GT100 positions and 6,599 control positions; they improved
+633 candidate queries and 624 control queries, worsened none, and tied
+the rest. Candidate group-to-final loss fell from 7,703 to only 65
+GT100 positions; 1,015 remaining misses had truth owners outside
+selected groups. The source-score candidate was only 15 GT100
+positions below the prior truth-aware interval witness's 98,935.
+All 98,920 candidate hits were on admitted target pages; bridged
+pages added no hits. These paired, frozen-rule data identify OPQ8
+row-score fidelity as the dominant cause of the previous final-wave
+loss, while the 65 in-group source-score misses show a smaller residual
+admission cost.
+
+Construct, plan, evaluate and validate maximum RSS were 1,127,648,
+1,253,680, 740,840 and 2,391,240 KiB; sampled process-tree peaks
+were 753,000,448, 1,290,493,952, 682,725,376 and 2,454,863,872
+bytes. Every phase recorded zero swaps and passed the 3-GiB-with-margin
+cap. The complete terminal elapsed 408 seconds.
+
+**Decision:** `source-score-diagnostic-pass`; retain the sealed OPQ8
+group route and range budget as a promising production shape, but do
+not promote source-vector scanning or the failed 8-byte OPQ8 row
+scorer as the final-wave implementation. The next gate must test a
+single preregistered compressed row-score representation against the
+source-score and OPQ8 baselines with the same group plans, page layout,
+range rule and caps. A cheap 100k representation screen precedes a
+frozen 1M source-only score gate; actual authenticated reads and an
+untouched query cohort follow only for a passing scorer. PQ96 remains
+a candidate, not a winner. Production latency, throughput, writes and
+10M/100M scaling remain unmeasured by this result.
