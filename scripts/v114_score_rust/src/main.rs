@@ -20,6 +20,8 @@ mod physical_interval;
 use exact_sq8_mirror::{ExactSq8Mirror, MirrorManifest, Placement};
 use exact_sq8_nominee::{Sq8Geometry, primary_ordinals};
 use pq64_router_artifact::load_source_router;
+use returned_sq8::{ReturnedRange, rank_returned_ranges};
+use sha2::{Digest, Sha256};
 use physical_interval::{IntervalGeometry, IntervalPlan, PlanError, plan_weighted_intervals};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
@@ -226,10 +228,78 @@ fn run_nominate(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() != 6 {
+        return Err("usage: borsuk-v114-score-gate replay-returned MANIFEST OBJECT SIDECAR REQUESTS".into());
+    }
+    let manifest = parse_manifest(&serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(&args[2])?,
+    )?)
+    .map_err(io::Error::other)?;
+    let mirror = ExactSq8Mirror::open(
+        Path::new(&args[3]), Path::new(&args[4]),
+        manifest.clone(), Placement::Ram,
+    )?;
+    let object = fs::read(&args[3])?;
+    if format!("{:x}", Sha256::digest(&object)) != manifest.object_sha256 {
+        return Err("replay SQ8 object changed after mirror opening".into());
+    }
+    let mut output = BufWriter::new(io::stdout().lock());
+    for (ordinal, line) in BufReader::new(File::open(&args[5])?).lines().enumerate() {
+        let request = serde_json::from_str::<serde_json::Value>(&line?)?;
+        let query_ordinal = request["query_ordinal"].as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or("invalid replay ordinal")?;
+        if query_ordinal != ordinal {
+            return Err("replay query ordinal differs".into());
+        }
+        let query: Vec<f32> = serde_json::from_value(request["query"].clone())?;
+        let nominees: Vec<usize> = serde_json::from_value(request["nominees"].clone())?;
+        let primary_count = request["primary_count"].as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or("invalid replay primary count")?;
+        if query.len() != manifest.geometry.dimensions
+            || primary_count != 100 || nominees.len() != 512
+        {
+            return Err("replay request geometry differs".into());
+        }
+        let scored = mirror.score(&nominees, &query)?;
+        let primary = primary_ordinals(&scored, primary_count)
+            .map_err(|error| io::Error::other(format!("invalid primary: {error:?}")))?;
+        let (votes, plan) = route_primary(
+            &primary, &nominees, manifest.geometry.rows, manifest.geometry.dimensions,
+        )?;
+        let ranges = plan.ranges.iter().map(|range| ReturnedRange {
+            start: range.start, bytes: &object[range.clone()],
+        }).collect::<Vec<_>>();
+        let returned = rank_returned_ranges(
+            manifest.geometry, &ranges, &query, &manifest.low, &manifest.step,
+            100, 16_777_216,
+        ).map_err(|error| io::Error::other(format!("invalid returned score: {error:?}")))?;
+        serde_json::to_writer(&mut output, &serde_json::json!({
+            "query_ordinal": ordinal,
+            "nominees": nominees,
+            "score_bits": scored.iter().map(|entry| entry.score.to_bits()).collect::<Vec<_>>(),
+            "primary": primary,
+            "page_votes": votes,
+            "ranges": plan.ranges.iter().map(|range| [range.start, range.end]).collect::<Vec<_>>(),
+            "plan_bytes": plan.bytes,
+            "plan_score": plan.score,
+            "returned_ids": returned.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        }))?;
+        output.write_all(b"\n")?;
+    }
+    output.flush()?;
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.get(1).is_some_and(|value| value == "nominate") {
         return run_nominate(&args);
+    }
+    if args.get(1).is_some_and(|value| value == "replay-returned") {
+        return run_replay_returned(&args);
     }
     if args.len() != 5 {
         return Err("usage: v114_exact_local_score MANIFEST OBJECT SIDECAR REQUESTS".into());
