@@ -357,6 +357,17 @@ theorem threshold_recall_loss_bounded_by_band
         List.map_cons, List.sum_cons] at *
       omega
 
+theorem one_million_gt100_gate_of_boundary_certificate
+    (pages : List ThresholdPage) (threshold error : Int)
+    (scoreUpper : ∀ page ∈ pages,
+      page.routedScore ≤ page.trueScore + error)
+    (sourceHits : sourceThresholdHits pages threshold = 98920)
+    (boundaryHits : boundaryBandHits pages threshold error ≤ 769) :
+    98151 ≤ routedThresholdHits pages threshold := by
+  have bound := threshold_recall_loss_bounded_by_band
+    pages threshold error scoreUpper
+  omega
+
 /-! The p05 and sub-90 conditions concern the per-query distribution.
 Aggregate hit-loss bounds alone do not establish them. -/
 

@@ -5212,3 +5212,65 @@ its earlier 1M byte-ceiling failure remains a separate warning. A revised
 200-byte scorer under the newer 32-range page schedule requires its own
 preregistered source-only gate; previous measurements do not establish
 its result or production latency.
+
+### ReLAION-1M page-local 200-byte code-wave projection a0001: reject
+
+After both 96-byte row scorers failed, the next frozen question was whether
+a page-local 200-byte code object could fetch enough rows under its own
+32-GET/16,777,216-byte **code** wave. The preregistered contract is
+`docs/research/two-bit-page-code-wave-contract.md`. This was a source-only
+projection: it replayed the terminal-closed resident OPQ8 page priority,
+authenticated original physical page row counts, and planned page-local
+code ranges with the unchanged minimum-byte merged-range rule. Truth was
+unavailable until all 1,000 query plans were sealed and uploaded. It
+neither built a 1M two-bit object nor measured S3 code-read latency.
+
+Pushed source `658f35f8e3378250c1bc3421f59efddd2c6aa02c` was sealed in a
+11,303,085-byte archive with SHA-256
+`47bf34fd5c6aa3195018fb806418f3f6d58cf7988eeb14e981255b7807f2ed9b`.
+The sole attempt was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-two_bit_code_wave-selector/658f35f8e3378250c1bc3421f59efddd2c6aa02c/runs/relaion-1m-dev1000-a0001/`.
+Its complete terminal SHA-256 is
+`51f8464490474050d60f56c68e4ab615d46d462fa88ca7f1821361fcfc9c40c8`.
+The original controller exited zero after 536 seconds. Causality Spot
+`i-07534ad9f9d56ec70` (`c7i.8xlarge`) was confirmed terminated. The
+controller read back every terminal artifact; separate local closeout
+authenticated the reservation, exact source archive, all 13 terminal-
+listed artifacts, prior closed plans/page map and zero-swap resource
+receipts. The worker's independent validator rebuilt the page lengths,
+greedy admissions, ranges, bytes and all 1,000 truth masks without using
+the production admission helper.
+
+| Frozen 1M code-wave projection | Old 200-byte group route | New page-local code wave | Preregistered advance |
+|---|---:|---:|---:|
+| GT100 contained / 100,000 | 97,541 | **98,468** | ≥98,651 |
+| GT10 contained / 10,000 | 9,896 | 9,934 | reported |
+| p05 GT100 | 86 | **91** | ≥93 |
+| queries below 90 GT100 | 70 | 35 | reported |
+| maximum code GETs | 32 | 32 | ≤32 |
+| maximum code bytes | 16,777,208 | 16,777,200 | ≤16,777,216 |
+
+The page-local schedule gained 927 GT100 positions over the historical
+200-byte whole-group route, yet missed its fixed safety margin by 183
+positions and two p05 points. It retained 517 fewer GT100 positions than
+the closed OPQ8 selected-group containment of 98,985. Bridged pages
+supplied seven of its 98,468 hits. Across queries the cover included
+352–748 pages, while 352–597 were explicit targets; all 1,000 code waves
+used 32 GETs. The source-only exact-score final-range diagnostic had
+98,920 GT100 and p05 94 on the larger full-group candidate set; those
+numbers are context, not a paired scorer comparison on this narrower
+code cover.
+
+Construct, plan, evaluate and validate maximum RSS were 968,960,
+853,192, 1,083,148 and 1,089,328 KiB respectively. Sampled process-
+tree RSS peaks were 359,084,032, 814,780,416, 1,035,739,136 and
+1,043,791,872 bytes. Every phase recorded zero swaps and passed the
+3-GiB-minus-64-MiB cap.
+
+**Decision:** `reject` this page-local 200-byte code-wave candidate at
+the frozen projection gate. Do not construct its 1M code plane or run
+the 200-byte scorer on this development cohort. The limiting layer is
+code-wave page admission and locality under the byte/GET budget, before
+row-score quantization. A next architecture must materially improve
+source-trained routing/layout or score fidelity at a narrower width;
+do not tune this candidate's admission constants on these queries.

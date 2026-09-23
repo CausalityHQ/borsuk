@@ -1,6 +1,6 @@
 # Candidate 200-byte page code wave
 
-Status: preregistered architecture hypothesis; no new result is claimed.
+Status: rejected at the preregistered 1M source-only projection gate.
 
 ## Decision and existing evidence
 
@@ -78,6 +78,16 @@ per-page score error and margin premises. `formal/Opq8Planner.lean` proves
 abstract request/byte and conditional latency bounds. The greedy merged-
 range Python implementation, page-level authentication, row-score errors,
 truth masks, S3 service times and unseen-query recall are separate premises
-or measurements. A counting theorem for pages near the admission boundary
-would make the recall certificate more useful when perfect margin separation
-does not hold; its code-wave planner refinement remains necessary.
+or measurements. A threshold-model counting theorem for pages near the
+admission boundary has since been checked; its code-wave planner
+refinement remains necessary.
+
+## Closed decision
+
+The single attempt from source `658f35f8e3378250c1bc3421f59efddd2c6aa02c`
+closed complete on Spot `i-07534ad9f9d56ec70`, which was terminated.
+Independent validation and terminal readback confirmed 98,468 GT100
+contained and p05 91, below the frozen 98,651/93 screening margins.
+The 200-byte 1M code plane and scorer cell are stopped. Full evidence,
+identities and resource receipts are in the research ledger section
+"ReLAION-1M page-local 200-byte code-wave projection a0001."

@@ -82,3 +82,7 @@ counts. It does not yet transfer to the production greedy byte/GET
 planner; that requires a checked planner refinement or its own admission
 certificate. This conditional result can bound cohort recall with data
 assumptions, while unseen-query recall remains an empirical question.
+If a separately checked threshold model produced the closed 1M source-
+score total of 98,920 GT100 hits, a boundary-band certificate of at most
+769 truth positions would imply the 98,151 GT100 floor in that model.
+The existing greedy range plans have no such threshold refinement yet.
