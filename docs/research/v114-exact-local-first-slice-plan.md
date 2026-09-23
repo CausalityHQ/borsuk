@@ -1,0 +1,104 @@
+# V114 Exact Local SQ8 First Slice Implementation Plan
+
+> **For agentic workers:** implement this plan with the repository's
+focused-check, source-frozen, Spot-first workflow. Keep the V114 design in
+`docs/research/v114-exact-local-nominee-gate.md` authoritative.
+
+Goal: add one reusable production-facing exact SQ8 row scorer with explicit
+RAM or local-file placement and prove its 100k primary sets match an
+independent reference. This slice does not add a live S3 reader or claim
+returned recall. It prepares the paired 1M gate in the design document.
+
+## File boundaries
+
+- `crates/borsuk/src/exact_sq8_nominee.rs`: exact row geometry, bounds,
+  digest-checked local loading, placement choice, candidate score and
+  `(score, ID)` ranking. No S3 client or research dataset constants.
+- `crates/borsuk/src/lib.rs`: export the module.
+- `scripts/v114_exact_local_100k.py`: frozen 100k two-phase gate. It writes
+  a source-only authenticated SQ8 plane, then reads development queries
+  and compares the Rust scorer's primary sets against an independent
+  Python score implementation over the same 512-row PQ64 roster.
+- `scripts/validate_v114_exact_local_100k.py`: recompute source/query
+  identities, plane hashes, all 1,000 primary sets and the reduction.
+- `scripts/launch_v114_exact_local_100k_spot.py` and remote runner: one
+  registered Causality Spot attempt, terminal sync and termination.
+- `docs/research/v114-exact-local-100k-closeout.md`: terminal-bound result,
+  code revision, resource observations, decision and next gate.
+
+## Task 1: local exact scorer and placement
+
+1. Write focused Rust tests first for a 3-row, 4-coordinate SQ8 object in
+   the existing `id<i8>, norm<f4>, code[D]` little-endian layout. Check
+   record offsets, deterministic score/ID tie order, a short final row,
+   invalid ordinals, short/corrupt files, wrong dimension, wrong SHA-256,
+   nonfinite query/norm and identical RAM/file outputs. The scorer must
+   accept an explicit placement enum; it cannot switch on row count.
+2. Run only those tests. Confirm the new tests fail for the absent module.
+3. Implement the small module. Stream SHA-256 once before exposing a
+   generation. For RAM, hold verified bytes. For file placement, retain a
+   verified file descriptor and use positioned reads; keep bytes and row
+   scratch bounded by `512 × (D+12)` for a query. Bind the caller's
+   generation marker and SQ8 object hash to the opened handle. Reject a
+   file that changes between verification and use; the experiment may
+   ensure this by copying to a private, immutable local path before open.
+4. Run the focused tests and direct `rustc --test` check if Cargo would
+   raise devbox memory pressure. Run `cargo fmt --check` for touched Rust
+   files. Commit the coherent scorer slice.
+
+## Task 2: source-only 100k parity gate
+
+1. Write tiny two-phase Python fixtures with source columns
+   `feature_row_id, embedding` and query columns `query, vector`; reject
+   unordered query IDs and changed source/query hashes. The query file
+   must not be accessible to the build phase.
+2. Reuse frozen source SHA
+   `a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d`
+   and development query SHA
+   `4834cf63a50971b7d605c00f91b5142f67b049e91ea2c62c220271b50bffa6ac`.
+   Create the SQ8 bytes from source alone with the V70 quantizer and
+   persist a manifest binding exact bytes, IDs, low/step, PQ64 books/codes
+   and source revision. Use a source-only layout; record it before queries
+   arrive. Reuse the V113 source-only PQ64 top-512 roster.
+3. For every query, score the same 512 nominated rows using both explicit
+   Rust placements and an independent Python scorer. Record all three
+   top-100 lists, scores at any disagreement, page votes, interval plans,
+   local read time and physical caps. Require identical lists and plans
+   on all 1,000 queries, zero hash failures and zero cap violations.
+4. Independently validate every query and reduction. Keep 100k results
+   labeled score/route correctness, not GT recall or live latency.
+
+## Task 3: one frozen Spot execution and decision
+
+1. Add a launcher and runner with one immutable source archive, terminal
+   marker, input hashes, Spot instance ID, interruption detection and S3
+   artifact hashes. Query bytes are downloaded only after the source-only
+   SQ8/PQ/layout artifacts are sealed. Do not inspect partial evidence.
+2. Run shell syntax and tiny launcher tests locally. Run the 100k gate on
+   Causality Spot once from a pushed revision. Stop/terminate immediately
+   after terminal. A failed attempt gets a new immutable attempt prefix.
+3. Require terminal status complete and independently verify downloaded
+   reduction/evidence hashes. If any placement or reference primary set
+   differs, diagnose the score operation/tie or layout before 1M. If all
+   match, write and push a closeout that names the next paired 1M
+   development and live S3 gate; do not promote on RAM or SSD arithmetic
+   alone.
+
+## Review focus
+
+- A verified file can be mutated after SHA-256 validation: the reader
+  needs a private immutable path or a repeated identity check.
+- Rust scalar `f32` accumulation can differ from NumPy matrix products:
+  the 100k gate compares primary sets, records score differences, and
+  uses one canonical operation order for both placements.
+- The source and query Parquet schemas differ: source uses `embedding`,
+  development queries use `vector` plus ordered `query` IDs.
+- The 100k layout can hide short-final-page byte errors: include a short
+  final page fixture and exact byte accounting.
+- A small 100k file may fit page cache: measured placement timings are
+  diagnostic only; the 1M/10M concurrency gates decide viability.
+
+Verification policy: no local full suite while devbox swap/pressure is
+elevated. Run focused tests after changes, then the repository full gate
+once only when the code diff is stable and resources permit. Heavy data
+construction and performance work belongs on Spot.
