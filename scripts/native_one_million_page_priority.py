@@ -22,7 +22,7 @@ def rank_selected_pages(
         scores.ndim != 1
         or row_pages.shape != scores.shape
         or row_groups.shape != scores.shape
-        or scores.dtype != np.float32
+        or scores.dtype not in (np.dtype("float32"), np.dtype("float64"))
         or not np.isfinite(scores).all()
         or not selected
         or len(set(selected)) != len(selected)
@@ -48,7 +48,7 @@ def rank_selected_pages(
     page_ids = row_pages[available].astype(np.intp, copy=False)
     pages = np.unique(page_ids)
     counts = np.bincount(row_pages[best].astype(np.intp, copy=False), minlength=page_count)
-    minima = np.full(page_count, np.inf, dtype=np.float32)
+    minima = np.full(page_count, np.inf, dtype=scores.dtype)
     np.minimum.at(minima, page_ids, values)
     priority = sorted(
         (int(page) for page in pages),

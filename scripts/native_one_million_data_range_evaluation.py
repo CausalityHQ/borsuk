@@ -16,7 +16,7 @@ def evaluate_query_pages(
     maximum_bytes: int = 16_777_216,
 ) -> dict[str, object]:
     """Recount bridged pages too; reject a plan whose priority replay differs."""
-    if set(page_lengths) != {"base", "delta"} or set(plan) != {
+    if set(page_lengths) not in ({"base"}, {"base", "delta"}) or set(plan) != {
         "priority_pages", "target_pages", "ranges", "included_pages", "gets", "encoded_bytes"
     }:
         raise ValueError("data-range evaluation contract differs")
@@ -32,7 +32,7 @@ def evaluate_query_pages(
     }:
         raise ValueError("data-range sealed plan replay differs")
     base_pages = len(page_lengths["base"])
-    total_pages = base_pages + len(page_lengths["delta"])
+    total_pages = base_pages + len(page_lengths.get("delta", ()))
     if any(type(page) is not int or not 0 <= page < total_pages for page in truth_pages):
         raise ValueError("data-range truth page differs")
     chosen = set(expected.cover.included_pages)

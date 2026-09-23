@@ -18,3 +18,20 @@ def test_bridged_page_counts_as_truth_hit() -> None:
         "priority_owner_ranks": [None, 2, None],
         "hit_kinds": ["bridge", "target", "miss"],
     }
+
+
+def test_single_base_role_recounts_same_range_rule() -> None:
+    plan = {
+        "priority_pages": [["base", 0], ["base", 2]],
+        "target_pages": [["base", 0], ["base", 2]],
+        "ranges": [["base", 0, 3]],
+        "included_pages": [["base", 0], ["base", 1], ["base", 2]],
+        "gets": 1,
+        "encoded_bytes": 22,
+    }
+    result = evaluate_query_pages(
+        plan, (0, 1, 2), {"base": (10, 2, 10)},
+        maximum_gets=1, maximum_bytes=22,
+    )
+    assert result["hit_mask"] == "111"
+    assert result["hit_kinds"] == ["target", "bridge", "target"]

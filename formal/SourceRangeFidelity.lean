@@ -46,6 +46,20 @@ theorem gt10_gate_of_bounded_source_loss
   have accounting := source_hits_le_compressed_plus_lost pairs
   omega
 
+/-! The 100k sign96 screen uses a paired source arm. A bound of 300 lost
+truth positions certifies its aggregate fidelity relationship. The
+lower-tail and resource gates remain separate premises. -/
+
+theorem hundred_thousand_screen_of_bounded_loss
+    (pairs : List (Bool × Bool))
+    (_cohort : pairs.length = 100000)
+    (source_floor : 98000 ≤ sourceHits pairs)
+    (loss : lostHits pairs ≤ 300) :
+    97700 ≤ compressedHits pairs ∧
+    sourceHits pairs ≤ compressedHits pairs + 300 := by
+  have accounting := source_hits_le_compressed_plus_lost pairs
+  omega
+
 /-! A per-query certificate can discharge the lower-tail gate without
 postulating its observed value. It must bind the 100 paired truth positions
 for that query and count the actual lost hits. -/

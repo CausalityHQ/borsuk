@@ -118,7 +118,8 @@ corpus and measured no serving latency.
 
 The next gate is a preregistered 96-byte row-score comparison. Its primary
 candidate is a rotated sign record with 752 sign bits (94 bytes) and one
-binary16 row scale (2 bytes); standard PQ96 is the paired 96-byte control.
+binary16 row scale (2 bytes); standard PQ96 is a predeclared rescue only
+if sign96 fails its 100k screen.
 The earlier suggestion to keep both a binary16 scale and a binary16 norm
 alongside 752 signs would require **98 bytes** and cannot satisfy the
 frozen 96-byte projection. The sign scorer's promise is a hypothesis from

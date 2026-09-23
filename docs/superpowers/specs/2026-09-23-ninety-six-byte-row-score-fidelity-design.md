@@ -14,8 +14,10 @@ establish that any compressed scorer will pass, nor any serving latency.
 
 The architecture decision is whether a **96-byte** fetched row-score
 record can preserve enough of the source plan to pass the fixed 1M gate.
-The primary hypothesis is a rotated one-bit code; standard PQ96 is a
-paired same-width control. The earlier 100k rotated two-bit cell lost 97
+The primary hypothesis is a rotated one-bit code; standard PQ96 is the
+predeclared rescue if the primary fails its cheap 100k screen. This
+sequential order avoids training PQ96 when sign96 already qualifies.
+The earlier 100k rotated two-bit cell lost 97
 GT100 positions relative to exact scoring on the same grouped rows at
 200 bytes per row. That result motivates the sign-code family but cannot
 be extrapolated numerically to one bit or to the new range planner.
@@ -73,7 +75,7 @@ nonfinite inputs and invalid scales. Compare this stored-scale score with
 the exact source-distance arm, because scale rounding is part of the
 representation. The 94+2 record is 96 bytes; 94+2+2 would be 98.
 
-**PQ96 control:** 96 disjoint eight-coordinate subspaces, one byte per
+**Contingent PQ96 rescue:** 96 disjoint eight-coordinate subspaces, one byte per
 subspace, 256 centers per subspace, with train sample, seed, centroid
 dtype, iteration rule and ADC reduction pinned in the seal. Reuse the
 previous PQ96 construction method only where its exact inputs and
@@ -97,28 +99,30 @@ no code path may materialize the whole 1M source matrix.
 
 ## Paired gates and stop rules
 
-First run one paired 100k source-only screen under the **same** top-100-row
+First run one sign96-versus-source 100k source-only screen under the **same** top-100-row
 page-priority **rule** and 32 merged data ranges/16,777,216 encoded data
 bytes intended for 1M. The 100k run has one base object; use the same
 range algorithm with a single `base` role, while the 1M run has its
 sealed `base` and `delta` roles. Score the rows in exactly the same selected groups
-with sign96, PQ96 and source vectors; recompute each arm's page priority
+with sign96 and source vectors; recompute each arm's page priority
 and data ranges independently. Use the same physical layout, route, queries and truth
-for all arms. Report GT100 and GT10 hit counts, p05, sub-90 query count,
+for both arms. Report GT100 and GT10 hit counts, p05, sub-90 query count,
 per-query deltas, selected-page and interval deltas, score-error tails,
-**separate code-group GETs/bytes and data-range GETs/bytes**, runtime and
+**projected code-group GETs/bytes and planned data-range GETs/bytes**, runtime and
 peak process-tree RSS/swap. The old
 32-page 100k result is historical context, not the screen's control.
 
-A scorer advances from 100k only if it loses at most 300 GT100 positions
-relative to the paired source arm, creates at most ten additional sub-90
+A scorer advances from 100k only if the paired source arm reaches at least
+98,000/100,000 GT100 positions, the scorer loses at most 300 GT100 positions
+relative to that arm, has p05 GT100 at least 90, creates at most ten additional sub-90
 queries, stays within both **data-range** I/O caps, and stays under 3 GiB minus 64 MiB
 peak process-tree RSS with zero swap. These are conservative screening
-rules, not proof of a 1M pass. If both advance, the primary remains sign96
-and PQ96 remains a paired control. If sign96 fails and PQ96 passes, record
-the primary's failure and advance PQ96 as the sole survivor; if neither
-passes, stop this width and revise representation or budget before
-another campaign.
+rules, not proof of a 1M pass. If sign96 passes, advance it alone to 1M
+without training PQ96. If sign96 fails, run **one** separately sealed PQ96
+rescue on the identical 100k inputs, fixed group plans, source-score
+control and thresholds. PQ96 may advance alone if it passes; otherwise
+stop this width and revise representation or budget before another
+campaign. Do not tune either scorer on these development queries.
 
 At 1M, hold the sealed OPQ8 selected-group plans, original page layout,
 page-priority **algorithm** and 32-data-range/16-MiB admission rule fixed;
@@ -148,6 +152,8 @@ terminal markers; never inspect incomplete measurement CSV.
 
 `formal/SourceRangeFidelity.lean` proves that the closed source count plus
 a bounded paired hit loss implies the aggregate 1M GT100 and GT10 floors.
+It also proves that a 100k source arm with at least 98,000 hits and at most
+300 paired lost hits leaves the compressed arm with at least 97,700 hits.
 It also proves the 96-byte record and conditional code-payload row
 arithmetic (which must not be inferred from the separate data-range cap) and a
 per-query sufficient condition for retaining 90 GT100 hits. Future work

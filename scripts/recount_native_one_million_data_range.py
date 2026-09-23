@@ -13,9 +13,9 @@ def _geometry(
         "priority_pages", "target_pages", "ranges", "included_pages", "gets", "encoded_bytes"
     }:
         raise ValueError("data-range geometry differs")
-    roles = ("base", "delta")
-    if set(page_lengths) != set(roles):
+    if set(page_lengths) not in ({"base"}, {"base", "delta"}):
         raise ValueError("data-range geometry differs")
+    roles = tuple(page_lengths)
     included: list[tuple[str, int]] = []
     total_bytes = 0
     last: tuple[str, int] | None = None
@@ -51,12 +51,17 @@ def recount_range_masks(
     plan_samples: Sequence[dict[str, object]],
     truth_pages: Sequence[Sequence[int]],
     page_lengths: Mapping[str, Sequence[int]],
+    *, arms: tuple[str, str] = ("candidate", "control"),
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Recount every planned byte and truth-owner hit without scorer code."""
-    if not plan_samples or len(plan_samples) != len(truth_pages):
+    if (
+        not plan_samples or len(plan_samples) != len(truth_pages)
+        or len(arms) != 2 or len(set(arms)) != 2
+        or any(type(arm) is not str or not arm for arm in arms)
+    ):
         raise ValueError("data-range recount cohort differs")
     base_count = len(page_lengths["base"])
-    total_pages = base_count + len(page_lengths["delta"])
+    total_pages = base_count + len(page_lengths.get("delta", ()))
     samples: list[dict[str, object]] = []
     for ordinal, (plan, owners) in enumerate(zip(plan_samples, truth_pages, strict=True)):
         if plan.get("query_ordinal") != ordinal or any(
@@ -64,7 +69,7 @@ def recount_range_masks(
         ):
             raise ValueError("data-range recount truth differs")
         sample: dict[str, object] = {"query_ordinal": ordinal}
-        for arm in ("candidate", "control"):
+        for arm in arms:
             arm_plan = plan[arm]
             chosen = _geometry(arm_plan, page_lengths)
             targets = {tuple(page) for page in arm_plan["target_pages"]}
@@ -92,9 +97,9 @@ def recount_range_masks(
         samples.append(sample)
     count = len(samples)
     metrics: dict[str, object] = {}
-    for arm in ("candidate", "control"):
+    for arm in arms:
         hits = [int(item[arm]["hits_at_100"]) for item in samples]
-        arms = [item[arm] for item in plan_samples]
+        planned_arms = [item[arm] for item in plan_samples]
         metrics[arm] = {
             "gt100_hits": sum(hits),
             "gt10_hits": sum(int(item[arm]["hits_at_10"]) for item in samples),
@@ -102,14 +107,15 @@ def recount_range_masks(
             "bridge_gt100_hits": sum(item[arm]["hit_kinds"].count("bridge") for item in samples),
             "p05_gt100_hits": sorted(hits)[math.ceil(count * .05) - 1],
             "sub90_queries": sum(value < 90 for value in hits),
-            "maximum_gets": max(int(item["gets"]) for item in arms),
-            "maximum_bytes": max(int(item["encoded_bytes"]) for item in arms),
-            "total_gets": sum(int(item["gets"]) for item in arms),
-            "total_bytes": sum(int(item["encoded_bytes"]) for item in arms),
+            "maximum_gets": max(int(item["gets"]) for item in planned_arms),
+            "maximum_bytes": max(int(item["encoded_bytes"]) for item in planned_arms),
+            "total_gets": sum(int(item["gets"]) for item in planned_arms),
+            "total_bytes": sum(int(item["encoded_bytes"]) for item in planned_arms),
         }
+    first, second = arms
     metrics["paired_gt100"] = {
-        "candidate_better": sum(item["candidate"]["hits_at_100"] > item["control"]["hits_at_100"] for item in samples),
-        "control_better": sum(item["candidate"]["hits_at_100"] < item["control"]["hits_at_100"] for item in samples),
-        "tied": sum(item["candidate"]["hits_at_100"] == item["control"]["hits_at_100"] for item in samples),
+        f"{first}_better": sum(item[first]["hits_at_100"] > item[second]["hits_at_100"] for item in samples),
+        f"{second}_better": sum(item[first]["hits_at_100"] < item[second]["hits_at_100"] for item in samples),
+        "tied": sum(item[first]["hits_at_100"] == item[second]["hits_at_100"] for item in samples),
     }
     return samples, metrics

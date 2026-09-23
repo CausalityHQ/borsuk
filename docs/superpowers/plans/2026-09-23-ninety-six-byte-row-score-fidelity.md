@@ -4,7 +4,7 @@
 
 **Goal:** Measure whether a real 96-byte row scorer preserves the fixed ReLAION-1M source-range result.
 
-**Architecture:** Implement the exact 94-byte sign plus binary16 scale record and standard PQ96 as separate versioned, authenticated code planes. Replay each on the same fixed OPQ8 group plans, layout, range rule and query cohorts; seal source-only construct/plan phases before truth-bearing evaluation.
+**Architecture:** Implement the exact 94-byte sign plus binary16 scale record as a versioned, authenticated code plane. Screen it against source scores on the fixed OPQ8 plans; build standard PQ96 on those same inputs only if sign96 fails. Seal source-only construct/plan phases before truth-bearing evaluation.
 
 **Tech Stack:** Python 3, NumPy 2.4.2, PyArrow 24.0.0, pytest, Ruff, boto3, AWS Causality Spot, Lean 4.33.0.
 
@@ -41,18 +41,28 @@
 - [x] Run the focused tests, scoped Ruff and Lean proof; inspect peak RSS of the focused test process (128,220 KiB, zero swaps).
 - [x] Commit and fast-forward push this independently reviewable kernel slice.
 
-### Task 2: Authenticated code-plane and truth-separated paired 100k cell
+### Task 2: Authenticated sign96 code-plane and truth-separated 100k cell
 
 **Files:** Create focused code-plane, cell, validator, worker, launcher and test modules under `scripts/`; reuse the existing source-range plan/evaluation helpers only through their public boundaries.
 
 **Interfaces:** Construction writes a versioned mean, groups object and seal; plan consumes only source, queries and selected groups; evaluate consumes a sealed plan and truth; validator independently rereads group bytes and recounts all query masks.
 
 - [ ] Test corruption of group bytes, wrong format/version, changed physical order, wrong source/query identity and truth access during planning; observe failures against the missing integration.
-- [ ] Implement sign96 and PQ96 authenticated group readers/writers in bounded batches and the shared candidate-row scoring pipeline.
+- [ ] Implement the sign96 authenticated group reader/writer in bounded batches and the paired source/sign candidate-row scoring pipeline.
 - [ ] Run focused cell tests and scoped lint; independently review generated remote worker artifacts and terminal roster.
 - [ ] Commit, fast-forward push and archive the exact source commit before the Spot launch.
 - [ ] Run one sealed paired 100k Spot attempt; monitor only terminal markers and infrastructure health while incomplete.
 - [ ] Close the terminal attempt with independent artifact hashes and mask recount; stop Spot compute immediately; apply the preregistered screen stop rule.
+
+### Task 2b: PQ96 rescue only if sign96 fails
+
+**Files:** Create PQ96 code-plane, cell and validator modules under `scripts/` only after the closed sign96 screen fails.
+
+**Interfaces:** Reuse the sealed 100k source identity, OPQ8 group plans, layout, query order, source-score control and fixed 100k thresholds; write a distinct versioned PQ96 object and plan.
+
+- [ ] Authenticate the completed sign96 failure and freeze the PQ96 rescue source commit.
+- [ ] Implement and narrowly test 96-by-8D training, physical-order 96-byte codes, authenticated groups and truth-separated planning.
+- [ ] Run one Spot rescue attempt, close it independently and advance only a passing scorer.
 
 ### Task 3: Fixed 1M gate for survivors
 
