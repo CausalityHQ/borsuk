@@ -1,6 +1,7 @@
 # G0c: PQ192 code-only returned ranking on the closed 100k roster
 
-Status: preregistered design, no G0c output opened.
+Status: complete, failed; see `docs/research/pq192-returned-g0c-closeout.md`.
+The method below was preregistered before G0c output was opened.
 
 G0 and G0b rejected two scoring formulas on the authenticated 200-byte
 rotated scalar code. ReLAION-100k development returned Recall@100 was

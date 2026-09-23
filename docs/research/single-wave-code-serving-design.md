@@ -1,9 +1,11 @@
 # Single-wave code serving: falsifiable architecture candidate
 
-Status: **stopped after G0 and G0b**. Both the reconstructed-norm and
-stored-norm 200-byte two-bit final scores failed on ReLAION-100k development;
+Status: **stopped after G0, G0b and G0c**. The reconstructed-norm and
+stored-norm 200-byte two-bit scores, then a corpus-trained 208-byte PQ192
+score, failed returned ranking on the same ReLAION-100k development rows;
 see `docs/research/two-bit-returned-g0-closeout.md` and
-`docs/research/two-bit-stored-norm-g0b-closeout.md`. This is not a qualified
+`docs/research/two-bit-stored-norm-g0b-closeout.md` and
+`docs/research/pq192-returned-g0c-closeout.md`. This is not a qualified
 reader or frozen production format. The 1M route gate below is suspended
 until a materially revised representation and route pass new returned-ranking
 and physical-plan gates.
