@@ -110,6 +110,8 @@ class OneMillionOpq8CellTests(unittest.TestCase):
                         result = run_evaluate(root, root / "planning", root / "evaluation", query_count=1,
                                               expected_rows=257, expected_groups=33)
                         self.assertEqual(result["metrics"]["control_gt100_hits"], sample["hits_at_100"])
+                        self.assertEqual(result["metrics"]["control_total_bytes"], used)
+                        self.assertEqual(result["metrics"]["control_total_groups"], len(selected))
                         validation = run_validate(root, root / "planning", root / "evaluation", root / "validation",
                                                   query_count=1, expected_rows=257, expected_groups=33)
                         self.assertEqual(validation["metrics"], result["metrics"])

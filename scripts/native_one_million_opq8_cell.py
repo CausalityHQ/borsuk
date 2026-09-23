@@ -233,6 +233,17 @@ def _metrics(samples: Sequence[dict[str, object]]) -> dict[str, int]:
         metrics[arm + "_maximum_gets"] = max(plan["projected_code_gets"] for plan in plans)
         metrics[arm + "_maximum_bytes"] = max(plan["projected_code_bytes"] for plan in plans)
         metrics[arm + "_maximum_groups"] = max(len(plan["selected_groups"]) for plan in plans)
+        metrics[arm + "_total_gets"] = sum(plan["projected_code_gets"] for plan in plans)
+        metrics[arm + "_total_bytes"] = sum(plan["projected_code_bytes"] for plan in plans)
+        metrics[arm + "_total_groups"] = sum(len(plan["selected_groups"]) for plan in plans)
+    metrics["candidate_more_bytes_queries"] = sum(
+        sample["candidate"]["plan"]["projected_code_bytes"] > sample["control"]["plan"]["projected_code_bytes"]
+        for sample in samples
+    )
+    metrics["candidate_more_groups_queries"] = sum(
+        len(sample["candidate"]["plan"]["selected_groups"]) > len(sample["control"]["plan"]["selected_groups"])
+        for sample in samples
+    )
     return metrics
 
 
