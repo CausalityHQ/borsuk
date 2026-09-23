@@ -40,6 +40,16 @@ ARTIFACTS = {
 
 
 def artifact_names(kind: str) -> dict[str, str]:
+    if kind == "page_oracle":
+        return {
+            "page-map": "page-map.bin", "page-groups": "page-groups.bin",
+            "page-bytes": "page-bytes.bin", "seal": "seal.json",
+            "evidence": "evidence.json", "result": "result.json",
+            "validation": "validation.json",
+            "construct-resources": "construct-resources.txt",
+            "evaluate-resources": "evaluate-resources.txt",
+            "validate-resources": "validate-resources.txt",
+        }
     if kind == "opq8_1m":
         return {
             "model": "model.bin", "codes": "codes.bin", "membership": "membership.bin",
@@ -98,7 +108,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-hundred-thousand-opq8-paired/"
@@ -110,6 +120,9 @@ def build_plan(**values: object) -> SelectorSpotPlan:
         f"s3://{BUCKET}/research/native-one-million-opq8-selector/"
         f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
         if plan.selector_kind == "opq8_1m" else
+        f"s3://{BUCKET}/research/native-one-million-page-oracle-selector/"
+        f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
+        if plan.selector_kind == "page_oracle" else
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
         f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
     )
@@ -141,6 +154,8 @@ def _download_commands(identities: dict[str, object], names: dict[str, str]) -> 
 
 
 def _terminal_schema(kind: str) -> str:
+    if kind == "page_oracle":
+        return "borsuk-one-million-opq8-page-oracle-terminal-v1"
     if kind == "opq8_1m":
         return "borsuk-one-million-opq8-terminal-v1"
     if kind == "paired":
@@ -155,6 +170,12 @@ def _terminal_schema(kind: str) -> str:
 
 def worker_script(plan: SelectorSpotPlan) -> str:
     """Generate a compact phase-separated worker with durable failure logs."""
+    if plan.selector_kind == "page_oracle":
+        from scripts.native_one_million_page_oracle_worker import (
+            page_oracle_worker_script,
+        )
+
+        return page_oracle_worker_script(plan)
     if plan.selector_kind == "paired":
         from scripts.native_hundred_thousand_opq8_paired_worker import (
             paired_worker_script,
@@ -525,6 +546,17 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
             **{role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()},
             "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
         }
+    elif plan.selector_kind == "page_oracle":
+        from scripts.native_one_million_page_oracle_cell import PRIOR, PRIOR_PREFIX
+
+        source_inputs = {
+            **{role: dataclasses.asdict(SOURCE_IDENTITIES[role]) for role in ("generation", "base", "delta")},
+            **{f"prior-{role}": {"uri": f"{PRIOR_PREFIX}{details[0]}", "sha256": details[1], "bytes": details[2]}
+               for role, details in PRIOR.items()},
+        }
+        development_inputs = {
+            role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()
+        }
     else:
         source_inputs = {role: dataclasses.asdict(value) for role, value in SOURCE_IDENTITIES.items()}
         development_inputs = {role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()}
@@ -532,6 +564,8 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
         "schema": (
             "borsuk-hundred-thousand-opq8-paired-reservation-v1"
             if plan.selector_kind == "paired"
+            else "borsuk-one-million-opq8-page-oracle-reservation-v1"
+            if plan.selector_kind == "page_oracle"
             else f"borsuk-one-million-{plan.selector_kind}-selector-reservation-v1"
         ),
         "attempt": plan.attempt, "source_commit": plan.source_commit,
@@ -635,7 +669,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(

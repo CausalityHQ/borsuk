@@ -5,10 +5,11 @@
 The terminal-closed OPQ8 1M route selected 98,985/100,000 GT100 owner
 groups under a projected 96-byte code wave. A final data wave may admit
 only 32 physical pages and 16,777,216 encoded bytes. Before training or
-reading any 96-byte row code, determine whether these sealed group plans
-can satisfy the final-page quality gate when the selected rows are scored
-from source vectors. This is a source-only decision about the page cap,
-nomination rule and layout. It is not a production search or latency run.
+reading any 96-byte row code, first determine whether these sealed group
+plans can satisfy the final-page quality gate even with truth-aware page
+selection. If they can, run a separate source-vector nomination stage.
+These are source-only decisions about the page cap, nomination rule and
+layout. They are not production search or latency runs.
 
 ## Frozen authority and phase order
 
@@ -23,29 +24,37 @@ and `plan-seal.json` has SHA-256
 Replay candidate and page-centroid control selected groups, merged
 intervals, projected GETs and bytes exactly. Do not rank or replan.
 
-Authenticate the frozen base/delta Arrow runs and generation before
-building stable-ID-to-page, page-size and physical-row maps. Authenticate
-source parquet. Source construction and query scoring may read queries
-but not truth. Seal all page-score and nomination outputs before truth
-is downloaded or visible to the evaluator. Evaluate truth only against
-the sealed selections. Keep 1,000 ordered queries and their 100 ordered,
-distinct truth IDs, with a separate first-ten mask.
+For Stage A, authenticate the frozen base/delta Arrow runs and generation
+before building stable-ID-to-page, page-size and physical-row maps. Read
+truth only in the oracle evaluator. Keep 1,000 ordered queries and their
+100 ordered, distinct truth IDs, with a separate first-ten mask. Stage A
+authenticates the query file to bind the cohort but does not score
+queries; it may close immediately if the necessary bound
+fails. If Stage A passes, a separately sealed Stage B authenticates source
+parquet, computes query-only source scores and page nominations, and
+seals those outputs before truth is downloaded or visible to its
+evaluator. Stage B replays the same source, plan and cohort identities.
 
 ## Cheap necessary upper bound
 
-After nominations are sealed, for each query and arm count how many GT positions belong to each
+In Stage A, for each query and arm count how many GT positions belong to each
 physical page inside selected groups. The sum of the 32 largest page
 counts is an optimistic upper bound on any 32-page final wave; it ignores
 the byte cap and does not predict a real scorer. This calculation needs
-truth and belongs only to the final evaluation phase. If the candidate's
-upper bound misses any fixed absolute gate below, stop before training
+truth and belongs only to Stage A's oracle evaluation. If the candidate's
+upper bound misses any fixed absolute gate below, stop before Stage B and
 PQ96: no code representation or nomination rule with that
 32-page cap can pass. Record group containment and the bound as separate
 metrics. Also report the corresponding control bound.
+The GT100 and GT10 optimistic bounds may use different page selections;
+each is a separate necessary condition, not a jointly attainable plan.
+Because ten GT positions occupy at most ten pages, the GT10 bound equals
+selected-group GT10 containment under this 32-page cap. Report it for
+completeness, not as a new selectivity test.
 
 ## Source-vector page nomination
 
-Before truth is visible, stream authenticated source rows in bounded
+Only if Stage A passes, before truth is visible in Stage B, stream authenticated source rows in bounded
 batches. Compute squared L2 in float64 by explicit subtraction and
 square summation for only each arm's sealed selected rows, with a fixed
 stable-ID tie rule. Apply the unchanged `nominate_pages` rule: count the

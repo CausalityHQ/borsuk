@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Sequence
+from numbers import Integral
 
 
 def oracle_page_hit_ceiling(
@@ -35,12 +36,21 @@ def oracle_page_selection(
     """A deterministic witness attaining the optimistic count ceiling."""
     if (
         not truth_pages
-        or not page_groups
+        or len(page_groups) == 0
         or type(maximum_pages) is not int
         or maximum_pages <= 0
-        or any(type(group) is not int or group < 0 for group in page_groups)
-        or any(type(page) is not int or not 0 <= page < len(page_groups) for page in truth_pages)
-        or any(type(group) is not int or group not in page_groups for group in selected_groups)
+        or any(
+            not isinstance(group, Integral) or isinstance(group, bool) or group < 0
+            for group in page_groups
+        )
+        or any(
+            type(page) is not int or not 0 <= page < len(page_groups)
+            for page in truth_pages
+        )
+        or any(
+            type(group) is not int or group not in page_groups
+            for group in selected_groups
+        )
         or len(set(selected_groups)) != len(selected_groups)
     ):
         raise ValueError("page ceiling authority differs")
