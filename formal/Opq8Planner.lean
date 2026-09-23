@@ -342,6 +342,35 @@ theorem bounded_data_wave_latency
   have transferBound := Nat.mul_le_mul_right byteTime bytesBound
   omega
 
+/-! A conditional sequential ceiling for the proposed code-plus-data
+waves. It requires measured upper bounds on request and transfer time in
+one common unit, plus a bound on all local work. Parallel execution may
+be faster, but is outside this model. -/
+
+def twoWaveLatencyBound
+    (localTime codeRequestTime codeByteTime dataRequestTime dataByteTime : Nat) : Nat :=
+  localTime + 32 * codeRequestTime + 16777216 * codeByteTime +
+    32 * dataRequestTime + 16777216 * dataByteTime
+
+theorem bounded_two_wave_latency
+    (codeGets codeBytes dataGets dataBytes localTime
+      codeRequestTime codeByteTime dataRequestTime dataByteTime observedTime : Nat)
+    (codeGetsBound : codeGets ≤ 32)
+    (codeBytesBound : codeBytes ≤ 16777216)
+    (dataGetsBound : dataGets ≤ 32)
+    (dataBytesBound : dataBytes ≤ 16777216)
+    (serviceBound : observedTime ≤ localTime +
+      codeGets * codeRequestTime + codeBytes * codeByteTime +
+      dataGets * dataRequestTime + dataBytes * dataByteTime) :
+    observedTime ≤ twoWaveLatencyBound localTime codeRequestTime codeByteTime
+      dataRequestTime dataByteTime := by
+  unfold twoWaveLatencyBound
+  have codeRequestBound := Nat.mul_le_mul_right codeRequestTime codeGetsBound
+  have codeTransferBound := Nat.mul_le_mul_right codeByteTime codeBytesBound
+  have dataRequestBound := Nat.mul_le_mul_right dataRequestTime dataGetsBound
+  have dataTransferBound := Nat.mul_le_mul_right dataByteTime dataBytesBound
+  omega
+
 def regionTableLookups (visitedRows : Nat) : Nat := 8 * visitedRows
 
 theorem region_lookup_bound (visitedRows regionCap : Nat)

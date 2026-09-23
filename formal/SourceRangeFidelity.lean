@@ -179,6 +179,14 @@ theorem page_local_code_wave_row_budget
   rw [selected_page_code_bytes_exact] at budget
   omega
 
+theorem page_local_code_wave_coordinate_work_budget
+    (rowCounts : List Nat)
+    (budget : selectedPageCodeBytes rowCounts ≤ 16777216) :
+    twoBitCoordinateWork rowCounts.sum ≤ 64424448 := by
+  have rows := page_local_code_wave_row_budget rowCounts budget
+  simp only [twoBitCoordinateWork]
+  omega
+
 /-! Uniform per-row score-error bounds also bound a page's minimum score.
 This supports a non-recall-based premise for page-order certificates. -/
 

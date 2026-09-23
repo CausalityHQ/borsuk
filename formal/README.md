@@ -30,6 +30,12 @@ table lookups per visited row. These results provide arithmetic implications;
 the bounds and implementation correspondence must be supplied and checked
 for any production claim.
 
+The same file now gives a conditional **two-wave** sequential latency
+ceiling for at most 32 code GETs/16 MiB and 32 data GETs/16 MiB. Its
+per-request, per-byte and local-work time bounds are premises to be
+measured for the deployed reader; the theorem does not predict S3 tail
+latency or parallel-wave scheduling from source code alone.
+
 `SourceRangeFidelity.lean` adds paired finite-cohort hit accounting:
 authenticated source/compressed hit pairs and bounded lost hits imply
 the 100k and 1M aggregate fidelity floors. It separately proves the
@@ -64,7 +70,9 @@ the exact payload of the pages in a physical code cover is 200 times
 their total row count. A 16-MiB code-wave cap therefore permits at most
 83,886 rows, including rows on bridged pages. The sealed page map and
 Python range planner must supply the actual cover and establish refinement
-before this bound describes a served query.
+before this bound describes a served query. This implies at most
+64,424,448 coordinate decode/score operations for the modeled code wave;
+it is a work count rather than a wall-clock bound.
 
 A second finite-query theorem bounds recall loss for a **fixed score
 threshold** by the authenticated truth count of pages whose true scores
