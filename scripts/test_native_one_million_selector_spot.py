@@ -139,6 +139,67 @@ class OneMillionSelectorSpotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "readback differs"):
             _readback_artifacts(S3(), "bucket", "prefix", {"status": "complete", "artifacts": identities})
 
+    def test_poll_error_publishes_failed_controller_terminal(self) -> None:
+        class S3:
+            def list_objects_v2(self, **_kwargs):
+                return {"KeyCount": 0}
+
+            def get_object(self, **_kwargs):
+                raise RuntimeError("poll unavailable")
+
+        class EC2:
+            def run_instances(self, **_kwargs):
+                return {"Instances": [{"InstanceId": "i-0123456789abcdef0"}]}
+
+        s3 = S3()
+        ec2 = EC2()
+        session = SimpleNamespace(client=lambda name: s3 if name == "s3" else ec2)
+        writes = []
+        with (
+            patch.dict(sys.modules, {"boto3": SimpleNamespace(Session=lambda **_kwargs: session)}),
+            patch("scripts.launch_native_one_million_selector_spot._atomic_put", side_effect=lambda *_a, **kw: writes.append(kw)),
+            patch("scripts.launch_native_one_million_selector_spot._terminate_and_wait") as terminate,
+            self.assertRaisesRegex(RuntimeError, "poll unavailable"),
+        ):
+            launch_and_monitor(self.plan())
+        terminate.assert_called_once_with(ec2, "i-0123456789abcdef0")
+        self.assertEqual([write["key"].rsplit("/", 1)[-1] for write in writes], [
+            "reservation.json", "terminal.json", "controller-failure.json",
+        ])
+        terminal = json.loads(writes[1]["body"])
+        self.assertEqual(terminal["status"], "failed")
+        self.assertEqual(terminal["phase"], "controller")
+
+    def test_lost_launch_response_retries_same_client_token(self) -> None:
+        class S3:
+            def list_objects_v2(self, **_kwargs):
+                return {"KeyCount": 0}
+
+            def get_object(self, **_kwargs):
+                raise RuntimeError("poll unavailable")
+
+        class EC2:
+            def __init__(self):
+                self.tokens = []
+
+            def run_instances(self, **kwargs):
+                self.tokens.append(kwargs["ClientToken"])
+                if len(self.tokens) == 1:
+                    raise RuntimeError("response lost")
+                return {"Instances": [{"InstanceId": "i-0123456789abcdef0"}]}
+
+        ec2 = EC2()
+        session = SimpleNamespace(client=lambda name: S3() if name == "s3" else ec2)
+        with (
+            patch.dict(sys.modules, {"boto3": SimpleNamespace(Session=lambda **_kwargs: session)}),
+            patch("scripts.launch_native_one_million_selector_spot._atomic_put"),
+            patch("scripts.launch_native_one_million_selector_spot._terminate_and_wait"),
+            self.assertRaisesRegex(RuntimeError, "poll unavailable"),
+        ):
+            launch_and_monitor(self.plan())
+        self.assertEqual(len(ec2.tokens), 2)
+        self.assertEqual(ec2.tokens[0], ec2.tokens[1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,7 @@ SCHEMA = "borsuk-one-million-page-selector-result-v1"
 EVIDENCE_SCHEMA = "borsuk-one-million-page-selector-evidence-v1"
 
 
-def select_page_groups(query: np.ndarray, artifact: PageSelectorArtifact) -> tuple[int, ...]:
+def rank_page_groups(query: np.ndarray, artifact: PageSelectorArtifact) -> tuple[int, ...]:
     if (
         query.shape != (DIMENSIONS,)
         or not np.isfinite(query).all()
@@ -40,7 +40,11 @@ def select_page_groups(query: np.ndarray, artifact: PageSelectorArtifact) -> tup
     return tuple(sorted(
         range(len(artifact.groups)),
         key=lambda index: (float(minima[index]), artifact.groups[index].role, artifact.groups[index].ordinal),
-    )[:MAXIMUM_GETS])
+    ))
+
+
+def select_page_groups(query: np.ndarray, artifact: PageSelectorArtifact) -> tuple[int, ...]:
+    return rank_page_groups(query, artifact)[:MAXIMUM_GETS]
 
 
 def evaluate_page_selector(

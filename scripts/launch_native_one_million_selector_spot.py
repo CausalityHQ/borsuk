@@ -59,7 +59,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page"}:
+    if plan.selector_kind not in {"group", "page", "range"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
@@ -90,6 +90,13 @@ def _download_commands(identities: dict[str, object], names: dict[str, str]) -> 
             f"printf '%s  {filename}\\n' {_q(identity.sha256)} | sha256sum -c -",
         ))
     return "\n".join(lines)
+
+
+def _terminal_schema(kind: str) -> str:
+    return (
+        "borsuk-one-million-selector-terminal-v1" if kind == "group"
+        else f"borsuk-one-million-{kind}-selector-terminal-v1"
+    )
 
 
 def worker_script(plan: SelectorSpotPlan) -> str:
@@ -212,8 +219,12 @@ phase=complete
     development_names = {"queries": "queries.parquet", "truth": "truth.parquet"}
     replacements = {
         "@OUTPUT@": _q(plan.output_prefix.rstrip("/")),
-        "@CELL_MODULE@": "scripts.native_one_million_page_selector_cell" if plan.selector_kind == "page" else "scripts.native_one_million_selector_cell",
-        "@TERMINAL_SCHEMA@": "borsuk-one-million-page-selector-terminal-v1" if plan.selector_kind == "page" else "borsuk-one-million-selector-terminal-v1",
+        "@CELL_MODULE@": (
+            "scripts.native_one_million_range_selector_cell" if plan.selector_kind == "range"
+            else "scripts.native_one_million_page_selector_cell" if plan.selector_kind == "page"
+            else "scripts.native_one_million_selector_cell"
+        ),
+        "@TERMINAL_SCHEMA@": _terminal_schema(plan.selector_kind),
         "@ATTEMPT@": str(plan.attempt),
         "@BUCKET@": _q(BUCKET),
         "@ARTIFACT_KEY@": _q(_s3_location(plan.output_prefix)[1] + "/artifacts"),
@@ -279,7 +290,7 @@ def _validate_terminal_bytes(
         body != (json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n").encode()
         or type(terminal) is not dict
         or set(terminal) != {"artifacts", "attempt", "claim_eligible", "elapsed_seconds", "exit_code", "instance_id", "phase", "schema", "source_commit", "source_archive", "requirements_sha256", "status"}
-        or terminal["schema"] != ("borsuk-one-million-page-selector-terminal-v1" if plan.selector_kind == "page" else "borsuk-one-million-selector-terminal-v1")
+        or terminal["schema"] != _terminal_schema(plan.selector_kind)
         or terminal["attempt"] != plan.attempt
         or terminal["claim_eligible"] is not False
         or terminal["source_commit"] != plan.source_commit
@@ -331,10 +342,7 @@ def _controller_terminal(plan: SelectorSpotPlan, instance_id: str) -> dict[str, 
     return {
         "artifacts": {}, "attempt": plan.attempt, "claim_eligible": False,
         "elapsed_seconds": 0, "exit_code": 1, "instance_id": instance_id,
-        "phase": "controller", "schema": (
-            "borsuk-one-million-page-selector-terminal-v1" if plan.selector_kind == "page"
-            else "borsuk-one-million-selector-terminal-v1"
-        ),
+        "phase": "controller", "schema": _terminal_schema(plan.selector_kind),
         "source_commit": plan.source_commit,
         "source_archive": dataclasses.asdict(plan.source_archive),
         "requirements_sha256": plan.requirements_sha256,
@@ -372,7 +380,22 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
         except Exception as error:
             if any(marker in str(error) for marker in capacity_markers):
                 continue
-            raise
+            # A lost response can follow a successful launch. The same EC2
+            # client token makes one retry idempotent; then reconcile by token.
+            try:
+                response = ec2.run_instances(**spec)
+            except Exception as recovery_error:
+                matches = ec2.describe_instances(Filters=[{
+                    "Name": "client-token", "Values": [spec["ClientToken"]],
+                }])
+                found = [
+                    item["InstanceId"]
+                    for reservation in matches.get("Reservations", [])
+                    for item in reservation.get("Instances", [])
+                ]
+                if len(found) != 1:
+                    raise error from recovery_error
+                response = {"Instances": [{"InstanceId": found[0]}]}
         instance_id = response["Instances"][0]["InstanceId"]
         break
     if instance_id is None:
@@ -398,17 +421,17 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
             _readback_artifacts(s3, bucket, prefix, terminal)
             return terminal
     except Exception as error:
-        if isinstance(error, TimeoutError) or "ended without terminal" in str(error):
-            _terminate_and_wait(ec2, instance_id)
-            terminated = True
-            terminal = _controller_terminal(plan, instance_id)
-            try:
-                _atomic_put(
-                    s3, bucket=bucket, key=f"{prefix}/terminal.json",
-                    body=(json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n").encode(),
-                )
-            except Exception:
-                pass
+        _terminate_and_wait(ec2, instance_id)
+        terminated = True
+        terminal = _controller_terminal(plan, instance_id)
+        try:
+            _atomic_put(
+                s3, bucket=bucket, key=f"{prefix}/terminal.json",
+                body=(json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+            )
+        except Exception:
+            # A worker terminal may already exist; the create-only write cannot replace it.
+            pass
         failure = {
             "schema": "borsuk-one-million-selector-controller-failure-v1",
             "source_commit": plan.source_commit,
@@ -440,7 +463,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(
