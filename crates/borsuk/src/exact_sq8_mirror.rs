@@ -111,16 +111,18 @@ fn hash_bytes(value: &[u8]) -> String {
     format!("{:x}", Sha256::digest(value))
 }
 
-fn hash_file(file: &File) -> Result<String, io::Error> {
+fn hash_file(file: &File, object_bytes: usize, sidecar: &[u8]) -> Result<String, MirrorError> {
     let mut reader = io::BufReader::new(file);
     let mut digest = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
-    loop {
-        let count = reader.read(&mut buffer)?;
-        if count == 0 {
-            break;
+    let mut buffer = [0u8; BLOCK_BYTES];
+    for (index, expected) in sidecar.chunks_exact(32).enumerate() {
+        let block_start = index * BLOCK_BYTES;
+        let length = (object_bytes - block_start).min(BLOCK_BYTES);
+        reader.read_exact(&mut buffer[..length])?;
+        if Sha256::digest(&buffer[..length]).as_slice() != expected {
+            return Err(MirrorError::BlockCorrupt);
         }
-        digest.update(&buffer[..count]);
+        digest.update(&buffer[..length]);
     }
     Ok(format!("{:x}", digest.finalize()))
 }
@@ -184,15 +186,15 @@ impl ExactSq8Mirror {
         {
             return Err(MirrorError::InvalidPlane);
         }
-        if hash_file(&file)? != manifest.object_sha256 {
-            return Err(MirrorError::HashMismatch);
-        }
         let sidecar = fs::read(digest_path)?;
         let blocks = object_bytes.div_ceil(BLOCK_BYTES);
         if sidecar.len() != blocks.checked_mul(32).ok_or(MirrorError::InvalidManifest)? {
             return Err(MirrorError::InvalidPlane);
         }
         if hash_bytes(&sidecar) != manifest.block_digest_sha256 {
+            return Err(MirrorError::HashMismatch);
+        }
+        if hash_file(&file, object_bytes, &sidecar)? != manifest.object_sha256 {
             return Err(MirrorError::HashMismatch);
         }
         let backing = match placement {

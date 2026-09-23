@@ -91,6 +91,17 @@ fn rejects_wrong_object_or_sidecar_identity() {
 }
 
 #[test]
+fn rejects_a_manifest_bound_sidecar_that_describes_other_bytes() {
+    let (root, object, sidecar) = fixture();
+    let wrong_block_digest = [7u8; 32];
+    fs::write(&sidecar, wrong_block_digest).unwrap();
+    let mut authority = manifest();
+    authority.block_digest_sha256 = format!("{:x}", Sha256::digest(wrong_block_digest));
+    assert!(ExactSq8Mirror::open(&object, &sidecar, authority, Placement::File).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn verifies_both_blocks_of_a_crossing_final_row() {
     let (root, object, sidecar) = fixture();
     let mut bytes = Vec::new();
