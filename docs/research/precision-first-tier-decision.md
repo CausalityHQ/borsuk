@@ -3,7 +3,9 @@
 Status: architecture hypothesis and next development gate, 2026-09-23. The
 operator clarified that resident memory may increase at 100M if the measured
 quality, latency and node cost justify it. The 3-GiB figure is therefore a
-research target, not a release gate. No production format or 100M performance
+research target, not a release gate. The memory envelope should scale with
+vector count and the selected recall target rather than switching at an
+arbitrary collection-size threshold. No production format or 100M performance
 claim is frozen here.
 
 ## Decision evidence
@@ -45,6 +47,17 @@ overheads, query buffers and overlapping generations must be charged in an
 actual implementation and measured as node/cgroup memory, not only process
 RSS. Do not call a larger design a failure merely because it misses 3 GiB.
 
+The production decision is a measured frontier, not a single byte ceiling:
+for each collection size `N`, returned-recall target `R`, query concurrency
+`C`, and maximum pinned generations `G`, report both resident bytes and
+node-charged bytes as `M(N,R,C,G)`, together with p50/p95 latency, sustained
+QPS and node cost. Record the fixed intercept and bytes/vector for each
+candidate and locate any observed changes in slope at 100k, 1M, 10M and
+100M. Do not extrapolate a new knee from a different dataset or count a
+projected memory number as a measured peak. Select the least-cost qualified
+point at each declared quality target, with a stated rollover and growth
+reserve; a higher target may require a wider resident representation.
+
 ## Candidate, with explicit uncertainty
 
 Store authoritative immutable page bodies, codebooks and generation manifest
@@ -70,26 +83,38 @@ needed by PQ64 nomination. Even a 1M quality pass says nothing about
 10M/100M selected-page growth, locality, p95 latency, throughput or the
 charged two-generation peak.
 
-## Next gate: one physical identity, one control
+## Canceled live gate and corrected next gate
 
-First extend the existing V77 native reader to the complete ReLAION-1M
-**development** 1,000-query roster at its frozen 1,024-region, 512-row,
-gap-2 operating point. This is a distinct cell from the older 256-region
-full-development result. It regenerates the V77 manifest from the same V63
-layout and authenticated source, validates V70's SQ8 object, and makes real
-S3 reads on one Spot node. The registered decision is whether returned
-Recall@100 is at least 99.0%, p05 is at least 90, and **every** query stays
-within 32 GETs and 16,777,216 received bytes. Compare its first 200 query
-IDs and aggregate with V77's historical 99.155% (V78's revised scoring
-reported 99.160% on that prefix), 18 mean GETs and 10.3 mean MiB before
-interpreting the extended roster. Report both passes and the
-independently reduced per-query evidence. Stop if the cap or quality fails;
-the failed dimension determines whether to replace the page selector, range
-planner or representation. A pass is only development evidence. It does not
-make a 100M memory, latency or throughput claim.
+An attempted complete ReLAION-1M **development** 1,000-query replay of the
+existing V77 1,024-region, 512-row, gap-2 native reader was reserved at
+`research/v109-hierarchical-1m/5753cefa/runs/dev1000-r1024/a0001/` and
+launched on Spot instance `i-0f32dbb7a9d44715d` from pushed source
+`5753cefa760cddaa6558f392e0aa888ae0b81959`. It was canceled before a
+new result because the *terminal-complete prior V77 200-query result* at
+exactly that operating point was independently fetched and found to report
+**61 GETs at p95**, versus the current hard cap of 32 per query. Its other
+historical numbers are 99.155% returned Recall@100 on ReLAION-1M development
+200, 18 GETs at p50, 10,782,720 bytes at p50, and 41.842 ms total p50.
+The old result SHA-256 is
+`b66b3d660c4e282034efce91ce08c61fbc363d9b0ea4a3640c7b0e20ff4818e1`;
+its terminal exit code is zero. `cancelled.json` records the new instance,
+source and reason. The new attempt has **no measurement result** and must
+never be described as a failed quality measurement. No additional live read
+cell is justified on the unchanged planner.
 
-Only if that same-layout native gate passes should the following offline
-summary-width and row-code access gate run:
+The next gate is read-free physical planning on the same V63 layout and
+ReLAION-1M development roster. Authenticate the inputs, reproduce the V77
+prefix row nomination, and replace gap-2 coalescing with a truth-free exact
+range admission algorithm. It must score the bytes of every bridged page and
+reject or trim any plan over 32 GETs or 16,777,216 bytes **before** a query
+read. Pair against V77's old page set to show which rows/pages were lost and
+why. If no such planner preserves at least 99.0% returned Recall@100 and p05
+90 with precise scoring, change page layout or the routing representation;
+do not tune the same unconstrained coalescer. A passing development replay
+permits a new untouched live serving cohort, not reuse of the canceled cell.
+
+The longer summary-width and row-code access gate below remains conditional
+on a cap-safe physical planner:
 
 Run a read-free, terminal-validated ReLAION-1M **development** 1,000-query
 replay on the V63 corpus-only k-means-8192 centroid-chain order. Authenticate

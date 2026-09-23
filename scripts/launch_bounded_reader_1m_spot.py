@@ -58,7 +58,6 @@ class BoundedReaderSpotPlan:
     attempt: int = 1
     query_count: int = 1_000
     regions: int = 256
-    throughput_pass: bool = True
     shortlist_rows: int = 512
     gap_pages: int = 2
     get_concurrency: int = 128
@@ -102,10 +101,8 @@ def build_plan(**values: object) -> BoundedReaderSpotPlan:
         or plan.instance_type != "c7i.12xlarge"
         or plan.attempt != 1
         or plan.query_count != 1_000
-        or plan.regions not in (256, 1_024)
-        or type(plan.throughput_pass) is not bool
-        or (plan.shortlist_rows, plan.gap_pages, plan.get_concurrency)
-        != (512, 2, 128)
+        or (plan.regions, plan.shortlist_rows, plan.gap_pages, plan.get_concurrency)
+        != (256, 512, 2, 128)
         or plan.virtual_memory_kib != 48 * 1024 * 1024
         or plan.wall_seconds != 7_200
         or plan.spot_price_usd_per_hour_micros <= 0
@@ -138,7 +135,7 @@ def worker_script(plan: BoundedReaderSpotPlan) -> str:
         "BORSUK_V71_SHORTLIST": plan.shortlist_rows,
         "BORSUK_V71_GAP": plan.gap_pages,
         "BORSUK_V71_CONCURRENCY": plan.get_concurrency,
-        "BORSUK_V71_THROUGHPUT": int(plan.throughput_pass),
+        "BORSUK_V71_THROUGHPUT": 1,
     }
     for role, identity in identities.items():
         exports[f"BOUNDED_{role}_URI"] = identity.uri
@@ -304,7 +301,7 @@ def _claim_body(plan: BoundedReaderSpotPlan, instance_id: str | None) -> bytes:
                     "shortlist_rows": plan.shortlist_rows,
                     "gap_pages": plan.gap_pages,
                     "get_concurrency": plan.get_concurrency,
-                    "throughput_pass": plan.throughput_pass,
+                    "throughput_pass": True,
                 },
             },
             sort_keys=True,
@@ -405,8 +402,6 @@ def parse_args(argv: Sequence[str] | None = None) -> BoundedReaderSpotPlan:
         default="arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
     )
     parser.add_argument("--spot-price-usd-per-hour-micros", type=int, default=720_000)
-    parser.add_argument("--regions", type=int, choices=(256, 1_024), default=256)
-    parser.add_argument("--skip-throughput", action="store_true")
     args = parser.parse_args(argv)
     identity = lambda role: ObjectIdentity(  # noqa: E731
         getattr(args, f"{role}_uri"),
@@ -432,8 +427,6 @@ def parse_args(argv: Sequence[str] | None = None) -> BoundedReaderSpotPlan:
         instance_profile_arn=args.instance_profile_arn,
         targets=DEFAULT_TARGETS,
         spot_price_usd_per_hour_micros=args.spot_price_usd_per_hour_micros,
-        regions=args.regions,
-        throughput_pass=not args.skip_throughput,
     )
 
 

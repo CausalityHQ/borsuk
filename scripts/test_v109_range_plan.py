@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.v109_range_plan import plan_page_ranges
+from scripts.v109_range_plan import admit_ranked_pages, plan_page_ranges
 
 
 class RangePlanTests(unittest.TestCase):
@@ -29,6 +29,31 @@ class RangePlanTests(unittest.TestCase):
                                 page_rows=256, row_bytes=780)
         self.assertTrue(plan.within(gets=1, bytes_limit=3 * 256 * 780))
         self.assertFalse(plan.within(gets=1, bytes_limit=2 * 256 * 780))
+
+    def test_ranked_admission_merges_cheapest_gap_under_get_cap(self):
+        selected = admit_ranked_pages([0, 3, 10], rows=16, page_rows=1,
+                                      row_bytes=10, max_gets=2,
+                                      max_bytes=60)
+        self.assertEqual(selected.nominated_pages, (0, 3, 10))
+        self.assertEqual(selected.plan.ranges, ((0, 40), (100, 110)))
+        self.assertEqual(selected.plan.bytes, 50)
+        self.assertEqual(selected.rejected_pages, ())
+
+    def test_ranked_admission_rejects_page_when_bridge_exceeds_byte_cap(self):
+        selected = admit_ranked_pages([0, 3, 10], rows=16, page_rows=1,
+                                      row_bytes=10, max_gets=2,
+                                      max_bytes=40)
+        self.assertEqual(selected.nominated_pages, (0, 3))
+        self.assertEqual(selected.rejected_pages, (10,))
+        self.assertEqual(selected.plan.gets, 2)
+        self.assertEqual(selected.plan.bytes, 20)
+
+    def test_ranked_admission_charges_final_partial_page(self):
+        selected = admit_ranked_pages([3, 0], rows=10, page_rows=3,
+                                      row_bytes=2, max_gets=1,
+                                      max_bytes=20)
+        self.assertEqual(selected.plan.ranges, ((0, 20),))
+        self.assertEqual(selected.plan.bytes, 20)
 
 
 if __name__ == "__main__":
