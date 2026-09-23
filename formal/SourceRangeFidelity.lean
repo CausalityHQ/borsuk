@@ -374,6 +374,18 @@ theorem progressive_cover_gt100_gate_of_loss_certificate
 /-! Uniform per-row score-error bounds also bound a page's minimum score.
 This supports a non-recall-based premise for page-order certificates. -/
 
+/-! A returned-rank boundary is stable only when the true score gap exceeds
+twice the certified error. This is the exact conditional fact that a future
+code-error/margin certificate must discharge; G0/G0b did not supply one. -/
+
+theorem row_order_preserved_of_margin
+    (trueA approxA trueB approxB error : Int)
+    (aUpper : approxA ≤ trueA + error)
+    (bLower : trueB ≤ approxB + error)
+    (gap : trueA + 2 * error < trueB) :
+    approxA < approxB := by
+  omega
+
 theorem min_score_error
     (trueA routedA trueB routedB error : Int)
     (firstUpper : routedA ≤ trueA + error)
