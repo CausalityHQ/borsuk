@@ -29,3 +29,15 @@ theorem similarly converts a certified visited-row cap into at most eight
 table lookups per visited row. These results provide arithmetic implications;
 the bounds and implementation correspondence must be supplied and checked
 for any production claim.
+
+`SourceRangeFidelity.lean` adds paired finite-cohort hit accounting:
+authenticated source/compressed hit pairs and bounded lost hits imply
+the 100k and 1M aggregate fidelity floors. It separately proves the
+96-byte sign/PQ record arithmetic, a conditional 16-MiB **code** payload
+row bound, 94 sign or 96 PQ table lookups per fetched row, and 9.6 billion
+PQ lookups for a full 100M-row scan. It proves page-minimum score order
+when every row's score error is bounded and two true page minima differ
+by more than twice that bound. Actual hit pairs, score-error bounds,
+Python refinement, S3 service times and unseen-query recall are explicit
+external premises. In particular the checked lookup count is a work
+bound, not a latency or scalability claim.

@@ -5163,3 +5163,52 @@ Do not tune it on these development queries or promote it to 1M.
 Proceed with exactly one separately sealed standard PQ96 rescue on the
 same fixed 100k inputs, group plans, source control and advance thresholds.
 If that fails, reject this width and revise the representation or budget.
+
+### ReLAION-100k PQ96 row-score rescue a0001: reject the 96-byte width
+
+The one preregistered PQ96 rescue used the identical 1,000 development
+queries, sealed OPQ8-selected groups, physical page layout, exact-source
+control, top-100-row page priorities, and 32-range/16,777,216-byte data
+rule as the sign96 screen. Source-only construction trained standard
+96×8-coordinate, 256-centroid PQ on the 100,000 source rows; its plan was
+sealed before truth access. The independent closeout matched all 1,000
+source plans to the sign96 control and authenticated every terminal-listed
+artifact. No S3 code or data GET was served in this source-only projection.
+
+Pushed source `88daad4fac6052e36c5533a42da32669aca0c5a5` was sealed in a
+11,286,750-byte archive with SHA-256
+`fccbd7e61ec6593fa49285fac46cfafff8a6a54339b7ec80a4ca55e4b9093b74`.
+The sole attempt was
+`s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-pq96/88daad4fac6052e36c5533a42da32669aca0c5a5/runs/relaion-100k-dev1000-a0001/`.
+Its complete terminal SHA-256 is
+`5751b807f725b0e2c2bd3dca08278257ae64b1b713f3eca077d09dfec1d81469`.
+Causality Spot `i-00d0e60e9678ba60f` (`c7i.8xlarge`) was confirmed
+terminated after terminal publication. The separate closeout read back the
+source archive and all 18 artifacts, then replayed the sealed validator.
+
+| Paired 100k screen | Exact source | PQ96 | Frozen rescue rule |
+|---|---:|---:|---:|
+| GT100 hits / 100,000 | 99,861 | **99,003** | PQ loss ≤300 |
+| GT10 hits / 10,000 | 10,000 | 10,000 | reported |
+| p05 GT100 | 99 | 93 | PQ ≥90 |
+| queries below 90 GT100 | 0 | **26** | PQ ≤source+10 |
+| maximum data GET ranges | 27 | 27 | ≤32 |
+| maximum encoded data bytes | 16,644,060 | 16,644,124 | ≤16,777,216 |
+
+PQ96 lost 858 paired GT100 positions, exceeding the loss limit by 558;
+201 queries favored source, none favored PQ96, and 799 tied. The lower-tail
+gate also failed by 16 queries. The projected code wave was 32 group GETs
+and at most 7,403,392 bytes, with a 786,464-byte model. Construct, plan,
+evaluate and validate process-tree RSS peaks were 1,667,485,696,
+1,749,741,568, 1,544,380,416 and 1,815,928,832 bytes respectively;
+all phases recorded zero swaps and met the 3-GiB-minus-64-MiB cap.
+
+**Decision:** `reject` PQ96. Both independently sealed 96-byte row-score
+representations fail the fixed paired fidelity limit, so this width has no
+quality-qualified scorer under the tested methods. Do not tune either on
+the reused development cohort or promote either to 1M. The earlier
+200-byte rotated two-bit scorer has strong 100k actual-read evidence but
+its earlier 1M byte-ceiling failure remains a separate warning. A revised
+200-byte scorer under the newer 32-range page schedule requires its own
+preregistered source-only gate; previous measurements do not establish
+its result or production latency.

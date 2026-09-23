@@ -112,6 +112,23 @@ theorem code_payload_lookup_budget
   simp only [signByteLookups]
   omega
 
+/-! A 96-byte PQ record performs 96 table lookups. These are exact
+algorithmic counts, not wall-clock bounds. The 16-MiB premise concerns
+the code payload and is distinct from the 16-MiB data-range wave. -/
+
+def pqTableLookups (rows : Nat) : Nat := 96 * rows
+
+theorem hundred_million_pq_full_scan_lookups :
+    pqTableLookups 100000000 = 9600000000 := by decide
+
+theorem pq_code_payload_lookup_budget
+    (pages rows : Nat)
+    (within_code_payload_budget : groupedCodeBytes pages rows ≤ 16777216) :
+    pqTableLookups rows ≤ 16777152 := by
+  have row_bound := code_row_budget pages rows within_code_payload_budget
+  simp only [pqTableLookups]
+  omega
+
 /-! Uniform per-row score-error bounds also bound a page's minimum score.
 This supports a non-recall-based premise for page-order certificates. -/
 
