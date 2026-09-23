@@ -61,6 +61,8 @@ mod parallel;
 pub mod physical_interval;
 pub mod exact_sq8_nominee;
 pub mod exact_sq8_mirror;
+pub mod pq64_nominee;
+pub mod pq64_router_artifact;
 mod physical_layout;
 mod positioned_candidate;
 mod positioned_log;

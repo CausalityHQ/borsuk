@@ -4,11 +4,16 @@
 mod exact_sq8_mirror;
 #[path = "../../../crates/borsuk/src/exact_sq8_nominee.rs"]
 mod exact_sq8_nominee;
+#[path = "../../../crates/borsuk/src/pq64_nominee.rs"]
+mod pq64_nominee;
+#[path = "../../../crates/borsuk/src/pq64_router_artifact.rs"]
+mod pq64_router_artifact;
 #[path = "../../../crates/borsuk/src/physical_interval.rs"]
 mod physical_interval;
 
 use exact_sq8_mirror::{ExactSq8Mirror, MirrorManifest, Placement};
 use exact_sq8_nominee::{Sq8Geometry, primary_ordinals};
+use pq64_router_artifact::load_source_router;
 use physical_interval::{IntervalGeometry, IntervalPlan, PlanError, plan_weighted_intervals};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
@@ -184,8 +189,37 @@ fn process_request(
     }))
 }
 
+fn run_nominate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() != 7 {
+        return Err("usage: borsuk-v114-score-gate nominate ROUTER MANIFEST_SHA REQUESTS REGIONS SHORTLIST".into());
+    }
+    let router = load_source_router(Path::new(&args[2]), &args[3])?;
+    let regions = args[5].parse::<usize>()?;
+    let shortlist = args[6].parse::<usize>()?;
+    let mut output = BufWriter::new(io::stdout().lock());
+    let input = BufReader::new(File::open(&args[4])?);
+    for (ordinal, line) in input.lines().enumerate() {
+        let request = serde_json::from_str::<serde_json::Value>(&line?)?;
+        if request["query_ordinal"] != ordinal {
+            return Err("nomination query ordinals are not contiguous".into());
+        }
+        let query: Vec<f32> = serde_json::from_value(request["query"].clone())?;
+        let nominees = router.router.nominate(&query, regions, shortlist)
+            .map_err(|error| io::Error::other(format!("nomination failed: {error:?}")))?;
+        serde_json::to_writer(&mut output, &serde_json::json!({
+            "query_ordinal": ordinal, "nominees": nominees,
+        }))?;
+        output.write_all(b"\n")?;
+    }
+    output.flush()?;
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).is_some_and(|value| value == "nominate") {
+        return run_nominate(&args);
+    }
     if args.len() != 5 {
         return Err("usage: v114_exact_local_score MANIFEST OBJECT SIDECAR REQUESTS".into());
     }
