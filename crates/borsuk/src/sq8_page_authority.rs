@@ -1,6 +1,7 @@
 //! Generation-bound SHA-256 verification of exact S3 SQ8 page ranges.
 
 use sha2::{Digest, Sha256};
+use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageError {
@@ -13,9 +14,11 @@ pub enum PageError {
 
 /// Loaded from a manifest whose SHA-256 is pinned by the generation authority.
 pub struct PageAuthority {
+    generation: u64,
     rows: usize,
     dimensions: usize,
     page_rows: usize,
+    object_sha256: String,
     digests: Vec<[u8; 32]>,
 }
 
@@ -57,7 +60,8 @@ impl PageAuthority {
             usize::try_from(number).ok().filter(|value| *value > 0)
                 .ok_or(PageError::InvalidManifest)
         };
-        let _generation = positive("generation")?;
+        let generation = u64::try_from(positive("generation")?)
+            .map_err(|_| PageError::InvalidManifest)?;
         let rows = positive("rows")?;
         let dimensions = positive("dimensions")?;
         let page_rows = positive("page_rows")?;
@@ -78,9 +82,56 @@ impl PageAuthority {
         {
             return Err(PageError::InvalidSidecar);
         }
-        Ok(Self { rows, dimensions, page_rows,
+        Ok(Self { generation, rows, dimensions, page_rows,
+            object_sha256: object_hash.to_owned(),
             digests: sidecar.chunks_exact(32)
                 .map(|chunk| chunk.try_into().unwrap()).collect() })
+    }
+
+    pub fn generation(&self) -> u64 { self.generation }
+    pub fn rows(&self) -> usize { self.rows }
+    pub fn dimensions(&self) -> usize { self.dimensions }
+    pub fn page_rows(&self) -> usize { self.page_rows }
+    pub fn object_sha256(&self) -> &str { &self.object_sha256 }
+
+    pub fn object_bytes(&self) -> usize {
+        self.rows * (self.dimensions + 12)
+    }
+
+    pub fn byte_range(&self, first_page: usize, last_page: usize)
+        -> Result<Range<usize>, PageError>
+    {
+        if first_page > last_page || last_page >= self.digests.len() {
+            return Err(PageError::InvalidRange);
+        }
+        let row_bytes = self.dimensions + 12;
+        let start = first_page * self.page_rows * row_bytes;
+        let stop = (last_page + 1).saturating_mul(self.page_rows)
+            .min(self.rows) * row_bytes;
+        Ok(start..stop)
+    }
+
+    /// Authenticate payload bytes after the transport has checked 206 and
+    /// Content-Range, and verified the pinned ETag in the same request.
+    pub fn verify_payload(&self, first_page: usize, last_page: usize,
+        payload: &[u8]) -> Result<(), PageError>
+    {
+        let range = self.byte_range(first_page, last_page)?;
+        if payload.len() != range.end - range.start {
+            return Err(PageError::InvalidResponse);
+        }
+        let row_bytes = self.dimensions + 12;
+        for page in first_page..=last_page {
+            let local_start = (page - first_page) * self.page_rows * row_bytes;
+            let local_stop = (page + 1).saturating_mul(self.page_rows)
+                .min(self.rows) * row_bytes - range.start;
+            if Sha256::digest(&payload[local_start..local_stop]).as_slice()
+                != self.digests[page]
+            {
+                return Err(PageError::HashMismatch);
+            }
+        }
+        Ok(())
     }
 
     /// Validate the exact response to a conditional `If-Match` page range GET.
@@ -88,35 +139,19 @@ impl PageAuthority {
         &self, first_page: usize, last_page: usize, expected_etag: &str,
         response: &RangeResponse<'_>,
     ) -> Result<(), PageError> {
-        if first_page > last_page || last_page >= self.digests.len()
-            || expected_etag.is_empty()
-        {
+        if expected_etag.is_empty() {
             return Err(PageError::InvalidRange);
         }
-        let row_bytes = self.dimensions + 12;
-        let start = first_page * self.page_rows * row_bytes;
-        let stop = (last_page + 1).saturating_mul(self.page_rows)
-            .min(self.rows) * row_bytes;
-        let expected_range = format!("bytes {}-{}/{}", start, stop - 1,
-                                     self.rows * row_bytes);
+        let range = self.byte_range(first_page, last_page)?;
+        let expected_range = format!("bytes {}-{}/{}", range.start,
+                                     range.end - 1, self.object_bytes());
         if response.status != 206 || response.content_range != expected_range
-            || response.content_length != stop - start
-            || response.payload.len() != stop - start
+            || response.content_length != range.end - range.start
             || response.etag != expected_etag
         {
             return Err(PageError::InvalidResponse);
         }
-        for page in first_page..=last_page {
-            let local_start = (page - first_page) * self.page_rows * row_bytes;
-            let local_stop = ((page + 1).saturating_mul(self.page_rows)
-                .min(self.rows) * row_bytes) - start;
-            if Sha256::digest(&response.payload[local_start..local_stop]).as_slice()
-                != self.digests[page]
-            {
-                return Err(PageError::HashMismatch);
-            }
-        }
-        Ok(())
+        self.verify_payload(first_page, last_page, response.payload)
     }
 }
 

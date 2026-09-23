@@ -65,6 +65,8 @@ pub mod pq64_nominee;
 pub mod pq64_router_artifact;
 pub mod returned_sq8;
 pub mod sq8_page_authority;
+pub mod sq8_s3_range;
+pub mod serving_generation;
 mod physical_layout;
 mod positioned_candidate;
 mod positioned_log;
