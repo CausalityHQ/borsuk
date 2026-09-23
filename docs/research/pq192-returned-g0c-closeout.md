@@ -80,3 +80,11 @@ dual-precision one-wave path remains a hypothesis and needs an offline
 containment/rank-margin gate before any new object build. Lean's proven
 byte/margin implications require authenticated per-query and service-time
 premises; the three measured ranking failures cannot be proved away.
+
+For the 3-GiB resident target, the Lean two-generation arithmetic is sharper:
+if two full 100M-row resident generations coexist and 64 MiB is reserved for
+the process, **each generation's row representation must be at most 15 B/row
+before all other metadata**. This conditional bound rules out simply
+carrying V75's 64-B/row router into that rollover model. Shared generations,
+off-memory code access, a narrower route, or a revised memory target require
+their own explicit correctness and performance evidence.

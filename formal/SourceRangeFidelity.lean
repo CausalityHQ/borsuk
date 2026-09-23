@@ -261,6 +261,12 @@ for a two-generation design under that cap. -/
 theorem two_full_pq16_generations_with_allowance_exceed_three_gib :
     16 * 100000000 * 2 + 67108864 > 3221225472 := by decide
 
+theorem two_generation_resident_width_at_most_fifteen
+    (bytesPerRow : Nat)
+    (cap : bytesPerRow * 100000000 * 2 + 67108864 ≤ 3221225472) :
+    bytesPerRow ≤ 15 := by
+  omega
+
 theorem full_two_bit_pages_in_single_wave
     (pages : Nat) (budget : 200 * 256 * pages ≤ 16777216) :
     pages ≤ 327 := by omega
