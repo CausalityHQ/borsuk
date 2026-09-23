@@ -58,9 +58,9 @@
 
 - [x] Add launcher tests for Spot specification, terminal roster and artifact readback; add a validator test that rejects changed returned hits or decision. Fail-closed output prefix and capacity handling are implemented in the controller.
 - [x] Implement the remote worker with bounded process-tree RSS/swap monitoring, exact source archive, terminal upload on both success and failure, and `finally` termination. Interruption invalidates the cell and uses a new ordinal.
-- [ ] Run only the launcher/validator focused tests and offline Ruff; inspect the worker script and launch specification. Commit and fast-forward push to `origin/main` before the Spot launch.
-- [ ] Launch one immutable attempt; while it runs, watch only terminal and infrastructure state. On terminal, collect the original controller exit, confirm instance termination, and independently authenticate/replay all terminal-listed artifacts.
-- [ ] Apply the preregistered G0 decision: paired mean loss ≤0.25 percentage point and primary marginal p05 at most one hit below exact; report p95 paired per-query loss and sub-90 counts. Record measured units and limits without extrapolating to 1M. Commit and fast-forward push the closeout.
+- [x] Run only the launcher/validator focused tests (16 passed) and offline Ruff; inspect the worker script and launch specification. Commit `9cf22cad` and fast-forward push it to `origin/main` before the Spot launch.
+- [x] Launch one immutable attempt; while it runs, watch only terminal and infrastructure state. On terminal, collect the original controller exit (0), confirm instance termination, and independently authenticate all seven terminal-listed artifacts. The remote validator replayed every query and returned `valid: true`.
+- [x] Apply the preregistered G0 decision: paired mean loss ≤0.25 percentage point and primary marginal p05 at most one hit below exact; report p95 paired per-query loss and sub-90 counts. Record measured units and limits without extrapolating to 1M. The sole-scorer candidate stopped; commit and fast-forward push the closeout.
 
 ## Self-review
 

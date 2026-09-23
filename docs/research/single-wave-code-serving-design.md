@@ -1,6 +1,11 @@
 # Single-wave code serving: falsifiable architecture candidate
 
-Status: research hypothesis, not a qualified reader or frozen production format.
+Status: **stopped at G0**. The 200-byte two-bit record failed as the sole
+returned scorer on ReLAION-100k development; see
+`docs/research/two-bit-returned-g0-closeout.md`. This is not a qualified
+reader or frozen production format. The 1M route gate below is suspended
+until a materially revised representation passes a new 100k returned-ranking
+gate.
 This is a material alternative to the stopped mirrored 104/96 code waves. It
 must be rejected at the earliest decisive failed gate. The next action is an
 offline sealed replay before building new code objects or launching reads.
@@ -19,7 +24,11 @@ The closed ReLAION-100k development actual-read code-wave cell scored its
 selected rows with the 200-byte rotated two-bit record: its primary page
 nomination contained 98.418% GT100 versus 98.515% for exact scores on the
 same fetched rows. This 0.097 percentage-point **page-containment** gap
-supports testing the scorer; it does not measure code-only returned recall.
+supported testing the scorer; it did not measure code-only returned recall.
+That test is now complete: two-bit returned Recall@100 was **90.295%** versus
+**98.590%** for exact scores on precisely the same fetched rows, with 8.295
+percentage points of paired loss and p05 82 versus 93. The conditional
+single-wave sole-scorer architecture fails its first gate.
 The closed ReLAION-1M development mirrored cell contained 98,728 GT100 in
 its final SQ8 data pages; the 193-position paired loss likewise concerns
 page nomination, not final code-only ranking. Neither is transferable to a
