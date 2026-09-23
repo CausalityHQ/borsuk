@@ -91,6 +91,9 @@ fn route_primary(
     {
         return Err(PlanError::InvalidWeights);
     }
+    let primary_weight = nominees.len().checked_add(1)
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or(PlanError::ArithmeticOverflow)?;
     let mut weights = BTreeMap::<usize, u32>::new();
     for &ordinal in nominees {
         if ordinal >= rows {
@@ -99,7 +102,7 @@ fn route_primary(
         let page_weight = weights.entry(ordinal / 256).or_default();
         *page_weight = page_weight
             .checked_add(if primary_set.contains(&ordinal) {
-                513
+                primary_weight
             } else {
                 1
             })
@@ -274,7 +277,7 @@ mod tests {
     fn page_votes_and_plan_charge_the_short_final_page_exactly() {
         let (votes, plan) =
             route_primary(&[0, 256, 300], &[0, 1, 256, 257, 300], 416, 768).unwrap();
-        assert_eq!(votes, vec![(0, 514), (1, 1027)]);
+        assert_eq!(votes, vec![(0, 7), (1, 13)]);
         assert_eq!(plan.ranges, vec![0..324_480]);
         assert_eq!(plan.bytes, 324_480);
     }
@@ -367,7 +370,7 @@ mod tests {
             result["score_bits"],
             serde_json::json!([1088421888, 1073741824])
         );
-        assert_eq!(result["page_votes"], serde_json::json!([[0, 514]]));
+        assert_eq!(result["page_votes"], serde_json::json!([[0, 4]]));
         assert_eq!(result["ranges"], serde_json::json!([[0, 512]]));
         fs::remove_dir_all(root).unwrap();
     }
