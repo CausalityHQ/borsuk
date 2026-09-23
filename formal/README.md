@@ -120,10 +120,22 @@ For the later terminal-closed progressive cover, a separate theorem says
 that its authenticated 98,986 GT100 contained positions would imply the
 98,151 final aggregate floor if at most 835 paired positions are lost
 between cover and final result. The terminal-closed paired scorer cell
-subsequently returned 98,728 GT100 hits, so its 258-position
+subsequently contained 98,728 GT100 truth owners in final data pages, so
+its 258-position
 cover-to-final gap satisfies that premise; GT10 and the lower tail were
 checked separately by the cell validator. This is a finite-cohort
-certificate and does not establish unseen-query recall.
+certificate and does not establish actual returned recall or unseen-query
+recall. The sealed final data objects are SQ8 pages and require an
+authenticated read and rerank gate.
+
+The sealed progressive code/data plans give per-query lower wave sizes
+of 16,773,536 sign bytes, 15,483,264 magnitude bytes and 16,756,872
+SQ8 data bytes on the development cohort. `mirrored_plan_byte_floor`
+proves their sum is at least 49,013,672 bytes. A second theorem proves
+that a target latency is impossible if a **certified maximum aggregate
+transfer rate** cannot carry that many bytes by the target time. The
+plan minima and rate cap remain external assumptions; this is a
+necessary bandwidth condition, not measured or sufficient latency.
 
 A second finite-query theorem bounds recall loss for a **fixed score
 threshold** by the authenticated truth count of pages whose true scores

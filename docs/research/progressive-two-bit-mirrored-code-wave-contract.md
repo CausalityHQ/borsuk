@@ -154,7 +154,7 @@ archive, all artifacts, prior frozen plans, resource files, and the digest
 of every rejoined two-bit record. The remote independent validator replayed
 the code/data range geometry and ordered truth masks for all 1,000 queries.
 
-| Frozen paired metric | Exact source on same cover | Two-bit | Gate |
+| Frozen paired page-containment metric | Exact source on same cover | Two-bit | Gate |
 |---|---:|---:|---:|
 | GT100 / 100,000 | 98,921 | **98,728** | ≥98,151 |
 | GT10 / 10,000 | 9,956 | **9,956** | ≥9,928 |
@@ -168,16 +168,33 @@ to exact source. Source won on 84 queries and the arms tied on 916; two-bit
 won on none. Both arms are scored on precisely the mirrored code cover;
 the 98,921 source result is one hit above the historical 98,920 full-group
 source diagnostic because that run used different page/range plans. The
-98,986 code-cover count is an upper bound, not final recall. The first and
-second code waves remain capped separately as reported above; no actual
-S3 code/data range reads were timed in this source-only cell.
+98,986 code-cover count and 98,728 final data-page containment are upper
+bounds on served Recall@100. The sealed data objects contain SQ8 pages;
+this cell neither read them through S3 nor decoded and reranked their rows.
+The first and second code waves remain capped separately as reported above.
 Construct, plan, evaluate and validate maximum RSS were 1,331,612,
 2,334,924, 1,758,580 and 2,767,432 KiB; each phase recorded zero
 swaps under the remote 3-GiB cap.
 
+An arithmetic audit of the sealed 1,000 query plans (code plan SHA-256
+`ee68310ef3084e2f08a7f26bb832251f8ab420a6abb80eb8d4c75adfe947a2ef`;
+paired data plan SHA-256
+`94a4da370a1ccd1b565988cddd51b3ff86ba14e45c3660c7ed78dbf9d3802627`)
+finds **49,018,864–49,040,992 planned bytes per query**, with median
+49,035,644; GET counts are 79–96, median 96. Every query's sign,
+magnitude and data waves are individually at least 16,773,536,
+15,483,264 and 16,756,872 bytes. The Lean theorem
+`mirrored_plan_byte_floor` checks the resulting 49,013,672-byte
+conservative floor; `mirrored_plan_misses_target_of_transfer_cap` turns
+any certified maximum aggregate transfer rate into a conditional latency
+lower bound. These are plan bytes, not observed S3 transfer or a measured
+rate. Parallel code GETs can overlap in time but cannot remove their
+aggregate network demand.
+
 **Decision:** `advance-to-actual-read-and-held-out-gate` under the frozen
 paired rule. Authenticate actual S3 range reads of both code planes and
-the data wave, measure end-to-end latency, throughput and request cost,
-and use untouched queries for quality. Freeze a new source/configuration
+the SQ8 data wave, measure returned neighbor recall after reranking,
+end-to-end latency, throughput and request cost, and use untouched queries
+for quality. Freeze a new source/configuration
 revision before a 10M and 100M scale campaign. This development-cohort
 result cannot establish unseen-query recall or production latency.

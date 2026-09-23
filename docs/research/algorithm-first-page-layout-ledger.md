@@ -5347,7 +5347,7 @@ artifact roster, prior plans, resource receipts and rejoined record digest.
 The remote validator replayed the range geometry and truth masks. Spot
 `i-03fc8c109b0cd5815` (`c7i.8xlarge`) was confirmed terminated.
 
-| Frozen 1M paired score | Exact source, same cover | Two-bit | Gate |
+| Frozen 1M paired page containment | Exact source, same cover | Two-bit | Gate |
 |---|---:|---:|---:|
 | GT100 / 100,000 | 98,921 | **98,728** | ≥98,151 |
 | GT10 / 10,000 | 9,956 | **9,956** | ≥9,928 |
@@ -5359,11 +5359,14 @@ The remote validator replayed the range geometry and truth masks. Spot
 The two-bit arm lost 220 and recovered 27 GT100 positions against the
 same-cover source arm. It scored below source on 84 queries and tied on
 916. The 98,986 source-owner code cover leaves 258 positions not returned
-by the final two-bit data range. All gate values passed. This is a
+by the final two-bit data range. All gate values passed. These are
+truth-owner page counts, not returned neighbor recall: the sealed data
+objects hold SQ8 pages, which this cell did not read or rerank. This is a
 source-only score and range-plan cell, not a timed S3 read. No latency,
 throughput, cost or unseen-query claim follows from it.
 
 **Decision:** `advance-to-actual-read-and-held-out-gate`. The next
 architecture qualification must authenticate and time S3 range reads of
-both code planes and final data, then test quality on untouched queries.
+both code planes and final SQ8 data, return reranked neighbors, then test
+quality on untouched queries.
 Freeze the selected configuration before 10M and 100M scale studies.

@@ -447,6 +447,38 @@ theorem bounded_parallel_code_data_latency
   have dataTransferBound := Nat.mul_le_mul_right dataByteTime dataBytesBound
   omega
 
+/-! A plan certificate may supply a lower byte bound for each of the
+three physically transferred waves. If a certified link/service rate
+cannot move their combined bytes by a target time, that target is
+impossible for the same plan even with perfect overlap and zero local
+work. The rate cap and plan minima are external premises. -/
+
+theorem mirrored_plan_byte_floor
+    (signBytes magnitudeBytes dataBytes : Nat)
+    (signMin : 16773536 ≤ signBytes)
+    (magnitudeMin : 15483264 ≤ magnitudeBytes)
+    (dataMin : 16756872 ≤ dataBytes) :
+    49013672 ≤ signBytes + magnitudeBytes + dataBytes := by
+  omega
+
+theorem mirrored_plan_misses_target_of_transfer_cap
+    (signBytes magnitudeBytes dataBytes maximumBytesPerUnit
+      observedTime targetTime : Nat)
+    (signMin : 16773536 ≤ signBytes)
+    (magnitudeMin : 15483264 ≤ magnitudeBytes)
+    (dataMin : 16756872 ≤ dataBytes)
+    (rateCap : signBytes + magnitudeBytes + dataBytes ≤
+      maximumBytesPerUnit * observedTime)
+    (insufficient : maximumBytesPerUnit * targetTime < 49013672) :
+    targetTime < observedTime := by
+  have floor := mirrored_plan_byte_floor signBytes magnitudeBytes dataBytes
+    signMin magnitudeMin dataMin
+  by_cases meets : targetTime < observedTime
+  · exact meets
+  · have timeBound : observedTime ≤ targetTime := by omega
+    have rateBound := Nat.mul_le_mul_left maximumBytesPerUnit timeBound
+    omega
+
 def regionTableLookups (visitedRows : Nat) : Nat := 8 * visitedRows
 
 theorem hundred_million_full_route_lookups :
