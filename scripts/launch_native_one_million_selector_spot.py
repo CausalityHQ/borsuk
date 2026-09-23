@@ -40,6 +40,16 @@ ARTIFACTS = {
 
 
 def artifact_names(kind: str) -> dict[str, str]:
+    if kind == "opq8":
+        return {
+            "model": "model.bin", "codes": "codes.bin", "seal": "seal.json",
+            "plans": "plans.json", "evidence": "evidence.json",
+            "result": "result.json", "validation": "validation.json",
+            "construct-resources": "construct-resources.txt",
+            "plan-resources": "plan-resources.txt",
+            "evaluate-resources": "evaluate-resources.txt",
+            "validate-resources": "validate-resources.txt",
+        }
     return {
         **ARTIFACTS,
         **({"layout": "layout.json"} if kind == "layout" else {}),
@@ -67,9 +77,12 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8"}:
         raise ValueError("one-million selector kind differs")
     expected = (
+        f"s3://{BUCKET}/research/native-hundred-thousand-opq8-router/"
+        f"{plan.source_commit}/runs/relaion-100k-dev1000-a{plan.attempt:04d}"
+        if plan.selector_kind == "opq8" else
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
         f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
     )
@@ -101,6 +114,8 @@ def _download_commands(identities: dict[str, object], names: dict[str, str]) -> 
 
 
 def _terminal_schema(kind: str) -> str:
+    if kind == "opq8":
+        return "borsuk-hundred-thousand-opq8-terminal-v1"
     return (
         "borsuk-one-million-selector-terminal-v1" if kind == "group"
         else f"borsuk-one-million-{kind}-selector-terminal-v1"
@@ -109,6 +124,10 @@ def _terminal_schema(kind: str) -> str:
 
 def worker_script(plan: SelectorSpotPlan) -> str:
     """Generate a compact phase-separated worker with durable failure logs."""
+    if plan.selector_kind == "opq8":
+        from scripts.native_hundred_thousand_opq8_worker import opq8_worker_script
+
+        return opq8_worker_script(plan)
     script = """#!/bin/bash
 set -euo pipefail
 root=/mnt/native-one-million-selector
@@ -314,7 +333,11 @@ def build_launch_specs(plan: SelectorSpotPlan) -> list[dict[str, object]]:
                 "Groups": [plan.security_group_id], "SubnetId": target.subnet_id,
             }],
             "TagSpecifications": [{"ResourceType": "instance", "Tags": [
-                {"Key": "Name", "Value": f"borsuk-native-one-million-{plan.selector_kind}-selector"},
+                {"Key": "Name", "Value": (
+                    "borsuk-native-hundred-thousand-opq8-router"
+                    if plan.selector_kind == "opq8"
+                    else f"borsuk-native-one-million-{plan.selector_kind}-selector"
+                )},
                 {"Key": "BorsukAttempt", "Value": f"a{plan.attempt:04d}"},
             ]}],
             "UserData": user_data,
@@ -406,13 +429,33 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
     existing = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
     if existing.get("KeyCount", 0) or existing.get("Contents"):
         raise ValueError("selector immutable attempt already exists")
+    if plan.selector_kind == "opq8":
+        from scripts.native_hundred_thousand_opq8_cell import (
+            HISTORICAL_EVIDENCE,
+            PRIOR_CODE_SEAL,
+        )
+        from scripts.native_page_microcluster_cell import FROZEN_INPUTS
+
+        source_inputs = {
+            "source": dataclasses.asdict(FROZEN_INPUTS.layout.source),
+            "membership": dataclasses.asdict(FROZEN_INPUTS.membership),
+            "prior-code-seal": dataclasses.asdict(PRIOR_CODE_SEAL),
+        }
+        development_inputs = {
+            "queries": dataclasses.asdict(FROZEN_INPUTS.queries),
+            "truth": dataclasses.asdict(FROZEN_INPUTS.truth),
+            "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
+        }
+    else:
+        source_inputs = {role: dataclasses.asdict(value) for role, value in SOURCE_IDENTITIES.items()}
+        development_inputs = {role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()}
     reservation = {
         "schema": f"borsuk-one-million-{plan.selector_kind}-selector-reservation-v1",
         "attempt": plan.attempt, "source_commit": plan.source_commit,
         "source_archive": dataclasses.asdict(plan.source_archive),
         "requirements_sha256": plan.requirements_sha256,
-        "source_inputs": {role: dataclasses.asdict(value) for role, value in SOURCE_IDENTITIES.items()},
-        "development_inputs": {role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()},
+        "source_inputs": source_inputs,
+        "development_inputs": development_inputs,
     }
     _atomic_put(
         s3, bucket=bucket, key=f"{prefix}/reservation.json",
@@ -509,7 +552,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(
