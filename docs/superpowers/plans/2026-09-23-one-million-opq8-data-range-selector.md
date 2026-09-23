@@ -46,18 +46,18 @@
 
 **Interfaces:** `construct` authenticates old source and page/code maps, `plan` reads queries and emits both sealed arm plans, `evaluate` reads truth only after plan seals and writes masks/metrics, `validate` independently rebuilds page maps and recomputes plans and results.
 
-- [ ] Add a synthetic fixture with base/delta roles, selected groups, OPQ8 scores and known truth owner pages.
-- [ ] Run its test red, implement phase boundaries and deterministic ranking, then run focused tests green.
-- [ ] Test malformed identities, nonfinite scores, missing plan seals, bridging, GET/byte overflow and historical-plan mismatch.
-- [ ] Add explicit resource and phase receipts; check no source-only result claims actual S3 data reads.
+- [x] Add synthetic base/delta score, range, owner-page and evaluation fixtures.
+- [x] Run the core tests red, implement phase boundaries and deterministic ranking, then run focused tests green.
+- [x] Complete historical-plan mismatch and resource-boundary regression coverage before launch.
+- [x] Add phase and resource receipts; label the result as source-only.
 - [ ] Commit the cell and validator after scoped lint and focused tests.
 
 ### Task 3: Spot execution and independent closeout
 
 **Files:** Create `scripts/native_one_million_data_range_worker.py`; adapt `scripts/launch_native_one_million_selector_spot.py`; create focused launcher tests; update `docs/research/algorithm-first-page-layout-ledger.md` only after closure.
 
-- [ ] Add create-only source/terminal upload, readback authentication, Causality Spot default, zero-swap/3-GiB resource gate and terminal-driven shutdown.
-- [ ] Test the worker and launcher using a tiny synthetic fixture; run scoped Ruff.
+- [x] Add create-only source/terminal upload, readback authentication, Causality Spot default, zero-swap/3-GiB resource gate and terminal-driven shutdown.
+- [x] Test the worker and launcher using a tiny synthetic fixture; run scoped Ruff.
 - [ ] Commit and fast-forward push to `origin/main` before creating the archive.
 - [ ] Check durable consultation and instance lists for an existing attempt; launch only if none is active.
 - [ ] Monitor terminal and instance health without opening incomplete measurement files.

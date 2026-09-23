@@ -45,20 +45,21 @@ def _validated(
     return lengths, targets
 
 
-def minimum_cover(
-    page_lengths: Mapping[str, Sequence[int]], target_pages: Sequence[Page],
-    maximum_gets: int,
-) -> Cover | None:
-    """Minimize encoded bytes while covering targets in at most `maximum_gets` GETs."""
-    lengths, targets = _validated(page_lengths, target_pages, maximum_gets)
-    if not targets:
-        return Cover((), (), 0)
+def _prefixes(lengths: Mapping[str, Sequence[int]]) -> dict[str, list[int]]:
     prefixes: dict[str, list[int]] = {}
     for role, values in lengths.items():
         prefix = [0]
         for value in values:
             prefix.append(prefix[-1] + value)
         prefixes[role] = prefix
+    return prefixes
+
+
+def _cover_validated(
+    prefixes: Mapping[str, Sequence[int]], targets: Sequence[Page], maximum_gets: int,
+) -> Cover | None:
+    if not targets:
+        return Cover((), (), 0)
     runs: list[Interval] = []
     for role, page in sorted(targets):
         if runs and runs[-1][0] == role and runs[-1][2] == page:
@@ -93,6 +94,15 @@ def minimum_cover(
     return Cover(tuple(intervals), included, total)
 
 
+def minimum_cover(
+    page_lengths: Mapping[str, Sequence[int]], target_pages: Sequence[Page],
+    maximum_gets: int,
+) -> Cover | None:
+    """Minimize encoded bytes while covering targets in at most `maximum_gets` GETs."""
+    lengths, targets = _validated(page_lengths, target_pages, maximum_gets)
+    return _cover_validated(_prefixes(lengths), targets, maximum_gets)
+
+
 def admit_ranked_pages(
     page_lengths: Mapping[str, Sequence[int]], ranked_pages: Sequence[Page],
     maximum_gets: int, maximum_bytes: int,
@@ -100,12 +110,13 @@ def admit_ranked_pages(
     """Admit each query-ranked page only if its optimal cover fits both caps."""
     if type(maximum_bytes) is not int or maximum_bytes < 0:
         raise ValueError("data-range byte cap differs")
-    _validated(page_lengths, ranked_pages, maximum_gets)
+    lengths, ranked = _validated(page_lengths, ranked_pages, maximum_gets)
+    prefixes = _prefixes(lengths)
     targets: list[Page] = []
-    cover = minimum_cover(page_lengths, targets, maximum_gets)
+    cover = _cover_validated(prefixes, targets, maximum_gets)
     assert cover is not None
-    for page in ranked_pages:
-        next_cover = minimum_cover(page_lengths, (*targets, page), maximum_gets)
+    for page in ranked:
+        next_cover = _cover_validated(prefixes, (*targets, page), maximum_gets)
         if next_cover is not None and next_cover.bytes <= maximum_bytes:
             targets.append(page)
             cover = next_cover

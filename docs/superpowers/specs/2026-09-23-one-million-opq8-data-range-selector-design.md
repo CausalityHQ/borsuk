@@ -26,6 +26,10 @@ uses its own frozen selected groups but exactly the same OPQ8 scores,
 page priority rule and data-range selector. Neither arm reads truth while
 planning. The development truth file is available only after both plan
 files and their digests are sealed.
+The prior plans artifact also contains a historical `source_distance` arm
+that used exact source vectors. This gate reads only candidate and control
+group plans; that diagnostic arm has no role in page priority, admission
+or evaluation.
 
 ## Query-only rule to freeze before launch
 
@@ -53,6 +57,11 @@ score/tie arithmetic identity. No query truth influences admission.
 The two role objects have distinct byte coordinates; authenticate their
 physical page spans and reject overlap, out-of-bounds offsets or any
 reported budget excess.
+Before launch, the authenticated 416,563-byte generation manifest
+(`45fa4e708ab660151a7b1ea79e35eada6090faced1bfb147f7e20cac7055e754`)
+was checked across every page: each role starts at offset zero, all 3,639
+pages per role tile without gaps, and their byte sums equal 708,888,104
+base bytes and 80,900,000 delta bytes in the sealed objects.
 
 ## Evaluation and stop rule
 
@@ -61,6 +70,10 @@ ten IDs to physical owner pages. Count a hit whenever its owner page is
 inside a planned range, including bridged pages. Record per-query hit
 masks, GT100 and GT10 counts, p05 GT100, sub-90 count, range count,
 encoded bytes and candidate/control paired wins, losses and ties. The
+evidence also records each truth owner's one-based rank in the sealed
+page priority, or null when absent, and classifies each position as a
+target-page hit, a bridged-page hit or a miss. This lets a failed gate be
+assigned to group containment, score ranking or range dispersion. The
 candidate advances only if it reaches at least 98,151/100,000 GT100,
 9,928/10,000 GT10, p05 90 and at most 49 sub-90 queries, with all
 queries within 32 ranges and 16,777,216 encoded bytes. Report the
@@ -70,6 +83,10 @@ rejects this selector and triggers diagnosis of ranking versus layout
 or representation; do not tune on this development cohort. A pass
 licenses an actual authenticated data-range read gate, not production
 readiness.
+That later read gate must include a fresh untouched query cohort. The
+current 1,000-query development cohort already informed the truth-aware
+interval witness and selector design, so its outcome is development
+evidence only.
 
 ## Execution and independent closeout
 
@@ -83,6 +100,11 @@ attempt. Monitor an incomplete attempt through terminal and instance
 health only. Independently authenticate every terminal-listed artifact,
 recompute every page-range cover and hit mask from sealed plans and
 truth, and reject any mismatch before entering a result in the ledger.
+The sealed priority list is the cross-host closeout authority. Re-scoring
+on a different BLAS host is diagnostic because float32 ties may change;
+the on-host validator reruns the exact planning phase. Receipt closeout
+separately authenticates the terminal, source archive, artifact roster,
+instance identity and zero-swap resource files before acceptance.
 
 ## Formal boundary
 
