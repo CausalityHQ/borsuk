@@ -141,6 +141,18 @@ command failure is not established. The next source records worker output
 and finer setup phases, initializes `HOME` before installing `uv`, and uses
 a new attempt ordinal. The original terminal is immutable.
 
+V109 attempt `a0002` completed its 200-query prefix and stopped by the
+registered rule: capped returned Recall@100 was **98.695%**, p05 95, zero
+GET/byte cap violations, versus the paired V77 plan's **99.160%** but 63/200
+cap violations. The matched prefix control passed. The instance was
+terminated, and the 1,000-query cohort was deliberately not run. See
+`docs/research/v109-capped-reader-closeout.md` for authenticated evidence.
+The next decision is the exact truth-aware interval cover under the same
+32-GET/16-MiB cap **for full 256-row SQ8 pages**; no further local
+coalescing tweaks are justified until it separates current page-geometry
+infeasibility from query-only planner error. A failure would leave sub-page
+ranges and a new layout as distinct architectural options.
+
 The longer summary-width and row-code access gate below remains conditional
 on a cap-safe physical planner:
 
