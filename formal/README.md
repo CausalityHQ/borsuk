@@ -10,6 +10,15 @@ query-time recall, live S3 latency or 100M memory peaks.
 It also proves that V112's 513-to-1 vote encoding ranks any gain of one
 precise nominee above at most 512 secondary votes.
 
+`NomineePrimaryStability.lean` proves a conditional V113 certificate: if
+each nominee has an authenticated score-error bound and the precise
+top-100 boundary exceeds those bounds, approximate scoring selects the
+same 100 rows and gives the same result under any deterministic page-vote
+function. It also checks that a 16-byte plane across two complete 100M
+generations occupies 3.2 billion payload bytes. Neither statement is a
+measured recall, latency, or charged-memory result. Run
+`lean NomineePrimaryStability.lean` from this directory to check it.
+
 Run `lean Opq8Planner.lean` from this directory with the pinned Lean
 toolchain. The file imports only `Std` and contains no admitted theorems.
 

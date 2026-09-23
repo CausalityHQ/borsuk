@@ -36,6 +36,13 @@ marker and hashes binding it to the exact PQ64 codes/codebook, SQ8 object,
 and layout permutation. Reject any mismatch at generation load. Row
 identity and SQ8 final scoring must use the same layout ordinal.
 
+Record the maximum residual-to-centroid norm over **all** encoded rows for
+each residual codeword. Together with the two scalar quantization steps,
+query norm and an explicit floating-point accumulation allowance, these
+give a per-nominee SQ8 score-error bound. Report the fraction of queries
+whose SQ8 top-100 boundary is certified by those bounds. A loose bound is
+an inconclusive certificate, not evidence of poor measured recall.
+
 This is a hypothesis, not a selected production default. In particular,
 16 bytes may lack enough score fidelity. A plain residual PQ16 arm and a
 four-byte scalar-only arm will isolate whether the two scalar corrections
@@ -92,8 +99,10 @@ full 16-byte plane recovers at least 25% more of that gap than the
 scalar-only arm. Otherwise change the planner or representation according
 to the failing layer. A 32-byte plane is a new frozen cell, not a sweep.
 
-Lean can prove an exact interval optimum under given weights and physical
-geometry. A score-error premise plus a positive SQ8 boundary margin can
-prove identical primary sets and therefore identical plans. Such a theorem
-is conditional on authenticated scores/error bounds and does not establish
-unseen-query recall, live S3 latency, or 100M resource peaks.
+`formal/NomineePrimaryStability.lean` checks the conditional statement that
+authenticated score-error bounds plus a positive SQ8 boundary margin leave
+the 100 primary rows and any deterministic page-vote calculation identical.
+It also checks the two-generation 100M R16 payload arithmetic. A separate
+proof of the Rust interval DP's optimum is still needed. None of these
+arithmetic and conditional theorems establishes unseen-query recall, live
+S3 latency, or 100M node-charged resource peaks.
