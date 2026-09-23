@@ -40,7 +40,11 @@ ARTIFACTS = {
 
 
 def artifact_names(kind: str) -> dict[str, str]:
-    return {**ARTIFACTS, **({"layout": "layout.json"} if kind == "layout" else {})}
+    return {
+        **ARTIFACTS,
+        **({"layout": "layout.json"} if kind == "layout" else {}),
+        **({"moments": "moments.bin"} if kind == "mass" else {}),
+    }
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -63,7 +67,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
@@ -239,6 +243,8 @@ phase=complete
     replacements = {
         "@OUTPUT@": _q(plan.output_prefix.rstrip("/")),
         "@CELL_MODULE@": (
+            "scripts.native_one_million_page_dispersion_mass_cell" if plan.selector_kind == "mass"
+            else
             "scripts.native_one_million_geometric_group_order_cell" if plan.selector_kind == "layout"
             else
             "scripts.native_one_million_pq80_projection_cell" if plan.selector_kind == "pq80"
@@ -253,8 +259,14 @@ phase=complete
         ),
         "@TERMINAL_SCHEMA@": _terminal_schema(plan.selector_kind),
         "@ARTIFACT_FILES@": repr(tuple(artifact_names(plan.selector_kind).items())),
-        "@LAYOUT_CHMOD@": "layout.json" if plan.selector_kind == "layout" else "",
-        "@LAYOUT_PUBLISH@": "publish_artifact layout.json" if plan.selector_kind == "layout" else "",
+        "@LAYOUT_CHMOD@": (
+            "layout.json" if plan.selector_kind == "layout"
+            else "moments.bin" if plan.selector_kind == "mass" else ""
+        ),
+        "@LAYOUT_PUBLISH@": (
+            "publish_artifact layout.json" if plan.selector_kind == "layout"
+            else "publish_artifact moments.bin" if plan.selector_kind == "mass" else ""
+        ),
         "@ATTEMPT@": str(plan.attempt),
         "@BUCKET@": _q(BUCKET),
         "@ARTIFACT_KEY@": _q(_s3_location(plan.output_prefix)[1] + "/artifacts"),
@@ -497,7 +509,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(

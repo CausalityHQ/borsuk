@@ -57,8 +57,10 @@ screen tests.
 
 The same 1,000 ordered development queries and GT100 must reproduce the
 closed original-layout PQ96 control exactly: 98.151% mean GT100, 89% p05,
-99.28% GT10 and 51 sub-90 queries, including every per-query plan. Seal
-moments before exposing either object. The evaluator is unprivileged and
+99.28% GT10 and 51 sub-90 queries, including every per-query plan. The
+closed PQ96 canonical 1,000-sample list SHA-256 is
+`ce61ad527968c5bf1bb5bc45e576b4f94eeb690c9ac7000fff6acf6f2ead713d`.
+Seal moments before exposing either object. The evaluator is unprivileged and
 without network. The independent validator rebuilds source moments, the
 score, all baseline and challenger admissions, and per-query containment
 without calling the producer router or planner. Preserve paired raw samples,

@@ -4603,7 +4603,10 @@ values were respectively
 and `20878c717638560de7ebb31d6e8874813976ed669c0f1248ce301d5ae5d44c09`.
 The independent replay reconstructed the source arrays, geometric order,
 all physical plans and the paired PQ96 control. Separate closeout aggregation
-of all 1,000 rows agreed with both result and validation.
+of all 1,000 rows agreed with both result and validation. After closure,
+the canonical 1,000-sample paired control list SHA-256
+`ce61ad527968c5bf1bb5bc45e576b4f94eeb690c9ac7000fff6acf6f2ead713d`
+matched the terminal-closed original PQ96 evidence sample list exactly.
 
 | Identical 1M cohort and 96-byte projection | Original physical order | Geometric order | advance gate |
 |---|---:|---:|---:|
