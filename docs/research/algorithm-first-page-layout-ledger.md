@@ -4735,6 +4735,12 @@ were 1,650,167,808, 144,166,912, 1,404,022,784 and 1,664,647,168
 bytes. Each passed the 3-GiB cap with a 64-MiB margin, with zero swaps.
 The validator independently reconstructed the source-trained model, physical
 codes, ADC scores and all plans before replaying containment.
+This small layout has only 42 four-page groups, of which the route can read
+32. The source-only containment threshold was anchored to the historical
+final-page outcome, so the two quantities in that first stage are not a
+paired quality comparison. The actual-read paired stage below supplies
+that comparison. Neither 100k result establishes selectivity among the
+910 eight-page groups at 1M.
 
 **Decision:** `opq8-group-containment-advance` to the separately
 preregistered paired 100k actual two-bit code-read and final-page quality
@@ -4795,6 +4801,8 @@ all four recorded zero swaps.
 OPQ8 model and top-four group scorer to a preregistered 1M containment
 and actual-read gate on the frozen original physical layout. The 100k
 paired improvement does not by itself establish 1M quality, 100M memory,
-serving throughput, or object-store latency bounds. Formal planner and
-conditional recall proofs can supplement these measured gates under
-explicit data and service assumptions.
+serving throughput, or object-store latency bounds. The current checked
+Lean planner bounds apply to the 100k one-GET-per-group plan. Pairwise
+margin and truth-owner counting lemmas can supplement measured gates under
+authenticated data premises; the 1M merged-range planner and full recall
+composition remain unproved.

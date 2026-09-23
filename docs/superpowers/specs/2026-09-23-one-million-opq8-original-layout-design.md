@@ -35,8 +35,13 @@ group ordinal; only finite scores are valid. Reuse the existing 1M
 adjacent-range planner on that ranking, with a projected 96-byte row
 payload, 32 contiguous GET ranges and 16,777,216 projected bytes.
 It may skip an over-budget group and continue. Store all 1,000 ranked and
-selected plans before reading truth. Count ordered GT10 and GT100 owner
-groups only after the plan seal. This is a group-containment upper bound.
+selected plans before reading truth. Record the number of selected groups
+separately from the number of merged GET ranges. In the same query-only
+phase, stream the source once more in bounded batches and calculate source
+squared-L2 top-four group scores for all 1,000 queries. Run those scores
+through the same range planner as a sealed diagnostic arm, with no role in
+the primary pass/fail gate. Count ordered GT10 and GT100 owner groups only
+after both plans are sealed. This is a group-containment upper bound.
 
 ## Paired control and fixed gate
 
@@ -56,6 +61,15 @@ and the memory/swap cap. A valid quality miss kills this fixed OPQ8
 model/top-four/original-layout combination; do not tune it on the cohort.
 An authority, replay, or resource failure invalidates the attempt and
 requires a repaired source revision and fresh attempt.
+
+Report projected bytes and selected-group counts for both primary and
+control. If primary containment improves only by consuming materially
+more bytes or selected groups, do not call that a routing-quality gain.
+If OPQ8 fails but the source-distance diagnostic passes, assign the loss
+to representation error. If both fail, assign the loss to the frozen
+original-layout/top-four-score combination, rather than tuning OPQ8 on
+this cohort. The diagnostic is a source-only calculation, not an S3 read
+or latency measure.
 
 ## Execution and next gate
 

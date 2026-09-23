@@ -43,11 +43,11 @@
 
 **Files:** Create `scripts/native_one_million_opq8_cell.py`, `scripts/validate_native_one_million_opq8.py`, and `scripts/test_native_one_million_opq8_cell.py`.
 
-**Interfaces:** `run_construct(root)`, `run_plan(root,out)`, `run_evaluate(root,out)`, `run_validate(root,out)` write canonical sealed artifacts. The plan contains all 1,000 `ranked_groups`, `selected_groups`, merged `intervals`, projected GET and byte counts; evidence adds ordered GT masks and paired historical control fields.
+**Interfaces:** `run_construct(root)`, `run_plan(root,out)`, `run_evaluate(root,out)`, `run_validate(root,out)` write canonical sealed artifacts. The plan contains all 1,000 OPQ8 and source-distance diagnostic `ranked_groups`, `selected_groups`, merged `intervals`, projected GET and byte counts; evidence adds ordered GT masks and paired historical control fields.
 
 - [ ] **Step 1: Write failing phase tests.** Assert queries cannot exist during construct, truth cannot exist during plan, tampering with model/code/seal/plan rejects downstream phases, and the control sample mismatch fails even when aggregates still match.
 - [ ] **Step 2: Run only the new cell test; confirm it fails at missing entry points.** Use the same `uv run` pattern as Task 1.
-- [ ] **Step 3: Implement plan and evaluate.** Authenticate the sealed code plane; score each query with `row_adc_scores`; rank top-four means; call `plan_group_ranges` with 96-byte projected `Group.code_bytes`; compare each control sample with terminal-closed PQ96 evidence; resolve ordered truth IDs to original physical group owners only after the plan seal.
+- [ ] **Step 3: Implement plan and evaluate.** Authenticate the sealed code plane; score each query with `row_adc_scores`; rank top-four means; call `plan_group_ranges` with 96-byte projected `Group.code_bytes`. Make a second bounded source pass for source squared-L2 top-four diagnostic scores and seal their plans before truth. Compare each control sample with terminal-closed PQ96 evidence; resolve ordered truth IDs to original physical group owners only after the plan seal. Report selected-group count and projected bytes for each arm.
 - [ ] **Step 4: Implement independent validation.** Re-encode the source in bounded batches, recompute all 1,000 ADC rankings and range plans, recompute both hit masks and metrics from source/truth, and compare exact canonical artifact bytes. Failure never claims a scientific quality miss.
 - [ ] **Step 5: Run both new focused tests and scoped Ruff, then commit.** Include nonmonotonic skip and base/delta boundary fixtures.
 
