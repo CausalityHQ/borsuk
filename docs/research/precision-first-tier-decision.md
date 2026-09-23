@@ -113,6 +113,24 @@ why. If no such planner preserves at least 99.0% returned Recall@100 and p05
 do not tune the same unconstrained coalescer. A passing development replay
 permits a new untouched live serving cohort, not reuse of the canceled cell.
 
+The executable V109 candidate uses V77's 1,024-region PQ192-reconstructed
+page summaries and PQ64 row codes, selecting the top 512 encoded rows. It
+ranks their distinct pages by best row-code score. The capped planner admits
+pages in that order, merges the cheapest physical gaps when needed to stay
+within 32 GETs, and skips a page if its full bridged interval would exceed
+16,777,216 SQ8 bytes. It scores **all** rows in the admitted intervals from a
+local authenticated copy of V70's SQ8 object. Its paired control scores all
+rows in V77's original gap-2 intervals on the same queries. The existing
+200-query V77 result is the prefix control; a difference greater than ten
+GT100 hits, three p95 GETs, or one 199,680-byte page at p50 is a harness
+mismatch, not a new architecture result. On the first 200 development queries,
+stop and publish a terminal negative result if capped returned Recall@100 is
+below 99.0%, p05 below 90, or a cap is violated. Only a passing prefix may
+run the complete 1,000 development queries with the same frozen algorithm.
+The complete cohort uses the same 99.0%/p05-90/cap promotion filters. The
+separate reducer recomputes plans, membership and truth hits. This offline
+replay reports planned network bytes and GETs, not live S3 latency or QPS.
+
 The longer summary-width and row-code access gate below remains conditional
 on a cap-safe physical planner:
 
