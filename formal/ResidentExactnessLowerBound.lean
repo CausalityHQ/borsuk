@@ -54,4 +54,13 @@ theorem exact_scorer_requires_injective_encoding
     _ = score (encode right) := by rw [sameState]
     _ = observation storedNorm right := exact right
 
+def exactSq8PayloadBytes (rows dimensions generations : Nat) : Nat :=
+  rows * (dimensions + 12) * generations
+
+theorem exact_payload_100m_768_two_generations :
+    exactSq8PayloadBytes 100_000_000 768 2 = 156_000_000_000 := by decide
+
+theorem exact_payload_100m_96_two_generations :
+    exactSq8PayloadBytes 100_000_000 96 2 = 21_600_000_000 := by decide
+
 end Borsuk.ResidentExactness

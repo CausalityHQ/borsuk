@@ -33,6 +33,11 @@ distinctly. It does not machine-check a bit-count lower bound and does not
 formalize the reduction for general affine SQ8 steps. It does not apply to a
 restricted query family or an approximate scorer. Run
 `lean ResidentExactnessLowerBound.lean` from this directory to check it.
+The same file checks the exact `(D + 12) × N × G` payload of the existing
+SQ8 record format (8-byte ID, 4-byte norm, D code bytes): 156 billion bytes
+for 100M 768-dimensional rows across two generations, or 21.6 billion
+bytes at 96 dimensions. These are payload projections, not charged RAM,
+SSD occupancy, or an affordability result.
 
 Run `lean Opq8Planner.lean` from this directory with the pinned Lean
 toolchain. The file imports only `Std` and contains no admitted theorems.
