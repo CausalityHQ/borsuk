@@ -144,6 +144,39 @@ class TwoBitEvaluationTests(unittest.TestCase):
         self.assertEqual(sample.grouped_pages, (4, 0, 1, 2, 3))
         self.assertEqual(sample.prior_residual_hits_at_100, 81)
         self.assertEqual(aggregate_two_bit_samples((sample,))["query_count"], 1)
+        class TrackingReader(CountingReader):
+            def __init__(self, body: bytes) -> None:
+                super().__init__(body)
+                self.calls: list[tuple[int, int]] = []
+
+            def __call__(self, offset: int, length: int) -> bytes:
+                self.calls.append((offset, length))
+                return super().__call__(offset, length)
+
+        selected_reader = TrackingReader(body)
+        selected = evaluate_two_bit_query(
+            query_ordinal=0, query=vectors[0], retained_pages=(0, 4),
+            selected_group_ordinals=(1, 0),
+            artifacts=artifacts, stable_ids=ids, vectors=vectors,
+            truth_ids=ids[:100], page_byte_sizes=(1000,) * 5,
+            limits=limits, read_group_range=selected_reader,
+            prior_exact_pages=None, prior_pq_hits_at_100=80,
+            prior_residual_hits_at_100=81,
+        )
+        self.assertEqual(selected.grouped_pages, (4, 0, 1, 2, 3))
+        self.assertEqual(selected.group_ranges, (artifacts.group_ranges[1], artifacts.group_ranges[0]))
+        self.assertEqual(selected_reader.calls, [(group[2], group[3]) for group in selected.group_ranges])
+        self.assertEqual(selected.code_gets, 2)
+        self.assertEqual(selected.code_bytes, sum(group[3] for group in selected.group_ranges))
+        with self.assertRaisesRegex(ValueError, "selected group plan"):
+            evaluate_two_bit_query(
+                query_ordinal=0, query=vectors[0], retained_pages=(0, 4),
+                selected_group_ordinals=(0, 0), artifacts=artifacts,
+                stable_ids=ids, vectors=vectors, truth_ids=ids[:100],
+                page_byte_sizes=(1000,) * 5, limits=limits,
+                read_group_range=CountingReader(body), prior_exact_pages=None,
+                prior_pq_hits_at_100=80, prior_residual_hits_at_100=81,
+            )
         with self.assertRaisesRegex(ValueError, "closed exact"):
             evaluate_two_bit_query(
                 query_ordinal=0, query=vectors[0], retained_pages=(4, 0),

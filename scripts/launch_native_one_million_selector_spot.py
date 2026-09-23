@@ -40,6 +40,17 @@ ARTIFACTS = {
 
 
 def artifact_names(kind: str) -> dict[str, str]:
+    if kind == "paired":
+        return {
+            "source-seal": "source-seal.json", "plan-seal": "plan-seal.json",
+            "evidence": "evidence.json",
+            "result": "result.json", "validation": "validation.json",
+            "broker-audit": "broker-audit.json",
+            "source-resources": "source-resources.txt",
+            "plan-resources": "plan-resources.txt",
+            "evaluate-resources": "evaluate-resources.txt",
+            "validate-resources": "validate-resources.txt",
+        }
     if kind == "opq8":
         return {
             "model": "model.bin", "codes": "codes.bin", "seal": "seal.json",
@@ -77,9 +88,12 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired"}:
         raise ValueError("one-million selector kind differs")
     expected = (
+        f"s3://{BUCKET}/research/native-hundred-thousand-opq8-paired/"
+        f"{plan.source_commit}/runs/relaion-100k-dev1000-a{plan.attempt:04d}"
+        if plan.selector_kind == "paired" else
         f"s3://{BUCKET}/research/native-hundred-thousand-opq8-router/"
         f"{plan.source_commit}/runs/relaion-100k-dev1000-a{plan.attempt:04d}"
         if plan.selector_kind == "opq8" else
@@ -114,6 +128,8 @@ def _download_commands(identities: dict[str, object], names: dict[str, str]) -> 
 
 
 def _terminal_schema(kind: str) -> str:
+    if kind == "paired":
+        return "borsuk-hundred-thousand-opq8-paired-terminal-v1"
     if kind == "opq8":
         return "borsuk-hundred-thousand-opq8-terminal-v1"
     return (
@@ -124,6 +140,12 @@ def _terminal_schema(kind: str) -> str:
 
 def worker_script(plan: SelectorSpotPlan) -> str:
     """Generate a compact phase-separated worker with durable failure logs."""
+    if plan.selector_kind == "paired":
+        from scripts.native_hundred_thousand_opq8_paired_worker import (
+            paired_worker_script,
+        )
+
+        return paired_worker_script(plan)
     if plan.selector_kind == "opq8":
         from scripts.native_hundred_thousand_opq8_worker import opq8_worker_script
 
@@ -336,6 +358,8 @@ def build_launch_specs(plan: SelectorSpotPlan) -> list[dict[str, object]]:
                 {"Key": "Name", "Value": (
                     "borsuk-native-hundred-thousand-opq8-router"
                     if plan.selector_kind == "opq8"
+                    else "borsuk-native-hundred-thousand-opq8-paired"
+                    if plan.selector_kind == "paired"
                     else f"borsuk-native-one-million-{plan.selector_kind}-selector"
                 )},
                 {"Key": "BorsukAttempt", "Value": f"a{plan.attempt:04d}"},
@@ -429,28 +453,56 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
     existing = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
     if existing.get("KeyCount", 0) or existing.get("Contents"):
         raise ValueError("selector immutable attempt already exists")
-    if plan.selector_kind == "opq8":
+    if plan.selector_kind in {"opq8", "paired"}:
         from scripts.native_hundred_thousand_opq8_cell import (
             HISTORICAL_EVIDENCE,
             PRIOR_CODE_SEAL,
         )
         from scripts.native_page_microcluster_cell import FROZEN_INPUTS
 
-        source_inputs = {
-            "source": dataclasses.asdict(FROZEN_INPUTS.layout.source),
-            "membership": dataclasses.asdict(FROZEN_INPUTS.membership),
-            "prior-code-seal": dataclasses.asdict(PRIOR_CODE_SEAL),
-        }
-        development_inputs = {
-            "queries": dataclasses.asdict(FROZEN_INPUTS.queries),
-            "truth": dataclasses.asdict(FROZEN_INPUTS.truth),
-            "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
-        }
+        if plan.selector_kind == "paired":
+            from scripts.native_hundred_thousand_opq8_paired_cell import (
+                OPQ_SOURCE,
+                TWO_BIT_SOURCE,
+            )
+            from scripts.native_rotated_two_bit_cell import PRIOR_PAGES, PRIOR_TREE
+
+            source_inputs = {
+                "source": dataclasses.asdict(FROZEN_INPUTS.layout.source),
+                "membership": dataclasses.asdict(FROZEN_INPUTS.membership),
+                "prior-code-seal": dataclasses.asdict(PRIOR_CODE_SEAL),
+                **{f"opq-{name}": dataclasses.asdict(identity) for name, identity in OPQ_SOURCE.items() if name in {"model", "codes", "seal"}},
+                **{f"two-bit-{name}": dataclasses.asdict(identity) for name, identity in TWO_BIT_SOURCE.items()},
+                "tree": dataclasses.asdict(PRIOR_TREE),
+                "pages": dataclasses.asdict(PRIOR_PAGES),
+            }
+            development_inputs = {
+                "queries": dataclasses.asdict(FROZEN_INPUTS.queries),
+                "truth": dataclasses.asdict(FROZEN_INPUTS.truth),
+                "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
+                "opq-plans": dataclasses.asdict(OPQ_SOURCE["plans"]),
+                "opq-evidence": dataclasses.asdict(OPQ_SOURCE["evidence"]),
+            }
+        else:
+            source_inputs = {
+                "source": dataclasses.asdict(FROZEN_INPUTS.layout.source),
+                "membership": dataclasses.asdict(FROZEN_INPUTS.membership),
+                "prior-code-seal": dataclasses.asdict(PRIOR_CODE_SEAL),
+            }
+            development_inputs = {
+                "queries": dataclasses.asdict(FROZEN_INPUTS.queries),
+                "truth": dataclasses.asdict(FROZEN_INPUTS.truth),
+                "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
+            }
     else:
         source_inputs = {role: dataclasses.asdict(value) for role, value in SOURCE_IDENTITIES.items()}
         development_inputs = {role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()}
     reservation = {
-        "schema": f"borsuk-one-million-{plan.selector_kind}-selector-reservation-v1",
+        "schema": (
+            "borsuk-hundred-thousand-opq8-paired-reservation-v1"
+            if plan.selector_kind == "paired"
+            else f"borsuk-one-million-{plan.selector_kind}-selector-reservation-v1"
+        ),
         "attempt": plan.attempt, "source_commit": plan.source_commit,
         "source_archive": dataclasses.asdict(plan.source_archive),
         "requirements_sha256": plan.requirements_sha256,
@@ -552,7 +604,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(

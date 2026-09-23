@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 import numpy as np
 
 from scripts.native_geometric_layout_screen import EvaluationLimits
-from scripts.native_page_centered_group_evaluation import plan_groups
+from scripts.native_page_centered_group_evaluation import GroupPlan, plan_groups
 from scripts.native_rotated_two_bit_codes import (
     PACKED_BYTES,
     ROW_BYTES,
@@ -156,12 +156,13 @@ def evaluate_two_bit_query(
     page_byte_sizes: Sequence[int],
     limits: EvaluationLimits,
     read_group_range: Callable[[int, int], bytes],
-    prior_exact_pages: Sequence[int],
+    prior_exact_pages: Sequence[int] | None,
     prior_pq_hits_at_100: int,
     prior_residual_hits_at_100: int,
     prior_exact_hits_at_10: int | None = None,
     prior_exact_hits_at_100: int | None = None,
     owner_by_id: Mapping[bytes, int] | None = None,
+    selected_group_ordinals: Sequence[int] | None = None,
 ) -> TwoBitSample:
     """Fetch every chosen group and bind the unchanged exact control."""
     if (
@@ -174,10 +175,25 @@ def evaluate_two_bit_query(
         or not 0 <= prior_residual_hits_at_100 <= 100
     ):
         raise ValueError("two-bit query authority differs")
-    plan = plan_groups(
-        retained_pages, artifacts.group_ranges,
-        maximum_groups=MAXIMUM_CODE_GETS, maximum_bytes=MAXIMUM_CODE_BYTES,
-    )
+    if selected_group_ordinals is None:
+        plan = plan_groups(
+            retained_pages, artifacts.group_ranges,
+            maximum_groups=MAXIMUM_CODE_GETS, maximum_bytes=MAXIMUM_CODE_BYTES,
+        )
+    else:
+        chosen = tuple(selected_group_ordinals)
+        if (
+            not chosen or len(chosen) > MAXIMUM_CODE_GETS
+            or len(set(chosen)) != len(chosen)
+            or any(type(group) is not int or not 0 <= group < len(artifacts.group_ranges) for group in chosen)
+        ):
+            raise ValueError("two-bit selected group plan differs")
+        ranges = tuple(artifacts.group_ranges[group] for group in chosen)
+        used = sum(group[3] for group in ranges)
+        if used > MAXIMUM_CODE_BYTES:
+            raise ValueError("two-bit selected group bytes differ")
+        pages = tuple(page for group in ranges for page in range(group[0], group[1]))
+        plan = GroupPlan(chosen, ranges, pages, len(chosen), used)
     offsets = [0]
     for count in artifacts.page_row_counts:
         offsets.append(offsets[-1] + count)
@@ -207,7 +223,7 @@ def evaluate_two_bit_query(
     )
     exact = exact_scores(query, vectors, sources)
     exact_pages = nominate_pages(exact, sources, row_pages, page_byte_sizes, limits)
-    if tuple(prior_exact_pages) != exact_pages:
+    if prior_exact_pages is not None and tuple(prior_exact_pages) != exact_pages:
         raise ValueError("two-bit closed exact control differs")
     primary_pages = nominate_pages(primary_scores, sources, row_pages, page_byte_sizes, limits)
     diagnostic_pages = nominate_pages(diagnostic_scores, sources, row_pages, page_byte_sizes, limits)
