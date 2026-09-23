@@ -37,6 +37,12 @@ float64 mathematical expression was `5.946e-7` squared-L2 score units.
 The residual plane improved mean overlap on 594 queries, tied on 125 and
 lost on 281. These are verified completed-cohort observations; no unseen
 query bound follows from them.
+The protocol requested exact score-tie counts, but the evidence schema did
+not emit them; this is a recorded diagnostic omission, not a promotion-gate
+input. The independent validator used a different float32 PQ lookup
+reduction than the scorer; it nevertheless matched all 1,000 nominated and
+primary lists exactly on this completed cohort. The sealed query Parquet's
+`query` field was independently checked as ordered IDs 0–999.
 
 The preregistered promotion gate was mean overlap at least 95 and p05 at
 least 90. Both planes fail by a wide margin. The residual plane gains only
