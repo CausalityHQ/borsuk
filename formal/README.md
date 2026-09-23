@@ -24,6 +24,16 @@ input is held fixed. The generic payload law is `16 × rows × generations`
 bytes; it has no vector-count knee or memory cap. A charged-memory claim
 still needs measured allocator, codebook, layout and concurrency overhead.
 
+`ResidentExactnessLowerBound.lean` proves a generic distinction requirement
+for an exact query-independent SQ8 scorer. The stored norm is observable at
+the zero query, and basis-query scores reveal each code coordinate in the
+checked unit-step model, so a
+state that answers all of them exactly must encode distinct SQ8 code vectors
+distinctly. It does not machine-check a bit-count lower bound and does not
+formalize the reduction for general affine SQ8 steps. It does not apply to a
+restricted query family or an approximate scorer. Run
+`lean ResidentExactnessLowerBound.lean` from this directory to check it.
+
 Run `lean Opq8Planner.lean` from this directory with the pinned Lean
 toolchain. The file imports only `Std` and contains no admitted theorems.
 
