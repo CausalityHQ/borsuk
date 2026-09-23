@@ -267,6 +267,19 @@ theorem two_generation_resident_width_at_most_fifteen
     bytesPerRow ≤ 15 := by
   omega
 
+/-! The V85 100M worksheet charges 1,098,772,248 bytes excluding its
+single generation of resident PQ16 codes. If the same fixed reserve is
+optimistically reused for two independent complete 100M-row generations,
+the 3-GiB cap permits at most ten whole bytes per row. This is a conditional
+capacity bound, not a claim that the V85 worksheet models a two-generation
+implementation or that a ten-byte router achieves any recall. -/
+
+theorem two_generation_width_with_v85_reserve_at_most_ten
+    (bytesPerRow : Nat)
+    (cap : bytesPerRow * 100000000 * 2 + 1098772248 ≤ 3221225472) :
+    bytesPerRow ≤ 10 := by
+  omega
+
 theorem full_two_bit_pages_in_single_wave
     (pages : Nat) (budget : 200 * 256 * pages ≤ 16777216) :
     pages ≤ 327 := by omega
