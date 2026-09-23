@@ -39,6 +39,37 @@ code.
   manifest and incompatible format marker. Readers reject a mismatched
   seal before serving results.
 
+## Conditional recall theorem
+
+For one query, define the true row distance `d(r)` and the row routing
+distance `a(r)`. Assume a certified uniform bound
+`|a(r) - d(r)| <= epsilon` for every row. The mean of the four smallest
+distances in a group is 1-Lipschitz under this uniform error, so the
+corresponding true and routed group scores also differ by at most
+`epsilon`. If every pair of distinct groups has a true-score gap above
+`2*epsilon`, the route's
+ordered selected groups equal the true-score plan. If that true-score
+plan contains the owners of all GT100 rows, the route contains GT100.
+
+The same argument applies to the two-bit row scorer with its own certified
+distance-error bound. If its true 100th and 101st selected-row distances
+have a gap above twice that bound, its top 100 rows are unchanged. If
+their distinct owner pages number at most 32 and their total planned
+bytes fit 16,777,216, the existing page nomination rule includes all
+their owners. These conditions together imply perfect GT100 page
+containment for that query. We can also prove a weaker lower bound by
+counting individually certified truth positions when the full-margin
+condition fails.
+
+This theorem is intentionally conditional. Its data premises can be
+checked against frozen source rows, queries, codebooks and page sizes,
+yielding a small per-query certificate and a mechanically checked count
+of certified queries or GT positions. Computing and authenticating those
+premises still requires dataset work; a distributional assumption alone
+cannot establish the observed cohort's recall. Float32 rounding,
+non-exact stored rotation and the precise scorer expression must either
+enter the error bound or be modeled at their actual finite precision.
+
 The current 8-byte row code plane occupies exactly `8N` bytes for `N`
 rows; two full generations occupy `16N` bytes. At 100 million rows that is
 1,600,000,000 bytes before the 3,148,820-byte model per generation,
