@@ -71,6 +71,12 @@ SQ8 scorer did not cause this paired decline. The median **paired**
 per-query difference was 2,995,200 more bytes and four fewer GETs for
 V111. The byte/GET shift is consistent with longer coalesced ranges;
 the range-level cause has not been separately decomposed.
+The pairwise range difference lost 95 GT positions fetched only by V109
+and gained 60 fetched only by V111. Among nominated truth pages in those
+differences, the median best-PQ64 page rank was 34 for losses and 80 for
+gains (zero-based). Fourteen discordant truth positions lay on bridged,
+unnominated pages. The count utility traded higher-ranked pages for
+lower-ranked ones on this fixed cohort.
 
 This is a negative result for **top-512 row count as page utility**, not
 for the exact optimizer or for the V63 layout's physical feasibility.
