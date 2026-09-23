@@ -278,3 +278,18 @@ def run_closed_replay(root: Path, out: Path) -> dict[str, int]:
         queries, vectors, tuple(ids), tuple(tuple(values) for values in truth),
         codes, samples, out,
     )
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+    print(json.dumps(run_closed_replay(args.root, args.out),
+                     sort_keys=True, separators=(",", ":")))
+
+
+if __name__ == "__main__":
+    main()
