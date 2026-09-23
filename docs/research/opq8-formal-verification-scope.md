@@ -47,8 +47,8 @@ distance `a(r)`. Assume a certified uniform bound
 distances in a group is 1-Lipschitz under this uniform error, so the
 corresponding true and routed group scores also differ by at most
 `epsilon`. If every pair of distinct groups has a true-score gap above
-`2*epsilon`, the route's
-ordered selected groups equal the true-score plan. If that true-score
+`2*epsilon`, the route's ordered selected groups equal the true-score
+plan. If that true-score
 plan contains the owners of all GT100 rows, the route contains GT100.
 
 The same argument applies to the two-bit row scorer with its own certified
@@ -69,6 +69,17 @@ premises still requires dataset work; a distributional assumption alone
 cannot establish the observed cohort's recall. Float32 rounding,
 non-exact stored rotation and the precise scorer expression must either
 enter the error bound or be modeled at their actual finite precision.
+
+One way to discharge the routing-error premise is to measure each row's
+rotated reconstruction residual `e = ||(x-mean)R-c||` and bound the stored
+rotation's Gram defect by `gamma = ||R Rᵀ-I||₂`. In exact arithmetic, with
+`z=(q-x)R`, the ADC-to-true squared-distance error is at most
+`2||z||e + e² + gamma||q-x||²`; a separately verified finite-precision
+allowance must cover table construction, summation and final float32
+rounding. Per-row intervals can feed an interval-order checker instead
+of assuming one loose global `epsilon`. Constructing those certificates
+still reads source data and measures residuals and margins; Lean can
+verify the implication from authenticated numbers.
 
 The current 8-byte row code plane occupies exactly `8N` bytes for `N`
 rows; two full generations occupy `16N` bytes. At 100 million rows that is
