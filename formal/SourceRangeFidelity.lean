@@ -84,6 +84,20 @@ theorem code_row_budget
 theorem code_row_budget_exact_remainder :
     96 * 174762 + 64 = 16777216 := by decide
 
+def signByteTableEntries : Nat := 94 * 256
+
+def signByteLookups (rows : Nat) : Nat := 94 * rows
+
+theorem sign_byte_table_size : signByteTableEntries = 24064 := by decide
+
+theorem code_payload_lookup_budget
+    (pages rows : Nat)
+    (within_code_payload_budget : groupedCodeBytes pages rows ≤ 16777216) :
+    signByteLookups rows ≤ 16427628 := by
+  have row_bound := code_row_budget pages rows within_code_payload_budget
+  simp only [signByteLookups]
+  omega
+
 /-! The p05 and sub-90 conditions concern the per-query distribution.
 Aggregate hit-loss bounds alone do not establish them. -/
 

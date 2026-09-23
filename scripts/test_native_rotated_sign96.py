@@ -12,12 +12,24 @@ from scripts.native_rotated_sign96 import (
     MAX_ENCODE_ROWS,
     RECORD_BYTES,
     encode_records,
+    query_byte_table,
     score_records,
 )
 from scripts.native_rotated_two_bit_codes import rotate_rows
 
 
 class RotatedSign96Tests(unittest.TestCase):
+    def test_byte_table_matches_independent_sign_dot(self) -> None:
+        retained_query = np.arange(752, dtype=np.float64) / 1000
+        table = query_byte_table(retained_query)
+        self.assertEqual(table.shape, (94, 256))
+        for byte_index in (0, 47, 93):
+            block = retained_query[8 * byte_index : 8 * byte_index + 8]
+            for symbol in (0, 1, 0b10100110, 255):
+                bits = np.asarray([(symbol >> bit) & 1 for bit in range(8)])
+                expected = np.sum((2 * bits - 1) * block, dtype=np.float64)
+                self.assertAlmostEqual(table[byte_index, symbol], expected)
+
     def test_exact_record_width_and_bit_order(self) -> None:
         mean = np.zeros(768, dtype=np.float32)
         rows = np.zeros((2, 768), dtype=np.float32)

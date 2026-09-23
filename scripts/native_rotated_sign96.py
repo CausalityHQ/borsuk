@@ -60,6 +60,25 @@ def encode_records(
     return records
 
 
+def query_byte_table(retained_query: np.ndarray) -> np.ndarray:
+    """Precompute each packed byte's signed dot product with eight query values."""
+    if (
+        type(retained_query) is not np.ndarray
+        or retained_query.dtype != np.float64
+        or retained_query.shape != (752,)
+        or not np.isfinite(retained_query).all()
+    ):
+        raise ValueError("sign96 query table differs")
+    symbols = np.arange(256, dtype=np.uint8)[:, None]
+    bits = (symbols >> np.arange(8, dtype=np.uint8)) & 1
+    signs = np.where(bits != 0, 1.0, -1.0)
+    return np.sum(
+        retained_query.reshape(SIGN_BYTES, 1, 8) * signs[None, :, :],
+        axis=2,
+        dtype=np.float64,
+    )
+
+
 def score_records(
     query: np.ndarray, mean: np.ndarray, records: np.ndarray, *, rotation_seed: int
 ) -> np.ndarray:
@@ -79,6 +98,8 @@ def score_records(
     centered_q = query.astype(np.float64) - mean.astype(np.float64)
     rotated_q = rotate_rows(centered_q[None, :], rotation_seed=rotation_seed)[0]
     kept_q = rotated_q[KEPT_COORDINATES]
+    table = query_byte_table(kept_q)
+    byte_indices = np.arange(SIGN_BYTES, dtype=np.intp)[None, :]
     query_norm = float(np.sum(centered_q * centered_q, dtype=np.float64))
     scores = np.empty(len(records), dtype=np.float32)
     for first in range(0, len(records), BATCH_ROWS):
@@ -87,8 +108,7 @@ def score_records(
         scales = np.frombuffer(part[:, SIGN_BYTES:].tobytes(), dtype="<f2").astype(np.float64)
         if not np.isfinite(scales).all() or np.any(scales < 0):
             raise ValueError("sign96 record scale differs")
-        signs = np.unpackbits(part[:, :SIGN_BYTES], axis=1, bitorder="little")
-        dot = np.sum(np.where(signs != 0, kept_q, -kept_q), axis=1, dtype=np.float64)
+        dot = np.sum(table[byte_indices, part[:, :SIGN_BYTES]], axis=1, dtype=np.float64)
         scores[first:last] = (query_norm + 752 * scales * scales - 2 * scales * dot).astype(
             np.float32
         )

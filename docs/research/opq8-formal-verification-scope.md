@@ -214,6 +214,9 @@ bound for code bytes fetched in that wave, not a bound on rows scored,
 CPU time, resident memory or storage-system latency. The proposed
 two-scalar variant is 98 bytes and
 does not satisfy this record format.
+The same conditional code-payload premise limits the 94-byte-table
+scorer to 16,427,628 table lookups, after 24,064 per-query table entries.
+These are operation counts, not elapsed-time bounds.
 
 This is a conditional finite-cohort claim. A future checker must bind
 both hit-mask lists to immutable source, query, truth, selected-range

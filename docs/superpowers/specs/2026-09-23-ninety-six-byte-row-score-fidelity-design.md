@@ -55,8 +55,10 @@ For query rotation `z`, score by
 coordinates. The first term is constant across rows and expresses the
 reconstruction score in squared-distance units. Reconstruction can have
 row-dependent bias; report signed score-error tails as well as rank and
-page outcomes. Decode the stored binary16 scale before scoring; use a
-pinned NumPy reduction implementation and break equal float32 scores by
+page outcomes. Decode the stored binary16 scale before scoring. Precompute
+94 by 256 float64 byte-dot table entries per query by reducing each
+eight-coordinate signed block; score each record with 94 table lookups
+and a float64 reduction. Break equal float32 scores by
 physical row ordinal in the caller. Reject
 nonfinite inputs and invalid scales. Compare this stored-scale score with
 the exact source-distance arm, because scale rounding is part of the
