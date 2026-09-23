@@ -4520,3 +4520,55 @@ tail deficit and an exact 768D partition into 48 ten-dimensional plus
 and redesign the routing signal or code-group layout. If it passes, the
 next gate is an actual paired 100k PQ80 quality/read/resource experiment;
 no 1M production claim follows from a width projection.
+
+### ReLAION-1M PQ80 final width projection a0001: locality gate fails
+
+The preregistered final width-only screen changed the projected row payload
+from 96 to 80 bytes. It retained the seven frozen inputs, 7,278 page
+centroids, 910 eight-page groups, stable page-score order, and 32-range /
+16-MiB planner. The design and fixed gate are in
+`docs/superpowers/specs/2026-09-23-one-million-pq80-final-width-projection-design.md`.
+No PQ80 codebook was trained and no row codes were built, scored, or read.
+
+Source commit `b4066786fd0618a17d99c5cea72e08e3bbd0ea2f` was archived
+create-only as 11,119,211 bytes with readback SHA-256
+`7caef968eb07567599e22bfee094c8187e5c3e941d3690efebed4b139187c8bb`.
+The sole immutable attempt prefix is
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-pq80-selector/b4066786fd0618a17d99c5cea72e08e3bbd0ea2f/runs/relaion-1m-dev1000-a0001/`.
+The 3,512-byte terminal SHA-256 is
+`a7e549d588c5b7bd79be03f85b127aeb4fa5d44a55eee86055d48c338b771c2f`.
+It closed `complete` with controller exit 0 in 121 seconds. Spot instance
+`i-0dc07d3e48a0791d0` was confirmed terminated. Controller and separate
+closeout readback authenticated all nine artifacts by length and SHA-256.
+The unchanged source seal SHA-256 is
+`ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41`;
+the 1,418,617-byte evidence, result, and independent validation SHA-256
+values are respectively
+`a4efe6db7267d4bb69bee7f307513b0540355e1adf621f5290f42b79c1dc0075`,
+`71f1c409290730b336ea4f79f45986ab9b4b9cf7d05f56f3e6cd6d78ae169a0f`,
+and `9cc32b150669e3c3b0b6161e9d3b7f7c53498acccfb2e0f9eba297d1928c6958`.
+The independent validator rebuilt source arrays and 80-byte group lengths,
+then replayed all 1,000 plans; separate closeout aggregation agreed.
+
+| Fixed page ranking and range planner | 96-byte projection | 80-byte projection | advance gate |
+|---|---:|---:|---:|
+| mean GT100 containment | 98.151% | **98.152%** | ≥97.5% |
+| p05 GT100 containment | 89% | **89%** | ≥90% |
+| GT10 containment | 99.28% | **99.28%** | ≥96% |
+| maximum projected code wave | 32 GETs / 16,777,216 bytes | 32 GETs / 16,777,216 bytes | ≤32 GETs / ≤16,777,216 bytes |
+
+The 80-byte plan admitted 160–218 groups (median 187), versus 132–182
+(median 157) for 96 bytes, yet improved only one query by one GT100 hit;
+999 queries tied and none worsened. That improved query rose from 73 to 74
+hits, leaving the same 51 queries below 90, two more than the p05 gate
+permits. Minimum containment stayed at 53 hits. Construct, evaluate and
+validate peaked at 841,500, 232,044 and 752,280 KiB RSS, respectively,
+with zero swaps. This measures source-only containment, not PQ80 scoring
+quality or S3 serving.
+
+**Decision:** `pq80-locality-projection-killed`. Stop width-only projection
+and do not train PQ80 or build a 1M code plane under this route. The added
+group capacity without tail improvement implicates the fixed page-centroid
+ranking and/or physical group layout. The next decisive experiment must
+change a routing signal or the group layout, preregistered against the
+strongest completed 96-byte projection on this frozen development cohort.
