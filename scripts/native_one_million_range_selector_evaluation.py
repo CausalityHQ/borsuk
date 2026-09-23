@@ -21,8 +21,6 @@ SCHEMA = "borsuk-one-million-range-selector-result-v1"
 EVIDENCE_SCHEMA = "borsuk-one-million-range-selector-evidence-v1"
 BYTE_SCHEMA = "borsuk-one-million-byte-ceiling-result-v1"
 BYTE_EVIDENCE_SCHEMA = "borsuk-one-million-byte-ceiling-evidence-v1"
-PQ96_SCHEMA = "borsuk-one-million-pq96-locality-result-v1"
-PQ96_EVIDENCE_SCHEMA = "borsuk-one-million-pq96-locality-evidence-v1"
 MAXIMUM_GETS = 32
 MAXIMUM_BYTES = 16_777_216
 
@@ -78,9 +76,12 @@ def plan_group_ranges(
 
 
 def aggregate_range_samples(
-    samples: list[dict[str, object]], *, byte_only: bool = False, pq96: bool = False,
+    samples: list[dict[str, object]], *, byte_only: bool = False, row_bytes: int = 200,
 ) -> dict[str, int | str]:
-    if byte_only and pq96 or not samples or any(sample["query_ordinal"] != i for i, sample in enumerate(samples)):
+    if (
+        row_bytes not in {80, 96, 200} or (byte_only and row_bytes != 200)
+        or not samples or any(sample["query_ordinal"] != i for i, sample in enumerate(samples))
+    ):
         raise ValueError("range-selector samples differ")
     count = len(samples)
     hit100 = [int(sample["hits_at_100"]) for sample in samples]
@@ -102,24 +103,31 @@ def aggregate_range_samples(
         and metrics["mean_recall_at_10_ppm"] >= 960000
         and metrics["max_projected_code_bytes"] <= MAXIMUM_BYTES
     )
-    if pq96:
-        metrics["row_bytes"] = 96
-    metrics["decision"] = (
-        ("score-ranked-byte-ceiling-feasible" if quality_pass else "score-ranked-byte-ceiling-fails")
-        if byte_only else
-        ("pq96-locality-projection-feasible" if quality_pass and metrics["max_code_gets"] <= MAXIMUM_GETS else "pq96-locality-projection-killed")
-        if pq96 else
-        ("adjacent-code-range-selector-feasible" if quality_pass and metrics["max_code_gets"] <= MAXIMUM_GETS else "adjacent-code-range-selector-killed")
-    )
+    if row_bytes != 200:
+        metrics["row_bytes"] = row_bytes
+    if byte_only:
+        metrics["decision"] = "score-ranked-byte-ceiling-feasible" if quality_pass else "score-ranked-byte-ceiling-fails"
+    elif row_bytes != 200:
+        metrics["decision"] = (
+            f"pq{row_bytes}-locality-projection-feasible"
+            if quality_pass and metrics["max_code_gets"] <= MAXIMUM_GETS
+            else f"pq{row_bytes}-locality-projection-killed"
+        )
+    else:
+        metrics["decision"] = (
+            "adjacent-code-range-selector-feasible"
+            if quality_pass and metrics["max_code_gets"] <= MAXIMUM_GETS
+            else "adjacent-code-range-selector-killed"
+        )
     return metrics
 
 
 def evaluate_range_selector(
     artifact: PageSelectorArtifact, queries: Path, truth: Path, out: Path,
     identities: Mapping[str, ObjectIdentity], *, query_count: int = 1000,
-    byte_only: bool = False, pq96: bool = False,
+    byte_only: bool = False, row_bytes: int = 200,
 ) -> dict[str, object]:
-    if byte_only and pq96:
+    if row_bytes not in {80, 96, 200} or (byte_only and row_bytes != 200):
         raise ValueError("range-selector mode differs")
     vectors, truth_ids = _query_truth(queries, truth, identities, query_count=query_count)
     positions = np.searchsorted(artifact.membership_ids, truth_ids)
@@ -129,9 +137,9 @@ def evaluate_range_selector(
     groups = (
         tuple(dataclasses.replace(
             group,
-            code_bytes=4 + 4 * (group.end_page - group.first_page) + 96 * group.row_count,
+            code_bytes=4 + 4 * (group.end_page - group.first_page) + row_bytes * group.row_count,
         ) for group in artifact.groups)
-        if pq96 else artifact.groups
+        if row_bytes != 200 else artifact.groups
     )
     samples: list[dict[str, object]] = []
     for ordinal, query in enumerate(vectors):
@@ -151,16 +159,16 @@ def evaluate_range_selector(
             "hits_at_10": sum(int(value) in chosen for value in row[:10]),
             "hits_at_100": sum(int(value) in chosen for value in row),
         })
-    metrics = aggregate_range_samples(samples, byte_only=byte_only, pq96=pq96)
+    metrics = aggregate_range_samples(samples, byte_only=byte_only, row_bytes=row_bytes)
     evidence = {
-        "schema": BYTE_EVIDENCE_SCHEMA if byte_only else PQ96_EVIDENCE_SCHEMA if pq96 else EVIDENCE_SCHEMA,
+        "schema": BYTE_EVIDENCE_SCHEMA if byte_only else f"borsuk-one-million-pq{row_bytes}-locality-evidence-v1" if row_bytes != 200 else EVIDENCE_SCHEMA,
         "samples": samples, "metrics": metrics,
     }
     out.mkdir(parents=True, exist_ok=True)
     evidence_body = _canonical_json_bytes(evidence)
     (out / "evidence.json").write_bytes(evidence_body)
     result: dict[str, object] = {
-        "schema": BYTE_SCHEMA if byte_only else PQ96_SCHEMA if pq96 else SCHEMA,
+        "schema": BYTE_SCHEMA if byte_only else f"borsuk-one-million-pq{row_bytes}-locality-result-v1" if row_bytes != 200 else SCHEMA,
         "decision": metrics["decision"], "claim_eligible": False,
         "query_identity": dataclasses.asdict(identities["queries"]),
         "truth_identity": dataclasses.asdict(identities["truth"]),

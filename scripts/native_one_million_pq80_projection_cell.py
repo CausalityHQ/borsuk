@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase-separated fixed ReLAION-1M PQ96 locality projection."""
+"""Phase-separated fixed ReLAION-1M PQ80 locality projection."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def run_evaluate(root: Path, out: Path, *, query_count: int = 1000) -> None:
     check_prior_page_artifact(artifact.seal)
     evaluate_range_selector(
         artifact, root / "queries.parquet", root / "truth.parquet", out,
-        DEVELOPMENT_IDENTITIES, query_count=query_count, row_bytes=96,
+        DEVELOPMENT_IDENTITIES, query_count=query_count, row_bytes=80,
     )
 
 
@@ -32,7 +32,7 @@ def run_validate(root: Path, out: Path, *, query_count: int = 1000) -> None:
     check_prior_page_artifact(artifact.seal)
     validate_range_selector(
         root, root, root, out, SOURCE_IDENTITIES, DEVELOPMENT_IDENTITIES,
-        query_count=query_count, row_bytes=96,
+        query_count=query_count, row_bytes=80,
     )
 
 
@@ -46,11 +46,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         run_construct(args.root)
     elif args.phase == "evaluate":
         if args.out is None:
-            raise ValueError("PQ96 projection evaluation output required")
+            raise ValueError("PQ80 projection evaluation output required")
         run_evaluate(args.root, args.out)
     else:
         if args.out is None:
-            raise ValueError("PQ96 projection validation output required")
+            raise ValueError("PQ80 projection validation output required")
         run_validate(args.root, args.out)
 
 

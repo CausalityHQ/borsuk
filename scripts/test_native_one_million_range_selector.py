@@ -85,15 +85,33 @@ class OneMillionRangeSelectorTests(unittest.TestCase):
             _, development = development_fixture(root)
             result = evaluate_range_selector(
                 artifact, root / "queries.parquet", root / "truth.parquet", root,
-                development, query_count=1, pq96=True,
+                development, query_count=1, row_bytes=96,
             )
             validation = validate_range_selector(
                 root, root, root, root, identities, development,
-                query_count=1, pq96=True,
+                query_count=1, row_bytes=96,
             )
             self.assertEqual(result["metrics"], validation["metrics"])
             self.assertEqual(result["metrics"]["row_bytes"], 96)
             self.assertEqual(result["decision"], "pq96-locality-projection-feasible")
+
+    def test_pq80_projection_replays_exact_width(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identities = source_fixture(root, base_rows=256)
+            artifact = build_page_selector(root, root, identities)
+            _, development = development_fixture(root)
+            result = evaluate_range_selector(
+                artifact, root / "queries.parquet", root / "truth.parquet", root,
+                development, query_count=1, row_bytes=80,
+            )
+            validation = validate_range_selector(
+                root, root, root, root, identities, development,
+                query_count=1, row_bytes=80,
+            )
+            self.assertEqual(result["metrics"], validation["metrics"])
+            self.assertEqual(result["metrics"]["row_bytes"], 80)
+            self.assertEqual(result["decision"], "pq80-locality-projection-feasible")
 
     def test_fixed_source_seal_matches_previous_screen(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
