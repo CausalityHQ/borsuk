@@ -54,19 +54,20 @@ def optimal_truth_hits(
     if (page_count <= 0 or max_gets <= 0 or max_units < 0
         or full_page_units <= 0 or last_page_units <= 0
         or any(page < 0 or page >= page_count or weight <= 0
-               for page, weight in page_weights.items())):
+               for page, weight in page_weights.items())
+        or sum(page_weights.values()) >= 2**30):
         raise ValueError("oracle geometry or truth weights differ")
-    negative = -10_000
+    negative = -2**30
     shape = (max_gets + 1, max_units + 1)
-    closed = np.full(shape, negative, dtype=np.int16)
-    opened = np.full(shape, negative, dtype=np.int16)
+    closed = np.full(shape, negative, dtype=np.int32)
+    opened = np.full(shape, negative, dtype=np.int32)
     closed[0, 0] = 0
     previous_page = None
     for page, weight in sorted(page_weights.items()):
         page_units = last_page_units if page == page_count - 1 else full_page_units
         gap_units = 0 if previous_page is None else (page - previous_page - 1) * full_page_units
         base = np.maximum(closed, opened)
-        next_open = np.full(shape, negative, dtype=np.int16)
+        next_open = np.full(shape, negative, dtype=np.int32)
         if page_units <= max_units:
             next_open[1:, page_units:] = np.maximum(
                 next_open[1:, page_units:],

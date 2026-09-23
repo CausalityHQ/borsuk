@@ -41,6 +41,14 @@ class WeightedIntervalPlanTests(unittest.TestCase):
         self.assertEqual(score, 5)
         self.assertEqual(ranges, ((0, 0),))
 
+    def test_high_primary_vote_overrides_secondary_count(self) -> None:
+        score, ranges = optimal_weighted_intervals(
+            {0: 412, 1: 513}, page_count=3, max_gets=1,
+            max_units=4, full_page_units=4, last_page_units=1,
+        )
+        self.assertEqual(score, 513)
+        self.assertEqual(ranges, ((1, 1),))
+
     def test_empty_weights(self) -> None:
         self.assertEqual(optimal_weighted_intervals(
             {}, page_count=7, max_gets=2, max_units=5,

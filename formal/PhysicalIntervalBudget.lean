@@ -50,4 +50,20 @@ theorem thirty_two_requests_and_336_units_fit
     requests ≤ 32 ∧ chargedBytes fullPages shortPages ≤ maxBytes := by
   exact ⟨request_cap, (units_fit_iff_bytes_fit fullPages shortPages).mp unit_cap⟩
 
+/-! V112 gives one primary vote to each of the 100 precise SQ8 nominees
+and one secondary vote to every other nominated row. Since there are at
+most 512 secondary votes over the entire query, a factor of 513 makes
+maximizing the encoded sum lexicographically maximize primary votes. -/
+
+def encodedVotes (primary secondary : Nat) : Nat :=
+  513 * primary + secondary
+
+theorem one_primary_vote_dominates_all_secondary_votes
+    (primaryA primaryB secondaryA secondaryB : Nat)
+    (betterPrimary : primaryB < primaryA)
+    (secondaryBudget : secondaryB ≤ 512) :
+    encodedVotes primaryB secondaryB < encodedVotes primaryA secondaryA := by
+  simp only [encodedVotes]
+  omega
+
 end Borsuk.PhysicalIntervalBudget

@@ -21,9 +21,9 @@ from scripts.v109_range_plan import RangePlan, admit_ranked_pages, plan_page_ran
 from scripts.v111_weighted_interval_plan import optimal_weighted_intervals
 
 
-def nominate_count_weights(
+def nominate_rows(
     query: np.ndarray, manifest: dict[str, object], *, regions: int, shortlist: int,
-) -> tuple[list[int], list[int], dict[int, int]]:
+) -> tuple[list[int], list[int], dict[int, int], np.ndarray]:
     summaries = manifest["summaries"]
     books = manifest["books"]
     codes = manifest["codes"]
@@ -49,7 +49,16 @@ def nominate_count_weights(
         best_scores[page] = min(best_scores.get(page, float("inf")), float(scores[index]))
         counts[page] = counts.get(page, 0) + 1
     ranked = sorted(best_scores, key=lambda page: (best_scores[page], page))
-    return ranked, sorted(best_scores), counts
+    return ranked, sorted(best_scores), counts, rows[best]
+
+
+def nominate_count_weights(
+    query: np.ndarray, manifest: dict[str, object], *, regions: int, shortlist: int,
+) -> tuple[list[int], list[int], dict[int, int]]:
+    ranked, historical, counts, _ = nominate_rows(
+        query, manifest, regions=regions, shortlist=shortlist,
+    )
+    return ranked, historical, counts
 
 
 def weighted_plan(weights: dict[int, int]) -> tuple[int, RangePlan]:

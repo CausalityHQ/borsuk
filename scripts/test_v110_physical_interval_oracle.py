@@ -47,6 +47,12 @@ class PhysicalOracleTests(unittest.TestCase):
             self.assertEqual(observed, expected,
                              (weights, gets, budget, observed, expected))
 
+    def test_generic_high_weight_does_not_overflow(self) -> None:
+        self.assertEqual(optimal_truth_hits(
+            {0: 51_300, 6: 412}, page_count=7, max_gets=1,
+            max_units=3, full_page_units=3, last_page_units=1,
+        ), 51_300)
+
 
 if __name__ == "__main__":
     unittest.main()

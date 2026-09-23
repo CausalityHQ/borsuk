@@ -7,6 +7,8 @@ it proves the 32-GET/16-MiB arithmetic gate. It does not yet prove the
 NumPy interval DP's refinement to those counts; the exact DP recurrence is
 tested against exhaustive small layouts. The proof does not establish
 query-time recall, live S3 latency or 100M memory peaks.
+It also proves that V112's 513-to-1 vote encoding ranks any gain of one
+precise nominee above at most 512 secondary votes.
 
 Run `lean Opq8Planner.lean` from this directory with the pinned Lean
 toolchain. The file imports only `Std` and contains no admitted theorems.
