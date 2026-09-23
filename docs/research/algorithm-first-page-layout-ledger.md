@@ -4464,3 +4464,59 @@ first project a specific narrower code width on this frozen 1M source-only
 screen, then run its real paired 100k code-quality gate before any 1M code
 plane. A rank/layout redesign remains possible, but must supply a new
 source-only signal rather than reusing this failed score-order schedule.
+
+### ReLAION-1M PQ96 locality projection a0001: one p05 point short
+
+The next preregistered source-only screen changed only projected code-row
+payloads from 200 bytes to 96 bytes, representing one future PQ96 code byte
+per 8D subspace. The seven input identities, 7,278 source-trained page
+centroids, 910 eight-page groups, page-score order and 32-range greedy
+planner were fixed from the prior cell. No PQ96 book was trained and no
+96-byte row code was encoded or read. The design and gates are in
+`docs/superpowers/specs/2026-09-23-one-million-pq96-locality-projection-design.md`.
+The source commit was
+`1a1d2e7380c4d6635a2b370784ea009aa3af0851`; its 11,117,131-byte
+readback-verified archive SHA-256 was
+`2e55b018748d70307dab439beef8898fba176ccb67d3cc79837a8e304e0af723`.
+The one immutable attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-pq96-selector/1a1d2e7380c4d6635a2b370784ea009aa3af0851/runs/relaion-1m-dev1000-a0001/`.
+
+The 3,512-byte terminal SHA-256 was
+`a1d70c80e88844bb412765c0478ee4f2598749205479eeafc209fe47c98b434a`.
+It closed `complete` with controller exit 0 after 159 seconds; the one Spot
+instance `i-01ef23a3fe100e294` was confirmed terminated. The controller
+and separate closeout readback authenticated all nine terminal-listed
+artifacts. The unchanged source seal, 1,303,923-byte evidence, result and
+independent validation SHA-256 were respectively
+`ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41`,
+`2ece968e85d77c46b2cf5dc7b058e0570b198d5f2d5ece5aa255ec17e07f1468`,
+`205cf56a6e45594b2cf5dc7b058e0570b198d5f2d5ece5aa255ec17e07f1468`, and
+`bdb7d4a684eb568507a5976d68ba617bd600ab913af5f64a24969dc74b7f1426`.
+The validator independently rebuilt all source arrays and 96-byte group
+lengths, replayed every interval, and agreed with a separate aggregation of
+all 1,000 samples.
+
+| Same fixed page ranking and 32-range planner | 200-byte rows | projected 96-byte rows | advance gate |
+|---|---:|---:|---:|
+| mean GT100 containment | 97.541% | **98.151%** | ≥97.5% |
+| p05 GT100 containment | 86% | **89%** | ≥90% |
+| GT10 containment | 98.96% | **99.28%** | ≥96% |
+| maximum projected code wave | 32 GETs / 16,777,208 bytes | 32 GETs / 16,777,216 bytes | ≤32 GETs / ≤16,777,216 bytes |
+
+The projection admitted 132–182 groups (median 157). It added 610 GT100
+hits relative to the paired 200-byte range plan: 248 queries improved, none
+worsened and 752 tied. It rescued 19 of the 70 prior sub-90 queries; 51
+remain below 90, two more than the p05 gate permits. The worst query still
+contains 53 GT100 neighbors. Construct, evaluate and validate peaked at
+841,548, 231,448 and 747,720 KiB RSS, all with zero swaps. This was a
+source-only projection, not evidence of PQ96 row-score quality or actual
+S3 serving.
+
+**Decision:** `pq96-locality-projection-killed` at the fixed 90% p05 gate.
+Do not train PQ96 or build its 1M code plane under this route. One final
+preregistered width projection at 80 bytes is justified by the two-query
+tail deficit and an exact 768D partition into 48 ten-dimensional plus
+32 nine-dimensional PQ subspaces. If it fails, stop width-only projection
+and redesign the routing signal or code-group layout. If it passes, the
+next gate is an actual paired 100k PQ80 quality/read/resource experiment;
+no 1M production claim follows from a width projection.
