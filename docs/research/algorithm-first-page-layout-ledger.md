@@ -4632,3 +4632,66 @@ irrelevant; the changed adjacency moved individual queries both ways. The
 next material hypothesis should add source-trained query-routing information
 that distinguishes useful groups beyond one minimum page-centroid distance,
 then face the same paired containment and read gates before real codes.
+
+### ReLAION-1M page-dispersion mass route a0001: tail worsens
+
+The fixed source-trained routing hypothesis in
+`docs/superpowers/specs/2026-09-23-one-million-page-dispersion-mass-routing-design.md`
+used two-pass float64 population means and diagonal variances for each
+source page. Query routing estimated page distance distributions, bisected
+once per query to 100 expected rows, summed expected mass for each existing
+eight-page group, and ranked groups by that mass. The original physical
+order, 96-byte projected rows, 32-GET/16-MiB planner, seven source/development
+identities and 1,000-query cohort were unchanged. No PQ96 codebook or row
+codes were built or scored. The candidate tests a Gaussian moment surrogate,
+not a calibrated probability or production route.
+
+The pushed source commit was
+`6c6671ea4ea70c5873bb81df79d3616c6a7d6625`; its create-only,
+readback-verified 11,566,911-byte archive SHA-256 was
+`cf6d2b692c294e6c6141cf56cc054eb6db4576ac6bfa714c0a63e5ae854313b0`.
+The sole immutable attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-mass-selector/6c6671ea4ea70c5873bb81df79d3616c6a7d6625/runs/relaion-1m-dev1000-a0001/`.
+The 3,821-byte terminal SHA-256 was
+`57efe8847653bc2af229f7ef7f263ea8a03e7bf35c032e959366cc98bb1e5683`.
+It closed `complete` with original controller exit 0 after 276 seconds;
+Spot instance `i-0a7f8a76d61874878` was confirmed terminated. Controller
+and separate closeout readback authenticated all ten artifacts. The
+89,461,192-byte source-only moments SHA-256 was
+`e74eff4cba4dca56f6fe59143c50a110bfc0f80da80e96efd730f6235fbd9a90`.
+The 6,109,873-byte paired evidence, result and independent validation
+SHA-256 values were respectively
+`85d6c344c3cb5bee44e8fe6cb2221d4472bf98acf0b22978bc3803821fc83f9f`,
+`f952755b849755cccd0ce2625bd9fe06dfb0978e7c9e5a6dc3b50b568c73a6a9`,
+and `a0daa50b55c683a80f48cd0f3d7e025733cf57b0a59a1642e6166fe90e340f5f`.
+The independent validator rebuilt all page moments from source rows,
+replayed both scores and plans, and agreed with a separate aggregation of
+all 1,000 queries. The candidate's paired control sample-list SHA-256 was
+the exact historical PQ96 value
+`ce61ad527968c5bf1bb5bc45e576b4f94eeb690c9ac7000fff6acf6f2ead713d`.
+
+| Same original layout and 96-byte projection | PQ96 page-centroid control | Dispersion mass route | advance gate |
+|---|---:|---:|---:|
+| mean GT100 containment | **98.151%** | 97.996% | ≥98.151% paired |
+| p05 GT100 containment | **89%** | 87% | ≥90% |
+| GT10 containment | **99.28%** | 98.31% | ≥99.28% paired |
+| queries below 90 GT100 hits | **51** | 58 | ≤49 |
+| maximum projected code wave | 32 GETs / 16,777,216 bytes | 32 GETs / 16,777,212 bytes | ≤32 GETs / ≤16,777,216 bytes |
+
+The mass route improved 164 queries, worsened 179 and tied 657, losing
+155 GT100 hits net. It rescued 23 formerly sub-90 queries but created
+30 new sub-90 queries. Its worst query contained 65 hits versus 53 for
+the control, yet p05 dropped two points. Both used median 32 GETs.
+Construct, evaluate and validate maximum RSS were 1,256,140, 416,532
+and 1,392,668 KiB. Their sampled process-tree peaks were 907,911,168,
+431,042,560 and 1,110,319,104 bytes. All satisfied the 3-GiB cap with
+64-MiB allowance and recorded zero swaps.
+
+**Decision:** `page-dispersion-mass-killed`. Do not tune this normal-model
+score, mass target, variance scale or group aggregation on this cohort.
+The results show that within-page dispersion adds routing information
+(23 rescues) but this diagonal mass surrogate misprioritizes enough other
+groups to worsen the tail and paired means. It does not prove all moment
+models fail. A next production-oriented hypothesis must add a materially
+different directional or row-level routing signal, and begin with a
+preregistered decisive 100k gate before another 1M promotion.
