@@ -1,0 +1,62 @@
+# OPQ8 formal verification boundary
+
+The 100k OPQ8 router and paired two-bit reader have two kinds of claims.
+Formal verification can establish planner and format invariants for every
+input satisfying explicit preconditions. Recall, throughput and remote
+latency need observed data and service measurements.
+
+## First Lean target: the fixed group planner
+
+Model a finite ordered list of distinct group ordinals, a positive byte
+length for each sealed group, a count cap of 32 and a byte cap of
+16,777,216. The executable planner scans this list in order, accepts a
+group exactly when its length fits the remaining byte budget, and stops
+after 32 acceptances. Prove:
+
+1. Every selected ordinal occurs exactly once in the input and selected
+   ordinals preserve input order.
+2. The selected count is at most 32 and the sum of sealed lengths is at
+   most 16,777,216, including when a too-large group is skipped.
+3. The planner terminates after at most the input length iterations.
+4. Each planned read uses the offset and length bound to its selected
+   ordinal in the authenticated group manifest. The broker admits only
+   these manifest coordinates; returned bytes must match their digest.
+
+The manifest uniqueness, positive lengths, in-bounds offsets, finite
+scores and authenticated input identities are explicit preconditions.
+A proof of an abstract planner does not prove the Python or future Rust
+implementation follows it. Keep executable conformance tests and a small
+translation or refinement check between the proved function and production
+code.
+
+## Other candidate proofs
+
+- Source ordinals form a permutation; every physical row belongs to one
+  page and one group, so a selected group's containment count is exact.
+- Lexicographic ties on row scores and group ordinals yield deterministic
+  ranking when scores are finite.
+- A generation seal binds the source identity, model, physical order, group
+  manifest and incompatible format marker. Readers reject a mismatched
+  seal before serving results.
+
+The current 8-byte row code plane occupies exactly `8N` bytes for `N`
+rows; two full generations occupy `16N` bytes. At 100 million rows that is
+1,600,000,000 bytes before the 3,148,820-byte model per generation,
+liveness, metadata, query tables, runtime and allocator reserves. A route
+query evaluates eight codebook lookups per row plus group reduction and
+ranking. These are useful analytical resource bounds, but they do not
+establish a wall-clock latency.
+
+Orthogonal rotation preserves squared L2 distance in exact arithmetic.
+Finite precision and 8-byte quantization can change neighbor order; a
+rank-stability theorem would need bounds on quantization error and on the
+distance margin of the actual queries. Neither a worst-case proof nor a
+complexity bound gives the cohort's recall. Similarly, object-store GET
+latency and Spot interruptions are external behaviors with no finite
+worst-case bound supplied by this algorithm. Keep paired, terminal-closed
+measurements for quality, latency, throughput, memory and cost claims.
+
+The repository has no Lean toolchain or checked proof today. Mechanize the
+planner theorem first if the paired quality gate selects this architecture;
+then connect the proved model to the production implementation and run
+the existing empirical scale gates.
