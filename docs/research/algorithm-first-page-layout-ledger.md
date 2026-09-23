@@ -4349,3 +4349,62 @@ remaining byte budget while keeping at most 32 actual GETs, then measure
 truth containment on the same development cohort. It must still stop before
 code construction if quality or byte limits fail; any winner needs actual
 S3 reads, fresh holdout and two-generation memory validation.
+
+### ReLAION-1M adjacent code-range selector a0001: mean passes, p05 fails
+
+The fixed screen in
+`docs/superpowers/specs/2026-09-23-one-million-adjacent-code-range-selector-design.md`
+kept the prior source-trained 7,278 page centroids, 910 eight-page groups
+and score ranking exactly. It scanned all groups once in score order,
+admitting one only if the final union of adjacent same-role code groups
+would fit 32 maximal intervals and 16,777,216 projected bytes. This changed
+the hypothetical code-read schedule, not routing scores or row codes.
+The source commit was
+`1626e78507dbc6531e9e9ff3b51ec79459f26564`; its 11,110,792-byte
+readback-verified archive SHA-256 was
+`a5755e935f31d47c5034b05b3cd48c05f19b3335d6175b8a3f90aacad841ac06`.
+The one immutable attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-range-selector/1626e78507dbc6531e9e9ff3b51ec79459f26564/runs/relaion-1m-dev1000-a0001/`.
+
+The 3,522-byte terminal SHA-256 was
+`54a878e6acbe683939beda148c94744ef5d975e6efd14cd199e7a9f912964f78`.
+It closed `complete` with controller exit 0 after 153 seconds, and the one
+Spot instance `i-0b5cdbeb61ad1d6d4` was confirmed terminated. The
+controller and a separate closeout readback authenticated all nine
+terminal-listed artifacts by encoded length and SHA-256. The source-only
+seal, 967,233-byte evidence, result and independent validation SHA-256 were
+respectively
+`ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41`,
+`732e8ca9e3456e8ffb7a4d28e8cd1c53127a2f65b99aff8ac2ff710f1669ab75`,
+`b8eedabff74975a7b33d7212a44fe4b6a5afe79c5852e531c023f19b3bbc3d51`,
+and `e92b13b20a37edd62e3f5470b2c12086281bfb810e5c66c382c788c19b1a08da`.
+The rebuilt centroid, membership and physical-page SHA-256 values were
+identical to the prior screen. Independent replay and a separate 1,000-sample
+aggregation agreed on every group, interval, budget and containment metric.
+
+| Fixed 1M selector | page single-group reads | adjacent range reads | advance gate |
+|---|---:|---:|---:|
+| mean GT100 containment | 93.213% | **97.541%** | ≥97.5% |
+| p05 GT100 containment | 71% | **86%** | ≥90% |
+| GT10 containment | 96.26% | **98.96%** | ≥96% |
+| maximum projected code wave | 32 GETs / 9,108,752 bytes | 32 GETs / 16,777,208 bytes | ≤32 GETs / ≤16,777,216 bytes |
+
+The range plan selected 68–89 groups (median 78), with 20–32 projected GETs
+and 16,738,732–16,777,208 bytes per query. It added 4,328 GT100 hits versus
+the paired 32-group screen: 584 queries improved, none worsened and 416 tied.
+It rescued 147 of the 217 prior sub-90 queries; 70 remain below 90, whereas
+at most 49 may remain for the fixed p05 gate. The worst query still contains
+only 53 GT100 neighbors. Construct, evaluate and validate peaked at 841,468,
+229,792 and 772,144 KiB RSS, each with zero swaps. This source-only screen
+issued no actual code or final-page Range GETs and measured no SQ8 serving.
+
+**Decision:** `adjacent-code-range-selector-killed`. The I/O schedule clears
+mean GT100 and GT10 but misses p05 by four percentage points, with the
+16-MiB code-byte budget essentially saturated (mean unused 14,484 bytes).
+Do not build or serve a 1M code plane under this layout. The next cheapest
+material revision must improve tail locality at the same byte cap, such as
+a deterministic source-only ordering of code groups by geometric proximity
+before applying the same fixed page scores and range planner. Preregister
+one layout and test it as a separate source-only screen; a pass would still
+need actual code/final-page S3 reads, fresh holdout and two-generation 100M
+memory proof.
