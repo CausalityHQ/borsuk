@@ -85,4 +85,23 @@ theorem one_primary_dominates_any_bounded_secondary_roster
   simp only [genericEncodedVotes]
   omega
 
+/-! An arbitrary short final page can use rounded-up units in the planner.
+The physical final bytes are no larger than their charged units, so the
+physical payload respects any cap proved for the charged units. This is
+independent of dataset, row count and embedding dimension. -/
+
+theorem partial_final_page_respects_charged_byte_cap
+    (fullPages fullPageUnits finalUnits unitBytes finalBytes maxBytes : Nat)
+    (tailBound : finalBytes ≤ finalUnits * unitBytes)
+    (chargedCap :
+      (fullPages * fullPageUnits + finalUnits) * unitBytes ≤ maxBytes) :
+    fullPages * (fullPageUnits * unitBytes) + finalBytes ≤ maxBytes := by
+  calc
+    fullPages * (fullPageUnits * unitBytes) + finalBytes
+        ≤ fullPages * (fullPageUnits * unitBytes) + finalUnits * unitBytes :=
+          Nat.add_le_add_left tailBound _
+    _ = (fullPages * fullPageUnits + finalUnits) * unitBytes := by
+      simp [Nat.add_mul, Nat.mul_assoc]
+    _ ≤ maxBytes := chargedCap
+
 end Borsuk.PhysicalIntervalBudget

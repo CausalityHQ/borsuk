@@ -15,6 +15,10 @@ possible secondary vote. This is an arithmetic design rule for a future
 larger shortlist, not evidence that such a shortlist meets recall or cost
 targets. The current V114 implementation still uses the frozen 512-row
 operating point; changing that point requires a new paired campaign.
+The partial-final-page theorem proves that exact physical bytes remain under
+the cap when a short tail is conservatively charged in whole planning units.
+It assumes the tail's actual bytes fit those charged units; it does not prove
+the Rust planner implements that premise or establish S3 latency.
 
 `NomineePrimaryStability.lean` proves a conditional V113 certificate: if
 each nominee has an authenticated score-error bound and the precise
