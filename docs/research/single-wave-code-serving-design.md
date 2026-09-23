@@ -9,6 +9,10 @@ see `docs/research/two-bit-returned-g0-closeout.md` and
 reader or frozen production format. The 1M route gate below is suspended
 until a materially revised representation and route pass new returned-ranking
 and physical-plan gates.
+The 3-GiB-at-100M objective below is this stopped campaign's historical
+target. The current product decision in `precision-first-tier-decision.md`
+sets memory from a measured frontier over collection size, recall,
+concurrency and pinned generations, with no fixed vector-count knee.
 This is a material alternative to the stopped mirrored 104/96 code waves. It
 must be rejected at the earliest decisive failed gate. The next action is an
 offline sealed replay before building new code objects or launching reads.
