@@ -4408,3 +4408,59 @@ before applying the same fixed page scores and range planner. Preregister
 one layout and test it as a separate source-only screen; a pass would still
 need actual code/final-page S3 reads, fresh holdout and two-generation 100M
 memory proof.
+
+### ReLAION-1M score-ranked byte-only diagnostic a0001: p05 still fails
+
+The next source-only diagnostic removed only the 32-GET restriction from
+the prior page-centroid score order. It scanned all 910 groups once in the
+same score order, admitting each group if its 200-byte-row payload fit the
+16,777,216-byte code cap. This is a score-order-preserving byte-bound
+diagnostic, not a truth-aware oracle or an executable serving plan. It was
+preregistered in
+`docs/superpowers/specs/2026-09-23-one-million-byte-only-routing-ceiling-design.md`.
+The frozen source commit was
+`32660c4e1ca8ef8c505292553f5e7277e8648eed`; the 11,113,524-byte
+readback-verified source archive SHA-256 was
+`f6429fd4e837837a8e1fef30943ceedafe93f60921bb69e5d8c98f894a60d895`.
+Its sole immutable attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-byte-selector/32660c4e1ca8ef8c505292553f5e7277e8648eed/runs/relaion-1m-dev1000-a0001/`.
+
+The 3,511-byte terminal SHA-256 was
+`4a027b3383be508ceb7cf46346f361d519ebea155ca2884257295da158cee741`.
+It closed `complete` with controller exit 0 after 153 seconds, and Spot
+instance `i-0083814645770ec11` was confirmed terminated. The controller
+and a separate closeout readback authenticated all nine terminal-listed
+artifacts. The source-only seal, 998,944-byte evidence, result and independent
+validation SHA-256 were respectively
+`ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41`,
+`1dac88e6df676d9b16f0344d4057429aa337cac3b5f04f06d6c9ea09427eb3f2`,
+`1ba1d8d37e9b44b72fc3fa2f0098a1bed1e052f40db4d24332a43be7c68424bd`,
+and `d75763b08f54ec1b8c3a2f00517830ccd0d104e9e63528e4b655671053463084`.
+The source plane was byte-identical to the prior page/range screens; the
+independent validator and separate aggregation agreed on all 1,000 samples.
+
+| Same frozen 1M cohort | 32-range schedule | byte-only score order | fixed quality gate |
+|---|---:|---:|---:|
+| mean GT100 containment | 97.541% | **97.553%** | ≥97.5% |
+| p05 GT100 containment | 86% | **86%** | ≥90% |
+| GT10 containment | 98.96% | **98.97%** | ≥96% |
+| maximum projected bytes | 16,777,208 | 16,777,208 | ≤16,777,216 |
+| maximum projected GETs | 32 | **44** | 32 operationally |
+
+The diagnostic selected 68–86 groups and hypothetically needed 20–44 GETs.
+It left 68 queries below 90 GT100 neighbors (versus 70 under the range
+plan), with a worst query of 53. The two selections are not nested: against
+the range plan, 36 queries improved, 35 worsened and 929 tied, for 12 net
+hits. Thus removing the GET cap from the same ranking does not repair p05;
+it does not prove that every layout or truth-aware selection fails. Construct,
+evaluate and validate peaked at 841,568, 230,232 and 814,500 KiB RSS,
+all with zero swaps. No actual code/final-page S3 reads occurred.
+
+**Decision:** `score-ranked-byte-ceiling-fails`. The 200-byte representation
+plus the fixed page-centroid score order cannot satisfy the development
+p05 gate through simple score-priority packing at 16 MiB, even if GET count
+were free. The next cheapest decisive test is a **new row-width hypothesis**:
+first project a specific narrower code width on this frozen 1M source-only
+screen, then run its real paired 100k code-quality gate before any 1M code
+plane. A rank/layout redesign remains possible, but must supply a new
+source-only signal rather than reusing this failed score-order schedule.
