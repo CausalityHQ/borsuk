@@ -4572,3 +4572,60 @@ group capacity without tail improvement implicates the fixed page-centroid
 ranking and/or physical group layout. The next decisive experiment must
 change a routing signal or the group layout, preregistered against the
 strongest completed 96-byte projection on this frozen development cohort.
+
+### ReLAION-1M geometric whole-group order a0001: layout gate fails
+
+The preregistered physical-layout experiment in
+`docs/superpowers/specs/2026-09-23-one-million-geometric-code-group-order-design.md`
+kept the seven frozen inputs, 7,278 page centroids, 910 whole eight-page
+groups, minimum-page query score, 96-byte projected rows and the same
+32-GET/16-MiB planner. Before exposing queries or truth, it sealed a
+base/delta-separated nearest-group chain, using the minimum float64 squared
+distance between source-trained page centroids. It also sealed each group's
+projected physical length. The source commit was
+`c4ca7d184cbd37a4101953ef3f010bb7accd5bc1`; the create-only,
+readback-verified 11,553,421-byte archive SHA-256 was
+`3980c5b27649aaef839d74abd13e0ed74cc1bae2401f80a8504f4205e2cdf026`.
+The sole immutable attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-layout-selector/c4ca7d184cbd37a4101953ef3f010bb7accd5bc1/runs/relaion-1m-dev1000-a0001/`.
+
+The 3,839-byte terminal SHA-256 was
+`7f50deb16dcade5825f09e0a866b9414c6b9e872afde9259ef84cf51496630ae`.
+It closed `complete` with original controller exit 0 after 143 seconds;
+Spot instance `i-0d3cfc0079ccc1a39` was confirmed terminated. Controller
+and separate closeout readback authenticated all ten terminal-listed
+artifacts. The 9,740-byte sealed layout SHA-256 was
+`933f3295dcfd596c9aab9a76948204783425056e5700e421f3690329a2185cff`.
+The 2,621,323-byte evidence, result and independent validation SHA-256
+values were respectively
+`d6269f4ca38913e79fef4ffddff054185930cc8e93254af178ad6db33e7ae109`,
+`ab6d5e581208906a467bb77ec479599736d91639e67759b18db697b54ac79108`,
+and `20878c717638560de7ebb31d6e8874813976ed669c0f1248ce301d5ae5d44c09`.
+The independent replay reconstructed the source arrays, geometric order,
+all physical plans and the paired PQ96 control. Separate closeout aggregation
+of all 1,000 rows agreed with both result and validation.
+
+| Identical 1M cohort and 96-byte projection | Original physical order | Geometric order | advance gate |
+|---|---:|---:|---:|
+| mean GT100 containment | **98.151%** | 98.018% | ≥98.151% paired |
+| p05 GT100 containment | 89% | 89% | ≥90% |
+| GT10 containment | **99.28%** | 99.21% | ≥99.28% paired |
+| queries below 90 GT100 hits | **51** | 59 | ≤49 |
+| maximum projected code wave | 32 GETs / 16,777,216 bytes | 32 GETs / 16,777,212 bytes | ≤32 GETs / ≤16,777,216 bytes |
+
+The reordered plan improved 80 queries, worsened 117 and tied 803; it lost
+133 GT100 hits net. Six former sub-90 queries were rescued, but 14 new
+queries fell below 90. Both plans used a median 32 GETs. The construct,
+evaluate and validate phase `/usr/bin/time` maximum RSS values were
+841,508, 235,856 and 732,776 KiB. Their additional sampled process-tree
+peaks were 608,514,048, 229,695,488 and 755,470,336 bytes; all stayed
+below 3 GiB with the 64-MiB allowance, and all phases recorded zero swaps.
+
+**Decision:** `geometric-group-order-killed`. One deterministic physical
+permutation did not repair the 1M p05 tail and caused paired mean losses.
+Do not tune more group-order permutations on this cohort or build PQ96 row
+codes from this projection. This result does not prove physical order is
+irrelevant; the changed adjacency moved individual queries both ways. The
+next material hypothesis should add source-trained query-routing information
+that distinguishes useful groups beyond one minimum page-centroid distance,
+then face the same paired containment and read gates before real codes.
