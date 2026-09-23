@@ -63,8 +63,11 @@ An authority, replay, or resource failure invalidates the attempt and
 requires a repaired source revision and fresh attempt.
 
 Report projected bytes and selected-group counts for both primary and
-control. If primary containment improves only by consuming materially
-more bytes or selected groups, do not call that a routing-quality gain.
+control. "Materially more" means the candidate's 1,000-query total
+projected bytes or total selected groups exceeds the control total by
+more than 1%. Record that boolean in the sealed result. If primary
+containment improves with material plan expansion, report the gain as
+budget use within the fixed caps, not as a routing-quality gain.
 If OPQ8 fails but the source-distance diagnostic passes, assign the loss
 to representation error. If both fail, assign the loss to the frozen
 original-layout/top-four-score combination, rather than tuning OPQ8 on
@@ -78,6 +81,15 @@ source revision. Preregister terminal behavior, stop compute immediately
 after terminal publication, and monitor incomplete work only by terminal
 and infrastructure health. Preserve raw sealed evidence and independently
 recompute every result after terminal closure.
+
+An EC2 Spot interruption invalidates that attempt's measurement cell.
+The controller records its instance identity and failed terminal, and
+every published artifact remains immutable. Discard all partial
+measurements without reading them; restart the entire cell at `a{n+1}`
+from the same revision when the code did not fail. If the worker reached
+a successful terminal, do not restart. The controller's active deadline
+is 14,400 seconds from launch plus 900 seconds for boot and closure;
+this whole-run deadline takes precedence over each phase's own timeout.
 
 If this gate passes, build or use a real 1M row-code object for a separate
 actual-read/final-page gate. If it fails, diagnose row representation

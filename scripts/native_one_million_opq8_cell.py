@@ -247,6 +247,18 @@ def _metrics(samples: Sequence[dict[str, object]]) -> dict[str, int]:
     return metrics
 
 
+def _passes_fixed_gate(metrics: Mapping[str, int], arm: str) -> bool:
+    prefix = arm + "_"
+    return (
+        metrics[prefix + "gt100_hits"] >= 98_151
+        and metrics[prefix + "p05_gt100_hits"] >= 90
+        and metrics[prefix + "gt10_hits"] >= 9_928
+        and metrics[prefix + "sub90_queries"] <= 49
+        and metrics[prefix + "maximum_gets"] <= 32
+        and metrics[prefix + "maximum_bytes"] <= 16_777_216
+    )
+
+
 def run_evaluate(
     root: Path, planning: Path, out: Path, *, query_count: int = 1000,
     expected_rows: int = 1_000_000, expected_groups: int = 910,
@@ -316,14 +328,11 @@ def run_evaluate(
             raise ValueError("OPQ8 historical control replay differs")
         samples.append({"query_ordinal": ordinal, **arm_data})
     metrics = _metrics(samples)
-    candidate = "candidate_"
-    advance = (
-        metrics[candidate + "gt100_hits"] >= 98_151
-        and metrics[candidate + "p05_gt100_hits"] >= 90
-        and metrics[candidate + "gt10_hits"] >= 9_928
-        and metrics[candidate + "sub90_queries"] <= 49
-        and metrics[candidate + "maximum_gets"] <= 32
-        and metrics[candidate + "maximum_bytes"] <= 16_777_216
+    advance = _passes_fixed_gate(metrics, "candidate")
+    source_distance_passes = _passes_fixed_gate(metrics, "source_distance")
+    material_expansion = (
+        100 * metrics["candidate_total_bytes"] > 101 * metrics["control_total_bytes"]
+        or 100 * metrics["candidate_total_groups"] > 101 * metrics["control_total_groups"]
     )
     decision = "opq8-one-million-containment-advance" if advance else "opq8-one-million-containment-killed"
     evidence = {"schema": SCHEMA + "-evidence", "samples": samples, "metrics": metrics}
@@ -333,6 +342,8 @@ def run_evaluate(
     result = {
         "schema": SCHEMA + "-result", "claim_eligible": False, "decision": decision,
         "metrics": metrics, "source_seal_sha256": plans["source_seal_sha256"],
+        "source_distance_passes": source_distance_passes,
+        "material_plan_expansion": material_expansion,
         "plan_sha256": hashlib.sha256(plans_body).hexdigest(),
         "historical_sha256": hashlib.sha256(history_body).hexdigest(),
         "evidence_sha256": hashlib.sha256(evidence_body).hexdigest(),

@@ -112,6 +112,11 @@ class OneMillionOpq8CellTests(unittest.TestCase):
                         self.assertEqual(result["metrics"]["control_gt100_hits"], sample["hits_at_100"])
                         self.assertEqual(result["metrics"]["control_total_bytes"], used)
                         self.assertEqual(result["metrics"]["control_total_groups"], len(selected))
+                        self.assertIsInstance(result["source_distance_passes"], bool)
+                        self.assertEqual(result["material_plan_expansion"], (
+                            100 * result["metrics"]["candidate_total_bytes"] > 101 * result["metrics"]["control_total_bytes"]
+                            or 100 * result["metrics"]["candidate_total_groups"] > 101 * result["metrics"]["control_total_groups"]
+                        ))
                         validation = run_validate(root, root / "planning", root / "evaluation", root / "validation",
                                                   query_count=1, expected_rows=257, expected_groups=33)
                         self.assertEqual(validation["metrics"], result["metrics"])
