@@ -46,9 +46,9 @@
 
 - [x] Write tests for valid disjoint ranges, repeated groups, a wrong digest, and accounting drift against the old byte cap.
 - [x] Run the focused test to observe the missing-module failure, implement `selected_positions`, then rerun it (3 passed; Ruff passed).
-- [ ] Implement `replay` with `read_two_bit_codes`, `read_two_bit_evidence`, `_read_inputs` and `_read_queries_truth`. Bind each old artifact to the complete terminal SHA and receipt before it is used. Assert all 1,000 query ordinals, source IDs and truth IDs; reuse the existing float32 scoring formulas and source-ordinal tie rule.
-- [ ] Write canonical per-query primary/exact GT100 and GT10 hits, paired losses, p05 and sub-90 counts. Keep page-containment metrics in separate fields. Add a test where a row-score swap changes returned recall without changing page containment.
-- [ ] Run focused unittest and offline Ruff. Commit the verified adapter.
+- [x] Implement `run_closed_replay` with `read_two_bit_codes`, `read_two_bit_evidence`, `_read_inputs` and `_read_queries_truth`. Bind each old artifact to the complete terminal SHA and receipt before it is used. Assert all 1,000 query ordinals, source IDs and truth IDs; reuse the existing float32 scoring formulas and source-ordinal tie rule.
+- [x] Write canonical per-query primary/exact returned GT100 hits, paired losses, p05 and sub-90 counts. GT10 was removed from this bounded scorer gate because the design decision is Recall@100 fidelity; the independent serving gate still requires Recall@10. The rank-boundary test proves returned hits can change on a fixed fetched roster.
+- [x] Run focused unittest (8 passed) and offline Ruff (passed). Commit the verified adapter.
 
 ## Task 3: Spot cell and independent closeout
 

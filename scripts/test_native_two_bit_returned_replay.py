@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 from scripts import native_two_bit_returned_replay as replay
+from scripts.native_rotated_two_bit_codes import _fit_records
 
 
 def fixture():
@@ -37,3 +44,99 @@ class SelectedPositionsTests(unittest.TestCase):
         sample.code_bytes = 817
         with self.assertRaisesRegex(ValueError, "budget"):
             replay.selected_positions(sample, codes)
+
+    def test_scores_and_returns_from_same_fetched_rows(self) -> None:
+        vectors = np.zeros((3, 768), dtype=np.float32)
+        vectors[1, 0] = 1.0
+        vectors[2, 0] = 10.0
+        codes = SimpleNamespace(
+            page_row_counts=(3,),
+            group_ranges=((0, 1, 0, 608, "a" * 64),),
+            records=_fit_records(vectors.astype(np.float64), rotation_seed=20260923),
+            mean=np.zeros(768, dtype=np.float32),
+            rotation_seed=20260923,
+            source_ordinals=(0, 1, 2),
+        )
+        sample = SimpleNamespace(group_ranges=codes.group_ranges, code_gets=1,
+                                 code_bytes=608, query_ordinal=0)
+        result = replay.replay_query(
+            sample, codes, vectors[0], vectors,
+            (b"a", b"b", b"c"), (b"a", b"b"), top_k=2,
+        )
+        self.assertEqual(result["candidate_rows"], 3)
+        self.assertEqual(result["exact_hits"], 2)
+        self.assertEqual(result["two_bit_hits"], 2)
+
+    def test_summary_keeps_paired_loss_separate_from_marginal_tail(self) -> None:
+        cases = [
+            {"query_ordinal": 0, "candidate_rows": 3, "code_gets": 1,
+             "code_bytes": 608, "exact_hits": 2, "two_bit_hits": 1,
+             "paired_loss": 1},
+            {"query_ordinal": 1, "candidate_rows": 3, "code_gets": 1,
+             "code_bytes": 608, "exact_hits": 1, "two_bit_hits": 1,
+             "paired_loss": 0},
+        ]
+        summary = replay.summarize_results(cases, expected_queries=2, top_k=2)
+        self.assertEqual(summary["two_bit_recall_at_k_ppm"], 500_000)
+        self.assertEqual(summary["exact_recall_at_k_ppm"], 750_000)
+        self.assertEqual(summary["two_bit_p05_hits"], 1)
+        self.assertEqual(summary["p95_paired_loss_hits"], 1)
+
+    def test_terminal_receipt_binds_closed_artifact_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = {}
+            for role, filename in (("groups", "groups.bin"), ("mean", "mean.bin"),
+                                   ("code-seal", "seal.json"),
+                                   ("evidence", "evidence.json")):
+                body = filename.encode()
+                (root / filename).write_bytes(body)
+                artifacts[role] = {"role": role, "uri": "s3://closed/" + filename,
+                                   "sha256": hashlib.sha256(body).hexdigest(),
+                                   "encoded_bytes": len(body)}
+            terminal = {"status": "complete", "exit_code": 0,
+                        "artifacts": artifacts}
+            body = (json.dumps(terminal, sort_keys=True, separators=(",", ":"))
+                    + "\n").encode()
+            (root / "terminal.json").write_bytes(body)
+            digest = hashlib.sha256(body).hexdigest()
+            self.assertEqual(set(replay.authenticate_legacy_artifacts(root, digest)),
+                             set(artifacts))
+            (root / "groups.bin").write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "artifact"):
+                replay.authenticate_legacy_artifacts(root, digest)
+
+    def test_loaded_replay_writes_canonical_returned_evidence(self) -> None:
+        vectors = np.zeros((3, 768), dtype=np.float32)
+        vectors[1, 0] = 1.0
+        vectors[2, 0] = 10.0
+        codes = SimpleNamespace(
+            page_row_counts=(3,),
+            group_ranges=((0, 1, 0, 608, "a" * 64),),
+            records=_fit_records(vectors.astype(np.float64), rotation_seed=20260923),
+            mean=np.zeros(768, dtype=np.float32), rotation_seed=20260923,
+            source_ordinals=(0, 1, 2),
+        )
+        sample = SimpleNamespace(group_ranges=codes.group_ranges, code_gets=1,
+                                 code_bytes=608, query_ordinal=0)
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            summary = replay.replay_loaded(
+                vectors[:1], vectors, (b"a", b"b", b"c"),
+                ((b"a", b"b"),), codes, (sample,), out, top_k=2,
+            )
+            self.assertEqual(summary["two_bit_recall_at_k_ppm"], 1_000_000)
+            evidence = json.loads((out / "returned-evidence.json").read_bytes())
+            self.assertEqual(evidence["samples"][0]["two_bit_hits"], 2)
+            self.assertEqual(
+                (out / "returned-result.json").read_bytes(),
+                (json.dumps(json.loads((out / "returned-result.json").read_bytes()),
+                            sort_keys=True, separators=(",", ":")) + "\n").encode(),
+            )
+
+    def test_closed_replay_checks_terminal_before_source_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "terminal.json").write_bytes(b"{}\n")
+            with self.assertRaisesRegex(ValueError, "terminal identity"):
+                replay.run_closed_replay(root, root)
