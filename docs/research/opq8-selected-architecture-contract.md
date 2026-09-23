@@ -116,14 +116,24 @@ fidelity as the dominant loss under this frozen planner. The source
 scan itself is not a production candidate: it reads the entire source
 corpus and measured no serving latency.
 
-The next gate is a single preregistered PQ96 row-score candidate. First
-reject inadequate score fidelity on a cheap 100k source-only screen;
-then, only if it survives, use the frozen 1M group plans, original page
-layout, page-priority and 32-range/16-MiB rule for a paired source-only
+The next gate is a preregistered 96-byte row-score comparison. Its primary
+candidate is a rotated sign record with 752 sign bits (94 bytes) and one
+binary16 row scale (2 bytes); standard PQ96 is the paired 96-byte control.
+The earlier suggestion to keep both a binary16 scale and a binary16 norm
+alongside 752 signs would require **98 bytes** and cannot satisfy the
+frozen 96-byte projection. The sign scorer's promise is a hypothesis from
+the paired 100k two-bit result, not a measured 96-byte result. First reject
+inadequate score fidelity on a cheap 100k source-only screen; then, only
+for survivors, use the frozen 1M group plans, original page layout,
+page-priority rule and 32-range/16-MiB data-wave rule for a paired source-only
 score gate against this source-vector result and the failed OPQ8 score
-baseline. Do not substitute the old 32-page cap. A passing compressed
-scorer can proceed to actual authenticated code and data reads on a
-fresh untouched query cohort, then measured serving latency,
-throughput and resource checks. At 10M/100M, replace the linear full
-route scan with a measured hierarchical or region route before scale
+baseline. Each arm derives its own priority and ranges from its own row
+scores; only group selections and algorithms are shared. Do
+not substitute the old 32-page cap. The sealed source plans preserve page
+priority order without numeric page-score gaps, so a gap certificate
+requires another exact-score pass and cannot be read from those plans.
+A passing compressed scorer can proceed to actual authenticated code and
+data reads on a fresh untouched query cohort, then measured serving
+latency, throughput and resource checks. At 10M/100M, replace the linear
+full route scan with a measured hierarchical or region route before scale
 qualification.

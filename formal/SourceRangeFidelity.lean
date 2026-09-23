@@ -46,6 +46,44 @@ theorem gt10_gate_of_bounded_source_loss
   have accounting := source_hits_le_compressed_plus_lost pairs
   omega
 
+/-! A per-query certificate can discharge the lower-tail gate without
+postulating its observed value. It must bind the 100 paired truth positions
+for that query and count the actual lost hits. -/
+
+theorem query_stays_at_least_ninety
+    (pairs : List (Bool × Bool))
+    (_truth_positions : pairs.length = 100)
+    (loss_budget : lostHits pairs + 90 ≤ sourceHits pairs) :
+    90 ≤ compressedHits pairs := by
+  have accounting := source_hits_le_compressed_plus_lost pairs
+  omega
+
+/-! A 96-byte sign record has 752 bits and one binary16 scale. The same
+arithmetic applies to PQ96, though its scorer has different CPU work.
+Headers, IDs, authentication data and source vectors are not row bytes. -/
+
+def signRecordBytes : Nat := 94 + 2
+
+def packedCodeBytes (rows : Nat) : Nat := signRecordBytes * rows
+
+def groupedCodeBytes (pages rows : Nat) : Nat :=
+  4 + 4 * pages + packedCodeBytes rows
+
+theorem sign_record_is_ninety_six : signRecordBytes = 96 := by decide
+
+theorem one_hundred_million_code_bytes :
+    packedCodeBytes 100000000 = 9600000000 := by decide
+
+theorem code_row_budget
+    (pages rows : Nat)
+    (within_code_payload_budget : groupedCodeBytes pages rows ≤ 16777216) :
+    rows ≤ 174762 := by
+  simp only [groupedCodeBytes, packedCodeBytes, signRecordBytes] at within_code_payload_budget
+  omega
+
+theorem code_row_budget_exact_remainder :
+    96 * 174762 + 64 = 16777216 := by decide
+
 /-! The p05 and sub-90 conditions concern the per-query distribution.
 Aggregate hit-loss bounds alone do not establish them. -/
 

@@ -199,6 +199,22 @@ certificates that p05 is at least 90 and no more than 49 queries fall
 below 90. Aggregate loss bounds alone cannot prove these distribution
 conditions.
 
+The same file now proves a per-query lower-tail implication: for 100
+paired truth positions, if the number of source hits covers 90 plus
+all source-to-compressed losses, compressed containment stays at least
+90. This can support a machine-checked count of at-risk queries once
+the paired hit masks are authenticated. It also checks the proposed
+96-byte sign record's arithmetic: 752 sign bits occupy 94 bytes and a
+binary16 scale occupies two more; 100M records occupy 9.6 billion bytes
+before headers, replicas and metadata. **If a separate** 16,777,216-byte
+code-payload budget is imposed, any group payload with four-byte page
+counts contains at most 174,762 such rows. The data-range 16-MiB cap
+does not imply this code-fetch premise. This is a conditional row-count
+bound for code bytes fetched in that wave, not a bound on rows scored,
+CPU time, resident memory or storage-system latency. The proposed
+two-scalar variant is 98 bytes and
+does not satisfy this record format.
+
 This is a conditional finite-cohort claim. A future checker must bind
 both hit-mask lists to immutable source, query, truth, selected-range
 and scorer identities, and prove or validate the executable-to-model
