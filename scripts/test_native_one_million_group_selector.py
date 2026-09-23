@@ -48,9 +48,9 @@ def _page_body(row_id: int) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def _fixture(root: Path, *, duplicate_delta: bool = False, omit_source: bool = False):
+def _fixture(root: Path, *, duplicate_delta: bool = False, omit_source: bool = False, base_rows: int = 9):
     generation = {"schema": "fixture", "dimensions": DIMENSIONS, "runs": []}
-    for role, ids in (("base", tuple(range(9))), ("delta", (8 if duplicate_delta else 9,))):
+    for role, ids in (("base", tuple(range(base_rows))), ("delta", (base_rows - 1 if duplicate_delta else base_rows,))):
         body = bytearray()
         pages = []
         for page, row_id in enumerate(ids):
@@ -62,7 +62,7 @@ def _fixture(root: Path, *, duplicate_delta: bool = False, omit_source: bool = F
         generation["runs"].append({"kind": role, "object": dataclasses.asdict(_identity(path)), "pages": pages})
     (root / "generation.json").write_text(json.dumps(generation, sort_keys=True, separators=(",", ":")) + "\n")
     (root / "router.arrow").write_bytes(b"source-only-router-fixture")
-    ids = list(range(10 if not omit_source else 9))[::-1]
+    ids = list(range(base_rows + (0 if omit_source else 1)))[::-1]
     vectors = np.zeros((len(ids), DIMENSIONS), dtype=np.float32)
     for index, row_id in enumerate(ids):
         vectors[index, 0] = row_id
