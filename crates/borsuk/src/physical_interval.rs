@@ -4,18 +4,17 @@ use std::ops::Range;
 
 /// Physical units for pages of one contiguous object.
 ///
-/// Both full and final page sizes must be exact multiples of `unit_bytes`.
-/// A caller with a 160-row final page of 780-byte rows, for example, can
-/// use 32-row units: eight units per full 256-row page and five per final
-/// page. Large unit budgets are rejected rather than planned approximately.
+/// Full pages are exact multiples of `unit_bytes`. The final page may be
+/// shorter than a unit; its units are rounded up for budget accounting while
+/// its physical range ends at the exact last byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IntervalGeometry {
     /// Number of pages, including the possibly short final page.
     pub page_count: usize,
     /// Units charged for each page except the final page.
     pub full_page_units: usize,
-    /// Units charged for the final page.
-    pub last_page_units: usize,
+    /// Exact bytes in the final page.
+    pub last_page_bytes: usize,
     /// Exact bytes in one physical unit.
     pub unit_bytes: usize,
     /// Maximum number of contiguous object ranges.
@@ -78,13 +77,19 @@ pub fn plan_weighted_intervals(
 ) -> Result<IntervalPlan, PlanError> {
     if geometry.page_count == 0
         || geometry.full_page_units == 0
-        || geometry.last_page_units == 0
-        || geometry.last_page_units > geometry.full_page_units
+        || geometry.last_page_bytes == 0
         || geometry.unit_bytes == 0
         || geometry.max_gets == 0
     {
         return Err(PlanError::InvalidGeometry);
     }
+    let full_page_bytes = geometry.full_page_units
+        .checked_mul(geometry.unit_bytes)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    if geometry.last_page_bytes > full_page_bytes {
+        return Err(PlanError::InvalidGeometry);
+    }
+    let last_page_units = geometry.last_page_bytes.div_ceil(geometry.unit_bytes);
     let geometry = IntervalGeometry {
         max_gets: geometry.max_gets.min(geometry.page_count),
         ..geometry
@@ -125,7 +130,7 @@ pub fn plan_weighted_intervals(
     let mut previous_page: Option<usize> = None;
     for &(page, weight) in weights {
         let page_units = if page == geometry.page_count - 1 {
-            geometry.last_page_units
+            last_page_units
         } else {
             geometry.full_page_units
         };
@@ -224,17 +229,9 @@ pub fn plan_weighted_intervals(
         return Err(PlanError::InconsistentWitness);
     }
     page_intervals.reverse();
-    let full_page_bytes = geometry
-        .full_page_units
-        .checked_mul(geometry.unit_bytes)
-        .ok_or(PlanError::ArithmeticOverflow)?;
-    let last_page_bytes = geometry
-        .last_page_units
-        .checked_mul(geometry.unit_bytes)
-        .ok_or(PlanError::ArithmeticOverflow)?;
     let object_bytes = (geometry.page_count - 1)
         .checked_mul(full_page_bytes)
-        .and_then(|value| value.checked_add(last_page_bytes))
+        .and_then(|value| value.checked_add(geometry.last_page_bytes))
         .ok_or(PlanError::ArithmeticOverflow)?;
     let mut ranges = Vec::with_capacity(page_intervals.len());
     let mut bytes = 0usize;
@@ -258,9 +255,13 @@ pub fn plan_weighted_intervals(
         .max_units
         .checked_mul(geometry.unit_bytes)
         .ok_or(PlanError::ArithmeticOverflow)?;
-    let selected_bytes = selected_units
+    let charged_bytes = selected_units
         .checked_mul(geometry.unit_bytes)
         .ok_or(PlanError::ArithmeticOverflow)?;
+    let selected_final_page = ranges.iter().any(|range| range.end == object_bytes);
+    let final_page_slack = last_page_units * geometry.unit_bytes
+        - geometry.last_page_bytes;
+    let selected_bytes = charged_bytes - if selected_final_page { final_page_slack } else { 0 };
     let witnessed_score = weights.iter().try_fold(0u64, |score, &(page, weight)| {
         let offset = page
             .checked_mul(full_page_bytes)
@@ -299,7 +300,7 @@ mod tests {
         IntervalGeometry {
             page_count,
             full_page_units: 3,
-            last_page_units: 1,
+            last_page_bytes: 7,
             unit_bytes: 7,
             max_gets,
             max_units,
@@ -369,7 +370,7 @@ mod tests {
             IntervalGeometry {
                 page_count: 3907,
                 full_page_units: 4,
-                last_page_units: 1,
+                last_page_bytes: 49_920,
                 unit_bytes: 49_920,
                 max_gets: 32,
                 max_units: 336,
@@ -388,7 +389,7 @@ mod tests {
             IntervalGeometry {
                 page_count: 391,
                 full_page_units: 8,
-                last_page_units: 5,
+                last_page_bytes: 124_800,
                 unit_bytes: 24_960,
                 max_gets: 32,
                 max_units: 672,
@@ -398,6 +399,23 @@ mod tests {
         .unwrap();
         assert_eq!(plan.ranges, vec![77_875_200..78_000_000]);
         assert_eq!(plan.bytes, 124_800);
+    }
+
+    #[test]
+    fn partial_unit_tail_emits_exact_range_and_stays_within_cap() {
+        let plan = plan_weighted_intervals(
+            IntervalGeometry {
+                page_count: 2,
+                full_page_units: 8,
+                last_page_bytes: 17 * 780,
+                unit_bytes: 32 * 780,
+                max_gets: 1,
+                max_units: 1,
+            },
+            &[(1, 1)],
+        ).unwrap();
+        assert_eq!(plan.ranges, vec![256 * 780..273 * 780]);
+        assert_eq!(plan.bytes, 17 * 780);
     }
 
     #[test]

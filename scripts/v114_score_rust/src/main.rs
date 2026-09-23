@@ -76,7 +76,7 @@ fn route_primary(
 ) -> Result<(Vec<(usize, u32)>, IntervalPlan), PlanError> {
     let final_rows = rows % 256;
     let final_rows = if final_rows == 0 { 256 } else { final_rows };
-    if rows == 0 || dimensions == 0 || final_rows % 32 != 0 {
+    if rows == 0 || dimensions == 0 {
         return Err(PlanError::InvalidGeometry);
     }
     let unit_bytes = dimensions
@@ -113,7 +113,9 @@ fn route_primary(
         IntervalGeometry {
             page_count: rows.div_ceil(256),
             full_page_units: 8,
-            last_page_units: final_rows / 32,
+            last_page_bytes: final_rows
+                .checked_mul(dimensions + 12)
+                .ok_or(PlanError::ArithmeticOverflow)?,
             unit_bytes,
             max_gets: 32,
             max_units: 16_777_216 / unit_bytes,
@@ -283,12 +285,19 @@ mod tests {
     }
 
     #[test]
+    fn route_accepts_a_partial_32_row_final_unit() {
+        let (_, plan) = route_primary(&[272], &[272], 273, 768).unwrap();
+        assert_eq!(plan.ranges, vec![256 * 780..273 * 780]);
+        assert_eq!(plan.bytes, 17 * 780);
+    }
+
+    #[test]
     fn rust_planner_tie_prefers_less_physical_io() {
         let plan = plan_weighted_intervals(
             IntervalGeometry {
                 page_count: 4,
                 full_page_units: 1,
-                last_page_units: 1,
+                last_page_bytes: 1,
                 unit_bytes: 1,
                 max_gets: 1,
                 max_units: 2,
