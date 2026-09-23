@@ -39,6 +39,10 @@ ARTIFACTS = {
 }
 
 
+def artifact_names(kind: str) -> dict[str, str]:
+    return {**ARTIFACTS, **({"layout": "layout.json"} if kind == "layout" else {})}
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class SelectorSpotPlan:
     source_commit: str
@@ -59,7 +63,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
@@ -112,26 +116,35 @@ MAXIMUM_RSS_BYTES=@RSS@
 mkdir -p "$root" && cd "$root"
 exec 2>worker-stderr.log
 run_capped() {
+  local resource_file="$4" peak_bytes=0 samples=0
   setsid "$@" & pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     rss_bytes=$(ps -eo pid=,ppid=,rss= | awk -v root="$pid" '{ parent[$1]=$2; rss[$1]=$3 } END { selected[root]=1; changed=1; while(changed) { changed=0; for (p in rss) if (!selected[p] && selected[parent[p]]) { selected[p]=1; changed=1 } } for (p in selected) if (selected[p]) total+=rss[p]; printf "%.0f", total * 1024 }')
-    if [ "$rss_bytes" -gt "$MAXIMUM_RSS_BYTES" ]; then
+    (( samples += 1 ))
+    if [ "$rss_bytes" -gt "$peak_bytes" ]; then peak_bytes="$rss_bytes"; fi
+    if [ "$rss_bytes" -gt "$((MAXIMUM_RSS_BYTES - 67108864))" ]; then
       kill -TERM -- "-$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
+      printf 'Maximum sampled process-tree RSS (bytes): %s\\nProcess-tree RSS samples: %s\\n' "$peak_bytes" "$samples" >> "$resource_file"
       return 137
     fi
     sleep 1
   done
   rc=0; wait "$pid" || rc=$?
+  printf 'Maximum sampled process-tree RSS (bytes): %s\\nProcess-tree RSS samples: %s\\n' "$peak_bytes" "$samples" >> "$resource_file"
   return "$rc"
 }
 check_resources() {
-  local peak_kib swaps
+  local peak_kib tree_bytes samples swaps
   peak_kib=$(awk -F: 'index($1,"Maximum resident set size") {gsub(/[[:space:]]/,"",$2); print $2}' "$1")
+  tree_bytes=$(awk -F: 'index($1,"Maximum sampled process-tree RSS (bytes)") {gsub(/[[:space:]]/,"",$2); print $2}' "$1")
+  samples=$(awk -F: 'index($1,"Process-tree RSS samples") {gsub(/[[:space:]]/,"",$2); print $2}' "$1")
   swaps=$(awk -F: 'index($1,"Swaps") {gsub(/[[:space:]]/,"",$2); print $2}' "$1")
   [[ "$peak_kib" =~ ^[0-9]+$ ]] || return 1
+  [[ "$tree_bytes" =~ ^[0-9]+$ ]] || return 1
+  [[ "$samples" =~ ^[0-9]+$ ]] || return 1
   [[ "$swaps" =~ ^[0-9]+$ ]] || return 1
-  (( swaps == 0 && peak_kib * 1024 + 67108864 <= MAXIMUM_RSS_BYTES ))
+  (( samples > 0 && swaps == 0 && peak_kib * 1024 + 67108864 <= MAXIMUM_RSS_BYTES && tree_bytes + 67108864 <= MAXIMUM_RSS_BYTES ))
 }
 publish_artifact() {
   local name="$1"
@@ -156,12 +169,17 @@ import hashlib,json,os,pathlib
 def ident(path,role):
  body=pathlib.Path(path).read_bytes()
  return {"encoded_bytes":len(body),"role":role,"sha256":hashlib.sha256(body).hexdigest(),"uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
-files=(("centroids","centroids.bin"),("membership","membership.bin"),("seal","seal.json"),("evidence","evidence.json"),("result","result.json"),("validation","validation.json"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
+files=@ARTIFACT_FILES@
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
 value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":@ATTEMPT@,"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"@TERMINAL_SCHEMA@","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
 pathlib.Path("terminal.json").write_bytes(json.dumps(value,sort_keys=True,separators=(",",":")).encode()+bytes([10]))
 PY
-  aws s3 cp terminal.json "$output/terminal.json" --only-show-errors || true
+  if aws s3api put-object --bucket @BUCKET@ --key @TERMINAL_KEY@ --body terminal.json --if-none-match '*' >/dev/null; then
+    mkdir -p readback
+    if ! aws s3 cp "$output/terminal.json" readback/terminal.json --only-show-errors || ! cmp -s terminal.json readback/terminal.json; then rc=1; fi
+  else
+    rc=1
+  fi
   rm -f source.parquet base.arrow delta.arrow queries.parquet truth.parquet
   shutdown -h now || true
   exit "$rc"
@@ -186,10 +204,11 @@ python3.12 -m venv .venv
 phase=construct
 run_capped /usr/bin/time -v -o construct-resources.txt timeout @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m @CELL_MODULE@ construct --root "$root"
 phase=seal
-chmod 0444 source.parquet generation.json base.arrow delta.arrow router.arrow centroids.bin membership.bin seal.json
+chmod 0444 source.parquet generation.json base.arrow delta.arrow router.arrow centroids.bin membership.bin seal.json @LAYOUT_CHMOD@
 publish_artifact centroids.bin
 publish_artifact membership.bin
 publish_artifact seal.json
+@LAYOUT_PUBLISH@
 publish_artifact construct-resources.txt
 phase=evaluate
 @DEVELOPMENT_COMMANDS@
@@ -220,6 +239,8 @@ phase=complete
     replacements = {
         "@OUTPUT@": _q(plan.output_prefix.rstrip("/")),
         "@CELL_MODULE@": (
+            "scripts.native_one_million_geometric_group_order_cell" if plan.selector_kind == "layout"
+            else
             "scripts.native_one_million_pq80_projection_cell" if plan.selector_kind == "pq80"
             else
             "scripts.native_one_million_pq96_projection_cell" if plan.selector_kind == "pq96"
@@ -231,9 +252,13 @@ phase=complete
             else "scripts.native_one_million_selector_cell"
         ),
         "@TERMINAL_SCHEMA@": _terminal_schema(plan.selector_kind),
+        "@ARTIFACT_FILES@": repr(tuple(artifact_names(plan.selector_kind).items())),
+        "@LAYOUT_CHMOD@": "layout.json" if plan.selector_kind == "layout" else "",
+        "@LAYOUT_PUBLISH@": "publish_artifact layout.json" if plan.selector_kind == "layout" else "",
         "@ATTEMPT@": str(plan.attempt),
         "@BUCKET@": _q(BUCKET),
         "@ARTIFACT_KEY@": _q(_s3_location(plan.output_prefix)[1] + "/artifacts"),
+        "@TERMINAL_KEY@": _q(_s3_location(plan.output_prefix)[1] + "/terminal.json"),
         "@RSS@": str(plan.maximum_rss_bytes),
         "@COMMIT@": _q(plan.source_commit),
         "@ARCHIVE_URI@": _q(plan.source_archive.uri),
@@ -314,9 +339,10 @@ def _validate_terminal_bytes(
             raise ValueError("selector failed terminal differs")
         return terminal
     artifacts = terminal["artifacts"]
-    if type(artifacts) is not dict or set(artifacts) != set(ARTIFACTS):
+    names = artifact_names(plan.selector_kind)
+    if type(artifacts) is not dict or set(artifacts) != set(names):
         raise ValueError("selector terminal artifact roster differs")
-    for role, name in ARTIFACTS.items():
+    for role, name in names.items():
         identity = artifacts[role]
         if (
             type(identity) is not dict
@@ -333,10 +359,12 @@ def _validate_terminal_bytes(
     return terminal
 
 
-def _readback_artifacts(s3: object, bucket: str, prefix: str, terminal: dict[str, object]) -> None:
+def _readback_artifacts(
+    s3: object, bucket: str, prefix: str, terminal: dict[str, object], *, kind: str = "group",
+) -> None:
     if terminal["status"] != "complete":
         return
-    for role, filename in ARTIFACTS.items():
+    for role, filename in artifact_names(kind).items():
         identity = terminal["artifacts"][role]
         body = s3.get_object(Bucket=bucket, Key=f"{prefix}/artifacts/{filename}")["Body"].read()
         if len(body) != identity["encoded_bytes"] or hashlib.sha256(body).hexdigest() != identity["sha256"]:
@@ -424,7 +452,7 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
                 time.sleep(15)
                 continue
             terminal = _validate_terminal_bytes(body, plan, instance_id)
-            _readback_artifacts(s3, bucket, prefix, terminal)
+            _readback_artifacts(s3, bucket, prefix, terminal, kind=plan.selector_kind)
             return terminal
     except Exception as error:
         _terminate_and_wait(ec2, instance_id)
@@ -469,7 +497,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(
