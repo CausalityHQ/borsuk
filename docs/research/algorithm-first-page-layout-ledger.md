@@ -5274,3 +5274,54 @@ code-wave page admission and locality under the byte/GET budget, before
 row-score quantization. A next architecture must materially improve
 source-trained routing/layout or score fidelity at a narrower width;
 do not tune this candidate's admission constants on these queries.
+
+### ReLAION-1M mirrored 104/96-byte two-bit code-wave projection a0001: advance
+
+The next preregistered architecture split the already-tested 200-byte
+rotated two-bit record into a 104-byte sign/scale/norm page plane and a
+96-byte magnitude page plane. A 104-byte OPQ8-priority page cover was
+planned under its own 32-GET/16-MiB cap; the magnitude plane mirrored the
+same physical page intervals under a separate cap. Their bits rejoin the
+old record exactly. The source-only projection did not build either plane
+or measure S3 code-read latency. Its frozen gate and next stage are in
+`docs/research/progressive-two-bit-mirrored-code-wave-contract.md`.
+
+Pushed source `7a06b24b0b5790406ba558d2c0f097493f401de1` was sealed
+in an 11,783,491-byte archive with SHA-256
+`abfb90075599cd6c2ef944fcae8be9d4b11bb461f738847ae6f73983ea8f25e2`.
+The sole attempt was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_code_wave-selector/7a06b24b0b5790406ba558d2c0f097493f401de1/runs/relaion-1m-dev1000-a0001/`.
+The terminal SHA-256 was
+`a97a9f2deb402d1b7a016906028849e1ee075f6b295b77f389c684d18784138a`.
+The original controller exited zero after 798 seconds and read back all
+13 terminal artifacts. Separate receipt closeout authenticated the
+reservation, exact source archive, artifact roster, sealed prior plans and
+page map, and zero-swap resource files. The remote independent validator
+replayed all 1,000 admissions, mirrors and ordered truth masks. Spot
+`i-0405f60b5582283ce` (`c7i.8xlarge`) was confirmed terminated.
+
+| Frozen 1M code-wave screen | Rejected 200-byte page wave | Mirrored 104/96-byte waves | Advance |
+|---|---:|---:|---:|
+| GT100 contained / 100,000 | 98,468 | **98,986** | ≥98,651 |
+| GT10 contained / 10,000 | 9,934 | 9,956 | reported |
+| p05 GT100 | 91 | **95** | ≥93 |
+| queries below 90 GT100 | 35 | 15 | reported |
+| maximum first-code GETs / bytes | 32 / 16,777,200 | 32 / 16,777,176 | ≤32 / ≤16,777,216 |
+| maximum second-code GETs / bytes | absent | 32 / 15,486,624 | ≤32 / ≤16,777,216 |
+
+The 104-byte sign wave gains 518 GT100 positions and four p05 points over
+the 200-byte page wave. All 1,000 first-code plans use 32 GETs. One
+bridged truth owner makes the page cover one hit above the historical
+98,985 OPQ8 selected-group containment. Construct, plan, evaluate and
+validate maximum RSS were 968,724, 1,034,608, 1,723,160 and 1,720,040
+KiB; sampled tree peaks were 296,046,592, 969,035,776, 1,719,193,600
+and 1,715,601,408 bytes. Every phase had zero swaps.
+
+**Decision:** `advance-to-paired-score-cell`. This clears only the frozen
+source-owner code-cover screen; it does not establish final recall,
+latency, throughput or cost. The next single source-only cell must build
+and authenticate both planes, prove byte-exact rejoining against the
+existing 200-byte record, and compare two-bit page/range recall with an
+exact-source control on precisely the same mirrored cover. A passing
+cell then needs actual authenticated S3 reads on untouched queries and
+the 10M/100M scale gate.
