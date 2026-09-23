@@ -108,11 +108,14 @@ phase=bootstrap
 status=failed
 started=$(date +%s)
 MAXIMUM_RSS_BYTES=@RSS@
+broker_pid=
 mkdir -p "$root" && cd "$root"
 run_capped() {
   setsid "$@" & pid=$!
+  peak_bytes=0
   while kill -0 "$pid" 2>/dev/null; do
-    rss_bytes=$(ps -eo pgid=,rss= | awk -v pgid="$pid" '$1 == pgid { total += $2 } END { printf "%.0f", total * 1024 }')
+    rss_bytes=$(ps -eo pid=,pgid=,rss= | awk -v pgid="$pid" -v broker="${broker_pid:-0}" '$2 == pgid || $1 == broker { total += $3 } END { printf "%.0f", total * 1024 }')
+    if [ "$rss_bytes" -gt "$peak_bytes" ]; then peak_bytes=$rss_bytes; fi
     if [ "$rss_bytes" -gt "$MAXIMUM_RSS_BYTES" ]; then
       kill -TERM -- "-$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
@@ -121,16 +124,21 @@ run_capped() {
     sleep 1
   done
   rc=0; wait "$pid" || rc=$?
+  if [ "$phase" = evaluate ]; then printf '%s\n' "$peak_bytes" > evaluate-combined-peak.txt; fi
   return "$rc"
 }
 check_peak_rss() {
-  local peak_kib
+  local peak_kib swaps
   peak_kib=$(awk -F: 'index($1,"Maximum resident set size") {gsub(/[[:space:]]/,"",$2); print $2}' "$1")
+  swaps=$(awk -F: 'index($1,"Swaps") {gsub(/[[:space:]]/,"",$2); print $2}' "$1")
   [[ "$peak_kib" =~ ^[0-9]+$ ]] || return 1
+  [[ "$swaps" =~ ^[0-9]+$ ]] || return 1
+  (( swaps == 0 )) || return 1
   (( peak_kib * 1024 <= MAXIMUM_RSS_BYTES ))
 }
 terminal() {
   rc=$?; trap - EXIT; set +e; ended=$(date +%s)
+  if [ -n "$broker_pid" ]; then kill -TERM "$broker_pid" 2>/dev/null || true; wait "$broker_pid" 2>/dev/null || true; fi
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null || true)
   instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
   STATUS="$status" PHASE="$phase" EXIT_CODE="$rc" STARTED="$started" ENDED="$ended" SOURCE_COMMIT=@COMMIT@ SOURCE_ARCHIVE_URI=@ARCHIVE_URI@ SOURCE_ARCHIVE_SHA256=@ARCHIVE_SHA@ SOURCE_ARCHIVE_BYTES=@ARCHIVE_BYTES@ REQUIREMENTS_SHA256=@REQUIREMENTS_SHA@ INSTANCE_ID="$instance_id" OUTPUT_PREFIX="$output" ATTEMPT=@ATTEMPT@ python3 - <<'PY'
@@ -138,7 +146,7 @@ import hashlib,json,os,pathlib
 def ident(path,role):
  body=pathlib.Path(path).read_bytes()
  return {"encoded_bytes":len(body),"role":role,"sha256":hashlib.sha256(body).hexdigest(),"uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
-files=(("mean","mean.bin"),("groups","groups.bin"),("code-seal","seal.json"),("sealed","sealed.json"),("evidence","evidence.json"),("result","result.json"),("validation","validation.json"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
+files=(("mean","mean.bin"),("groups","groups.bin"),("code-seal","seal.json"),("sealed","sealed.json"),("evidence","evidence.json"),("result","result.json"),("validation","validation.json"),("broker-audit","broker-audit.json"),("evaluate-combined-peak","evaluate-combined-peak.txt"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
 value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":int(os.environ["ATTEMPT"]),"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-rotated-two-bit-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
 pathlib.Path("terminal.json").write_text(json.dumps(value,sort_keys=True,separators=(",",":"))+"\\n")
@@ -152,6 +160,8 @@ trap terminal EXIT
 trap 'exit 143' TERM INT
 phase=install
 dnf install -y -q python3.12 python3.12-pip tar gzip time util-linux >install.log 2>&1
+swapoff -a
+awk '$1 == "SwapTotal:" {exit ($2 != 0)}' /proc/meminfo
 phase=source
 aws s3 cp @ARCHIVE_URI@ source.tar.gz --only-show-errors
 [ "$(stat -c%s source.tar.gz)" = @ARCHIVE_BYTES@ ]
@@ -195,12 +205,31 @@ aws s3 cp @TRUTH_URI@ truth.parquet --only-show-errors
 printf '%s  truth.parquet\n' @TRUTH_SHA@ | sha256sum -c -
 chmod 0444 tree.parquet pages.parquet queries.parquet truth.parquet prior-evidence.json
 mkdir evaluation && chown nobody:nobody evaluation
-run_capped /usr/bin/time -v -o evaluate-resources.txt timeout @WALL@ setpriv --reuid=nobody --regid=nobody --clear-groups env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_rotated_two_bit_cell evaluate --root "$root" --out "$root/evaluation" --output-prefix "$output" --source-archive-uri @ARCHIVE_URI@ --source-archive-sha256 @ARCHIVE_SHA@ --source-archive-bytes @ARCHIVE_BYTES@ --requirements-sha256 @REQUIREMENTS_SHA@
+"$root/.venv/bin/python" -m scripts.native_rotated_two_bit_range_broker --root "$root" --output-prefix "$output" --socket "$root/broker.sock" --audit "$root/broker-audit.json" & broker_pid=$!
+for attempt in $(seq 1 100); do
+  [ -S "$root/broker.sock" ] && break
+  kill -0 "$broker_pid" 2>/dev/null
+  sleep 0.1
+done
+[ -S "$root/broker.sock" ]
+run_capped /usr/bin/time -v -o evaluate-resources.txt timeout @WALL@ unshare --net --fork setpriv --reuid=nobody --regid=nobody --clear-groups env -i PATH="$PATH" PYTHONPATH="$root/repo" BORSUK_RANGE_BROKER_SOCKET="$root/broker.sock" AWS_EC2_METADATA_DISABLED=true OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_rotated_two_bit_cell evaluate --root "$root" --out "$root/evaluation" --output-prefix "$output" --source-archive-uri @ARCHIVE_URI@ --source-archive-sha256 @ARCHIVE_SHA@ --source-archive-bytes @ARCHIVE_BYTES@ --requirements-sha256 @REQUIREMENTS_SHA@
+kill -TERM "$broker_pid"
+wait "$broker_pid"
+broker_pid=
 mv evaluation/evidence.json evidence.json
 mv evaluation/result.json result.json
 rmdir evaluation
+python3 - <<'PY'
+import json,pathlib
+audit=json.loads(pathlib.Path('broker-audit.json').read_bytes())
+samples=json.loads(pathlib.Path('evidence.json').read_bytes())['samples']
+assert audit['gets']==sum(sample['code_gets'] for sample in samples)
+assert audit['bytes']==sum(sample['code_bytes'] for sample in samples)
+PY
 aws s3 cp evidence.json "$output/artifacts/evidence.json" --only-show-errors
 aws s3 cp result.json "$output/artifacts/result.json" --only-show-errors
+aws s3 cp broker-audit.json "$output/artifacts/broker-audit.json" --only-show-errors
+aws s3 cp evaluate-combined-peak.txt "$output/artifacts/evaluate-combined-peak.txt" --only-show-errors
 aws s3 cp evaluate-resources.txt "$output/artifacts/evaluate-resources.txt" --only-show-errors
 phase=validate
 run_capped /usr/bin/time -v -o validate-resources.txt timeout @WALL@ env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_rotated_two_bit_cell validate --root "$root" --out "$root" --output-prefix "$output" --source-commit @COMMIT@ --source-archive-uri @ARCHIVE_URI@ --source-archive-sha256 @ARCHIVE_SHA@ --source-archive-bytes @ARCHIVE_BYTES@ --requirements-sha256 @REQUIREMENTS_SHA@
@@ -210,6 +239,8 @@ phase=resource-gate
 for resource in construct-resources.txt evaluate-resources.txt validate-resources.txt; do
   check_peak_rss "$resource"
 done
+(( $(cat evaluate-combined-peak.txt) <= MAXIMUM_RSS_BYTES ))
+awk '$1 == "SwapTotal:" {exit ($2 != 0)}' /proc/meminfo
 status=complete
 phase=complete
 """
@@ -333,6 +364,8 @@ def _validate_terminal_bytes(
         "evidence": "evidence.json",
         "result": "result.json",
         "validation": "validation.json",
+        "broker-audit": "broker-audit.json",
+        "evaluate-combined-peak": "evaluate-combined-peak.txt",
         "construct-resources": "construct-resources.txt",
         "evaluate-resources": "evaluate-resources.txt",
         "validate-resources": "validate-resources.txt",
@@ -480,6 +513,8 @@ def parse_args(argv: Sequence[str] | None = None) -> SpotLayoutPlan:
 def main(argv: Sequence[str] | None = None) -> None:
     terminal = launch_and_monitor(parse_args(argv))
     print(json.dumps(terminal, sort_keys=True, separators=(",", ":")))
+    if terminal["status"] != "complete":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

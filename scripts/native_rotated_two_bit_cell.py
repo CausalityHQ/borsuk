@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -41,7 +42,6 @@ from scripts.native_rotated_two_bit_evidence import (
     read_two_bit_evidence,
     write_two_bit_evidence,
 )
-from scripts.native_row_score_s3 import S3CodeRangeReader
 from scripts.validate_native_geometric_layout_result import _independent_route
 from scripts.validate_native_rotated_two_bit_result import validate_two_bit_samples
 
@@ -273,17 +273,13 @@ def run_evaluate_phase(
     if len(prior_samples) != len(queries):
         raise ValueError("group prior evidence query count differs")
     if code_reader is None:
-        import boto3
-        from botocore.config import Config
+        from scripts.native_rotated_two_bit_range_broker import BrokerRangeReader
 
-        code_reader = S3CodeRangeReader(
-            boto3.client(
-                "s3",
-                region_name="eu-central-1",
-                config=Config(retries={"mode": "standard", "total_max_attempts": 1}),
-            ),
-            identities.groups.uri,
-            object_bytes=identities.groups.encoded_bytes,
+        socket_path = os.environ.get("BORSUK_RANGE_BROKER_SOCKET")
+        if not socket_path:
+            raise ValueError("two-bit read-only range broker required")
+        code_reader = BrokerRangeReader(
+            Path(socket_path), object_bytes=identities.groups.encoded_bytes
         )
     retained = tuple(
         route_geometric_query(router, query, leaf_frontier=128, limits=inputs.limits).retained_leaf_pages

@@ -28,6 +28,7 @@ from scripts.launch_native_rotated_two_bit_spot import (
     build_launch_specs,
     build_plan,
     launch_and_monitor,
+    main,
     worker_script,
 )
 from scripts.native_geometric_layout_screen import ArtifactIdentity, EvaluationLimits
@@ -180,6 +181,14 @@ class TwoBitSpotTests(unittest.TestCase):
         self.assertNotIn(FROZEN_TRUTH.uri, before_evaluation)
         self.assertIn("mean.bin", before_evaluation)
         self.assertIn(PRIOR_EVIDENCE.uri, script[script.index("phase=evaluate") :])
+        evaluation = script[script.index("phase=evaluate") : script.index("phase=validate")]
+        self.assertIn("native_rotated_two_bit_range_broker", evaluation)
+        self.assertIn("unshare --net --fork setpriv --reuid=nobody", evaluation)
+        self.assertIn('BORSUK_RANGE_BROKER_SOCKET="$root/broker.sock"', evaluation)
+        self.assertIn("broker-audit.json", evaluation)
+        self.assertIn("evaluate-combined-peak.txt", evaluation)
+        self.assertIn("swapoff -a", script)
+        self.assertIn('(( swaps == 0 ))', script)
         self.assertIn('env PYTHONPATH="$root/repo"', script[script.index("phase=validate") :])
         terminal_body = script[script.index("terminal() {") : script.index("trap terminal EXIT")]
         terminal_python = terminal_body.split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
@@ -204,6 +213,15 @@ class TwoBitSpotTests(unittest.TestCase):
             _validate_terminal_bytes(failed_body, plan, "i-0123456789abcdef0"),
             failed,
         )
+
+    def test_failed_terminal_exits_controller_nonzero(self) -> None:
+        with (
+            patch("scripts.launch_native_rotated_two_bit_spot.parse_args", return_value=self.plan()),
+            patch("scripts.launch_native_rotated_two_bit_spot.launch_and_monitor", return_value={"status": "failed"}),
+            self.assertRaises(SystemExit) as error,
+        ):
+            main([])
+        self.assertEqual(error.exception.code, 1)
 
     def test_artifacts_only_prefix_collision(self) -> None:
         class S3:

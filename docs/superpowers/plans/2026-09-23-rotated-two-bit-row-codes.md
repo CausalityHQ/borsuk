@@ -8,7 +8,7 @@
 
 **Fixed evidence:** Closed page-centered group attempt from source `fd3b14ba`, terminal SHA `06f62bc2e511482697395d36c6035f9205051bf55c55503103f12d2619e91694`, and 1,000-query evidence SHA `24c0f36d947206141b536dd0e6d7536e29e1b56bf3c60700394546fb1e1d20d9`. The attempt itself is immutable and is not modified or restarted.
 
-**Read/quality gates:** 32 actual S3 GET and 16,777,216 code bytes; 32 planned final pages and 16,777,216 data bytes; mean GT100 >=97.5%, p05 GT100 >=90%, GT10 page containment >=96%; <3 GiB worker phase RSS. A 100k pass is only `quality-advance-memory-pending`.
+**Read/quality gates:** 32 actual S3 GET and 16,777,216 code bytes; 32 planned final pages and 16,777,216 data bytes; mean GT100 >=97.5%, p05 GT100 >=90%, GT10 page containment >=96%; <3 GiB worker phase RSS including the range broker, zero swap. A 100k pass is only `quality-advance-memory-pending`.
 
 ## Task 1: deterministic source-only scalar code and group artifact
 
@@ -20,7 +20,7 @@ Create `scripts/native_rotated_two_bit_evaluation.py`, `scripts/native_rotated_t
 
 ## Task 3: phase-separated Spot cell and controller
 
-Create `scripts/native_rotated_two_bit_cell.py` and `scripts/launch_native_rotated_two_bit_spot.py` with focused tests. Adapt the proven source-only construct/evaluate/validate, networkless construction, read-only non-root evaluation, no-retry actual S3 range reader, immutable reservation, terminal roster and immediate controller termination. Use batches of at most 4,096 source rows for construction/replay and 2,048 candidate rows for scoring so no whole float64 source/candidate matrix survives. Use a distinct prefix `research/native-rotated-two-bit/<source-commit>/runs/relaion-100k-dev1000-a0001/`. Test source/query capability boundary, source archive/requirements binding, exact roster, shell syntax and user-data size, validator Python paths, prefix collision and interruption terminal. Keep phase RSS monitoring and `/usr/bin/time -v` gate. Run focused tests, Ruff, diff check; obtain one read-only final implementation review and fix concrete findings. Commit and fast-forward push source.
+Create `scripts/native_rotated_two_bit_cell.py`, `scripts/native_rotated_two_bit_range_broker.py` and `scripts/launch_native_rotated_two_bit_spot.py` with focused tests. Adapt the proven source-only construct/evaluate/validate, networkless construction, network-isolated non-root evaluation through a root Unix-socket broker limited to sealed group ranges, no-retry actual S3 range reader, immutable reservation, terminal roster and immediate controller termination. Use batches of at most 4,096 source rows for construction/replay and 2,048 candidate rows for scoring so no whole float64 source/candidate matrix survives. Use a distinct prefix `research/native-rotated-two-bit/<source-commit>/runs/relaion-100k-dev1000-a0001/`. Test source/query capability boundary, source archive/requirements binding, exact roster, shell syntax and user-data size, validator Python paths, prefix collision and interruption terminal. Keep phase RSS monitoring including the broker, zero-swap verification and `/usr/bin/time -v` gate. Run focused tests, Ruff, diff check; obtain one read-only final implementation review and fix concrete findings. Commit and fast-forward push source.
 
 ## Task 4: one immutable measured decision
 
