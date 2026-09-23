@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import unittest
+from dataclasses import fields
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -54,6 +55,16 @@ class BoundedReaderSpotLauncherTests(unittest.TestCase):
         self.assertEqual(plan.get_concurrency, 128)
         self.assertEqual(plan.virtual_memory_kib, 48 * 1024 * 1024)
         self.assertEqual(plan.sq8.bytes, 780_000_000)
+
+    def test_hierarchical_development_arm_is_explicit_and_skips_throughput(self) -> None:
+        values = {field.name: getattr(self.plan(), field.name)
+                  for field in fields(BoundedReaderSpotPlan)}
+        plan = build_plan(**{**values, "regions": 1_024, "throughput_pass": False})
+        script = worker_script(plan)
+        self.assertIn("BORSUK_V71_REGIONS=1024", script)
+        self.assertIn("BORSUK_V71_THROUGHPUT=0", script)
+        with self.assertRaises(ValueError):
+            build_plan(**{**values, "regions": 512})
 
     def test_worker_authenticates_all_inputs_and_publishes_terminal_last(self) -> None:
         script = worker_script(self.plan())
