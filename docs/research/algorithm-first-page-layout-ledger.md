@@ -5402,3 +5402,31 @@ The next 100k candidate must materially reduce network demand using
 hierarchical page routing and compact page summaries; the historical
 V66/V77 evidence is a starting point, not proof that such a new
 architecture will satisfy the 1M or 100M gates.
+
+### Closed-artifact filter for the next one-wave architecture
+
+Before selecting a replacement, the terminal-complete V66 and V72
+results were read back at their recorded prefixes. Their result SHA-256
+values matched the ledger: respectively
+`282c67f0e61195bfeed2e97ade96ac8c082fec027cfe461a7d7eb78d76d1bb30`
+and `7e39e48346415306581168638400f886ae5189a0c8e966e6e36fb5f40dfa14e0`.
+No new query or truth cohort was opened.
+
+| Closed 1M development screen | GT100 containment | p05 | Physical limitation |
+|---|---:|---:|---|
+| V66 PQ192, eight summaries/page, 64 pages | 97.698% | 88% | fits about 12.2 MiB of fixed 780-byte SQ8 rows |
+| V66 same router, 128 pages | 99.098% | 95% | 25,559,040 SQ8 bytes before request framing, above 16 MiB |
+| V72 resident PQ16, 512-row shortlist | 96.362% | not reported | 16 median, 59 p95 GETs before a cap |
+| V72 resident PQ16, 2,048-row shortlist | 99.248% | not reported | 36 median, 121 p95 GETs; 69.7 MiB p95 before a cap |
+
+V66's 64- and 128-page points bracket the 16-MiB page budget but do
+not tell us the quality at every intermediate page count. V72's
+unbounded shortlist result cannot establish a 32-GET/16-MiB serving
+point; the separately capped V85 PQ16 validation returned only 93.505%
+Recall@100 and p05 70%. These facts reject simply replacing the
+mirrored read with a page-summary-only 128-page read or an unchanged
+PQ16 row shortlist. They do not rule out a new spatial layout, a
+different row representation, or genuinely selective hierarchical
+routing. The next gate must compare its exact-source causal control
+with its compressed arm on one fixed layout and must count actual
+bounded data ranges before advancing.
