@@ -4695,3 +4695,48 @@ groups to worsen the tail and paired means. It does not prove all moment
 models fail. A next production-oriented hypothesis must add a materially
 different directional or row-level routing signal, and begin with a
 preregistered decisive 100k gate before another 1M promotion.
+
+### ReLAION-100k OPQ8 source-only group containment a0001: advance to code test
+
+The fixed eight-byte source-trained OPQ row router in
+`docs/superpowers/specs/2026-09-23-hundred-thousand-opq8-row-router-design.md`
+ranked the unchanged four-page two-bit code groups. This first stage read no
+two-bit code groups and performed no final row or page scoring. It is only
+an upper bound for the planned code-read stage.
+
+Pushed source `87236c5765186fb8ab977ef86f87a6b1047effb1` was sealed in
+an 11,584,428-byte create-only archive with SHA-256
+`f337048cbf9e981a5f79c19d919996f5aedb61e0b3fc8995a373a8333a3f4e4a`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-opq8-router/87236c5765186fb8ab977ef86f87a6b1047effb1/runs/relaion-100k-dev1000-a0001/`.
+The 4,161-byte terminal SHA-256 was
+`c6f2258209634a282abf316730a316e90156ed6e669f0bc938f65a8d3c38c0eb`.
+It closed `complete` in 112 seconds with controller exit zero; Spot instance
+`i-08f4472686f0fd103` was confirmed terminated. The controller read back
+all 11 artifacts, and a separate closeout recomputed every summary from the
+1,000 sealed evidence rows. Model, code plane, plan, evidence and independent
+validation SHA-256 values were respectively
+`e49a31fd334f4af3de7964ca6452c3f93bc6223939e29718721b3d34207733ff`,
+`04c3b5c38928c225f27ca749acbbfef1a6571f9ffe0dd8782fd5b4309464e8cc`,
+`b14ed50ad4b552a95de9aa1871e3ea964bb96d76e871e3979e10e7036dc77064`,
+`b834a78673b3b5c8dfa30ed528ec8edb00c9e8508da3385b681026096bcc5019`,
+and `0802f12a6f0b120a20b842a6ecbabb3e3bbc315e02d0ac740d3ad869303c730f`.
+
+| Frozen 100k group containment | OPQ8 source-only | preregistered stop |
+|---|---:|---:|
+| total GT100 positions selected | **99,934 / 100,000** | ≥98,418 |
+| p05 GT100 positions selected | **100 / 100** | ≥92 |
+| total GT10 positions selected | **10,000 / 10,000** | ≥9,951 |
+| queries below 90 selected GT100 | **0** | <36 |
+| maximum group plan | **32 GETs / 15,423,040 bytes** | ≤32 / ≤16,777,216 |
+
+Construct, plan, evaluate and independent validate process-tree RSS peaks
+were 1,650,167,808, 144,166,912, 1,404,022,784 and 1,664,647,168
+bytes. Each passed the 3-GiB cap with a 64-MiB margin, with zero swaps.
+The validator independently reconstructed the source-trained model, physical
+codes, ADC scores and all plans before replaying containment.
+
+**Decision:** `opq8-group-containment-advance` to the separately
+preregistered paired 100k actual two-bit code-read and final-page quality
+test. Source-only containment cannot establish final quality, real S3 read
+latency or 100M scan throughput.
