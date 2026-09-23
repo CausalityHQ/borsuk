@@ -4026,3 +4026,78 @@ page-local SQ8 plus native cold-S3 timing before format selection. At 100M,
 the 7.2-GB row-code plane must remain on object storage, not resident RAM.
 If residual codes miss the 100k quality gate, reject this representation and
 revisit representation or routing rather than tuning another width.
+
+### Residual row-score a0001: mean recovers, tail remains below the gate
+
+The one preregistered residual cell ran from source commit
+`8fc9c497a85dbdbfc016346e8fc1cd3100a089a6` and source archive SHA-256
+`55c4931b91435affff2f22d02067dc4ac76d37c4bd394de6a8cd0ccebcdda600`
+(11,016,946 bytes), with requirements SHA-256
+`d2057b9b57da6ae2900efa99c3424c1a7211f7847c1c621ed0dd9e467f56a874`.
+The immutable attempt prefix is
+`s3://borsuk-bench-453182569524-euc1/research/native-residual-row-score/8fc9c497a85dbdbfc016346e8fc1cd3100a089a6/runs/relaion-100k-dev1000-a0001/`.
+Its terminal SHA-256 is
+`d566574793cb46f2742ba4bd6473df23c8562d44e7dd20a68ecb8508aa203ea0`;
+status is `complete`, exit 0, 2,607 seconds, `claim_eligible=false`.
+Controller readback matched the length and SHA-256 of all ten terminal-listed
+artifacts. The one-time `c7i.8xlarge` Spot instance `i-0a7edde63418411f0`
+in `eu-central-1c` is terminated. Result, evidence and independent validation
+SHA-256 values are respectively
+`65cb40d7294067e1df3fa1496dbf36903a2ff66a5dd05b7df04f98d8b945996a`,
+`d91c726afb584826c24a3fd1c0d804cd8d71d95c4967cf16f3cdceb924c53f1f`,
+and `74bf9704bba97f0600864bbd97c4276a5fba20909a48309e73c567a5511aaf57`.
+The validator independently replayed all 1,000 paired queries and agreed with
+the producer's `killed` decision. The sealed 1,572,864-byte books and
+7,200,000-byte interleaved row plane have SHA-256
+`2f017639723f8d7d6b8964eb1bcfd19adb771caf9a9bee5887730fd147097266`
+and `c614f44e7605cfacd5e1cbe27a6f24760c00705764a775e18dcc4177534381bc`.
+Extracting the first-stage books and 48 columns per row reproduces the prior
+PQ48 book and code-plane SHA-256 values exactly, so the paired difference is
+caused by the residual stage rather than a retrained first stage.
+
+| Same 1,000 frozen queries | mean GT100 | p05 GT100 | worst GT100 | R@10 |
+|---|---:|---:|---:|---:|
+| single-stage PQ48 paired control | 97.184% | 87% | 50% | 99.39% |
+| residual PQ48+PQ24 nomination | **97.554%** | **87%** | 65% | **99.56%** |
+| exact-distance nomination | 98.556% | 91% | 65% | 99.59% |
+| restricted truth-aware oracle | 98.557% | 91% | 65% | — |
+| retained 128 leaves | 98.644% | 92% | 65% | — |
+
+Residual codes add 370 GT100 hits over PQ48: 205 queries improve, 37 worsen,
+and 758 tie. They meet the 97.5% mean and 96% R@10 gates but miss the 90% p05
+gate by three points; 68 queries remain below 90 GT100 hits, versus 33 under
+exact row scores. A replacement must rescue at least 19 of the 35 currently
+sub-90 queries that exact scoring can rescue to move p05 to 90% on this frozen
+split. Exact nomination adds 1,002 hits over residual and never
+worsens a paired query (229 improve, 771 tie). The remaining failure is thus
+row-score representation fidelity on the fixed retained leaves, with a smaller
+irreducible tail from the tree. The actual authenticated S3 code wave used
+8–11 Range GETs and 5,551,704–7,200,000 bytes per query. The planned final
+data wave contained at most 32 pages and 15,665,288 encoded bytes; this cell
+did not issue data-page GETs or measure SQ8 serving recall/latency. Its R@10
+is GT10 page containment. Construct, evaluate and
+validate peaked at 1,939,860, 2,345,344 and 2,535,752 KiB RSS respectively,
+each with zero swaps. These measurements establish the 100k read and worker
+memory bounds, not 1M locality or native cold-S3 latency.
+
+The two-generation 100M worksheet also exceeds the limit for the current
+uncompressed router under a conservative full-reserve overlap. The standing
+V102 one-generation 1,269,504,702-byte projection omits this geometric
+tree's page centroids and split normals. A 491,520-byte SQ8 page can hold at
+most 632 rows even before ID and Arrow overhead (768 code bytes, 8 mutation
+bytes and 1 state byte per row), so 100M rows need at least 158,228 pages.
+Raw 768-float centroids need at least 486,076,416 bytes and 192-float normals
+for a binary tree at least 121,518,336 bytes per generation. Adding the
+786,432-byte second books and 25,165,824-byte float64 cross-term tables per
+generation to two complete V102 reserve sets yields at least 3,806,103,420
+projected resident bytes, 584,877,948 above the 3-GiB gate. Shared runtime
+reserves or omitting the unneeded page centroids from the row-score serving
+path can reduce this conditional projection; neither has a verified
+two-generation implementation or allocation inventory yet. The figure is
+not a lower bound for every possible implementation of this architecture.
+
+**Decision:** kill the two-stage residual PQ48+PQ24 row-score representation.
+Do not promote it to 1M or freeze its storage format. A next 100k design must
+materially change row-score fidelity or the nomination information and prove
+the frozen p05 gate; a credible 1M code-locality and two-generation memory
+path are separate requirements before any scale promotion.
