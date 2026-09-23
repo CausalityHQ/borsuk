@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from scripts.launch_native_geometric_layout_spot import SourceArchiveIdentity
 from scripts.launch_native_one_million_selector_spot import (
     artifact_names,
@@ -20,6 +22,7 @@ from scripts.native_one_million_two_bit_code_projection_cell import (
     _prior_authority,
     run_plan,
 )
+from scripts.validate_native_one_million_two_bit_code_projection import _replay_cover
 
 
 class CodeWaveProjectionTest(unittest.TestCase):
@@ -50,6 +53,24 @@ class CodeWaveProjectionTest(unittest.TestCase):
             (root / "prior-range-terminal.json").write_text("{}\n")
             with self.assertRaisesRegex(ValueError, "terminal identity"):
                 _prior_authority(root)
+
+    def test_independent_cover_replays_bridge_cost_and_admission(self) -> None:
+        lengths = {"base": (200, 200, 200, 200)}
+        replay = _replay_cover((('base', 0), ('base', 2), ('base', 3)), lengths, 1, 600)
+        self.assertEqual(replay["target_pages"], [["base", 0], ["base", 2]])
+        self.assertEqual(replay["included_pages"], [["base", 0], ["base", 1], ["base", 2]])
+        self.assertEqual(replay["ranges"], [["base", 0, 3]])
+        self.assertEqual(replay["encoded_bytes"], 600)
+
+    def test_independent_replay_matches_planner_across_small_layouts(self) -> None:
+        rng = np.random.default_rng(20260923)
+        for _ in range(30):
+            counts = tuple(int(value) for value in rng.integers(1, 5, size=9))
+            lengths = code_page_lengths(counts, base_pages=5)
+            priority = tuple(int(value) for value in rng.permutation(9))
+            expected = plan_code_wave(priority, lengths, maximum_gets=2, maximum_bytes=3200)
+            ranked = tuple(tuple(page) for page in expected["priority_pages"])
+            self.assertEqual(_replay_cover(ranked, lengths, 2, 3200), expected)
 
     def test_spot_plan_has_dedicated_projection_roster(self) -> None:
         commit = "0" * 40
