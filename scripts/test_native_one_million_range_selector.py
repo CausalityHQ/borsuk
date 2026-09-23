@@ -77,6 +77,24 @@ class OneMillionRangeSelectorTests(unittest.TestCase):
             self.assertEqual(result["metrics"], validation["metrics"])
             self.assertEqual(result["decision"], "score-ranked-byte-ceiling-feasible")
 
+    def test_pq96_projection_replays_exact_width(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identities = source_fixture(root, base_rows=256)
+            artifact = build_page_selector(root, root, identities)
+            _, development = development_fixture(root)
+            result = evaluate_range_selector(
+                artifact, root / "queries.parquet", root / "truth.parquet", root,
+                development, query_count=1, pq96=True,
+            )
+            validation = validate_range_selector(
+                root, root, root, root, identities, development,
+                query_count=1, pq96=True,
+            )
+            self.assertEqual(result["metrics"], validation["metrics"])
+            self.assertEqual(result["metrics"]["row_bytes"], 96)
+            self.assertEqual(result["decision"], "pq96-locality-projection-feasible")
+
     def test_fixed_source_seal_matches_previous_screen(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

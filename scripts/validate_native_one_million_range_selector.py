@@ -38,9 +38,9 @@ def _intervals(groups: tuple, selected: set[int]) -> list[list[object]]:
 def replay_range_evidence(
     artifact: PageSelectorArtifact, queries: Path, truth: Path, evidence_dir: Path,
     identities: Mapping[str, ObjectIdentity], *, query_count: int = 1000,
-    byte_only: bool = False,
+    byte_only: bool = False, pq96: bool = False,
 ) -> dict[str, object]:
-    if set(identities) != {"queries", "truth"} or query_count <= 0:
+    if set(identities) != {"queries", "truth"} or query_count <= 0 or (byte_only and pq96):
         raise ValueError("independent range query contract differs")
     _check(queries, identities["queries"], "queries")
     _check(truth, identities["truth"], "truth")
@@ -70,6 +70,11 @@ def replay_range_evidence(
         raise ValueError("independent range query vectors differ")
     owner = dict(zip((int(v) for v in artifact.membership_ids), (int(v) for v in artifact.membership_groups), strict=True))
     centers = artifact.page_centroids.astype(np.float64)
+    lengths = [
+        4 + 4 * (group.end_page - group.first_page) + 96 * group.row_count
+        if pq96 else group.code_bytes
+        for group in artifact.groups
+    ]
     samples: list[dict[str, object]] = []
     for ordinal, query in enumerate(vectors):
         delta = centers - query.astype(np.float64)
@@ -83,7 +88,7 @@ def replay_range_evidence(
         admitted: list[int] = []
         bytes_used = 0
         for index in ranked:
-            next_bytes = bytes_used + artifact.groups[index].code_bytes
+            next_bytes = bytes_used + lengths[index]
             if next_bytes > 16_777_216:
                 continue
             candidate = chosen | {index}
@@ -113,6 +118,7 @@ def replay_range_evidence(
         raise ValueError("independent range evidence canonical bytes differ")
     expected_evidence_schema = (
         "borsuk-one-million-byte-ceiling-evidence-v1" if byte_only
+        else "borsuk-one-million-pq96-locality-evidence-v1" if pq96
         else "borsuk-one-million-range-selector-evidence-v1"
     )
     if evidence.get("schema") != expected_evidence_schema or evidence.get("samples") != samples:
@@ -134,13 +140,18 @@ def replay_range_evidence(
         and metrics["mean_recall_at_10_ppm"] >= 960000
         and metrics["max_projected_code_bytes"] <= 16777216
     )
+    if pq96:
+        metrics["row_bytes"] = 96
     metrics["decision"] = (
         ("score-ranked-byte-ceiling-feasible" if quality_pass else "score-ranked-byte-ceiling-fails")
         if byte_only else
+        ("pq96-locality-projection-feasible" if quality_pass and metrics["max_code_gets"] <= 32 else "pq96-locality-projection-killed")
+        if pq96 else
         ("adjacent-code-range-selector-feasible" if quality_pass and metrics["max_code_gets"] <= 32 else "adjacent-code-range-selector-killed")
     )
     expected_result_schema = (
         "borsuk-one-million-byte-ceiling-result-v1" if byte_only
+        else "borsuk-one-million-pq96-locality-result-v1" if pq96
         else "borsuk-one-million-range-selector-result-v1"
     )
     if (
@@ -162,7 +173,7 @@ def validate_range_selector(
     root: Path, selector_dir: Path, evidence_dir: Path, out: Path,
     source_identities: Mapping[str, ObjectIdentity],
     development_identities: Mapping[str, ObjectIdentity], *, query_count: int = 1000,
-    byte_only: bool = False,
+    byte_only: bool = False, pq96: bool = False,
 ) -> dict[str, object]:
     artifact = read_page_selector(selector_dir, source_identities)
     centroids, membership, page_groups, page_order_sha, groups = rebuild_page_arrays(root, source_identities)
@@ -176,11 +187,12 @@ def validate_range_selector(
         raise ValueError("independent range source replay differs")
     metrics = replay_range_evidence(
         artifact, root / "queries.parquet", root / "truth.parquet", evidence_dir,
-        development_identities, query_count=query_count, byte_only=byte_only,
+        development_identities, query_count=query_count, byte_only=byte_only, pq96=pq96,
     )
     validation: dict[str, object] = {
         "schema": (
             "borsuk-one-million-byte-ceiling-validation-v1" if byte_only
+            else "borsuk-one-million-pq96-locality-validation-v1" if pq96
             else "borsuk-one-million-range-selector-validation-v1"
         ),
         "decision": metrics["decision"], "metrics": metrics,
