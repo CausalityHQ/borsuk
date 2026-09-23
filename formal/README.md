@@ -1,5 +1,13 @@
 # OPQ8 proofs
 
+`PhysicalIntervalBudget.lean` proves exact SQ8 page-to-byte conversion for
+the V63/V70 one-object layout used by V110/V111: 336 units of 49,920 bytes
+fit under 16 MiB, and 337 do not. Given authenticated page and GET counts,
+it proves the 32-GET/16-MiB arithmetic gate. It does not yet prove the
+NumPy interval DP's refinement to those counts; the exact DP recurrence is
+tested against exhaustive small layouts. The proof does not establish
+query-time recall, live S3 latency or 100M memory peaks.
+
 Run `lean Opq8Planner.lean` from this directory with the pinned Lean
 toolchain. The file imports only `Std` and contains no admitted theorems.
 
