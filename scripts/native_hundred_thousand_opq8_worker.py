@@ -12,19 +12,63 @@ from scripts.native_page_microcluster_cell import FROZEN_INPUTS
 
 
 def _download(identity: object, name: str) -> str:
+    encoded_bytes = getattr(identity, "encoded_bytes", None)
+    if encoded_bytes is None:
+        encoded_bytes = identity.bytes
     return "\n".join((
         f"aws s3 cp {_q(identity.uri)} {_q(name)} --only-show-errors",
-        f"[ \"$(stat -c%s {_q(name)})\" = {_q(identity.encoded_bytes)} ]",
+        f"[ \"$(stat -c%s {_q(name)})\" = {_q(encoded_bytes)} ]",
         f"printf '%s  {name}\\n' {_q(identity.sha256)} | sha256sum -c -",
     ))
 
 
 def opq8_worker_script(plan: object) -> str:
     from scripts.launch_native_one_million_selector_spot import BUCKET, artifact_names
+    one_million = plan.selector_kind == "opq8_1m"
+    if one_million:
+        from scripts.native_one_million_opq8_cell import (
+            CONTROL_SOURCE,
+            MODEL_IDENTITY,
+        )
+        from scripts.native_one_million_opq8_cell import (
+            HISTORICAL_EVIDENCE as ONE_MILLION_HISTORICAL,
+        )
+        from scripts.native_one_million_selector_cell import (
+            DEVELOPMENT_IDENTITIES,
+            SOURCE_IDENTITIES,
+        )
+
+        source_commands = "\n".join((
+            *(_download(SOURCE_IDENTITIES[role], name) for role, name in (
+                ("source", "source.parquet"), ("generation", "generation.json"),
+                ("base", "base.arrow"), ("delta", "delta.arrow"), ("router", "router.arrow"),
+            )),
+            _download(MODEL_IDENTITY, "model.bin"),
+            *(_download(CONTROL_SOURCE[role], f"control/{name}") for role, name in (
+                ("centroids", "centroids.bin"), ("membership", "membership.bin"),
+                ("seal", "seal.json"),
+            )),
+        ))
+        query_commands = _download(DEVELOPMENT_IDENTITIES["queries"], "queries.parquet")
+        truth_commands = "\n".join((
+            _download(DEVELOPMENT_IDENTITIES["truth"], "truth.parquet"),
+            _download(ONE_MILLION_HISTORICAL, "historical-evidence.json"),
+        ))
+    else:
+        source_commands = "\n".join((
+            _download(FROZEN_INPUTS.layout.source, "source.parquet"),
+            _download(FROZEN_INPUTS.membership, "membership.parquet"),
+            _download(PRIOR_CODE_SEAL, "prior-code-seal.json"),
+        ))
+        query_commands = _download(FROZEN_INPUTS.queries, "queries.parquet")
+        truth_commands = "\n".join((
+            _download(FROZEN_INPUTS.truth, "truth.parquet"),
+            _download(HISTORICAL_EVIDENCE, "historical-evidence.json"),
+        ))
 
     script = """#!/bin/bash
 set -euo pipefail
-root=/mnt/native-hundred-thousand-opq8
+root=@ROOT@
 output=@OUTPUT@
 phase=bootstrap
 status=failed
@@ -98,7 +142,7 @@ def ident(path,role):
  return {"encoded_bytes":len(body),"role":role,"sha256":hashlib.sha256(body).hexdigest(),"uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
 files=@ARTIFACT_FILES@
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
-value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":@ATTEMPT@,"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-hundred-thousand-opq8-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
+value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":@ATTEMPT@,"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"@TERMINAL_SCHEMA@","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
 pathlib.Path("terminal.json").write_bytes(json.dumps(value,sort_keys=True,separators=(",",":")).encode()+bytes([10]))
 PY
   if aws s3api put-object --bucket @BUCKET@ --key @TERMINAL_KEY@ --body terminal.json --if-none-match '*' >/dev/null; then
@@ -126,31 +170,32 @@ printf '%s  repo/scripts/requirements-format-bench.txt\\n' @REQUIREMENTS_SHA@ | 
 chmod -R a+rX "$root/repo"
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --disable-pip-version-check --quiet -r repo/scripts/requirements-format-bench.txt
+@SOURCE_SETUP@
 @SOURCE_COMMANDS@
 phase=construct
-run_capped /usr/bin/time -v -o construct-resources.txt timeout --foreground @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "$root/.venv/bin/python" -m scripts.native_hundred_thousand_opq8_cell construct --root "$root"
+run_capped /usr/bin/time -v -o construct-resources.txt timeout --foreground @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=@BLAS_THREADS@ OMP_NUM_THREADS=@BLAS_THREADS@ "$root/.venv/bin/python" -m @CELL_MODULE@ construct --root "$root"
 check_resources construct-resources.txt
 phase=seal
-chmod 0444 source.parquet membership.parquet prior-code-seal.json model.bin codes.bin seal.json
-publish_artifact model.bin
-publish_artifact codes.bin
-publish_artifact seal.json
+@SOURCE_CHMOD@
+@SOURCE_PUBLISH@
 publish_artifact construct-resources.txt
 phase=plan
 @QUERY_COMMANDS@
 chmod 0444 queries.parquet
 mkdir planning && chown nobody:nobody planning
-run_capped /usr/bin/time -v -o plan-resources.txt timeout --foreground @WALL@ unshare --net --fork setpriv --reuid=nobody --regid=nobody --clear-groups env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "$root/.venv/bin/python" -m scripts.native_hundred_thousand_opq8_cell plan --root "$root" --out "$root/planning"
+run_capped /usr/bin/time -v -o plan-resources.txt timeout --foreground @WALL@ unshare --net --fork setpriv --reuid=nobody --regid=nobody --clear-groups env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=@BLAS_THREADS@ OMP_NUM_THREADS=@BLAS_THREADS@ "$root/.venv/bin/python" -m @CELL_MODULE@ plan --root "$root" --out "$root/planning"
 mv planning/plans.json plans.json
+@PLAN_MOVE@
 rmdir planning
 check_resources plan-resources.txt
 publish_artifact plans.json
+@PLAN_PUBLISH@
 publish_artifact plan-resources.txt
 phase=evaluate
 @TRUTH_COMMANDS@
-chmod 0444 truth.parquet historical-evidence.json plans.json
+@TRUTH_CHMOD@
 mkdir evaluation && chown nobody:nobody evaluation
-run_capped /usr/bin/time -v -o evaluate-resources.txt timeout --foreground @WALL@ unshare --net --fork setpriv --reuid=nobody --regid=nobody --clear-groups env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "$root/.venv/bin/python" -m scripts.native_hundred_thousand_opq8_cell evaluate --root "$root" --out "$root/evaluation"
+run_capped /usr/bin/time -v -o evaluate-resources.txt timeout --foreground @WALL@ unshare --net --fork setpriv --reuid=nobody --regid=nobody --clear-groups env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=@BLAS_THREADS@ OMP_NUM_THREADS=@BLAS_THREADS@ "$root/.venv/bin/python" -m @CELL_MODULE@ evaluate --root "$root" --out "$root/evaluation"
 mv evaluation/evidence.json evidence.json
 mv evaluation/result.json result.json
 rmdir evaluation
@@ -159,7 +204,7 @@ publish_artifact evidence.json
 publish_artifact result.json
 publish_artifact evaluate-resources.txt
 phase=validate
-run_capped /usr/bin/time -v -o validate-resources.txt timeout --foreground @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "$root/.venv/bin/python" -m scripts.native_hundred_thousand_opq8_cell validate --root "$root" --out "$root"
+run_capped /usr/bin/time -v -o validate-resources.txt timeout --foreground @WALL@ unshare --net --fork env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=@BLAS_THREADS@ OMP_NUM_THREADS=@BLAS_THREADS@ "$root/.venv/bin/python" -m @CELL_MODULE@ validate --root "$root" --out "$root"
 check_resources validate-resources.txt
 publish_artifact validation.json
 publish_artifact validate-resources.txt
@@ -168,12 +213,15 @@ status=complete
 phase=complete
 """
     replacements = {
+        "@ROOT@": _q("/mnt/native-one-million-opq8" if one_million else "/mnt/native-hundred-thousand-opq8"),
         "@OUTPUT@": _q(plan.output_prefix.rstrip("/")),
         "@RSS@": str(plan.maximum_rss_bytes),
         "@BUCKET@": _q(BUCKET),
         "@ARTIFACT_KEY@": _q(_s3_location(plan.output_prefix)[1] + "/artifacts"),
         "@TERMINAL_KEY@": _q(_s3_location(plan.output_prefix)[1] + "/terminal.json"),
-        "@ARTIFACT_FILES@": repr(tuple(artifact_names("opq8").items())),
+        "@ARTIFACT_FILES@": repr(tuple(artifact_names(plan.selector_kind).items())),
+        "@TERMINAL_SCHEMA@": "borsuk-one-million-opq8-terminal-v1" if one_million else "borsuk-hundred-thousand-opq8-terminal-v1",
+        "@CELL_MODULE@": "scripts.native_one_million_opq8_cell" if one_million else "scripts.native_hundred_thousand_opq8_cell",
         "@ATTEMPT@": str(plan.attempt),
         "@COMMIT@": _q(plan.source_commit),
         "@ARCHIVE_URI@": _q(plan.source_archive.uri),
@@ -181,16 +229,27 @@ phase=complete
         "@ARCHIVE_BYTES@": str(plan.source_archive.encoded_bytes),
         "@REQUIREMENTS_SHA@": _q(plan.requirements_sha256),
         "@WALL@": str(plan.wall_seconds),
-        "@SOURCE_COMMANDS@": "\n".join((
-            _download(FROZEN_INPUTS.layout.source, "source.parquet"),
-            _download(FROZEN_INPUTS.membership, "membership.parquet"),
-            _download(PRIOR_CODE_SEAL, "prior-code-seal.json"),
-        )),
-        "@QUERY_COMMANDS@": _download(FROZEN_INPUTS.queries, "queries.parquet"),
-        "@TRUTH_COMMANDS@": "\n".join((
-            _download(FROZEN_INPUTS.truth, "truth.parquet"),
-            _download(HISTORICAL_EVIDENCE, "historical-evidence.json"),
-        )),
+        "@BLAS_THREADS@": "8" if one_million else "1",
+        "@SOURCE_SETUP@": "mkdir control" if one_million else "",
+        "@SOURCE_COMMANDS@": source_commands,
+        "@SOURCE_CHMOD@": (
+            "chmod 0444 source.parquet generation.json base.arrow delta.arrow router.arrow model.bin codes.bin membership.bin seal.json control/*"
+            if one_million else
+            "chmod 0444 source.parquet membership.parquet prior-code-seal.json model.bin codes.bin seal.json"
+        ),
+        "@SOURCE_PUBLISH@": (
+            "publish_artifact model.bin\npublish_artifact codes.bin\npublish_artifact membership.bin\npublish_artifact seal.json"
+            if one_million else
+            "publish_artifact model.bin\npublish_artifact codes.bin\npublish_artifact seal.json"
+        ),
+        "@QUERY_COMMANDS@": query_commands,
+        "@PLAN_MOVE@": "mv planning/plan-seal.json plan-seal.json" if one_million else "",
+        "@PLAN_PUBLISH@": "publish_artifact plan-seal.json" if one_million else "",
+        "@TRUTH_COMMANDS@": truth_commands,
+        "@TRUTH_CHMOD@": (
+            "chmod 0444 truth.parquet historical-evidence.json plans.json plan-seal.json"
+            if one_million else "chmod 0444 truth.parquet historical-evidence.json plans.json"
+        ),
     }
     for marker, value in replacements.items():
         script = script.replace(marker, value)

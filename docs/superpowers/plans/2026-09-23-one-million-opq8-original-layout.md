@@ -57,9 +57,9 @@
 
 **Interfaces:** Add one distinct `opq8_1m` selector kind with its own prefix, terminal schema, source/query/truth downloads and artifact roster. Reuse the controller's create-only reservation, terminal readback and guaranteed EC2 termination.
 
-- [ ] **Step 1: Write failing launcher tests.** Validate the exact 1M prefix/schema, download phase order, 100k model identity, immutable artifact roster, Spot reservation and terminal parse.
-- [ ] **Step 2: Run only launcher tests; confirm the new kind is rejected.** Use the existing focused test module.
-- [ ] **Step 3: Add the worker/controller mode.** Freeze the source archive and script before launch; resource receipts cover construct, plan, evaluate and validation. Keep the original 100k worker behavior unchanged.
+- [x] **Step 1: Write failing launcher tests.** The focused test pins 1M prefix/schema, 13 artifacts, model/control downloads, source/plan phase order, 14,400-second CLI deadline, Spot specs and shell syntax.
+- [x] **Step 2: Confirm the new kind is rejected.** The new focused test first failed at `build_plan` rejecting `opq8_1m`.
+- [x] **Step 3: Add the worker/controller mode.** The worker shares create-only terminal, readback, resource receipts and termination with the 100k worker; the old 100k focused script test still passes.
 - [ ] **Step 4: Run focused tests, source archive checks and a read-only cross-provider review.** Repair findings before any launch. Do not run a local full suite while swap remains charged.
 - [ ] **Step 5: Commit and fast-forward push, then launch exactly one Spot attempt.** Monitor only terminal and infrastructure until closure. Read back and authenticate all terminal artifacts, recompute all 1,000 results, confirm instance termination, record the pass/fail decision and push the ledger.
 

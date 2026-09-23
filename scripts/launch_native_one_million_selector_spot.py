@@ -40,6 +40,16 @@ ARTIFACTS = {
 
 
 def artifact_names(kind: str) -> dict[str, str]:
+    if kind == "opq8_1m":
+        return {
+            "model": "model.bin", "codes": "codes.bin", "membership": "membership.bin",
+            "seal": "seal.json", "plans": "plans.json", "plan-seal": "plan-seal.json",
+            "evidence": "evidence.json", "result": "result.json", "validation": "validation.json",
+            "construct-resources": "construct-resources.txt",
+            "plan-resources": "plan-resources.txt",
+            "evaluate-resources": "evaluate-resources.txt",
+            "validate-resources": "validate-resources.txt",
+        }
     if kind == "paired":
         return {
             "source-seal": "source-seal.json", "plan-seal": "plan-seal.json",
@@ -88,7 +98,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-hundred-thousand-opq8-paired/"
@@ -97,6 +107,9 @@ def build_plan(**values: object) -> SelectorSpotPlan:
         f"s3://{BUCKET}/research/native-hundred-thousand-opq8-router/"
         f"{plan.source_commit}/runs/relaion-100k-dev1000-a{plan.attempt:04d}"
         if plan.selector_kind == "opq8" else
+        f"s3://{BUCKET}/research/native-one-million-opq8-selector/"
+        f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
+        if plan.selector_kind == "opq8_1m" else
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
         f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
     )
@@ -108,7 +121,7 @@ def build_plan(**values: object) -> SelectorSpotPlan:
         or not 1 <= plan.attempt <= 9999
         or len(plan.requirements_sha256) != 64
         or any(character not in "0123456789abcdef" for character in plan.requirements_sha256)
-        or plan.wall_seconds != 7_200
+        or plan.wall_seconds != (14_400 if plan.selector_kind == "opq8_1m" else 7_200)
         or plan.maximum_rss_bytes != 3 * 1024**3
     ):
         raise ValueError("one-million selector Spot plan differs")
@@ -128,6 +141,8 @@ def _download_commands(identities: dict[str, object], names: dict[str, str]) -> 
 
 
 def _terminal_schema(kind: str) -> str:
+    if kind == "opq8_1m":
+        return "borsuk-one-million-opq8-terminal-v1"
     if kind == "paired":
         return "borsuk-hundred-thousand-opq8-paired-terminal-v1"
     if kind == "opq8":
@@ -146,7 +161,7 @@ def worker_script(plan: SelectorSpotPlan) -> str:
         )
 
         return paired_worker_script(plan)
-    if plan.selector_kind == "opq8":
+    if plan.selector_kind in {"opq8", "opq8_1m"}:
         from scripts.native_hundred_thousand_opq8_worker import opq8_worker_script
 
         return opq8_worker_script(plan)
@@ -494,6 +509,22 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
                 "truth": dataclasses.asdict(FROZEN_INPUTS.truth),
                 "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
             }
+    elif plan.selector_kind == "opq8_1m":
+        from scripts.native_one_million_opq8_cell import (
+            CONTROL_SOURCE,
+            HISTORICAL_EVIDENCE,
+            MODEL_IDENTITY,
+        )
+
+        source_inputs = {
+            **{role: dataclasses.asdict(value) for role, value in SOURCE_IDENTITIES.items()},
+            "opq-model": dataclasses.asdict(MODEL_IDENTITY),
+            **{f"control-{role}": dataclasses.asdict(identity) for role, identity in CONTROL_SOURCE.items()},
+        }
+        development_inputs = {
+            **{role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()},
+            "historical-evidence": dataclasses.asdict(HISTORICAL_EVIDENCE),
+        }
     else:
         source_inputs = {role: dataclasses.asdict(value) for role, value in SOURCE_IDENTITIES.items()}
         development_inputs = {role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()}
@@ -604,7 +635,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(
@@ -616,6 +647,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
         output_prefix=args.output_prefix,
         selector_kind=args.selector_kind,
         attempt=args.attempt,
+        wall_seconds=14_400 if args.selector_kind == "opq8_1m" else 7_200,
     )
 
 
