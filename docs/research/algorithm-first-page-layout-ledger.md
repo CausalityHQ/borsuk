@@ -4234,3 +4234,59 @@ source-only 1M centroid-selector screen in
 Only a selector pass authorizes a full 1M code-plane and native final-page
 range-serving cell; two-generation 100M memory and product performance remain
 open.
+
+### ReLAION-1M eight-page single-centroid selector a0001: killed before code build
+
+The first 1M bridge screen followed the fixed seven-input identity and
+source-only construction in
+`docs/superpowers/specs/2026-09-23-rotated-two-bit-one-million-bridge-design.md`.
+It grouped consecutive V85 base and delta pages in eights, trained one
+float16 centroid per group from source vectors, and selected the nearest
+32 groups per frozen development query. The source commit was
+`6c81003e879eff4e741c9fc4855e47a7562d51b2`; the 11,097,000-byte
+readback-verified archive SHA-256 was
+`3ba68e91745a27ca68e4ac108e607e304b5ed0eb3432d103ec27e51e235150dd`.
+The immutable attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-group-selector/6c81003e879eff4e741c9fc4855e47a7562d51b2/runs/relaion-1m-dev1000-a0001/`.
+
+The 3,513-byte terminal SHA-256 was
+`08657936c5bf35735b68e15f42dde1835147525f7a8e0fb14f083bc781025423`.
+It closed `complete` with controller exit 0 after 91 seconds; Spot instance
+`i-0808988d71d126dbe` was confirmed terminated. All nine terminal-listed
+artifacts matched S3 readback length and SHA-256. The 910-centroid seal,
+229,996-byte per-query evidence, result and independent validation SHA-256
+were respectively
+`ad115e2340a22986589f82f2989e3f4b23d22f0c53191f71c53794f7ba074878`,
+`763f2a0efe656bf7f9ff19093f3e47cfd9690b5ce83e14b401d6e460b153c33b`,
+`0e341d29f32ab931fd02f2db08a4266b67ce7f5b6a846f858d84fa175552964c`,
+and `9bfcfa360aeefb992a0b2ff3388e19c7e13baae5267bf0b269b8c4a0cfabbd29`.
+The validator reconstructed the source centroids, physical page membership
+and every query's selected groups. A separate aggregation of the 1,000
+terminal-closed samples reproduced the recorded decision.
+
+| Fixed 1M selector screen | measured | required to continue |
+|---|---:|---:|
+| mean GT100 containment | 86.981% | ≥97.5% |
+| p05 GT100 containment | 59% | ≥90% |
+| GT10 containment | 89.34% | ≥96% |
+| maximum projected code wave | 32 GETs, 8,340,352 bytes | ≤32 GETs, ≤16,777,216 bytes |
+
+The worst query contained 11 of 100 true neighbors; 447 of 1,000 queries
+contained fewer than 90. Construct, evaluate and validate peaked at 841,260,
+133,512 and 573,332 KiB RSS, with zero swaps. This screen made no code-group
+S3 Range GETs and no final-page serving measurements. The historical
+truth-aware 32-group ceiling of 98.381% mean/91% p05 on the V98 retained
+pages is a diagnostic inference from a different routing stage, not a claim
+that this new selector could attain it.
+
+**Decision:** `group-centroid-selector-killed`. The fixed single-centroid
+router fails quality by 10.519 mean and 31 p05 percentage points while
+leaving half the nominal code-byte budget unused. Do not build the 1M
+200-byte row-code plane or run the native serving cell under this selector.
+The next cheapest material revision is a source-only page-level
+multi-representative routing screen: retain the frozen eight-page code-group
+boundary but score each group by its individual page representatives before
+fetching at most 32 groups. Preregister its exact scoring and resident-memory
+cost before another run; use the same 1M development cohort only for an
+architecture decision. Production quality still requires fresh frozen
+holdout, actual S3 serving and two-generation 100M proof.
