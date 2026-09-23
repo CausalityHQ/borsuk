@@ -98,7 +98,18 @@ latency and Spot interruptions are external behaviors with no finite
 worst-case bound supplied by this algorithm. Keep paired, terminal-closed
 measurements for quality, latency, throughput, memory and cost claims.
 
-The repository has no Lean toolchain or checked proof today. Mechanize the
-planner theorem first if the paired quality gate selects this architecture;
-then connect the proved model to the production implementation and run
-the existing empirical scale gates.
+The 100k paired quality gate selected this OPQ8 route for the next 1M gate.
+`formal/Opq8Planner.lean` now checks with Lean 4.33.0 and proves that the
+abstract admission loop stays within 32 reads and 16,777,216 bytes,
+preserves input order and uniqueness, and accounts for exactly the selected
+group lengths. It also proves integer interval margin order stability, a
+conditional lower bound from certified truth positions, full containment
+from an owner certificate, and the 8N/16N code-plane arithmetic. The
+structural `List.foldl` consumes one ranked group per recursive step.
+
+The proof has no `sorry`, but the refinement from production Python to the
+Lean model and the per-query numerical certificates are still open. The
+integer margin theorem requires outward-rounded score intervals and an
+authenticated check of their premises. Model, code and object bytes beyond
+the eight-byte route plane remain outside the code-plane arithmetic. Run
+the empirical 1M, serving and 100M resource gates separately.
