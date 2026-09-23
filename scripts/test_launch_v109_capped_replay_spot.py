@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import pathlib
+import subprocess
 import unittest
 from io import BytesIO
 
@@ -26,6 +28,12 @@ class CappedReplaySpotTests(unittest.TestCase):
         self.assertIn("run_v109_capped_replay_remote.sh", script)
         self.assertIn("V109_ARCHIVE_SHA256", script)
         self.assertIn("V109_SQ8_SHA256", script)
+
+    def test_direct_launcher_entrypoint_imports_without_pythonpath(self) -> None:
+        path = pathlib.Path(__file__).with_name("launch_v109_capped_replay_spot.py")
+        result = subprocess.run(["python3", str(path), "--help"],
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_launch_is_spot_and_uses_the_new_worker(self) -> None:
         specs = build_launch_specs(self.plan)

@@ -9,7 +9,12 @@ import dataclasses
 import hashlib
 import json
 import shlex
+import sys
 import time
+from pathlib import Path
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.launch_bounded_reader_1m_spot import (
     DEFAULT_TARGETS, BoundedReaderSpotPlan, ObjectIdentity, _atomic_put,
