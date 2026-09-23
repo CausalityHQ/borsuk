@@ -4290,3 +4290,62 @@ fetching at most 32 groups. Preregister its exact scoring and resident-memory
 cost before another run; use the same 1M development cohort only for an
 architecture decision. Production quality still requires fresh frozen
 holdout, actual S3 serving and two-generation 100M proof.
+
+### ReLAION-1M page-representative selector a0001: improved, still killed
+
+The preregistered revision in
+`docs/superpowers/specs/2026-09-23-one-million-page-representative-selector-design.md`
+kept the same 910 eight-page groups and 200-byte row-code projection, but
+trained one source-only float16 centroid per physical page. For each query it
+ranked groups by the minimum squared L2 of their member page centroids and
+selected exactly 32. There was no group-width, dimension or score sweep.
+The frozen source commit was
+`7ac8fc842c5cfd5fd6701bdd3bd1f3d04f6dc17c`; the 11,105,077-byte
+readback-verified source archive SHA-256 was
+`ec46f255bfbc56a79dcde709653f7c314573c4d6d6069274c74b9a4f1d69b42f`.
+Its sole immutable attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-page-selector/7ac8fc842c5cfd5fd6701bdd3bd1f3d04f6dc17c/runs/relaion-1m-dev1000-a0001/`.
+
+The 3,511-byte terminal SHA-256 was
+`977f629270d35c4b571f115b9047aed4a23ff7c5570cabcb9b0da99d51ad9c21`.
+It closed `complete` with controller exit 0 after 151 seconds, and the one
+Spot instance `i-0b96c39ab4f6819e2` was confirmed terminated. The
+controller and a separate closeout readback authenticated all nine
+terminal-listed artifacts by encoded length and SHA-256. The source-only
+page-centroid seal (7,278 pages, 11,179,008 centroid bytes), evidence, result
+and independent validation SHA-256 were respectively
+`ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41`,
+`d7c5ba9ee9d16801afe1774871320e598258edf0ec4ee08585c4a812736d6253`,
+`9b1483473be19495e9d6204908194eb396c9a30b7e7a4975d92b3e024cb23c56`,
+and `2e62d70738e7d473f532b34fffd3a0ee991d4568ee07e06e87035b60f314e191`.
+The validator independently reparsed the pages, rebuilt every centroid byte
+and replayed all 1,000 group plans; separate aggregation of the samples
+matched the producer and validator.
+
+| Fixed 1M selector | single group centroid | page representatives | advance gate |
+|---|---:|---:|---:|
+| mean GT100 containment | 86.981% | **93.213%** | ≥97.5% |
+| p05 GT100 containment | 59% | **71%** | ≥90% |
+| GT10 containment | 89.34% | **96.26%** | ≥96% |
+| maximum projected code wave | 32 GETs / 8,340,352 bytes | 32 GETs / 9,108,752 bytes | ≤32 GETs / ≤16,777,216 bytes |
+
+The worst query contained 32 of 100 true neighbors, and 217 of 1,000
+queries contained fewer than 90. Construct, evaluate and validate peaked at
+841,384, 224,940 and 785,480 KiB RSS respectively, all with zero swaps.
+This was only a source-only routing screen: it made no code-group Range GETs,
+no final-page GETs and no native SQ8 serving measurement. Its resident
+page-centroid table is 11,179,008 bytes at 1M rows; the two-generation 100M
+memory budget remains unproven.
+
+**Decision:** `page-representative-selector-killed`. Individual page geometry
+recovers 6.232 mean and 12 p05 percentage points against the previous
+single-centroid screen, but leaves 4.287 mean and 19 p05 percentage points
+below the fixed quality gate. The 16-MiB code-byte budget is only 54.3%
+utilized at the maximum sample, while the 32-GET count is saturated. Do not
+build the 1M row-code plane or claim serving quality from this screen. The
+next cheapest architectural gate should change the **I/O schedule**: derive
+and preregister a bounded adjacent-group range plan that can spend the
+remaining byte budget while keeping at most 32 actual GETs, then measure
+truth containment on the same development cohort. It must still stop before
+code construction if quality or byte limits fail; any winner needs actual
+S3 reads, fresh holdout and two-generation memory validation.
