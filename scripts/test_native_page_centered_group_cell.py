@@ -28,6 +28,7 @@ from scripts.launch_native_page_centered_group_spot import (
     _validate_terminal_bytes,
     build_launch_specs,
     build_plan,
+    launch_and_monitor,
     worker_script,
 )
 from scripts.native_geometric_layout_screen import (
@@ -263,6 +264,21 @@ class GroupCellTests(unittest.TestCase):
 
 
 class GroupSpotTests(unittest.TestCase):
+    def test_artifacts_only_prefix_collision_rejects_before_reservation(self) -> None:
+        class S3:
+            def list_objects_v2(self, **kwargs):
+                return {"KeyCount": 1, "Contents": [{"Key": kwargs["Prefix"] + "artifacts/groups.bin"}]}
+
+            def put_object(self, **kwargs):
+                raise AssertionError("existing attempt must not be reserved")
+
+        s3 = S3()
+        session = SimpleNamespace(client=lambda name: s3 if name == "s3" else object())
+        fake_boto3 = SimpleNamespace(Session=lambda **kwargs: session)
+        with patch.dict(sys.modules, {"boto3": fake_boto3}):
+            with self.assertRaisesRegex(ValueError, "immutable attempt already exists"):
+                launch_and_monitor(self.plan())
+
     @staticmethod
     def plan():
         return build_plan(

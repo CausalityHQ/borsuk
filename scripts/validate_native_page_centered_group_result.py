@@ -52,6 +52,11 @@ def _nominate_independently(
     return tuple(selected)
 
 
+def _exact_scores_independently(query: np.ndarray, vectors: np.ndarray) -> np.ndarray:
+    delta = vectors.astype(np.float64) - query.astype(np.float64)
+    return np.sum(delta * delta, axis=1).astype(np.float32)
+
+
 def _decode_and_verify(
     body: bytes,
     artifacts: GroupCodes,
@@ -221,10 +226,9 @@ def validate_group_samples(
         code_scores = _direct_coded_scores(
             queries[query_ordinal], artifacts.books, means, codes[positions], row_pages
         )
-        exact_delta = vectors[list(row_sources)].astype(np.float64) - queries[
-            query_ordinal
-        ].astype(np.float64)
-        exact_scores = np.sum(exact_delta * exact_delta, axis=1)
+        exact_scores = _exact_scores_independently(
+            queries[query_ordinal], vectors[list(row_sources)]
+        )
         coded_pages = _nominate_independently(
             code_scores, row_sources, row_pages, page_byte_sizes, limits
         )

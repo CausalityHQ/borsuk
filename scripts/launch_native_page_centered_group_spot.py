@@ -378,14 +378,8 @@ def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
     ec2 = session.client("ec2")
     s3 = session.client("s3")
     bucket, prefix = _s3_location(plan.output_prefix)
-    for name in ("reservation.json", "terminal.json"):
-        try:
-            s3.head_object(Bucket=bucket, Key=f"{prefix}/{name}")
-        except Exception as error:
-            code = str(getattr(error, "response", {}).get("Error", {}).get("Code", ""))
-            if code in {"404", "NoSuchKey", "NotFound"}:
-                continue
-            raise
+    existing = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/", MaxKeys=1)
+    if existing.get("KeyCount", 0) or existing.get("Contents"):
         raise ValueError("page-centered group immutable attempt already exists")
     reservation = {
         "schema": "borsuk-page-centered-group-reservation-v1",

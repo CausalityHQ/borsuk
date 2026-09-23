@@ -15,11 +15,17 @@ from scripts.native_page_centered_group_codes import (
     write_group_codes,
 )
 from scripts.native_page_centered_group_evaluation import (
+    _exact_scores,
     centered_scores,
     evaluate_group_query,
     plan_groups,
 )
+from scripts.native_row_score_nomination import nominate_pages
 from scripts.test_native_page_centered_group_codes import GroupCodeTests
+from scripts.validate_native_page_centered_group_result import (
+    _exact_scores_independently,
+    _nominate_independently,
+)
 
 
 class CountingReader:
@@ -36,6 +42,22 @@ class CountingReader:
 
 
 class GroupEvaluationTests(unittest.TestCase):
+    def test_768_dimension_exact_ties_have_identical_page_nomination(self) -> None:
+        rng = np.random.default_rng(738)
+        query = np.zeros(768, dtype=np.float32)
+        one = rng.normal(size=768).astype(np.float32)
+        vectors = np.stack([np.roll(one, shift) for shift in range(200)])
+        ordinals = tuple(range(200))
+        pages = tuple(index // 50 for index in ordinals)
+        evaluated = _exact_scores(query, vectors)
+        replayed = _exact_scores_independently(query, vectors)
+        np.testing.assert_array_equal(evaluated, replayed)
+        limits = EvaluationLimits(2, 2000)
+        self.assertEqual(
+            nominate_pages(evaluated, ordinals, pages, (1000,) * 4, limits),
+            _nominate_independently(replayed, ordinals, pages, (1000,) * 4, limits),
+        )
+
     def test_first_32_distinct_groups_are_selected_in_tree_order(self) -> None:
         manifest = tuple(
             (4 * group, 4 * group + 4, group * 100, 100, hashlib.sha256(bytes([group])).hexdigest())

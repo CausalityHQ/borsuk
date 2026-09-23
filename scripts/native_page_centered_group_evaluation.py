@@ -149,6 +149,11 @@ def centered_scores(
     return scores.astype(np.float32)
 
 
+def _exact_scores(query: np.ndarray, selected_vectors: np.ndarray) -> np.ndarray:
+    delta = selected_vectors.astype(np.float64) - query.astype(np.float64)
+    return np.einsum("ij,ij->i", delta, delta).astype(np.float32)
+
+
 def _decode_group(
     payload: bytes,
     group: GroupRange,
@@ -255,9 +260,7 @@ def evaluate_group_query(
         np.concatenate(selected_codes),
         tuple(row_pages),
     )
-    selected_vectors = vectors[source_ordinals].astype(np.float64)
-    delta = selected_vectors - query.astype(np.float64)
-    exact = np.einsum("ij,ij->i", delta, delta)
+    exact = _exact_scores(query, vectors[source_ordinals])
     coded_pages = nominate_pages(
         coded, source_ordinals, row_pages, page_byte_sizes, limits
     )
