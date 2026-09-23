@@ -40,6 +40,21 @@ ARTIFACTS = {
 
 
 def artifact_names(kind: str) -> dict[str, str]:
+    if kind == "source_range":
+        return {
+            "page-map": "page-map.bin", "page-groups": "page-groups.bin",
+            "page-bytes": "page-bytes.bin", "seal": "seal.json",
+            "row-pages": "row-pages.bin", "range-seal": "range-seal.json",
+            "source-range-plans": "source-range-plans.json",
+            "source-range-plan-seal": "source-range-plan-seal.json",
+            "source-range-evidence": "source-range-evidence.json",
+            "source-range-result": "source-range-result.json",
+            "source-range-validation": "source-range-validation.json",
+            "construct-resources": "construct-resources.txt",
+            "plan-resources": "plan-resources.txt",
+            "evaluate-resources": "evaluate-resources.txt",
+            "validate-resources": "validate-resources.txt",
+        }
     if kind == "data_range":
         return {
             "page-map": "page-map.bin", "page-groups": "page-groups.bin",
@@ -121,7 +136,7 @@ class SelectorSpotPlan:
 
 def build_plan(**values: object) -> SelectorSpotPlan:
     plan = SelectorSpotPlan(**values)
-    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range"}:
+    if plan.selector_kind not in {"group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range", "source_range"}:
         raise ValueError("one-million selector kind differs")
     expected = (
         f"s3://{BUCKET}/research/native-hundred-thousand-opq8-paired/"
@@ -139,6 +154,9 @@ def build_plan(**values: object) -> SelectorSpotPlan:
         f"s3://{BUCKET}/research/native-one-million-data-range-selector/"
         f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
         if plan.selector_kind == "data_range" else
+        f"s3://{BUCKET}/research/native-one-million-source-range-diagnostic/"
+        f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
+        if plan.selector_kind == "source_range" else
         f"s3://{BUCKET}/research/native-one-million-{plan.selector_kind}-selector/"
         f"{plan.source_commit}/runs/relaion-1m-dev1000-a{plan.attempt:04d}"
     )
@@ -170,6 +188,8 @@ def _download_commands(identities: dict[str, object], names: dict[str, str]) -> 
 
 
 def _terminal_schema(kind: str) -> str:
+    if kind == "source_range":
+        return "borsuk-one-million-source-range-terminal-v1"
     if kind == "data_range":
         return "borsuk-one-million-opq8-data-range-terminal-v1"
     if kind == "page_oracle":
@@ -188,6 +208,12 @@ def _terminal_schema(kind: str) -> str:
 
 def worker_script(plan: SelectorSpotPlan) -> str:
     """Generate a compact phase-separated worker with durable failure logs."""
+    if plan.selector_kind == "source_range":
+        from scripts.native_one_million_source_range_worker import (
+            source_range_worker_script,
+        )
+
+        return source_range_worker_script(plan)
     if plan.selector_kind == "data_range":
         from scripts.native_one_million_data_range_worker import (
             data_range_worker_script,
@@ -581,7 +607,7 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
         development_inputs = {
             role: dataclasses.asdict(value) for role, value in DEVELOPMENT_IDENTITIES.items()
         }
-    elif plan.selector_kind == "data_range":
+    elif plan.selector_kind in {"data_range", "source_range"}:
         from scripts.native_one_million_data_range_cell import (
             PRIOR_CODES,
             PRIOR_MEMBERSHIP,
@@ -590,6 +616,7 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
         from scripts.native_one_million_page_oracle_cell import PRIOR, PRIOR_PREFIX
 
         source_inputs = {
+            **({"source": dataclasses.asdict(SOURCE_IDENTITIES["source"])} if plan.selector_kind == "source_range" else {}),
             **{role: dataclasses.asdict(SOURCE_IDENTITIES[role]) for role in ("generation", "base", "delta")},
             **{f"prior-{role}": {"uri": f"{PRIOR_PREFIX}{details[0]}", "sha256": details[1], "bytes": details[2]}
                for role, details in PRIOR.items()},
@@ -610,6 +637,8 @@ def launch_and_monitor(plan: SelectorSpotPlan) -> dict[str, object]:
             if plan.selector_kind == "page_oracle"
             else "borsuk-one-million-opq8-data-range-reservation-v1"
             if plan.selector_kind == "data_range"
+            else "borsuk-one-million-source-range-reservation-v1"
+            if plan.selector_kind == "source_range"
             else f"borsuk-one-million-{plan.selector_kind}-selector-reservation-v1"
         ),
         "attempt": plan.attempt, "source_commit": plan.source_commit,
@@ -713,7 +742,7 @@ def parse_args(argv: Sequence[str] | None = None) -> SelectorSpotPlan:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--requirements-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range"), default="group")
+    parser.add_argument("--selector-kind", choices=("group", "page", "range", "byte", "pq96", "pq80", "layout", "mass", "opq8", "paired", "opq8_1m", "page_oracle", "data_range", "source_range"), default="group")
     parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args(argv)
     return build_plan(

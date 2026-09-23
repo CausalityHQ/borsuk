@@ -14,15 +14,15 @@ group plans, page layout and range rule, meet the fixed final-range gate.
 - [x] Add authenticated source Parquet traversal and float64 squared-L2
   scoring with a fixed arithmetic identity; enforce resource limits in
   the Spot worker before launch.
-- [ ] Commit this slice after focused tests and scoped lint.
+- [x] Commit this slice after focused tests and scoped lint.
 
 ## Task 2: Phase-separated source-only cell
 
-- [ ] Reuse the closed generation, maps, group plans and range planner;
+- [x] Reuse the closed generation, maps, group plans and range planner;
   enforce a truth-free planning phase and seal both plans before truth.
-- [ ] Evaluate ordered GT100/GT10 owner pages with the unchanged fixed
+- [x] Evaluate ordered GT100/GT10 owner pages with the unchanged fixed
   pass rule and paired OPQ8/control comparisons.
-- [ ] Independently validate source identities, score replay, plan seals,
+- [x] Independently validate source identities, score replay, plan seals,
   resource receipts and every truth hit mask on the execution host.
 - [ ] Run focused tests and scoped lint; commit and fast-forward push.
 
