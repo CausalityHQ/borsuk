@@ -63,8 +63,8 @@ class ReturnedValidationTests(unittest.TestCase):
                                 codes, (sample,), out, top_k=2)
             (out / "returned-result.json").write_bytes(original_result)
             evidence = json.loads((out / "returned-evidence.json").read_bytes())
-            evidence["samples"][0]["two_bit_hits"] = 1
-            evidence["samples"][0]["paired_loss"] = 1
+            evidence["samples"][0]["stored_norm_hits"] = 1
+            evidence["samples"][0]["stored_norm_paired_loss"] = 1
             evidence_body = (json.dumps(evidence, sort_keys=True,
                                         separators=(",", ":")) + "\n").encode()
             (out / "returned-evidence.json").write_bytes(evidence_body)

@@ -133,7 +133,7 @@ def ident(path,role):
             "uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
 terminal={
-  "schema":"borsuk-two-bit-returned-terminal-v1",
+  "schema":"borsuk-two-bit-norm-terminal-v1",
   "status":os.environ["STATUS"],"phase":os.environ["PHASE"],
   "exit_code":int(os.environ["EXIT_CODE"]),
   "elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),
@@ -203,7 +203,7 @@ for phase in ('evaluate','validate'):
 result=json.loads((root/'evaluation/returned-result.json').read_bytes())
 validation=json.loads((root/'evaluation/returned-validation.json').read_bytes())
 if validation.get('valid') is not True or result.get('decision') not in \
-        ('advance-fidelity-only','stop-two-bit-sole-scorer'):
+        ('advance-fidelity-only','stop-stored-norm-scorer'):
     raise ValueError('returned decision differs')
 PY
 awk '$1 == "SwapTotal:" {exit ($2 != 0)}' /proc/meminfo

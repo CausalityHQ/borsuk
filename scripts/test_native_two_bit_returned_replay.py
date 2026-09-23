@@ -68,25 +68,45 @@ class SelectedPositionsTests(unittest.TestCase):
         self.assertEqual(result["grouped_hits"], 2)
         self.assertEqual(result["exact_hits"], 2)
         self.assertEqual(result["two_bit_hits"], 2)
+        self.assertEqual(result["stored_norm_hits"], 2)
+        self.assertEqual(result["stored_norm_paired_loss"], 0)
+
+    def test_stored_norm_must_equal_source_centered_norm(self) -> None:
+        vectors = np.zeros((2, 768), dtype=np.float32)
+        vectors[1, 0] = 1.0
+        codes = SimpleNamespace(
+            records=_fit_records(vectors.astype(np.float64), rotation_seed=20260923),
+            mean=np.zeros(768, dtype=np.float32), source_ordinals=(0, 1),
+        )
+        replay.verify_stored_norms(codes, vectors)
+        codes.records[1, 196:200] = np.frombuffer(
+            np.asarray([2.0], dtype="<f4").tobytes(), dtype=np.uint8,
+        )
+        with self.assertRaisesRegex(ValueError, "stored norm"):
+            replay.verify_stored_norms(codes, vectors)
 
     def test_summary_keeps_paired_loss_separate_from_marginal_tail(self) -> None:
         cases = [
             {"query_ordinal": 0, "candidate_rows": 3, "code_gets": 1,
              "code_bytes": 608, "grouped_hits": 2,
              "exact_hits": 2, "two_bit_hits": 1,
+             "stored_norm_hits": 2, "stored_norm_paired_loss": 0,
              "paired_loss": 1},
             {"query_ordinal": 1, "candidate_rows": 3, "code_gets": 1,
              "code_bytes": 608, "grouped_hits": 1,
              "exact_hits": 1, "two_bit_hits": 1,
+             "stored_norm_hits": 1, "stored_norm_paired_loss": 0,
              "paired_loss": 0},
         ]
         summary = replay.summarize_results(cases, expected_queries=2, top_k=2)
         self.assertEqual(summary["two_bit_recall_at_k_ppm"], 500_000)
         self.assertEqual(summary["exact_recall_at_k_ppm"], 750_000)
+        self.assertEqual(summary["stored_norm_recall_at_k_ppm"], 750_000)
         self.assertEqual(summary["two_bit_p05_hits"], 1)
         self.assertEqual(summary["p95_paired_loss_hits"], 1)
         cases[0]["exact_hits"] = 0
         cases[0]["paired_loss"] = -1
+        cases[0]["stored_norm_paired_loss"] = -2
         with self.assertRaisesRegex(ValueError, "exact control"):
             replay.summarize_results(cases, expected_queries=2, top_k=2)
 
@@ -137,6 +157,7 @@ class SelectedPositionsTests(unittest.TestCase):
             self.assertEqual(summary["two_bit_recall_at_k_ppm"], 1_000_000)
             evidence = json.loads((out / "returned-evidence.json").read_bytes())
             self.assertEqual(evidence["samples"][0]["two_bit_hits"], 2)
+            self.assertEqual(evidence["samples"][0]["stored_norm_hits"], 2)
             self.assertEqual(
                 (out / "returned-result.json").read_bytes(),
                 (json.dumps(json.loads((out / "returned-result.json").read_bytes()),

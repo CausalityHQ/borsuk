@@ -96,6 +96,28 @@ def selected_positions(sample: object, codes: object) -> tuple[int, ...]:
     return tuple(positions)
 
 
+def verify_stored_norms(codes: object, vectors: object) -> None:
+    """Prove the sealed four-byte scalar is the source's centered norm."""
+    import numpy as np
+
+    if (
+        type(vectors) is not np.ndarray or vectors.dtype != np.float32
+        or vectors.ndim != 2 or vectors.shape[1] != 768
+        or len(codes.source_ordinals) != len(vectors)
+        or codes.records.shape != (len(vectors), 200)
+    ):
+        raise ValueError("returned stored norm source shape differs")
+    mean = codes.mean.astype(np.float64)
+    for first in range(0, len(vectors), 4096):
+        last = min(first + 4096, len(vectors))
+        sources = list(codes.source_ordinals[first:last])
+        centered = vectors[sources].astype(np.float64) - mean
+        expected = np.sum(centered * centered, axis=1, dtype=np.float64).astype("<f4")
+        stored = np.frombuffer(codes.records[first:last, 196:200].tobytes(), dtype="<f4")
+        if not np.array_equal(stored, expected):
+            raise ValueError("returned stored norm differs from source")
+
+
 def replay_query(
     sample: object, codes: object, query: object, vectors: object,
     stable_ids: tuple[bytes, ...], truth_ids: tuple[bytes, ...], *,
@@ -120,14 +142,17 @@ def replay_query(
         or grouped_hits != sample.grouped_hits_at_100
     ):
         raise ValueError("returned closed group-containment authority differs")
-    primary, _ = score_records(
+    primary, stored_norm = score_records(
         query, codes.mean, codes.records[list(positions)],
         rotation_seed=codes.rotation_seed,
     )
     exact = exact_scores(query, vectors, sources)
     two_bit_hits = ranked_hits(primary, sources, stable_ids, truth_ids, top_k=top_k)
+    stored_norm_hits = ranked_hits(
+        stored_norm, sources, stable_ids, truth_ids, top_k=top_k,
+    )
     exact_hits = ranked_hits(exact, sources, stable_ids, truth_ids, top_k=top_k)
-    if two_bit_hits > grouped_hits or exact_hits > grouped_hits:
+    if max(two_bit_hits, stored_norm_hits, exact_hits) > grouped_hits:
         raise ValueError("returned hit exceeds fetched truth authority")
     return {
         "query_ordinal": sample.query_ordinal,
@@ -136,8 +161,10 @@ def replay_query(
         "code_bytes": sample.code_bytes,
         "grouped_hits": grouped_hits,
         "two_bit_hits": two_bit_hits,
+        "stored_norm_hits": stored_norm_hits,
         "exact_hits": exact_hits,
         "paired_loss": exact_hits - two_bit_hits,
+        "stored_norm_paired_loss": exact_hits - stored_norm_hits,
     }
 
 
@@ -147,7 +174,8 @@ def summarize_results(
     """Keep returned mean, marginal tail and paired loss as distinct metrics."""
     fields = {
         "query_ordinal", "candidate_rows", "code_gets", "code_bytes",
-        "grouped_hits", "two_bit_hits", "exact_hits", "paired_loss",
+        "grouped_hits", "two_bit_hits", "stored_norm_hits", "exact_hits",
+        "paired_loss", "stored_norm_paired_loss",
     }
     if (
         type(expected_queries) is not int or expected_queries <= 0
@@ -165,15 +193,21 @@ def summarize_results(
             or not 0 < case["code_bytes"] <= 16_777_216
             or not 0 <= case["grouped_hits"] <= top_k
             or not 0 <= case["two_bit_hits"] <= case["grouped_hits"]
+            or not 0 <= case["stored_norm_hits"] <= case["grouped_hits"]
             or not 0 <= case["exact_hits"] <= case["grouped_hits"]
             or case["paired_loss"] != case["exact_hits"] - case["two_bit_hits"]
+            or case["stored_norm_paired_loss"] != (
+                case["exact_hits"] - case["stored_norm_hits"]
+            )
         ):
             raise ValueError("returned per-query authority differs")
     percentile05 = math.ceil(expected_queries * 0.05) - 1
     percentile95 = math.ceil(expected_queries * 0.95) - 1
     primary = sorted(case["two_bit_hits"] for case in cases)
+    stored_norm = sorted(case["stored_norm_hits"] for case in cases)
     exact = sorted(case["exact_hits"] for case in cases)
     losses = sorted(case["paired_loss"] for case in cases)
+    stored_norm_losses = sorted(case["stored_norm_paired_loss"] for case in cases)
     exact_shortfall = sum(case["grouped_hits"] - case["exact_hits"] for case in cases)
     exact_mismatch_count = sum(
         case["grouped_hits"] != case["exact_hits"] for case in cases
@@ -187,15 +221,24 @@ def summarize_results(
         "query_count": expected_queries,
         "top_k": top_k,
         "two_bit_recall_at_k_ppm": sum(primary) * 1_000_000 // (expected_queries * top_k),
+        "stored_norm_recall_at_k_ppm": (
+            sum(stored_norm) * 1_000_000 // (expected_queries * top_k)
+        ),
         "exact_recall_at_k_ppm": sum(exact) * 1_000_000 // (expected_queries * top_k),
         "two_bit_p05_hits": primary[percentile05],
+        "stored_norm_p05_hits": stored_norm[percentile05],
         "exact_p05_hits": exact[percentile05],
         "p95_paired_loss_hits": losses[percentile95],
+        "stored_norm_p95_paired_loss_hits": stored_norm_losses[percentile95],
         "net_paired_loss_hits": sum(losses),
+        "stored_norm_net_paired_loss_hits": sum(stored_norm_losses),
         "grouped_truth_hits": sum(case["grouped_hits"] for case in cases),
         "exact_shortfall_from_grouped_hits": exact_shortfall,
         "exact_grouped_mismatch_queries": exact_mismatch_count,
         "two_bit_sub90_count": sum(value < math.ceil(top_k * 0.9) for value in primary),
+        "stored_norm_sub90_count": sum(
+            value < math.ceil(top_k * 0.9) for value in stored_norm
+        ),
         "exact_sub90_count": sum(value < math.ceil(top_k * 0.9) for value in exact),
         "maximum_code_gets": max(case["code_gets"] for case in cases),
         "maximum_code_bytes": max(case["code_bytes"] for case in cases),
@@ -223,21 +266,21 @@ def replay_loaded(
     ]
     summary = summarize_results(cases, expected_queries=len(samples), top_k=top_k)
     evidence_body = (
-        json.dumps({"schema": "borsuk-two-bit-returned-evidence-v1", "samples": cases},
+        json.dumps({"schema": "borsuk-two-bit-returned-evidence-v2", "samples": cases},
                    sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
     if top_k == 100 and len(samples) == 1000:
         decision = (
             "advance-fidelity-only"
-            if summary["net_paired_loss_hits"] <= 250
-            and summary["two_bit_p05_hits"] >= summary["exact_p05_hits"] - 1
-            else "stop-two-bit-sole-scorer"
+            if summary["stored_norm_net_paired_loss_hits"] <= 250
+            and summary["stored_norm_p05_hits"] >= summary["exact_p05_hits"] - 1
+            else "stop-stored-norm-scorer"
         )
     else:
         decision = "diagnostic-only"
     result_body = (
         json.dumps({
-            "schema": "borsuk-two-bit-returned-result-v1",
+            "schema": "borsuk-two-bit-returned-result-v2",
             "dataset": "ReLAION-100k", "split": "development",
             "legacy_terminal_sha256": LEGACY_TERMINAL_SHA256,
             "evidence_sha256": hashlib.sha256(evidence_body).hexdigest(),
@@ -291,6 +334,7 @@ def load_closed_inputs(root: Path) -> tuple[object, ...]:
         layout_seed=inputs.layout.seed,
         rotation_seed=ROTATION_SEED,
     )
+    verify_stored_norms(codes, vectors)
     samples, _ = read_two_bit_evidence(
         root / "evidence.json", identity("evidence", "rotated-two-bit-evidence")
     )

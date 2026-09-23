@@ -51,7 +51,7 @@ def build_plan(**values: object) -> SpotLayoutPlan:
     base = geometric_build_plan(**adjusted)
     plan = dataclasses.replace(base, attempt=attempt, output_prefix=prefix.rstrip("/"))
     expected = (
-        "s3://borsuk-bench-453182569524-euc1/research/native-two-bit-returned/"
+        "s3://borsuk-bench-453182569524-euc1/research/native-two-bit-norm-g0b/"
         + plan.source_commit
         + f"/runs/relaion-100k-dev1000-a{attempt:04d}"
     )
@@ -66,12 +66,12 @@ def build_launch_specs(plan: SpotLayoutPlan) -> list[dict[str, object]]:
     for spec in specs:
         zone = spec["NetworkInterfaces"][0]["SubnetId"]
         token = hashlib.sha256(
-            f"two-bit-returned:{plan.source_commit}:{zone}:a{plan.attempt:04d}".encode()
+            f"two-bit-norm-g0b:{plan.source_commit}:{zone}:a{plan.attempt:04d}".encode()
         ).hexdigest()[:32]
-        spec["ClientToken"] = "native-two-bit-returned-" + token
+        spec["ClientToken"] = "native-two-bit-norm-g0b-" + token
         spec["UserData"] = user_data
         tags = spec["TagSpecifications"][0]["Tags"]
-        tags[0]["Value"] = "borsuk-native-two-bit-returned"
+        tags[0]["Value"] = "borsuk-native-two-bit-norm-g0b"
         tags[1]["Value"] = f"a{plan.attempt:04d}"
     return specs
 
@@ -92,7 +92,7 @@ def validate_terminal_bytes(
             "exit_code", "instance_id", "phase", "schema", "source_commit",
             "source_archive", "requirements_sha256", "status",
         }
-        or terminal["schema"] != "borsuk-two-bit-returned-terminal-v1"
+        or terminal["schema"] != "borsuk-two-bit-norm-terminal-v1"
         or terminal["attempt"] != plan.attempt
         or terminal["claim_eligible"] is not False
         or terminal["source_commit"] != plan.source_commit
@@ -169,7 +169,7 @@ def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
     if existing.get("KeyCount", 0) or existing.get("Contents"):
         raise ValueError("returned immutable attempt already exists")
     reservation = {
-        "schema": "borsuk-two-bit-returned-reservation-v1",
+        "schema": "borsuk-two-bit-norm-reservation-v1",
         "attempt": plan.attempt,
         "source_commit": plan.source_commit,
         "source_archive": dataclasses.asdict(plan.source_archive),

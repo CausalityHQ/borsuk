@@ -33,7 +33,7 @@ class ReturnedSpotTests(unittest.TestCase):
             source_archive=SourceArchiveIdentity("s3://bucket/archive", "b" * 64, 123),
             source=FROZEN_SOURCE, queries=FROZEN_QUERIES, truth=FROZEN_TRUTH,
             requirements_sha256="c" * 64,
-            output_prefix=("s3://bucket/research/native-two-bit-returned/"
+            output_prefix=("s3://bucket/research/native-two-bit-norm-g0b/"
                            f"{commit}/runs/relaion-100k-dev1000-a0001"),
             image_id="ami-1", security_group_id="sg-1",
             instance_profile_arn="arn:aws:iam::123:instance-profile/x",
@@ -56,7 +56,7 @@ class ReturnedSpotTests(unittest.TestCase):
         plan = self.plan()
         instance = "i-0123456789abcdef0"
         terminal = {
-            "schema": "borsuk-two-bit-returned-terminal-v1",
+            "schema": "borsuk-two-bit-norm-terminal-v1",
             "status": "complete", "phase": "complete", "exit_code": 0,
             "elapsed_seconds": 123, "instance_id": instance,
             "source_commit": plan.source_commit,

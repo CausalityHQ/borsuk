@@ -63,14 +63,19 @@ worker resource measurements**, not query p95 or QPS.
 
 ## Decision and next gate
 
-The representation loses true neighbors during final top-100 ranking even
-though they are present among fetched rows. The next design must change
-final-score information, not merely page routing or GET scheduling. The
+The current primary score loses true neighbors during final top-100 ranking
+even though they are present among fetched rows. Each authenticated record
+also stores an exact centered source norm that the failed primary score did
+not use. A distinct G0b replay will substitute this stored norm while keeping
+the same two-bit dot estimate, rows and exact control; this isolates norm
+error from remaining dot/quantization error. Page routing or GET scheduling
+alone cannot repair the fixed-row result. The
 current single-wave code-only serving contract is stopped at G0; its planned
-1M routing promotion is withheld. A new 100k paired representation screen
-must hold the exact fetched-row roster and truth fixed, record code width,
-reconstruction/rank fidelity and a byte/memory worksheet, and compare the
-strongest same-row exact control. Only a representation that clears a
+1M routing promotion is withheld. G0b holds the exact fetched-row roster and
+truth fixed and uses the same byte/memory plan; if it fails, a new paired
+representation screen must record code width, reconstruction/rank fidelity
+and a byte/memory worksheet against the strongest same-row exact control.
+Only a final scorer that clears a
 preregistered returned-ranking gate may enter a new physical layout and 1M
 route test. Lean can prove conditional bounds under explicit score-error,
 margin, byte and service-time premises; this measured miss cannot be turned
