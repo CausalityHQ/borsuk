@@ -326,6 +326,22 @@ theorem rejected_code_cover_cannot_clear_screen
   have ceiling := final_hits_le_code_cover pairs subset
   omega
 
+/-! The closed progressive 1M page cover contains 98,986 of 100,000
+truth positions. A final page/range plan on that same cover clears the
+98,151 aggregate gate if an authenticated paired certificate bounds its
+gross lost positions by 835. This does not assert that the scorer has
+such a loss certificate, or discharge GT10 and lower-tail gates. -/
+
+theorem progressive_cover_gt100_gate_of_loss_certificate
+    (pairs : List (Bool × Bool))
+    (_cohort : pairs.length = 100000)
+    (cover : containedTruthHits pairs = 98986)
+    (loss : lostHits pairs ≤ 835) :
+    98151 ≤ finalTruthHits pairs := by
+  have accounting := source_hits_le_compressed_plus_lost pairs
+  simp only [sourceHits, compressedHits, containedTruthHits, finalTruthHits] at *
+  omega
+
 /-! Uniform per-row score-error bounds also bound a page's minimum score.
 This supports a non-recall-based premise for page-order certificates. -/
 

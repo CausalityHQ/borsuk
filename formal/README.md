@@ -116,6 +116,12 @@ code-cover hits and that every final hit came from the cover, no scorer or
 reranker on that same cover can clear the preregistered 98,651 screening
 floor. This rules out rescoring the rejected cover; it does not rule out
 a different layout, page choice, or two-wave schedule.
+For the later terminal-closed progressive cover, a separate theorem says
+that its authenticated 98,986 GT100 contained positions would imply the
+98,151 final aggregate floor if at most 835 paired positions are lost
+between cover and final result. This is an exact finite-cohort budget,
+not a claim that the pending scorer cell meets it. GT10 and the lower
+tail remain separate certificates.
 
 A second finite-query theorem bounds recall loss for a **fixed score
 threshold** by the authenticated truth count of pages whose true scores
