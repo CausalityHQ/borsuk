@@ -272,6 +272,22 @@ theorem two_bit_code_payload_row_budget
   simp only [twoBitGroupBytes, twoBitRecordBytes] at budget
   omega
 
+/-! The G0c PQ192 worksheet charges one byte per subspace and 16 bytes
+per stable row ID. Its closed 100k plan's authenticated maxima are 77,113
+rows and 640 framing bytes. The theorem is conditional on those certified
+plan facts; it does not assert returned recall or live S3 transfer. -/
+
+def pq192RecordBytes : Nat := 192 + 16
+
+theorem pq192_record_is_two_hundred_eight : pq192RecordBytes = 208 := by decide
+
+theorem pq192_closed_wave_within_sixteen_mib
+    (rows framing : Nat) (rowBound : rows ≤ 77113)
+    (framingBound : framing ≤ 640) :
+    pq192RecordBytes * rows + framing ≤ 16777216 := by
+  simp only [pq192RecordBytes]
+  omega
+
 /-! The proposed page-local format has no group header in its code object.
 Its selected page payloads are exactly 200 bytes per row; bytes of pages
 bridged into a physical GET must also occur in `rowCounts`. -/

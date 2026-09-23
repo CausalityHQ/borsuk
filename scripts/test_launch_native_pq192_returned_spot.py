@@ -16,12 +16,13 @@ from scripts.launch_native_geometric_layout_spot import (
     SourceArchiveIdentity,
     SpotLayoutPlan,
 )
-from scripts.launch_native_two_bit_returned_replay_spot import (
+from scripts.launch_native_pq192_returned_spot import (
     build_launch_specs,
     readback_artifacts,
+    validate_readback_bindings,
     validate_terminal_bytes,
 )
-from scripts.native_two_bit_returned_spot_worker import ARTIFACT_FILES
+from scripts.native_pq192_returned_spot_worker import ARTIFACT_FILES
 
 
 class ReturnedSpotTests(unittest.TestCase):
@@ -33,7 +34,7 @@ class ReturnedSpotTests(unittest.TestCase):
             source_archive=SourceArchiveIdentity("s3://bucket/archive", "b" * 64, 123),
             source=FROZEN_SOURCE, queries=FROZEN_QUERIES, truth=FROZEN_TRUTH,
             requirements_sha256="c" * 64,
-            output_prefix=("s3://bucket/research/native-two-bit-norm-g0b/"
+            output_prefix=("s3://bucket/research/native-pq192-returned-g0c/"
                            f"{commit}/runs/relaion-100k-dev1000-a0001"),
             image_id="ami-1", security_group_id="sg-1",
             instance_profile_arn="arn:aws:iam::123:instance-profile/x",
@@ -49,14 +50,14 @@ class ReturnedSpotTests(unittest.TestCase):
             self.assertEqual(spec["MinCount"], spec["MaxCount"])
             self.assertEqual(spec["MinCount"], 1)
             self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
-            self.assertIn("scripts.native_two_bit_returned_replay", spec["UserData"])
-            self.assertIn("scripts.validate_native_two_bit_returned_replay", spec["UserData"])
+            self.assertIn("scripts.native_pq192_returned", spec["UserData"])
+            self.assertIn("scripts.validate_native_pq192_returned", spec["UserData"])
 
     def test_terminal_requires_exact_artifact_roster(self) -> None:
         plan = self.plan()
         instance = "i-0123456789abcdef0"
         terminal = {
-            "schema": "borsuk-two-bit-norm-terminal-v1",
+            "schema": "borsuk-pq192-returned-terminal-v1",
             "status": "complete", "phase": "complete", "exit_code": 0,
             "elapsed_seconds": 123, "instance_id": instance,
             "source_commit": plan.source_commit,
@@ -103,3 +104,47 @@ class ReturnedSpotTests(unittest.TestCase):
         bodies["returned-result"] = b"tampered"
         with self.assertRaisesRegex(ValueError, "readback"):
             readback_artifacts(FakeS3(), terminal)
+
+    def test_readback_binds_result_to_codes_evidence_and_validation(self) -> None:
+        plan = self.plan()
+        bodies = {role: role.encode() for role in ARTIFACT_FILES}
+
+        def encode(value: dict[str, object]) -> bytes:
+            return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+        def receipt(role: str) -> dict[str, object]:
+            body = bodies[role]
+            return {"role": role, "encoded_bytes": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                    "uri": plan.output_prefix + "/artifacts/" + ARTIFACT_FILES[role]}
+
+        bodies["returned-result"] = encode({
+            "schema": "borsuk-pq192-returned-result-v1",
+            "decision": "stop-pq192-sole-scorer",
+            "evidence_sha256": hashlib.sha256(bodies["returned-evidence"]).hexdigest(),
+            "pq_books_sha256": hashlib.sha256(bodies["pq-books"]).hexdigest(),
+            "pq_codes_sha256": hashlib.sha256(bodies["pq-codes"]).hexdigest(),
+        })
+        bodies["returned-validation"] = encode({
+            "schema": "borsuk-pq192-returned-validation-v1", "valid": True,
+            "query_count": 1000,
+            "result_sha256": hashlib.sha256(bodies["returned-result"]).hexdigest(),
+            "evidence_sha256": hashlib.sha256(bodies["returned-evidence"]).hexdigest(),
+        })
+        terminal = {"status": "complete", "artifacts": {
+            role: receipt(role) for role in ARTIFACT_FILES
+        }}
+
+        class FakeS3:
+            def get_object(self, *, Bucket: str, Key: str):
+                role = next(role for role, path in ARTIFACT_FILES.items()
+                            if Key.endswith(path))
+                return {"Body": io.BytesIO(bodies[role])}
+
+        validate_readback_bindings(FakeS3(), terminal)
+        wrong = json.loads(bodies["returned-validation"])
+        wrong["result_sha256"] = "0" * 64
+        bodies["returned-validation"] = encode(wrong)
+        terminal["artifacts"]["returned-validation"] = receipt("returned-validation")
+        with self.assertRaisesRegex(ValueError, "bindings"):
+            validate_readback_bindings(FakeS3(), terminal)

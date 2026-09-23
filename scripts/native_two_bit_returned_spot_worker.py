@@ -43,7 +43,16 @@ def _download(uri: str, sha256: str, size: int, filename: str) -> str:
     ))
 
 
-def returned_worker_script(plan: SpotLayoutPlan) -> str:
+def returned_worker_script(
+    plan: SpotLayoutPlan, *,
+    evaluation_module: str = "scripts.native_two_bit_returned_replay",
+    validation_module: str = "scripts.validate_native_two_bit_returned_replay",
+    artifact_files: dict[str, str] | None = None,
+    terminal_schema: str = "borsuk-two-bit-norm-terminal-v1",
+    advance_decision: str = "advance-fidelity-only",
+    stop_decision: str = "stop-stored-norm-scorer",
+    extra_evaluation_files: tuple[str, ...] = (),
+) -> str:
     """Download complete authorities, replay without network, then close."""
     bucket, prefix = _s3_location(plan.output_prefix)
     downloads = "\n".join((
@@ -133,7 +142,7 @@ def ident(path,role):
             "uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
 terminal={
-  "schema":"borsuk-two-bit-norm-terminal-v1",
+  "schema":@TERMINAL_SCHEMA@,
   "status":os.environ["STATUS"],"phase":os.environ["PHASE"],
   "exit_code":int(os.environ["EXIT_CODE"]),
   "elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),
@@ -176,15 +185,15 @@ run_capped timeout "$WALL_SECONDS" unshare --net --fork /usr/bin/time -v \
   -o evaluate-resources.txt setpriv --reuid=nobody --regid=nobody --clear-groups \
   env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 \
   OMP_NUM_THREADS=32 "$root/.venv/bin/python" \
-  -m scripts.native_two_bit_returned_replay --root "$root" --out "$root/evaluation"
+  -m @EVALUATION_MODULE@ --root "$root" --out "$root/evaluation"
 for name in evaluation/returned-evidence.json evaluation/returned-result.json \
-  evaluate-resources.txt evaluate-peak.txt; do publish_artifact "$name"; done
+  @EXTRA_EVALUATION_FILES@ evaluate-resources.txt evaluate-peak.txt; do publish_artifact "$name"; done
 phase=validate
 run_capped timeout "$WALL_SECONDS" unshare --net --fork /usr/bin/time -v \
   -o validate-resources.txt setpriv --reuid=nobody --regid=nobody --clear-groups \
   env -i PATH="$PATH" PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 \
   OMP_NUM_THREADS=32 "$root/.venv/bin/python" \
-  -m scripts.validate_native_two_bit_returned_replay --root "$root" --out "$root/evaluation"
+  -m @VALIDATION_MODULE@ --root "$root" --out "$root/evaluation"
 for name in evaluation/returned-validation.json validate-resources.txt \
   validate-peak.txt; do publish_artifact "$name"; done
 phase=resource-gate
@@ -203,7 +212,7 @@ for phase in ('evaluate','validate'):
 result=json.loads((root/'evaluation/returned-result.json').read_bytes())
 validation=json.loads((root/'evaluation/returned-validation.json').read_bytes())
 if validation.get('valid') is not True or result.get('decision') not in \
-        ('advance-fidelity-only','stop-stored-norm-scorer'):
+        (@ADVANCE_DECISION@,@STOP_DECISION@):
     raise ValueError('returned decision differs')
 PY
 awk '$1 == "SwapTotal:" {exit ($2 != 0)}' /proc/meminfo
@@ -221,7 +230,13 @@ phase=complete
         "@ARCHIVE_BYTES@": str(plan.source_archive.encoded_bytes),
         "@ARCHIVE_SHA@": _q(plan.source_archive.sha256),
         "@REQUIREMENTS_SHA@": _q(plan.requirements_sha256),
-        "@ARTIFACTS@": json.dumps(ARTIFACT_FILES, sort_keys=True),
+        "@ARTIFACTS@": json.dumps(artifact_files or ARTIFACT_FILES, sort_keys=True),
+        "@TERMINAL_SCHEMA@": json.dumps(terminal_schema),
+        "@EVALUATION_MODULE@": _q(evaluation_module),
+        "@VALIDATION_MODULE@": _q(validation_module),
+        "@EXTRA_EVALUATION_FILES@": " ".join(_q(item) for item in extra_evaluation_files),
+        "@ADVANCE_DECISION@": json.dumps(advance_decision),
+        "@STOP_DECISION@": json.dumps(stop_decision),
         "@ARCHIVE_DOWNLOAD@": _download(
             plan.source_archive.uri, plan.source_archive.sha256,
             plan.source_archive.encoded_bytes, "source.tar.gz",

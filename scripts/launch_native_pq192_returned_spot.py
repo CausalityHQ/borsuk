@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One immutable Causality Spot run for closed 100k returned-recall replay."""
+"""One immutable Causality Spot run for closed PQ192 G0c returned replay."""
 
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ from scripts.launch_native_geometric_layout_spot import (
     build_plan as geometric_build_plan,
 )
 from scripts.launch_native_rotated_two_bit_spot import _instance_state
-from scripts.native_two_bit_returned_spot_worker import (
+from scripts.native_pq192_returned_spot_worker import (
     ARTIFACT_FILES,
-    returned_worker_script,
+    pq_worker_script,
 )
 
 
@@ -51,7 +51,7 @@ def build_plan(**values: object) -> SpotLayoutPlan:
     base = geometric_build_plan(**adjusted)
     plan = dataclasses.replace(base, attempt=attempt, output_prefix=prefix.rstrip("/"))
     expected = (
-        "s3://borsuk-bench-453182569524-euc1/research/native-two-bit-norm-g0b/"
+        "s3://borsuk-bench-453182569524-euc1/research/native-pq192-returned-g0c/"
         + plan.source_commit
         + f"/runs/relaion-100k-dev1000-a{attempt:04d}"
     )
@@ -62,16 +62,16 @@ def build_plan(**values: object) -> SpotLayoutPlan:
 
 def build_launch_specs(plan: SpotLayoutPlan) -> list[dict[str, object]]:
     specs = geometric_launch_specs(plan)
-    user_data = returned_worker_script(plan)
+    user_data = pq_worker_script(plan)
     for spec in specs:
         zone = spec["NetworkInterfaces"][0]["SubnetId"]
         token = hashlib.sha256(
-            f"two-bit-norm-g0b:{plan.source_commit}:{zone}:a{plan.attempt:04d}".encode()
+            f"pq192-returned-g0c:{plan.source_commit}:{zone}:a{plan.attempt:04d}".encode()
         ).hexdigest()[:32]
-        spec["ClientToken"] = "native-two-bit-norm-g0b-" + token
+        spec["ClientToken"] = "native-pq192-returned-g0c-" + token
         spec["UserData"] = user_data
         tags = spec["TagSpecifications"][0]["Tags"]
-        tags[0]["Value"] = "borsuk-native-two-bit-norm-g0b"
+        tags[0]["Value"] = "borsuk-native-pq192-returned-g0c"
         tags[1]["Value"] = f"a{plan.attempt:04d}"
     return specs
 
@@ -92,7 +92,7 @@ def validate_terminal_bytes(
             "exit_code", "instance_id", "phase", "schema", "source_commit",
             "source_archive", "requirements_sha256", "status",
         }
-        or terminal["schema"] != "borsuk-two-bit-norm-terminal-v1"
+        or terminal["schema"] != "borsuk-pq192-returned-terminal-v1"
         or terminal["attempt"] != plan.attempt
         or terminal["claim_eligible"] is not False
         or terminal["source_commit"] != plan.source_commit
@@ -157,6 +157,48 @@ def readback_artifacts(
     return digests
 
 
+def validate_readback_bindings(
+    s3_client: object, terminal: dict[str, object],
+) -> None:
+    """Bind the terminal's code, evidence, result and validation receipts."""
+    artifacts = terminal["artifacts"]
+
+    def read_json(role: str) -> dict[str, object]:
+        identity = artifacts[role]
+        bucket, key = _s3_location(identity["uri"])
+        body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        try:
+            value = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("PQ readback JSON differs") from error
+        if (
+            type(value) is not dict
+            or body != (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            or len(body) != identity["encoded_bytes"]
+            or hashlib.sha256(body).hexdigest() != identity["sha256"]
+        ):
+            raise ValueError("PQ readback canonical identity differs")
+        return value
+
+    result = read_json("returned-result")
+    validation = read_json("returned-validation")
+    if (
+        result.get("schema") != "borsuk-pq192-returned-result-v1"
+        or validation.get("schema") != "borsuk-pq192-returned-validation-v1"
+        or validation.get("valid") is not True
+        or validation.get("query_count") != 1000
+        or result.get("evidence_sha256") != artifacts["returned-evidence"]["sha256"]
+        or result.get("pq_books_sha256") != artifacts["pq-books"]["sha256"]
+        or result.get("pq_codes_sha256") != artifacts["pq-codes"]["sha256"]
+        or validation.get("result_sha256") != artifacts["returned-result"]["sha256"]
+        or validation.get("evidence_sha256") != artifacts["returned-evidence"]["sha256"]
+        or result.get("decision") not in {
+            "advance-pq-fidelity-only", "stop-pq192-sole-scorer",
+        }
+    ):
+        raise ValueError("PQ readback result bindings differ")
+
+
 def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
     import boto3
 
@@ -169,7 +211,7 @@ def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
     if existing.get("KeyCount", 0) or existing.get("Contents"):
         raise ValueError("returned immutable attempt already exists")
     reservation = {
-        "schema": "borsuk-two-bit-norm-reservation-v1",
+        "schema": "borsuk-pq192-returned-reservation-v1",
         "attempt": plan.attempt,
         "source_commit": plan.source_commit,
         "source_archive": dataclasses.asdict(plan.source_archive),
@@ -198,6 +240,7 @@ def launch_and_monitor(plan: SpotLayoutPlan) -> dict[str, object]:
         terminal = validate_terminal_bytes(body, plan, instance_id)
         if terminal["status"] == "complete":
             readback_artifacts(s3, terminal)
+            validate_readback_bindings(s3, terminal)
         return terminal
 
     try:
