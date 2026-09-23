@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import re
+
 from scripts.native_one_million_data_range_worker import _once, data_range_worker_script
 from scripts.native_one_million_page_oracle_worker import _download
 from scripts.native_one_million_selector_cell import SOURCE_IDENTITIES
@@ -38,9 +40,10 @@ def source_range_worker_script(plan: object) -> str:
         ("range-result.json", "source-range-result.json"),
         ("range-validation.json", "source-range-validation.json"),
     ):
-        if old not in script:
+        pattern = r"(?<!source-)" + re.escape(old)
+        script, count = re.subn(pattern, new, script)
+        if count == 0:
             raise ValueError(f"source-range worker template anchor differs: {old}")
-        script = script.replace(old, new)
     script = _once(
         script, "scripts.validate_native_one_million_data_range_cell",
         "scripts.validate_native_one_million_source_range_cell",

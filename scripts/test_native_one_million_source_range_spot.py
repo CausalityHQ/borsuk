@@ -1,5 +1,6 @@
 """Source-vector diagnostic stays truth separated on a single Spot worker."""
 
+import ast
 import subprocess
 
 from scripts.launch_native_geometric_layout_spot import SourceArchiveIdentity
@@ -35,4 +36,6 @@ def test_source_range_worker_seals_plan_before_truth() -> None:
     assert "--if-none-match '*'" in script
     assert "swapoff -a" in script
     assert len(artifact_names("source_range")) == 15
+    terminal_files = next(line.removeprefix("files=") for line in script.splitlines() if line.startswith("files="))
+    assert dict(ast.literal_eval(terminal_files)) == artifact_names("source_range")
     assert all(item["InstanceMarketOptions"]["MarketType"] == "spot" for item in build_launch_specs(plan))
