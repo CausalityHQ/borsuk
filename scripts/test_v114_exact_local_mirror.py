@@ -16,9 +16,17 @@ from scripts.v114_exact_local_100k import (
     score_reference, write_mirror,
 )
 from scripts.validate_v114_exact_local_100k import validate_mirror_rows
+from scripts.v114_weighted_interval_plan import optimal_weighted_intervals
 
 
 class ExactLocalMirrorTests(unittest.TestCase):
+    def test_v114_planner_tie_prefers_less_physical_io(self) -> None:
+        score, ranges = optimal_weighted_intervals(
+            {0: 1, 1: 1, 3: 2}, page_count=4,
+            max_gets=1, max_units=2, full_page_units=1, last_page_units=1,
+        )
+        self.assertEqual((score, ranges), (2, ((3, 3),)))
+
     def test_independent_validator_rejects_wrong_row_even_with_a_new_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "mirror"
@@ -136,17 +144,18 @@ class ExactLocalMirrorTests(unittest.TestCase):
         )
         self.assertEqual(request["nominees"], list(range(128)))
         self.assertEqual(reference["primary"], list(range(10)))
-        self.assertEqual(reference["page_votes"], [[0, 10]])
+        self.assertEqual(reference["page_votes"], [[0, 5_248]])
         self.assertEqual(reference["ranges"], [[0, 256 * (dimensions + 12)]])
 
     def test_route_reference_accounts_for_short_final_page_bytes(self) -> None:
         votes, ranges, byte_count, score = route_reference(
-            [0, 256, 300], rows=416, dimensions=768,
+            [0, 256, 300], [0, 1, 256, 257, 300],
+            rows=416, dimensions=768,
         )
-        self.assertEqual(votes, [[0, 1], [1, 2]])
+        self.assertEqual(votes, [[0, 514], [1, 1027]])
         self.assertEqual(ranges, [[0, 324_480]])
         self.assertEqual(byte_count, 324_480)
-        self.assertEqual(score, 3)
+        self.assertEqual(score, 1_541)
 
     def test_reference_scores_affine_codes_and_breaks_ties_by_id(self) -> None:
         primary, scores = score_reference(

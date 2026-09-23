@@ -8,9 +8,12 @@ phase=bootstrap
 started_epoch=$(date +%s)
 deadline_epoch=$((started_epoch + V114_WALL_SECONDS))
 monitor_pid=
-imds_token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
-  http://169.254.169.254/latest/api/token)
+imds_token=
 imds() {
+  if [ -z "$imds_token" ]; then
+    imds_token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+      http://169.254.169.254/latest/api/token) || return
+  fi
   curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" \
     "http://169.254.169.254/latest/meta-data/$1"
 }
@@ -78,6 +81,8 @@ PY
 }
 trap finish EXIT
 trap 'exit 97' TERM
+imds_token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+  http://169.254.169.254/latest/api/token)
 
 monitor() {
   while true; do

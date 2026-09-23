@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.v111_weighted_interval_plan import optimal_weighted_intervals
+from scripts.v114_weighted_interval_plan import optimal_weighted_intervals
 from scripts.v113_100k_score_screen import nominate_pq64
 
 BLOCK_BYTES = 4096
@@ -90,7 +90,8 @@ def prepare_one(
         primary_count=primary_count,
     )
     votes, ranges, byte_count, plan_score = route_reference(
-        primary, rows=int(built.ids.size), dimensions=int(query.size),
+        primary, nominees.astype(int).tolist(),
+        rows=int(built.ids.size), dimensions=int(query.size),
     )
     request: dict[str, object] = {
         "query_ordinal": query_ordinal,
@@ -112,20 +113,23 @@ def prepare_one(
 
 
 def route_reference(
-    primary: list[int], *, rows: int, dimensions: int,
+    primary: list[int], nominees: list[int], *, rows: int, dimensions: int,
 ) -> tuple[list[list[int]], list[list[int]], int, int]:
-    """Independently plan exact byte ranges from truth-free primary votes."""
+    """Plan exact bytes with V112's 513/1 primary/secondary page votes."""
     final_rows = rows % 256 or 256
+    primary_set = set(primary)
     if (
         rows <= 0 or dimensions <= 0 or final_rows % 32
-        or len(set(primary)) != len(primary)
-        or any(ordinal < 0 or ordinal >= rows for ordinal in primary)
+        or len(primary_set) != len(primary)
+        or len(set(nominees)) != len(nominees)
+        or not primary_set.issubset(nominees)
+        or any(ordinal < 0 or ordinal >= rows for ordinal in nominees)
     ):
         raise ValueError("V114 physical row geometry differs")
     votes: dict[int, int] = {}
-    for ordinal in primary:
+    for ordinal in nominees:
         page = ordinal // 256
-        votes[page] = votes.get(page, 0) + 1
+        votes[page] = votes.get(page, 0) + (513 if ordinal in primary_set else 1)
     unit_bytes = 32 * (dimensions + 12)
     score, pages = optimal_weighted_intervals(
         votes, page_count=(rows + 255) // 256, max_gets=32,

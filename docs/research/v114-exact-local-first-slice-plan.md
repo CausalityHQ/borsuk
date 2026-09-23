@@ -116,3 +116,25 @@ Verification policy: no local full suite while devbox swap/pressure is
 elevated. Run focused tests after changes, then the repository full gate
 once only when the code diff is stable and resources permit. Heavy data
 construction and performance work belongs on Spot.
+
+## Registered 100k execution resources
+
+The one 100k correctness attempt uses `c7i.8xlarge` Linux/UNIX Spot in
+`eu-central-1`, trying zones c, b, a in that order. It has one encrypted,
+delete-on-termination 100-GiB gp3 root volume and a four-hour worker
+deadline. The instance shuts down after the terminal upload; the launcher
+also terminates and waits for EC2 termination. No fixed Spot maximum price
+is set, so the charged rate can change. On 2026-09-23 the live AWS EC2
+`DescribeSpotPriceHistory` response showed the most recent per-zone rates
+as USD 0.6814/hour in 1c (16:00 UTC), 0.7658/hour in 1b (17:00 UTC), and
+0.6970/hour in 1a (20:00 UTC). These are **price observations**, not a
+campaign charge or performance measurement; the terminal instance ID and
+actual bill determine final cost. AWS documents the meaning and scope of
+the [Spot price history API](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSpotPriceHistory.html).
+
+The attempt uses the completed V113 source-only artifact and its frozen
+seal, a new source archive at the V114 commit, and the frozen 1,000-query
+development object. The builder cannot see query bytes before the mirror
+and provenance record are sealed. A Spot interruption makes the attempt
+invalid: sync the terminal artifacts, discard the interrupted cell, and
+reserve a new immutable attempt prefix before rerunning.

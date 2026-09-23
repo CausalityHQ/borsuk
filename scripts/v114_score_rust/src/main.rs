@@ -10,7 +10,7 @@ mod physical_interval;
 use exact_sq8_mirror::{ExactSq8Mirror, MirrorManifest, Placement};
 use exact_sq8_nominee::{Sq8Geometry, primary_ordinals};
 use physical_interval::{IntervalGeometry, IntervalPlan, PlanError, plan_weighted_intervals};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -65,6 +65,7 @@ fn parse_manifest(value: &serde_json::Value) -> Result<MirrorManifest, String> {
 
 fn route_primary(
     primary: &[usize],
+    nominees: &[usize],
     rows: usize,
     dimensions: usize,
 ) -> Result<(Vec<(usize, u32)>, IntervalPlan), PlanError> {
@@ -77,12 +78,27 @@ fn route_primary(
         .checked_add(12)
         .and_then(|width| width.checked_mul(32))
         .ok_or(PlanError::ArithmeticOverflow)?;
+    let primary_set = primary.iter().copied().collect::<HashSet<_>>();
+    let nominee_set = nominees.iter().copied().collect::<HashSet<_>>();
+    if primary_set.len() != primary.len()
+        || nominee_set.len() != nominees.len()
+        || !primary_set.is_subset(&nominee_set)
+    {
+        return Err(PlanError::InvalidWeights);
+    }
     let mut weights = BTreeMap::<usize, u32>::new();
-    for &ordinal in primary {
+    for &ordinal in nominees {
         if ordinal >= rows {
             return Err(PlanError::InvalidWeights);
         }
-        *weights.entry(ordinal / 256).or_default() += 1;
+        let page_weight = weights.entry(ordinal / 256).or_default();
+        *page_weight = page_weight
+            .checked_add(if primary_set.contains(&ordinal) {
+                513
+            } else {
+                1
+            })
+            .ok_or(PlanError::ArithmeticOverflow)?;
     }
     let votes = weights.into_iter().collect::<Vec<_>>();
     let plan = plan_weighted_intervals(
@@ -148,8 +164,8 @@ fn process_request(
         .map_err(|error| format!("invalid RAM primary: {error:?}"))?;
     let file_primary = primary_ordinals(&file_scores, primary_count)
         .map_err(|error| format!("invalid file primary: {error:?}"))?;
-    let (votes, plan) =
-        route_primary(&ram_primary, rows, dimensions).map_err(|error| error.to_string())?;
+    let (votes, plan) = route_primary(&ram_primary, &nominees, rows, dimensions)
+        .map_err(|error| error.to_string())?;
     let ranges = plan
         .ranges
         .iter()
@@ -222,10 +238,29 @@ mod tests {
 
     #[test]
     fn page_votes_and_plan_charge_the_short_final_page_exactly() {
-        let (votes, plan) = route_primary(&[0, 256, 300], 416, 768).unwrap();
-        assert_eq!(votes, vec![(0, 1), (1, 2)]);
+        let (votes, plan) =
+            route_primary(&[0, 256, 300], &[0, 1, 256, 257, 300], 416, 768).unwrap();
+        assert_eq!(votes, vec![(0, 514), (1, 1027)]);
         assert_eq!(plan.ranges, vec![0..324_480]);
         assert_eq!(plan.bytes, 324_480);
+    }
+
+    #[test]
+    fn rust_planner_tie_prefers_less_physical_io() {
+        let plan = plan_weighted_intervals(
+            IntervalGeometry {
+                page_count: 4,
+                full_page_units: 1,
+                last_page_units: 1,
+                unit_bytes: 1,
+                max_gets: 1,
+                max_units: 2,
+            },
+            &[(0, 1), (1, 1), (3, 2)],
+        )
+        .unwrap();
+        assert_eq!(plan.score, 2);
+        assert_eq!(plan.ranges, vec![3..4]);
     }
 
     #[test]
@@ -298,7 +333,7 @@ mod tests {
             result["score_bits"],
             serde_json::json!([1088421888, 1073741824])
         );
-        assert_eq!(result["page_votes"], serde_json::json!([[0, 1]]));
+        assert_eq!(result["page_votes"], serde_json::json!([[0, 514]]));
         assert_eq!(result["ranges"], serde_json::json!([[0, 512]]));
         fs::remove_dir_all(root).unwrap();
     }
