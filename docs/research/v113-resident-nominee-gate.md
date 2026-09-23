@@ -58,14 +58,16 @@ the ideal-arithmetic score error is bounded by
 add explicit per-query allowances for the V112 float32 SQ8 score relative
 to the mathematical `low + code*span_step` score and for the resident
 scorer's arithmetic. Independently recompute both on all 512 nominees;
-only an outward-rounded total can be called a certificate. Report the
-fraction of queries whose SQ8 top-100 boundary is certified. A loose bound is
-an inconclusive certificate, not evidence of poor measured recall.
+only an outward-rounded total can be called a certificate. The first screen
+records observed errors and has no certificate claim. A later floating-point
+analysis must establish the full numerical allowance before reporting the
+fraction of queries whose SQ8 top-100 boundary is certified. A loose bound
+is an inconclusive certificate, not evidence of poor measured recall.
 
 This is a hypothesis, not a selected production default. In particular,
-16 bytes may lack enough score fidelity. A plain residual PQ16 arm and a
-four-byte scalar-only arm will isolate whether the two scalar corrections
-or the residual code add useful primary-set fidelity. Query/GT rows are
+16 bytes may lack enough score fidelity. A four-byte scalar-only arm
+isolates whether the residual code adds useful primary-set fidelity.
+Query/GT rows are
 never used for codebook training. A fresh, recorded corpus-only training
 sample and seed fix the representation before any query evaluation.
 
@@ -79,20 +81,20 @@ query SHA-256 is
 The sealed inputs are the `source` and `queries` identities in
 `scripts/launch_native_geometric_layout_spot.py`; their S3 URIs and encoded
 lengths are part of the launcher registration.
-Build the SQ8 target by V70's corpus-only quantization, PQ64 by V77's
-source-only recipe (seed 7301, 10 iterations, 100k sampled rows), and R16
+Build the SQ8 target by V70's corpus-only quantization, PQ64 by the
+balanced-block `fit_pq` routine (seed 7301, 10 iterations, 100k sampled
+rows), and R16
 by the source-only residual recipe (seed 113031, 10 iterations, 100k sampled
 rows). Exhaustively scan the 100k PQ64 codes and choose the same top 512
 nominees for every arm. Compare their SQ8 top-100 membership with the
-resident R16, four-byte scalar-only, and plain residual PQ16 estimates.
+resident R16 and four-byte scalar-only estimates.
 No ground truth, page layout, GET cap, or returned recall is used in this
 screen: those would confound a representation decision at this size.
 
 Record mean and p05 overlap of the 100 SQ8-primary nominees, exact ties,
-per-row score errors and the fraction of queries satisfying the Lean margin
-premise. A representation passes the screen only if mean primary overlap is
+and per-query mean/maximum nominee score errors. A representation passes the screen only if mean primary overlap is
 at least 95/100 and p05 at least 90/100. Promote the smallest passing row
-plane; the 16-byte plane must beat the scalar-only arm if both pass. A miss
+plane; scalar-only wins if both pass. A miss
 rejects the encoding at this width. If R16 gains at least two mean primary
 positions over the scalar-only arm but misses the threshold, compare one
 preregistered 32-byte width; otherwise change the representation. These
