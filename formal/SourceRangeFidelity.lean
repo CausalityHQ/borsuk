@@ -187,6 +187,42 @@ theorem page_local_code_wave_coordinate_work_budget
   simp only [twoBitCoordinateWork]
   omega
 
+/-! A final candidate can hit a truth position only when the code wave
+contains that position's owner page. This is a reusable upper bound for
+any scorer or reranker restricted to a sealed code cover. The Boolean
+lists and subset premise still require an authenticated implementation
+certificate; the theorem does not load benchmark artifacts itself. -/
+
+def containedTruthHits (pairs : List (Bool × Bool)) : Nat :=
+  (pairs.filter fun pair => pair.1).length
+
+def finalTruthHits (pairs : List (Bool × Bool)) : Nat :=
+  (pairs.filter fun pair => pair.2).length
+
+theorem final_hits_le_code_cover
+    (pairs : List (Bool × Bool))
+    (subset : ∀ pair ∈ pairs, pair.2 = true → pair.1 = true) :
+    finalTruthHits pairs ≤ containedTruthHits pairs := by
+  induction pairs with
+  | nil => simp [finalTruthHits, containedTruthHits]
+  | cons pair rest ih =>
+      have tailSubset : ∀ next ∈ rest, next.2 = true → next.1 = true := by
+        intro next member hit
+        exact subset next (by simp [member]) hit
+      have tailBound := ih tailSubset
+      have headSubset := subset pair (by simp)
+      rcases pair with ⟨contained, final⟩
+      cases contained <;> cases final <;>
+        simp [finalTruthHits, containedTruthHits] at * <;> omega
+
+theorem rejected_code_cover_cannot_clear_screen
+    (pairs : List (Bool × Bool))
+    (subset : ∀ pair ∈ pairs, pair.2 = true → pair.1 = true)
+    (observed_cover : containedTruthHits pairs = 98468) :
+    finalTruthHits pairs < 98651 := by
+  have ceiling := final_hits_le_code_cover pairs subset
+  omega
+
 /-! Uniform per-row score-error bounds also bound a page's minimum score.
 This supports a non-recall-based premise for page-order certificates. -/
 

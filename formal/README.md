@@ -74,6 +74,14 @@ before this bound describes a served query. This implies at most
 64,424,448 coordinate decode/score operations for the modeled code wave;
 it is a work count rather than a wall-clock bound.
 
+The code-cover ceiling theorem proves that a scorer restricted to fetched
+pages cannot hit more truth positions than those pages contain. If an
+authenticated Boolean certificate establishes the observed 98,468 GT100
+code-cover hits and that every final hit came from the cover, no scorer or
+reranker on that same cover can clear the preregistered 98,651 screening
+floor. This rules out rescoring the rejected cover; it does not rule out
+a different layout, page choice, or two-wave schedule.
+
 A second finite-query theorem bounds recall loss for a **fixed score
 threshold** by the authenticated truth count of pages whose true scores
 fall in the error band immediately below that threshold. It needs a
