@@ -4167,3 +4167,70 @@ to 1M or freeze the storage format. The next cheapest gate must materially
 replace the row scoring representation while retaining an exact paired arm and
 the same frozen 100k quality/read limits. A pass would still require separate
 1M group locality, native final-page serving and two-generation memory proof.
+
+### Rotated two-bit row codes a0001: 100k quality and memory advance
+
+The next source-only cell encoded each 768D row with a signed Hadamard rotation,
+two scalar bits per dimension, a row scale and its exact norm: 200 bytes per
+row. It retained the same four-page groups and frozen 1,000 development
+queries, scoring precisely the same fetched rows in primary reconstructed,
+norm-corrected diagnostic and paired exact arms. Its fixed design and gates
+are in `docs/superpowers/specs/2026-09-23-rotated-two-bit-row-codes-design.md`.
+
+The first complete run used source
+`8d920de52b6d1469b9af565faf8dbf3049ce0f00`, but its process-group RSS
+sampler missed a forked evaluator, so its reported combined-memory peak was
+invalid. The source-only resource confirmation at
+`80ddf40533aefd3c24b7d3ea4539887aa94f91bb` fixed the sampler to follow
+the process tree and added a separate broker peak and conservative sum gate.
+The confirmation source archive SHA-256 was
+`de8f6f59abe40eaf5985103906f5bd19d8a4b9f418429321ebefb3b994cd8559`
+(11,075,884 bytes); the requirements SHA-256 was
+`d2057b9b57da6ae2900efa99c3424c1a7211f7847c1c621ed0dd9e467f56a874`.
+Its one immutable attempt prefix is
+`s3://borsuk-bench-453182569524-euc1/research/native-rotated-two-bit/80ddf40533aefd3c24b7d3ea4539887aa94f91bb/runs/relaion-100k-dev1000-a0001/`.
+
+The 4,679-byte terminal SHA-256 is
+`82875585b8854d0a5f20ff4ebafe629e50ff64808ae8d0f577a1e1935e9caf19`;
+it closed `complete` with controller exit 0 after 2,792 seconds. The one-time
+Spot instance `i-00ae1b8ee873340b0` was confirmed terminated. All 13
+terminal-listed artifacts matched readback length and SHA-256. Result,
+evidence and independent validation SHA-256 are respectively
+`8b4ec737d670979b2647cc72d3827a17427f79291e1cc5f95bb7ecae4b1825b2`,
+`219f7cee65e9930ed06bd7297b681962e9eaaf9d4b24dc7a36c5fff24a81bbdf`,
+and `049299b22ac28d9bd82efefd4a86fc9a8f0babfd01abac385a4d760d03927054`.
+The confirmation's 1,000-query evidence is byte-identical to the first
+quality run, and the independent validator agreed with all quality and
+read-budget metrics.
+
+| Same 1,000 frozen queries | mean GT100 | p05 GT100 | worst GT100 | GT10 page containment |
+|---|---:|---:|---:|---:|
+| prior global PQ48 paired control | 97.184% | 87% | 50% | 99.39% |
+| prior PQ48+PQ24 residual paired control | 97.554% | 87% | 65% | 99.56% |
+| rotated two-bit primary | **98.418%** | **91%** | 58% | **99.51%** |
+| norm-corrected diagnostic | 98.352% | 91% | — | 99.51% |
+| exact scores on the same grouped rows | 98.515% | 92% | 58% | 99.51% |
+
+Primary loses only 97 GT100 hits to paired exact scoring across all queries:
+one improves, 64 worsen and 935 tie. The actual code wave took 32,000
+authenticated Range GETs and 15,342,423,352 bytes total, at most 32 GETs and
+15,423,240 bytes for any query. The planned final data wave stayed below 32
+pages and 15,665,032 bytes per query. This cell did not issue final-page GETs
+or measure SQ8 serving. Construct, evaluate and validate peaked at 1,536,248,
+1,536,824 and 1,565,924 KiB RSS respectively; all reported zero swaps. The
+fixed process-tree combined peak was 1,582,702,592 bytes. The conservative
+evaluator peak plus 97,538,048-byte broker peak plus 64 MiB wrapper allowance
+was 1,738,354,688 bytes, below the 3-GiB cap. The terminal-closed broker
+audit recorded exactly 32,000 GETs and 15,342,423,352 bytes, matching query
+evidence.
+
+**Decision:** advance the rotated two-bit representation past the frozen 100k
+quality, code-read and worker-memory gates. The static result retains its
+original `quality-advance-memory-pending` label because the confirmation
+replayed the same quality evidence; this ledger records the separate audited
+memory resolution. The format is not production-frozen. Next run the
+source-only 1M centroid-selector screen in
+`docs/superpowers/specs/2026-09-23-rotated-two-bit-one-million-bridge-design.md`.
+Only a selector pass authorizes a full 1M code-plane and native final-page
+range-serving cell; two-generation 100M memory and product performance remain
+open.
