@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -187,8 +188,10 @@ class TwoBitSpotTests(unittest.TestCase):
         self.assertIn('BORSUK_RANGE_BROKER_SOCKET="$root/broker.sock"', evaluation)
         self.assertIn("broker-audit.json", evaluation)
         self.assertIn("evaluate-combined-peak.txt", evaluation)
+        self.assertIn("evaluate-broker-peak.txt", evaluation)
         self.assertIn("swapoff -a", script)
         self.assertIn('(( swaps == 0 ))', script)
+        self.assertIn('evaluate_peak_kib * 1024 + $(cat evaluate-broker-peak.txt) + 67108864', script)
         self.assertIn('exec 2>worker-stderr.log', script)
         self.assertIn('"$output/diagnostics/worker-stderr.log"', script)
         self.assertIn('env PYTHONPATH="$root/repo"', script[script.index("phase=validate") :])
@@ -215,6 +218,17 @@ class TwoBitSpotTests(unittest.TestCase):
             _validate_terminal_bytes(failed_body, plan, "i-0123456789abcdef0"),
             failed,
         )
+
+    def test_rss_sampler_includes_child_with_new_process_group(self) -> None:
+        script = worker_script(self.plan())
+        match = re.search(r'rss_bytes=\$\(ps -eo pid=,ppid=,rss= \| awk -v root="\$pid" -v broker="\$\{broker_pid:-0\}" \'(.*)\'\)', script)
+        self.assertIsNotNone(match)
+        sampled = subprocess.run(
+            ["awk", "-v", "root=100", "-v", "broker=900", match.group(1)],
+            input="100 1 1\n101 100 3\n102 101 400\n900 1 50\n",
+            text=True, capture_output=True, check=True,
+        )
+        self.assertEqual(int(sampled.stdout), 454 * 1024)
 
     def test_failed_terminal_exits_controller_nonzero(self) -> None:
         with (

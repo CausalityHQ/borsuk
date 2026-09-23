@@ -114,8 +114,13 @@ exec 2>worker-stderr.log
 run_capped() {
   setsid "$@" & pid=$!
   peak_bytes=0
+  broker_peak_bytes=0
   while kill -0 "$pid" 2>/dev/null; do
-    rss_bytes=$(ps -eo pid=,pgid=,rss= | awk -v pgid="$pid" -v broker="${broker_pid:-0}" '$2 == pgid || $1 == broker { total += $3 } END { printf "%.0f", total * 1024 }')
+    rss_bytes=$(ps -eo pid=,ppid=,rss= | awk -v root="$pid" -v broker="${broker_pid:-0}" '{ parent[$1]=$2; rss[$1]=$3 } END { selected[root]=1; changed=1; while(changed) { changed=0; for (p in rss) if (!selected[p] && selected[parent[p]]) { selected[p]=1; changed=1 } } for (p in selected) if (selected[p]) total+=rss[p]; if (broker>0 && !selected[broker]) total+=rss[broker]; printf "%.0f", total * 1024 }')
+    if [ "$phase" = evaluate ]; then
+      broker_bytes=$(ps -o rss= -p "$broker_pid" | awk '{printf "%.0f", $1 * 1024}')
+      if [ "$broker_bytes" -gt "$broker_peak_bytes" ]; then broker_peak_bytes=$broker_bytes; fi
+    fi
     if [ "$rss_bytes" -gt "$peak_bytes" ]; then peak_bytes=$rss_bytes; fi
     if [ "$rss_bytes" -gt "$MAXIMUM_RSS_BYTES" ]; then
       kill -TERM -- "-$pid" 2>/dev/null || true
@@ -125,7 +130,10 @@ run_capped() {
     sleep 1
   done
   rc=0; wait "$pid" || rc=$?
-  if [ "$phase" = evaluate ]; then printf '%s\n' "$peak_bytes" > evaluate-combined-peak.txt; fi
+  if [ "$phase" = evaluate ]; then
+    printf '%s\n' "$peak_bytes" > evaluate-combined-peak.txt
+    printf '%s\n' "$broker_peak_bytes" > evaluate-broker-peak.txt
+  fi
   return "$rc"
 }
 check_peak_rss() {
@@ -153,7 +161,7 @@ import hashlib,json,os,pathlib
 def ident(path,role):
  body=pathlib.Path(path).read_bytes()
  return {"encoded_bytes":len(body),"role":role,"sha256":hashlib.sha256(body).hexdigest(),"uri":os.environ["OUTPUT_PREFIX"]+"/artifacts/"+path}
-files=(("mean","mean.bin"),("groups","groups.bin"),("code-seal","seal.json"),("sealed","sealed.json"),("evidence","evidence.json"),("result","result.json"),("validation","validation.json"),("broker-audit","broker-audit.json"),("evaluate-combined-peak","evaluate-combined-peak.txt"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
+files=(("mean","mean.bin"),("groups","groups.bin"),("code-seal","seal.json"),("sealed","sealed.json"),("evidence","evidence.json"),("result","result.json"),("validation","validation.json"),("broker-audit","broker-audit.json"),("evaluate-combined-peak","evaluate-combined-peak.txt"),("evaluate-broker-peak","evaluate-broker-peak.txt"),("construct-resources","construct-resources.txt"),("evaluate-resources","evaluate-resources.txt"),("validate-resources","validate-resources.txt"))
 complete=os.environ["STATUS"]=="complete" and int(os.environ["EXIT_CODE"])==0
 value={"artifacts":{role:ident(path,role) for role,path in files} if complete else {},"attempt":int(os.environ["ATTEMPT"]),"claim_eligible":False,"elapsed_seconds":int(os.environ["ENDED"])-int(os.environ["STARTED"]),"exit_code":int(os.environ["EXIT_CODE"]),"instance_id":os.environ.get("INSTANCE_ID",""),"phase":os.environ["PHASE"],"schema":"borsuk-rotated-two-bit-terminal-v1","source_commit":os.environ["SOURCE_COMMIT"],"source_archive":{"uri":os.environ["SOURCE_ARCHIVE_URI"],"sha256":os.environ["SOURCE_ARCHIVE_SHA256"],"encoded_bytes":int(os.environ["SOURCE_ARCHIVE_BYTES"])},"requirements_sha256":os.environ["REQUIREMENTS_SHA256"],"status":os.environ["STATUS"]}
 pathlib.Path("terminal.json").write_text(json.dumps(value,sort_keys=True,separators=(",",":"))+"\\n")
@@ -237,6 +245,7 @@ aws s3 cp evidence.json "$output/artifacts/evidence.json" --only-show-errors
 aws s3 cp result.json "$output/artifacts/result.json" --only-show-errors
 aws s3 cp broker-audit.json "$output/artifacts/broker-audit.json" --only-show-errors
 aws s3 cp evaluate-combined-peak.txt "$output/artifacts/evaluate-combined-peak.txt" --only-show-errors
+aws s3 cp evaluate-broker-peak.txt "$output/artifacts/evaluate-broker-peak.txt" --only-show-errors
 aws s3 cp evaluate-resources.txt "$output/artifacts/evaluate-resources.txt" --only-show-errors
 phase=validate
 run_capped /usr/bin/time -v -o validate-resources.txt timeout @WALL@ env PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=32 OMP_NUM_THREADS=32 "$root/.venv/bin/python" -m scripts.native_rotated_two_bit_cell validate --root "$root" --out "$root" --output-prefix "$output" --source-commit @COMMIT@ --source-archive-uri @ARCHIVE_URI@ --source-archive-sha256 @ARCHIVE_SHA@ --source-archive-bytes @ARCHIVE_BYTES@ --requirements-sha256 @REQUIREMENTS_SHA@
@@ -247,6 +256,8 @@ for resource in construct-resources.txt evaluate-resources.txt validate-resource
   check_peak_rss "$resource"
 done
 (( $(cat evaluate-combined-peak.txt) <= MAXIMUM_RSS_BYTES ))
+evaluate_peak_kib=$(awk -F: 'index($1,"Maximum resident set size") {gsub(/[[:space:]]/,"",$2); print $2}' evaluate-resources.txt)
+(( evaluate_peak_kib * 1024 + $(cat evaluate-broker-peak.txt) + 67108864 <= MAXIMUM_RSS_BYTES ))
 awk '$1 == "SwapTotal:" {exit ($2 != 0)}' /proc/meminfo
 status=complete
 phase=complete
@@ -373,6 +384,7 @@ def _validate_terminal_bytes(
         "validation": "validation.json",
         "broker-audit": "broker-audit.json",
         "evaluate-combined-peak": "evaluate-combined-peak.txt",
+        "evaluate-broker-peak": "evaluate-broker-peak.txt",
         "construct-resources": "construct-resources.txt",
         "evaluate-resources": "evaluate-resources.txt",
         "validate-resources": "validate-resources.txt",
