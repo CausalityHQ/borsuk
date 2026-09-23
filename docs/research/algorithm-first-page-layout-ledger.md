@@ -4806,3 +4806,80 @@ Lean planner bounds apply to the 100k one-GET-per-group plan. Pairwise
 margin and truth-owner counting lemmas can supplement measured gates under
 authenticated data premises; the 1M merged-range planner and full recall
 composition remain unproved.
+
+### ReLAION-1M OPQ8 original-layout containment a0001: advance to actual reads
+
+The preregistered source-only gate in
+`docs/superpowers/specs/2026-09-23-one-million-opq8-original-layout-design.md`
+applied the unchanged 100k-trained OPQ8 model to the original 1M physical
+row order and 910 adjacent eight-page groups. It encoded one real
+8,000,000-byte OPQ route plane, ranked groups by the mean of their four
+best ADC row scores, and used the existing adjacent-range planner with
+projected 96-byte rows. All 1,000 candidate, historical page-centroid
+control, and source-distance diagnostic plans were sealed before truth.
+The historical PQ96 control replayed every selected group, interval,
+projected byte/GET count and GT outcome against its terminal-closed
+evidence. This gate read no projected 96-byte code object and made no
+final-page nomination claim.
+
+Pushed source `cc0dd60de8b63a87656475591be12127ad4f3769` was sealed
+in an 11,180,211-byte create-only archive with SHA-256
+`c5721f7d8b5a1ab187637e65003c4e80d232c0d50cc6ed4eeacca8d9a2069357`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-opq8-selector/cc0dd60de8b63a87656475591be12127ad4f3769/runs/relaion-1m-dev1000-a0001/`.
+The 4,734-byte terminal SHA-256 was
+`257266bffcb7a80402eab465bbf920c188eb3e35d4330afcf2d533cea09feca9`.
+It closed `complete` in 341 seconds with original controller exit zero;
+Spot instance `i-059554c4d19cdf1c1` was confirmed terminated. The
+controller and separate closeout authenticated all 13 terminal-listed
+artifacts. The OPQ model, physical codes, plan seal, plans, evidence,
+result and validation SHA-256 values were respectively
+`e49a31fd334f4af3de7964ca6452c3f93bc6223939e29718721b3d34207733ff`,
+`4fecab2927eceda33f3777751fcb841f8daf715613f79b0a37fe53243ead8267`,
+`ee4c9c4c91b2197c16d07a91c726c8d5401fb22f14950470d32f3bfb8250ae4b`,
+`cb39314a53f0030f57386887f3fa7213a3e5e869610dcdc107f28b1c7a4fbe08`,
+`98719fde6bac228107141403230cf4544669b34221a5a2c3dcc4d366595c41fa`,
+`020be13aaa6b9014fe64b47889496488eb1eeb8dca603f67663d361ef54a8eee`,
+and `1286692e0c4d6cea3ae576ee515830bbb2fed1f77a6e7af672bbb769b234ca6a`.
+The closeout independently mapped the authenticated truth IDs through
+the sealed 12,000,000-byte membership plane, recomputed every hit mask,
+interval and byte sum, and matched the frozen PQ96 control on all 1,000
+queries.
+
+| Frozen 1M group containment | PQ96 page-centroid control | OPQ8 row route | source-distance diagnostic | preregistered advance |
+|---|---:|---:|---:|---:|
+| GT100 hits | 98,151 / 100,000 | **98,985 / 100,000** | 99,710 / 100,000 | ≥98,151 |
+| p05 GT100 hits | 89 / 100 | **95 / 100** | 98 / 100 | ≥90 |
+| GT10 hits | 9,928 / 10,000 | **9,956 / 10,000** | 9,992 / 10,000 | ≥9,928 |
+| queries below 90 GT100 hits | 51 | **15** | 1 | ≤49 |
+| maximum projected code wave | 32 GETs / 16,777,216 bytes | **32 GETs / 16,777,212 bytes** | 32 GETs / 16,777,212 bytes | ≤32 / ≤16,777,216 |
+| total projected bytes / selected groups | 16,769,203,088 / 157,526 | **16,769,389,164 / 121,782** | 16,769,443,200 / 121,750 | report paired |
+
+The OPQ route improved 225 queries, worsened 62 and tied 713 on GT100
+positions, for a net gain of 834. It selected 35,744 fewer groups than
+control while using 186,076 more projected bytes across 1,000 queries,
+well below the preregistered 1% material-expansion threshold. The
+source-distance diagnostic passed the same numerical gate with 99,710
+hits, indicating a representation gap that could matter in a
+later generation. Construct, plan, evaluate and validate maximum RSS
+were 985,168, 955,572, 331,300 and 1,330,940 KiB; sampled process-tree
+peaks were 690,593,792, 839,237,632, 315,539,456 and 908,750,848
+bytes. All four phases stayed at least 64 MiB below the 3-GiB cap and
+recorded zero swaps.
+
+**Decision:** `opq8-one-million-containment-advance`. The unchanged
+OPQ8 row route has a paired source-only 1M quality win on the frozen
+original layout without material plan expansion. The next gate must
+build a real 96-byte-per-row code format, perform actual authenticated
+S3 range reads for the selected groups, replay a matched control, and
+measure final-page quality and latency. The current source-only result
+does not establish that those projected bytes can deliver accurate
+final pages. The checked Lean budget and conditional counting lemmas
+do not establish empirical recall or latency. At 100M with two resident
+code generations, the current full-array NumPy scorer exceeds the
+3-GiB-with-margin memory bound; a chunked scanner is required before
+that scale gate.
+
+An accidental prelaunch upload placed the same source archive under a
+different, nonexistent full-commit key. No attempt referenced or ran
+that object. The sole executed attempt used the authenticated key above.

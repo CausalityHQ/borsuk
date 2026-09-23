@@ -61,7 +61,7 @@
 - [x] **Step 2: Confirm the new kind is rejected.** The new focused test first failed at `build_plan` rejecting `opq8_1m`.
 - [x] **Step 3: Add the worker/controller mode.** The worker shares create-only terminal, readback, resource receipts and termination with the 100k worker; the old 100k focused script test still passes.
 - [x] **Step 4: Run focused tests and read-only cross-provider review.** Fifteen focused tests, scoped Ruff and diff checks passed. The reviewer found no Critical/High blocker; the preregistration now defines Spot interruption restart, the 1% material-expansion threshold and diagnostic verdict. A closed PQ96 query-0 preflight replayed exactly. Source archive checks follow after this reviewed revision is committed. No local full suite ran while swap remained charged.
-- [ ] **Step 5: Commit and fast-forward push, then launch exactly one Spot attempt.** Monitor only terminal and infrastructure until closure. Read back and authenticate all terminal artifacts, recompute all 1,000 results, confirm instance termination, record the pass/fail decision and push the ledger.
+- [x] **Step 5: Commit and fast-forward push, then launch exactly one Spot attempt.** Monitor only terminal and infrastructure until closure. Read back and authenticate all terminal artifacts, recompute all 1,000 results, confirm instance termination, record the pass/fail decision and push the ledger.
 
 ## Self-review
 
