@@ -44,8 +44,8 @@
 
 **Interface:** `selected_positions(sample, codes) -> tuple[int, ...]` reconstructs physical row offsets from `codes.page_row_counts`, verifies every `sample.group_ranges` tuple against `codes.group_ranges` and the old 32-GET/16-MiB limits, and rejects overlap. `replay(root, out)` authenticates the old terminal/evidence/code seal/groups/mean against their pinned identities and the four `FROZEN_INPUTS`, then computes per-query paired returned hits and canonical evidence/result files.
 
-- [ ] Write tests for valid disjoint ranges, repeated groups, a wrong digest, and a range that exceeds the old byte cap.
-- [ ] Run the focused test to observe failure, implement `selected_positions`, then rerun it.
+- [x] Write tests for valid disjoint ranges, repeated groups, a wrong digest, and accounting drift against the old byte cap.
+- [x] Run the focused test to observe the missing-module failure, implement `selected_positions`, then rerun it (3 passed; Ruff passed).
 - [ ] Implement `replay` with `read_two_bit_codes`, `read_two_bit_evidence`, `_read_inputs` and `_read_queries_truth`. Bind each old artifact to the complete terminal SHA and receipt before it is used. Assert all 1,000 query ordinals, source IDs and truth IDs; reuse the existing float32 scoring formulas and source-ordinal tie rule.
 - [ ] Write canonical per-query primary/exact GT100 and GT10 hits, paired losses, p05 and sub-90 counts. Keep page-containment metrics in separate fields. Add a test where a row-score swap changes returned recall without changing page containment.
 - [ ] Run focused unittest and offline Ruff. Commit the verified adapter.
