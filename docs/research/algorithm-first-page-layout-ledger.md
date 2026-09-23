@@ -5325,3 +5325,45 @@ existing 200-byte record, and compare two-bit page/range recall with an
 exact-source control on precisely the same mirrored cover. A passing
 cell then needs actual authenticated S3 reads on untouched queries and
 the 10M/100M scale gate.
+
+### ReLAION-1M mirrored two-bit paired scorer a0001: advance
+
+The sole paired cell built the 104-byte sign and 96-byte magnitude page
+objects from source, checked that every page rejoins the original 200-byte
+record, and scored exactly the frozen mirrored cover. An exact-source arm
+scored the same fetched rows. The fixed gate is in
+`docs/research/progressive-two-bit-mirrored-code-wave-contract.md`.
+
+Pushed source `0375f08514c2166453d3268793d52703bee0cf1c` was sealed in
+an 11,803,539-byte archive with SHA-256
+`ac6863ab9eb11a2e72c3953cbdeeb0079cb71634423f04d7c997c6591a83efc4`.
+The sole attempt was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/runs/relaion-1m-dev1000-a0001/`.
+Its complete terminal SHA-256 was
+`f0fe51a3b4639fe8bb033e31f8cb102c224b027fa690badc961f01b3b0c5fb75`.
+The original controller exited zero and read back all 20 terminal
+artifacts. Local receipt closeout authenticated the source archive,
+artifact roster, prior plans, resource receipts and rejoined record digest.
+The remote validator replayed the range geometry and truth masks. Spot
+`i-03fc8c109b0cd5815` (`c7i.8xlarge`) was confirmed terminated.
+
+| Frozen 1M paired score | Exact source, same cover | Two-bit | Gate |
+|---|---:|---:|---:|
+| GT100 / 100,000 | 98,921 | **98,728** | ≥98,151 |
+| GT10 / 10,000 | 9,956 | **9,956** | ≥9,928 |
+| p05 GT100 | 94 | **93** | ≥90 |
+| queries below 90 GT100 | 18 | **28** | ≤49 |
+| maximum data GETs / bytes | 32 / 16,777,216 | **32 / 16,777,208** | ≤32 / ≤16,777,216 |
+| paired net GT100 loss | — | **193** | ≤300 |
+
+The two-bit arm lost 220 and recovered 27 GT100 positions against the
+same-cover source arm. It scored below source on 84 queries and tied on
+916. The 98,986 source-owner code cover leaves 258 positions not returned
+by the final two-bit data range. All gate values passed. This is a
+source-only score and range-plan cell, not a timed S3 read. No latency,
+throughput, cost or unseen-query claim follows from it.
+
+**Decision:** `advance-to-actual-read-and-held-out-gate`. The next
+architecture qualification must authenticate and time S3 range reads of
+both code planes and final data, then test quality on untouched queries.
+Freeze the selected configuration before 10M and 100M scale studies.

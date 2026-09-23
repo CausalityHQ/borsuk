@@ -1,6 +1,7 @@
 # Progressive two-bit mirrored page-wave contract
 
-Status: 1M source-only projection passed; paired scorer cell remains pending.
+Status: 1M source-only projection and paired scorer cell passed; actual-read
+and held-out qualification remain pending.
 This is one architecture decision after
 the rejected page-local 200-byte code-wave projection. Historical artifacts
 and their source commits remain immutable.
@@ -135,3 +136,48 @@ before the final data wave; request cost and tail latency need actual-read
 qualification. Build the split plane artifacts once from source, check
 bit-exact rejoining, score only the sealed mirrored cover, and compare
 against exact source scores on those same rows with the fixed final gate.
+
+## Closed 1M paired score decision
+
+The sole paired attempt used pushed source
+`0375f08514c2166453d3268793d52703bee0cf1c`, archived at
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/source/source.tar.gz`
+(11,803,539 bytes, SHA-256
+`ac6863ab9eb11a2e72c3953cbdeeb0079cb71634423f04d7c997c6591a83efc4`).
+The create-only attempt prefix ends in `runs/relaion-1m-dev1000-a0001/`.
+Its complete terminal SHA-256 is
+`f0fe51a3b4639fe8bb033e31f8cb102c224b027fa690badc961f01b3b0c5fb75`.
+The original controller exited zero, read back all 20 terminal artifacts,
+and terminated Causality Spot `i-03fc8c109b0cd5815` (`c7i.8xlarge`).
+Separate local receipt closeout authenticated the reservation, exact source
+archive, all artifacts, prior frozen plans, resource files, and the digest
+of every rejoined two-bit record. The remote independent validator replayed
+the code/data range geometry and ordered truth masks for all 1,000 queries.
+
+| Frozen paired metric | Exact source on same cover | Two-bit | Gate |
+|---|---:|---:|---:|
+| GT100 / 100,000 | 98,921 | **98,728** | ≥98,151 |
+| GT10 / 10,000 | 9,956 | **9,956** | ≥9,928 |
+| p05 GT100 | 94 | **93** | ≥90 |
+| queries below 90 GT100 | 18 | **28** | ≤49 |
+| maximum data GETs / bytes | 32 / 16,777,216 | **32 / 16,777,208** | ≤32 / ≤16,777,216 |
+| paired net GT100 loss | — | **193** | ≤300 |
+
+The two-bit arm lost 220 covered truth positions and recovered 27 relative
+to exact source. Source won on 84 queries and the arms tied on 916; two-bit
+won on none. Both arms are scored on precisely the mirrored code cover;
+the 98,921 source result is one hit above the historical 98,920 full-group
+source diagnostic because that run used different page/range plans. The
+98,986 code-cover count is an upper bound, not final recall. The first and
+second code waves remain capped separately as reported above; no actual
+S3 code/data range reads were timed in this source-only cell.
+Construct, plan, evaluate and validate maximum RSS were 1,331,612,
+2,334,924, 1,758,580 and 2,767,432 KiB; each phase recorded zero
+swaps under the remote 3-GiB cap.
+
+**Decision:** `advance-to-actual-read-and-held-out-gate` under the frozen
+paired rule. Authenticate actual S3 range reads of both code planes and
+the data wave, measure end-to-end latency, throughput and request cost,
+and use untouched queries for quality. Freeze a new source/configuration
+revision before a 10M and 100M scale campaign. This development-cohort
+result cannot establish unseen-query recall or production latency.

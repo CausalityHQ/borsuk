@@ -119,9 +119,11 @@ a different layout, page choice, or two-wave schedule.
 For the later terminal-closed progressive cover, a separate theorem says
 that its authenticated 98,986 GT100 contained positions would imply the
 98,151 final aggregate floor if at most 835 paired positions are lost
-between cover and final result. This is an exact finite-cohort budget,
-not a claim that the pending scorer cell meets it. GT10 and the lower
-tail remain separate certificates.
+between cover and final result. The terminal-closed paired scorer cell
+subsequently returned 98,728 GT100 hits, so its 258-position
+cover-to-final gap satisfies that premise; GT10 and the lower tail were
+checked separately by the cell validator. This is a finite-cohort
+certificate and does not establish unseen-query recall.
 
 A second finite-query theorem bounds recall loss for a **fixed score
 threshold** by the authenticated truth count of pages whose true scores
