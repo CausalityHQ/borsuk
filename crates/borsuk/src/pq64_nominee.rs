@@ -121,10 +121,17 @@ impl Pq64Router {
                 table[subspace * 256 + word] = squared;
             }
         }
-        let mut candidates = Vec::with_capacity(regions * self.page_rows);
+        let candidate_count = chosen.iter().try_fold(0usize, |count, &page| {
+            let start = page * self.page_rows;
+            let stop = (page + 1).saturating_mul(self.page_rows).min(self.rows);
+            count.checked_add(stop - start).ok_or(Pq64Error::InvalidRequest)
+        })?;
+        let mut candidates = Vec::new();
+        candidates.try_reserve_exact(candidate_count)
+            .map_err(|_| Pq64Error::InvalidRequest)?;
         for page in chosen {
             let start = page * self.page_rows;
-            let stop = ((page + 1) * self.page_rows).min(self.rows);
+            let stop = (page + 1).saturating_mul(self.page_rows).min(self.rows);
             for row in start..stop {
                 let mut score = 0.0f32;
                 for subspace in 0..64 {
@@ -186,5 +193,14 @@ mod tests {
                    (0..100).collect::<Vec<_>>());
         assert_eq!(router.nominate(&vec![0.0f32; 95], 1, 100),
                    Err(super::Pq64Error::InvalidQuery));
+    }
+
+    #[test]
+    fn huge_page_width_allocates_only_the_one_actual_candidate() {
+        let router = Pq64Router::new(
+            1, 1, usize::MAX, 1, vec![0.0f32; 1],
+            vec![0.0f32; 64 * 256], vec![0u8; 64],
+        ).unwrap();
+        assert_eq!(router.nominate(&[0.0], 1, 1).unwrap(), vec![0]);
     }
 }
