@@ -228,6 +228,32 @@ fn run_nominate(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Apply the same native returned-row arithmetic to either physical plan.
+fn score_bounded_ranges(
+    object: &[u8], geometry: Sq8Geometry, pairs: &[[usize; 2]],
+    query: &[f32], low: &[f32], step: &[f32], top_k: usize,
+) -> Result<(Vec<i64>, usize), String> {
+    if pairs.is_empty() || pairs.len() > 32 {
+        return Err("returned plan GET cap differs".to_owned());
+    }
+    let mut total = 0usize;
+    let mut ranges = Vec::with_capacity(pairs.len());
+    for &[start, end] in pairs {
+        let bytes = object.get(start..end)
+            .ok_or("returned plan range exceeds object")?;
+        total = total.checked_add(bytes.len())
+            .ok_or("returned plan byte count overflows")?;
+        if total > 16_777_216 {
+            return Err("returned plan byte cap differs".to_owned());
+        }
+        ranges.push(ReturnedRange { start, bytes });
+    }
+    let returned = rank_returned_ranges(
+        geometry, &ranges, query, low, step, top_k, 16_777_216,
+    ).map_err(|error| format!("invalid returned score: {error:?}"))?;
+    Ok((returned.iter().map(|entry| entry.id).collect(), total))
+}
+
 fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
     if args.len() != 6 {
         return Err("usage: borsuk-v114-score-gate replay-returned MANIFEST OBJECT SIDECAR REQUESTS".into());
@@ -269,24 +295,37 @@ fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
         let (votes, plan) = route_primary(
             &primary, &nominees, manifest.geometry.rows, manifest.geometry.dimensions,
         )?;
-        let ranges = plan.ranges.iter().map(|range| ReturnedRange {
-            start: range.start, bytes: &object[range.clone()],
-        }).collect::<Vec<_>>();
-        let returned = rank_returned_ranges(
-            manifest.geometry, &ranges, &query, &manifest.low, &manifest.step,
-            100, 16_777_216,
-        ).map_err(|error| io::Error::other(format!("invalid returned score: {error:?}")))?;
-        serde_json::to_writer(&mut output, &serde_json::json!({
+        let plan_pairs = plan.ranges.iter().map(|range| [range.start, range.end])
+            .collect::<Vec<_>>();
+        let (returned_ids, returned_bytes) = score_bounded_ranges(
+            &object, manifest.geometry, &plan_pairs, &query,
+            &manifest.low, &manifest.step, 100,
+        ).map_err(io::Error::other)?;
+        if returned_bytes != plan.bytes {
+            return Err("planned returned bytes differ".into());
+        }
+        let mut result = serde_json::json!({
             "query_ordinal": ordinal,
             "nominees": nominees,
             "score_bits": scored.iter().map(|entry| entry.score.to_bits()).collect::<Vec<_>>(),
             "primary": primary,
             "page_votes": votes,
-            "ranges": plan.ranges.iter().map(|range| [range.start, range.end]).collect::<Vec<_>>(),
+            "ranges": plan_pairs,
             "plan_bytes": plan.bytes,
             "plan_score": plan.score,
-            "returned_ids": returned.iter().map(|entry| entry.id).collect::<Vec<_>>(),
-        }))?;
+            "returned_ids": returned_ids,
+        });
+        if let Some(raw_ranges) = request.get("baseline_ranges") {
+            let baseline_pairs: Vec<[usize; 2]> = serde_json::from_value(raw_ranges.clone())?;
+            let (baseline_ids, baseline_bytes) = score_bounded_ranges(
+                &object, manifest.geometry, &baseline_pairs, &query,
+                &manifest.low, &manifest.step, 100,
+            ).map_err(io::Error::other)?;
+            result["baseline_ranges"] = serde_json::to_value(baseline_pairs)?;
+            result["baseline_bytes"] = serde_json::json!(baseline_bytes);
+            result["baseline_returned_ids"] = serde_json::json!(baseline_ids);
+        }
+        serde_json::to_writer(&mut output, &result)?;
         output.write_all(b"\n")?;
     }
     output.flush()?;
@@ -399,6 +438,25 @@ mod tests {
         let mut invalid = valid;
         invalid["geometry"]["rows"] = serde_json::json!(2.5);
         assert!(parse_manifest(&invalid).is_err());
+    }
+
+    #[test]
+    fn paired_ranges_use_one_bounded_returned_scorer() {
+        let mut object = Vec::new();
+        for id in [30i64, 10, 20] {
+            object.extend_from_slice(&id.to_le_bytes());
+            object.extend_from_slice(&(id as f32).to_le_bytes());
+            object.push(0);
+        }
+        let geometry = Sq8Geometry { rows: 3, dimensions: 1 };
+        let scored = score_bounded_ranges(
+            &object, geometry, &[[0, 26]], &[0.0], &[0.0], &[1.0], 2,
+        ).unwrap();
+        assert_eq!(scored.0, vec![10, 30]);
+        assert_eq!(scored.1, 26);
+        assert!(score_bounded_ranges(
+            &object, geometry, &[[0, 27]], &[0.0], &[0.0], &[1.0], 2,
+        ).is_err());
     }
 
     #[test]
