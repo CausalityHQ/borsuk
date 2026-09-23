@@ -5105,3 +5105,61 @@ frozen 1M source-only score gate; actual authenticated reads and an
 untouched query cohort follow only for a passing scorer. PQ96 remains
 a candidate, not a winner. Production latency, throughput, writes and
 10M/100M scaling remain unmeasured by this result.
+
+### ReLAION-100k sign96 row-score fidelity a0001: reject, PQ96 rescue next
+
+The preregistered sign96-versus-source screen used the same frozen 1,000
+development queries, OPQ8-selected four-page groups, source vectors, physical
+layout and top-100-row page-priority and 32-range/16,777,216-byte data rule.
+Each arm scored the same selected rows and independently planned its data
+ranges. This was a source-only projection; code-group and data-range GETs
+were calculated, not served from S3, so the result supplies no serving
+latency claim. Query-only plans were uploaded create-only before truth.
+
+Pushed source `13c724f667d1af246a3be3e3a0b3bf108aa53fb8` was sealed in a
+11,277,096-byte source archive with SHA-256
+`1e1504350766c9b0fafe179db5bb2ea1afe3d3777124cd3ae94044a13729cf91`.
+The sole attempt was
+`s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-sign96/13c724f667d1af246a3be3e3a0b3bf108aa53fb8/runs/relaion-100k-dev1000-a0001/`.
+Its complete terminal SHA-256 is
+`ff97081047a65952f440a8d9b5fc2a56350f04adede31bd2c9c1ea2a33017d9f`.
+Causality Spot `i-0ce61cf14f6a5ae0c` (`c7i.8xlarge`) was confirmed
+terminated after the terminal marker. Independent local closeout authenticated
+the reservation, read-back source archive and all 18 terminal-listed
+artifacts; the worker separately replayed all row-score page priorities,
+range geometry and truth masks before closing the terminal.
+
+| Paired 100k screen | Exact source | Sign96 | Frozen sign96 advance rule |
+|---|---:|---:|---:|
+| GT100 hits / 100,000 | 99,861 | **99,496** | source ≥98,000; sign loss ≤300 |
+| GT10 hits / 10,000 | 10,000 | 9,999 | reported |
+| p05 GT100 | 99 | 96 | sign ≥90 |
+| queries below 90 GT100 | 0 | 3 | sign ≤source+10 |
+| maximum data GET ranges | 27 | 26 | ≤32 |
+| maximum encoded data bytes | 16,644,060 | 16,643,844 | ≤16,777,216 |
+
+Sign96 lost 365 paired GT100 positions, 65 beyond the preregistered limit;
+this is 396 source hits displaced and 31 recovered elsewhere. Exactly
+137 queries favored source, none favored sign, and 863 tied. Its per-query
+loss ranged from zero to nine. The median query's absolute row-score error
+p99 was about 0.355 squared-distance units, while the signed mean error
+was about −0.200. The score bias itself is nearly constant and does not
+explain changed ordering; absolute score-error quantiles do not isolate
+order-changing error. In 983 of 1,000 queries the arms had different selected
+target-page sets, with a median symmetric difference of six pages.
+This pattern is consistent with row-dependent sign reconstruction error
+changing page priority. It is a diagnosis from the paired evidence, not a
+proof that any particular quantizer will succeed.
+
+Construct, plan, evaluate and validate process-tree RSS peaks were
+1,410,551,808, 1,751,633,920, 1,469,042,688 and 1,818,030,080 bytes.
+Each phase recorded zero swaps and stayed below the 3-GiB-minus-64-MiB
+cap. The terminal elapsed 601 seconds. The projected code wave was
+32 group GETs per query and at most 7,403,392 code bytes; these are not
+actual S3 reads.
+
+**Decision:** `reject` sign96 for the frozen 96-byte row-score gate.
+Do not tune it on these development queries or promote it to 1M.
+Proceed with exactly one separately sealed standard PQ96 rescue on the
+same fixed 100k inputs, group plans, source control and advance thresholds.
+If that fails, reject this width and revise the representation or budget.

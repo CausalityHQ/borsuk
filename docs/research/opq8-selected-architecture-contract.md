@@ -2,8 +2,10 @@
 
 Status: routing decision selected from terminal-closed 100k actual reads and
 1M source-only evidence. Source-vector scoring passed the 1M final-range
-diagnostic, but no compressed production row scorer or end-to-end 1M read
-has passed. This is a research contract, not a released index format.
+diagnostic. Sign96 failed its 100k paired row-score gate by 65 GT100 hits;
+one standard PQ96 rescue is the next frozen screen. No compressed production
+row scorer or end-to-end 1M read has passed. This is a research contract,
+not a released index format.
 
 ## Sealed route
 
@@ -120,6 +122,13 @@ The next gate is a preregistered 96-byte row-score comparison. Its primary
 candidate is a rotated sign record with 752 sign bits (94 bytes) and one
 binary16 row scale (2 bytes); standard PQ96 is a predeclared rescue only
 if sign96 fails its 100k screen.
+The sign96 attempt has now failed its paired 100k gate: 99,496 GT100 hits
+versus 99,861 for exact source scores, a loss of 365 against the fixed 300
+limit. The terminal-closed and independently read-back result is recorded
+in `docs/research/algorithm-first-page-layout-ledger.md`. Do not promote
+sign96 to 1M or tune it on these development queries. The PQ96 rescue is
+separately sealed and uses the same selected groups, layout, source control,
+range rule and 100k thresholds.
 The earlier suggestion to keep both a binary16 scale and a binary16 norm
 alongside 752 signs would require **98 bytes** and cannot satisfy the
 frozen 96-byte projection. The sign scorer's promise is a hypothesis from

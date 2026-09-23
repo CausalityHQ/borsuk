@@ -1,6 +1,7 @@
 # ReLAION 96-byte row-score fidelity gate
 
-Status: preregistered design, no 96-byte quality measurement or Spot launch.
+Status: sign96 100k gate terminal-closed and rejected; one preregistered
+PQ96 rescue remains. No 1M 96-byte quality or serving measurement exists.
 
 ## Decision and authority
 
@@ -81,6 +82,17 @@ dtype, iteration rule and ADC reduction pinned in the seal. Reuse the
 previous PQ96 construction method only where its exact inputs and
 codebook contract can be authenticated; no results from a layout-only
 projection count as PQ96 row-score evidence.
+
+The rescue uses the existing deterministic `fit_pq`/`encode_pq`/`adc_scores`
+implementation in `scripts/v97_row_width_screen.py` with `PqSpec("pq96x8", 96,
+8, 96)`, a query-blind sample of all 100,000 frozen source vectors selected
+without replacement by NumPy `default_rng(20260923)`, ten Lloyd iterations,
+float32 centroids and float32 ascending-subspace ADC accumulation. Training
+and encoding are pinned to the source archive's dependency versions and one
+OpenBLAS/OMP thread. The coder writes a new incompatible four-page group
+format and seals the model bytes, source, membership, physical order,
+training inputs and scoring rule. Equal scores break by physical row ordinal.
+These rules are frozen before the rescue measures any query or truth.
 
 Write each arm in authenticated four-page groups with per-page row-count
 headers, a versioned format marker, source/order/mean/model hashes and
