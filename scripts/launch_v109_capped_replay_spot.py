@@ -39,10 +39,11 @@ INPUTS = {
 }
 
 
-def build_plan(source_commit: str, archive_sha256: str, archive_bytes: int) -> BoundedReaderSpotPlan:
+def build_plan(source_commit: str, archive_sha256: str, archive_bytes: int,
+               attempt: int = 1) -> BoundedReaderSpotPlan:
     if (len(source_commit) != 40 or len(archive_sha256) != 64
         or any(char not in "0123456789abcdef" for char in source_commit + archive_sha256)
-        or archive_bytes <= 0):
+        or archive_bytes <= 0 or type(attempt) is not int or not 1 <= attempt <= 99):
         raise ValueError("source archive identity differs")
     archive = ObjectIdentity(
         f"s3://{BUCKET}/research/v109-capped-reader/{source_commit}/source/source.tar.gz",
@@ -53,18 +54,19 @@ def build_plan(source_commit: str, archive_sha256: str, archive_bytes: int) -> B
         source=INPUTS["SOURCE"], queries=INPUTS["QUERIES"], truth=INPUTS["TRUTH"],
         layout=INPUTS["LAYOUT"], sq8=INPUTS["SQ8"],
         output_prefix=(f"s3://{BUCKET}/research/v109-capped-reader/{source_commit}"
-                       "/runs/relaion-1m-dev1000-a0001"),
+                       f"/runs/relaion-1m-dev1000-a{attempt:04d}"),
         image_id="ami-06121aa3085b6f918", security_group_id="sg-0b1fd3e4fbde4af0d",
         instance_profile_arn="arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
         targets=DEFAULT_TARGETS, spot_price_usd_per_hour_micros=720000,
         regions=1024, shortlist_rows=512, gap_pages=2, get_concurrency=0,
-        wall_seconds=14400,
+        wall_seconds=14400, attempt=attempt,
     )
 
 
 def worker_script(plan: BoundedReaderSpotPlan) -> str:
     values = {
         "V109_SOURCE_COMMIT": plan.source_commit,
+        "V109_ATTEMPT": plan.attempt,
         "V109_OUTPUT_PREFIX": plan.output_prefix,
         "V109_ARCHIVE_URI": plan.source_archive.uri,
         "V109_ARCHIVE_SHA256": plan.source_archive.sha256,
@@ -100,7 +102,9 @@ def build_launch_specs(plan: BoundedReaderSpotPlan) -> list[dict[str, object]]:
     encoded = base64.b64encode(worker_script(plan).encode()).decode()
     for spec in specs:
         subnet = spec["NetworkInterfaces"][0]["SubnetId"]
-        digest = hashlib.sha256(f"v109:{plan.source_commit}:{subnet}:a0001".encode()).hexdigest()[:40]
+        digest = hashlib.sha256(
+            f"v109:{plan.source_commit}:{subnet}:a{plan.attempt:04d}".encode()
+        ).hexdigest()[:40]
         spec["ClientToken"] = "v109-" + digest
         spec["UserData"] = encoded
         spec["TagSpecifications"][0]["Tags"][0]["Value"] = "borsuk-v109-capped-replay"
@@ -111,7 +115,8 @@ def _claim(plan: BoundedReaderSpotPlan, instance_id: str | None) -> bytes:
     value = {"schema": "borsuk-v109-capped-claim-v1", "source_commit": plan.source_commit,
              "source_archive": dataclasses.asdict(plan.source_archive),
              "inputs": {role: dataclasses.asdict(identity) for role, identity in INPUTS.items()},
-             "instance_id": instance_id, "query_count": 1000, "prefix_stop_queries": 200,
+             "instance_id": instance_id, "attempt": plan.attempt,
+             "query_count": 1000, "prefix_stop_queries": 200,
              "regions": 1024, "shortlist": 512, "max_gets": 32,
              "max_bytes": 16777216, "instance_type": plan.instance_type,
              "instance_market": "spot", "interrupted_cell_action": "discard-and-new-attempt"}
@@ -154,6 +159,7 @@ def monitor(ec2: object, s3: object, plan: BoundedReaderSpotPlan,
             terminal = json.loads(body)
             if (terminal.get("schema") != "borsuk-v109-capped-terminal-v1"
                 or terminal.get("source_commit") != plan.source_commit
+                or terminal.get("attempt") != plan.attempt
                 or terminal.get("instance_id") != instance_id):
                 raise ValueError("V109 terminal identity differs")
             return terminal
@@ -204,8 +210,10 @@ def main() -> None:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--archive-sha256", required=True)
     parser.add_argument("--archive-bytes", type=int, required=True)
+    parser.add_argument("--attempt", type=int, default=1)
     args = parser.parse_args()
-    plan = build_plan(args.source_commit, args.archive_sha256, args.archive_bytes)
+    plan = build_plan(args.source_commit, args.archive_sha256, args.archive_bytes,
+                      args.attempt)
     session = boto3.Session(profile_name="causality", region_name="eu-central-1")
     ec2, s3 = session.client("ec2"), session.client("s3")
     bucket, prefix = _s3_location(plan.output_prefix)

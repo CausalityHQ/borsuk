@@ -28,6 +28,13 @@ class CappedReplaySpotTests(unittest.TestCase):
         self.assertIn("run_v109_capped_replay_remote.sh", script)
         self.assertIn("V109_ARCHIVE_SHA256", script)
         self.assertIn("V109_SQ8_SHA256", script)
+        self.assertIn("V109_ATTEMPT=1", script)
+
+    def test_new_attempt_has_distinct_prefix_and_client_token(self) -> None:
+        retry = build_plan("1" * 40, "2" * 64, 100, attempt=2)
+        self.assertTrue(retry.output_prefix.endswith("/runs/relaion-1m-dev1000-a0002"))
+        self.assertNotEqual(build_launch_specs(retry)[0]["ClientToken"],
+                            build_launch_specs(self.plan)[0]["ClientToken"])
 
     def test_direct_launcher_entrypoint_imports_without_pythonpath(self) -> None:
         path = pathlib.Path(__file__).with_name("launch_v109_capped_replay_spot.py")

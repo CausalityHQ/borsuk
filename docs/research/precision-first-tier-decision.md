@@ -131,6 +131,16 @@ The complete cohort uses the same 99.0%/p05-90/cap promotion filters. The
 separate reducer recomputes plans, membership and truth hits. This offline
 replay reports planned network bytes and GETs, not live S3 latency or QPS.
 
+The first V109 bootstrap attempt under source
+`7a3c74a46dea0309348c31d59334911f51fc4b3c` launched Spot instance
+`i-02c32cf9ec2a5f5e0` and emitted a terminal `failed` marker after 17
+seconds in `dependencies`, before input authentication or science. The
+instance is verified terminated and the attempt has no result. Its worker
+had not captured early standard output, so the particular dependency
+command failure is not established. The next source records worker output
+and finer setup phases, initializes `HOME` before installing `uv`, and uses
+a new attempt ordinal. The original terminal is immutable.
+
 The longer summary-width and row-code access gate below remains conditional
 on a cap-safe physical planner:
 

@@ -3,6 +3,7 @@ set -euo pipefail
 
 root=/mnt/v109-capped-replay
 cd "$root"
+exec >worker.log 2>&1
 phase=bootstrap
 started_epoch=$(date +%s)
 monitor_pid=
@@ -51,6 +52,7 @@ for name in names:
                          "uri":os.environ["V109_OUTPUT_PREFIX"]+"/artifacts/"+name}
 print(json.dumps({
     "schema":"borsuk-v109-capped-terminal-v1",
+    "attempt":int(os.environ["V109_ATTEMPT"]),
     "source_commit":os.environ["V109_SOURCE_COMMIT"],
     "instance_id":sys.argv[3], "exit_code":code,
     "phase":phase, "status":"complete" if code==0 and phase=="complete" else "failed",
@@ -104,13 +106,17 @@ run_science() {
   fi
 }
 
-phase=dependencies
+phase=system-packages
 dnf install -y -q time >/dev/null
+export HOME=${HOME:-/root}
+phase=uv-install
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
-export HOME=${HOME:-/root} PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
+phase=venv
 uv venv --python 3.12 .venv
+phase=pip-install
 uv pip install --python .venv/bin/python 'numpy==1.26.4' 'pyarrow==17.0.0'
 
 phase=input-download
