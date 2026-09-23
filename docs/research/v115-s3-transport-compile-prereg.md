@@ -23,3 +23,20 @@ test exit status, log, `/usr/bin/time -v` resources, instance ID and all
 artifact hashes; terminate after the terminal. On Spot interruption, discard
 the cell and use a new attempt prefix. A compile or test failure requires a
 source fix and a new snapshot, not repeated runs of identical source.
+
+## Attempt a0001 closeout and a0002 correction
+
+Attempt a0001 terminated `failed`, exit 101, after 39 seconds on Spot
+`i-0ae05236906499a1f`. Its terminal and four artifact hashes verified.
+The test did not compile BORSUK: the runner called Cargo from the work root
+without `--manifest-path`, so Cargo could not find `Cargo.toml`. This is a
+runner error, not a code or quality result. The instance terminated.
+
+Attempt a0002 corrects the runner to use `repo/Cargo.toml`, imports
+`ObjectStoreExt` in the Rust test, and bounds streamed response bytes before
+collecting them. The new deterministic archive uses actual base commit
+`ec0becf299b407b060c1c2ea99a7b84cbcaba616` plus four overlays listed
+in its `snapshot.json`. It is 11,531,054 bytes, SHA-256
+`f4914e7b417b589803edc502dfb52b4229b73d91627dd214702336b4cc3e02d9`.
+The same narrow test command, Spot class, time cap and immutable terminal
+protocol apply under a fresh `a0002` prefix.
