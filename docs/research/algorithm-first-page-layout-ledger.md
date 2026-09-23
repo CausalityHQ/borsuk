@@ -4740,3 +4740,61 @@ codes, ADC scores and all plans before replaying containment.
 preregistered paired 100k actual two-bit code-read and final-page quality
 test. Source-only containment cannot establish final quality, real S3 read
 latency or 100M scan throughput.
+
+### ReLAION-100k OPQ8 paired two-bit code reads a0001: advance to 1M
+
+The fixed plan in
+`docs/superpowers/specs/2026-09-23-hundred-thousand-opq8-paired-two-bit-design.md`
+used the sealed OPQ8 group selection and actual authenticated HTTP 206 S3
+range reads of the unchanged historical two-bit code object. The same
+two-bit row scorer and page nomination rule scored the OPQ8 and historical
+plans. The historical arm replayed every per-query field exactly against
+its terminal-closed evidence. The evaluator had no network namespace or AWS
+credentials; an authenticated Unix broker admitted only sealed ranges.
+
+Pushed source `b0c0c25fb6816af68935690f3c4b6603e37b2d39` was sealed in
+an 11,596,552-byte create-only archive with SHA-256
+`a02528fa15ebc1dc9bbb9169dd23315399f2fd6940b50cb2787b8170b3cd6f3f`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-opq8-paired/b0c0c25fb6816af68935690f3c4b6603e37b2d39/runs/relaion-100k-dev1000-a0001/`.
+The 3,902-byte terminal SHA-256 was
+`7407bdaa779ad3aa1d6f57360d832707640933493e93311523ad63b2e5b7e041`.
+It closed `complete` in 2,839 seconds with original controller exit zero;
+Spot instance `i-0ebe091b66f96d44a` was confirmed terminated. The
+controller and a separate closeout authenticated all ten artifacts. The
+9,491,759-byte evidence, result and independent validation SHA-256 values
+were respectively
+`b596d9988927032649184ae58d5663e5a3e071ffea756904291f14738708ecd0`,
+`fa89ef7f79a2c798b18da031721bb4dc457f3d89a044fa325cabd28abad821a0`,
+and `5380b65692ea44ae843e7f55f6c5e4e4deef61f81089da884e5138cf03d506e4`.
+The separate closeout recomputed the primary metrics and budget checks from
+all 1,000 evidence rows and matched all 1,000 historical control records
+field for field. Ordered 100-bit primary hit masks independently matched
+each record's GT10 and GT100 counts.
+
+| Frozen 100k actual code reads | Historical two-bit route | OPQ8 route | preregistered advance |
+|---|---:|---:|---:|
+| GT100 hits | 98,418 / 100,000 | **99,668 / 100,000** | ≥98,418 |
+| p05 GT100 hits | 91 / 100 | **98 / 100** | ≥92 |
+| GT10 hits | 9,951 / 10,000 | **10,000 / 10,000** | ≥9,951 |
+| queries below 90 GT100 hits | 36 | **2** | <36 |
+| maximum code wave | 32 GETs / 15,423,240 bytes | 32 GETs / 15,423,040 bytes | ≤32 / ≤16,777,216 |
+| maximum planned data page wave | 32 pages / 15,665,016 bytes | 32 pages / 15,665,112 bytes | ≤32 / ≤16,777,216 |
+
+The OPQ8 arm improved 294 queries, worsened 9 and tied 697 on primary
+GT100 hits, for a net gain of 1,250. The broker completed 64,000 actual
+GETs and 30,687,348,584 bytes across both arms; its recorded cumulative
+GET time was 1,678,783,227,927 ns. The sequential evaluation phase took
+46:24.59 wall-clock, which is campaign timing and is not a production
+per-query latency claim. Source, plan, evaluate and validate sampled
+process-tree RSS peaks were 1,383,219,200, 5,357,568, 1,654,390,784 and
+1,432,117,248 bytes. Each stayed below the 3-GiB cap with 64-MiB margin;
+all four recorded zero swaps.
+
+**Decision:** `opq8-paired-advance`. Promote the unchanged source-trained
+OPQ8 model and top-four group scorer to a preregistered 1M containment
+and actual-read gate on the frozen original physical layout. The 100k
+paired improvement does not by itself establish 1M quality, 100M memory,
+serving throughput, or object-store latency bounds. Formal planner and
+conditional recall proofs can supplement these measured gates under
+explicit data and service assumptions.
