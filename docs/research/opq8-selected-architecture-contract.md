@@ -80,6 +80,11 @@ local-compute upper bounds with the 32-GET/16-MiB budget; those service
 bounds must be supplied for the deployment and cold/warm cache state.
 The 8N full-scan lookup proof is a linear-work result, so sublinear
 scaling needs a new certified search structure and a refinement proof.
+`formal/SourceRangeFidelity.lean` adds a checked finite-cohort fidelity
+budget: at most 769 GT100 and 28 GT10 source-score hit losses imply the
+aggregate fixed gates from the closed 98,920/9,956 source baseline.
+Per-query p05 and sub-90 certificates, authenticated mask generation,
+and implementation refinement remain separate proof obligations.
 
 ## Final-wave decision after the 1M range gate
 

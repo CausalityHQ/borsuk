@@ -147,9 +147,9 @@ not by filling these certificates. The certificate theorem assumes valid
 owner lists and coverage; it does not authenticate artifacts, establish
 a 1,000-by-100 query/truth shape, prove p05 or GT10 tails, or show
 nominated-page containment. Those checks must be separate inputs to an
-end-to-end proof. The 1M source-distance diagnostic uses a float32 matrix
-product before conversion to float64, so its scores are not an
-exact-arithmetic witness without a rounding allowance.
+end-to-end proof. The earlier 1M **group-score** source-distance arm used
+a float32 matrix product before conversion to float64, so its scores
+are not an exact-arithmetic witness without a rounding allowance.
 
 The structural `List.foldl` consumes one ranked group per recursive
 step. A second abstract model
@@ -178,3 +178,34 @@ integer margin theorem requires outward-rounded score intervals and an
 authenticated check of their premises. Model, code and object bytes beyond
 the eight-byte route plane remain outside the code-plane arithmetic. Run
 the empirical 1M, serving and 100M resource gates separately.
+
+## Source-range fidelity budget after the closed 1M diagnostic
+
+The terminal-closed source-vector final-range diagnostic retained
+98,920/100,000 GT100 and 9,956/10,000 GT10 positions under the fixed
+32-GET/16-MiB budget. It converts stored float32 source/query coordinates
+to float64 before the squared-L2 norm-plus-dot calculation and records
+the BLAS implementation in its sealed plan. It remains an operational
+finite-precision scorer, not a real-arithmetic oracle.
+
+`formal/SourceRangeFidelity.lean` checks with Lean 4.33.0. It models
+each ordered truth position as a pair of source-score and compressed-score
+hit bits. It proves that source hits cannot exceed compressed hits plus
+positions lost by compression. For an authenticated 100,000-position
+GT100 pairing, at most 769 lost source hits implies the fixed 98,151
+aggregate gate. For the 10,000-position GT10 pairing, at most 28 lost
+source hits implies the 9,928 gate. The theorem also requires separate
+certificates that p05 is at least 90 and no more than 49 queries fall
+below 90. Aggregate loss bounds alone cannot prove these distribution
+conditions.
+
+This is a conditional finite-cohort claim. A future checker must bind
+both hit-mask lists to immutable source, query, truth, selected-range
+and scorer identities, and prove or validate the executable-to-model
+mapping. The current Lean file does not authenticate those bytes or
+establish unseen-query recall. A useful pre-truth score-error proof
+would additionally have to certify per-row or per-page score intervals
+and show that the compressed priority/admission plan preserves enough
+source-score truth-owner pages. S3 latency, serving throughput and
+100M work still require their separately stated service and index
+premises.
