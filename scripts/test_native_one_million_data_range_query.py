@@ -43,3 +43,19 @@ def test_query_plan_cannot_bridge_roles() -> None:
     )
     assert result["ranges"] == [["base", 0, 1]]
     assert result["target_pages"] == [["base", 0]]
+
+
+def test_query_plan_accepts_single_base_object() -> None:
+    result = plan_query(
+        np.array([0.1, 0.2, 9.0], dtype=np.float32),
+        np.array([0, 2, 1], dtype=np.uint32),
+        np.array([0, 0, 0], dtype=np.uint32),
+        {"base": (10, 2, 10)},
+        (0,),
+        maximum_gets=1,
+        maximum_bytes=22,
+        top_rows=2,
+    )
+    assert result["priority_pages"] == [["base", 0], ["base", 2], ["base", 1]]
+    assert result["ranges"] == [["base", 0, 3]]
+    assert result["encoded_bytes"] == 22

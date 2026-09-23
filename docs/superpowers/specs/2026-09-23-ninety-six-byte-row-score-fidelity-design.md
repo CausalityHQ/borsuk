@@ -99,7 +99,9 @@ no code path may materialize the whole 1M source matrix.
 
 First run one paired 100k source-only screen under the **same** top-100-row
 page-priority **rule** and 32 merged data ranges/16,777,216 encoded data
-bytes intended for 1M. Score the rows in exactly the same selected groups
+bytes intended for 1M. The 100k run has one base object; use the same
+range algorithm with a single `base` role, while the 1M run has its
+sealed `base` and `delta` roles. Score the rows in exactly the same selected groups
 with sign96, PQ96 and source vectors; recompute each arm's page priority
 and data ranges independently. Use the same physical layout, route, queries and truth
 for all arms. Report GT100 and GT10 hit counts, p05, sub-90 query count,

@@ -15,10 +15,10 @@ def plan_ranked_pages(
     *, maximum_gets: int = 32, maximum_bytes: int = 16_777_216,
 ) -> dict[str, object]:
     """Apply the frozen interval rule to a truth-free physical page order."""
-    if set(page_lengths) != {"base", "delta"}:
+    if set(page_lengths) not in ({"base"}, {"base", "delta"}):
         raise ValueError("query data-range layout differs")
     base_pages = len(page_lengths["base"])
-    page_count = base_pages + len(page_lengths["delta"])
+    page_count = base_pages + len(page_lengths.get("delta", ()))
     if any(type(page) is not int or not 0 <= page < page_count for page in ranked_global):
         raise ValueError("query data-range priority differs")
     ranked = tuple(
@@ -49,9 +49,9 @@ def plan_query(
 ) -> dict[str, object]:
     """Use only authenticated code scores, physical layout and group plan."""
     if (
-        set(page_lengths) != {"base", "delta"}
+        set(page_lengths) not in ({"base"}, {"base", "delta"})
         or page_groups.ndim != 1
-        or len(page_groups) != sum(len(page_lengths[role]) for role in ("base", "delta"))
+        or len(page_groups) != sum(len(values) for values in page_lengths.values())
         or len(row_pages) != len(scores)
         or np.any(row_pages >= len(page_groups))
     ):
