@@ -4101,3 +4101,69 @@ Do not promote it to 1M or freeze its storage format. A next 100k design must
 materially change row-score fidelity or the nomination information and prove
 the frozen p05 gate; a credible 1M code-locality and two-generation memory
 path are separate requirements before any scale promotion.
+
+### Page-centered four-page groups a0001: locality passes, row scores regress
+
+The next source-only falsifier trained one global PQ48x8 book on each vector
+minus its page mean, placed each 48-byte row code and the source page means in
+immutable four-page S3 groups, and fetched the first 32 distinct groups in the
+frozen 128-leaf tree order. The paired exact arm scored precisely those grouped
+source rows; both arms used the same top-100-row page nomination, 32-page and
+16-MiB planned data-wave caps. The worker had no query or truth access during
+construction. The frozen source is commit
+`fd3b14ba84c863fede148cd9d8beea80f67dd409`, source archive SHA-256
+`0642eb8e186bfe5b742ce6bf290bde79ad186a8f804410ffe8847cde2688089e`
+(11,045,882 bytes), and requirements SHA-256
+`d2057b9b57da6ae2900efa99c3424c1a7211f7847c1c621ed0dd9e467f56a874`.
+The one immutable attempt prefix is
+`s3://borsuk-bench-453182569524-euc1/research/native-page-centered-groups/fd3b14ba84c863fede148cd9d8beea80f67dd409/runs/relaion-100k-dev1000-a0001/`.
+
+The 3,757-byte terminal has SHA-256
+`06f62bc2e511482697395d36c6035f9205051bf55c55503103f12d2619e91694`,
+status `complete`, exit 0 and 2,272 seconds elapsed. The one-time
+`c7i.8xlarge` Spot instance `i-08113621455c6f13c` in `eu-central-1c` is
+terminated. Readback matched the encoded length and SHA-256 of all ten
+terminal-listed artifacts. Result, evidence and independent validation SHA-256
+values are respectively
+`330d842fa4ba1aa75760c443335f95feec87d749332ae30cfcdc1a0da3458576`,
+`24c0f36d947206141b536dd0e6d7536e29e1b56bf3c60700394546fb1e1d20d9`,
+and `4443be89d94e2ebb1902414951bd3084063a90f5fb5b93da90b8345c5b1da294`.
+The independent validator directly decoded grouped codes, replayed exact and
+coded nomination for all 1,000 queries, checked source-only reconstruction and
+group hashes, and agreed with the producer's `representation-killed` decision.
+
+| Same 1,000 frozen queries | mean GT100 | p05 GT100 | worst GT100 | GT10 page containment |
+|---|---:|---:|---:|---:|
+| prior global PQ48 paired control | 97.184% | 87% | 50% | 99.39% |
+| prior PQ48+PQ24 residual paired control | 97.554% | 87% | 65% | 99.56% |
+| page-centered PQ48, 32 fetched groups | **96.787%** | **85%** | 56% | 99.22% |
+| exact scores on the same grouped rows | 98.515% | 92% | 58% | 99.51% |
+| all pages in the fetched groups | 98.590% | 93% | 58% | — |
+| restricted truth-aware 32-page oracle | 98.516% | 92% | 58% | — |
+
+Page-centered codes lose 767 GT100 hits relative to residual PQ48+PQ24
+(136 queries improve, 319 worsen, 545 tie) and 397 relative to global PQ48.
+Exact scores on the identical grouped candidates recover 1,728 hits over the
+page-centered codes (342 queries improve, none worsen, 658 tie). There are 103
+page-centered queries below 90 GT100 hits versus 34 exact; exact scoring
+rescues 69 of those sub-90 queries. Thus the group fetch exposes enough rows
+for the frozen mean, p05 and GT10 gates, while this page-centered row-score
+representation does not. This is a paired representation diagnosis, not proof
+that every score format on these groups will pass.
+
+The actual authenticated code wave took exactly 32 S3 Range GETs per query,
+4,030,904–4,095,280 bytes; the entire group object is 5,310,784 bytes. The
+planned final data wave nominated at most 32 pages and 15,665,136 encoded
+bytes. It did not issue final data-page GETs or measure SQ8 serving recall or
+native cold-S3 latency; GT10 above is page containment. Construct, evaluate
+and validate peaked at 1,988,320, 2,530,292 and 2,541,300 KiB RSS,
+respectively, with zero swaps. The 100M two-generation resident-memory gate is
+still open. Page means live in the S3 group payload and need not be resident
+for this row-score path, but a compact centroid-free production router and
+actual allocation inventory have not been demonstrated.
+
+**Decision:** kill page-centered PQ48 row scores. Do not promote this result
+to 1M or freeze the storage format. The next cheapest gate must materially
+replace the row scoring representation while retaining an exact paired arm and
+the same frozen 100k quality/read limits. A pass would still require separate
+1M group locality, native final-page serving and two-generation memory proof.
