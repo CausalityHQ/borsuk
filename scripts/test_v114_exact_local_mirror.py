@@ -1,6 +1,7 @@
 """Small source-only fixtures for the exact local SQ8 wire format."""
 
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,12 +12,69 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.v114_exact_local_100k import (
-    compare_records, prepare_one, read_queries, route_reference,
+    compare_frozen_results, compare_records, prepare_one, read_queries, route_reference,
     score_reference, write_mirror,
 )
+from scripts.validate_v114_exact_local_100k import validate_mirror_rows
 
 
 class ExactLocalMirrorTests(unittest.TestCase):
+    def test_independent_validator_rejects_wrong_row_even_with_a_new_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "mirror"
+            ids = np.arange(32, dtype=np.int64)
+            norms = np.arange(32, dtype=np.float32)
+            codes = np.zeros((32, 4), dtype=np.uint8)
+            write_mirror(
+                root, ids=ids, norms=norms, codes=codes,
+                low=np.zeros(4, dtype=np.float32),
+                step=np.ones(4, dtype=np.float32), generation=1, max_nominees=2,
+            )
+            validate_mirror_rows(root, ids, norms, codes)
+            object_bytes = bytearray((root / "sq8.bin").read_bytes())
+            object_bytes[12] = 1
+            (root / "sq8.bin").write_bytes(object_bytes)
+            sidecar = hashlib.sha256(object_bytes).digest()
+            (root / "blocks.sha256").write_bytes(sidecar)
+            manifest = json.loads((root / "manifest.json").read_text())
+            manifest["object_sha256"] = hashlib.sha256(object_bytes).hexdigest()
+            manifest["block_digest_sha256"] = hashlib.sha256(sidecar).hexdigest()
+            (root / "manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaises(ValueError):
+                validate_mirror_rows(root, ids, norms, codes)
+
+    def test_reduction_fails_if_one_of_thousand_queries_drifts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference_path = root / "reference.jsonl"
+            rust_path = root / "rust.jsonl"
+            reduction_path = root / "reduction.json"
+            expected = []
+            actual = []
+            for ordinal in range(1000):
+                record = {
+                    "query_ordinal": ordinal, "generation": 1,
+                    "primary": [2], "score_bits": [0],
+                    "page_votes": [[0, 1]], "ranges": [[0, 512]],
+                    "plan_bytes": 512, "plan_score": 1,
+                }
+                expected.append(record)
+                observed = {**record, "ram_primary": [2], "file_primary": [2]}
+                del observed["primary"]
+                actual.append(observed)
+            reference_path.write_text("".join(json.dumps(row) + "\n" for row in expected))
+            rust_path.write_text("".join(json.dumps(row) + "\n" for row in actual))
+            compare_frozen_results(reference_path, rust_path, reduction_path)
+            self.assertEqual(json.loads(reduction_path.read_text())["exact_query_matches"], 1000)
+            actual[19]["file_primary"] = [3]
+            rust_path.write_text("".join(json.dumps(row) + "\n" for row in actual))
+            with self.assertRaises(ValueError):
+                compare_frozen_results(reference_path, rust_path, reduction_path)
+            self.assertEqual(
+                json.loads(reduction_path.read_text())["first_mismatches"][0]["query_ordinal"],
+                19,
+            )
+
     def test_comparison_rejects_score_or_physical_plan_drift(self) -> None:
         reference = {
             "query_ordinal": 0, "generation": 1,

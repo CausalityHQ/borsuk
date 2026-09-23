@@ -63,10 +63,16 @@ returned recall. It prepares the paired 1M gate in the design document.
    `a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d`
    and development query SHA
    `4834cf63a50971b7d605c00f91b5142f67b049e91ea2c62c220271b50bffa6ac`.
-   Create the SQ8 bytes from source alone with the V70 quantizer and
-   persist a manifest binding exact bytes, IDs, low/step, PQ64 books/codes
-   and source revision. Use a source-only layout; record it before queries
-   arrive. Reuse the V113 source-only PQ64 top-512 roster.
+   Derive the SQ8 bytes from the already completed V113 source-only artifact
+   at its terminal S3 prefix. Require the historical artifact seal SHA
+   `803b00d9366bc8feb0e58e4900e27b1973c5d9578c33a0d6007fe4c28722c7b2`
+   and check each artifact file against that seal. V113 trained its PQ64
+   books and SQ8 codes from the frozen source with no query access. Persist
+   a new manifest binding exact local row bytes and low/step, plus a source
+   record binding that manifest to the source SHA and historical seal.
+   Record both before query bytes arrive. Reuse those
+   V113 PQ64 books/codes for the top-512 roster; no retraining or parameter
+   selection is allowed in the 100k correctness gate.
 3. For every query, score the same 512 nominated rows using both explicit
    Rust placements and an independent Python scorer. Record all three
    top-100 lists, scores at any disagreement, page votes, interval plans,
