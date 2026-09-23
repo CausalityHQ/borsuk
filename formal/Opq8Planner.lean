@@ -188,6 +188,20 @@ theorem hundred_million_two_code_planes :
     codePlaneBytes 100000000 + codePlaneBytes 100000000 = 1600000000 := by
   decide
 
+/-! This bound assumes two complete code planes are resident at the same
+time as the current NumPy scorer's float64 score and advanced-indexing
+lookup arrays. It excludes Python, metadata, codebooks and other scratch. -/
+
+def twoGenerationScanPeakBytes (rows : Nat) : Nat :=
+  2 * codePlaneBytes rows + 8 * rows + 8 * rows
+
+theorem hundred_million_current_scan_peak :
+    twoGenerationScanPeakBytes 100000000 = 3200000000 := by decide
+
+theorem hundred_million_exceeds_margin :
+    3 * 1024 ^ 3 - 64 * 1024 ^ 2 <
+      twoGenerationScanPeakBytes 100000000 := by decide
+
 /-! At 1M, one GET may cover several adjacent selected groups. The
 physical list and predecessor relation are sealed layout inputs. A group
 starts a GET exactly when it is selected and its same-role predecessor is

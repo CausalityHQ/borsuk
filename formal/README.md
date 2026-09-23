@@ -15,3 +15,9 @@ bridging example where three groups need one GET. It does not prove that
 the Python incremental merge counter equals this recount, or that the
 predecessor map was constructed correctly. Python refinement and
 numerical certificates for actual queries remain separate work.
+
+The 100M arithmetic theorem adds a conditional memory result: if two
+complete route-code planes, a float64 score array and a float64 indexed
+lookup array coexist, their `32N` bytes exceed the 3-GiB campaign cap
+with its 64-MiB allowance at 100M rows. It excludes allocator and
+metadata overhead; it is not a latency theorem.

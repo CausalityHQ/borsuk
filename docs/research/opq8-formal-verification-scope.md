@@ -91,7 +91,15 @@ rows; two full generations occupy `16N` bytes. At 100 million rows that is
 liveness, metadata, query tables, runtime and allocator reserves. The
 current `row_adc_scores` also allocates a float64 score array and a
 float32 returned array, about 1.2 GB in aggregate at 100M rows per
-in-flight query, before temporary lookup arrays. A route query evaluates
+in-flight query. During each table lookup, NumPy advanced indexing can
+hold an additional float64 array of `8N` bytes alongside the float64
+score array. If both full code generations are resident, their `16N`
+bytes plus these two simultaneous `8N` arrays total `32N` bytes:
+3,200,000,000 bytes at 100M rows. Lean proves this exceeds the campaign's
+3-GiB cap with its required 64-MiB margin even before metadata and
+codebooks. This is conditional on those arrays being resident as modeled;
+it rules out the current full-array scorer under that cap and motivates
+chunked scoring if the route qualifies. A route query evaluates
 eight codebook lookups per row plus group reduction and ranking. These
 are useful analytical resource bounds, but they do not
 establish a wall-clock latency.
