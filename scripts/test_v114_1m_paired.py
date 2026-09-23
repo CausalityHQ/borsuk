@@ -2,11 +2,14 @@
 
 import unittest
 from unittest.mock import patch
+import json
+import tempfile
+from pathlib import Path
 
 import numpy as np
 
 from scripts.v114_1m_paired import (
-    nominate_region_pq64, prepare_paired_query, qualifies_1m,
+    gate_summary, main, nominate_region_pq64, prepare_paired_query, qualifies_1m,
     reduce_paired_query,
     score_sq8_ranges,
 )
@@ -177,6 +180,23 @@ class PairedOneMillionTests(unittest.TestCase):
             p05_hits={"baseline": 95, "exact": 97, "production": 95},
             sub90_queries={"baseline": 19, "exact": 17, "production": 20},
         ))
+
+    def test_prefix_gate_stops_a_wrong_baseline_before_promotion(self) -> None:
+        with self.assertRaisesRegex(ValueError, "baseline"):
+            gate_summary({"query_count": 200, "baseline_reproduced": False}, 200)
+        gate_summary({"query_count": 200, "baseline_reproduced": True}, 200)
+        with self.assertRaisesRegex(ValueError, "quality"):
+            gate_summary({"query_count": 1000, "baseline_reproduced": True,
+                          "qualifies_live_s3": False}, 1000)
+
+    def test_gate_cli_needs_only_summary_and_query_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            summary = Path(directory) / "summary.json"
+            summary.write_text(json.dumps({"query_count": 200,
+                                           "baseline_reproduced": True}))
+            with patch("sys.argv", ["v114_1m_paired.py", "gate", "--queries", "200",
+                                    "--summary", str(summary)]):
+                main()
 
 
 if __name__ == "__main__":

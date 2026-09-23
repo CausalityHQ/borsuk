@@ -299,6 +299,16 @@ def qualifies_1m(
     )
 
 
+def gate_summary(summary: dict[str, object], query_count: int) -> None:
+    """Stop after independent validation unless preregistered gates pass."""
+    if summary.get("query_count") != query_count or query_count not in (200, 1000):
+        raise ValueError("paired gate query count differs")
+    if summary.get("baseline_reproduced") is not True:
+        raise ValueError("same-run V109 capped baseline differs")
+    if query_count == 1000 and summary.get("qualifies_live_s3") is not True:
+        raise ValueError("V114 paired 1M quality gate did not qualify")
+
+
 def prepare_frozen(
     manifest_path: Path, mirror: Path, sq8_path: Path,
     requests_path: Path, reference_path: Path, *, query_count: int,
@@ -326,7 +336,8 @@ def prepare_frozen(
 
 def reduce_frozen(
     manifest_path: Path, mirror: Path, sq8_path: Path,
-    reference_path: Path, rust_path: Path, evidence_path: Path, summary_path: Path,
+    requests_path: Path, reference_path: Path, rust_path: Path,
+    evidence_path: Path, summary_path: Path,
     *, query_count: int,
 ) -> None:
     """Check all exact parity, then produce paired returned-recall evidence."""
@@ -334,8 +345,10 @@ def reduce_frozen(
         raise ValueError("paired frozen query count differs")
     manifest, sq8 = load_frozen_1m(manifest_path, mirror, sq8_path)
     reference_lines = reference_path.read_text().splitlines()
+    request_lines = requests_path.read_text().splitlines()
     rust_lines = rust_path.read_text().splitlines()
-    if len(reference_lines) != query_count or len(rust_lines) != query_count:
+    if any(len(lines) != query_count
+           for lines in (request_lines, reference_lines, rust_lines)):
         raise ValueError("paired result count differs")
     references = [json.loads(line) for line in reference_lines]
     actuals = [json.loads(line) for line in rust_lines]
@@ -371,6 +384,7 @@ def reduce_frozen(
         "query_count": query_count,
         "manifest_sha256": FROZEN_MANIFEST_SHA256,
         "sq8_sha256": FROZEN_SQ8_SHA256,
+        "requests_sha256": _sha256_file(requests_path),
         "reference_sha256": _sha256_file(reference_path),
         "rust_sha256": _sha256_file(rust_path),
         "evidence_sha256": _sha256_file(evidence_path),
@@ -384,6 +398,8 @@ def reduce_frozen(
         "maximum_bytes": maximum_bytes,
         "live_s3_measured": False,
     }
+    expected_baseline = 19_739 if query_count == 200 else 98_803
+    summary["baseline_reproduced"] = totals["baseline"] == expected_baseline
     if query_count == 1000:
         summary["qualifies_live_s3"] = qualifies_1m(
             total_hits=totals,
@@ -391,38 +407,41 @@ def reduce_frozen(
             sub90_queries=summary["sub90_queries"],
         )
     summary_path.write_text(_canonical(summary))
-    expected_baseline = 19_739 if query_count == 200 else 98_803
-    if totals["baseline"] != expected_baseline:
-        raise ValueError("same-run V109 capped baseline differs")
-    if totals["exact"] != totals["production"]:
-        raise ValueError("exact and production returned hits differ")
-    if query_count == 1000 and not summary["qualifies_live_s3"]:
-        raise ValueError("paired 1M development quality gate did not qualify")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("prepare", "reduce"))
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--mirror", required=True, type=Path)
-    parser.add_argument("--sq8", required=True, type=Path)
+    parser.add_argument("phase", choices=("prepare", "reduce", "gate"))
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--mirror", type=Path)
+    parser.add_argument("--sq8", type=Path)
     parser.add_argument("--queries", required=True, type=int, choices=(200, 1000))
     parser.add_argument("--requests", type=Path)
-    parser.add_argument("--reference", required=True, type=Path)
+    parser.add_argument("--reference", type=Path)
     parser.add_argument("--rust", type=Path)
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--summary", type=Path)
     args = parser.parse_args()
+    if args.phase == "gate":
+        if args.summary is None:
+            parser.error("gate requires --summary")
+        gate_summary(json.loads(args.summary.read_text()), args.queries)
+        return
+    if args.manifest is None or args.mirror is None or args.sq8 is None:
+        parser.error("prepare and reduce require --manifest, --mirror and --sq8")
+    if args.reference is None:
+        parser.error("prepare and reduce require --reference")
     if args.phase == "prepare":
         if args.requests is None:
             parser.error("prepare requires --requests")
         prepare_frozen(args.manifest, args.mirror, args.sq8,
                        args.requests, args.reference, query_count=args.queries)
     else:
-        if args.rust is None or args.evidence is None or args.summary is None:
-            parser.error("reduce requires --rust, --evidence and --summary")
-        reduce_frozen(args.manifest, args.mirror, args.sq8, args.reference,
-                      args.rust, args.evidence, args.summary,
+        if (args.requests is None or args.rust is None
+                or args.evidence is None or args.summary is None):
+            parser.error("reduce requires --requests, --rust, --evidence and --summary")
+        reduce_frozen(args.manifest, args.mirror, args.sq8, args.requests,
+                      args.reference, args.rust, args.evidence, args.summary,
                       query_count=args.queries)
 
 

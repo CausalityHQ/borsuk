@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import tempfile
@@ -94,3 +95,27 @@ def seal_existing_sq8(
         }))
         temporary.rename(mirror)
     return manifest
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--sq8", required=True, type=Path)
+    parser.add_argument("--mirror", required=True, type=Path)
+    parser.add_argument("--source-sha256", required=True)
+    parser.add_argument("--sq8-sha256", required=True)
+    parser.add_argument("--rows", required=True, type=int)
+    parser.add_argument("--dimensions", required=True, type=int)
+    parser.add_argument("--max-nominees", required=True, type=int)
+    args = parser.parse_args()
+    seal_existing_sq8(
+        args.source, args.sq8, args.mirror,
+        expected_source_sha256=args.source_sha256,
+        expected_sq8_sha256=args.sq8_sha256,
+        rows=args.rows, dimensions=args.dimensions,
+        max_nominees=args.max_nominees,
+    )
+
+
+if __name__ == "__main__":
+    main()
