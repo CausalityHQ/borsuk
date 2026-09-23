@@ -182,7 +182,7 @@ class TwoBitSpotTests(unittest.TestCase):
         self.assertIn("mean.bin", before_evaluation)
         self.assertIn(PRIOR_EVIDENCE.uri, script[script.index("phase=evaluate") :])
         evaluation = script[script.index("phase=evaluate") : script.index("phase=validate")]
-        self.assertIn("native_rotated_two_bit_range_broker", evaluation)
+        self.assertIn('env PYTHONPATH="$root/repo" "$root/.venv/bin/python" -m scripts.native_rotated_two_bit_range_broker', evaluation)
         self.assertIn("unshare --net --fork setpriv --reuid=nobody", evaluation)
         self.assertIn('BORSUK_RANGE_BROKER_SOCKET="$root/broker.sock"', evaluation)
         self.assertIn("broker-audit.json", evaluation)

@@ -212,7 +212,7 @@ aws s3 cp @TRUTH_URI@ truth.parquet --only-show-errors
 printf '%s  truth.parquet\n' @TRUTH_SHA@ | sha256sum -c -
 chmod 0444 tree.parquet pages.parquet queries.parquet truth.parquet prior-evidence.json
 mkdir evaluation && chown nobody:nobody evaluation
-"$root/.venv/bin/python" -m scripts.native_rotated_two_bit_range_broker --root "$root" --output-prefix "$output" --socket "$root/broker.sock" --audit "$root/broker-audit.json" & broker_pid=$!
+env PYTHONPATH="$root/repo" "$root/.venv/bin/python" -m scripts.native_rotated_two_bit_range_broker --root "$root" --output-prefix "$output" --socket "$root/broker.sock" --audit "$root/broker-audit.json" & broker_pid=$!
 for attempt in $(seq 1 100); do
   [ -S "$root/broker.sock" ] && break
   kill -0 "$broker_pid" 2>/dev/null
