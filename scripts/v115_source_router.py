@@ -131,14 +131,15 @@ def load_source_router(output_dir: Path) -> tuple[dict[str, object], dict[str, n
     return manifest, arrays
 
 
-def _train_books(data: np.ndarray, subspaces: int, *, seed: int) -> np.ndarray:
+def _train_books(data: np.ndarray, subspaces: int, *, seed: int,
+                 sample_rows: int = 100_000) -> np.ndarray:
     """Apply V77's source-only sample and ten-iteration Lloyd rule."""
     rows, dimensions = data.shape
     width = (dimensions + subspaces - 1) // subspaces
-    padded = np.zeros((rows, width * subspaces), dtype=np.float32)
-    padded[:, :dimensions] = data
     generator = np.random.default_rng(seed)
-    sample = padded[generator.choice(rows, min(rows, 100_000), replace=False)]
+    selected = data[generator.choice(rows, min(rows, sample_rows), replace=False)]
+    sample = np.zeros((len(selected), width * subspaces), dtype=np.float32)
+    sample[:, :dimensions] = selected
     books = np.empty((subspaces, 256, width), dtype=np.float32)
     for subspace in range(subspaces):
         first = subspace * width
