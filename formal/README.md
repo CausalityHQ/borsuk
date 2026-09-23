@@ -85,6 +85,12 @@ decode/score operations for a full scan, and at most 83,886 row records
 in a 16-MiB code payload with group framing. These are exact arithmetic
 for the modeled format; streaming memory, observed latency, throughput,
 and recall depend on the implementation and data.
+It also proves at most 327 complete 256-row pages of 200-byte records fit
+one 16-MiB wave. Two independent 16-byte-per-row resident route-code
+generations at 100M rows plus a 64-MiB process allowance exceed 3 GiB,
+before summaries, mappings or query buffers. That arithmetic requires
+code sharing or a narrower representation for a two-generation design
+under this cap; it does not establish that either is implementable.
 
 For a proposed progressive split, Lean proves that every two-bit symbol
 rejoins exactly from its sign and magnitude bits, and that a 104-byte

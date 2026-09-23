@@ -252,6 +252,19 @@ theorem hundred_million_two_bit_code_bytes :
 theorem hundred_million_two_bit_coordinate_work :
     twoBitCoordinateWork 100000000 = 76800000000 := by decide
 
+/-! A 16-byte resident row route needs 1.6 billion bytes per complete
+100M-row generation. Two independent copies plus the 64-MiB process
+allowance exceed a 3-GiB cap before summaries, maps or query buffers.
+Sharing or a narrower representation is therefore a necessary premise
+for a two-generation design under that cap. -/
+
+theorem two_full_pq16_generations_with_allowance_exceed_three_gib :
+    16 * 100000000 * 2 + 67108864 > 3221225472 := by decide
+
+theorem full_two_bit_pages_in_single_wave
+    (pages : Nat) (budget : 200 * 256 * pages ≤ 16777216) :
+    pages ≤ 327 := by omega
+
 theorem two_bit_code_payload_row_budget
     (pages rows : Nat)
     (budget : twoBitGroupBytes pages rows ≤ 16777216) :
