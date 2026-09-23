@@ -65,3 +65,12 @@ their total row count. A 16-MiB code-wave cap therefore permits at most
 83,886 rows, including rows on bridged pages. The sealed page map and
 Python range planner must supply the actual cover and establish refinement
 before this bound describes a served query.
+
+A second finite-query theorem bounds recall loss for a **fixed score
+threshold** by the authenticated truth count of pages whose true scores
+fall in the error band immediately below that threshold. It needs a
+certified per-page score upper-error bound and the page scores/truth
+counts. It does not yet transfer to the production greedy byte/GET
+planner; that requires a checked planner refinement or its own admission
+certificate. This conditional result can bound cohort recall with data
+assumptions, while unseen-query recall remains an empirical question.

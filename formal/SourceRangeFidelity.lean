@@ -289,6 +289,66 @@ theorem threshold_admission_and_hits_stable
       simp [routedOutside, sourceOutside]
   exact ⟨same, congrArg admittedTruthHits same⟩
 
+/-! When some pages lie near the threshold, charge every possible lost
+truth position to that boundary band. This is a conservative bound for a
+fixed score threshold. A byte-constrained greedy planner requires an
+additional refinement or a separately certified admitted-page list. -/
+
+def sourceThresholdContribution (page : ThresholdPage) (threshold : Int) : Nat :=
+  if page.trueScore < threshold then page.truthCount else 0
+
+def routedThresholdContribution (page : ThresholdPage) (threshold : Int) : Nat :=
+  if page.routedScore < threshold then page.truthCount else 0
+
+def boundaryBandContribution (page : ThresholdPage) (threshold error : Int) : Nat :=
+  if threshold ≤ page.trueScore + error ∧ page.trueScore < threshold
+  then page.truthCount else 0
+
+theorem per_page_loss_charged_to_boundary
+    (page : ThresholdPage) (threshold error : Int)
+    (upperError : page.routedScore ≤ page.trueScore + error) :
+    sourceThresholdContribution page threshold ≤
+      routedThresholdContribution page threshold +
+      boundaryBandContribution page threshold error := by
+  by_cases sourceInside : page.trueScore < threshold
+  · by_cases routedInside : page.routedScore < threshold
+    · simp [sourceThresholdContribution, routedThresholdContribution,
+        boundaryBandContribution, sourceInside, routedInside]
+    · have inBand : threshold ≤ page.trueScore + error := by omega
+      simp [sourceThresholdContribution, routedThresholdContribution,
+        boundaryBandContribution, sourceInside, routedInside, inBand]
+  · simp [sourceThresholdContribution, sourceInside]
+
+def sourceThresholdHits (pages : List ThresholdPage) (threshold : Int) : Nat :=
+  (pages.map (fun page => sourceThresholdContribution page threshold)).sum
+
+def routedThresholdHits (pages : List ThresholdPage) (threshold : Int) : Nat :=
+  (pages.map (fun page => routedThresholdContribution page threshold)).sum
+
+def boundaryBandHits (pages : List ThresholdPage) (threshold error : Int) : Nat :=
+  (pages.map (fun page => boundaryBandContribution page threshold error)).sum
+
+theorem threshold_recall_loss_bounded_by_band
+    (pages : List ThresholdPage) (threshold error : Int)
+    (scoreUpper : ∀ page ∈ pages,
+      page.routedScore ≤ page.trueScore + error) :
+    sourceThresholdHits pages threshold ≤
+      routedThresholdHits pages threshold +
+      boundaryBandHits pages threshold error := by
+  induction pages with
+  | nil => simp [sourceThresholdHits, routedThresholdHits, boundaryBandHits]
+  | cons page rest ih =>
+      have head := per_page_loss_charged_to_boundary page threshold error
+        (scoreUpper page (by simp))
+      have tail : ∀ next ∈ rest,
+          next.routedScore ≤ next.trueScore + error := by
+        intro next member
+        exact scoreUpper next (by simp [member])
+      have tailBound := ih tail
+      simp only [sourceThresholdHits, routedThresholdHits, boundaryBandHits,
+        List.map_cons, List.sum_cons] at *
+      omega
+
 /-! The p05 and sub-90 conditions concern the per-query distribution.
 Aggregate hit-loss bounds alone do not establish them. -/
 
