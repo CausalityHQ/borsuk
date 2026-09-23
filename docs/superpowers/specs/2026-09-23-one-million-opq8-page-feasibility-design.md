@@ -1,5 +1,12 @@
 # ReLAION-1M OPQ8 final-page feasibility gate
 
+Status: Stage A completed and failed the fixed 32-page quality gate in
+attempt `relaion-1m-dev1000-a0001` from source `5fc9256d`. Stage B was
+cancelled under the preregistered stopping rule. The terminal hashes,
+independent closeout, exact metrics and revised decision are recorded in
+`docs/research/algorithm-first-page-layout-ledger.md`. The methodology
+below remains the frozen preregistration for this closed attempt.
+
 ## Question
 
 The terminal-closed OPQ8 1M route selected 98,985/100,000 GT100 owner

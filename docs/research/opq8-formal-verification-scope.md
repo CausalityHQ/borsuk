@@ -113,6 +113,16 @@ a different flat router, evidence that a region or hierarchical route
 must be measured before claiming 100M throughput. That historical rate
 is not a bound for the current OPQ8 implementation.
 
+For the proposed data-range wave, Lean also proves a conditional sequential
+latency ceiling: if the final plan uses at most 32 GET ranges and 16,777,216
+encoded bytes, and authenticated service evidence bounds each request's fixed
+overhead, each byte's transfer cost, and local compute, then total latency is
+at most `localTime + 32*requestTime + 16777216*byteTime` in the common time
+unit. A separate theorem bounds eight-table routing work by `8*regionCap`
+when an implementation certifies it visits at most `regionCap` rows. Neither
+the remote service bounds nor the visited-row cap has been established for
+production; these are proof obligations for a measured implementation.
+
 Orthogonal rotation preserves squared L2 distance in exact arithmetic.
 Finite precision and 8-byte quantization can change neighbor order; a
 rank-stability theorem would need bounds on quantization error and on the

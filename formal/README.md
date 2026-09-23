@@ -21,3 +21,11 @@ complete route-code planes, a float64 score array and a float64 indexed
 lookup array coexist, their `32N` bytes exceed the 3-GiB campaign cap
 with its 64-MiB allowance at 100M rows. It excludes allocator and
 metadata overhead; it is not a latency theorem.
+
+For a future data-range implementation, a separate conditional theorem
+combines a 32-GET/16-MiB plan with certified per-GET, per-byte and local
+compute upper bounds into a sequential latency ceiling. A region-work
+theorem similarly converts a certified visited-row cap into at most eight
+table lookups per visited row. These results provide arithmetic implications;
+the bounds and implementation correspondence must be supplied and checked
+for any production claim.

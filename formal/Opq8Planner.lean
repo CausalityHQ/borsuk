@@ -322,6 +322,34 @@ theorem merged_wave_bounds (physical : List Nat) (predecessor : Nat → Option N
     | cons group rest ih => simpa [mergedGets] using ih
   · simp
 
+/-! A sequential upper bound for the proposed data-range wave. `requestTime`
+and `byteTime` are certified upper bounds in one common time unit for each
+GET's fixed overhead and each encoded byte, and `localTime` bounds routing,
+scoring, decoding and reranking. This theorem does not supply those bounds,
+model parallel S3 scheduling, or assert an observed service latency. -/
+
+def waveLatencyBound (localTime requestTime byteTime : Nat) : Nat :=
+  localTime + 32 * requestTime + 16777216 * byteTime
+
+theorem bounded_data_wave_latency
+    (gets bytes localTime requestTime byteTime observedTime : Nat)
+    (getsBound : gets ≤ 32)
+    (bytesBound : bytes ≤ 16777216)
+    (serviceBound : observedTime ≤ localTime + gets * requestTime + bytes * byteTime) :
+    observedTime ≤ waveLatencyBound localTime requestTime byteTime := by
+  unfold waveLatencyBound
+  have requestBound := Nat.mul_le_mul_right requestTime getsBound
+  have transferBound := Nat.mul_le_mul_right byteTime bytesBound
+  omega
+
+def regionTableLookups (visitedRows : Nat) : Nat := 8 * visitedRows
+
+theorem region_lookup_bound (visitedRows regionCap : Nat)
+    (visitedBound : visitedRows ≤ regionCap) :
+    regionTableLookups visitedRows ≤ 8 * regionCap := by
+  unfold regionTableLookups
+  omega
+
 private def threeGroupPredecessor : Nat → Option Nat
   | 0 => none
   | group + 1 => some group

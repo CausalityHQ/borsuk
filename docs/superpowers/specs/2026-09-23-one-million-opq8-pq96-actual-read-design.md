@@ -1,6 +1,11 @@
 # ReLAION-1M real PQ96 code-read and page-containment gate
 
-Status: conditional preregistration draft. First close the cheaper
+Status: superseded before execution. The prerequisite 32-page upper bound
+failed in terminal-closed attempt `relaion-1m-dev1000-a0001`, so this
+PQ96/32-page campaign must not launch. The text below preserves the
+conditional draft and its original stopping rule as historical context.
+
+First close the cheaper
 source-vector final-page feasibility gate described below. Freeze
 implementation constants and source revision before any source
 construction or attempt. The terminal-closed 1M OPQ8 group-containment

@@ -4883,3 +4883,69 @@ that scale gate.
 An accidental prelaunch upload placed the same source archive under a
 different, nonexistent full-commit key. No attempt referenced or ran
 that object. The sole executed attempt used the authenticated key above.
+
+### ReLAION-1M OPQ8 32-page oracle a0001: kill the final-page cap
+
+The preregistered Stage A in
+`docs/superpowers/specs/2026-09-23-one-million-opq8-page-feasibility-design.md`
+replayed the exact terminal-closed 1M OPQ8 and page-centroid group plans.
+It authenticated the frozen base/delta physical page map and all 100,000
+ordered development GT positions, then chose the best 32 truth-owner
+pages per query inside each arm's selected groups. This is an optimistic
+upper bound on final-page containment: it uses truth and ignores the
+16-MiB data-byte cap. It does not measure any real scorer or S3 GET.
+The independent validator rebuilt the stable-ID-to-page map from the
+authenticated Arrow runs; separate closeout authenticated all ten
+terminal-listed artifacts and recomputed every hit mask and aggregate.
+
+Pushed source `5fc9256d4c08a05d7469931b5ab44190bb7fa806` was sealed
+in an 11,128,122-byte create-only archive with SHA-256
+`c373eb8a870212d963e5b50a86d44cc3ec64c13f10c5cb4aa684d662a0433587`.
+The sole attempt prefix was
+`s3://borsuk-bench-453182569524-euc1/research/native-one-million-page-oracle-selector/5fc9256d4c08a05d7469931b5ab44190bb7fa806/runs/relaion-1m-dev1000-a0001/`.
+The complete terminal SHA-256 was
+`88448e3aa96db28ba4ebcb0e770fbc0a160508cf09149b8a7f39e139d954f616`.
+The original controller exited zero after 64 seconds; Causality Spot
+`i-055fc7730886c64cf` (`c7i.8xlarge`) was confirmed terminated.
+The 1,062,652-byte evidence, result and validation SHA-256 values were
+`6b03beddcddb1c96e5dae55bbfbccea3bb4567aa0ec9b3a9d570fd2576583c23`,
+`5fc88386028c3731f7daa7737470b9ab0eb9ca3cd0b532bf4b10f4975650d7a0`,
+and `c28db5546b8101540c1ba07ab4533aa42a02b95689e2f7a08478c1846ec5e303`.
+
+| Same frozen 1M plans | Page-centroid control | OPQ8 route | page gate |
+|---|---:|---:|---:|
+| selected-group GT100 | 98,151 / 100,000 | 98,985 / 100,000 | replay exact |
+| optimistic best-32-page GT100 | 86,331 / 100,000 | **86,474 / 100,000** | ≥98,151 |
+| optimistic page p05 GT100 | 61 / 100 | **61 / 100** | ≥90 |
+| optimistic page queries below 90 GT100 | 504 | **504** | ≤49 |
+| independently optimized GT10 page upper bound | 9,928 / 10,000 | 9,956 / 10,000 | ≥9,928 |
+
+The GT10 upper bound is identical to selected-group GT10 because ten
+truth positions occupy at most ten pages, below the 32-page cap. Its
+page set is optimized separately from GT100, so the two upper bounds
+do not assert a jointly attainable plan. For the OPQ8 arm the best 32
+pages used a median 6,025,468 and maximum 6,451,712 encoded bytes,
+well below 16 MiB. The failure is the number and dispersion of pages,
+not the data-byte cap. Construct, evaluate and validate maximum RSS
+were 968,988, 242,136 and 980,608 KiB; sampled process-tree peaks
+were 359,149,568, 253,579,264 and 371,171,328 bytes. Every phase
+recorded zero swaps and passed the 3-GiB-with-margin cap.
+
+**Decision:** `page-count-ceiling-killed`. No 96-byte quantizer, exact
+row scorer or page nomination rule can make the fixed OPQ8 original
+layout pass the 1M final-page gate while selecting at most 32 pages.
+Do not run the preregistered source-score Stage B or build PQ96 under
+this final-wave contract. At 64 truth-aware pages, an exploratory
+post-closeout recount reaches 98,567 GT100, p05 91 and 36 sub-90
+queries, with maximum 12,877,528 encoded page bytes. This is an
+unpreregistered diagnostic, not a promotion result: those 64 pages
+require up to 53 disjoint contiguous GETs. A separate truth-aware
+minimum-byte interval recount shows that all selected GT positions
+fit within 32 contiguous GETs and 16 MiB for 987 of 1,000 OPQ8
+queries. A deterministic truth-aware gap-splitting witness that drops
+pages only for the other 13 queries fits every query within 32 GETs and
+16 MiB and retains 98,935 GT100, 9,956 GT10, p05 94 and 19 sub-90
+queries. This post-closeout diagnostic is an existence witness, not a
+query-only quality result or a promotion gate. The next architecture
+decision tests score-driven interval selection over the existing page
+layout before any 96-byte row-code campaign.
