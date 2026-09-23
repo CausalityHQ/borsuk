@@ -99,10 +99,19 @@ bytes plus these two simultaneous `8N` arrays total `32N` bytes:
 3-GiB cap with its required 64-MiB margin even before metadata and
 codebooks. This is conditional on those arrays being resident as modeled;
 it rules out the current full-array scorer under that cap and motivates
-chunked scoring if the route qualifies. A route query evaluates
+chunked scoring for memory. A route query evaluates
 eight codebook lookups per row plus group reduction and ranking. These
 are useful analytical resource bounds, but they do not
 establish a wall-clock latency.
+The checked full-scan model counts 800,000,000 table lookups at 100M
+rows per query, assuming the current eight-code-row scorer scans every
+row. This is a work count, not a measured throughput or a lower bound on
+time without a machine-rate assumption.
+Chunking alone leaves this full-scan work count unchanged. V76 measured
+64 million lookups at about 206 core-milliseconds per 1M-row query for
+a different flat router, evidence that a region or hierarchical route
+must be measured before claiming 100M throughput. That historical rate
+is not a bound for the current OPQ8 implementation.
 
 Orthogonal rotation preserves squared L2 distance in exact arithmetic.
 Finite precision and 8-byte quantization can change neighbor order; a
@@ -119,13 +128,38 @@ abstract **100k** admission loop stays within 32 reads and 16,777,216 bytes,
 preserves input order and uniqueness, and accounts for exactly the selected
 group lengths. It also proves a pairwise integer interval order lemma,
 counting lemmas conditional on already certified truth-owner coverage,
-and the 8N/16N code-plane arithmetic. The structural `List.foldl`
-consumes one ranked group per recursive step. A second abstract model
+a cohort theorem that sums conservative per-query certificates, and the
+8N/16N code-plane arithmetic. If the certificates contain at least
+98,151 positions, the checked theorem proves the 1M control's aggregate
+selected-group containment threshold under those premises. The actual
+frozen 1M outcome was established by the terminal-closed data replay,
+not by filling these certificates. The certificate theorem assumes valid
+owner lists and coverage; it does not authenticate artifacts, establish
+a 1,000-by-100 query/truth shape, prove p05 or GT10 tails, or show
+nominated-page containment. Those checks must be separate inputs to an
+end-to-end proof. The 1M source-distance diagnostic uses a float32 matrix
+product before conversion to float64, so its scores are not an
+exact-arithmetic witness without a rounding allowance.
+
+The structural `List.foldl` consumes one ranked group per recursive
+step. A second abstract model
 counts 1M merged GETs as selected groups whose same-role physical
 predecessor is absent. It proves a 32-GET/16-MiB bound and checks a
 three-group bridging example. The supplied physical predecessor map and
 the Python planner's incremental count still need a refinement proof.
 Neither model has been composed with routing and recall.
+
+For latency, a conditional service model can state that a single parallel
+wave of at most 32 successful GETs finishes within `L` if each GET finishes
+within `L` after launch, the scheduler starts all 32 together, and local
+planning, scoring and decoding finish within a stated CPU bound `C`.
+Then end-to-end successful-query latency is at most `C + L` plus any
+explicit queueing and data-page waves. This is a proof about those
+assumptions, not a measured bound for S3: network tail latency, throttling,
+retries, queueing and CPU rate have no fixed values supplied by the
+algorithm. A timeout can bound time to success-or-failure, but cannot
+guarantee successful recall. The 1M source-only run supplied no serving
+latency samples, so actual-read and serving measurements remain required.
 
 The proof has no `sorry`, but the refinement from production Python to the
 Lean model, the top-four score error bound, plan stability, page

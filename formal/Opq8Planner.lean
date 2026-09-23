@@ -174,7 +174,55 @@ theorem complete_recall_of_owner_certificate (truthOwners selected : List Nat)
           omega
         _ = (group :: rest).length := by rw [ih tail]; simp; omega
 
+/-! A cohort certificate records only truth positions whose owner has
+been verified to lie in the selected groups. It may omit positions for
+which the available score intervals are inconclusive. This makes the
+bound conservative without requiring every query to certify fully. -/
+
+structure QueryCertificate where
+  truthOwners : List Nat
+  selected : List Nat
+  certified : List Nat
+
+def certifiedCohortHits (cases : List QueryCertificate) : Nat :=
+  (cases.map fun item => item.certified.length).sum
+
+def coveredCohortHits (cases : List QueryCertificate) : Nat :=
+  (cases.map fun item => coveredHits item.truthOwners item.selected).sum
+
+theorem cohort_certified_recall_lower_bound (cases : List QueryCertificate)
+    (valid : ∀ item ∈ cases,
+      item.certified.Sublist item.truthOwners ∧
+      ∀ group ∈ item.certified, group ∈ item.selected) :
+    certifiedCohortHits cases ≤ coveredCohortHits cases := by
+  induction cases with
+  | nil => simp [certifiedCohortHits, coveredCohortHits]
+  | cons item rest ih =>
+      have head := valid item (by simp)
+      have tail : ∀ next ∈ rest,
+          next.certified.Sublist next.truthOwners ∧
+          ∀ group ∈ next.certified, group ∈ next.selected := by
+        intro next inRest
+        exact valid next (by simp [inRest])
+      have itemBound := certified_recall_lower_bound
+        item.truthOwners item.certified item.selected head.1 head.2
+      simpa [certifiedCohortHits, coveredCohortHits] using
+        Nat.add_le_add itemBound (ih tail)
+
+theorem cohort_recall_gate_of_certificate (cases : List QueryCertificate)
+    (valid : ∀ item ∈ cases,
+      item.certified.Sublist item.truthOwners ∧
+      ∀ group ∈ item.certified, group ∈ item.selected)
+    (certifiedGate : 98151 ≤ certifiedCohortHits cases) :
+    98151 ≤ coveredCohortHits cases := by
+  exact Nat.le_trans certifiedGate (cohort_certified_recall_lower_bound cases valid)
+
 def codePlaneBytes (rows : Nat) : Nat := 8 * rows
+
+def fullScanTableLookups (rows : Nat) : Nat := 8 * rows
+
+theorem hundred_million_full_scan_lookups :
+    fullScanTableLookups 100000000 = 800000000 := by decide
 
 theorem two_full_code_planes (rows : Nat) :
     codePlaneBytes rows + codePlaneBytes rows = 16 * rows := by
