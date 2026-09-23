@@ -98,6 +98,66 @@ theorem code_payload_lookup_budget
   simp only [signByteLookups]
   omega
 
+/-! Uniform per-row score-error bounds also bound a page's minimum score.
+This supports a non-recall-based premise for page-order certificates. -/
+
+theorem min_score_error
+    (trueA routedA trueB routedB error : Int)
+    (firstUpper : routedA ≤ trueA + error)
+    (firstLower : trueA ≤ routedA + error)
+    (secondUpper : routedB ≤ trueB + error)
+    (secondLower : trueB ≤ routedB + error) :
+    min routedA routedB ≤ min trueA trueB + error ∧
+    min trueA trueB ≤ min routedA routedB + error := by
+  omega
+
+def reducePageMins (state : Int × Int) (rows : List (Int × Int)) : Int × Int :=
+  rows.foldl (fun current row =>
+    (min current.1 row.1, min current.2 row.2)) state
+
+theorem page_min_error_of_row_errors
+    (state : Int × Int) (rows : List (Int × Int)) (error : Int)
+    (stateUpper : state.2 ≤ state.1 + error)
+    (stateLower : state.1 ≤ state.2 + error)
+    (rowErrors : ∀ row ∈ rows,
+      row.2 ≤ row.1 + error ∧ row.1 ≤ row.2 + error) :
+    (reducePageMins state rows).2 ≤ (reducePageMins state rows).1 + error ∧
+    (reducePageMins state rows).1 ≤ (reducePageMins state rows).2 + error := by
+  induction rows generalizing state with
+  | nil => simpa [reducePageMins] using And.intro stateUpper stateLower
+  | cons row rest ih =>
+      have rowError := rowErrors row (by simp)
+      have restErrors : ∀ next ∈ rest,
+          next.2 ≤ next.1 + error ∧ next.1 ≤ next.2 + error := by
+        intro next inRest
+        exact rowErrors next (by simp [inRest])
+      have nextError := min_score_error state.1 state.2 row.1 row.2 error
+        stateUpper stateLower rowError.1 rowError.2
+      simpa [reducePageMins, List.foldl_cons] using
+        ih (min state.1 row.1, min state.2 row.2)
+          nextError.1 nextError.2 restErrors
+
+theorem separated_page_minima_keep_order
+    (stateA stateB : Int × Int)
+    (rowsA rowsB : List (Int × Int)) (error : Int)
+    (stateAUpper : stateA.2 ≤ stateA.1 + error)
+    (stateALower : stateA.1 ≤ stateA.2 + error)
+    (stateBUpper : stateB.2 ≤ stateB.1 + error)
+    (stateBLower : stateB.1 ≤ stateB.2 + error)
+    (rowsAErrors : ∀ row ∈ rowsA,
+      row.2 ≤ row.1 + error ∧ row.1 ≤ row.2 + error)
+    (rowsBErrors : ∀ row ∈ rowsB,
+      row.2 ≤ row.1 + error ∧ row.1 ≤ row.2 + error)
+    (gap : (reducePageMins stateA rowsA).1 + 2 * error <
+      (reducePageMins stateB rowsB).1) :
+    (reducePageMins stateA rowsA).2 <
+      (reducePageMins stateB rowsB).2 := by
+  have a := page_min_error_of_row_errors stateA rowsA error
+    stateAUpper stateALower rowsAErrors
+  have b := page_min_error_of_row_errors stateB rowsB error
+    stateBUpper stateBLower rowsBErrors
+  omega
+
 /-! The p05 and sub-90 conditions concern the per-query distribution.
 Aggregate hit-loss bounds alone do not establish them. -/
 

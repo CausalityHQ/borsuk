@@ -218,6 +218,20 @@ The same conditional code-payload premise limits the 94-byte-table
 scorer to 16,427,628 table lookups, after 24,064 per-query table entries.
 These are operation counts, not elapsed-time bounds.
 
+The file now also proves a score-based, non-recall premise: if every
+integer-scored row of a page is within `epsilon` of its true score, that
+page's minimum compressed score is within `epsilon` of its true minimum.
+If true minima of two pages differ by more than `2*epsilon`, their
+minimum-score order is preserved. This follows through arbitrary page row
+lists by induction, without assuming the answer's hit count. To turn it
+into a cohort recall certificate, the campaign must authenticate
+outward-rounded score-error intervals for the actual finite-precision
+scorer, separately certify the top-100-row count part of priority, and
+prove that the pages retained by the **actual** merged-range
+planner include enough truth owners. A uniform worst-case bound may be
+too loose to certify many queries; query-specific bounds can be checked
+without changing this implication.
+
 This is a conditional finite-cohort claim. A future checker must bind
 both hit-mask lists to immutable source, query, truth, selected-range
 and scorer identities, and prove or validate the executable-to-model
