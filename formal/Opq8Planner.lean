@@ -371,6 +371,43 @@ theorem bounded_two_wave_latency
   have dataTransferBound := Nat.mul_le_mul_right dataByteTime dataBytesBound
   omega
 
+/-! A progressive sign/magnitude code layout can require two sequential
+code waves before the final data wave. This is a ceiling only if the
+caller supplies valid service-time bounds for every wave. It does not
+assert that three S3 round trips meet a product latency target. -/
+
+def threeWaveLatencyBound
+    (localTime signRequestTime signByteTime magnitudeRequestTime
+      magnitudeByteTime dataRequestTime dataByteTime : Nat) : Nat :=
+  localTime + 32 * signRequestTime + 16777216 * signByteTime +
+    32 * magnitudeRequestTime + 16777216 * magnitudeByteTime +
+    32 * dataRequestTime + 16777216 * dataByteTime
+
+theorem bounded_three_wave_latency
+    (signGets signBytes magnitudeGets magnitudeBytes dataGets dataBytes
+      localTime signRequestTime signByteTime magnitudeRequestTime
+      magnitudeByteTime dataRequestTime dataByteTime observedTime : Nat)
+    (signGetsBound : signGets ≤ 32)
+    (signBytesBound : signBytes ≤ 16777216)
+    (magnitudeGetsBound : magnitudeGets ≤ 32)
+    (magnitudeBytesBound : magnitudeBytes ≤ 16777216)
+    (dataGetsBound : dataGets ≤ 32)
+    (dataBytesBound : dataBytes ≤ 16777216)
+    (serviceBound : observedTime ≤ localTime +
+      signGets * signRequestTime + signBytes * signByteTime +
+      magnitudeGets * magnitudeRequestTime + magnitudeBytes * magnitudeByteTime +
+      dataGets * dataRequestTime + dataBytes * dataByteTime) :
+    observedTime ≤ threeWaveLatencyBound localTime signRequestTime signByteTime
+      magnitudeRequestTime magnitudeByteTime dataRequestTime dataByteTime := by
+  unfold threeWaveLatencyBound
+  have signRequestBound := Nat.mul_le_mul_right signRequestTime signGetsBound
+  have signTransferBound := Nat.mul_le_mul_right signByteTime signBytesBound
+  have magnitudeRequestBound := Nat.mul_le_mul_right magnitudeRequestTime magnitudeGetsBound
+  have magnitudeTransferBound := Nat.mul_le_mul_right magnitudeByteTime magnitudeBytesBound
+  have dataRequestBound := Nat.mul_le_mul_right dataRequestTime dataGetsBound
+  have dataTransferBound := Nat.mul_le_mul_right dataByteTime dataBytesBound
+  omega
+
 def regionTableLookups (visitedRows : Nat) : Nat := 8 * visitedRows
 
 theorem region_lookup_bound (visitedRows regionCap : Nat)

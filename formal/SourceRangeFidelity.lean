@@ -178,6 +178,51 @@ def twoBitCoordinateWork (rows : Nat) : Nat := 768 * rows
 
 theorem two_bit_record_is_two_hundred : twoBitRecordBytes = 200 := by decide
 
+/-! The four level symbols -3, -1, +1, +3 have unsigned codes 0, 1,
+2, 3. The high bit is sign and the low bit is magnitude. Splitting each
+symbol into two bit planes and rejoining it is exact, before any lossy
+first-plane-only score or selective second-plane fetch. -/
+
+def twoBitSign (symbol : Nat) : Nat := symbol / 2
+def twoBitMagnitude (symbol : Nat) : Nat := symbol % 2
+def joinTwoBitSymbol (sign magnitude : Nat) : Nat := 2 * sign + magnitude
+
+theorem split_join_two_bit_symbol (symbol : Nat) :
+    joinTwoBitSymbol (twoBitSign symbol) (twoBitMagnitude symbol) = symbol := by
+  unfold joinTwoBitSymbol twoBitSign twoBitMagnitude
+  omega
+
+theorem split_join_two_bit_symbols (symbols : List Nat) :
+    (symbols.map fun symbol =>
+      joinTwoBitSymbol (twoBitSign symbol) (twoBitMagnitude symbol)) = symbols := by
+  induction symbols with
+  | nil => rfl
+  | cons symbol rest ih => simp [split_join_two_bit_symbol]
+
+def signPlaneRecordBytes : Nat := 96 + 4 + 4
+def magnitudePlaneRecordBytes : Nat := 96
+
+theorem split_planes_rejoin_two_hundred :
+    signPlaneRecordBytes + magnitudePlaneRecordBytes = twoBitRecordBytes := by
+  decide
+
+theorem hundred_million_split_plane_bytes :
+    signPlaneRecordBytes * 100000000 = 10400000000 ∧
+    magnitudePlaneRecordBytes * 100000000 = 9600000000 := by
+  decide
+
+theorem sign_plane_wave_row_budget
+    (rows : Nat) (budget : signPlaneRecordBytes * rows ≤ 16777216) :
+    rows ≤ 161319 := by
+  simp only [signPlaneRecordBytes] at budget
+  omega
+
+theorem magnitude_plane_wave_row_budget
+    (rows : Nat) (budget : magnitudePlaneRecordBytes * rows ≤ 16777216) :
+    rows ≤ 174762 := by
+  simp only [magnitudePlaneRecordBytes] at budget
+  omega
+
 theorem hundred_million_two_bit_code_bytes :
     twoBitRecordBytes * 100000000 = 20000000000 := by decide
 

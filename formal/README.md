@@ -36,6 +36,11 @@ per-request, per-byte and local-work time bounds are premises to be
 measured for the deployed reader; the theorem does not predict S3 tail
 latency or parallel-wave scheduling from source code alone.
 
+It also gives a conditional **three-wave** ceiling for separate sign,
+magnitude and data GET waves, each capped at 32 requests and 16 MiB.
+The third wave can increase actual latency; only measured service-time
+bounds can make the theorem a useful numerical SLO certificate.
+
 `SourceRangeFidelity.lean` adds paired finite-cohort hit accounting:
 authenticated source/compressed hit pairs and bounded lost hits imply
 the 100k and 1M aggregate fidelity floors. It separately proves the
@@ -69,6 +74,15 @@ decode/score operations for a full scan, and at most 83,886 row records
 in a 16-MiB code payload with group framing. These are exact arithmetic
 for the modeled format; streaming memory, observed latency, throughput,
 and recall depend on the implementation and data.
+
+For a proposed progressive split, Lean proves that every two-bit symbol
+rejoins exactly from its sign and magnitude bits, and that a 104-byte
+sign/scale/norm record plus a 96-byte magnitude record equals the old
+200-byte record. Under separate 16-MiB payload caps, the sign wave can
+contain at most 161,319 rows and the magnitude wave at most 174,762.
+These statements establish neither coverage of the sealed 1M group
+plan at the new 104-byte width nor fidelity of rows fetched from only
+the first plane. Both need a frozen source-only gate before promotion.
 
 For the proposed page-local code object, a further theorem proves that
 the exact payload of the pages in a physical code cover is 200 times
