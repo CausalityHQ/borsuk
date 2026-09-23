@@ -58,3 +58,10 @@ decode/score operations for a full scan, and at most 83,886 row records
 in a 16-MiB code payload with group framing. These are exact arithmetic
 for the modeled format; streaming memory, observed latency, throughput,
 and recall depend on the implementation and data.
+
+For the proposed page-local code object, a further theorem proves that
+the exact payload of the pages in a physical code cover is 200 times
+their total row count. A 16-MiB code-wave cap therefore permits at most
+83,886 rows, including rows on bridged pages. The sealed page map and
+Python range planner must supply the actual cover and establish refinement
+before this bound describes a served query.

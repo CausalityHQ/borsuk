@@ -156,6 +156,29 @@ theorem two_bit_code_payload_row_budget
   simp only [twoBitGroupBytes, twoBitRecordBytes] at budget
   omega
 
+/-! The proposed page-local format has no group header in its code object.
+Its selected page payloads are exactly 200 bytes per row; bytes of pages
+bridged into a physical GET must also occur in `rowCounts`. -/
+
+def selectedPageCodeBytes (rowCounts : List Nat) : Nat :=
+  (rowCounts.map (fun rows => 200 * rows)).sum
+
+theorem selected_page_code_bytes_exact (rowCounts : List Nat) :
+    selectedPageCodeBytes rowCounts = 200 * rowCounts.sum := by
+  induction rowCounts with
+  | nil => simp [selectedPageCodeBytes]
+  | cons rows rest ih =>
+      simp only [selectedPageCodeBytes, List.map_cons, List.sum_cons]
+      simp only [selectedPageCodeBytes] at ih
+      omega
+
+theorem page_local_code_wave_row_budget
+    (rowCounts : List Nat)
+    (budget : selectedPageCodeBytes rowCounts ≤ 16777216) :
+    rowCounts.sum ≤ 83886 := by
+  rw [selected_page_code_bytes_exact] at budget
+  omega
+
 /-! Uniform per-row score-error bounds also bound a page's minimum score.
 This supports a non-recall-based premise for page-order certificates. -/
 
