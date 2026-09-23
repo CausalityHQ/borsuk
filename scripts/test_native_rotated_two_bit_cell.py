@@ -189,6 +189,8 @@ class TwoBitSpotTests(unittest.TestCase):
         self.assertIn("evaluate-combined-peak.txt", evaluation)
         self.assertIn("swapoff -a", script)
         self.assertIn('(( swaps == 0 ))', script)
+        self.assertIn('exec 2>worker-stderr.log', script)
+        self.assertIn('"$output/diagnostics/worker-stderr.log"', script)
         self.assertIn('env PYTHONPATH="$root/repo"', script[script.index("phase=validate") :])
         terminal_body = script[script.index("terminal() {") : script.index("trap terminal EXIT")]
         terminal_python = terminal_body.split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]

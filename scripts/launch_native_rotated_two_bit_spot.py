@@ -110,6 +110,7 @@ started=$(date +%s)
 MAXIMUM_RSS_BYTES=@RSS@
 broker_pid=
 mkdir -p "$root" && cd "$root"
+exec 2>worker-stderr.log
 run_capped() {
   setsid "$@" & pid=$!
   peak_bytes=0
@@ -137,8 +138,14 @@ check_peak_rss() {
   (( peak_kib * 1024 <= MAXIMUM_RSS_BYTES ))
 }
 terminal() {
-  rc=$?; trap - EXIT; set +e; ended=$(date +%s)
-  if [ -n "$broker_pid" ]; then kill -TERM "$broker_pid" 2>/dev/null || true; wait "$broker_pid" 2>/dev/null || true; fi
+    rc=$?; trap - EXIT; set +e; ended=$(date +%s)
+    if [ -n "$broker_pid" ]; then kill -TERM "$broker_pid" 2>/dev/null || true; wait "$broker_pid" 2>/dev/null || true; fi
+    if [ "$status" != complete ]; then
+      aws s3 cp worker-stderr.log "$output/diagnostics/worker-stderr.log" --only-show-errors || true
+      for resource in construct-resources.txt evaluate-resources.txt validate-resources.txt; do
+        if [ -f "$resource" ]; then aws s3 cp "$resource" "$output/diagnostics/$resource" --only-show-errors || true; fi
+      done
+    fi
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null || true)
   instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
   STATUS="$status" PHASE="$phase" EXIT_CODE="$rc" STARTED="$started" ENDED="$ended" SOURCE_COMMIT=@COMMIT@ SOURCE_ARCHIVE_URI=@ARCHIVE_URI@ SOURCE_ARCHIVE_SHA256=@ARCHIVE_SHA@ SOURCE_ARCHIVE_BYTES=@ARCHIVE_BYTES@ REQUIREMENTS_SHA256=@REQUIREMENTS_SHA@ INSTANCE_ID="$instance_id" OUTPUT_PREFIX="$output" ATTEMPT=@ATTEMPT@ python3 - <<'PY'
