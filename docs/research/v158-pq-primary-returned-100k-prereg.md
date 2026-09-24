@@ -30,7 +30,9 @@ establish live S3 latency or 100M behavior.
   512,093 bytes, SHA-256
   `ab8bfae34f753512f352581218596fc0f043354f8168192c856278b3ab5a0ce7`.
   The V85 and V114 input declarations bind it to the same 100k source and
-  ordered development queries. This split is **used**; no held-out claim.
+  ordered development queries. Source IDs are sparse signed int64 values;
+  map them explicitly to physical SQ8 positions. This split is **used**;
+  no held-out claim.
 
 ## Paired method
 

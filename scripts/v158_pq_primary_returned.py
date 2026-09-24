@@ -135,8 +135,7 @@ def load_truth(path: Path) -> np.ndarray:
     if table.num_rows != QUERIES or table["query"].to_pylist() != list(range(QUERIES)):
         raise ValueError("GT query order differs")
     result = np.asarray(table["neighbors"].to_pylist(), dtype=np.int64)
-    if (result.shape != (QUERIES, 100) or np.any(result < 0)
-            or np.any(result >= ROWS)
+    if (result.shape != (QUERIES, 100)
             or any(len(set(map(int, row))) != 100 for row in result)):
         raise ValueError("GT IDs differ")
     return result
@@ -166,10 +165,9 @@ def reduce(requests: Path, plans: Path, seal: Path, sq8_path: Path,
                       ("code", "u1", (DIMS,))])
     sq8 = np.memmap(sq8_path, mode="r", dtype=dtype, shape=(ROWS,))
     ids = np.asarray(sq8["id"], dtype=np.int64)
-    if not np.array_equal(np.sort(ids), np.arange(ROWS)):
-        raise ValueError("SQ8 ID permutation differs")
-    physical = np.empty(ROWS, dtype=np.int64)
-    physical[ids] = np.arange(ROWS)
+    physical = {int(identifier): position for position, identifier in enumerate(ids)}
+    if len(physical) != ROWS:
+        raise ValueError("SQ8 IDs are not unique")
     low = np.asarray(authority["low"], dtype=np.float32)
     step = np.asarray(authority["step"], dtype=np.float32)
     if (low.shape != (DIMS,) or step.shape != (DIMS,)
@@ -177,6 +175,8 @@ def reduce(requests: Path, plans: Path, seal: Path, sq8_path: Path,
             or (step <= 0).any()):
         raise ValueError("SQ8 quantizer differs")
     truth = load_truth(truth_path)
+    if any(int(identifier) not in physical for row in truth for identifier in row):
+        raise ValueError("GT IDs are absent from SQ8 source")
     hits = {"exact": [], "pq": []}
     coverage = {"exact": [], "pq": []}
     bytes_per = {"exact": [], "pq": []}

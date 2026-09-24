@@ -38,11 +38,12 @@ def verify(requests: Path, reference: Path, sq8_path: Path,
                       ("code", "u1", (DIMS,))])
     sq8 = np.memmap(sq8_path, mode="r", dtype=dtype, shape=(ROWS,))
     ids = np.asarray(sq8["id"], dtype=np.int64)
-    if not np.array_equal(np.sort(ids), np.arange(ROWS)):
-        raise ValueError("SQ8 ID permutation differs")
-    physical = np.empty(ROWS, dtype=np.int64)
-    physical[ids] = np.arange(ROWS)
+    physical = {int(identifier): position for position, identifier in enumerate(ids)}
+    if len(physical) != ROWS:
+        raise ValueError("SQ8 IDs are not unique")
     gold = load_truth(truth_path)
+    if any(int(identifier) not in physical for row in gold for identifier in row):
+        raise ValueError("GT IDs are absent from SQ8 source")
     metrics = {arm: {field: [] for field in ("hits", "physical_coverage", "bytes", "gets")}
                for arm in ("exact", "pq")}
     overlap = []
@@ -74,7 +75,7 @@ def verify(requests: Path, reference: Path, sq8_path: Path,
             found = result["arms"][arm]
             returned = found["returned_ids"]
             if (len(returned) != 100 or len(set(returned)) != 100
-                    or any(type(value) is not int or not 0 <= value < ROWS
+                    or any(type(value) is not int or value not in physical
                            for value in returned)
                     or found["bytes"] != planned[f"{arm}_bytes"]
                     or found["bytes"] != sum(end - start for start, end in ranges)
