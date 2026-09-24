@@ -1,9 +1,10 @@
 import Std
 
 /-!
-Conditional byte and GET accounting for V160/V163/V164's 512-row D768 SQ8
-page format. A row is 780 bytes, a planner unit is 32 rows, and the 1M
-object's final page has 64 rows. The theorems assume authenticated counts
+Conditional byte and GET accounting for the 512-row D768 SQ8 page format.
+A row is 780 bytes, a planner unit is 32 rows, and the V164 1M object's
+final page has 64 rows. The general tail theorem also covers V160/V163's
+100k final page of 160 rows. The theorems assume authenticated counts
 of whole full/final pages in the emitted intervals. They do not prove that
 the Python planner emits those counts, that the router captures GT rows,
 or that S3 meets any latency target.
@@ -52,6 +53,20 @@ theorem admitted_plan_respects_both_caps
     gets ≤ 32 ∧ chargedBytes fullPages finalPages ≤ capBytes := by
   exact ⟨getsBound,
     (charged_units_fit_iff_bytes_fit fullPages finalPages).mp unitsBound⟩
+
+theorem arbitrary_final_page_respects_byte_cap
+    (fullPages tailUnits tailBytes : Nat)
+    (tailBound : tailBytes ≤ tailUnits * unitBytes)
+    (unitsBound : 16 * fullPages + tailUnits ≤ 672) :
+    fullPageBytes * fullPages + tailBytes ≤ capBytes := by
+  simp only [unitBytes, fullPageBytes, capBytes] at *
+  omega
+
+theorem frozen_final_page_geometry :
+    100000 % 512 = 160 ∧ 1000000 % 512 = 64 ∧
+    160 * 780 = 5 * unitBytes ∧
+    64 * 780 = 2 * unitBytes := by
+  decide
 
 theorem forty_two_full_pages_fit :
     chargedBytes 42 0 = 16773120 ∧

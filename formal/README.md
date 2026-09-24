@@ -2,8 +2,9 @@
 
 `SmoothPageBudget.lean` proves the exact 32-row-unit accounting for the
 V160/V163/V164 D768 SQ8 layout: a 512-row full page is 399,360 bytes, the
-64-row final page is 49,920 bytes, 672 units fit under 16 MiB and 673 do
-not. Given authenticated page and GET counts, its admission theorem proves
+V164 1M final page is 49,920 bytes, and the V160/V163 100k final page is
+124,800 bytes. A total of 672 units fits under 16 MiB and 673 does not.
+Given authenticated page and GET counts, its admission theorem proves
 both the 32-GET and 16-MiB caps. It does not prove that the Python planner
 refines the model, that routing captures truth, or elapsed S3 latency.
 Run `lean SmoothPageBudget.lean` from this directory with the pinned toolchain.
