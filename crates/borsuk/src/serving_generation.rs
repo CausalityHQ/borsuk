@@ -3,6 +3,7 @@
 use crate::exact_sq8_mirror::MirrorManifest;
 use crate::native_source_id_map::NativeSourceIdMap;
 use crate::native_source_tier::{NativeSourceTier, decoded_sha256};
+use crate::physical_row_permutation::PhysicalRowPermutation;
 use crate::pq64_router_artifact::SourceRouterArtifact;
 use crate::sq8_page_authority::PageAuthority;
 
@@ -11,11 +12,11 @@ pub enum GenerationError {
     IdentityMismatch,
 }
 
-/// All immutable query planes and the S3 object identity agree before serving.
-/// The caller retains the authenticated manifest SHA-256 inputs used to load
-/// the router, mirror and page authority, and pins this ETag through serving.
+/// Identity fence for the original router, relaid SQ8 plane and row map.
+/// The caller pins the authenticated page-object ETag through serving.
 pub struct ServingGeneration<'a> {
     router: &'a SourceRouterArtifact,
+    row_map: &'a PhysicalRowPermutation,
     mirror: &'a MirrorManifest,
     pages: &'a PageAuthority,
     object_key: &'a str,
@@ -25,6 +26,10 @@ pub struct ServingGeneration<'a> {
 impl<'a> ServingGeneration<'a> {
     pub fn router(&self) -> &SourceRouterArtifact {
         self.router
+    }
+    /// Authenticated map between the relaid SQ8 and original router rows.
+    pub fn row_map(&self) -> &PhysicalRowPermutation {
+        self.row_map
     }
     pub fn mirror(&self) -> &MirrorManifest {
         self.mirror
@@ -41,6 +46,7 @@ impl<'a> ServingGeneration<'a> {
 
     pub fn bind(
         router: &'a SourceRouterArtifact,
+        row_map: &'a PhysicalRowPermutation,
         mirror: &'a MirrorManifest,
         pages: &'a PageAuthority,
         object_key: &'a str,
@@ -49,13 +55,18 @@ impl<'a> ServingGeneration<'a> {
         if router.generation == 0
             || router.generation != mirror.generation
             || router.generation != pages.generation()
-            || router.sq8_sha256 != mirror.object_sha256
-            || router.sq8_sha256 != pages.object_sha256()
+            || router.generation != row_map.generation()
+            || decoded_sha256(&router.manifest_sha256).ok()
+                != Some(row_map.router_manifest_sha256())
+            || decoded_sha256(&router.source_sha256).ok() != Some(row_map.source_sha256())
+            || decoded_sha256(&router.sq8_sha256).ok() != Some(row_map.old_sq8_sha256())
+            || decoded_sha256(&mirror.object_sha256).ok() != Some(row_map.new_sq8_sha256())
+            || decoded_sha256(pages.object_sha256()).ok() != Some(row_map.new_sq8_sha256())
             || router.router.rows() != mirror.geometry.rows
             || router.router.rows() != pages.rows()
+            || router.router.rows() != row_map.rows()
             || router.router.dimensions() != mirror.geometry.dimensions
             || router.router.dimensions() != pages.dimensions()
-            || router.router.page_rows() != pages.page_rows()
             || router.low.len() != mirror.low.len()
             || router.step.len() != mirror.step.len()
             || router
@@ -75,6 +86,7 @@ impl<'a> ServingGeneration<'a> {
         }
         Ok(Self {
             router,
+            row_map,
             mirror,
             pages,
             object_key,
@@ -128,8 +140,92 @@ mod tests {
     use crate::exact_sq8_nominee::Sq8Geometry;
     use crate::native_source_id_map::{NativeSourceIdMap, write_source_id_map};
     use crate::native_source_tier::{NativeSourceTier, write_source_tier};
+    use crate::physical_row_permutation::{
+        PhysicalRowPermutation, RowMapBinding, write_row_permutation,
+    };
     use crate::pq64_nominee::Pq64Router;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn relaid_nonidentity_map_binds_only_to_its_router_and_new_object() {
+        let object = vec![7u8; 26];
+        let object_sha = format!("{:x}", Sha256::digest(&object));
+        let sidecar = Sha256::digest(&object).to_vec();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2",
+            "generation":3,"rows":2,"dimensions":1,"page_rows":2,
+            "object_sha256":object_sha,
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar)),
+        }))
+        .unwrap();
+        let pages = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap();
+        let router = SourceRouterArtifact {
+            router: Pq64Router::new(2, 1, 1, 1, vec![0.0; 2], vec![0.0; 64 * 256], vec![0; 128])
+                .unwrap(),
+            low: vec![0.0],
+            step: vec![1.0],
+            generation: 3,
+            manifest_sha256: "b".repeat(64),
+            source_sha256: "a".repeat(64),
+            layout_sha256: "c".repeat(64),
+            sq8_sha256: "d".repeat(64),
+        };
+        let mirror = MirrorManifest {
+            format_version: 1,
+            generation: 3,
+            max_nominees: 2,
+            geometry: Sq8Geometry {
+                rows: 2,
+                dimensions: 1,
+            },
+            object_sha256: object_sha.clone(),
+            block_digest_sha256: "e".repeat(64),
+            low: vec![0.0],
+            step: vec![1.0],
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("row-map.bin");
+        let binding = RowMapBinding {
+            generation: 3,
+            rows: 2,
+            source_sha256: &router.source_sha256,
+            router_manifest_sha256: &router.manifest_sha256,
+            old_sq8_sha256: &router.sq8_sha256,
+            new_sq8_sha256: &object_sha,
+        };
+        let sha = write_row_permutation(&path, binding, &[1, 0]).unwrap();
+        let row_map = PhysicalRowPermutation::open_authenticated(&path, &sha, binding).unwrap();
+        let bound = ServingGeneration::bind(
+            &router,
+            &row_map,
+            &mirror,
+            &pages,
+            "index/relaid-sq8.bin",
+            "etag-3",
+        )
+        .unwrap();
+        assert_eq!(bound.row_map().new_to_old(0), Some(1));
+        assert_eq!(bound.row_map().old_to_new(1), Some(0));
+        let mut changed_router = router;
+        changed_router.manifest_sha256 = "f".repeat(64);
+        assert_eq!(
+            ServingGeneration::bind(
+                &changed_router,
+                &row_map,
+                &mirror,
+                &pages,
+                "index/relaid-sq8.bin",
+                "etag-3"
+            )
+            .err(),
+            Some(GenerationError::IdentityMismatch)
+        );
+    }
 
     #[test]
     fn same_shape_from_another_generation_fails_before_serving() {
@@ -155,6 +251,7 @@ mod tests {
             low: vec![0.0],
             step: vec![1.0],
             generation: 1,
+            manifest_sha256: "e".repeat(64),
             source_sha256: "a".repeat(64),
             layout_sha256: "b".repeat(64),
             sq8_sha256: pages.object_sha256().to_owned(),
@@ -172,18 +269,50 @@ mod tests {
             low: vec![0.0],
             step: vec![1.0],
         };
+        let directory = tempfile::tempdir().unwrap();
+        let row_map_path = directory.path().join("row-map.bin");
+        let row_map_binding = RowMapBinding {
+            generation: 1,
+            rows: 1,
+            source_sha256: &router.source_sha256,
+            router_manifest_sha256: &router.manifest_sha256,
+            old_sq8_sha256: &router.sq8_sha256,
+            new_sq8_sha256: &mirror.object_sha256,
+        };
+        let row_map_sha = write_row_permutation(&row_map_path, row_map_binding, &[0]).unwrap();
+        let row_map = PhysicalRowPermutation::open_authenticated(
+            &row_map_path,
+            &row_map_sha,
+            row_map_binding,
+        )
+        .unwrap();
         assert!(
-            ServingGeneration::bind(&router, &mirror, &pages, "index/sq8.bin", "etag-1").is_ok()
+            ServingGeneration::bind(
+                &router,
+                &row_map,
+                &mirror,
+                &pages,
+                "index/sq8.bin",
+                "etag-1"
+            )
+            .is_ok()
         );
         mirror.generation = 2;
         assert_eq!(
-            ServingGeneration::bind(&router, &mirror, &pages, "index/sq8.bin", "etag-1").err(),
+            ServingGeneration::bind(
+                &router,
+                &row_map,
+                &mirror,
+                &pages,
+                "index/sq8.bin",
+                "etag-1"
+            )
+            .err(),
             Some(GenerationError::IdentityMismatch)
         );
 
         mirror.generation = 1;
         mirror.object_sha256 = pages.object_sha256().to_owned();
-        let directory = tempfile::tempdir().unwrap();
         let source_path = directory.path().join("source.bin");
         let source_artifact = write_source_tier(
             &source_path,
@@ -223,8 +352,15 @@ mod tests {
             1,
         )
         .unwrap();
-        let base =
-            ServingGeneration::bind(&router, &mirror, &pages, "index/sq8.bin", "etag-1").unwrap();
+        let base = ServingGeneration::bind(
+            &router,
+            &row_map,
+            &mirror,
+            &pages,
+            "index/sq8.bin",
+            "etag-1",
+        )
+        .unwrap();
         let exact = ExactServingGeneration::bind(base, &source, &map).unwrap();
         assert_eq!(exact.source().rows(), 1);
         assert_eq!(exact.map().resident_entry_bytes(), 16);
@@ -258,24 +394,45 @@ mod tests {
             1,
         )
         .unwrap();
-        let base =
-            ServingGeneration::bind(&router, &mirror, &pages, "index/sq8.bin", "etag-1").unwrap();
+        let base = ServingGeneration::bind(
+            &router,
+            &row_map,
+            &mirror,
+            &pages,
+            "index/sq8.bin",
+            "etag-1",
+        )
+        .unwrap();
         assert!(matches!(
             ExactServingGeneration::bind(base, &source, &other_map),
             Err(GenerationError::IdentityMismatch)
         ));
 
         router.source_sha256 = "d".repeat(64);
-        let base =
-            ServingGeneration::bind(&router, &mirror, &pages, "index/sq8.bin", "etag-1").unwrap();
-        assert!(matches!(
-            ExactServingGeneration::bind(base, &source, &map),
-            Err(GenerationError::IdentityMismatch)
-        ));
+        assert_eq!(
+            ServingGeneration::bind(
+                &router,
+                &row_map,
+                &mirror,
+                &pages,
+                "index/sq8.bin",
+                "etag-1"
+            )
+            .err(),
+            Some(GenerationError::IdentityMismatch)
+        );
         mirror.generation = 1;
         mirror.object_sha256 = "d".repeat(64);
         assert_eq!(
-            ServingGeneration::bind(&router, &mirror, &pages, "index/sq8.bin", "etag-1").err(),
+            ServingGeneration::bind(
+                &router,
+                &row_map,
+                &mirror,
+                &pages,
+                "index/sq8.bin",
+                "etag-1"
+            )
+            .err(),
             Some(GenerationError::IdentityMismatch)
         );
     }
