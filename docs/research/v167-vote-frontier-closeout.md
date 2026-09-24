@@ -61,6 +61,15 @@ including 50,568 unvoted units; V167 `1/1` charged 39,277 units,
 including 21,089 unvoted units. These are aggregate unit-query counts,
 not distinct physical units.
 
+The eight missed rows occupied seven V165-only unvoted units. Every one
+of those units was **one physical unit from a nominee-voted unit**. Three
+were also one unit from an exact-primary unit and held four missed rows;
+the other four units held four rows and were adjacent to secondary-voted
+units. Across all V165-captured unvoted rows, 33 were in primary-adjacent
+units and 23 in secondary-adjacent units. Thus a primary-only halo would
+miss part of this signal; a blanket halo of every nominee unit would
+need its byte and GET cost measured.
+
 Thus V167's minimal-byte objective removes useful gap or adjacent units
 that have no nominee vote; retaining **all** achievable votes cannot
 recover them. It also spends many more GETs to avoid gap bytes. This is
