@@ -4,6 +4,7 @@ use crate::exact_sq8_mirror::MirrorManifest;
 use crate::native_source_id_map::NativeSourceIdMap;
 use crate::native_source_tier::{NativeSourceTier, decoded_sha256};
 use crate::physical_row_permutation::PhysicalRowPermutation;
+use crate::pq64_nominee::Pq64Error;
 use crate::pq64_router_artifact::SourceRouterArtifact;
 use crate::sq8_page_authority::PageAuthority;
 
@@ -30,6 +31,40 @@ impl<'a> ServingGeneration<'a> {
     /// Authenticated map between the relaid SQ8 and original router rows.
     pub fn row_map(&self) -> &PhysicalRowPermutation {
         self.row_map
+    }
+    /// Nominate through old router pages and return relaid SQ8 row ordinals.
+    pub fn nominate_sq8_rows(
+        &self,
+        query: &[f32],
+        regions: usize,
+        shortlist: usize,
+    ) -> Result<Vec<usize>, Pq64Error> {
+        self.router
+            .router
+            .nominate(query, regions, shortlist)?
+            .into_iter()
+            .map(|old| {
+                let old = u32::try_from(old).map_err(|_| Pq64Error::InvalidRequest)?;
+                self.row_map
+                    .old_to_new(old)
+                    .map(|new| new as usize)
+                    .ok_or(Pq64Error::InvalidRequest)
+            })
+            .collect()
+    }
+    /// Score selected relaid SQ8 rows through the original PQ code plane.
+    pub fn score_sq8_rows(&self, query: &[f32], new_rows: &[usize]) -> Result<Vec<f32>, Pq64Error> {
+        let old_rows = new_rows
+            .iter()
+            .map(|&new| {
+                let new = u32::try_from(new).map_err(|_| Pq64Error::InvalidRequest)?;
+                self.row_map
+                    .new_to_old(new)
+                    .map(|old| old as usize)
+                    .ok_or(Pq64Error::InvalidRequest)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.router.router.score_rows(query, &old_rows)
     }
     pub fn mirror(&self) -> &MirrorManifest {
         self.mirror
@@ -164,9 +199,12 @@ mod tests {
             &sidecar,
         )
         .unwrap();
+        let mut books = vec![0.0; 64 * 256];
+        books[63 * 256 + 1] = 1.0;
+        let mut codes = vec![0; 128];
+        codes[64 + 63] = 1;
         let router = SourceRouterArtifact {
-            router: Pq64Router::new(2, 1, 1, 1, vec![0.0; 2], vec![0.0; 64 * 256], vec![0; 128])
-                .unwrap(),
+            router: Pq64Router::new(2, 1, 1, 1, vec![0.0; 2], books, codes).unwrap(),
             low: vec![0.0],
             step: vec![1.0],
             generation: 3,
@@ -211,6 +249,12 @@ mod tests {
         .unwrap();
         assert_eq!(bound.row_map().new_to_old(0), Some(1));
         assert_eq!(bound.row_map().old_to_new(1), Some(0));
+        assert_eq!(bound.nominate_sq8_rows(&[0.0], 1, 1).unwrap(), vec![1]);
+        assert_eq!(bound.nominate_sq8_rows(&[1.0], 2, 2).unwrap(), vec![0, 1]);
+        assert_eq!(
+            bound.score_sq8_rows(&[1.0], &[0, 1]).unwrap(),
+            vec![0.0, 1.0]
+        );
         let mut changed_router = router;
         changed_router.manifest_sha256 = "f".repeat(64);
         assert_eq!(
