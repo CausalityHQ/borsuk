@@ -302,3 +302,12 @@ If a separately checked threshold model produced the closed 1M source-
 score total of 98,920 GT100 hits, a boundary-band certificate of at most
 769 truth positions would imply the 98,151 GT100 floor in that model.
 The existing greedy range plans have no such threshold refinement yet.
+
+`ScoredNeighborField.lean` proves a conditional candidate work bound for
+V168: at most three 32-row units per nominee imply at most 49,152 row
+scores and 3,145,728 PQ64 table lookups for 512 nominees. It also proves
+the linear `64 × rows × generations` code payload, equal to 12.8 billion
+bytes for two complete 100M generations. Run `lean ScoredNeighborField.lean`
+from this directory. The proof assumes authenticated nominee/unit/row
+counters and does not establish router work, code-plane charged RAM,
+empirical recall, build time or query latency.
