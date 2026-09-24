@@ -4,7 +4,8 @@ import unittest
 
 from scripts.launch_v123_rerank_diagnostic_spot import (
     INDEX_TERMINAL_SHA256, REQUESTS_SHA256, REPLAY_SHA256,
-    V121_COMMIT, Plan, launch_spec, validate_v121_terminal,
+    V121_COMMIT, Plan, launch_spec, validate_retired_instance,
+    validate_v121_terminal,
 )
 
 
@@ -35,6 +36,16 @@ class V123LauncherTests(unittest.TestCase):
         self.assertIn({"Key": "Name", "Value": "borsuk-v123-rerank-diagnostic"}, tags)
         self.assertIn({"Key": "BorsukAttempt", "Value": "a0001"}, tags)
         self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")
+
+    def test_aged_out_prerequisite_is_allowed_but_running_is_rejected(self) -> None:
+        validate_retired_instance({"Reservations": []}, "i-old")
+        validate_retired_instance({"Reservations": [{"Instances": [
+            {"InstanceId": "i-old", "State": {"Name": "terminated"}},
+        ]}]}, "i-old")
+        with self.assertRaises(ValueError):
+            validate_retired_instance({"Reservations": [{"Instances": [
+                {"InstanceId": "i-old", "State": {"Name": "running"}},
+            ]}]}, "i-old")
 
 
 if __name__ == "__main__":

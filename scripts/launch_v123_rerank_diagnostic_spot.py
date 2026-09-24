@@ -50,6 +50,18 @@ def validate_v121_terminal(terminal: dict) -> str:
     return terminal["instance_id"]
 
 
+def validate_retired_instance(response: dict, instance_id: str) -> None:
+    """EC2 can omit an aged-out terminated instance from DescribeInstances."""
+    instances = [instance for reservation in response.get("Reservations", [])
+                 for instance in reservation.get("Instances", [])]
+    if len(instances) > 1 or any(
+        instance.get("InstanceId") != instance_id
+        or instance.get("State", {}).get("Name") != "terminated"
+        for instance in instances
+    ):
+        raise ValueError(f"V123 prerequisite Spot {instance_id} has not terminated")
+
+
 def user_data(plan: Plan) -> str:
     validate_plan(plan)
     exports = "\n".join((
@@ -138,10 +150,8 @@ def launch_and_monitor(plan: Plan) -> dict:
         raise ValueError("V123 V121 terminal SHA-256 differs")
     v121_instance_id = validate_v121_terminal(json.loads(v121_raw))
     for prerequisite in (index_terminal["instance_id"], v121_instance_id):
-        state = ec2.describe_instances(InstanceIds=[prerequisite])[
-            "Reservations"][0]["Instances"][0]["State"]["Name"]
-        if state != "terminated":
-            raise ValueError(f"V123 prerequisite Spot {prerequisite} has not terminated")
+        validate_retired_instance(ec2.describe_instances(InstanceIds=[prerequisite]),
+                                  prerequisite)
     receipt = (json.dumps({"schema": SCHEMA, "source_commit": plan.source_commit,
         "archive_sha256": plan.archive_sha256,
         "index_terminal_sha256": INDEX_TERMINAL_SHA256,
