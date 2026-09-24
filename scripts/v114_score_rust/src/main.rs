@@ -29,6 +29,7 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
+use std::time::Instant;
 
 fn parse_manifest(value: &serde_json::Value) -> Result<MirrorManifest, String> {
     let integer = |path: &[&str]| -> Result<u64, String> {
@@ -363,6 +364,110 @@ fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Score three already-sealed physical plans without rerouting or loading GT.
+fn run_replay_fixed_ranges(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() != 9 {
+        return Err("usage: borsuk-v114-score-gate replay-fixed-ranges MANIFEST OBJECT SIDECAR REQUESTS SEALED V140 TOP_K".into());
+    }
+    let top_k = args[8].parse::<usize>()?;
+    if !(100..=1600).contains(&top_k) {
+        return Err("replay top-K must be between 100 and 1600".into());
+    }
+    let manifest = parse_manifest(&serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(&args[2])?,
+    )?)
+    .map_err(io::Error::other)?;
+    let _mirror = ExactSq8Mirror::open(
+        Path::new(&args[3]), Path::new(&args[4]),
+        manifest.clone(), Placement::Ram,
+    )?;
+    let object = fs::read(&args[3])?;
+    if format!("{:x}", Sha256::digest(&object)) != manifest.object_sha256 {
+        return Err("replay SQ8 object changed after mirror opening".into());
+    }
+    let requests = BufReader::new(File::open(&args[5])?);
+    let sealed = BufReader::new(File::open(&args[6])?);
+    let plans = BufReader::new(File::open(&args[7])?);
+    let mut output = BufWriter::new(io::stdout().lock());
+    let mut count = 0usize;
+    for (ordinal, triple) in requests.lines().zip(sealed.lines()).zip(plans.lines()).enumerate() {
+        let ((request, old), plan) = triple;
+        let request: serde_json::Value = serde_json::from_str(&request?)?;
+        let old: serde_json::Value = serde_json::from_str(&old?)?;
+        let plan: serde_json::Value = serde_json::from_str(&plan?)?;
+        if [
+            request["query_ordinal"].as_u64(),
+            old["query_ordinal"].as_u64(),
+            plan["query_ordinal"].as_u64(),
+        ] != [Some(ordinal as u64); 3] {
+            return Err(format!("fixed-range query ordinal differs: {ordinal}").into());
+        }
+        if request["nominees"] != old["nominees"]
+            || request["baseline_ranges"] != old["baseline_ranges"]
+        {
+            return Err(format!("fixed-range roster differs: {ordinal}").into());
+        }
+        let query: Vec<f32> = serde_json::from_value(request["query"].clone())?;
+        if query.len() != manifest.geometry.dimensions {
+            return Err("fixed-range query dimensions differ".into());
+        }
+        let beta = &plan["variants"]["4"];
+        let ranges: [(&str, serde_json::Value); 3] = [
+            ("beta4", beta["ranges"].clone()),
+            ("broad", old["ranges"].clone()),
+            ("control", old["baseline_ranges"].clone()),
+        ];
+        let mut arms = serde_json::Map::new();
+        for (name, raw) in ranges {
+            let pairs: Vec<[usize; 2]> = serde_json::from_value(raw)?;
+            let started = Instant::now();
+            let (ids, bytes) = score_bounded_ranges(
+                &object, manifest.geometry, &pairs, &query,
+                &manifest.low, &manifest.step, top_k,
+            ).map_err(io::Error::other)?;
+            let expected = match name {
+                "beta4" => beta["planned_bytes"].as_u64(),
+                "broad" => old["plan_bytes"].as_u64(),
+                _ => old["baseline_bytes"].as_u64(),
+            };
+            if expected != Some(bytes as u64)
+                || (name == "beta4" && beta["gets"].as_u64() != Some(pairs.len() as u64))
+            {
+                return Err(format!("fixed-range byte charge differs: {name}, {ordinal}").into());
+            }
+            if name != "beta4" {
+                let historical = if name == "broad" {
+                    &old["returned_ids"]
+                } else {
+                    &old["baseline_returned_ids"]
+                };
+                let historical: Vec<i64> = serde_json::from_value(historical.clone())?;
+                if historical.len() != 100
+                    || ids.iter().take(100).collect::<HashSet<_>>()
+                        != historical.iter().collect::<HashSet<_>>()
+                {
+                    return Err(format!("V116 fixed-range SQ8 parity differs: {name}, {ordinal}").into());
+                }
+            }
+            arms.insert(name.to_owned(), serde_json::json!({
+                "ranges": pairs, "planned_bytes": bytes, "gets": pairs.len(),
+                "sq8_top512_ids": ids,
+                "sq8_ns": started.elapsed().as_nanos(),
+            }));
+        }
+        serde_json::to_writer(&mut output, &serde_json::json!({
+            "query_ordinal": ordinal, "arms": arms,
+        }))?;
+        output.write_all(b"\n")?;
+        count += 1;
+    }
+    if count != 1000 {
+        return Err(format!("fixed-range replay count differs: {count}").into());
+    }
+    output.flush()?;
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.get(1).is_some_and(|value| value == "nominate") {
@@ -370,6 +475,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if args.get(1).is_some_and(|value| value == "replay-returned") {
         return run_replay_returned(&args);
+    }
+    if args.get(1).is_some_and(|value| value == "replay-fixed-ranges") {
+        return run_replay_fixed_ranges(&args);
     }
     if args.len() != 5 {
         return Err("usage: v114_exact_local_score MANIFEST OBJECT SIDECAR REQUESTS".into());

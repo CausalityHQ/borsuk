@@ -7,8 +7,8 @@ change β, page ranking, source scorer, or caps after seeing this split.
 This is the second corpus architecture screen, not a fresh held-out result
 or a live-S3 serving latency measurement.
 
-Authenticate V116 requests and sealed replay, the V70 SQ8 object, V115
-SQ8 low/step coefficients, V36 original float32 source and validation
+Authenticate V116 requests and sealed replay, the V70 SQ8 object, V114
+mirror manifest and block sidecar, V36 original float32 source and validation
 GT100, the V63 layout permutation, and V140 ReLAION raw plan against
 their frozen SHA-256 values. Download GT only after all top-100 returned
 IDs for every arm and query have been sealed. Use one Causality Spot
@@ -26,14 +26,20 @@ top-512 fetched SQ8 rows and original-source float64 cosine ranking:
 Use the V116 request query as float32 for SQ8 scoring, and normalize its
 float64 coordinates as in V126 only for exact-source cosine.
 Validate that every SQ8 physical source ID agrees with V63 layout and
-V36 source ID mapping. Score SQ8 rows with V114's original float32
-quantized arithmetic and tie rule. Score the union of fetched SQ8 top-512
+V36 source ID mapping. Score SQ8 rows with the same production Rust
+returned-range arithmetic and tie rule used by V116. Score the union of fetched SQ8 top-512
 source IDs and 512 physical nominee source IDs with the V126 exact-source
 method. The broad and control arms must reproduce V126 same-route totals:
 **99,563/99,432 exact-source hits** and **99,208/98,618 SQ8 hits**, or
-the candidate is claim-ineligible. If the V114 Python SQ8 scorer differs
-from the V116 Rust top-100 set, stop and diagnose rather than relaxing
-this parity gate.
+the candidate is claim-ineligible. Require per-query set parity with the
+V116 sealed Rust top-100 for both historical arms.
+
+The first implementation attempt (`a0001`) stopped before truth download
+at query 470 because NumPy float32 reduction disagreed with V116's Rust
+top-100 set. It produced no quality measurement. This amendment changes
+the **evaluator**, not the β=4 plan, source scorer, cohort, baseline or
+quality thresholds. The next attempt must use the frozen V116 Rust scorer
+for all three arms and preserve the original parity requirement.
 
 β=4 passes the quality screen only if it returns at least **99,500**
 exact-source GT hits out of 100,000, p05 at least **98** hits/query, no

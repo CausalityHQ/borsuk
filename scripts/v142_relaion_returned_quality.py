@@ -11,7 +11,6 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.v114_1m_paired import score_sq8_ranges
 from scripts.v124_source_tier_precision import load_truth, rank, unit
 
 ROWS = 1_000_000
@@ -75,12 +74,6 @@ def replay(args: argparse.Namespace) -> None:
     if args.sq8.stat().st_size != ROWS * record.itemsize:
         raise ValueError("SQ8 geometry differs")
     sq8 = np.memmap(args.sq8, dtype=record, mode="r", shape=(ROWS,))
-    low = np.fromfile(args.low, dtype="<f4")
-    step = np.fromfile(args.step, dtype="<f4")
-    if (low.shape != (DIMENSIONS,) or step.shape != (DIMENSIONS,)
-            or not np.isfinite(low).all() or not np.isfinite(step).all()
-            or np.any(step <= 0)):
-        raise ValueError("SQ8 coefficient plane differs")
     table = pq.read_table(args.source, columns=["feature_row_id", "embedding"])
     embedding = table.schema.field("embedding").type
     if (table.num_rows != ROWS or not pa.types.is_fixed_size_list(embedding)
@@ -106,9 +99,11 @@ def replay(args: argparse.Namespace) -> None:
     requests = read_rows(args.requests, REQUESTS_SHA)
     sealed = read_rows(args.sealed, SEALED_SHA)
     plans = read_rows(args.v140_raw, V140_RAW_SHA)
+    scored = read_rows(args.scored)
     with args.replay.open("x") as output:
-        for ordinal, (request, old, plan) in enumerate(zip(requests, sealed, plans)):
-            if any(row.get("query_ordinal") != ordinal for row in (request, old, plan)):
+        for ordinal, (request, old, plan, rust) in enumerate(
+                zip(requests, sealed, plans, scored)):
+            if any(row.get("query_ordinal") != ordinal for row in (request, old, plan, rust)):
                 raise ValueError("query ordinal differs")
             nominees = request["nominees"]
             if (len(nominees) != 512 or len(set(nominees)) != 512
@@ -120,7 +115,6 @@ def replay(args: argparse.Namespace) -> None:
             if (query.shape != (DIMENSIONS,) or not np.isfinite(query).all()
                     or np.linalg.norm(query) <= 0):
                 raise ValueError("query differs")
-            sq8_query = query.astype(np.float32)
             query /= np.linalg.norm(query)
             nominee_ids = set(map(int, sq8["id"][nominees]))
             beta = plan["variants"]["4"]
@@ -129,6 +123,11 @@ def replay(args: argparse.Namespace) -> None:
             result = {"query_ordinal": ordinal, "arms": {}}
             for name, raw in ranges.items():
                 selected, charged = page_ranges(raw, record.itemsize)
+                scored_arm = rust["arms"][name]
+                if (scored_arm["ranges"] != selected
+                        or scored_arm["gets"] != len(selected)
+                        or scored_arm["planned_bytes"] != charged):
+                    raise ValueError("Rust fixed-range score route differs")
                 if name == "beta4" and (charged != beta["planned_bytes"]
                                         or len(selected) != beta["gets"]):
                     raise ValueError("V140 β4 plan charge differs")
@@ -136,10 +135,8 @@ def replay(args: argparse.Namespace) -> None:
                     raise ValueError("V116 broad plan charge differs")
                 if name == "control" and charged != old["baseline_bytes"]:
                     raise ValueError("V116 capped plan charge differs")
-                started = time.perf_counter_ns()
-                returned = score_sq8_ranges(
-                    sq8, sq8_query, low, step, selected, top_k=512)
-                sq8_ns = time.perf_counter_ns() - started
+                returned = scored_arm["sq8_top512_ids"]
+                sq8_ns = scored_arm["sq8_ns"]
                 if len(returned) != 512 or len(set(returned)) != 512:
                     raise ValueError("fetched SQ8 width differs")
                 historical_field = ("returned_ids" if name == "broad" else
@@ -256,12 +253,12 @@ def reduce(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("replay", "reduce"))
-    for name in ("source", "layout", "sq8", "low", "step", "requests",
-                 "sealed", "v140_raw", "replay", "truth", "evidence", "summary"):
+    for name in ("source", "layout", "sq8", "requests",
+                 "sealed", "v140_raw", "scored", "replay", "truth", "evidence", "summary"):
         parser.add_argument("--" + name.replace("_", "-"), type=Path)
     args = parser.parse_args()
-    needed = (("source", "layout", "sq8", "low", "step", "requests", "sealed",
-               "v140_raw", "replay") if args.phase == "replay" else
+    needed = (("source", "layout", "sq8", "requests", "sealed",
+               "v140_raw", "scored", "replay") if args.phase == "replay" else
               ("replay", "sq8", "truth", "evidence", "summary"))
     if any(getattr(args, name) is None for name in needed):
         parser.error("required input differs")

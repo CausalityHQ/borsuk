@@ -28,8 +28,8 @@ INPUTS = (
     ("research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl", 18_726_909),
     ("research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/rust-replay.jsonl", 13_455_525),
     ("research/v70-algorithm-first/single-stage-a4a695d66f508edf/index/sq8.bin", 780_000_000),
-    ("research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/low.bin", 3_072),
-    ("research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/step.bin", 3_072),
+    ("research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/artifacts/mirror/manifest.json", 29_780),
+    ("research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/artifacts/mirror/blocks.sha256", 6_093_760),
     ("research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/validation-gt100.parquet", 2_045_045),
     ("research/v140-budgeted-page/3213ca34cf6a8c32824dec6967b39eb06dd5fba6/runs/v140-20260924T092255Z/a0001/terminal.json", 1_738),
     ("research/v140-budgeted-page/3213ca34cf6a8c32824dec6967b39eb06dd5fba6/runs/v140-20260924T092255Z/a0001/artifacts/relaion.raw.jsonl", 3_430_072),
@@ -192,7 +192,9 @@ def check_source_and_inputs(s3: object, plan: Plan) -> None:
     with tarfile.open(fileobj=archive, mode="r:gz") as source:
         if (RUNNER not in source.getnames()
                 or "scripts/v142_relaion_returned_quality.py" not in source.getnames()
-                or "scripts/v114_1m_paired.py" not in source.getnames()
+                or "scripts/v114_score_rust/Cargo.toml" not in source.getnames()
+                or "scripts/v114_score_rust/src/main.rs" not in source.getnames()
+                or "crates/borsuk/src/returned_sq8.rs" not in source.getnames()
                 or "scripts/v124_source_tier_precision.py" not in source.getnames()):
             raise ValueError("source archive lacks V142 runner or evaluator")
     for key, size in INPUTS:
@@ -260,8 +262,10 @@ def launch_and_monitor(plan: Plan) -> dict:
                     ec2.terminate_instances(InstanceIds=[instance_id])
                     ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
                 terminal["instance_state"] = "terminated"
-                required = {"install.log", "download.log", "replay-resources.txt",
-                            "reduce-resources.txt", "replay.jsonl", "evidence.jsonl",
+                required = {"install.log", "compile.log", "compile-resources.txt",
+                            "download.log", "score-resources.txt", "scored.jsonl",
+                            "replay-resources.txt", "reduce-resources.txt",
+                            "replay.jsonl", "evidence.jsonl",
                             "summary.json", "decision.json", "cgroup-memory.txt",
                             "worker.log"}
                 if terminal.get("status") == "complete":
