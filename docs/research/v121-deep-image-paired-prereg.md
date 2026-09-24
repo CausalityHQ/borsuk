@@ -16,6 +16,13 @@ reserving V121. V122 used disjoint test ordinals 9000..9999; this addendum
 does not alter V121's first-1000 split or scoring method. See
 `v122-deep-image-100k-closeout.md` for the independently recounted result.
 
+Harness addendum after attempt a0001: that attempt passed the 16-query runtime
+screen but failed before returned replay or GT download because compose CLI
+wiring passed an unset argument. The next immutable attempt repairs only the
+harness wiring and launcher exit propagation. The source-only index, query
+cohort, scorer, candidate/control methods and thresholds above remain frozen.
+See `v121-a0001-harness-failure.md` for the sealed failure evidence.
+
 The untouched inputs are the first 1,000 rows, in source order, of the
 publication-v3 **deep-image-96-angular test** split. The query object is
 `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/deep-image-96/attempts/0001/materialized/test.parquet`,

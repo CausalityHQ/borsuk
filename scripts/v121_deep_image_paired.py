@@ -250,7 +250,7 @@ def main() -> None:
     if args.phase == "prepare":
         prepare(args.queries, args.output)
     elif args.phase == "compose":
-        compose(args.router, args.requests, args.rosters, args.output)
+        compose(args.router, args.queries, args.rosters, args.output)
     else:
         reduce(args.requests, args.replay, args.truth, args.evidence, args.summary)
 

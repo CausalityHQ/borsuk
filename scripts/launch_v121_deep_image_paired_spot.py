@@ -276,6 +276,8 @@ def main() -> None:
         args.archive_bytes, args.output_prefix,
     ))
     print(json.dumps(terminal, sort_keys=True, separators=(",", ":")))
+    if terminal.get("status") != "complete" or terminal.get("exit_code") != 0:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
