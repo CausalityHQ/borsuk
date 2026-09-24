@@ -40,6 +40,10 @@ top-100 set. It produced no quality measurement. This amendment changes
 the **evaluator**, not the β=4 plan, source scorer, cohort, baseline or
 quality thresholds. The next attempt must use the frozen V116 Rust scorer
 for all three arms and preserve the original parity requirement.
+The Rust replacement attempt (`a0002`) stopped at compile, before data
+download or scoring, because the legacy research binary imported an unused
+module with newer source-tier dependencies. Removing that import changes
+only packaging; `a0002` also produced no quality measurement.
 
 β=4 passes the quality screen only if it returns at least **99,500**
 exact-source GT hits out of 100,000, p05 at least **98** hits/query, no

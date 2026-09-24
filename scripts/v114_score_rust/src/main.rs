@@ -12,8 +12,6 @@ mod pq64_router_artifact;
 mod returned_sq8;
 #[path = "../../../crates/borsuk/src/sq8_page_authority.rs"]
 mod sq8_page_authority;
-#[path = "../../../crates/borsuk/src/serving_generation.rs"]
-mod serving_generation;
 #[path = "../../../crates/borsuk/src/physical_interval.rs"]
 mod physical_interval;
 
