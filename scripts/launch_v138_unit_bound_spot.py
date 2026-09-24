@@ -24,7 +24,6 @@ TAG = "borsuk-v138-unit-bound"
 RUNNER = "scripts/run_v138_unit_bound_remote.sh"
 INPUTS = (
     ("research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/queries.jsonl", 2_041_773),
-    ("research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/evidence.jsonl", 6_183_526),
     ("research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/built/sq8.bin", 10_800_000),
     ("research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/low.bin", 384),
     ("research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/step.bin", 384),
@@ -189,7 +188,9 @@ def check_source_and_inputs(s3: object, plan: Plan) -> None:
         raise ValueError("source archive differs")
     archive.seek(0)
     with tarfile.open(fileobj=archive, mode="r:gz") as source:
-        if RUNNER not in source.getnames() or "scripts/v138_unit_bound_feasibility.py" not in source.getnames():
+        if (RUNNER not in source.getnames()
+                or "scripts/v138_unit_bound_feasibility.py" not in source.getnames()
+                or "docs/research/inputs/v138-deep-primary.jsonl" not in source.getnames()):
             raise ValueError("source archive lacks V138 runner or evaluator")
     for key, size in INPUTS:
         if s3.head_object(Bucket=BUCKET, Key=key)["ContentLength"] != size:

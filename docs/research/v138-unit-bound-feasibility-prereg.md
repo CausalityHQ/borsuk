@@ -73,3 +73,14 @@ artifacts, discard an interrupted cell, and terminate compute immediately
 after terminal. The first corpus is fail-fast: if the D96 stop rule is met,
 record that negative result and skip D768 download and computation in the
 same terminal. Do not start an overlapping attempt.
+
+## Input-isolation amendment after a0001
+
+a0001 parsed a V122 evidence record containing GT IDs, contrary to the
+no-GT-input statement above; see `v138-a0001-gt-input-failure.md`. That
+attempt is claim-ineligible. The a0002 rerun uses a frozen **primary-only**
+file derived from authenticated V122 evidence, SHA-256
+`04cdbea9079837806059799d9a90c2f579526de100b7743f83a3794a15c0d6e3`.
+The evaluator will load this file instead of V122 `evidence.jsonl`, and
+the Spot worker will not download the GT-bearing file. All algorithmic
+choices, screening thresholds and the other frozen inputs remain as above.

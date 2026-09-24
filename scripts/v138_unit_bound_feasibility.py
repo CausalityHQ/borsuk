@@ -40,7 +40,7 @@ def minimum_cover_bytes(pages: np.ndarray, rows: int, row_bytes: int) -> tuple[i
 def load_cohort(root: Path, name: str) -> tuple[np.ndarray, np.ndarray]:
     if name == "deep-image-96-angular-random100k":
         requests = [json.loads(line) for line in (root / "queries.jsonl").open()]
-        sealed = [json.loads(line) for line in (root / "evidence.jsonl").open()]
+        sealed = [json.loads(line) for line in (root / "primary.jsonl").open()]
     else:
         requests = [json.loads(line) for line in (root / "requests.jsonl").open()]
         sealed = [json.loads(line) for line in (root / "rust-replay.jsonl").open()]

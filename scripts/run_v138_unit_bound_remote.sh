@@ -118,7 +118,8 @@ phase=download-deep
 : >download.log
 v122=research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts
 download_checked deep/queries.jsonl "$v122/queries.jsonl" 2041773 dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99
-download_checked deep/evidence.jsonl "$v122/evidence.jsonl" 6183526 deac3e5e9d15a54753a1543bed338e31b23daaf3f234f64afabde5e79bcc6ae6
+cp repo/docs/research/inputs/v138-deep-primary.jsonl deep/primary.jsonl
+printf '%s  %s\n' 04cdbea9079837806059799d9a90c2f579526de100b7743f83a3794a15c0d6e3 deep/primary.jsonl | sha256sum -c - >>download.log
 download_checked deep/sq8.bin "$v122/built/sq8.bin" 10800000 c20dcb8058d2409791c6c584d9f078491d4c239acbe7c19350be7757d533e8df
 download_checked deep/low.bin "$v122/router/low.bin" 384 3fd035c242b99b6835727faa49f0dc52c77979b8c900980c01fcf23412222c9e
 download_checked deep/step.bin "$v122/router/step.bin" 384 bd6a8adb231b89d18ad1edf72cff043512d663117955a826bd8ca11224d02038
