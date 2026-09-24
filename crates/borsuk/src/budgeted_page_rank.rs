@@ -1,0 +1,228 @@
+//! Deterministic physical SQ8 page admission under an explicit I/O budget.
+
+use std::collections::{BTreeSet, HashSet};
+use std::ops::Range;
+
+const PAGE_ROWS: usize = 256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BudgetedPageError {
+    InvalidGeometry,
+    InvalidScore,
+    InvalidPrimary,
+    ArithmeticOverflow,
+    InsufficientBudget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BudgetedPagePlan {
+    pub selected_pages: Vec<usize>,
+    pub ranges: Vec<Range<usize>>,
+    pub planned_bytes: usize,
+    pub primary_pages_retained: usize,
+    pub target_pages: usize,
+    pub target_shortfall: usize,
+}
+
+fn cover_pages(
+    selected: &BTreeSet<usize>,
+    rows: usize,
+    row_bytes: usize,
+    max_gets: usize,
+) -> Result<(Vec<Range<usize>>, usize), BudgetedPageError> {
+    if selected.is_empty() || max_gets == 0 {
+        return Err(BudgetedPageError::InvalidGeometry);
+    }
+    let mut runs = Vec::<Range<usize>>::new();
+    for &page in selected {
+        if let Some(last) = runs.last_mut()
+            && last.end == page
+        {
+            last.end += 1;
+            continue;
+        }
+        runs.push(page..page + 1);
+    }
+    let bridges = runs.len().saturating_sub(max_gets);
+    let mut gaps = (0..runs.len().saturating_sub(1))
+        .map(|index| (runs[index + 1].start - runs[index].end, index))
+        .collect::<Vec<_>>();
+    gaps.sort_unstable();
+    let joined = gaps
+        .into_iter()
+        .take(bridges)
+        .map(|(_, index)| index)
+        .collect::<HashSet<_>>();
+    let mut merged = vec![runs[0].clone()];
+    for (index, run) in runs.into_iter().enumerate().skip(1) {
+        if joined.contains(&(index - 1)) {
+            merged.last_mut().expect("nonempty merged runs").end = run.end;
+        } else {
+            merged.push(run);
+        }
+    }
+    let mut ranges = Vec::with_capacity(merged.len());
+    let mut charged = 0usize;
+    for run in merged {
+        let first = run
+            .start
+            .checked_mul(PAGE_ROWS)
+            .and_then(|value| value.checked_mul(row_bytes))
+            .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+        let last = run
+            .end
+            .checked_mul(PAGE_ROWS)
+            .map(|value| value.min(rows))
+            .and_then(|value| value.checked_mul(row_bytes))
+            .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+        if first >= last {
+            return Err(BudgetedPageError::InvalidGeometry);
+        }
+        charged = charged
+            .checked_add(last - first)
+            .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+        ranges.push(first..last);
+    }
+    Ok((ranges, charged))
+}
+
+/// Admit primary pages in primary-rank order, then other pages by score/ID.
+/// The final range cover bridges the cheapest gaps needed to respect
+/// `max_gets`. This pure planner does not compute page scores or claim
+/// empirical recall, S3 latency, or charged serving memory.
+pub fn choose_budgeted_pages(
+    page_scores: &[f32],
+    primary: &[usize],
+    rows: usize,
+    dimensions: usize,
+    beta: usize,
+    max_gets: usize,
+    max_bytes: usize,
+) -> Result<BudgetedPagePlan, BudgetedPageError> {
+    if rows == 0
+        || dimensions == 0
+        || beta == 0
+        || max_gets == 0
+        || max_bytes == 0
+        || page_scores.len() != rows.div_ceil(PAGE_ROWS)
+    {
+        return Err(BudgetedPageError::InvalidGeometry);
+    }
+    if page_scores.iter().any(|score| !score.is_finite()) {
+        return Err(BudgetedPageError::InvalidScore);
+    }
+    let row_bytes = dimensions
+        .checked_add(12)
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+    rows.checked_mul(row_bytes)
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+    if primary.is_empty() || primary.iter().any(|&ordinal| ordinal >= rows) {
+        return Err(BudgetedPageError::InvalidPrimary);
+    }
+    let mut primary_seen = HashSet::new();
+    let mut primary_pages = Vec::new();
+    for &ordinal in primary {
+        let page = ordinal / PAGE_ROWS;
+        if primary_seen.insert(page) {
+            primary_pages.push(page);
+        }
+    }
+    let target_pages = beta
+        .checked_mul(primary_pages.len())
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?
+        .min(page_scores.len());
+    let mut score_order = (0..page_scores.len()).collect::<Vec<_>>();
+    score_order.sort_unstable_by(|&left, &right| {
+        page_scores[left]
+            .partial_cmp(&page_scores[right])
+            .expect("finite page scores")
+            .then(left.cmp(&right))
+    });
+    let mut selected = BTreeSet::new();
+    let mut final_ranges = Vec::new();
+    let mut final_bytes = 0;
+    for page in primary_pages.iter().copied().chain(
+        score_order
+            .into_iter()
+            .filter(|page| !primary_seen.contains(page)),
+    ) {
+        let mut proposed = selected.clone();
+        proposed.insert(page);
+        let (ranges, charged) = cover_pages(&proposed, rows, row_bytes, max_gets)?;
+        if charged > max_bytes {
+            continue;
+        }
+        selected = proposed;
+        final_ranges = ranges;
+        final_bytes = charged;
+        if selected.len() >= target_pages {
+            break;
+        }
+    }
+    if selected.is_empty() {
+        return Err(BudgetedPageError::InsufficientBudget);
+    }
+    let retained = primary_pages
+        .iter()
+        .filter(|page| selected.contains(page))
+        .count();
+    let selected_pages = selected.into_iter().collect::<Vec<_>>();
+    Ok(BudgetedPagePlan {
+        target_shortfall: target_pages.saturating_sub(selected_pages.len()),
+        target_pages,
+        selected_pages,
+        ranges: final_ranges,
+        planned_bytes: final_bytes,
+        primary_pages_retained: retained,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primary_page_precedes_better_scoring_secondary_page() {
+        let plan =
+            choose_budgeted_pages(&[0.3, 10.0, 0.1, 0.2], &[300], 1024, 96, 2, 32, 16_777_216)
+                .unwrap();
+        assert_eq!(plan.selected_pages, vec![1, 2]);
+        assert_eq!(plan.ranges, vec![27_648..82_944]);
+        assert_eq!(plan.planned_bytes, 55_296);
+        assert_eq!(plan.primary_pages_retained, 1);
+    }
+
+    #[test]
+    fn cheapest_gap_bridge_counts_bytes_and_rejects_over_cap_page() {
+        let scores = [0.0; 8];
+        let primary = [0, 512, 1024, 1536];
+        let exact_cap = choose_budgeted_pages(&scores, &primary, 2048, 96, 1, 2, 165_888).unwrap();
+        assert_eq!(exact_cap.selected_pages, vec![0, 2, 4, 6]);
+        assert_eq!(exact_cap.ranges, vec![0..138_240, 165_888..193_536]);
+        assert_eq!(exact_cap.planned_bytes, 165_888);
+
+        let too_small = choose_budgeted_pages(&scores, &primary, 2048, 96, 1, 2, 165_887).unwrap();
+        assert_eq!(too_small.selected_pages, vec![0, 1, 2, 4]);
+        assert_eq!(too_small.primary_pages_retained, 3);
+        assert!(too_small.planned_bytes <= 165_887);
+    }
+
+    #[test]
+    fn short_final_page_is_charged_by_its_actual_rows() {
+        let plan = choose_budgeted_pages(&[9.0, 8.0, 0.0], &[512], 513, 96, 1, 1, 108).unwrap();
+        assert_eq!(plan.selected_pages, vec![2]);
+        assert_eq!(plan.ranges, vec![55_296..55_404]);
+        assert_eq!(plan.planned_bytes, 108);
+        assert_eq!(
+            choose_budgeted_pages(&[9.0, 8.0, 0.0], &[512], 513, 96, 1, 1, 107),
+            Err(BudgetedPageError::InsufficientBudget),
+        );
+    }
+
+    #[test]
+    fn signed_zero_scores_tie_by_page_id() {
+        let plan =
+            choose_budgeted_pages(&[0.0, -0.0, 1.0], &[512], 768, 96, 2, 32, 16_777_216).unwrap();
+        assert_eq!(plan.selected_pages, vec![0, 2]);
+    }
+}
