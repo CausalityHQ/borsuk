@@ -8,6 +8,8 @@ import base64
 import hashlib
 import json
 import shlex
+import subprocess
+import tempfile
 import time
 
 from scripts.launch_native_geometric_layout_spot import DEFAULT_TARGETS
@@ -60,6 +62,19 @@ def validate_retired_instance(response: dict, instance_id: str) -> None:
         for instance in instances
     ):
         raise ValueError(f"V123 prerequisite Spot {instance_id} has not terminated")
+
+
+def reserve_attempt(bucket: str, key: str, receipt: bytes) -> None:
+    """Use the CLI's conditional put; older installed botocore omits this field."""
+    with tempfile.NamedTemporaryFile() as body:
+        body.write(receipt)
+        body.flush()
+        subprocess.run([
+            "aws", "s3api", "put-object", "--region", "eu-central-1",
+            "--bucket", bucket, "--key", key, "--body", body.name,
+            "--if-none-match", "*", "--content-type", "application/json",
+            "--output", "json",
+        ], check=True, stdout=subprocess.DEVNULL)
 
 
 def user_data(plan: Plan) -> str:
@@ -159,8 +174,7 @@ def launch_and_monitor(plan: Plan) -> dict:
         "source_sha256": SOURCE_SHA256, "truth_sha256": TRUTH_SHA256,
         "attempt": plan.output_prefix.rsplit("/", 1)[-1]},
         sort_keys=True,separators=(",", ":")) + "\n").encode()
-    s3.put_object(Bucket=bucket, Key=f"{prefix}/reservation.json", Body=receipt,
-                  IfNoneMatch="*", ContentType="application/json")
+    reserve_attempt(bucket, f"{prefix}/reservation.json", receipt)
     instance_id = None
     for target in DEFAULT_TARGETS:
         try:

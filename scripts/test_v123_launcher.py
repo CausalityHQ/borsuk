@@ -1,10 +1,11 @@
 """V123 accepts only the sealed failed-quality V121 result and one Spot cell."""
 
 import unittest
+from unittest import mock
 
 from scripts.launch_v123_rerank_diagnostic_spot import (
     INDEX_TERMINAL_SHA256, REQUESTS_SHA256, REPLAY_SHA256,
-    V121_COMMIT, Plan, launch_spec, validate_retired_instance,
+    V121_COMMIT, Plan, launch_spec, reserve_attempt, validate_retired_instance,
     validate_v121_terminal,
 )
 
@@ -46,6 +47,14 @@ class V123LauncherTests(unittest.TestCase):
             validate_retired_instance({"Reservations": [{"Instances": [
                 {"InstanceId": "i-old", "State": {"Name": "running"}},
             ]}]}, "i-old")
+
+    def test_reservation_uses_conditional_put(self) -> None:
+        with mock.patch("subprocess.run") as run:
+            reserve_attempt("bucket", "attempt/reservation.json", b"{}\n")
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("--if-none-match") + 1], "*")
+        self.assertEqual(args[args.index("--key") + 1],
+                         "attempt/reservation.json")
 
 
 if __name__ == "__main__":
