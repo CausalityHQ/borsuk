@@ -69,10 +69,14 @@ redesign.
 
 ## Next gate
 
-Preregister a paired 100k returned-quality replay for PQ-first-100 primary
-selection against the V114 exact-SQ8-primary baseline, with the same
-nominees, graph planner, exact source, transport cap, and query split. If
-the quality gate fails, test a generic exact-primary architecture with an
+Preregister a paired 100k **D768** returned-quality replay for PQ-first-100
+primary selection against the V114 exact-SQ8-primary baseline, with the
+same nominees, graph planner, exact source, transport cap, and query split.
+Construct and seal exact GT for that corpus before reducing returned IDs.
+The V114 ReLAION-100k correctness cell has no returned GT, while V122's
+D96 100k candidate fetched its entire SQ8 body; neither is already a
+decisive PQ-primary returned-quality comparison. If the new gate fails,
+test a generic exact-primary architecture with an
 authenticated bounded cache or a score certificate; its per-query memory
 and I/O allowance must be explicit. Promote only a winner to a frozen 1M
 paired gate, then a distinct 10M/100M scale gate. Separately measure live
