@@ -17,6 +17,19 @@ from scripts import v109_capped_reader_replay, v111_weighted_reader_replay
 
 
 class PairedOneMillionTests(unittest.TestCase):
+    def test_nonmultiple_dimension_nomination_uses_last_subspace(self) -> None:
+        query = np.zeros(96, np.float32)
+        query[95] = 1.0
+        books = np.zeros((64, 256, 2), np.float32)
+        books[63, 1, 1] = 1.0
+        codes = np.zeros((2, 64), np.uint8)
+        codes[1, 63] = 1
+        _, _, nominees = nominate_region_pq64(
+            query, np.zeros((1, 96), np.float32), books, codes,
+            page_rows=2, blocks_per_page=1, regions=1, shortlist=1,
+        )
+        np.testing.assert_array_equal(nominees, [1])
+
     def test_generic_region_pq64_routes_only_the_selected_page(self) -> None:
         query = np.zeros(64, dtype=np.float32)
         summaries = np.ones((4, 64), dtype=np.float32)

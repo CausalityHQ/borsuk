@@ -16,6 +16,10 @@ from scripts.v77_export_manifest import block_means, lloyd
 _SECTIONS = ("summaries", "books", "codes", "low", "step")
 
 
+def _subspace_bounds(dimensions: int, subspaces: int, index: int) -> tuple[int, int]:
+    return index * dimensions // subspaces, (index + 1) * dimensions // subspaces
+
+
 def _shapes(rows: int, dimensions: int, page_rows: int,
             blocks_per_page: int) -> dict[str, tuple[int, ...]]:
     pages = (rows + page_rows - 1) // page_rows
@@ -65,14 +69,15 @@ def write_source_router(
             (pending / f"{name}.bin").write_bytes(raw)
             sections[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
         manifest: dict[str, object] = {
-            "schema": "borsuk-v115-source-router-v1",
+            "schema": "borsuk-source-router-v2",
             "generation": generation,
             "source_sha256": source_sha256,
             "layout_sha256": layout_sha256,
             "sq8_sha256": sq8_sha256,
             "geometry": {"rows": rows, "dimensions": dimensions,
                          "page_rows": page_rows, "blocks_per_page": blocks_per_page,
-                         "subspaces": 64, "pq_width": shapes["books"][2]},
+                         "subspaces": 64, "pq_width": shapes["books"][2],
+                         "pq_partition": "balanced_floor_v1"},
             "sections": sections,
         }
         (pending / "manifest.json").write_text(
@@ -89,20 +94,23 @@ def load_source_router(output_dir: Path) -> tuple[dict[str, object], dict[str, n
         type(manifest) is not dict
         or set(manifest) != {"schema", "generation", "source_sha256", "layout_sha256",
                                  "sq8_sha256", "geometry", "sections"}
-        or manifest["schema"] != "borsuk-v115-source-router-v1"
+        or manifest["schema"] != "borsuk-source-router-v2"
         or type(manifest["generation"]) is not int or manifest["generation"] <= 0
         or any(not _hex64(manifest[key]) for key in
                ("source_sha256", "layout_sha256", "sq8_sha256"))
         or type(manifest["geometry"]) is not dict
         or set(manifest["geometry"]) != {"rows", "dimensions", "page_rows",
-                                         "blocks_per_page", "subspaces", "pq_width"}
+                                         "blocks_per_page", "subspaces", "pq_width",
+                                         "pq_partition"}
         or any(type(manifest["geometry"][key]) is not int or manifest["geometry"][key] <= 0
-               for key in manifest["geometry"])
+               for key in ("rows", "dimensions", "page_rows", "blocks_per_page",
+                           "subspaces", "pq_width"))
     ):
         raise ValueError("source router manifest differs")
     geometry = manifest["geometry"]
     if (geometry["subspaces"] != 64
             or geometry["pq_width"] != (geometry["dimensions"] + 63) // 64
+            or geometry["pq_partition"] != "balanced_floor_v1"
             or type(manifest["sections"]) is not dict
             or set(manifest["sections"]) != set(_SECTIONS)):
         raise ValueError("source router geometry differs")
@@ -138,12 +146,15 @@ def _train_books(data: np.ndarray, subspaces: int, *, seed: int,
     width = (dimensions + subspaces - 1) // subspaces
     generator = np.random.default_rng(seed)
     selected = data[generator.choice(rows, min(rows, sample_rows), replace=False)]
-    sample = np.zeros((len(selected), width * subspaces), dtype=np.float32)
-    sample[:, :dimensions] = selected
     books = np.empty((subspaces, 256, width), dtype=np.float32)
     for subspace in range(subspaces):
-        first = subspace * width
-        trained = lloyd(np.ascontiguousarray(sample[:, first:first + width]),
+        first, last = _subspace_bounds(dimensions, subspaces, subspace)
+        if first == last:
+            books[subspace] = 0.0
+            continue
+        sample = np.zeros((len(selected), width), dtype=np.float32)
+        sample[:, :last - first] = selected[:, first:last]
+        trained = lloyd(sample,
                         256, 10, seed + subspace)
         books[subspace, :trained.shape[0]] = trained
         if trained.shape[0] < 256:
@@ -154,16 +165,15 @@ def _train_books(data: np.ndarray, subspaces: int, *, seed: int,
 def _encode(data: np.ndarray, books: np.ndarray) -> np.ndarray:
     rows, dimensions = data.shape
     subspaces, _, width = books.shape
-    padded = np.zeros((rows, subspaces * width), dtype=np.float32)
-    padded[:, :dimensions] = data
     codes = np.empty((rows, subspaces), dtype=np.uint8)
     for subspace in range(subspaces):
-        first = subspace * width
+        first, last = _subspace_bounds(dimensions, subspaces, subspace)
         book = books[subspace]
         norms = np.einsum("ij,ij->i", book, book)
         for start in range(0, rows, 16_384):
             stop = min(start + 16_384, rows)
-            block = padded[start:stop, first:first + width]
+            block = np.zeros((stop - start, width), dtype=np.float32)
+            block[:, :last - first] = data[start:stop, first:last]
             codes[start:stop, subspace] = np.argmin(
                 norms[None, :] - 2.0 * (block @ book.T), axis=1,
             )
@@ -172,11 +182,12 @@ def _encode(data: np.ndarray, books: np.ndarray) -> np.ndarray:
 
 def _decode(codes: np.ndarray, books: np.ndarray, dimensions: int) -> np.ndarray:
     subspaces, _, width = books.shape
-    reconstructed = np.empty((codes.shape[0], subspaces * width), np.float32)
+    reconstructed = np.empty((codes.shape[0], dimensions), np.float32)
     for subspace in range(subspaces):
-        first = subspace * width
-        reconstructed[:, first:first + width] = books[subspace][codes[:, subspace]]
-    return reconstructed[:, :dimensions].copy()
+        first, last = _subspace_bounds(dimensions, subspaces, subspace)
+        if first != last:
+            reconstructed[:, first:last] = books[subspace][codes[:, subspace], :last - first]
+    return reconstructed
 
 
 def build_source_router(

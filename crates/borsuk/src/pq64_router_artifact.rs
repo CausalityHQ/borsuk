@@ -101,7 +101,7 @@ pub fn load_source_router(
         return Err(RouterArtifactError::HashMismatch);
     }
     let manifest: Value = serde_json::from_slice(&raw).map_err(|_| RouterArtifactError::Invalid)?;
-    if manifest.get("schema").and_then(Value::as_str) != Some("borsuk-v115-source-router-v1") {
+    if manifest.get("schema").and_then(Value::as_str) != Some("borsuk-source-router-v2") {
         return Err(RouterArtifactError::Invalid);
     }
     let geometry = manifest.get("geometry").ok_or(RouterArtifactError::Invalid)?;
@@ -111,6 +111,7 @@ pub fn load_source_router(
     let blocks_per_page = number(geometry, "blocks_per_page")?;
     if number(geometry, "subspaces")? != 64
         || number(geometry, "pq_width")? != dimensions.div_ceil(64)
+        || geometry.get("pq_partition").and_then(Value::as_str) != Some("balanced_floor_v1")
     {
         return Err(RouterArtifactError::Invalid);
     }
@@ -190,11 +191,12 @@ mod tests {
             }));
         }
         let manifest = serde_json::json!({
-            "schema": "borsuk-v115-source-router-v1", "generation": 1,
+            "schema": "borsuk-source-router-v2", "generation": 1,
             "source_sha256": "a".repeat(64), "layout_sha256": "b".repeat(64),
             "sq8_sha256": "c".repeat(64),
             "geometry": {"rows": 512, "dimensions": 64, "page_rows": 256,
-                         "blocks_per_page": 2, "subspaces": 64, "pq_width": 1},
+                         "blocks_per_page": 2, "subspaces": 64, "pq_width": 1,
+                         "pq_partition": "balanced_floor_v1"},
             "sections": sections,
         });
         let raw = serde_json::to_vec(&manifest).unwrap();

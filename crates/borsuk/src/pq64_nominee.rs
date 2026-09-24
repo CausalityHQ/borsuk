@@ -111,12 +111,18 @@ impl Pq64Router {
 
         let mut table = vec![0.0f32; 64 * 256];
         for subspace in 0..64 {
+            let first = subspace * self.dimensions / 64;
+            let last = (subspace + 1) * self.dimensions / 64;
             for word in 0..256 {
                 let mut squared = 0.0f32;
                 for coordinate in 0..self.width {
-                    let dimension = subspace * self.width + coordinate;
-                    let value = if dimension < self.dimensions { query[dimension] } else { 0.0 };
-                    let delta = self.books[(subspace * 256 + word) * self.width + coordinate] - value;
+                    let value = if coordinate < last - first {
+                        query[first + coordinate]
+                    } else {
+                        0.0
+                    };
+                    let delta = self.books[(subspace * 256 + word) * self.width + coordinate]
+                        - value;
                     squared += delta * delta;
                 }
                 if !squared.is_finite() {
@@ -197,6 +203,20 @@ mod tests {
                    (0..100).collect::<Vec<_>>());
         assert_eq!(router.nominate(&vec![0.0f32; 95], 1, 100),
                    Err(super::Pq64Error::InvalidQuery));
+    }
+
+    #[test]
+    fn ninety_six_dimensions_score_the_last_coordinate_in_the_last_subspace() {
+        let mut books = vec![0.0f32; 64 * 256 * 2];
+        books[(63 * 256 + 1) * 2 + 1] = 1.0;
+        let mut codes = vec![0u8; 2 * 64];
+        codes[64 + 63] = 1;
+        let router = Pq64Router::new(
+            2, 96, 2, 1, vec![0.0f32; 96], books, codes,
+        ).unwrap();
+        let mut query = vec![0.0f32; 96];
+        query[95] = 1.0;
+        assert_eq!(router.nominate(&query, 1, 1).unwrap(), vec![1]);
     }
 
     #[test]

@@ -75,7 +75,12 @@ def nominate_region_pq64(
     if shortlist > rows.size:
         raise ValueError("shortlist exceeds rows in selected regions")
     padded_query = np.zeros(books.shape[2] * 64, dtype=np.float32)
-    padded_query[:query.size] = query
+    for subspace in range(64):
+        first = subspace * query.size // 64
+        last = (subspace + 1) * query.size // 64
+        padded_query[subspace * books.shape[2]:subspace * books.shape[2] + last - first] = (
+            query[first:last]
+        )
     delta = books - padded_query.reshape(64, 1, books.shape[2])
     table = np.einsum("ijk,ijk->ij", delta, delta)
     scores = np.zeros(rows.size, dtype=np.float32)

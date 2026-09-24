@@ -10,19 +10,31 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.v115_source_router import (
-    _train_books, build_source_router, load_source_router, write_source_router,
+    _decode, _encode, _train_books, build_source_router,
+    load_source_router, write_source_router,
 )
 
 
 class SourceRouterTests(unittest.TestCase):
-    def test_training_sample_matches_original_pad_then_sample_rule(self) -> None:
+    def test_ninety_six_dimensions_use_all_sixty_four_pq_subspaces(self) -> None:
+        data = np.ones((2, 96), dtype=np.float32)
+        books = np.zeros((64, 256, 2), dtype=np.float32)
+        for subspace in range(64):
+            lo = subspace * 96 // 64
+            hi = (subspace + 1) * 96 // 64
+            books[subspace, 1, :hi - lo] = 1.0
+        codes = _encode(data, books)
+        np.testing.assert_array_equal(codes, np.ones((2, 64), dtype=np.uint8))
+        np.testing.assert_array_equal(_decode(codes, books, 96), data)
+
+    def test_training_sample_matches_balanced_partition_rule(self) -> None:
         data = np.arange(200 * 96, dtype=np.float32).reshape(200, 96) / 1000
         width = (data.shape[1] + 63) // 64
-        padded = np.zeros((len(data), width * 64), np.float32)
-        padded[:, :data.shape[1]] = data
         indices = np.random.default_rng(7301).choice(len(data), 24, replace=False)
         from scripts.v77_export_manifest import lloyd
-        expected = lloyd(np.ascontiguousarray(padded[indices, :width]),
+        sample = np.zeros((len(indices), width), np.float32)
+        sample[:, 0] = data[indices, 0]
+        expected = lloyd(sample,
                          256, 10, 7301)
         actual = _train_books(data, 64, seed=7301, sample_rows=24)
         np.testing.assert_array_equal(actual[0, :expected.shape[0]], expected)
