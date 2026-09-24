@@ -27,3 +27,18 @@ source/SQ8 relation, page-range fetch, exact rerank, mutation recovery,
 serving latency and charged memory require separate complete-generation
 and live S3 gates. The first narrow gate tests a valid root, a wrong
 whole-file digest and a root that pins the wrong row-map digest.
+
+## Closed narrow gate
+
+Pushed source `b69621d801e41d4378ec0aaa387939a95d71fd99` ran on one
+Causality Spot `c7i.8xlarge` worker `i-0109dc6c639c66c6c`. The
+`relaid_generation_authority::tests` target passed **1/1**; the
+`serving_generation::tests` name filter passed **8/8** (two binder tests
+and six graph-serving tests). The complete terminal SHA-256 is
+`264f07cb67c2ed403f1be8dc38d8793effd90d47985921a7987bad6b5c54e6ce`
+at `s3://borsuk-bench-453182569524-euc1/research/v176-authority-compile/b69621d801e41d4378ec0aaa387939a95d71fd99/runs/a0001/`.
+The controller streamed and rehashed all three terminal-listed artifacts
+and confirmed the worker terminated. Compile/tests took 101.89 wall
+seconds and peaked at 5,007,416 KiB RSS on the remote build worker.
+This establishes the narrow trust-root and binder checks only; it does
+not establish a production publisher, live S3 serving or full-suite pass.

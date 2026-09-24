@@ -17,6 +17,16 @@ measured resident bytes and fails explicitly when a caller's cap is
 infeasible. The V155 aggregate bytes/GETs are a **qualification target**
 for this 1M comparison, not model coefficients or product defaults.
 
+The currently selected PQ64 code plane and bidirectional row map have
+modeled payloads of `64N` and `8N` bytes per pinned generation. The two
+Lean files prove those formulas independently. At 100M rows that is a
+7.2 GB combined payload for one generation or 14.4 GB for two, before
+summaries, source-ID tables, allocators, query concurrency and optional
+local SQ8 cache. A higher recall target may justify a larger cache,
+wider candidate field or more fetched bytes; there is no hard memory
+threshold or special branch at 100M. Charged RSS and latency still need
+measurement for each selected profile.
+
 ## Candidate and cost rule
 
 Authenticate the old-router to relaid-SQ8 row permutation before scoring
