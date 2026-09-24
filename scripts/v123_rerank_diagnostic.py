@@ -51,7 +51,10 @@ def rank_source(source: np.ndarray, ids: np.ndarray, query: np.ndarray,
     vectors = source[ids]
     if half:
         vectors = vectors.astype(np.float16).astype(np.float32)
-    scores = vectors @ query
+    norms = np.linalg.norm(vectors, axis=1)
+    if not np.isfinite(norms).all() or np.any(norms <= 0):
+        raise ValueError("diagnostic source norm is invalid")
+    scores = (vectors @ query) / norms
     if not np.isfinite(scores).all():
         raise ValueError("diagnostic source score is nonfinite")
     ordering = np.lexsort((ids, -scores))[:top_k]

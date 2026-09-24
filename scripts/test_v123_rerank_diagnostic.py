@@ -15,13 +15,12 @@ class RerankDiagnosticTests(unittest.TestCase):
         saturated = candidate_ids(layout, [0, 1], [3, 2, 1], 1600)
         np.testing.assert_array_equal(saturated, [0, 1, 2, 3])
 
-    def test_fp16_rounding_can_change_exact_source_order(self) -> None:
-        source = np.array([[1.0, 0.0], [1.0001, 0.0], [0.0, 1.0]],
-                          dtype=np.float32)
-        ids = np.array([0, 1, 2], dtype=np.int64)
+    def test_fp16_cosine_corrects_rounded_norm(self) -> None:
+        source = np.array([[0.9999, 0.01414], [1.0, 0.0]], dtype=np.float32)
+        ids = np.array([0, 1], dtype=np.int64)
         query = np.array([1.0, 0.0], dtype=np.float32)
         self.assertEqual(rank_source(source, ids, query, 2, half=False), [1, 0])
-        self.assertEqual(rank_source(source, ids, query, 2, half=True), [0, 1])
+        self.assertEqual(rank_source(source, ids, query, 2, half=True), [1, 0])
 
 
 if __name__ == "__main__":

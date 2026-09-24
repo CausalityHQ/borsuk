@@ -152,6 +152,10 @@ run_science capture .venv/bin/python -m scripts.v123_rerank_diagnostic \
   --sealed-replay sealed-replay.jsonl --wide-replay wide-replay.jsonl \
   --truth neighbors.parquet --evidence capture-evidence.jsonl \
   --summary capture-summary.json
+for path in capture.log capture-resources.txt capture-evidence.jsonl \
+    capture-summary.json; do
+  aws s3 cp "$path" "$V123_OUTPUT_PREFIX/artifacts/$path" --only-show-errors
+done
 phase=source-download
 run_science source-download aws s3 cp "$V123_SOURCE_URI" source.parquet --only-show-errors
 [ "$(stat -c%s source.parquet)" = "$V123_SOURCE_BYTES" ] || exit 93
