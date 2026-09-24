@@ -12,6 +12,10 @@ The separately downloaded V63 old layout and V164 order matched their
 published SHA-256 values
 `32cba9690cd9d0ed3809763e5a0fa3574b09a207da26e93404651acaa1a66a0b`
 and `5b5ef48d86570e5ca68fdaaac9aef231ec7368dd526baef00474cd0a2f59a06f`.
+`scripts/v166_postterminal_rank_diagnostic.py` independently recounts this
+note from those four authenticated files. Its committed canonical JSON
+output is `v166-postterminal-rank-diagnostic.json`, SHA-256
+`aed2f873c2a6e37fcf6128fbac5b8684487fa83a05a591a6c1862a836cbf04ca`.
 
 For each candidate 32-row unit, map each of its nominated old physical
 rows through V63 source order and V164 inverse order. Take the smallest
@@ -38,3 +42,17 @@ within this narrow candidate universe. Equal-vote interval merging
 incidentally captured 97 of those 121 rows. These are source pseudoqueries
 seen by source-only construction, with no GT opened; the table cannot
 calibrate a recall profile or justify tuning a halo width on this holdout.
+
+An additional score-aware **oracle lower bound** requires every
+exact-primary unit and every unit containing an actual above-threshold
+non-nominee row in the declared candidate universe. For each query, merge
+the smallest physical gaps until at most its V165 baseline GET count
+remains. The resulting minimum contiguous 32-row-unit cover is
+222,343,680 encoded bytes over 128 queries (median 1,123,200 B/query),
+versus 1,700,275,200 bytes for the V165 plans. It fits the corresponding
+baseline byte cap on 127/128 queries. This oracle sees the very SQ8
+scores the policy is supposed to predict, so it is only a headroom
+diagnostic; it cannot be implemented as a source-only query policy or
+be interpreted as achieved recall. Within the declared universe, the
+binding problem is selection information, not a physical lower bound
+near V165's byte spend.
