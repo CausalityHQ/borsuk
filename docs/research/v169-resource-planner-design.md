@@ -113,6 +113,22 @@ route may infer the mapping from row position alone. Because BORSUK is
 unreleased, replace the experimental format marker rather than adding
 a legacy reader.
 
+The narrow production primitive `Pq64Router::score_rows` was pushed at
+`e92fec66f2d026429d0ab0a083371953b1e03415`. It shares the ADC
+table arithmetic with nomination, returns scores in caller-requested
+old-row order, and rejects duplicate, empty and out-of-range rosters.
+One Causality Spot `c7i.12xlarge` worker
+`i-04a4163da931705b5` ran `cargo test --locked -p borsuk --lib
+pq64_nominee::tests`: **8 passed**, 1,650 filtered out. The narrow
+compile/test took 99.89 wall seconds and peaked at 5,078,852 KiB RSS
+on the remote build worker; those are not serving measurements. The
+terminal SHA-256 is
+`b249e6f537d7568e860e6a55730b5ae4598dbdf9b4d567b004e44491c7f3c3ec`
+at `s3://borsuk-bench-453182569524-euc1/research/v169-pq64-compile/e92fec66f2d026429d0ab0a083371953b1e03415/runs/a0001/`.
+The controller streamed and rehashed its three terminal-listed
+artifacts and confirmed the instance terminated. This validates the
+primitive's crate integration, not a relaid generation or full suite.
+
 ## Qualification and stop conditions
 
 First freeze features, calibration method, resource profile, baseline
