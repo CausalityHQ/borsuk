@@ -35,12 +35,20 @@ SQ8 bodies and verify `new_sq8_row(i) == old_sq8_row(new_to_old[i])` for
 every row before publishing the map. Duplicate row bodies require the
 source-row identity or another authenticated tie key as well; byte
 equality alone is insufficient in that case. The full-generation test
-must deliberately supply the inverse map and reject it. The existing
-router loader also discards its verified manifest digest, so binder work
-must retain that digest in `SourceRouterArtifact` before comparing it to
-the row-map header. The current `ServingGeneration::bind` equality of
-old-router and new-mirror SQ8 hashes is incompatible with a relaid SQ8
-object and must be replaced by checks through this map, not bypassed.
+must deliberately supply the inverse map and reject it. V174 retains the
+verified router manifest digest in `SourceRouterArtifact` and changes
+`ServingGeneration::bind` to compare the router's old SQ8 hash and the
+mirror's new SQ8 hash through the map rather than equating them.
+
+The next artifact slice provides `write_verified_row_permutation`: it
+rehashes both local SQ8 files against their pinned identities and compares
+every new record to the mapped old record before publication. Its random
+old-record reads use O(row width) scratch space, but build time at 10M
+and 100M is unmeasured. The old and new files are required to remain
+immutable during the check. A production generation builder must call
+this checked entrypoint; the unverified writer is crate-private for
+small fixtures. The independent binder and query-path tests remain
+separate gates.
 
 ## Resource and qualification
 
