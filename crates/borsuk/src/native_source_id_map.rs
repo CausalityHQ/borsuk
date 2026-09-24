@@ -137,6 +137,15 @@ where
 }
 
 impl NativeSourceIdMap {
+    /// Whether this authenticated map belongs to the opened source plane.
+    #[must_use]
+    pub fn binds_to(&self, source: &NativeSourceTier) -> bool {
+        source.rows() == self.rows
+            && source.generation() == self.generation
+            && source.source_sha256() == self.source_sha256
+            && source.artifact_sha256() == self.source_artifact_sha256
+    }
+
     /// Authenticate the entire immutable map before retaining its entries.
     pub fn open_authenticated(
         path: &Path,
@@ -223,11 +232,7 @@ impl NativeSourceIdMap {
         router_ids: &[u64],
         expansion_ids: &[u64],
     ) -> Result<Vec<SourceCandidate>, SourceIdMapError> {
-        if source.rows() != self.rows
-            || source.generation() != self.generation
-            || source.source_sha256() != self.source_sha256
-            || source.artifact_sha256() != self.source_artifact_sha256
-        {
+        if !self.binds_to(source) {
             return Err(SourceIdMapError::Invalid("source generation binding"));
         }
         let total = router_ids
