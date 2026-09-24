@@ -23,7 +23,8 @@ top-512 fetched SQ8 rows and original-source float64 cosine ranking:
 2. **Broad current candidate:** V116 sealed `ranges`.
 3. **Fixed capped control:** V116 sealed `baseline_ranges`.
 
-Use the V116 request query, normalized as in V126 for source cosine.
+Use the V116 request query as float32 for SQ8 scoring, and normalize its
+float64 coordinates as in V126 only for exact-source cosine.
 Validate that every SQ8 physical source ID agrees with V63 layout and
 V36 source ID mapping. Score SQ8 rows with V114's original float32
 quantized arithmetic and tie rule. Score the union of fetched SQ8 top-512
