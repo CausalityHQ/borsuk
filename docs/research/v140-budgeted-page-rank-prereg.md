@@ -48,13 +48,15 @@ bytes, and exact cap result. Report per-β p50/p95/p99 and mean bytes and
 GETs, p05 primary-page retention, fraction preserving all primary pages,
 target shortfalls, and charged worker memory. The evaluator reads no GT or
 returned IDs. A post-terminal, separate read-only assessor may count
-**physical GT coverage ceilings** on the already-used cohorts, clearly
+**fetched-range physical GT coverage** on the already-used cohorts, clearly
 labelled as post-hoc; it must never feed GT back into page ordering. Neither
-coverage nor resource counts are returned Recall@100.
+coverage nor resource counts are returned Recall@100. Fetched-range coverage
+bounds SQ8 results from those pages; router nominees outside the ranges can
+still enter the exact-source union, so it does not bound that final result.
 
 ## Frozen comparison and promotion rule
 
-Compare D96's planned bytes and physical coverage ceiling with the sealed
+Compare D96's planned bytes and fetched-range physical coverage with the sealed
 V122 capped control (98,827/100,000 GT positions, 1,535,701.248 B/query)
 and V135 broad candidate (99,942/100,000 returned exact-source hits; its
 V132 S3 run received 9,428,126.976 B/query). Compare D768's primary-page

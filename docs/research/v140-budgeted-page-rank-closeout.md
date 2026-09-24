@@ -4,6 +4,10 @@
 enter a returned-quality implementation.** This is one generic, source-only
 page-ordering policy on two used historical layouts, not a qualified
 production default, returned Recall@100 result, or live S3 latency result.
+Physical coverage here counts GT positions in fetched SQ8 ranges; it is an
+upper bound for SQ8 results from those ranges. The final exact-source union
+also includes router nominees outside the ranges, so this is **not** a
+strict ceiling on final returned recall.
 β=1 and β=2 miss the D96 physical-coverage floor; β=8 exceeds the D96 mean
 byte screen. No β was tuned within a corpus.
 

@@ -24,8 +24,10 @@ The D96 threshold's physical GT coverage, counted **after** range selection
 against authenticated sealed V122 truth and layout, was **99,297/100,000**
 positions. The same-layout fixed capped control covered **98,827/100,000**;
 the stronger V135 full-object candidate returned **99,942/100,000** exact
-source neighbors. V139's 99,297 is only a physical ceiling, so its returned
-quality can be lower. It does not meet a 99.5% physical ceiling. The used
+source neighbors. V139's 99,297 bounds GT coverage through the fetched SQ8
+ranges; router nominees outside those ranges may still enter the exact-source
+union, so it is not a strict final-recall ceiling. It does not meet a 99.5%
+fetched-range coverage screen. The used
 publication-test split cannot provide a fresh validation claim.
 
 The root cause is a mismatch between a row-distance witness threshold and
