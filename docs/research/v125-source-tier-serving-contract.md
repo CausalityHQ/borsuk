@@ -40,8 +40,20 @@ and 300,000,064 bytes for D768. This is a modeled digest payload, not
 charged RAM or latency; larger blocks trade lower resident digest memory
 for more local bytes read and hashed per candidate.
 
-The caller must still supply an authenticated candidate ordinal-to-source-ID
-map and a generation-pinned source object. This slice does not yet hydrate
+Source-plane format v2 stores each source ID beside its float32 vector and
+rejects duplicate IDs during construction. A source-ordinal candidate may
+carry an expected ID, but ranking requires it to equal the authenticated
+row ID; `BORSST01` artifacts are rejected by their format marker. The
+physical-to-source-ordinal layout remains a separate authenticated
+generation object. A red/green Causality Spot gate first confirmed that a
+wrong candidate ID was accepted by v1 (six tests passed, one failed), then
+confirmed all eight focused tests pass on v2 source archive SHA-256
+`211791f74f5655267a60e55eed905e7ec9bef74bf1ea382ab90ca3b49bfcfbac`.
+The final terminal SHA-256 was
+`a270d52072e23af74eae9cb138f72d9b49c315def32a79809e7ed50fb9a4416f`;
+both gate Spots were observed terminated. The builder's global uniqueness
+check currently uses an O(N) hash set, whose charged build memory must be
+measured before 100M qualification. This slice does not yet hydrate
 from S3, perform FP16 interval refinement, or account for local I/O and S3
 GETs in a served query. Those are required before the architecture can pass
 gate 1 below. The writer records a caller-supplied source-object digest;
@@ -50,9 +62,9 @@ the build path must authenticate that original object independently.
 ## Query and generation contract
 
 An immutable generation has authenticated objects for (1) a query-blind
-router, (2) an expansion page plane, (3) a physical-to-source-ID map,
+router, (2) an expansion page plane, (3) a physical-to-source-ordinal map,
 (4) FP16 normalized source coordinates and per-row directional error bounds,
-and (5) original float32 source coordinates for exact fallback. The FP16 and
+and (5) original float32 source coordinates and source IDs for exact fallback. The FP16 and
 float32 planes refer to the same source-ID roster and generation. Every
 object's format/version, dimension, row count, byte length, SHA-256/block
 digests and source identity are in the generation manifest. Opening a
@@ -104,8 +116,8 @@ the worst case; a partial-refinement quota may not compromise correctness.
 Use explicit workload parameters `(N,D,R,C,G,L)`: rows, dimensions, target
 recall, active query concurrency, simultaneously pinned generations and
 latency target. Per-generation FP16 coordinate payload is `2ND` bytes, with
-an additional bound/ID map and router; exact float32 backing is `4ND`
-bytes before metadata. At 100M rows and D96, the two coordinate payloads
+an additional bound/ID map and router; exact float32 coordinates are `4ND`
+bytes before the 8-byte ID per row and 64-byte header. At 100M rows and D96, the two coordinate payloads
 are respectively 19.2 GB and 38.4 GB **per generation**; at D768 they are
 153.6 GB and 307.2 GB. These are decimal payload projections, not charged
 RAM or required memory. For two complete FP16 generations with 8 metadata

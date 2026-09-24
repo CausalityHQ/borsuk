@@ -17,8 +17,8 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-const MAGIC: [u8; 8] = *b"BORSST01";
-const VERSION: u32 = 1;
+const MAGIC: [u8; 8] = *b"BORSST02";
+const VERSION: u32 = 2;
 const HEADER_BYTES: u64 = 64;
 
 /// An exact-source tier error. Invalid or unauthenticated artifacts fail closed.
@@ -83,6 +83,7 @@ fn row_bytes(dimensions: usize) -> Result<u64, SourceTierError> {
     u64::try_from(dimensions)
         .ok()
         .and_then(|value| value.checked_mul(4))
+        .and_then(|coordinates| coordinates.checked_add(8))
         .ok_or(SourceTierError::Invalid("row width overflow"))
 }
 
@@ -116,7 +117,7 @@ fn header(
 
 /// Stream one generation's float32 source plane into a new immutable file.
 ///
-/// `vectors` must contain exactly `rows` source-ordinal vectors. The caller
+/// `vectors` must contain exactly `rows` unique source-ID/vector pairs. The caller
 /// supplies the authenticated source-object SHA-256 and publishes this file
 /// only after its returned artifact SHA-256 is bound in a generation manifest.
 /// A temporary file is synced and atomically installed without replacing an
@@ -130,7 +131,7 @@ pub fn write_source_tier<I>(
     mut vectors: I,
 ) -> Result<String, SourceTierError>
 where
-    I: Iterator<Item = Vec<f32>>,
+    I: Iterator<Item = (u64, Vec<f32>)>,
 {
     let source = decoded_sha256(source_sha256)?;
     let head = header(rows, dimensions, generation, source)?;
@@ -139,14 +140,18 @@ where
         .ok_or(SourceTierError::Invalid("source path has no parent"))?;
     let mut temporary = NamedTempFile::new_in(parent)?;
     let mut digest = Sha256::new();
+    let mut source_ids = HashSet::new();
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
         writer.write_all(&head)?;
         digest.update(head);
         for _ in 0..rows {
-            let vector = vectors
+            let (source_id, vector) = vectors
                 .next()
                 .ok_or(SourceTierError::Invalid("too few source rows"))?;
+            if !source_ids.insert(source_id) {
+                return Err(SourceTierError::Invalid("duplicate source ID"));
+            }
             if vector.len() != dimensions || vector.iter().any(|value| !value.is_finite()) {
                 return Err(SourceTierError::Invalid("source vector geometry"));
             }
@@ -156,6 +161,9 @@ where
             if !norm_squared.is_finite() || norm_squared <= 0.0 {
                 return Err(SourceTierError::Invalid("source vector norm"));
             }
+            let id_bytes = source_id.to_le_bytes();
+            writer.write_all(&id_bytes)?;
+            digest.update(id_bytes);
             for value in vector {
                 let bytes = value.to_le_bytes();
                 writer.write_all(&bytes)?;
@@ -198,6 +206,13 @@ impl NativeSourceTier {
         }
         let length = expected_len(rows, dimensions)?;
         let file = File::open(path)?;
+        let mut head = [0_u8; 64];
+        read_exact_at(&file, &mut head, 0)?;
+        if head[..8] != MAGIC || head[8..12] != VERSION.to_le_bytes() {
+            return Err(SourceTierError::Invalid(
+                "unsupported source format version",
+            ));
+        }
         if file.metadata()?.len() != length {
             return Err(SourceTierError::Invalid("source byte length"));
         }
@@ -226,7 +241,6 @@ impl NativeSourceTier {
         if computed != expected_artifact {
             return Err(SourceTierError::Invalid("source artifact SHA-256"));
         }
-        let mut head = [0_u8; 64];
         read_exact_at(&file, &mut head, 0)?;
         if head != header(rows, dimensions, generation, source)? {
             return Err(SourceTierError::Invalid("source format or generation"));
@@ -365,9 +379,13 @@ impl NativeSourceTier {
                 .and_then(|body_offset| body_offset.checked_add(HEADER_BYTES))
                 .ok_or(SourceTierError::Invalid("source row offset overflow"))?;
             self.read_verified_row(&mut bytes, &mut scratch, offset)?;
+            let authenticated_id = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            if authenticated_id != candidate.source_id {
+                return Err(SourceTierError::Invalid("candidate/source ID mismatch"));
+            }
             let mut norm_squared = 0.0_f64;
             let mut dot = 0.0_f64;
-            for (coordinate, encoded) in bytes.chunks_exact(4).enumerate() {
+            for (coordinate, encoded) in bytes[8..].chunks_exact(4).enumerate() {
                 let value = f64::from(f32::from_le_bytes(encoded.try_into().unwrap()));
                 if !value.is_finite() {
                     return Err(SourceTierError::Invalid("source vector nonfinite"));
@@ -433,7 +451,12 @@ mod tests {
             2,
             7,
             SOURCE_SHA,
-            vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 0.0]].into_iter(),
+            vec![
+                (900, vec![1.0, 0.0]),
+                (500, vec![0.0, 1.0]),
+                (100, vec![1.0, 0.0]),
+            ]
+            .into_iter(),
         )
         .unwrap();
         let tier =
@@ -469,8 +492,15 @@ mod tests {
     fn authentication_rejects_tampering_and_wrong_generation() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("source.bin");
-        let sha = write_source_tier(&path, 1, 2, 7, SOURCE_SHA, vec![vec![1.0, 0.0]].into_iter())
-            .unwrap();
+        let sha = write_source_tier(
+            &path,
+            1,
+            2,
+            7,
+            SOURCE_SHA,
+            vec![(3, vec![1.0, 0.0])].into_iter(),
+        )
+        .unwrap();
         assert!(
             NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 8, 4096).is_err()
         );
@@ -485,14 +515,21 @@ mod tests {
     fn read_rejects_valid_vector_mutation_after_open() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("source.bin");
-        let sha = write_source_tier(&path, 1, 2, 7, SOURCE_SHA, vec![vec![1.0, 0.0]].into_iter())
-            .unwrap();
+        let sha = write_source_tier(
+            &path,
+            1,
+            2,
+            7,
+            SOURCE_SHA,
+            vec![(3, vec![1.0, 0.0])].into_iter(),
+        )
+        .unwrap();
         let tier =
             NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 7, 4096).unwrap();
         let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        file.write_all_at(&0.0_f32.to_le_bytes(), HEADER_BYTES)
+        file.write_all_at(&0.0_f32.to_le_bytes(), HEADER_BYTES + 8)
             .unwrap();
-        file.write_all_at(&1.0_f32.to_le_bytes(), HEADER_BYTES + 4)
+        file.write_all_at(&1.0_f32.to_le_bytes(), HEADER_BYTES + 12)
             .unwrap();
         assert!(
             tier.rank_exact(
@@ -521,7 +558,7 @@ mod tests {
             1024,
             7,
             SOURCE_SHA,
-            vec![first, second].into_iter(),
+            vec![(1, first), (2, second)].into_iter(),
         )
         .unwrap();
         assert!(
@@ -547,7 +584,7 @@ mod tests {
         let result = tier.rank_exact(&query, &candidates, 2).unwrap();
         assert_eq!(result[0].source_id, 1);
         let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        file.write_all_at(&2.0_f32.to_le_bytes(), HEADER_BYTES + 8192 - 4)
+        file.write_all_at(&2.0_f32.to_le_bytes(), HEADER_BYTES + 2 * (8 + 4096) - 4)
             .unwrap();
         assert!(tier.rank_exact(&query, &candidates, 2).is_err());
     }
@@ -563,7 +600,18 @@ mod tests {
                 2,
                 1,
                 SOURCE_SHA,
-                vec![vec![f32::NAN, 0.0]].into_iter()
+                vec![(42, vec![f32::NAN, 0.0])].into_iter()
+            )
+            .is_err()
+        );
+        assert!(
+            write_source_tier(
+                &path,
+                2,
+                2,
+                1,
+                SOURCE_SHA,
+                vec![(42, vec![1.0, 0.0]), (42, vec![0.0, 1.0])].into_iter(),
             )
             .is_err()
         );
@@ -573,7 +621,7 @@ mod tests {
             2,
             1,
             SOURCE_SHA,
-            vec![vec![1.0, 0.0], vec![0.0, 1.0]].into_iter(),
+            vec![(42, vec![1.0, 0.0]), (43, vec![0.0, 1.0])].into_iter(),
         )
         .unwrap();
         let tier =
@@ -607,7 +655,7 @@ mod tests {
             2,
             3,
             SOURCE_SHA,
-            vec![vec![100.0, 0.0], vec![1.0, 1.0]].into_iter(),
+            vec![(10, vec![100.0, 0.0]), (11, vec![1.0, 1.0])].into_iter(),
         )
         .unwrap();
         let tier =
@@ -635,8 +683,67 @@ mod tests {
                 .is_err()
         );
         assert!(
-            write_source_tier(&path, 1, 2, 3, SOURCE_SHA, vec![vec![1.0, 0.0]].into_iter(),)
-                .is_err()
+            write_source_tier(
+                &path,
+                1,
+                2,
+                3,
+                SOURCE_SHA,
+                vec![(10, vec![1.0, 0.0])].into_iter(),
+            )
+            .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_unbound_candidate_source_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.bin");
+        let sha = write_source_tier(
+            &path,
+            1,
+            2,
+            7,
+            SOURCE_SHA,
+            vec![(42, vec![1.0, 0.0])].into_iter(),
+        )
+        .unwrap();
+        let tier =
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 7, 4096).unwrap();
+        assert!(
+            tier.rank_exact(
+                &[1.0, 0.0],
+                &[SourceCandidate {
+                    ordinal: 0,
+                    source_id: 999
+                }],
+                1,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn old_format_marker_is_rejected_clearly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.bin");
+        write_source_tier(
+            &path,
+            1,
+            2,
+            7,
+            SOURCE_SHA,
+            vec![(42, vec![1.0, 0.0])].into_iter(),
+        )
+        .unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all_at(b"BORSST01", 0).unwrap();
+        let sha = format!("{:x}", Sha256::digest(std::fs::read(&path).unwrap()));
+        assert!(matches!(
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 7, 4096),
+            Err(SourceTierError::Invalid(
+                "unsupported source format version"
+            ))
+        ));
     }
 }

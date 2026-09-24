@@ -69,17 +69,27 @@ theorem hundred_million_fp16_payload_examples :
   decide
 
 /-! SHA-256 digest-table payload for a full authenticated float32 source
-plane. This counts 32 bytes per verification block and a 64-byte format
+plane with an embedded 8-byte source ID per row. This counts 32 bytes per
+verification block and a 64-byte format
 header per generation. It excludes Vec overhead, page cache and I/O. The
 block size is a resource policy input, not a vector-count quality switch. -/
+def sourceTierPayloadBytes
+    (rows dimensions generations : Nat) : Nat :=
+  generations * (64 + rows * (8 + 4 * dimensions))
+
 def sourceDigestBytes
     (rows dimensions generations blockBytes : Nat) : Nat :=
-  generations * (32 * ((64 + rows * (4 * dimensions) + blockBytes - 1) / blockBytes))
+  generations * (32 * ((64 + rows * (8 + 4 * dimensions) + blockBytes - 1) / blockBytes))
+
+theorem hundred_million_source_payload_examples :
+    sourceTierPayloadBytes 100_000_000 96 2 = 78_400_000_128 ∧
+    sourceTierPayloadBytes 100_000_000 768 2 = 616_000_000_128 := by
+  decide
 
 theorem hundred_million_source_digest_examples :
-    sourceDigestBytes 100_000_000 96 2 65_536 = 37_500_032 ∧
-    sourceDigestBytes 100_000_000 768 2 65_536 = 300_000_064 ∧
-    sourceDigestBytes 100_000_000 768 2 4_096 = 4_800_000_064 := by
+    sourceDigestBytes 100_000_000 96 2 65_536 = 38_281_280 ∧
+    sourceDigestBytes 100_000_000 768 2 65_536 = 300_781_312 ∧
+    sourceDigestBytes 100_000_000 768 2 4_096 = 4_812_500_032 := by
   decide
 
 /-! A finite-cohort capture ceiling: an authenticated roster certificate and

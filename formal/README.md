@@ -19,11 +19,13 @@ ReLAION-1M validation-1000 nominee sets cannot reach 99,000 GT100 hits if
 their independently authenticated capture is 96,849. The proof uses that
 capture count as an external premise and does not apply to V116's expanded
 remote candidate set, a changed router or unseen queries.
-The same file checks exact digest-table payload arithmetic for a block-verified
-float32 source tier, including the 64-byte header: at 100M rows, two complete
-generations and 64-KiB blocks, the modeled table is 37,500,032 bytes for D96
-or 300,000,064 bytes for D768. A 4-KiB block choice at D768 would require
-4,800,000,064 digest bytes for two generations. Block size is an explicit
+The same file checks exact payload and digest-table arithmetic for a
+block-verified float32 source tier with an 8-byte source ID per row and a
+64-byte header. At 100M rows and two complete generations the source
+artifact totals 78,400,000,128 bytes at D96 or 616,000,000,128 bytes at
+D768. With 64-KiB blocks, the modeled digest table is 38,281,280 bytes for
+D96 or 300,781,312 bytes for D768. A 4-KiB block choice at D768 would require
+4,812,500,032 digest bytes for two generations. Block size is an explicit
 memory/I/O policy input; these checked payloads establish neither charged
 memory nor query-time local-read latency.
 
