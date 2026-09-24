@@ -14,7 +14,10 @@ from scripts.launch_native_geometric_layout_spot import DEFAULT_TARGETS
 from scripts.launch_v114_1m_paired_spot import _location, _missing
 from scripts.launch_v116_validation_paired_spot import ARTIFACTS
 from scripts.launch_v121_deep_image_paired_spot import Plan, validate_plan
-from scripts.launch_v123_rerank_diagnostic_spot import reserve_attempt
+from scripts.launch_v123_rerank_diagnostic_spot import (
+    reserve_attempt,
+    validate_retired_instance,
+)
 from scripts.launch_v124_source_tier_precision_spot import (
     INPUTS as V124_INPUTS,
 )
@@ -194,11 +197,9 @@ def launch_and_monitor(plan: Plan) -> dict:
         "sha256": INPUTS["SEALED_REPLAY"][1],
     }:
         raise ValueError("V126 V116 sealed replay identity differs")
-    state = ec2.describe_instances(InstanceIds=[old_instance])["Reservations"][0][
-        "Instances"
-    ][0]["State"]["Name"]
-    if state != "terminated":
-        raise ValueError("V126 V116 worker remains active")
+    validate_retired_instance(
+        ec2.describe_instances(InstanceIds=[old_instance]), old_instance
+    )
     for uri, _digest, length in INPUTS.values():
         source_bucket, key = _location(uri)
         if s3.head_object(Bucket=source_bucket, Key=key)["ContentLength"] != length:
