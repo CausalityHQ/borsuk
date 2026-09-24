@@ -19,6 +19,13 @@ ReLAION-1M validation-1000 nominee sets cannot reach 99,000 GT100 hits if
 their independently authenticated capture is 96,849. The proof uses that
 capture count as an external premise and does not apply to V116's expanded
 remote candidate set, a changed router or unseen queries.
+The same file checks exact digest-table payload arithmetic for a block-verified
+float32 source tier, including the 64-byte header: at 100M rows, two complete
+generations and 64-KiB blocks, the modeled table is 37,500,032 bytes for D96
+or 300,000,064 bytes for D768. A 4-KiB block choice at D768 would require
+4,800,000,064 digest bytes for two generations. Block size is an explicit
+memory/I/O policy input; these checked payloads establish neither charged
+memory nor query-time local-read latency.
 
 `IntervalLatticeNormalization.lean` proves the arithmetic behind V121's D96
 planner-state reduction: when full and final-page charges share a positive

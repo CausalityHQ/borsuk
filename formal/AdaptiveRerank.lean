@@ -68,6 +68,20 @@ theorem hundred_million_fp16_payload_examples :
     fp16TierPayloadBytes 100_000_000 768 2 8 = 308_800_000_000 := by
   decide
 
+/-! SHA-256 digest-table payload for a full authenticated float32 source
+plane. This counts 32 bytes per verification block and a 64-byte format
+header per generation. It excludes Vec overhead, page cache and I/O. The
+block size is a resource policy input, not a vector-count quality switch. -/
+def sourceDigestBytes
+    (rows dimensions generations blockBytes : Nat) : Nat :=
+  generations * (32 * ((64 + rows * (4 * dimensions) + blockBytes - 1) / blockBytes))
+
+theorem hundred_million_source_digest_examples :
+    sourceDigestBytes 100_000_000 96 2 65_536 = 37_500_032 ∧
+    sourceDigestBytes 100_000_000 768 2 65_536 = 300_000_064 ∧
+    sourceDigestBytes 100_000_000 768 2 4_096 = 4_800_000_064 := by
+  decide
+
 /-! A finite-cohort capture ceiling: an authenticated roster certificate and
 candidate-only return refinement can rule out an aggregate target, regardless
 of the scorer. The V124 number is an external artifact premise, not a Lean

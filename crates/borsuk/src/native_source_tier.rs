@@ -8,7 +8,7 @@
 use std::{
     collections::HashSet,
     fs::File,
-    io::{self, BufReader, BufWriter, Write},
+    io::{self, BufReader, BufWriter, Read, Write},
     os::unix::fs::FileExt,
     path::Path,
 };
@@ -58,6 +58,8 @@ pub struct NativeSourceTier {
     dimensions: usize,
     generation: u64,
     source_sha256: [u8; 32],
+    verification_block_bytes: usize,
+    block_digests: Vec<[u8; 32]>,
 }
 
 fn decoded_sha256(value: &str) -> Result<[u8; 32], SourceTierError> {
@@ -174,7 +176,10 @@ where
 
 impl NativeSourceTier {
     /// Open one local generation only after checking full-file SHA-256,
-    /// version, source identity, exact geometry and byte length.
+    /// version, source identity, exact geometry and byte length. Block digests
+    /// derived in that scan authenticate every later local candidate read.
+    /// `verification_block_bytes` is an explicit memory/I/O capacity choice;
+    /// it must be a power of two from 4 KiB through 1 MiB.
     pub fn open_authenticated(
         path: &Path,
         artifact_sha256: &str,
@@ -182,15 +187,41 @@ impl NativeSourceTier {
         rows: u64,
         dimensions: usize,
         generation: u64,
+        verification_block_bytes: usize,
     ) -> Result<Self, SourceTierError> {
         let expected_artifact = decoded_sha256(artifact_sha256)?;
         let source = decoded_sha256(source_sha256)?;
+        if !verification_block_bytes.is_power_of_two()
+            || !(4096..=1024 * 1024).contains(&verification_block_bytes)
+        {
+            return Err(SourceTierError::Invalid("verification block size"));
+        }
+        let length = expected_len(rows, dimensions)?;
         let file = File::open(path)?;
-        if file.metadata()?.len() != expected_len(rows, dimensions)? {
+        if file.metadata()?.len() != length {
             return Err(SourceTierError::Invalid("source byte length"));
         }
+        let block_width = verification_block_bytes as u64;
+        let block_count = usize::try_from(length.div_ceil(block_width))
+            .map_err(|_| SourceTierError::Invalid("digest count exceeds address space"))?;
+        block_count
+            .checked_mul(32)
+            .ok_or(SourceTierError::Invalid("digest table size overflow"))?;
+        let mut block_digests = Vec::new();
+        block_digests
+            .try_reserve_exact(block_count)
+            .map_err(|_| SourceTierError::Invalid("digest table allocation"))?;
         let mut actual = Sha256::new();
-        io::copy(&mut BufReader::new(&file), &mut actual_writer(&mut actual))?;
+        let mut reader = BufReader::new(&file);
+        let mut block = vec![0_u8; verification_block_bytes];
+        let mut remaining = length;
+        while remaining > 0 {
+            let count = remaining.min(block_width) as usize;
+            reader.read_exact(&mut block[..count])?;
+            actual.update(&block[..count]);
+            block_digests.push(Sha256::digest(&block[..count]).into());
+            remaining -= count as u64;
+        }
         let computed: [u8; 32] = actual.finalize().into();
         if computed != expected_artifact {
             return Err(SourceTierError::Invalid("source artifact SHA-256"));
@@ -206,6 +237,8 @@ impl NativeSourceTier {
             dimensions,
             generation,
             source_sha256: source,
+            verification_block_bytes,
+            block_digests,
         })
     }
 
@@ -231,6 +264,54 @@ impl NativeSourceTier {
     #[must_use]
     pub fn source_sha256(&self) -> [u8; 32] {
         self.source_sha256
+    }
+
+    /// Configured authenticated local read granularity.
+    #[must_use]
+    pub fn verification_block_bytes(&self) -> usize {
+        self.verification_block_bytes
+    }
+
+    /// Resident bytes in the per-block SHA-256 table, excluding Vec overhead.
+    #[must_use]
+    pub fn resident_digest_bytes(&self) -> usize {
+        self.block_digests.len() * 32
+    }
+
+    fn read_verified_row(
+        &self,
+        output: &mut [u8],
+        scratch: &mut [u8],
+        offset: u64,
+    ) -> Result<(), SourceTierError> {
+        let end = offset
+            .checked_add(output.len() as u64)
+            .ok_or(SourceTierError::Invalid("source row end overflow"))?;
+        let block_width = self.verification_block_bytes as u64;
+        let length = expected_len(self.rows, self.dimensions)?;
+        if end > length || scratch.len() != self.verification_block_bytes {
+            return Err(SourceTierError::Invalid("source row or scratch geometry"));
+        }
+        for block_number in offset / block_width..=(end - 1) / block_width {
+            let block_start = block_number
+                .checked_mul(block_width)
+                .ok_or(SourceTierError::Invalid("source block offset overflow"))?;
+            let count = (length - block_start).min(block_width) as usize;
+            read_exact_at(&self.file, &mut scratch[..count], block_start)?;
+            let digest: [u8; 32] = Sha256::digest(&scratch[..count]).into();
+            let index = usize::try_from(block_number)
+                .map_err(|_| SourceTierError::Invalid("digest index exceeds address space"))?;
+            if self.block_digests.get(index) != Some(&digest) {
+                return Err(SourceTierError::Invalid("source block SHA-256"));
+            }
+            let copy_start = offset.max(block_start);
+            let copy_end = end.min(block_start + count as u64);
+            let from = (copy_start - block_start) as usize;
+            let to = (copy_start - offset) as usize;
+            let copy_len = (copy_end - copy_start) as usize;
+            output[to..to + copy_len].copy_from_slice(&scratch[from..from + copy_len]);
+        }
+        Ok(())
     }
 
     /// Exact cosine top-k within a previously fixed candidate union.
@@ -270,6 +351,7 @@ impl NativeSourceTier {
         let width = usize::try_from(row_bytes(self.dimensions)?)
             .map_err(|_| SourceTierError::Invalid("row width exceeds address space"))?;
         let mut bytes = vec![0_u8; width];
+        let mut scratch = vec![0_u8; self.verification_block_bytes];
         for candidate in candidates {
             if candidate.ordinal >= self.rows
                 || !ids.insert(candidate.source_id)
@@ -282,7 +364,7 @@ impl NativeSourceTier {
                 .checked_mul(width as u64)
                 .and_then(|body_offset| body_offset.checked_add(HEADER_BYTES))
                 .ok_or(SourceTierError::Invalid("source row offset overflow"))?;
-            read_exact_at(&self.file, &mut bytes, offset)?;
+            self.read_verified_row(&mut bytes, &mut scratch, offset)?;
             let mut norm_squared = 0.0_f64;
             let mut dot = 0.0_f64;
             for (coordinate, encoded) in bytes.chunks_exact(4).enumerate() {
@@ -335,22 +417,6 @@ fn read_exact_at(
     Ok(())
 }
 
-struct DigestWriter<'a>(&'a mut Sha256);
-
-impl Write for DigestWriter<'_> {
-    fn write(&mut self, input: &[u8]) -> io::Result<usize> {
-        self.0.update(input);
-        Ok(input.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn actual_writer(digest: &mut Sha256) -> DigestWriter<'_> {
-    DigestWriter(digest)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,7 +436,8 @@ mod tests {
             vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 0.0]].into_iter(),
         )
         .unwrap();
-        let tier = NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 3, 2, 7).unwrap();
+        let tier =
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 3, 2, 7, 4096).unwrap();
         let result = tier
             .rank_exact(
                 &[1.0, 0.0],
@@ -404,10 +471,85 @@ mod tests {
         let path = directory.path().join("source.bin");
         let sha = write_source_tier(&path, 1, 2, 7, SOURCE_SHA, vec![vec![1.0, 0.0]].into_iter())
             .unwrap();
-        assert!(NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 8,).is_err());
+        assert!(
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 8, 4096).is_err()
+        );
         let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         file.write_all_at(&[0_u8; 4], HEADER_BYTES).unwrap();
-        assert!(NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 7,).is_err());
+        assert!(
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 7, 4096).is_err()
+        );
+    }
+
+    #[test]
+    fn read_rejects_valid_vector_mutation_after_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.bin");
+        let sha = write_source_tier(&path, 1, 2, 7, SOURCE_SHA, vec![vec![1.0, 0.0]].into_iter())
+            .unwrap();
+        let tier =
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 1, 2, 7, 4096).unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all_at(&0.0_f32.to_le_bytes(), HEADER_BYTES)
+            .unwrap();
+        file.write_all_at(&1.0_f32.to_le_bytes(), HEADER_BYTES + 4)
+            .unwrap();
+        assert!(
+            tier.rank_exact(
+                &[1.0, 0.0],
+                &[SourceCandidate {
+                    ordinal: 0,
+                    source_id: 3
+                }],
+                1
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn verifies_rows_spanning_blocks_and_reports_digest_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.bin");
+        let mut first = vec![0.0_f32; 1024];
+        first[0] = 1.0;
+        let mut second = vec![0.0_f32; 1024];
+        second[1023] = 1.0;
+        let sha = write_source_tier(
+            &path,
+            2,
+            1024,
+            7,
+            SOURCE_SHA,
+            vec![first, second].into_iter(),
+        )
+        .unwrap();
+        assert!(
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 2, 1024, 7, 3000)
+                .is_err()
+        );
+        let tier = NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 2, 1024, 7, 4096)
+            .unwrap();
+        assert_eq!(tier.verification_block_bytes(), 4096);
+        assert_eq!(tier.resident_digest_bytes(), 96);
+        let mut query = vec![0.0_f32; 1024];
+        query[0] = 1.0;
+        let candidates = [
+            SourceCandidate {
+                ordinal: 1,
+                source_id: 2,
+            },
+            SourceCandidate {
+                ordinal: 0,
+                source_id: 1,
+            },
+        ];
+        let result = tier.rank_exact(&query, &candidates, 2).unwrap();
+        assert_eq!(result[0].source_id, 1);
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all_at(&2.0_f32.to_le_bytes(), HEADER_BYTES + 8192 - 4)
+            .unwrap();
+        assert!(tier.rank_exact(&query, &candidates, 2).is_err());
     }
 
     #[test]
@@ -434,7 +576,8 @@ mod tests {
             vec![vec![1.0, 0.0], vec![0.0, 1.0]].into_iter(),
         )
         .unwrap();
-        let tier = NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 2, 2, 1).unwrap();
+        let tier =
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 2, 2, 1, 4096).unwrap();
         assert!(
             tier.rank_exact(
                 &[1.0, 0.0],
@@ -467,7 +610,8 @@ mod tests {
             vec![vec![100.0, 0.0], vec![1.0, 1.0]].into_iter(),
         )
         .unwrap();
-        let tier = NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 2, 2, 3).unwrap();
+        let tier =
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 2, 2, 3, 4096).unwrap();
         let result = tier
             .rank_exact(
                 &[2.0, 0.0],
@@ -487,7 +631,8 @@ mod tests {
         assert_eq!(result[0].source_id, 10);
         assert_eq!(result[0].score, 1.0);
         assert!(
-            NativeSourceTier::open_authenticated(&path, &sha, &"2".repeat(64), 2, 2, 3).is_err()
+            NativeSourceTier::open_authenticated(&path, &sha, &"2".repeat(64), 2, 2, 3, 4096)
+                .is_err()
         );
         assert!(
             write_source_tier(&path, 1, 2, 3, SOURCE_SHA, vec![vec![1.0, 0.0]].into_iter(),)

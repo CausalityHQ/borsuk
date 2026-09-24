@@ -15,23 +15,37 @@ not constitute one matched cross-corpus production method.
 `crates/borsuk/src/native_source_tier.rs` adds a versioned, generation-pinned
 float32 source-plane writer and a local reader that checks the complete
 artifact SHA-256, geometry, source-object identity, and generation at open.
+The reader derives SHA-256 digests for explicit 4-KiB-to-1-MiB verification
+blocks during that scan and checks each block fetched by a later query.
 It computes deterministic float64 cosine rankings within an externally
 supplied candidate union. Four focused library tests cover ranking, ties,
 invalid rows/IDs, nonunit vectors, tampering before open, and generation and
 source-identity mismatch. The final V125 code-check Spot attempt
 `i-0b9f2095ac8843161` ran these four tests successfully from source archive
 SHA-256 `f59eb815a1e36b793530c66d222391447ca703e1837d188ec20835546a985574`;
-all three code-check instances were terminated. Its package-wide Clippy step
+all three initial code-check instances were terminated. Its package-wide Clippy step
 failed on 137 diagnostics in older modules and none in the new module, so
 this is a targeted test gate, not a clean full-assurance result.
 
-The reader authenticates bytes **at open**. It currently relies on the caller
-to pin an immutable local file and to supply an authenticated candidate
-ordinal-to-source-ID map; it does not yet authenticate each later local read,
-hydrate from S3, perform FP16 interval refinement, or account for local I/O
-and S3 GETs in a served query. Those are required before the architecture
-can pass gate 1 below. The writer records a caller-supplied source-object
-digest; the build path must authenticate that original object independently.
+An additional red/green Spot gate confirmed a valid-vector mutation after
+open was formerly scored without error, then confirmed that the repaired
+reader rejects it: the final source archive SHA-256 was
+`e6148fd2139ba435329aa388d40432ecc4e90d9fc444f15d33aa21dfcd06dde8`,
+terminal SHA-256 was
+`f48a6378389961cec0b8ebc98e9c65d2c1cb0ab3b1828942207125a9107990e0`,
+and all six focused Rust tests passed. Both new Spot instances were
+terminated. Lean's `sourceDigestBytes` model checks the table payload for
+two complete 100M generations at 64-KiB blocks: 37,500,032 bytes for D96
+and 300,000,064 bytes for D768. This is a modeled digest payload, not
+charged RAM or latency; larger blocks trade lower resident digest memory
+for more local bytes read and hashed per candidate.
+
+The caller must still supply an authenticated candidate ordinal-to-source-ID
+map and a generation-pinned source object. This slice does not yet hydrate
+from S3, perform FP16 interval refinement, or account for local I/O and S3
+GETs in a served query. Those are required before the architecture can pass
+gate 1 below. The writer records a caller-supplied source-object digest;
+the build path must authenticate that original object independently.
 
 ## Query and generation contract
 
