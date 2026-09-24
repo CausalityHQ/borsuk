@@ -482,7 +482,9 @@ impl ContiguousPageHierarchy {
     fn node_bound(&self, query: &[f32], node: usize) -> Result<f32, HierarchyError> {
         let summary = &self.nodes[node];
         let distance = distance_to_center(query, &summary.center);
-        let bound = (distance - f64::from(summary.radius)).max(0.0) as f32;
+        // Preserve the signed triangle bound. Clamping to zero makes broad
+        // overlapping summaries tie and can collapse traversal to node order.
+        let bound = (distance - f64::from(summary.radius)) as f32;
         if !bound.is_finite() {
             return Err(HierarchyError::InvalidQuery);
         }

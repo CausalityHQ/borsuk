@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import io
 import json
+import math
 import shlex
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -184,6 +187,12 @@ def check_source_and_inputs(s3: object, plan: Plan) -> None:
         archive.write(block)
     if count != plan.archive_bytes or sha.hexdigest() != plan.archive_sha256:
         raise ValueError("source archive differs")
+    expected_tree = subprocess.run(
+        ["git", "archive", "--format=tar", plan.source_commit],
+        check=True, capture_output=True,
+    ).stdout
+    if gzip.decompress(archive.getvalue()) != expected_tree:
+        raise ValueError("source archive is not the named Git commit")
     archive.seek(0)
     with tarfile.open(fileobj=archive, mode="r:gz") as source:
         if (RUNNER not in source.getnames()
@@ -219,6 +228,129 @@ def reserve(plan: Plan) -> None:
             "--key", key + "/reservation.json", "--body", body.name,
             "--if-none-match", "*", "--output", "json",
         ], check=True, stdout=subprocess.DEVNULL)
+
+
+def recount_science(s3: object, prefix: str, decision: dict) -> None:
+    def artifact(name: str) -> bytes:
+        return s3.get_object(Bucket=BUCKET,
+                             Key=prefix + "/artifacts/" + name)["Body"].read()
+
+    summary = json.loads(artifact("science.summary.json"))
+    records = [json.loads(line) for line in artifact("science.jsonl").splitlines()]
+    if (len(records) != 1000 or summary.get("rows") != 100000
+            or summary.get("dimensions") != 96 or summary.get("query_count") != 1000
+            or summary.get("fanout") != 16 or summary.get("height") != 4):
+        raise ValueError("V149 science geometry/count differs")
+    flat_key = next(key for key, _ in INPUTS if key.endswith("/deep.rust-scores.bin"))
+    flat = s3.get_object(Bucket=BUCKET, Key=flat_key)["Body"].read()
+    if (len(flat) != 1_564_000 or hashlib.sha256(flat).hexdigest()
+            != "341436ca66c24b0e247cf2a8e40b606d7b983cbd7b170ba4e2740f390cf0807c"):
+        raise ValueError("V146 flat reference differs")
+    references = struct.unpack("<391000f", flat)
+    v140_key = next(key for key, _ in INPUTS if key.endswith("/deep.raw.jsonl"))
+    v140_bytes = s3.get_object(Bucket=BUCKET, Key=v140_key)["Body"].read()
+    if hashlib.sha256(v140_bytes).hexdigest() != "e2a1b31161bb2190cb7dc36d0601c50449c6d6aba0cc1a4985c032d713bc54d5":
+        raise ValueError("V140 raw baseline differs")
+    v140_records = [json.loads(line) for line in v140_bytes.splitlines()]
+    if len(v140_records) != 1000:
+        raise ValueError("V140 raw baseline count differs")
+    evaluations = []
+    capture = control_capture = reference_count = 0
+    all_primary = all_caps = all_shortfall = True
+    max_diff = 0.0
+    for ordinal, record in enumerate(records):
+        if (record["query_ordinal"] != ordinal
+                or record["source_query_ordinal"] != ordinal + 9000):
+            raise ValueError("V149 query ordinal differs")
+        visited = record["visited_pages"]
+        visited_set = {item[0] for item in visited}
+        if len(visited_set) != len(visited):
+            raise ValueError("V149 duplicate visited page")
+        query_diff = 0.0
+        for page, score in visited:
+            if not (isinstance(page, int) and 0 <= page < 391
+                    and math.isfinite(score)):
+                raise ValueError("V149 visited page differs")
+            query_diff = max(query_diff, abs(score - references[ordinal * 391 + page]))
+        if abs(query_diff - record["query_max_abs_score_difference"]) > 1e-7:
+            raise ValueError("V149 score difference recount differs")
+        max_diff = max(max_diff, query_diff)
+        primary_set = set(record["primary_pages"])
+        p = record["primary_distinct_pages"]
+        baseline_record = v140_records[ordinal]
+        baseline_selected = set(baseline_record["variants"]["4"]["selected_pages"])
+        if (baseline_record["query_ordinal"] != ordinal
+                or p != len(primary_set)
+                or record["baseline_selected_pages"] != sorted(baseline_selected)
+                or record["baseline_selected_count"] != len(baseline_selected)
+                or record["baseline_target_shortfall"]
+                != baseline_record["variants"]["4"]["target_shortfall"]):
+            raise ValueError("V149 baseline or primary geometry differs")
+        cap = min(391, 4 * p)
+        control_set = set(primary_set)
+        for page in range(391):
+            if len(control_set) == len(visited_set):
+                break
+            control_set.add(page)
+        selected_set = set(record["selected_pages"])
+        control_selected_set = set(record["control_selected_pages"])
+        if (record["additional_page_budget"] != cap
+                or record["node_budget"] != 8 * p * 4
+                or len(visited) > p + cap
+                or record["node_expansions"] > record["node_budget"]
+                or record["control_visited_pages"] != len(visited)
+                or len(control_set) != len(visited_set)
+                or len(selected_set) != len(record["selected_pages"])
+                or len(control_selected_set) != len(record["control_selected_pages"])
+                or not selected_set.issubset(visited_set)
+                or not control_selected_set.issubset(control_set)):
+            raise ValueError("V149 search budget recount differs")
+        evaluations.append(record["vector_evaluations"])
+        retained = primary_set.issubset(visited_set) and primary_set.issubset(selected_set)
+        if record["all_primary_retained"] is not retained:
+            raise ValueError("V149 primary inclusion recount differs")
+        all_primary &= retained
+        ranges = record["ranges"]
+        range_ok = (len(ranges) == record["gets"]
+                    and all(0 <= start < end <= 100000 * 108
+                            for start, end in ranges)
+                    and sum(end - start for start, end in ranges)
+                    == record["planned_bytes"])
+        query_caps = (range_ok and record["gets"] <= 32
+                      and record["planned_bytes"] <= 16_777_216)
+        if record["plan_caps_hold"] is not query_caps:
+            raise ValueError("V149 plan cap recount differs")
+        all_caps &= query_caps
+        shortfall = record["target_shortfall"] <= record["baseline_target_shortfall"]
+        if record["shortfall_no_worse"] is not shortfall:
+            raise ValueError("V149 shortfall recount differs")
+        all_shortfall &= shortfall
+        query_capture = len(selected_set & baseline_selected)
+        query_control_capture = len(control_selected_set & baseline_selected)
+        if (record["selected_baseline_capture"] != query_capture
+                or record["control_selected_baseline_capture"] != query_control_capture):
+            raise ValueError("V149 page capture recount differs")
+        capture += query_capture
+        control_capture += query_control_capture
+        reference_count += len(baseline_selected)
+    if reference_count <= 0:
+        raise ValueError("V149 empty baseline capture denominator")
+    fraction = capture / reference_count
+    control_fraction = control_capture / reference_count
+    verdict = ("pass" if all_primary and all_caps and all_shortfall
+               and max_diff <= 0.0001 and sorted(evaluations)[949] < 3125
+               and fraction >= 0.95 and fraction >= control_fraction + 0.05
+               else "reject")
+    if (summary.get("verdict") != verdict or decision.get("verdict") != verdict
+            or summary.get("all_primary_retained") is not all_primary
+            or summary.get("all_plan_caps") is not all_caps
+            or summary.get("shortfall_no_worse") is not all_shortfall
+            or summary.get("vector_evaluations_p95") != sorted(evaluations)[949]
+            or summary.get("selected_baseline_capture") != capture
+            or summary.get("control_selected_baseline_capture") != control_capture
+            or summary.get("baseline_selected_count") != reference_count
+            or abs(summary.get("max_abs_visited_score_difference", -1) - max_diff) > 1e-7):
+        raise ValueError("V149 scientific verdict recount differs")
 
 
 def launch_and_monitor(plan: Plan) -> dict:
@@ -288,6 +420,8 @@ def launch_and_monitor(plan: Plan) -> dict:
                         length += len(block)
                     if length != metadata["bytes"] or digest.hexdigest() != metadata["sha256"]:
                         raise ValueError(f"V149 artifact differs: {name}")
+                if terminal.get("status") == "complete":
+                    recount_science(s3, prefix, terminal["decision"])
                 terminal["authenticated_artifact_count"] = len(artifacts)
                 print(json.dumps(terminal, sort_keys=True), flush=True)
                 return terminal
@@ -322,9 +456,8 @@ def main() -> None:
         archive_bytes=args.archive_bytes,
         output_prefix=args.output_prefix,
     ))
-    if (terminal.get("status") != "complete" or terminal.get("exit_code") != 0
-            or terminal.get("decision", {}).get("verdict") != "pass"):
-        raise RuntimeError("V149 terminal reports a failed attempt")
+    if terminal.get("status") != "complete" or terminal.get("exit_code") != 0:
+        raise RuntimeError("V149 terminal reports an infrastructure failure")
 
 
 if __name__ == "__main__":

@@ -97,6 +97,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut exhausted = 0usize;
     let mut selected_capture = 0usize;
     let mut selected_reference = 0usize;
+    let mut control_capture = 0usize;
+    let mut shortfall_no_worse = true;
     for ordinal in 0..1000 {
         if unsigned(&queries[ordinal]["query_ordinal"])? != ordinal
             || unsigned(&primary[ordinal]["query_ordinal"])? != ordinal
@@ -176,6 +178,37 @@ fn run() -> Result<(), Box<dyn Error>> {
             .filter(|page| baseline_pages.contains(page))
             .count();
         selected_reference += baseline_pages.len();
+        let baseline_shortfall = unsigned(&frozen[ordinal]["variants"]["4"]["target_shortfall"])?;
+        let query_shortfall_no_worse = plan.target_shortfall <= baseline_shortfall;
+        shortfall_no_worse &= query_shortfall_no_worse;
+        let mut control_pages = primary_pages.iter().copied().collect::<BTreeSet<_>>();
+        let secondary_count = found.scored_pages.len() - p;
+        for page in 0..page_count {
+            if control_pages.len() == p + secondary_count {
+                break;
+            }
+            control_pages.insert(page);
+        }
+        let control_scores = control_pages
+            .into_iter()
+            .map(|page| (page, reference_scores[page]))
+            .collect::<Vec<_>>();
+        let control_plan = choose_budgeted_pages_sparse(
+            &control_scores,
+            &roster,
+            rows,
+            dimensions,
+            4,
+            32,
+            16_777_216,
+        )
+        .map_err(|error| format!("control plan failed at {ordinal}: {error:?}"))?;
+        let query_control_capture = control_plan
+            .selected_pages
+            .iter()
+            .filter(|page| baseline_pages.contains(page))
+            .count();
+        control_capture += query_control_capture;
         serde_json::to_writer(
             &mut output,
             &json!({
@@ -194,21 +227,33 @@ fn run() -> Result<(), Box<dyn Error>> {
                 "all_primary_retained": retained,
                 "plan_caps_hold": budget_ok,
                 "selected_pages": plan.selected_pages,
+                "primary_pages": primary_pages,
                 "ranges": plan.ranges.iter().map(|range| [range.start, range.end]).collect::<Vec<_>>(),
                 "planned_bytes": plan.planned_bytes,
                 "gets": plan.ranges.len(),
                 "target_shortfall": plan.target_shortfall,
                 "selected_baseline_capture": plan.selected_pages.iter().filter(|page| baseline_pages.contains(page)).count(),
                 "baseline_selected_count": baseline_pages.len(),
+                "baseline_selected_pages": baseline_pages,
+                "control_selected_baseline_capture": query_control_capture,
+                "control_selected_pages": control_plan.selected_pages,
+                "control_visited_pages": control_scores.len(),
+                "baseline_target_shortfall": baseline_shortfall,
+                "shortfall_no_worse": query_shortfall_no_worse,
             }),
         )?;
         output.write_all(b"\n")?;
     }
     output.flush()?;
+    let capture_fraction = selected_capture as f64 / selected_reference as f64;
+    let control_fraction = control_capture as f64 / selected_reference as f64;
     let verdict = if all_primary_retained
         && all_plan_caps
+        && shortfall_no_worse
         && max_abs_score_difference <= 0.0001
         && percentile_usize(&evals, 949) < scorer.unit_count()
+        && capture_fraction >= 0.95
+        && capture_fraction >= control_fraction + 0.05
     {
         "pass"
     } else {
@@ -242,6 +287,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         "search_and_planner_p99_ms": percentile_ms(&combined_ns, 989),
         "selected_baseline_capture": selected_capture,
         "baseline_selected_count": selected_reference,
+        "selected_baseline_capture_fraction": capture_fraction,
+        "control_selected_baseline_capture": control_capture,
+        "control_selected_baseline_capture_fraction": control_fraction,
+        "shortfall_no_worse": shortfall_no_worse,
         "verdict": verdict,
     });
     fs::write(&args[7], format!("{}\n", serde_json::to_string(&summary)?))?;
