@@ -1,5 +1,14 @@
 # OPQ8 proofs
 
+`PageSeededGraphBounds.lean` proves V151's conditional 16P distinct
+unit-evaluation cap from an 8P seed bound and an 8P discovery bound,
+the 5P exact candidate-page cap, and the provisional page-minimum
+upper-bound relation when the exact minimum is a lower bound for every
+observed unit distance. It does not prove that the Rust traversal
+refines this model, that graph discovery attains recall, or elapsed
+latency and charged memory. Check it with the pinned toolchain using
+`lean PageSeededGraphBounds.lean` from this directory.
+
 `BudgetedPageAdmission.lean` proves that primary-first page admission stays
 within its GET and byte caps when every proposed coalesced cover is charged
 before admission. It checks the current D96/D768 full-page byte arithmetic
