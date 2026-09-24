@@ -62,8 +62,9 @@ count, charged units and open/closed interval. Forbid skipping every
 mandatory primary unit directly; do not rely on a large artificial
 weight. The resulting states form a quality/resource frontier. Admit
 only witnesses with at most 32 GETs and 672 full 32-row units, or
-16,777,216 actual SQ8 bytes; the final partial unit is charged by its
-authenticated length. At D768 a full unit is 24,960 bytes. The
+16,777,216 actual SQ8 bytes. The first equal-unit solver conservatively
+charges a partial final unit as full; the serving checker recounts its
+authenticated actual length. At D768 a full unit is 24,960 bytes. The
 objective is the least measured resource cost among plans meeting a
 caller quality target, with deterministic ties. Report GETs, bytes,
 largest interval, estimated captured mass, exact-primary coverage and
@@ -80,6 +81,24 @@ transitions, and compare small instances against exhaustive search.
 Planner CPU is on the serving path; a NumPy offline result is not a
 Rust latency measurement. The fixed V115 flat summary route remains a
 separate 10M/100M scale blocker.
+
+The first V169 Python solver is an **experimental exact reference** for
+equal-unit cost `get_cost × GETs + unit_cost × units`, with both costs
+positive integers supplied by its caller. It returns one least-cost
+witness for a supplied integer utility target; it does not yet expose
+the entire frontier, accept a measured latency profile, or price a
+partial tail exactly. Among equally priced resource cells it chooses
+fewer GETs, then fewer units. Within a cell it keeps the maximum
+utility; equal-utility predecessor ties prefer a skip over keeping an
+interval open and a new GET over extending an open interval. A Rust
+refinement must reproduce these ties or record a new format/algorithm
+version. The impossible-state sentinel is `−2³⁰`, and total integer
+utility must stay below `2³⁰`; otherwise the proof of witness
+feasibility fails. An independent read-only review reported agreement
+on 3,000 more small brute-force cases and 0.37–0.54 seconds per query
+in two local NumPy 1,536-event diagnostics. Those advisory runs are
+neither a controlled serving Rust latency measurement nor an acceptable
+production target.
 
 ## Qualification and stop conditions
 
