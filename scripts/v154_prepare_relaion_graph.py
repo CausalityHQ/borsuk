@@ -45,7 +45,7 @@ def main() -> None:
     requests = records(args.requests, REQUEST_SHA)
     primary = records(args.primary, PRIMARY_SHA)
     with args.queries_out.open("x") as query_out, args.routing_out.open("x") as route_out:
-        for ordinal, (request, route) in enumerate(zip(requests, primary, strict=True)):
+        for ordinal, (request, route) in enumerate(zip(requests, primary)):
             if request["query_ordinal"] != ordinal or route["query_ordinal"] != ordinal:
                 raise ValueError("query identity differs")
             query = request["query"]
