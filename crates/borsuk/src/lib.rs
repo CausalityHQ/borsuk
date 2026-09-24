@@ -61,6 +61,7 @@ mod parallel;
 pub mod physical_interval;
 pub mod budgeted_page_rank;
 pub mod graph_generation_resources;
+pub mod graph_serving_generation;
 pub mod contiguous_page_hierarchy;
 pub mod unit_centroid_pages;
 pub mod unit_centroid_graph;

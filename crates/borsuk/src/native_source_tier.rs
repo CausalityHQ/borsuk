@@ -2,8 +2,8 @@
 //!
 //! This module owns a versioned local float32 plane. S3 hydration, a faster
 //! first-pass plane, routing and expansion are separate layers. Search is
-//! exact cosine within the supplied candidates and never changes candidate
-//! membership to fit a memory or vector-count threshold.
+//! exact cosine or squared L2 within the supplied candidates and never
+//! changes candidate membership to fit a memory or vector-count threshold.
 
 use std::{
     collections::HashSet,
@@ -41,12 +41,12 @@ pub struct SourceCandidate {
     pub source_id: u64,
 }
 
-/// One exact cosine result within a supplied candidate roster.
+/// One exact source score within a supplied candidate roster.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScoredSourceCandidate {
     /// Public source identifier.
     pub source_id: u64,
-    /// Cosine score, descending in search results.
+    /// Cosine is ordered descending; squared L2 is ordered ascending.
     pub score: f64,
 }
 
@@ -72,6 +72,12 @@ pub struct NativeSourceTier {
     source_sha256: [u8; 32],
     verification_block_bytes: usize,
     block_digests: Vec<[u8; 32]>,
+}
+
+#[derive(Clone, Copy)]
+enum ExactMetric {
+    Cosine,
+    SquaredL2,
 }
 
 pub(crate) fn decoded_sha256(value: &str) -> Result<[u8; 32], SourceTierError> {
@@ -170,7 +176,7 @@ where
             let norm_squared = vector.iter().fold(0.0_f64, |acc, &value| {
                 acc + f64::from(value) * f64::from(value)
             });
-            if !norm_squared.is_finite() || norm_squared <= 0.0 {
+            if !norm_squared.is_finite() {
                 return Err(SourceTierError::Invalid("source vector norm"));
             }
             let id_bytes = source_id.to_le_bytes();
@@ -384,6 +390,27 @@ impl NativeSourceTier {
         candidates: &[SourceCandidate],
         top_k: usize,
     ) -> Result<(Vec<ScoredSourceCandidate>, SourceReadStats), SourceTierError> {
+        self.rank_with_stats(query, candidates, top_k, ExactMetric::Cosine)
+    }
+
+    /// Exact squared-L2 top-k and authenticated local read cost. Smaller
+    /// scores rank first; zero vectors and zero queries are valid.
+    pub fn rank_exact_l2_with_stats(
+        &self,
+        query: &[f32],
+        candidates: &[SourceCandidate],
+        top_k: usize,
+    ) -> Result<(Vec<ScoredSourceCandidate>, SourceReadStats), SourceTierError> {
+        self.rank_with_stats(query, candidates, top_k, ExactMetric::SquaredL2)
+    }
+
+    fn rank_with_stats(
+        &self,
+        query: &[f32],
+        candidates: &[SourceCandidate],
+        top_k: usize,
+        metric: ExactMetric,
+    ) -> Result<(Vec<ScoredSourceCandidate>, SourceReadStats), SourceTierError> {
         if query.len() != self.dimensions
             || top_k == 0
             || top_k > candidates.len()
@@ -397,12 +424,15 @@ impl NativeSourceTier {
                 acc + f64::from(value) * f64::from(value)
             })
             .sqrt();
-        if !query_norm.is_finite() || query_norm <= 0.0 {
+        if !query_norm.is_finite() || (matches!(metric, ExactMetric::Cosine) && query_norm <= 0.0) {
             return Err(SourceTierError::Invalid("query norm"));
         }
-        let query_unit = query
+        let query_values = query
             .iter()
-            .map(|&value| f64::from(value) / query_norm)
+            .map(|&value| match metric {
+                ExactMetric::Cosine => f64::from(value) / query_norm,
+                ExactMetric::SquaredL2 => f64::from(value),
+            })
             .collect::<Vec<_>>();
         let mut ids = HashSet::with_capacity(candidates.len());
         let mut ordinals = HashSet::with_capacity(candidates.len());
@@ -440,19 +470,31 @@ impl NativeSourceTier {
             }
             let mut norm_squared = 0.0_f64;
             let mut dot = 0.0_f64;
+            let mut distance_squared = 0.0_f64;
             for (coordinate, encoded) in bytes[8..].chunks_exact(4).enumerate() {
                 let value = f64::from(f32::from_le_bytes(encoded.try_into().unwrap()));
                 if !value.is_finite() {
                     return Err(SourceTierError::Invalid("source vector nonfinite"));
                 }
                 norm_squared += value * value;
-                dot += value * query_unit[coordinate];
+                match metric {
+                    ExactMetric::Cosine => dot += value * query_values[coordinate],
+                    ExactMetric::SquaredL2 => {
+                        let delta = value - query_values[coordinate];
+                        distance_squared += delta * delta;
+                    }
+                }
             }
-            let norm = norm_squared.sqrt();
-            if !norm.is_finite() || norm <= 0.0 {
-                return Err(SourceTierError::Invalid("source vector norm"));
-            }
-            let score = dot / norm;
+            let score = match metric {
+                ExactMetric::Cosine => {
+                    let norm = norm_squared.sqrt();
+                    if !norm.is_finite() || norm <= 0.0 {
+                        return Err(SourceTierError::Invalid("source vector norm"));
+                    }
+                    dot / norm
+                }
+                ExactMetric::SquaredL2 => distance_squared,
+            };
             if !score.is_finite() {
                 return Err(SourceTierError::Invalid("source score nonfinite"));
             }
@@ -466,10 +508,11 @@ impl NativeSourceTier {
                 .ok_or(SourceTierError::Invalid("source row count overflow"))?;
         }
         scored.sort_unstable_by(|left, right| {
-            right
-                .score
-                .total_cmp(&left.score)
-                .then_with(|| left.source_id.cmp(&right.source_id))
+            match metric {
+                ExactMetric::Cosine => right.score.total_cmp(&left.score),
+                ExactMetric::SquaredL2 => left.score.total_cmp(&right.score),
+            }
+            .then_with(|| left.source_id.cmp(&right.source_id))
         });
         scored.truncate(top_k);
         Ok((scored, stats))
@@ -499,6 +542,61 @@ mod tests {
     use super::*;
 
     const SOURCE_SHA: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn squared_l2_ranks_by_distance_and_accepts_zero_vectors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.bin");
+        let sha = write_source_tier(
+            &path,
+            3,
+            2,
+            7,
+            SOURCE_SHA,
+            vec![
+                (9, vec![2.0, 0.0]),
+                (4, vec![0.0, 0.0]),
+                (2, vec![1.0, 0.0]),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tier =
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 3, 2, 7, 4096).unwrap();
+        let candidates = [
+            SourceCandidate {
+                ordinal: 0,
+                source_id: 9,
+            },
+            SourceCandidate {
+                ordinal: 1,
+                source_id: 4,
+            },
+            SourceCandidate {
+                ordinal: 2,
+                source_id: 2,
+            },
+        ];
+        let (ranked, stats) = tier
+            .rank_exact_l2_with_stats(&[1.0, 0.0], &candidates, 3)
+            .unwrap();
+        assert_eq!(
+            ranked.iter().map(|row| row.source_id).collect::<Vec<_>>(),
+            vec![2, 4, 9]
+        );
+        assert_eq!(
+            ranked.iter().map(|row| row.score).collect::<Vec<_>>(),
+            vec![0.0, 1.0, 1.0]
+        );
+        assert_eq!(stats.source_rows, 3);
+        assert_eq!(
+            tier.rank_exact_l2_with_stats(&[0.0, 0.0], &candidates, 1)
+                .unwrap()
+                .0[0]
+                .source_id,
+            4
+        );
+    }
 
     #[test]
     fn authenticated_plane_ranks_nonmonotone_ids_and_stable_ties() {

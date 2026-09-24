@@ -28,6 +28,7 @@ impl Pq64Router {
     pub fn rows(&self) -> usize { self.rows }
     pub fn dimensions(&self) -> usize { self.dimensions }
     pub fn page_rows(&self) -> usize { self.page_rows }
+    pub fn blocks_per_page(&self) -> usize { self.blocks_per_page }
 
     /// Bind source-only arrays to explicit row, page and PQ geometry.
     pub fn new(

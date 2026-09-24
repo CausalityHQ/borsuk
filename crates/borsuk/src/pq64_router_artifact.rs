@@ -3,8 +3,8 @@
 use crate::pq64_nominee::{Pq64Error, Pq64Router};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::Path;
 
 /// Authenticated router and source-derived SQ8 affine coefficients.
@@ -72,10 +72,16 @@ fn read_section(
     }
     let expected_sha = hash_field(section, "sha256")?;
     let path = root.join(format!("{name}.bin"));
-    if usize::try_from(fs::metadata(&path)?.len()).ok() != Some(expected_bytes) {
+    let mut file = File::open(path)?;
+    if usize::try_from(file.metadata()?.len()).ok() != Some(expected_bytes) {
         return Err(RouterArtifactError::Invalid);
     }
-    let bytes = fs::read(path)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(expected_bytes).map_err(|_| RouterArtifactError::Invalid)?;
+    bytes.resize(expected_bytes, 0);
+    file.read_exact(&mut bytes)?;
+    let mut extra = [0_u8; 1];
+    if file.read(&mut extra)? != 0 { return Err(RouterArtifactError::Invalid); }
     if digest(&bytes) != expected_sha { return Err(RouterArtifactError::HashMismatch); }
     Ok(bytes)
 }
@@ -96,7 +102,11 @@ pub fn load_source_router(
     root: &Path, expected_manifest_sha256: &str,
 ) -> Result<SourceRouterArtifact, RouterArtifactError> {
     if !hex64(expected_manifest_sha256) { return Err(RouterArtifactError::Invalid); }
-    let raw = fs::read(root.join("manifest.json"))?;
+    let file = File::open(root.join("manifest.json"))?;
+    if file.metadata()?.len() > 64 * 1024 { return Err(RouterArtifactError::Invalid); }
+    let mut raw = Vec::new();
+    file.take(64 * 1024 + 1).read_to_end(&mut raw)?;
+    if raw.len() > 64 * 1024 { return Err(RouterArtifactError::Invalid); }
     if digest(&raw) != expected_manifest_sha256 {
         return Err(RouterArtifactError::HashMismatch);
     }
