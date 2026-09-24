@@ -76,3 +76,24 @@ before 1M promotion. RAM budgets should be chosen against measured
 recall and latency, rather than a hard corpus-size knee. Lean can prove
 conditional graph-work, adjacency-memory, and transport bounds, but
 page discovery, recall, and elapsed CPU/S3 latency remain empirical.
+
+## Postterminal truth-cover diagnostic
+
+After the GT-free decision was frozen, the read-only
+`scripts/v150_postterminal_truth_coverage.py` recounted V150's actual
+fetched ranges against the authenticated V122 GT100 and SQ8 source-ID
+map. The selected pages contained **99,414 / 100,000** truth positions;
+the fetched ranges, including bridged pages, contained **99,523 / 100,000**.
+The fetched-range p05 was **97 / 100**, with zero queries below 90.
+V141/V140's previously verified fetched physical coverage on this same
+used split was **99,738 / 100,000**. The V150 range-cover deficit was
+therefore 215 truth positions, much smaller than its 22,594-page
+V140-plan difference.
+
+This is a postterminal diagnostic on already-used queries, not a
+preregistered V150 pass or returned Recall@100. Router nominees and
+source reranking can change returned hits relative to fetched-page
+coverage. It shows that exact page-plan capture was an overly blunt
+screen for a changed candidate router. The next decisive gate should
+measure returned IDs, lower-tail recall, and S3 work directly before
+rejecting or promoting any revised page-diverse policy.
