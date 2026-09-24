@@ -97,6 +97,16 @@ all 11 focused tests passed. Both Spots were observed terminated. These
 logical bytes can be served from page cache; physical SSD I/O and live
 per-query costs still need measurement. Gate 1 below is still open.
 
+`native_source_id_map.rs` adds a versioned `BORSMAP1` candidate for
+original-ID-to-source-ordinal resolution. It binds the complete sorted map
+to the source plane's artifact SHA-256, source-object SHA-256 and generation,
+checks sorted unique IDs and ordinal permutation at open, and resolves the
+deduplicated router/expansion union. Exact scoring still checks each source
+row's embedded ID. Its separate V128 contract and focused red/green Spot
+evidence are in `docs/research/v128-source-id-map-contract.md`. The map's
+16-byte-per-row resident pair payload is a projected resource cost, not a
+measured 100M capacity or live latency result.
+
 ## Query and generation contract
 
 An immutable generation has authenticated objects for (1) a query-blind

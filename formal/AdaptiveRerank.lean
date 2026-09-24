@@ -92,6 +92,25 @@ theorem hundred_million_source_digest_examples :
     sourceDigestBytes 100_000_000 768 2 4_096 = 4_812_500_032 := by
   decide
 
+/-! The immutable source-ID map has a 96-byte header and one 16-byte
+`(source ID, source ordinal)` pair per row and pinned generation. This is
+format payload arithmetic, not charged RAM or lookup latency. -/
+def sourceIdMapPayloadBytes (rows generations : Nat) : Nat :=
+  generations * (96 + 16 * rows)
+
+theorem source_id_map_payload_monotone
+    (rows₁ rows₂ generations : Nat) (ordered : rows₁ ≤ rows₂) :
+    sourceIdMapPayloadBytes rows₁ generations ≤
+      sourceIdMapPayloadBytes rows₂ generations := by
+  simp only [sourceIdMapPayloadBytes]
+  exact Nat.mul_le_mul_left generations
+    (Nat.add_le_add_left (Nat.mul_le_mul_left 16 ordered) 96)
+
+theorem source_id_map_payload_examples :
+    sourceIdMapPayloadBytes 1_000_000 1 = 16_000_096 ∧
+    sourceIdMapPayloadBytes 100_000_000 2 = 3_200_000_192 := by
+  decide
+
 /-! A finite-cohort capture ceiling: an authenticated roster certificate and
 candidate-only return refinement can rule out an aggregate target, regardless
 of the scorer. The V124 number is an external artifact premise, not a Lean

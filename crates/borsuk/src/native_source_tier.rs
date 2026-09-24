@@ -68,6 +68,7 @@ pub struct NativeSourceTier {
     rows: u64,
     dimensions: usize,
     generation: u64,
+    artifact_sha256: [u8; 32],
     source_sha256: [u8; 32],
     verification_block_bytes: usize,
     block_digests: Vec<[u8; 32]>,
@@ -261,6 +262,7 @@ impl NativeSourceTier {
             rows,
             dimensions,
             generation,
+            artifact_sha256: expected_artifact,
             source_sha256: source,
             verification_block_bytes,
             block_digests,
@@ -289,6 +291,12 @@ impl NativeSourceTier {
     #[must_use]
     pub fn source_sha256(&self) -> [u8; 32] {
         self.source_sha256
+    }
+
+    /// SHA-256 identity of this exact source-plane artifact.
+    #[must_use]
+    pub fn artifact_sha256(&self) -> [u8; 32] {
+        self.artifact_sha256
     }
 
     /// Configured authenticated local read granularity.
