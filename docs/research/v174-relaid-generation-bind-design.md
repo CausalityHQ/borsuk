@@ -31,3 +31,14 @@ assume a source-tier ordinal equals either physical SQ8 ordinal. An
 end-to-end test must independently check returned IDs and exact-source
 reranking. No recall, serving latency,
 charged RAM or recovery claim follows from this binder test.
+
+The helper revision `a0bb625628d41d4286333239bc547956a929b2c9`
+passed the same two-filter narrow Spot gate, including the nonidentity
+nomination/scoring assertions: 2 router tests and 8 tests matched by the
+serving-generation name filter, all passing. The complete terminal
+SHA-256 is
+`4ab3ee269325ed3df22c30ca96eca467401512ff0dc26e2c83100635ef6e2496`
+at `s3://borsuk-bench-453182569524-euc1/research/v174-relaid-bind-compile/a0bb625628d41d4286333239bc547956a929b2c9/runs/a0002/`.
+The controller rehashed the three closed artifacts and confirmed Spot
+instance `i-07d7844fe3da0d091` terminated. Compile/tests took 103.35
+wall seconds and peaked at 4,997,760 KiB RSS on the build worker.
