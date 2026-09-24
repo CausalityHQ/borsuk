@@ -92,6 +92,7 @@ def user_data(plan: Plan) -> str:
     )
     return f"""#!/bin/bash
 set -euo pipefail
+systemd-run --unit=v139-hard-stop --on-active={plan.wall_seconds}s /usr/sbin/shutdown -h now
 root=/mnt/v139-centroid-page
 mkdir -p "$root" && cd "$root"
 {exports}
@@ -238,34 +239,65 @@ def launch_and_monitor(plan: Plan) -> dict:
     print(json.dumps({"instance_id": instance_id, "output_prefix": plan.output_prefix},
                      sort_keys=True), flush=True)
     deadline = time.monotonic() + plan.wall_seconds + 1_800
-    while time.monotonic() < deadline:
-        if not missing(s3, prefix + "/terminal.json"):
-            raw = s3.get_object(Bucket=BUCKET, Key=prefix + "/terminal.json")["Body"].read()
-            terminal = json.loads(raw)
-            if (terminal.get("schema") != "borsuk-v139-centroid-page-feasibility-spot-v1"
-                    or terminal.get("source_commit") != plan.source_commit
-                    or terminal.get("source_archive_sha256") != plan.archive_sha256
-                    or terminal.get("instance_id") != instance_id):
-                raise ValueError("V139 terminal identity differs")
-            terminal["terminal_sha256"] = hashlib.sha256(raw).hexdigest()
-            for _ in range(24):
-                state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
-                if state == "terminated":
-                    break
-                time.sleep(5)
-            else:
+    try:
+        while time.monotonic() < deadline:
+            if not missing(s3, prefix + "/terminal.json"):
+                raw = s3.get_object(Bucket=BUCKET, Key=prefix + "/terminal.json")["Body"].read()
+                terminal = json.loads(raw)
+                if (terminal.get("schema") != "borsuk-v139-centroid-page-feasibility-spot-v1"
+                        or terminal.get("source_commit") != plan.source_commit
+                        or terminal.get("source_archive_sha256") != plan.archive_sha256
+                        or terminal.get("instance_id") != instance_id):
+                    raise ValueError("V139 terminal identity differs")
+                terminal["terminal_sha256"] = hashlib.sha256(raw).hexdigest()
+                for _ in range(24):
+                    state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
+                    if state == "terminated":
+                        break
+                    time.sleep(5)
+                else:
+                    ec2.terminate_instances(InstanceIds=[instance_id])
+                    ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
+                terminal["instance_state"] = "terminated"
+                required = {"install.log", "download.log", "deep-resources.txt",
+                            "deep.raw.jsonl", "deep.summary.json", "decision.json",
+                            "cgroup-memory.txt", "worker.log"}
+                if terminal.get("status") == "complete":
+                    decision = json.loads(s3.get_object(
+                        Bucket=BUCKET, Key=prefix + "/artifacts/decision.json")["Body"].read())
+                    if not decision.get("relaion_skipped"):
+                        required.update({"relaion-resources.txt", "relaion.raw.jsonl",
+                                         "relaion.summary.json"})
+                    artifacts = terminal.get("artifacts", {})
+                    if not required.issubset(artifacts):
+                        raise ValueError("V139 complete terminal lacks required artifacts")
+                    for name, metadata in artifacts.items():
+                        body = s3.get_object(
+                            Bucket=BUCKET, Key=prefix + "/artifacts/" + name)["Body"]
+                        digest = hashlib.sha256()
+                        length = 0
+                        for block in body.iter_chunks(chunk_size=4 * 1024 * 1024):
+                            digest.update(block)
+                            length += len(block)
+                        if length != metadata["bytes"] or digest.hexdigest() != metadata["sha256"]:
+                            raise ValueError(f"V139 artifact differs: {name}")
+                    terminal["authenticated_artifact_count"] = len(artifacts)
+                print(json.dumps(terminal, sort_keys=True), flush=True)
+                return terminal
+            state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
+            if state == "terminated":
+                raise RuntimeError("V139 instance terminated without terminal marker")
+            time.sleep(15)
+        raise TimeoutError(f"V139 terminal missing after worker deadline: {instance_id}")
+    except BaseException:
+        try:
+            state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
+            if state != "terminated":
                 ec2.terminate_instances(InstanceIds=[instance_id])
                 ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
-            terminal["instance_state"] = "terminated"
-            print(json.dumps(terminal, sort_keys=True), flush=True)
-            return terminal
-        state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
-        if state == "terminated":
-            raise RuntimeError("V139 instance terminated without terminal marker")
-        time.sleep(15)
-    ec2.terminate_instances(InstanceIds=[instance_id])
-    ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
-    raise TimeoutError(f"V139 terminal missing after worker deadline: {instance_id} terminated")
+        except Exception:
+            pass
+        raise
 
 
 def main() -> None:

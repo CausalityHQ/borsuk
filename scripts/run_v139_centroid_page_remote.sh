@@ -28,7 +28,8 @@ finish() {
     rm -f deep.raw.jsonl deep.summary.json relaion.raw.jsonl relaion.summary.json
   fi
   upload_failed=0
-  for path in install.log download.log deep-resources.txt relaion-resources.txt \
+  for path in install.log download.log deep.log relaion.log \
+      deep-resources.txt relaion-resources.txt \
       deep.raw.jsonl deep.summary.json relaion.raw.jsonl relaion.summary.json \
       decision.json cgroup-memory.txt worker.log interrupt-stop.txt; do
     if [ -f "$path" ] && ! timeout 900 aws s3 cp "$path" \
@@ -43,7 +44,8 @@ finish() {
     python3 - <<'PY' >terminal.json
 import hashlib,json,os
 from pathlib import Path
-names=('install.log','download.log','deep-resources.txt','relaion-resources.txt',
+names=('install.log','download.log','deep.log','relaion.log',
+       'deep-resources.txt','relaion-resources.txt',
        'deep.raw.jsonl','deep.summary.json','relaion.raw.jsonl','relaion.summary.json',
        'decision.json','cgroup-memory.txt','worker.log','interrupt-stop.txt')
 artifacts={}
