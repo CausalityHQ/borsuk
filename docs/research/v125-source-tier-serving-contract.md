@@ -10,6 +10,16 @@ only 96.849% of GT100 positions, whereas V116's separate expanded SQ8
 reader returned 99.208%. These studies have different layout fitters and do
 not constitute one matched cross-corpus production method.
 
+V126 subsequently replayed the fixed V116 expansion and capped-control
+routes at top-512 width and scored each union against original source
+coordinates on the already used ReLAION-1M validation-1000 split. Its
+authenticated closeout is in
+`docs/research/v126-relaion-expansion-source-closeout.md`: exact source and
+FP16 both returned 99.563% versus 99.432% for the same-run capped control,
+above their V116 SQ8 baselines of 99.208% and 98.618%. This advances the
+expansion-plus-source candidate to a matched 100k serving screen; it does
+not remove the need for fresh cross-corpus qualification.
+
 ## First implementation slice and remaining boundary
 
 `crates/borsuk/src/native_source_tier.rs` adds a versioned, generation-pinned
