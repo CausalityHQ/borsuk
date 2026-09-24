@@ -37,9 +37,10 @@ def score_neighbor_field(
             or books.ndim != 3 or books.shape[:2] != (64, 256)
             or books.dtype != np.float32 or not np.isfinite(books).all()
             or not 0 <= books.shape[2] * 64 - dimensions < 64
+            or old_order.shape != (rows,)
+            or old_order.dtype not in (np.dtype("int32"), np.dtype("int64"))
             or any(mapping.shape != (rows,) or mapping.dtype != np.int64
-                   for mapping in (old_order, inverse_old,
-                                   new_order, inverse_new))):
+                   for mapping in (inverse_old, new_order, inverse_new))):
         raise ValueError("V168 PQ field geometry differs")
     units = candidate_units(nominees, old_order, inverse_new, rows, unit_rows)
     if len(units) > 3 * len(nominees):

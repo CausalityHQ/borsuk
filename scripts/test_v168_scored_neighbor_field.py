@@ -8,6 +8,17 @@ from scripts.v168_scored_neighbor_field import score_neighbor_field
 
 
 class ScoredNeighborFieldTests(unittest.TestCase):
+    def test_authenticated_old_order_may_be_int32(self):
+        rows = 32
+        old = np.arange(rows, dtype=np.int32)
+        inverse = np.arange(rows, dtype=np.int64)
+        field = score_neighbor_field(
+            np.zeros(64, dtype=np.float32), nominees=(0,),
+            old_order=old, inverse_old=inverse, new_order=inverse,
+            inverse_new=inverse, books=np.zeros((64, 256, 1), dtype=np.float32),
+            codes=np.zeros((rows, 64), dtype=np.uint8), unit_rows=32)
+        self.assertEqual(field.units, (0,))
+
     def test_scores_all_rows_in_neighbor_units_in_new_physical_order(self):
         rows = 64
         old = np.arange(rows, dtype=np.int64)
