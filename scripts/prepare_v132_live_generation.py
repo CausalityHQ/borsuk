@@ -8,6 +8,7 @@ import hashlib
 import json
 import struct
 import subprocess
+import tempfile
 from typing import Any
 
 import boto3
@@ -74,7 +75,33 @@ def terminal_checked(
 
 def publish(s3: Any, prefix: str, name: str, body: bytes) -> dict[str, Any]:
     key = f"{prefix}/{name}"
-    result = s3.put_object(Bucket=BUCKET, Key=key, Body=body, IfNoneMatch="*")
+    with tempfile.NamedTemporaryFile() as temporary:
+        temporary.write(body)
+        temporary.flush()
+        result = json.loads(
+            subprocess.check_output(
+                [
+                    "aws",
+                    "s3api",
+                    "put-object",
+                    "--profile",
+                    "causality",
+                    "--region",
+                    "eu-central-1",
+                    "--bucket",
+                    BUCKET,
+                    "--key",
+                    key,
+                    "--body",
+                    temporary.name,
+                    "--if-none-match",
+                    "*",
+                    "--output",
+                    "json",
+                ],
+                text=True,
+            )
+        )
     received = s3.get_object(Bucket=BUCKET, Key=key)
     check = received["Body"].read()
     if check != body or result["ETag"] != received["ETag"]:
