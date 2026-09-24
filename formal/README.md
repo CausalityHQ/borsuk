@@ -14,6 +14,11 @@ metadata per row, two complete 100M generations are 40.0 GB at D96 or
 scratch and concurrent work. These are payload projections without a vector
 count knee; they do not prove charged RAM or latency. Run
 `lean AdaptiveRerank.lean` from this directory with the pinned toolchain.
+The V124 finite-cohort corollary says that a scorer restricted to the sealed
+ReLAION-1M validation-1000 nominee sets cannot reach 99,000 GT100 hits if
+their independently authenticated capture is 96,849. The proof uses that
+capture count as an external premise and does not apply to V116's expanded
+remote candidate set, a changed router or unseen queries.
 
 `IntervalLatticeNormalization.lean` proves the arithmetic behind V121's D96
 planner-state reduction: when full and final-page charges share a positive

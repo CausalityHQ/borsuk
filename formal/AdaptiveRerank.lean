@@ -68,4 +68,23 @@ theorem hundred_million_fp16_payload_examples :
     fp16TierPayloadBytes 100_000_000 768 2 8 = 308_800_000_000 := by
   decide
 
+/-! A finite-cohort capture ceiling: an authenticated roster certificate and
+candidate-only return refinement can rule out an aggregate target, regardless
+of the scorer. The V124 number is an external artifact premise, not a Lean
+derivation from Parquet or evidence JSONL. -/
+theorem target_impossible_below_capture
+    (returned captured target : Nat)
+    (restricted : returned ≤ captured)
+    (captureBelowTarget : captured < target) :
+    returned < target := by
+  omega
+
+theorem relaion_v124_nominee_only_below_99_percent
+    (returned captured : Nat)
+    (restricted : returned ≤ captured)
+    (sealedCapture : captured = 96_849) :
+    returned < 99_000 := by
+  exact target_impossible_below_capture returned captured 99_000
+    restricted (by omega)
+
 end Borsuk.AdaptiveRerank
