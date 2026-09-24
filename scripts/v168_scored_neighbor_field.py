@@ -27,8 +27,9 @@ def score_neighbor_field(
     new_order: np.ndarray, inverse_new: np.ndarray,
     books: np.ndarray, codes: np.ndarray, unit_rows: int,
     radius: int = 1,
+    metric: str = "squared_l2",
 ) -> ScoredNeighborField:
-    """Score candidate rows with V114's float32 PQ64 ADC arithmetic."""
+    """Score candidate rows by PQ64 L2 or reconstructed cosine."""
     rows = codes.shape[0]
     dimensions = query.size
     if (query.ndim != 1 or query.dtype != np.float32
@@ -43,6 +44,10 @@ def score_neighbor_field(
             or any(mapping.shape != (rows,) or mapping.dtype != np.int64
                    for mapping in (inverse_old, new_order, inverse_new))):
         raise ValueError("V168 PQ field geometry differs")
+    if metric not in ("squared_l2", "cosine"):
+        raise ValueError("PQ score metric differs")
+    if metric == "cosine" and not np.any(query):
+        raise ValueError("cosine query has zero norm")
     units = candidate_units(nominees, old_order, inverse_new, rows,
                             unit_rows, radius=radius)
     max_units = (2 * radius + 1) * len(nominees)
@@ -60,9 +65,26 @@ def score_neighbor_field(
         first = subspace * dimensions // 64
         last = (subspace + 1) * dimensions // 64
         padded[subspace * width:subspace * width + last - first] = query[first:last]
-    delta = books - padded.reshape(64, 1, width)
-    table = np.einsum("ijk,ijk->ij", delta, delta)
-    scores = np.zeros(old_rows.size, dtype=np.float32)
-    for subspace in range(64):
-        scores += table[subspace, codes[old_rows, subspace]]
+    if metric == "squared_l2":
+        delta = books - padded.reshape(64, 1, width)
+        table = np.einsum("ijk,ijk->ij", delta, delta)
+        scores = np.zeros(old_rows.size, dtype=np.float32)
+        for subspace in range(64):
+            scores += table[subspace, codes[old_rows, subspace]]
+    else:
+        dot_table = np.einsum("ijk,ik->ij", books,
+                              padded.reshape(64, width))
+        norm_table = np.einsum("ijk,ijk->ij", books, books)
+        dot = np.zeros(old_rows.size, dtype=np.float32)
+        norm_sq = np.zeros(old_rows.size, dtype=np.float32)
+        for subspace in range(64):
+            selected = codes[old_rows, subspace]
+            dot += dot_table[subspace, selected]
+            norm_sq += norm_table[subspace, selected]
+        if not np.isfinite(norm_sq).all() or (norm_sq <= 0).any():
+            raise ValueError("PQ reconstruction has zero or invalid norm")
+        query_norm = np.float32(np.linalg.norm(query.astype(np.float64)))
+        scores = -dot / (np.sqrt(norm_sq) * query_norm)
+        if not np.isfinite(scores).all():
+            raise ValueError("PQ reconstructed cosine score is nonfinite")
     return ScoredNeighborField(units, old_rows, scores)

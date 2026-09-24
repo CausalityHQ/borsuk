@@ -90,6 +90,34 @@ class ScoredNeighborFieldTests(unittest.TestCase):
                            - query.astype(np.float64)) ** 2)
         self.assertAlmostEqual(float(field.scores[7]), float(expected), delta=0.01)
 
+    def test_cosine_scores_match_reconstructed_vector_direction(self):
+        rows = 32
+        order = np.arange(rows, dtype=np.int64)
+        query = np.zeros(64, dtype=np.float32)
+        query[0] = 1
+        books = np.zeros((64, 256, 1), dtype=np.float32)
+        books[0, 1, 0] = 1
+        books[1, 1, 0] = 1
+        codes = np.zeros((rows, 64), dtype=np.uint8)
+        codes[:, 1] = 1
+        codes[0, 0] = 1
+        codes[0, 1] = 0
+
+        field = score_neighbor_field(query, nominees=(0,),
+                                     old_order=order, inverse_old=order,
+                                     new_order=order, inverse_new=order,
+                                     books=books, codes=codes, unit_rows=32,
+                                     metric="cosine")
+        self.assertEqual(field.scores.dtype, np.float32)
+        self.assertEqual(field.scores[0], -1)
+        self.assertTrue(np.all(field.scores[1:] == 0))
+        with self.assertRaises(ValueError):
+            score_neighbor_field(np.zeros_like(query), nominees=(0,),
+                                 old_order=order, inverse_old=order,
+                                 new_order=order, inverse_new=order,
+                                 books=books, codes=codes, unit_rows=32,
+                                 metric="cosine")
+
 
 if __name__ == "__main__":
     unittest.main()
