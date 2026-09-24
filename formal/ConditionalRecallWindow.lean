@@ -65,4 +65,15 @@ theorem recall_floor_of_near_omission_certificate
   have accounting := truth_count_le_returned_plus_near rows sound
   omega
 
+theorem recall_floor_for_requested_k
+    (rows : List RowWitness) (requested target maxOmissions : Nat)
+    (truthSize : truthCount rows = requested)
+    (nearBound : nearOmissions rows ≤ maxOmissions)
+    (targetFits : target + maxOmissions ≤ requested)
+    (sound : ∀ row ∈ rows,
+      row.truth = true → row.selected = false → row.near = true) :
+    target ≤ returnedTruth rows := by
+  have accounting := truth_count_le_returned_plus_near rows sound
+  omega
+
 end Borsuk.ConditionalRecallWindow

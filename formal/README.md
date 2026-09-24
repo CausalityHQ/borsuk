@@ -346,3 +346,10 @@ for one 100M-row generation (1,600,000,000 for two). Run
 vector-count knee or fixed maximum memory; allocator capacity, router,
 source data, query buffers and charged process RSS remain outside this
 model and must be measured.
+
+`ConditionalRecallWindow.lean` now also has
+`recall_floor_for_requested_k`: for any requested `k`, an authenticated
+truth count of `k`, a sound near-window premise and an omission bound
+imply the chosen returned-hit floor. The theorem does not infer that
+the PQ/SQ8 score window is sound for real queries or that a fitted
+probability model certifies omissions; those are explicit data premises.
