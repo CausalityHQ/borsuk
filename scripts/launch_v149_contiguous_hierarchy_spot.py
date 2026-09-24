@@ -244,7 +244,7 @@ def recount_science(s3: object, prefix: str, decision: dict) -> None:
     flat_key = next(key for key, _ in INPUTS if key.endswith("/deep.rust-scores.bin"))
     flat = s3.get_object(Bucket=BUCKET, Key=flat_key)["Body"].read()
     if (len(flat) != 1_564_000 or hashlib.sha256(flat).hexdigest()
-            != "341436ca66c24b0e247cf2a8e40b606d7b983cbd7b170ba4e2740f390cf0807c"):
+            != "341436ca66c24b0e247cf2a8e40b606d7d983cbd7b170ba4e2740f390cf0807c"):
         raise ValueError("V146 flat reference differs")
     references = struct.unpack("<391000f", flat)
     v140_key = next(key for key, _ in INPUTS if key.endswith("/deep.raw.jsonl"))
