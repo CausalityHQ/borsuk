@@ -1,6 +1,6 @@
 //! Exact, bounded contiguous page intervals for a one-object dense read.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::Range;
 
 /// Physical units for pages of one contiguous object.
@@ -35,6 +35,21 @@ pub struct IntervalPlan {
     pub bytes: usize,
 }
 
+/// Exact minimum cover of mandatory whole pages under one GET cap.
+/// The byte floor counts a short final page by its actual physical length;
+/// the unit floor charges that page rounded up to a physical unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrimaryCoverFloor {
+    pub primary_pages: usize,
+    pub disconnected_runs: usize,
+    pub bridged_pages: usize,
+    pub minimum_units: usize,
+    /// Smallest caller byte cap accepted by the rounded-unit budget lattice.
+    pub minimum_budget_bytes: usize,
+    /// Exact physical bytes read by the minimum cover; may be smaller.
+    pub minimum_bytes: usize,
+}
+
 /// A malformed or unrepresentable physical planning request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanError {
@@ -48,6 +63,93 @@ pub enum PlanError {
     BudgetTooLarge,
     /// Reconstructing an optimum did not match its dynamic-program state.
     InconsistentWitness,
+    /// Mandatory primary pages cannot fit the caller's GET/unit/byte caps.
+    InsufficientBudget,
+}
+
+/// Calculate the minimum mandatory cover by joining the shortest run gaps.
+/// This uses only physical geometry and the caller's GET cap, so it may be
+/// checked before optional utility scores or ground truth are available.
+pub fn minimum_primary_cover(
+    geometry: IntervalGeometry,
+    primary_pages: &[usize],
+) -> Result<PrimaryCoverFloor, PlanError> {
+    let full_page_bytes = geometry
+        .full_page_units
+        .checked_mul(geometry.unit_bytes)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    if (geometry.page_count == 0
+        || geometry.full_page_units == 0
+        || geometry.unit_bytes == 0
+        || geometry.last_page_bytes == 0
+        || geometry.last_page_bytes > full_page_bytes
+        || geometry.max_gets == 0
+        || primary_pages.is_empty())
+    {
+        return Err(PlanError::InvalidGeometry);
+    }
+    let primary = primary_pages.iter().copied().collect::<BTreeSet<_>>();
+    if primary.iter().any(|&page| page >= geometry.page_count) {
+        return Err(PlanError::InvalidWeights);
+    }
+    let final_page = geometry.page_count - 1;
+    let final_units = geometry.last_page_bytes.div_ceil(geometry.unit_bytes);
+    let mut minimum_units = primary
+        .len()
+        .checked_mul(geometry.full_page_units)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    let mut minimum_bytes = primary
+        .len()
+        .checked_mul(full_page_bytes)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    if primary.contains(&final_page) {
+        minimum_units -= geometry.full_page_units - final_units;
+        minimum_bytes -= full_page_bytes - geometry.last_page_bytes;
+    }
+    let mut gaps = Vec::new();
+    let mut previous = None;
+    for &page in &primary {
+        if let Some(before) = previous
+            && page > before + 1
+        {
+            gaps.push(page - before - 1);
+        }
+        previous = Some(page);
+    }
+    let disconnected_runs = gaps.len() + 1;
+    let bridges = disconnected_runs.saturating_sub(geometry.max_gets);
+    gaps.sort_unstable();
+    let bridged_pages = gaps
+        .into_iter()
+        .take(bridges)
+        .try_fold(0usize, |sum, gap| {
+            sum.checked_add(gap).ok_or(PlanError::ArithmeticOverflow)
+        })?;
+    minimum_units = minimum_units
+        .checked_add(
+            bridged_pages
+                .checked_mul(geometry.full_page_units)
+                .ok_or(PlanError::ArithmeticOverflow)?,
+        )
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    minimum_bytes = minimum_bytes
+        .checked_add(
+            bridged_pages
+                .checked_mul(full_page_bytes)
+                .ok_or(PlanError::ArithmeticOverflow)?,
+        )
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    let minimum_budget_bytes = minimum_units
+        .checked_mul(geometry.unit_bytes)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    Ok(PrimaryCoverFloor {
+        primary_pages: primary.len(),
+        disconnected_runs,
+        bridged_pages,
+        minimum_units,
+        minimum_budget_bytes,
+        minimum_bytes,
+    })
 }
 
 /// Build the source-only primary/secondary page vote plan from physical SQ8
@@ -109,21 +211,42 @@ pub fn plan_weighted_nominee_pages(
     let page_count = rows.div_ceil(page_rows);
     let final_rows = rows - (page_count - 1) * page_rows;
     let votes = weights.into_iter().collect::<Vec<_>>();
-    let plan = plan_weighted_intervals(
-        normalize_budget_lattice(IntervalGeometry {
-            page_count,
-            full_page_units: page_rows / UNIT_ROWS,
-            last_page_bytes: final_rows
-                .checked_mul(row_bytes)
-                .ok_or(PlanError::ArithmeticOverflow)?,
-            unit_bytes,
-            max_gets,
-            max_units: max_bytes / unit_bytes,
-        })?,
-        &votes,
-    )?;
+    let geometry = IntervalGeometry {
+        page_count,
+        full_page_units: page_rows / UNIT_ROWS,
+        last_page_bytes: final_rows
+            .checked_mul(row_bytes)
+            .ok_or(PlanError::ArithmeticOverflow)?,
+        unit_bytes,
+        max_gets,
+        max_units: max_bytes / unit_bytes,
+    };
+    let primary_pages = primary
+        .iter()
+        .map(|row| row / page_rows)
+        .collect::<Vec<_>>();
+    let floor = minimum_primary_cover(geometry, &primary_pages)?;
+    if floor.minimum_budget_bytes > max_bytes {
+        return Err(PlanError::InsufficientBudget);
+    }
+    let plan = plan_weighted_intervals(normalize_budget_lattice(geometry)?, &votes)?;
     if plan.bytes > max_bytes || plan.ranges.len() > max_gets || plan.ranges.is_empty() {
         return Err(PlanError::InconsistentWitness);
+    }
+    let full_page_bytes = page_rows
+        .checked_mul(row_bytes)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    for page in primary_pages {
+        let offset = page
+            .checked_mul(full_page_bytes)
+            .ok_or(PlanError::ArithmeticOverflow)?;
+        if !plan
+            .ranges
+            .iter()
+            .any(|range| range.start <= offset && offset < range.end)
+        {
+            return Err(PlanError::InconsistentWitness);
+        }
     }
     Ok((votes, plan))
 }
@@ -450,8 +573,8 @@ pub fn plan_weighted_intervals(
 #[cfg(test)]
 mod tests {
     use super::{
-        IntervalGeometry, PlanError, normalize_budget_lattice, plan_weighted_intervals,
-        plan_weighted_nominee_pages,
+        IntervalGeometry, PlanError, minimum_primary_cover, normalize_budget_lattice,
+        plan_weighted_intervals, plan_weighted_nominee_pages,
     };
 
     fn geometry(page_count: usize, max_gets: usize, max_units: usize) -> IntervalGeometry {
@@ -701,5 +824,111 @@ mod tests {
             plan_weighted_nominee_pages(416, 768, 256, &[0, 300], &[0, 1, 256], 32, 16_777_216),
             Err(PlanError::InvalidWeights),
         );
+    }
+
+    #[test]
+    fn mandatory_primary_floor_bridges_shortest_gap_and_rejects_small_cap() {
+        let geometry = IntervalGeometry {
+            page_count: 10,
+            full_page_units: 1,
+            last_page_bytes: 416,
+            unit_bytes: 416,
+            max_gets: 2,
+            max_units: 3,
+        };
+        let floor = minimum_primary_cover(geometry, &[0, 2, 5]).unwrap();
+        assert_eq!(floor.primary_pages, 3);
+        assert_eq!(floor.disconnected_runs, 3);
+        assert_eq!(floor.bridged_pages, 1);
+        assert_eq!(floor.minimum_units, 4);
+        assert_eq!(floor.minimum_budget_bytes, 1_664);
+        assert_eq!(floor.minimum_bytes, 1_664);
+        assert_eq!(
+            plan_weighted_nominee_pages(320, 1, 32, &[0, 64, 160], &[0, 64, 160], 2, 1_248),
+            Err(PlanError::InsufficientBudget),
+        );
+        let (_, plan) =
+            plan_weighted_nominee_pages(320, 1, 32, &[0, 64, 160], &[0, 64, 160], 2, 1_664)
+                .unwrap();
+        assert_eq!(plan.ranges, vec![0..1_248, 2_080..2_496]);
+    }
+
+    #[test]
+    fn mandatory_floor_charges_exact_short_final_page_bytes() {
+        let floor = minimum_primary_cover(
+            IntervalGeometry {
+                page_count: 10,
+                full_page_units: 1,
+                last_page_bytes: 130,
+                unit_bytes: 416,
+                max_gets: 2,
+                max_units: 2,
+            },
+            &[0, 9],
+        )
+        .unwrap();
+        assert_eq!(floor.minimum_units, 2);
+        assert_eq!(floor.minimum_budget_bytes, 832);
+        assert_eq!(floor.minimum_bytes, 546);
+        assert_eq!(
+            plan_weighted_nominee_pages(298, 1, 32, &[0, 288], &[0, 288], 2, 546),
+            Err(PlanError::InsufficientBudget),
+        );
+        let (_, plan) =
+            plan_weighted_nominee_pages(298, 1, 32, &[0, 288], &[0, 288], 2, 832).unwrap();
+        assert_eq!(plan.bytes, 546);
+    }
+
+    #[test]
+    fn mandatory_floor_matches_exhaustive_six_page_covers() {
+        for primary_mask in 1..64usize {
+            let primary = (0..6)
+                .filter(|&page| primary_mask & (1 << page) != 0)
+                .collect::<Vec<_>>();
+            for max_gets in 1..=3 {
+                let floor = minimum_primary_cover(
+                    IntervalGeometry {
+                        page_count: 6,
+                        full_page_units: 2,
+                        last_page_bytes: 7,
+                        unit_bytes: 7,
+                        max_gets,
+                        max_units: 12,
+                    },
+                    &primary,
+                )
+                .unwrap();
+                let mut best = (usize::MAX, usize::MAX);
+                for selected_mask in 1..64usize {
+                    if selected_mask & primary_mask != primary_mask {
+                        continue;
+                    }
+                    let gets = (0..6)
+                        .filter(|&page| {
+                            selected_mask & (1 << page) != 0
+                                && (page == 0 || selected_mask & (1 << (page - 1)) == 0)
+                        })
+                        .count();
+                    if gets > max_gets {
+                        continue;
+                    }
+                    let units = (0..6)
+                        .filter(|&page| selected_mask & (1 << page) != 0)
+                        .map(|page| if page == 5 { 1 } else { 2 })
+                        .sum();
+                    let bytes = (0..6)
+                        .filter(|&page| selected_mask & (1 << page) != 0)
+                        .map(|page| if page == 5 { 7 } else { 14 })
+                        .sum();
+                    best = best.min((units, bytes));
+                }
+                assert_eq!(
+                    (floor.minimum_units, floor.minimum_bytes),
+                    best,
+                    "primary_mask={primary_mask}, max_gets={max_gets}"
+                );
+                assert_eq!(floor.minimum_budget_bytes, best.0 * 7);
+            }
+        }
     }
 }
