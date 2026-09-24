@@ -172,7 +172,6 @@ fn choose_ranked_pages(
         .min(page_count);
     let mut selected = Vec::new();
     let mut gap_scratch = Vec::new();
-    let mut final_ranges = Vec::new();
     let mut final_bytes = 0;
     for page in primary_pages.iter().copied().chain(
         score_order
@@ -193,14 +192,6 @@ fn choose_ranked_pages(
             selected.remove(insertion);
             continue;
         }
-        let (ranges, exact_charge) = cover_pages(
-            &selected.iter().copied().collect(),
-            rows,
-            row_bytes,
-            max_gets,
-        )?;
-        debug_assert_eq!(charged, exact_charge);
-        final_ranges = ranges;
         final_bytes = charged;
         if selected.len() >= target_pages {
             break;
@@ -213,6 +204,13 @@ fn choose_ranked_pages(
         .iter()
         .filter(|page| selected.binary_search(page).is_ok())
         .count();
+    let (final_ranges, exact_charge) = cover_pages(
+        &selected.iter().copied().collect(),
+        rows,
+        row_bytes,
+        max_gets,
+    )?;
+    debug_assert_eq!(final_bytes, exact_charge);
     let selected_pages = selected;
     Ok(BudgetedPagePlan {
         target_shortfall: target_pages.saturating_sub(selected_pages.len()),
