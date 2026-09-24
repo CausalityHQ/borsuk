@@ -95,7 +95,7 @@ curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolch
 phase=test
 timeout --signal=TERM --kill-after=30 3300 /usr/bin/time -v \\
   "$CARGO_HOME/bin/cargo" test --manifest-path repo/Cargo.toml --locked \\
-  -p borsuk --lib {test} --jobs 4 -- --exact --nocapture >test.log 2>test-resources.txt
+  -p borsuk --lib {test} --jobs 4 -- --nocapture >test.log 2>test-resources.txt
 phase=complete
 exit 0
 """
@@ -119,7 +119,7 @@ def main() -> int:
     args = parser.parse_args()
     test = args.test_filter
     if not test or any(character not in "abcdefghijklmnopqrstuvwxyz_0123456789:" for character in test):
-        raise ValueError("test filter must be a fully qualified Rust test name")
+        raise ValueError("test filter must use Rust test-path characters")
     commit, archive, sha = source_archive()
     source_key = f"research/rust-slices/{commit}/source/{sha}.tar.gz"
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
