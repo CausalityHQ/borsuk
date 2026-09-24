@@ -17,6 +17,10 @@ source-object byte counts and SHA-256 values before processing; seal the
 selected pseudoquery IDs, parameter, per-query plans, and raw scores before
 reducing the decision. A second implementation replays the plan and charge
 checks from the sealed inputs.
+The V115 router is an immutable research artifact with a v1 manifest. The
+V166 runner authenticates and reads that exact manifest and its five
+sections locally for this experiment; production's v2 reader continues to
+reject it. This does not establish compatibility with old index formats.
 
 ## Frozen pseudoqueries and comparison
 

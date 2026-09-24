@@ -11,7 +11,6 @@ import numpy as np
 
 from scripts.v114_1m_paired import nominate_region_pq64
 from scripts.v114_exact_local_100k import score_reference
-from scripts.v115_source_router import load_source_router
 from scripts.v155_relaion_returned_quality import (
     DIMS, LAYOUT_SHA, ROWS, SOURCE_SHA, SQ8_SHA, sha256,
 )
@@ -43,6 +42,55 @@ def records(path: Path) -> list[dict]:
         return [json.loads(line) for line in source]
 
 
+def load_frozen_v115_router(
+    root: Path, expected_manifest_sha: str, rows: int, dimensions: int,
+) -> tuple[dict, dict[str, np.ndarray]]:
+    """Read one authenticated historical V115 research artifact exactly.
+
+    This is an experiment-local reader for the closed v1 artifact. The
+    production v2 loader continues to reject incompatible generations.
+    """
+    if sha256(root / "manifest.json") != expected_manifest_sha:
+        raise ValueError("V166 frozen V115 manifest digest differs")
+    manifest = json.loads((root / "manifest.json").read_text())
+    geometry = {"rows": rows, "dimensions": dimensions, "page_rows": 256,
+                "blocks_per_page": 2, "subspaces": 64,
+                "pq_width": (dimensions + 63) // 64}
+    shapes = {"summaries": (((rows + 255) // 256) * 2, dimensions),
+              "books": (64, 256, geometry["pq_width"]),
+              "codes": (rows, 64), "low": (dimensions,),
+              "step": (dimensions,)}
+    if (type(manifest) is not dict
+            or set(manifest) != {"schema", "generation", "source_sha256",
+                                 "layout_sha256", "sq8_sha256", "geometry",
+                                 "sections"}
+            or manifest["schema"] != "borsuk-v115-source-router-v1"
+            or manifest["generation"] != 1
+            or manifest["source_sha256"] != SOURCE_SHA
+            or manifest["layout_sha256"] != LAYOUT_SHA
+            or manifest["sq8_sha256"] != SQ8_SHA
+            or manifest["geometry"] != geometry
+            or set(manifest["sections"]) != set(shapes)):
+        raise ValueError("V166 frozen V115 router authority differs")
+    planes = {}
+    for name, shape in shapes.items():
+        dtype = np.dtype("u1" if name == "codes" else "<f4")
+        expected_bytes = int(np.prod(shape)) * dtype.itemsize
+        path = root / f"{name}.bin"
+        section = manifest["sections"][name]
+        if (set(section) != {"bytes", "sha256"}
+                or section["bytes"] != expected_bytes
+                or path.stat().st_size != expected_bytes
+                or sha256(path) != section["sha256"]):
+            raise ValueError(f"V166 frozen V115 {name} differs")
+        planes[name] = np.fromfile(path, dtype=dtype).reshape(shape)
+    if (any(not np.isfinite(planes[name]).all()
+            for name in ("summaries", "books", "low", "step"))
+            or (planes["step"] <= 0).any()):
+        raise ValueError("V166 frozen V115 numerical plane differs")
+    return manifest, planes
+
+
 def _unit_intervals(byte_ranges: list[list[int]]) -> tuple[tuple[int, int], ...]:
     if not byte_ranges or any(start % UNIT_BYTES or end % UNIT_BYTES or start >= end
                               for start, end in byte_ranges):
@@ -71,16 +119,14 @@ def prepare(args: argparse.Namespace) -> None:
         raise ValueError("V166 output directory already exists")
     if sha256(args.source) != SOURCE_SHA or sha256(args.old_sq8) != SQ8_SHA:
         raise ValueError("V166 source or old SQ8 identity differs")
-    if sha256(args.router / "manifest.json") != ROUTER_MANIFEST_SHA:
-        raise ValueError("V166 V115 router identity differs")
-    router_manifest, planes = load_source_router(args.router)
+    router_manifest, planes = load_frozen_v115_router(
+        args.router, ROUTER_MANIFEST_SHA, ROWS, DIMS)
     if (router_manifest["source_sha256"] != SOURCE_SHA
             or router_manifest["layout_sha256"] != LAYOUT_SHA
             or router_manifest["sq8_sha256"] != SQ8_SHA
             or router_manifest["geometry"] != {
                 "rows": ROWS, "dimensions": DIMS, "page_rows": 256,
                 "blocks_per_page": 2, "subspaces": 64, "pq_width": 12,
-                "pq_partition": "balanced_floor_v1",
             }):
         raise ValueError("V166 V115 router authority differs")
     old, inverse = load_orders(args.old_layout, args.order, args.v164_terminal)

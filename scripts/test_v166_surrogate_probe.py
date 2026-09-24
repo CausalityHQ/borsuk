@@ -3,6 +3,7 @@
 import unittest
 import json
 import tempfile
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,8 @@ from scripts.v166_surrogate_probe import (
     modeled_plan, captured_exceedances, select_pseudoqueries,
 )
 from scripts.v166_surrogate_ranking_run import (
-    QUERY_COUNT, UNIT_BYTES, ROUTER_MANIFEST_SHA, _score, canonical, check, plan,
+    QUERY_COUNT, UNIT_BYTES, ROUTER_MANIFEST_SHA, _score, canonical, check,
+    load_frozen_v115_router, plan,
 )
 from scripts.v155_relaion_returned_quality import sha256
 from scripts.v155_relaion_returned_quality import SOURCE_SHA, SQ8_SHA, LAYOUT_SHA
@@ -124,6 +126,38 @@ class SurrogateProbeTests(unittest.TestCase):
         self.assertEqual(actual[0], expected[0])
         np.testing.assert_array_equal(actual[1].view(np.uint32),
                                       expected[1].view(np.uint32))
+
+    def test_exact_v115_reader_accepts_only_sealed_v1_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            arrays = {
+                "summaries": np.zeros((2, 64), dtype=np.float32),
+                "books": np.zeros((64, 256, 1), dtype=np.float32),
+                "codes": np.zeros((4, 64), dtype=np.uint8),
+                "low": np.zeros(64, dtype=np.float32),
+                "step": np.ones(64, dtype=np.float32),
+            }
+            sections = {}
+            for name, value in arrays.items():
+                body = value.tobytes()
+                (root / f"{name}.bin").write_bytes(body)
+                sections[name] = {"bytes": len(body),
+                                  "sha256": hashlib.sha256(body).hexdigest()}
+            manifest = {"schema": "borsuk-v115-source-router-v1",
+                        "generation": 1, "source_sha256": SOURCE_SHA,
+                        "layout_sha256": LAYOUT_SHA, "sq8_sha256": SQ8_SHA,
+                        "geometry": {"rows": 4, "dimensions": 64, "page_rows": 256,
+                                     "blocks_per_page": 2, "subspaces": 64,
+                                     "pq_width": 1}, "sections": sections}
+            (root / "manifest.json").write_text(canonical(manifest))
+            digest = sha256(root / "manifest.json")
+            loaded, planes = load_frozen_v115_router(root, digest, 4, 64)
+            self.assertEqual(loaded, manifest)
+            self.assertEqual(planes["codes"].shape, (4, 64))
+            manifest["schema"] = "borsuk-source-router-v2"
+            (root / "manifest.json").write_text(canonical(manifest))
+            with self.assertRaises(ValueError):
+                load_frozen_v115_router(root, sha256(root / "manifest.json"), 4, 64)
 
 
 if __name__ == "__main__":
