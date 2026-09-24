@@ -3,7 +3,8 @@
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
-use object_store::{GetOptions, GetResultPayload, ObjectStore, path::Path};
+use object_store::aws::{AmazonS3, AmazonS3Builder};
+use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path};
 
 #[derive(Debug)]
 pub enum RangeFetchError {
@@ -18,11 +19,58 @@ pub struct VerifiedRange {
     pub bytes: Bytes,
 }
 
+/// S3 data reader with the `object_store` request retry loop disabled. The
+/// query coordinator owns explicit retries and must charge every wire GET
+/// against the physical cap. A live HTTP fixture must still verify this
+/// transport's request accounting before a bounded-cost claim.
+pub struct OneAttemptS3 {
+    store: AmazonS3,
+}
+
+impl OneAttemptS3 {
+    pub fn new(bucket: &str, region: &str) -> Result<Self, RangeFetchError> {
+        if bucket.is_empty() || region.is_empty() {
+            return Err(RangeFetchError::UnexpectedMetadata);
+        }
+        let store = AmazonS3Builder::new()
+            .with_bucket_name(bucket)
+            .with_region(region)
+            .with_retry(RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .map_err(RangeFetchError::Store)?;
+        Ok(Self { store })
+    }
+
+    pub async fn fetch_verified_pages(
+        &self,
+        location: &Path,
+        authority: &PageAuthority,
+        first_page: usize,
+        last_page: usize,
+        etag: &str,
+        max_bytes: usize,
+    ) -> Result<VerifiedRange, RangeFetchError> {
+        fetch_verified_pages_inner(
+            &self.store,
+            location,
+            authority,
+            first_page,
+            last_page,
+            etag,
+            max_bytes,
+        )
+        .await
+    }
+}
+
 /// Fetch one inclusive S3 byte range through `object_store`'s HTTP client.
 /// Its HTTP get parser requires 206 and the exact Content-Range for ranged
 /// requests. We additionally verify object size, ETag, collected length and
 /// SHA-256 for each page against the pinned generation sidecar.
-pub async fn fetch_verified_pages(
+async fn fetch_verified_pages_inner(
     store: &dyn ObjectStore,
     location: &Path,
     authority: &PageAuthority,
@@ -117,13 +165,15 @@ mod tests {
             &sidecar,
         )
         .unwrap();
-        let fetched = fetch_verified_pages(&store, &location, &authority, 1, 1, &etag, 17 * 13)
-            .await
-            .unwrap();
+        let fetched =
+            fetch_verified_pages_inner(&store, &location, &authority, 1, 1, &etag, 17 * 13)
+                .await
+                .unwrap();
         assert_eq!(fetched.start, 256 * 13);
         assert_eq!(fetched.bytes.as_ref(), &object[256 * 13..]);
         assert!(matches!(
-            fetch_verified_pages(&store, &location, &authority, 1, 1, &etag, 17 * 13 - 1).await,
+            fetch_verified_pages_inner(&store, &location, &authority, 1, 1, &etag, 17 * 13 - 1)
+                .await,
             Err(RangeFetchError::UnexpectedMetadata)
         ));
         let changed = vec![8u8; object.len()];
@@ -132,7 +182,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            fetch_verified_pages(&store, &location, &authority, 1, 1, &etag, 17 * 13).await,
+            fetch_verified_pages_inner(&store, &location, &authority, 1, 1, &etag, 17 * 13).await,
             Err(RangeFetchError::Store(_))
         ));
     }
