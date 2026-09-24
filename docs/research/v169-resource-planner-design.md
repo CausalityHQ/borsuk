@@ -159,15 +159,58 @@ bytes, 22,126 GETs), then to live S3 latency/cost and 10M/100M
 build/query/memory gates. Historical revisions require disclosed paired
 reproductions before product claims.
 
+## V170/V171 evidence and budget allocation correction
+
+V170's closed paired ReLAION-100k D768 **used** development-1000 cell
+passed its preregistered direct-field gate: 99,357/100,000 SQ8-only
+GT100 hits versus 99,338 for the same-unit neighbor-rank arm and
+99,322 for V163. Direct versus neighbor gained 19 hits, with a paired
+bootstrap total 95% interval of 8–32. Direct planned 14,785,704,960
+SQ8 bytes and 13,888 GETs versus V163's 15,657,408,000 bytes and
+15,275 GETs. It used 6,614,400 more bytes than neighbor rank at the
+same aggregate and per-query GET counts, so the whole-cohort feature
+gain is under matched ceilings, not exact equal bytes. Its terminal,
+checker, raw and GT-blind seals are recorded in
+`v170-pq-field-100k-transfer-closeout.md`. This promotes the score
+field to a 1M test, not a production default.
+
+The V171 first-stage ReLAION-1M D768 **used** validation-1000 screen
+rejected strict inheritance of V155's *per-query* GET and byte caps.
+Query 898 has 26 primary units in nine physical runs; its V155 cap is
+3 GETs / 3,394,560 bytes, while any three-GET primary cover needs
+97,843,200 bytes. The other 999 queries fit their paired caps. The
+failure is a mismatch between the smooth layout's primary geometry and
+V155's per-query GET allocation. It does not refute the direct PQ score
+or aggregate resource competitiveness. A generic planner must derive a
+minimum primary GET requirement from authenticated physical geometry,
+then price optional units under caller GET/byte and quality targets.
+It may allocate more GETs to a dispersed query and fewer elsewhere,
+while each query still obeys the physical 32-GET/16-MiB caps. The
+resource comparison must report both per-query and aggregate charges;
+it may not hide a failed query in an average. See
+`v171-primary-feasibility-closeout.md`.
+
+The V171 closed counters also imply an aggregate **mandatory-only**
+feasibility witness, not a scored plan: its 999 feasible per-query
+minimum-unit witnesses plus nine separate runs for query 898 total
+17,684 GETs and 1,098,814,080 bytes. Both totals are below V155's
+22,126 GETs and 11,134,007,040 bytes, and every query can obey the
+physical cap. Optional recall-improving units still have to fit the
+remaining resource envelope; this arithmetic does not predict recall.
+
 ## Formal and empirical boundary
 
 `formal/ScoredNeighborField.lean` proves conditional candidate-work and
 64N code-payload arithmetic. `formal/ConditionalRecallWindow.lean`
 proves a true top-100 capture floor if a uniform score-error bound,
 nominee-threshold relation, complete source roster and omitted-near
-count are supplied. A further planner proof should certify that an
-accepted witness covers all mandatory units and stays within GET and
-byte caps, and should bound integer-utility rounding error. Exact DP
+count are supplied. `formal/PrimaryRunBudget.lean` proves conditional
+primary-run GET/byte lower bounds and checks the V171 query-898
+arithmetic under an externally authenticated gap certificate. It does
+not prove the Python gap-sort refinement. A further planner proof should
+certify that an accepted witness covers all mandatory units and stays
+within GET and byte caps, and should bound integer-utility rounding
+error. Exact DP
 optimality needs a refinement check against the implementation.
 Calibration, query transfer, threshold bias, actual returned recall,
 serving latency, charged RAM and 100M feasibility remain measurements.

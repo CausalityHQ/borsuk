@@ -12,6 +12,20 @@ completeness, near-window count, or serving latency from the V168 PQ
 scores. Those remain data and implementation obligations. Run
 `lean ConditionalRecallWindow.lean` with the pinned toolchain.
 
+`PrimaryRunBudget.lean` proves conditional primary-run accounting: a
+cover that compresses `runs` physical primary components into a GET cap
+must bridge enough gaps, and any authenticated lower bound on the
+bridged-unit count becomes a fetched-byte lower bound. Applied to the
+V171 query-898 certificate (26 primary units and at least 3,894 bridge
+units for a three-GET cover), it proves that such a cover exceeds both
+the paired 3,394,560-byte limit and the global 16-MiB limit. It also
+checks that nine separate runs of 26 units fit the global GET and byte
+caps. The 3,894-unit gap certificate and the mapping from physical rows
+to the Lean model remain external data/checker obligations; this theorem
+does not prove Python's gap-sort optimality, query recall, latency or RAM.
+Run `lean PrimaryRunBudget.lean` from this directory with the pinned
+toolchain.
+
 `SmoothPageBudget.lean` proves the exact 32-row-unit accounting for the
 V160/V163/V164 D768 SQ8 layout: a 512-row full page is 399,360 bytes, the
 V164 1M final page is 49,920 bytes, and the V160/V163 100k final page is
