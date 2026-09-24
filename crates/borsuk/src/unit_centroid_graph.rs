@@ -62,6 +62,18 @@ pub struct UnitCentroidGraphSearch {
     pub work_exhausted: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageDiverseGraphSearch {
+    /// Nonprimary pages, ordered by their best evaluated unit distance.
+    pub pages: Vec<(usize, f32)>,
+    /// Every distinct graph-scored unit, in evaluation order.
+    pub evaluated_units: Vec<usize>,
+    /// Number of distinct graph-scored units, including primary seeds.
+    pub unit_evaluations: usize,
+    /// Whether an unseen graph neighbor was rejected by the work cap.
+    pub work_exhausted: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Candidate {
     distance_squared: f32,
@@ -129,6 +141,19 @@ fn node_distance(
 }
 
 impl UnitCentroidGraph {
+    fn matching_scorer(&self, scorer: &UnitCentroidPages, query: &[f32]) -> bool {
+        (
+            scorer.rows(),
+            scorer.dimensions(),
+            scorer.unit_rows(),
+            scorer.page_rows(),
+        ) == (self.rows, self.dimensions, self.unit_rows, self.page_rows)
+            && scorer.unit_count() == self.node_count()
+            && scorer.blob_sha256() == &self.centroid_sha256
+            && query.len() == self.dimensions
+            && query.iter().all(|value| value.is_finite())
+    }
+
     pub fn build(
         scorer: &UnitCentroidPages,
         centroid_blob: &[u8],
@@ -330,19 +355,7 @@ impl UnitCentroidGraph {
         nearest_units: usize,
         max_evaluations: usize,
     ) -> Result<UnitCentroidGraphSearch, UnitCentroidGraphError> {
-        if (
-            scorer.rows(),
-            scorer.dimensions(),
-            scorer.unit_rows(),
-            scorer.page_rows(),
-        ) != (self.rows, self.dimensions, self.unit_rows, self.page_rows)
-            || scorer.unit_count() != self.node_count()
-            || scorer.blob_sha256() != &self.centroid_sha256
-            || query.len() != self.dimensions
-            || query.iter().any(|value| !value.is_finite())
-            || nearest_units == 0
-            || max_evaluations == 0
-        {
+        if !self.matching_scorer(scorer, query) || nearest_units == 0 || max_evaluations == 0 {
             return Err(UnitCentroidGraphError::InvalidGeometry);
         }
         let mut scores = HashMap::with_capacity(max_evaluations.min(self.node_count()));
@@ -454,6 +467,112 @@ impl UnitCentroidGraph {
             work_exhausted: exhausted,
         })
     }
+
+    /// Search from known primary pages, ranking each discovered physical page once.
+    pub fn search_pages_seeded(
+        &self,
+        scorer: &UnitCentroidPages,
+        query: &[f32],
+        primary_pages: &[usize],
+        max_additional_pages: usize,
+        max_evaluations: usize,
+    ) -> Result<PageDiverseGraphSearch, UnitCentroidGraphError> {
+        let page_count = self.rows.div_ceil(self.page_rows);
+        let units_per_page = self.page_rows / self.unit_rows;
+        let primary = primary_pages.iter().copied().collect::<HashSet<_>>();
+        if !self.matching_scorer(scorer, query)
+            || primary_pages.is_empty()
+            || primary.len() != primary_pages.len()
+            || primary_pages.iter().any(|&page| page >= page_count)
+            || max_additional_pages == 0
+        {
+            return Err(UnitCentroidGraphError::InvalidGeometry);
+        }
+        let seed_count = primary_pages
+            .iter()
+            .try_fold(0usize, |total, &page| {
+                page.checked_mul(units_per_page)
+                    .map(|first| self.node_count().saturating_sub(first).min(units_per_page))
+                    .and_then(|count| total.checked_add(count))
+            })
+            .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?;
+        if max_evaluations < seed_count {
+            return Err(UnitCentroidGraphError::InvalidGeometry);
+        }
+        let mut scores = HashMap::with_capacity(max_evaluations.min(self.node_count()));
+        let mut evaluated = Vec::with_capacity(max_evaluations.min(self.node_count()));
+        let mut frontier = BinaryHeap::new();
+        for &page in primary_pages {
+            let first = page * units_per_page;
+            let last = (first + units_per_page).min(self.node_count());
+            for unit in first..last {
+                let distance = node_distance(
+                    scorer,
+                    query,
+                    unit as u32,
+                    &mut scores,
+                    &mut evaluated,
+                    max_evaluations,
+                )?
+                .ok_or(UnitCentroidGraphError::InvalidGeometry)?;
+                frontier.push(Reverse(Candidate {
+                    distance_squared: distance,
+                    node: unit as u32,
+                }));
+            }
+        }
+        let mut expanded = HashSet::new();
+        let mut exhausted = false;
+        'walk: while let Some(Reverse(current)) = frontier.pop() {
+            if !expanded.insert(current.node) {
+                continue;
+            }
+            for &neighbor in self.layer_neighbours(current.node, 0) {
+                if scores.contains_key(&neighbor) {
+                    continue;
+                }
+                let Some(distance) = node_distance(
+                    scorer,
+                    query,
+                    neighbor,
+                    &mut scores,
+                    &mut evaluated,
+                    max_evaluations,
+                )?
+                else {
+                    exhausted = true;
+                    break 'walk;
+                };
+                frontier.push(Reverse(Candidate {
+                    distance_squared: distance,
+                    node: neighbor,
+                }));
+            }
+        }
+        let mut page_scores = HashMap::<usize, f32>::new();
+        for &unit in &evaluated {
+            let page = unit as usize / units_per_page;
+            if !primary.contains(&page) {
+                let distance = scores[&unit];
+                page_scores
+                    .entry(page)
+                    .and_modify(|score| *score = (*score).min(distance))
+                    .or_insert(distance);
+            }
+        }
+        let mut pages = page_scores.into_iter().collect::<Vec<_>>();
+        pages.sort_by(|left, right| left.1.total_cmp(&right.1).then(left.0.cmp(&right.0)));
+        pages.truncate(max_additional_pages);
+        for (_, score) in &mut pages {
+            *score = score.sqrt();
+        }
+        Ok(PageDiverseGraphSearch {
+            pages,
+            unit_evaluations: scores.len(),
+            evaluated_units: evaluated.into_iter().map(|unit| unit as usize).collect(),
+            work_exhausted: exhausted,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -549,5 +668,63 @@ mod tests {
         assert_eq!(decoded.neighbours, graph.neighbours);
         let found = decoded.search(&scorer, &[127.0], 8, 128).unwrap();
         assert_eq!(found.units[0].0, 127);
+    }
+
+    #[test]
+    fn seeded_search_returns_distinct_nonprimary_pages_with_a_hard_cap() {
+        let (blob, scorer) = centroids();
+        let mut graph = UnitCentroidGraph::build(&scorer, &blob).unwrap();
+        graph.neighbours = vec![
+            vec![vec![1, 2]],
+            vec![vec![0, 2]],
+            vec![vec![0, 1, 3]],
+            vec![vec![2]],
+        ];
+        graph.entry = 0;
+        let loaded = UnitCentroidGraph::decode(&graph.encode().unwrap(), &blob, &scorer).unwrap();
+        let limited = loaded
+            .search_pages_seeded(&scorer, &[2.1], &[0], 1, 2)
+            .unwrap();
+        assert!(limited.pages.is_empty());
+        assert_eq!(limited.unit_evaluations, 2);
+        assert!(limited.work_exhausted);
+        let full = loaded
+            .search_pages_seeded(&scorer, &[2.1], &[0], 1, 4)
+            .unwrap();
+        assert_eq!(full.pages[0].0, 1);
+        assert_eq!(full.unit_evaluations, 4);
+        assert!(full.pages.len() <= 1);
+        assert!(
+            loaded
+                .search_pages_seeded(&scorer, &[2.1], &[0], 1, 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn seeded_search_handles_a_partial_last_page() {
+        let mut sq8 = Vec::new();
+        for code in [0u8, 0, 1, 1, 2, 2, 3, 3, 4, 4] {
+            sq8.extend_from_slice(&[0u8; 12]);
+            sq8.push(code);
+        }
+        let blob = UnitCentroidPages::build_from_sq8_reader(
+            &mut Cursor::new(sq8),
+            10,
+            1,
+            2,
+            4,
+            &[0.0],
+            &[1.0],
+        )
+        .unwrap();
+        let scorer = UnitCentroidPages::decode(&blob).unwrap();
+        let graph = UnitCentroidGraph::build(&scorer, &blob).unwrap();
+        let found = graph
+            .search_pages_seeded(&scorer, &[4.0], &[2], 1, 5)
+            .unwrap();
+        assert!(found.evaluated_units.contains(&4));
+        assert_eq!(found.unit_evaluations, found.evaluated_units.len());
+        assert!(found.pages.iter().all(|&(page, _)| page != 2));
     }
 }
