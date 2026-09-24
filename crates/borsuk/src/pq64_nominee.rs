@@ -1,6 +1,7 @@
 //! Source-only PQ64 runtime nomination over explicit physical geometry.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 /// Invalid source-only router geometry, coefficients or request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +30,63 @@ impl Pq64Router {
     pub fn dimensions(&self) -> usize { self.dimensions }
     pub fn page_rows(&self) -> usize { self.page_rows }
     pub fn blocks_per_page(&self) -> usize { self.blocks_per_page }
+
+    fn adc_table(&self, query: &[f32]) -> Result<Vec<f32>, Pq64Error> {
+        if query.len() != self.dimensions || query.iter().any(|value| !value.is_finite()) {
+            return Err(Pq64Error::InvalidQuery);
+        }
+        let mut table = vec![0.0f32; 64 * 256];
+        for subspace in 0..64 {
+            let first = subspace * self.dimensions / 64;
+            let last = (subspace + 1) * self.dimensions / 64;
+            for word in 0..256 {
+                let mut squared = 0.0f32;
+                for coordinate in 0..self.width {
+                    let value = if coordinate < last - first {
+                        query[first + coordinate]
+                    } else {
+                        0.0
+                    };
+                    let delta = self.books[(subspace * 256 + word) * self.width + coordinate]
+                        - value;
+                    squared += delta * delta;
+                }
+                if !squared.is_finite() {
+                    return Err(Pq64Error::InvalidQuery);
+                }
+                table[subspace * 256 + word] = squared;
+            }
+        }
+        Ok(table)
+    }
+
+    /// Score only caller-selected old physical rows from the resident PQ64
+    /// code plane. The caller authenticates any mapping to a relaid SQ8
+    /// physical order and separately bounds the number of requested rows.
+    pub fn score_rows(&self, query: &[f32], rows: &[usize]) -> Result<Vec<f32>, Pq64Error> {
+        if rows.is_empty() || rows.len() > self.rows {
+            return Err(Pq64Error::InvalidRequest);
+        }
+        let table = self.adc_table(query)?;
+        let mut seen = HashSet::new();
+        seen.try_reserve(rows.len()).map_err(|_| Pq64Error::InvalidRequest)?;
+        let mut result = Vec::new();
+        result.try_reserve_exact(rows.len()).map_err(|_| Pq64Error::InvalidRequest)?;
+        for &row in rows {
+            if row >= self.rows || !seen.insert(row) {
+                return Err(Pq64Error::InvalidRequest);
+            }
+            let mut score = 0.0f32;
+            for subspace in 0..64 {
+                score += table[subspace * 256 + usize::from(self.codes[row * 64 + subspace])];
+            }
+            if !score.is_finite() {
+                return Err(Pq64Error::InvalidQuery);
+            }
+            result.push(score);
+        }
+        Ok(result)
+    }
 
     /// Bind source-only arrays to explicit row, page and PQ geometry.
     pub fn new(
@@ -73,7 +131,8 @@ impl Pq64Router {
         })
     }
 
-    /// Return physical SQ8-row ordinals in stable ascending PQ score order.
+    /// Return old physical router-row ordinals in stable ascending PQ score
+    /// order. A relaid SQ8 object needs an authenticated order mapping.
     pub fn nominate(
         &self,
         query: &[f32],
@@ -110,28 +169,7 @@ impl Pq64Router {
         let mut chosen = page_scores[..regions].iter().map(|(_, page)| *page).collect::<Vec<_>>();
         chosen.sort_unstable();
 
-        let mut table = vec![0.0f32; 64 * 256];
-        for subspace in 0..64 {
-            let first = subspace * self.dimensions / 64;
-            let last = (subspace + 1) * self.dimensions / 64;
-            for word in 0..256 {
-                let mut squared = 0.0f32;
-                for coordinate in 0..self.width {
-                    let value = if coordinate < last - first {
-                        query[first + coordinate]
-                    } else {
-                        0.0
-                    };
-                    let delta = self.books[(subspace * 256 + word) * self.width + coordinate]
-                        - value;
-                    squared += delta * delta;
-                }
-                if !squared.is_finite() {
-                    return Err(Pq64Error::InvalidQuery);
-                }
-                table[subspace * 256 + word] = squared;
-            }
-        }
+        let table = self.adc_table(query)?;
         let candidate_count = chosen.iter().try_fold(0usize, |count, &page| {
             let start = page * self.page_rows;
             let stop = (page + 1).saturating_mul(self.page_rows).min(self.rows);
@@ -227,5 +265,56 @@ mod tests {
             vec![0.0f32; 64 * 256], vec![0u8; 64],
         ).unwrap();
         assert_eq!(router.nominate(&[0.0], 1, 1).unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn scores_only_requested_rows_in_caller_order() {
+        let mut books = vec![0.0f32; 64 * 256];
+        books[1] = 2.0;
+        let mut codes = vec![0u8; 32 * 64];
+        codes[7 * 64] = 1;
+        let router = Pq64Router::new(
+            32, 64, 32, 1, vec![0.0f32; 64], books, codes,
+        ).unwrap();
+        assert_eq!(router.score_rows(&[0.0; 64], &[7, 2]).unwrap(), vec![4.0, 0.0]);
+        assert_eq!(router.score_rows(&[0.0; 64], &[32]),
+                   Err(super::Pq64Error::InvalidRequest));
+        assert_eq!(router.score_rows(&[0.0; 64], &[7, 7]),
+                   Err(super::Pq64Error::InvalidRequest));
+        assert_eq!(router.score_rows(&[0.0; 64], &[]),
+                   Err(super::Pq64Error::InvalidRequest));
+    }
+
+    #[test]
+    fn row_scores_use_the_same_d96_subspace_padding_as_nomination() {
+        let mut books = vec![0.0f32; 64 * 256 * 2];
+        books[(1 * 256 + 1) * 2 + 1] = 3.0;
+        let mut codes = vec![0u8; 2 * 64];
+        codes[64 + 1] = 1;
+        let router = Pq64Router::new(
+            2, 96, 2, 1, vec![0.0f32; 96], books, codes,
+        ).unwrap();
+        let mut query = [0.0f32; 96];
+        query[2] = 3.0;
+        assert_eq!(router.score_rows(&query, &[1, 0]).unwrap(), vec![0.0, 9.0]);
+        assert_eq!(router.score_rows(&query[..95], &[1]),
+                   Err(super::Pq64Error::InvalidQuery));
+    }
+
+    #[test]
+    fn scored_rows_match_nominee_adc_order() {
+        let mut books = vec![0.0f32; 64 * 256];
+        books[1] = 2.0;
+        books[2] = 1.0;
+        let mut codes = vec![0u8; 3 * 64];
+        codes[0] = 1;
+        codes[64] = 2;
+        let router = Pq64Router::new(
+            3, 64, 3, 1, vec![0.0f32; 64], books, codes,
+        ).unwrap();
+        assert_eq!(router.score_rows(&[0.0; 64], &[0, 1, 2]).unwrap(),
+                   vec![4.0, 1.0, 0.0]);
+        assert_eq!(router.nominate(&[0.0; 64], 1, 3).unwrap(),
+                   vec![2, 1, 0]);
     }
 }

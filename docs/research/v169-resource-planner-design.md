@@ -100,6 +100,19 @@ in two local NumPy 1,536-event diagnostics. Those advisory runs are
 neither a controlled serving Rust latency measurement nor an acceptable
 production target.
 
+The current `Pq64Router` code plane is indexed by its original physical
+order, whereas V164/V163 SQ8 records were repacked into a new physical
+order. The offline V168 runner carries authenticated old/new source-row
+permutations; the serving generation does not yet persist or bind that
+mapping. A production format change must store a generation-bound
+permutation (or rebuild the complete router summaries and PQ code plane
+in SQ8 order), authenticate
+its digest together with the router, SQ8 object and source identity,
+and reject any mismatch before scoring candidate units. No serving
+route may infer the mapping from row position alone. Because BORSUK is
+unreleased, replace the experimental format marker rather than adding
+a legacy reader.
+
 ## Qualification and stop conditions
 
 First freeze features, calibration method, resource profile, baseline
