@@ -40,9 +40,13 @@ pub struct IntervalPlan {
 /// the unit floor charges that page rounded up to a physical unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrimaryCoverFloor {
+    /// Number of distinct mandatory physical pages.
     pub primary_pages: usize,
+    /// Number of contiguous mandatory runs before bridging gaps.
     pub disconnected_runs: usize,
+    /// Number of previously empty pages added by the cheapest bridges.
     pub bridged_pages: usize,
+    /// Rounded physical units charged by the minimum cover.
     pub minimum_units: usize,
     /// Smallest caller byte cap accepted by the rounded-unit budget lattice.
     pub minimum_budget_bytes: usize,
