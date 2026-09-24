@@ -60,8 +60,17 @@ write. An owned `Arc` generation keeps old readers pinned until they
 finish. Production has no non-CAS publication fallback; garbage
 collection waits for pinned readers and a declared grace period.
 
-For one query, the source-only PQ64 router emits its bounded nominee
-roster and primary physical pages. The current full-code router is a
+For one query, the source-only PQ64 router emits its bounded, score-ordered
+nominee roster. V114 selected the 100 primary rows only **after exact SQ8
+scoring of all 512 nominees** through its authenticated local mirror; V154
+and V155 reused those captured exact-primary rosters. Taking the first 100
+PQ nominees would change the method and has no returned-quality evidence.
+Fetching every nominee page from S3 before graph planning may consume the
+request's transport cap. The registered V157 cover gate decides whether
+that exact-primary step is feasible under the same charged cap, and records
+PQ-primary overlap without treating overlap as a recall result. No serving
+query may silently substitute PQ-primary for the V154/V155 method.
+The current full-code router is a
 100M latency blocker: `nominate` scores every page summary, then scans
 the selected PQ codes. V156 initially qualifies only the graph/planner
 stage after this router. A measured bounded-work hierarchical
