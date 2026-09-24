@@ -72,6 +72,35 @@ def main() -> None:
     rows = [json.loads(line) for line in authenticated(args.evidence, EVIDENCE_SHA).splitlines()]
     if len(rows) != 1_000:
         raise ValueError("V122 query count differs")
+    attribution = {
+        "control_missed_gt": 0,
+        "control_missed_in_unvoted_pages": 0,
+        "control_missed_recovered_by_candidate": 0,
+        "candidate_missed_gt": 0,
+        "candidate_missed_in_unvoted_pages": 0,
+        "voted_pages_dropped_by_control": 0,
+    }
+    for row in rows:
+        voted = {ordinal // PAGE_ROWS for ordinal in row["nominees"]}
+        control = row["baseline_ranges"]
+        candidate = row["candidate_ranges"]
+        attribution["voted_pages_dropped_by_control"] += sum(
+            not any(first <= page * PAGE_ROWS * ROW_BYTES < last
+                    for first, last in control) for page in voted
+        )
+        for source in row["truth_ids"]:
+            physical = inverse[source]
+            offset = physical * ROW_BYTES
+            voted_page = physical // PAGE_ROWS in voted
+            in_control = any(first <= offset < last for first, last in control)
+            in_candidate = any(first <= offset < last for first, last in candidate)
+            if not in_control:
+                attribution["control_missed_gt"] += 1
+                attribution["control_missed_in_unvoted_pages"] += not voted_page
+                attribution["control_missed_recovered_by_candidate"] += in_candidate
+            if not in_candidate:
+                attribution["candidate_missed_gt"] += 1
+                attribution["candidate_missed_in_unvoted_pages"] += not voted_page
     outcomes = []
     for halo in (0, 1, 2, 4, 8, 16):
         coverage = 0
@@ -116,7 +145,7 @@ def main() -> None:
     print(json.dumps({"schema": "borsuk-v137-v122-halo-ceiling-diagnostic-v1",
                       "dataset": "deep-image-96-angular random100k train subset",
                       "split": "used publication-test ordinals 9000-9999",
-                      "outcomes": outcomes}, sort_keys=True))
+                      "attribution": attribution, "outcomes": outcomes}, sort_keys=True))
 
 
 if __name__ == "__main__":

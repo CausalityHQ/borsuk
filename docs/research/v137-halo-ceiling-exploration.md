@@ -51,3 +51,12 @@ deep-image cohort and the already-used ReLAION-1M development cohort,
 recording per-query GETs, bytes, exact-source returned quality, p05 and
 sub-90 tails. Only a cross-corpus winner warrants a new paired live-S3
 attempt and fresh 1M validation.
+
+An independent attribution over the same sealed rows found that the capped
+control dropped **zero voted pages**. All **1,173** GT positions it missed
+lay in pages with no PQ64 nominee. The candidate's broad physical bridges
+covered **1,115** of those positions; its remaining **58** misses were also
+outside its fetched ranges and in unvoted pages. Thus the 100k control miss
+comes from unvoted-page discovery, not the GET/byte cap or SQ8 expansion
+width. This is a cohort-specific causal diagnosis; ReLAION-1M may be
+cap-bound for a different reason and requires its own authenticated replay.
