@@ -1,5 +1,20 @@
 # OPQ8 proofs
 
+`AdaptiveRerank.lean` proves a conditional score-interval rule for a
+quantized-first exact-source reranker. If a row's sound upper score bound is
+below a threshold and `k` distinct candidate witnesses have sound lower
+bounds at or above that threshold, the row is strictly outranked by those
+`k` witnesses and cannot enter a correct exact top-`k` result. A production
+certificate must establish interval soundness for the deployed FP16/CPU
+kernel, authenticate the witness IDs and exact fallback scores, and refine
+the actual deterministic top-`k` implementation to this model. The file also
+proves the linear `N × (2D + metadata) × G` FP16 payload law: with 8 bytes of
+metadata per row, two complete 100M generations are 40.0 GB at D96 or
+308.8 GB at D768, before allocator, router, mappings, page cache, query
+scratch and concurrent work. These are payload projections without a vector
+count knee; they do not prove charged RAM or latency. Run
+`lean AdaptiveRerank.lean` from this directory with the pinned toolchain.
+
 `IntervalLatticeNormalization.lean` proves the arithmetic behind V121's D96
 planner-state reduction: when full and final-page charges share a positive
 divisor, dividing those charges and the budget preserves feasible charged
