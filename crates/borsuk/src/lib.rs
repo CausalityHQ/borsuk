@@ -71,6 +71,7 @@ pub mod exact_sq8_mirror;
 pub mod pq64_nominee;
 pub mod pq64_router_artifact;
 pub mod returned_sq8;
+pub mod relaid_generation_authority;
 pub mod sq8_page_authority;
 pub mod sq8_s3_range;
 pub mod serving_generation;

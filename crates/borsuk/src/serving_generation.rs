@@ -6,6 +6,7 @@ use crate::native_source_tier::{NativeSourceTier, decoded_sha256};
 use crate::physical_row_permutation::PhysicalRowPermutation;
 use crate::pq64_nominee::Pq64Error;
 use crate::pq64_router_artifact::SourceRouterArtifact;
+use crate::relaid_generation_authority::RelayedGenerationAuthority;
 use crate::sq8_page_authority::PageAuthority;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,14 +15,13 @@ pub enum GenerationError {
 }
 
 /// Identity fence for the original router, relaid SQ8 plane and row map.
-/// The caller pins the authenticated page-object ETag through serving.
+/// The trusted generation root pins the page-object ETag through serving.
 pub struct ServingGeneration<'a> {
     router: &'a SourceRouterArtifact,
     row_map: &'a PhysicalRowPermutation,
+    authority: &'a RelayedGenerationAuthority,
     mirror: &'a MirrorManifest,
     pages: &'a PageAuthority,
-    object_key: &'a str,
-    etag: &'a str,
 }
 
 impl<'a> ServingGeneration<'a> {
@@ -74,24 +74,31 @@ impl<'a> ServingGeneration<'a> {
         self.pages
     }
     pub fn object_key(&self) -> &str {
-        self.object_key
+        self.authority.object_key()
     }
     pub fn etag(&self) -> &str {
-        self.etag
+        self.authority.etag()
     }
 
     pub fn bind(
         router: &'a SourceRouterArtifact,
         row_map: &'a PhysicalRowPermutation,
+        authority: &'a RelayedGenerationAuthority,
         mirror: &'a MirrorManifest,
         pages: &'a PageAuthority,
-        object_key: &'a str,
-        etag: &'a str,
     ) -> Result<Self, GenerationError> {
         if router.generation == 0
+            || router.generation != authority.generation()
             || router.generation != mirror.generation
             || router.generation != pages.generation()
             || router.generation != row_map.generation()
+            || router.router.rows() != authority.rows()
+            || router.router.dimensions() != authority.dimensions()
+            || row_map.artifact_sha256() != authority.row_map_sha256()
+            || row_map.source_sha256() != authority.source_sha256()
+            || row_map.router_manifest_sha256() != authority.router_manifest_sha256()
+            || row_map.old_sq8_sha256() != authority.old_sq8_sha256()
+            || row_map.new_sq8_sha256() != authority.new_sq8_sha256()
             || decoded_sha256(&router.manifest_sha256).ok()
                 != Some(row_map.router_manifest_sha256())
             || decoded_sha256(&router.source_sha256).ok() != Some(row_map.source_sha256())
@@ -115,18 +122,15 @@ impl<'a> ServingGeneration<'a> {
                 .iter()
                 .zip(&mirror.step)
                 .any(|(left, right)| left.to_bits() != right.to_bits())
-            || object_key.is_empty()
-            || etag.is_empty()
         {
             return Err(GenerationError::IdentityMismatch);
         }
         Ok(Self {
             router,
             row_map,
+            authority,
             mirror,
             pages,
-            object_key,
-            etag,
         })
     }
 }
@@ -181,6 +185,31 @@ mod tests {
     };
     use crate::pq64_nominee::Pq64Router;
     use sha2::{Digest, Sha256};
+
+    fn authority(
+        router: &SourceRouterArtifact,
+        row_map_sha256: &str,
+        new_sq8_sha256: &str,
+        object_key: &str,
+        etag: &str,
+    ) -> RelayedGenerationAuthority {
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-relaid-generation-v1",
+            "generation":router.generation,
+            "rows":router.router.rows(),
+            "dimensions":router.router.dimensions(),
+            "source_sha256":router.source_sha256.as_str(),
+            "router_manifest_sha256":router.manifest_sha256.as_str(),
+            "row_map_sha256":row_map_sha256,
+            "old_sq8_sha256":router.sq8_sha256.as_str(),
+            "new_sq8_sha256":new_sq8_sha256,
+            "object_key":object_key,
+            "etag":etag,
+        }))
+        .unwrap();
+        RelayedGenerationAuthority::load_authenticated(&raw, &format!("{:x}", Sha256::digest(&raw)))
+            .unwrap()
+    }
 
     #[test]
     fn relaid_nonidentity_map_binds_only_to_its_router_and_new_object() {
@@ -239,15 +268,20 @@ mod tests {
         };
         let sha = write_row_permutation(&path, binding, &[1, 0]).unwrap();
         let row_map = PhysicalRowPermutation::open_authenticated(&path, &sha, binding).unwrap();
-        let bound = ServingGeneration::bind(
+        let sealed = authority(&router, &sha, &object_sha, "index/relaid-sq8.bin", "etag-3");
+        let bound = ServingGeneration::bind(&router, &row_map, &sealed, &mirror, &pages).unwrap();
+        assert_eq!(bound.object_key(), "index/relaid-sq8.bin");
+        let wrong_seal = authority(
             &router,
-            &row_map,
-            &mirror,
-            &pages,
+            &"f".repeat(64),
+            &object_sha,
             "index/relaid-sq8.bin",
             "etag-3",
-        )
-        .unwrap();
+        );
+        assert_eq!(
+            ServingGeneration::bind(&router, &row_map, &wrong_seal, &mirror, &pages).err(),
+            Some(GenerationError::IdentityMismatch)
+        );
         assert_eq!(bound.row_map().new_to_old(0), Some(1));
         assert_eq!(bound.row_map().old_to_new(1), Some(0));
         assert_eq!(bound.nominate_sq8_rows(&[0.0], 1, 1).unwrap(), vec![1]);
@@ -259,15 +293,7 @@ mod tests {
         let mut changed_router = router;
         changed_router.manifest_sha256 = "f".repeat(64);
         assert_eq!(
-            ServingGeneration::bind(
-                &changed_router,
-                &row_map,
-                &mirror,
-                &pages,
-                "index/relaid-sq8.bin",
-                "etag-3"
-            )
-            .err(),
+            ServingGeneration::bind(&changed_router, &row_map, &sealed, &mirror, &pages).err(),
             Some(GenerationError::IdentityMismatch)
         );
     }
@@ -331,28 +357,17 @@ mod tests {
             row_map_binding,
         )
         .unwrap();
-        assert!(
-            ServingGeneration::bind(
-                &router,
-                &row_map,
-                &mirror,
-                &pages,
-                "index/sq8.bin",
-                "etag-1"
-            )
-            .is_ok()
+        let sealed = authority(
+            &router,
+            &row_map_sha,
+            pages.object_sha256(),
+            "index/sq8.bin",
+            "etag-1",
         );
+        assert!(ServingGeneration::bind(&router, &row_map, &sealed, &mirror, &pages).is_ok());
         mirror.generation = 2;
         assert_eq!(
-            ServingGeneration::bind(
-                &router,
-                &row_map,
-                &mirror,
-                &pages,
-                "index/sq8.bin",
-                "etag-1"
-            )
-            .err(),
+            ServingGeneration::bind(&router, &row_map, &sealed, &mirror, &pages).err(),
             Some(GenerationError::IdentityMismatch)
         );
 
@@ -397,15 +412,7 @@ mod tests {
             1,
         )
         .unwrap();
-        let base = ServingGeneration::bind(
-            &router,
-            &row_map,
-            &mirror,
-            &pages,
-            "index/sq8.bin",
-            "etag-1",
-        )
-        .unwrap();
+        let base = ServingGeneration::bind(&router, &row_map, &sealed, &mirror, &pages).unwrap();
         let exact = ExactServingGeneration::bind(base, &source, &map).unwrap();
         assert_eq!(exact.source().rows(), 1);
         assert_eq!(exact.map().resident_entry_bytes(), 16);
@@ -439,15 +446,7 @@ mod tests {
             1,
         )
         .unwrap();
-        let base = ServingGeneration::bind(
-            &router,
-            &row_map,
-            &mirror,
-            &pages,
-            "index/sq8.bin",
-            "etag-1",
-        )
-        .unwrap();
+        let base = ServingGeneration::bind(&router, &row_map, &sealed, &mirror, &pages).unwrap();
         assert!(matches!(
             ExactServingGeneration::bind(base, &source, &other_map),
             Err(GenerationError::IdentityMismatch)
@@ -455,29 +454,13 @@ mod tests {
 
         router.source_sha256 = "d".repeat(64);
         assert_eq!(
-            ServingGeneration::bind(
-                &router,
-                &row_map,
-                &mirror,
-                &pages,
-                "index/sq8.bin",
-                "etag-1"
-            )
-            .err(),
+            ServingGeneration::bind(&router, &row_map, &sealed, &mirror, &pages).err(),
             Some(GenerationError::IdentityMismatch)
         );
         mirror.generation = 1;
         mirror.object_sha256 = "d".repeat(64);
         assert_eq!(
-            ServingGeneration::bind(
-                &router,
-                &row_map,
-                &mirror,
-                &pages,
-                "index/sq8.bin",
-                "etag-1"
-            )
-            .err(),
+            ServingGeneration::bind(&router, &row_map, &sealed, &mirror, &pages).err(),
             Some(GenerationError::IdentityMismatch)
         );
     }

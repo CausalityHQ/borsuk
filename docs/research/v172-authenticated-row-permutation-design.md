@@ -68,10 +68,21 @@ comparison, rehashes the old open file after the scan, and rejects
 duplicate ordinals before heavy I/O. This revision needs a new terminal
 gate; the failed result is preserved as negative evidence.
 
-The map loader now retains the trusted whole-artifact SHA-256, but V174's
-generation binder does not yet compare it to a row-map digest pinned in
-an authenticated generation manifest. That trust-root connection is a
-remaining product blocker. `nominate_sq8_rows` returns new ordinals in
+The repaired revision `38cbf7e5f1b2142615ba63f1a690cfcc13b2ccab`
+passed its separate Causality Spot narrow gate: **5/5** row-map tests,
+including a valid checked write, inverse-direction rejection and SQ8
+hash tamper rejection. The complete terminal SHA-256 is
+`461d1fa728a31fb1e52d6f24affd27555e36e50b9833acef8c260c7be72b5ead`
+at `s3://borsuk-bench-453182569524-euc1/research/v172-row-map-compile/38cbf7e5f1b2142615ba63f1a690cfcc13b2ccab/runs/a0002/`.
+The controller rehashed all three closed artifacts and confirmed Spot
+instance `i-05c6183878a7801ca` terminated. Compile/tests took 98.67
+wall seconds and peaked at 4,941,584 KiB RSS on that build worker.
+
+The map loader now retains the trusted whole-artifact SHA-256. V174's
+generation binder did not compare it to a digest pinned in an
+authenticated generation manifest; the V175 authority slice adds that
+check and requires its own narrow terminal gate. `nominate_sq8_rows`
+returns new ordinals in
 PQ score order, so a later page planner must regroup them by new page.
 
 ## Resource and qualification
