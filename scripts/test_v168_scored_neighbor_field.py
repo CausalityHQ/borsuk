@@ -60,6 +60,18 @@ class ScoredNeighborFieldTests(unittest.TestCase):
         self.assertEqual(field.scores[7], 0)
         self.assertTrue(np.all(field.scores[np.arange(rows) != 7] == 9))
 
+    def test_radius_expands_scored_physical_units(self):
+        rows = 160
+        order = np.arange(rows, dtype=np.int64)
+        field = score_neighbor_field(
+            np.zeros(64, dtype=np.float32), nominees=(64,),
+            old_order=order, inverse_old=order, new_order=order,
+            inverse_new=order, books=np.zeros((64, 256, 1), dtype=np.float32),
+            codes=np.zeros((rows, 64), dtype=np.uint8), unit_rows=32,
+            radius=2)
+        self.assertEqual(field.units, (0, 1, 2, 3, 4))
+        np.testing.assert_array_equal(field.old_rows, order)
+
     def test_d768_scores_match_direct_pq_reconstruction(self):
         rng = np.random.default_rng(168)
         rows = 32

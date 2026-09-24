@@ -99,10 +99,12 @@ def unit_moment_without(
 def candidate_units(
     nominees: Iterable[int], old_order: np.ndarray,
     inverse_order: np.ndarray, rows: int, unit_rows: int,
+    *, radius: int = 1,
 ) -> tuple[int, ...]:
-    """Nominee units and immediate physical neighbors under V164 order."""
+    """Nominee units and a caller-selected physical neighborhood."""
     roster = tuple(nominees)
-    if (rows <= 0 or unit_rows <= 0 or old_order.shape != (rows,)
+    if (rows <= 0 or unit_rows <= 0 or type(radius) is not int or radius < 0
+            or old_order.shape != (rows,)
             or inverse_order.shape != (rows,) or not roster
             or len(set(roster)) != len(roster)
             or any(type(value) not in (int, np.int32, np.int64)
@@ -113,8 +115,8 @@ def candidate_units(
     for old_physical in roster:
         source_row = int(old_order[old_physical])
         unit = int(inverse_order[source_row]) // unit_rows
-        answer.update(neighbor for neighbor in (unit - 1, unit, unit + 1)
-                      if 0 <= neighbor < unit_count)
+        answer.update(range(max(0, unit - radius),
+                            min(unit_count, unit + radius + 1)))
     return tuple(sorted(answer))
 
 

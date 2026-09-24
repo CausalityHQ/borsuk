@@ -26,6 +26,7 @@ def score_neighbor_field(
     old_order: np.ndarray, inverse_old: np.ndarray,
     new_order: np.ndarray, inverse_new: np.ndarray,
     books: np.ndarray, codes: np.ndarray, unit_rows: int,
+    radius: int = 1,
 ) -> ScoredNeighborField:
     """Score candidate rows with V114's float32 PQ64 ADC arithmetic."""
     rows = codes.shape[0]
@@ -42,13 +43,15 @@ def score_neighbor_field(
             or any(mapping.shape != (rows,) or mapping.dtype != np.int64
                    for mapping in (inverse_old, new_order, inverse_new))):
         raise ValueError("V168 PQ field geometry differs")
-    units = candidate_units(nominees, old_order, inverse_new, rows, unit_rows)
-    if len(units) > 3 * len(nominees):
+    units = candidate_units(nominees, old_order, inverse_new, rows,
+                            unit_rows, radius=radius)
+    max_units = (2 * radius + 1) * len(nominees)
+    if len(units) > max_units:
         raise AssertionError("V168 candidate-unit bound differs")
     new_physical = np.concatenate([
         np.arange(unit * unit_rows, min((unit + 1) * unit_rows, rows),
                   dtype=np.int64) for unit in units])
-    if new_physical.size > 3 * len(nominees) * unit_rows:
+    if new_physical.size > max_units * unit_rows:
         raise AssertionError("V168 candidate-row bound differs")
     old_rows = inverse_old[new_order[new_physical]]
     width = books.shape[2]

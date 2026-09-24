@@ -28,6 +28,12 @@ class SurrogateProbeTests(unittest.TestCase):
         inverse = np.arange(16, dtype=np.int64)
         self.assertEqual(candidate_units([0, 1, 15], old, inverse, 16, 4),
                          (0, 1, 2, 3))
+        self.assertEqual(candidate_units([0, 15], old, inverse, 16, 4,
+                                         radius=2), (0, 1, 2, 3))
+        self.assertEqual(candidate_units([0], old, inverse, 16, 4,
+                                         radius=0), (0,))
+        with self.assertRaises(ValueError):
+            candidate_units([0], old, inverse, 16, 4, radius=-1)
 
     def test_leave_one_out_recomputes_own_unit(self):
         vectors = np.asarray([[1., 0.], [1., 0.], [0., 1.], [0., 1.]],
