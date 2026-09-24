@@ -255,10 +255,24 @@ fn score_bounded_ranges(
     Ok((returned.iter().map(|entry| entry.id).collect(), total))
 }
 
-fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
-    if args.len() != 6 {
-        return Err("usage: borsuk-v114-score-gate replay-returned MANIFEST OBJECT SIDECAR REQUESTS".into());
+fn replay_top_k(args: &[String]) -> Result<usize, Box<dyn Error>> {
+    if args.len() != 6 && args.len() != 7 {
+        return Err("usage: borsuk-v114-score-gate replay-returned MANIFEST OBJECT SIDECAR REQUESTS [TOP_K]".into());
     }
+    let top_k = args.get(6).map(|raw| raw.parse::<usize>()).transpose()?.unwrap_or(100);
+    if !(100..=1_600).contains(&top_k) {
+        return Err("replay top-K must be between 100 and 1600".into());
+    }
+    Ok(top_k)
+}
+
+fn replay_width(requested: usize, available: usize, explicit_wide: bool) -> usize {
+    if explicit_wide { requested.min(available) } else { requested }
+}
+
+fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let top_k = replay_top_k(args)?;
+    let explicit_wide = args.len() == 7;
     let manifest = parse_manifest(&serde_json::from_str::<serde_json::Value>(
         &fs::read_to_string(&args[2])?,
     )?)
@@ -298,9 +312,13 @@ fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
         )?;
         let plan_pairs = plan.ranges.iter().map(|range| [range.start, range.end])
             .collect::<Vec<_>>();
+        let row_bytes = manifest.geometry.dimensions
+            .checked_add(12).ok_or("replay row width overflows")?;
+        let candidate_rows = plan.bytes / row_bytes;
         let (returned_ids, returned_bytes) = score_bounded_ranges(
             &object, manifest.geometry, &plan_pairs, &query,
-            &manifest.low, &manifest.step, 100,
+            &manifest.low, &manifest.step,
+            replay_width(top_k, candidate_rows, explicit_wide),
         ).map_err(io::Error::other)?;
         if returned_bytes != plan.bytes {
             return Err("planned returned bytes differ".into());
@@ -318,9 +336,21 @@ fn run_replay_returned(args: &[String]) -> Result<(), Box<dyn Error>> {
         });
         if let Some(raw_ranges) = request.get("baseline_ranges") {
             let baseline_pairs: Vec<[usize; 2]> = serde_json::from_value(raw_ranges.clone())?;
+            let baseline_rows = baseline_pairs.iter().try_fold(
+                0usize, |sum, pair| -> Result<usize, Box<dyn Error>> {
+                    let length = pair[1].checked_sub(pair[0])
+                        .ok_or("baseline range ends before start")?;
+                    if length % row_bytes != 0 {
+                        return Err("baseline range is not row aligned".into());
+                    }
+                    Ok(sum.checked_add(length / row_bytes)
+                        .ok_or("baseline row count overflows")?)
+                },
+            )?;
             let (baseline_ids, baseline_bytes) = score_bounded_ranges(
                 &object, manifest.geometry, &baseline_pairs, &query,
-                &manifest.low, &manifest.step, 100,
+                &manifest.low, &manifest.step,
+                replay_width(top_k, baseline_rows, explicit_wide),
             ).map_err(io::Error::other)?;
             result["baseline_ranges"] = serde_json::to_value(baseline_pairs)?;
             result["baseline_bytes"] = serde_json::json!(baseline_bytes);
@@ -390,6 +420,22 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use std::fs;
+
+    #[test]
+    fn replay_top_k_defaults_to_production_100_and_bounds_diagnostic_width() {
+        let args = vec!["bin", "replay-returned", "manifest", "object", "sidecar",
+                        "requests"].into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(replay_top_k(&args).unwrap(), 100);
+        let mut diagnostic = args.clone();
+        diagnostic.push("1600".to_owned());
+        assert_eq!(replay_top_k(&diagnostic).unwrap(), 1600);
+        diagnostic[6] = "1601".to_owned();
+        assert!(replay_top_k(&diagnostic).is_err());
+        diagnostic[6] = "99".to_owned();
+        assert!(replay_top_k(&diagnostic).is_err());
+        assert_eq!(replay_width(100, 99, false), 100);
+        assert_eq!(replay_width(1_600, 768, true), 768);
+    }
 
     #[test]
     fn page_votes_and_plan_charge_the_short_final_page_exactly() {
