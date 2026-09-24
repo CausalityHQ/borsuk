@@ -60,6 +60,7 @@ pub enum RowMapError {
 /// Both directions are resident; payload is exactly eight bytes per row.
 #[derive(Debug)]
 pub struct PhysicalRowPermutation {
+    artifact_sha256: [u8; 32],
     generation: u64,
     source_sha256: [u8; 32],
     router_manifest_sha256: [u8; 32],
@@ -171,35 +172,41 @@ pub(crate) fn write_row_permutation(
     Ok(sha256)
 }
 
-fn authenticated_sq8_file(
-    path: &Path,
+fn verify_sq8_file(
+    file: &File,
     expected_sha256: &str,
     expected_bytes: u64,
-) -> Result<File, RowMapError> {
+) -> Result<(), RowMapError> {
     let expected = decode_hash(expected_sha256)?;
-    let file = File::open(path)?;
     if file.metadata()?.len() != expected_bytes {
         return Err(RowMapError::Invalid("SQ8 object length"));
     }
-    let mut input = BufReader::new(&file);
     let mut digest = Sha256::new();
     let mut block = [0_u8; BLOCK_BYTES];
-    loop {
-        let got = input.read(&mut block)?;
-        if got == 0 {
-            break;
+    let mut offset = 0_u64;
+    while offset < expected_bytes {
+        let want = (expected_bytes - offset).min(BLOCK_BYTES as u64) as usize;
+        let mut read = 0;
+        while read < want {
+            let got = file.read_at(&mut block[read..want], offset + read as u64)?;
+            if got == 0 {
+                return Err(RowMapError::Invalid("SQ8 object ended early"));
+            }
+            read += got;
         }
-        digest.update(&block[..got]);
+        digest.update(&block[..want]);
+        offset += want as u64;
     }
     if digest.finalize()[..] != expected {
         return Err(RowMapError::HashMismatch);
     }
-    Ok(file)
+    Ok(())
 }
 
 /// Check both authenticated SQ8 objects and every mapped record before
 /// publishing a row map. The object files must remain immutable during build.
-/// Extra memory is O(row width); the old object is read by mapped offset.
+/// Scratch memory is O(rows + row width) for bijection checking and row
+/// comparison; the old object is read by mapped offset.
 pub fn write_verified_row_permutation(
     path: &Path,
     old_sq8_path: &Path,
@@ -220,37 +227,68 @@ pub fn write_verified_row_permutation(
         .rows
         .checked_mul(row_bytes as u64)
         .ok_or(RowMapError::Invalid("SQ8 object length overflow"))?;
-    let old_file = authenticated_sq8_file(old_sq8_path, binding.old_sq8_sha256, total_bytes)?;
-    let new_file = authenticated_sq8_file(new_sq8_path, binding.new_sq8_sha256, total_bytes)?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(rows)
+        .map_err(|_| RowMapError::Invalid("row-map validation allocation"))?;
+    seen.resize(rows, false);
+    for &old in new_to_old {
+        let index = old as usize;
+        if index >= rows || seen[index] {
+            return Err(RowMapError::Invalid("row-map is not a permutation"));
+        }
+        seen[index] = true;
+    }
+    drop(seen);
+    let old_file = File::open(old_sq8_path)?;
+    verify_sq8_file(&old_file, binding.old_sq8_sha256, total_bytes)?;
+    let new_file = File::open(new_sq8_path)?;
+    if new_file.metadata()?.len() != total_bytes {
+        return Err(RowMapError::Invalid("SQ8 object length"));
+    }
     let mut new_input = BufReader::new(new_file);
+    let expected_new_digest = decode_hash(binding.new_sq8_sha256)?;
+    let mut new_digest = Sha256::new();
     let mut old_row = Vec::new();
     old_row
         .try_reserve_exact(row_bytes)
         .map_err(|_| RowMapError::Invalid("SQ8 row buffer allocation"))?;
     old_row.resize(row_bytes, 0);
-    let mut new_row = Vec::new();
-    new_row
-        .try_reserve_exact(row_bytes)
+    let rows_per_block = (BLOCK_BYTES / row_bytes).max(1);
+    let block_bytes = rows_per_block
+        .checked_mul(row_bytes)
+        .ok_or(RowMapError::Invalid("SQ8 row block overflow"))?;
+    let mut new_block = Vec::new();
+    new_block
+        .try_reserve_exact(block_bytes)
         .map_err(|_| RowMapError::Invalid("SQ8 row buffer allocation"))?;
-    new_row.resize(row_bytes, 0);
-    for &old in new_to_old {
-        if u64::from(old) >= binding.rows {
-            return Err(RowMapError::Invalid("row-map is not a permutation"));
-        }
-        new_input.read_exact(&mut new_row)?;
-        let offset = u64::from(old) * row_bytes as u64;
-        let mut read = 0;
-        while read < row_bytes {
-            let got = old_file.read_at(&mut old_row[read..], offset + read as u64)?;
-            if got == 0 {
-                return Err(RowMapError::Invalid("old SQ8 row ended early"));
+    new_block.resize(block_bytes, 0);
+    for mapped_rows in new_to_old.chunks(rows_per_block) {
+        let bytes = &mut new_block[..mapped_rows.len() * row_bytes];
+        new_input.read_exact(bytes)?;
+        new_digest.update(&*bytes);
+        for (&old, new_row) in mapped_rows.iter().zip(bytes.chunks_exact(row_bytes)) {
+            let offset = u64::from(old) * row_bytes as u64;
+            let mut read = 0;
+            while read < row_bytes {
+                let got = old_file.read_at(&mut old_row[read..], offset + read as u64)?;
+                if got == 0 {
+                    return Err(RowMapError::Invalid("old SQ8 row ended early"));
+                }
+                read += got;
             }
-            read += got;
-        }
-        if old_row != new_row {
-            return Err(RowMapError::Invalid("row-map direction or SQ8 row body"));
+            if old_row != new_row {
+                return Err(RowMapError::Invalid("row-map direction or SQ8 row body"));
+            }
         }
     }
+    let mut extra = [0_u8; 1];
+    if new_input.read(&mut extra)? != 0 {
+        return Err(RowMapError::Invalid("new SQ8 trailing bytes"));
+    }
+    if new_digest.finalize()[..] != expected_new_digest {
+        return Err(RowMapError::HashMismatch);
+    }
+    verify_sq8_file(&old_file, binding.old_sq8_sha256, total_bytes)?;
     write_row_permutation(path, binding, new_to_old)
 }
 
@@ -310,6 +348,7 @@ impl PhysicalRowPermutation {
             return Err(RowMapError::HashMismatch);
         }
         Ok(Self {
+            artifact_sha256: expected_digest,
             generation: binding.generation,
             source_sha256: decode_hash(binding.source_sha256)?,
             router_manifest_sha256: decode_hash(binding.router_manifest_sha256)?,
@@ -323,6 +362,10 @@ impl PhysicalRowPermutation {
     /// Number of rows in either physical order.
     pub fn rows(&self) -> usize {
         self.new_to_old.len()
+    }
+    /// Trusted whole-artifact digest used to authenticate this map.
+    pub fn artifact_sha256(&self) -> [u8; 32] {
+        self.artifact_sha256
     }
     /// Immutable generation identifier.
     pub fn generation(&self) -> u64 {
@@ -386,6 +429,7 @@ mod tests {
         let path = root.path().join("rows.bin");
         let expected = write_row_permutation(&path, binding(), &[2, 0, 3, 1]).unwrap();
         let map = PhysicalRowPermutation::open_authenticated(&path, &expected, binding()).unwrap();
+        assert_eq!(map.artifact_sha256(), decode_hash(&expected).unwrap());
         assert_eq!(map.rows(), 4);
         assert_eq!(map.resident_payload_bytes(), 32);
         assert_eq!(map.generation(), 7);

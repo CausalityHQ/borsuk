@@ -32,7 +32,8 @@ impl<'a> ServingGeneration<'a> {
     pub fn row_map(&self) -> &PhysicalRowPermutation {
         self.row_map
     }
-    /// Nominate through old router pages and return relaid SQ8 row ordinals.
+    /// Nominate through old router pages and return relaid SQ8 row ordinals
+    /// in PQ score order; range planning must group them by new page.
     pub fn nominate_sq8_rows(
         &self,
         query: &[f32],

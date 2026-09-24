@@ -39,16 +39,40 @@ must deliberately supply the inverse map and reject it. V174 retains the
 verified router manifest digest in `SourceRouterArtifact` and changes
 `ServingGeneration::bind` to compare the router's old SQ8 hash and the
 mirror's new SQ8 hash through the map rather than equating them.
+The generation builder must also establish stable-ID uniqueness (as the
+source ID map does for its source plane) and match SQ8 IDs to that source
+set; the checked row-byte comparison does not certify that independent
+source/SQ8 relation on its own.
 
 The next artifact slice provides `write_verified_row_permutation`: it
 rehashes both local SQ8 files against their pinned identities and compares
 every new record to the mapped old record before publication. Its random
-old-record reads use O(row width) scratch space, but build time at 10M
+old-record reads and early bijection check use O(rows + row width)
+scratch space, but build time at 10M
 and 100M is unmeasured. The old and new files are required to remain
 immutable during the check. A production generation builder must call
 this checked entrypoint; the unverified writer is crate-private for
 small fixtures. The independent binder and query-path tests remain
 separate gates.
+
+The first checked-writer narrow test at pushed `c6bd8de6` **failed**:
+4 passed, 1 failed. Its complete terminal SHA-256 is
+`9233f89a21b5b36fc8bd924ba0656ff78c3cf4ed3b77c1957ec6e5c933cbf3ac`
+at `s3://borsuk-bench-453182569524-euc1/research/v172-row-map-compile/c6bd8de6b51beb34fdd45a883d79cadc5fc60cd3/runs/a0001/`.
+The original worker `i-00478479e57220177` was terminated and its three
+terminal-listed artifacts were rehashed. Root cause: hashing the new SQ8
+file with `BufReader<&File>` advanced the same file cursor to EOF before
+row comparison; the inverse-direction test received EOF rather than its
+expected direction error. The revised writer hashes new rows during
+comparison, rehashes the old open file after the scan, and rejects
+duplicate ordinals before heavy I/O. This revision needs a new terminal
+gate; the failed result is preserved as negative evidence.
+
+The map loader now retains the trusted whole-artifact SHA-256, but V174's
+generation binder does not yet compare it to a row-map digest pinned in
+an authenticated generation manifest. That trust-root connection is a
+remaining product blocker. `nominate_sq8_rows` returns new ordinals in
+PQ score order, so a later page planner must regroup them by new page.
 
 ## Resource and qualification
 
