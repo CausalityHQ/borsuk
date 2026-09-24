@@ -363,3 +363,10 @@ radius 8, 32 rows and PQ64 this is 8,704 units, 278,528 rows and
 directory. These are work upper bounds, not evidence of captured recall,
 fetched bytes, runtime or charged RAM. V177's source-only coverage and
 candidate-union sizes were measured separately on a closed Spot cell.
+
+`PrimaryRunBudget.lean` also includes the V178 query-653 conditional byte
+conflict: the independently checked closed V177 roster yields 71 mandatory
+units, 57 runs and a 752-unit minimum gap bridge at 32 GETs. With the
+authenticated gap premise, Lean proves any whole-unit cover needs more than
+16,777,216 bytes; the arithmetic minimum is 823 units or 20,542,080 bytes.
+The certificate is in `docs/research/v178-primary-gap-certificate.json`.

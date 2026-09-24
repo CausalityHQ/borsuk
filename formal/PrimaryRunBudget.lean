@@ -65,4 +65,20 @@ theorem v171_mandatory_aggregate_arithmetic :
     17684 ≤ 22126 ∧ 1098814080 ≤ 11134007040 := by
   decide
 
+theorem v178_query653_32_get_byte_conflict
+    (bridgedUnits fetchedUnits bytes : Nat)
+    (gapCertificate : 752 ≤ bridgedUnits)
+    (coverage : 71 + bridgedUnits ≤ fetchedUnits)
+    (byteAccounting : bytes = fetchedUnits * 24960) :
+    16777216 < bytes := by
+  have byteFloor := cannot_meet_byte_cap_of_gap_certificate
+    71 bridgedUnits fetchedUnits 24960 bytes 16777216 752
+    gapCertificate coverage byteAccounting (by decide)
+  exact byteFloor
+
+theorem v178_query653_floor_arithmetic :
+    71 + 752 = 823 ∧ 823 * 24960 = 20542080 ∧
+    16777216 < 20542080 := by
+  decide
+
 end Borsuk.PrimaryRunBudget
