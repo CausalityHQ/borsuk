@@ -353,3 +353,13 @@ truth count of `k`, a sound near-window premise and an omission bound
 imply the chosen returned-hit floor. The theorem does not infer that
 the PQ/SQ8 score window is sound for real queries or that a fitted
 probability model certifies omissions; those are explicit data premises.
+
+`UnitNeighborhoodBounds.lean` proves that increasing a physical-unit
+neighborhood radius cannot remove a candidate unit. Given a certified
+duplicate-free unit-count bound, it also bounds scored rows and PQ lookups
+by `nominees × (2 × radius + 1) × unitRows × subspaces`; for 512 nominees,
+radius 8, 32 rows and PQ64 this is 8,704 units, 278,528 rows and
+17,825,792 lookups. Run `lean UnitNeighborhoodBounds.lean` from this
+directory. These are work upper bounds, not evidence of captured recall,
+fetched bytes, runtime or charged RAM. V177's source-only coverage and
+candidate-union sizes were measured separately on a closed Spot cell.
