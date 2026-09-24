@@ -9,6 +9,7 @@ const PAGE_ROWS: usize = 256;
 pub enum BudgetedPageError {
     InvalidGeometry,
     InvalidScore,
+    InvalidCandidate,
     InvalidPrimary,
     ArithmeticOverflow,
     InsufficientBudget,
@@ -127,12 +128,9 @@ fn cover_charge(
     Ok(charged)
 }
 
-/// Admit primary pages in primary-rank order, then other pages by score/ID.
-/// The final range cover bridges the cheapest gaps needed to respect
-/// `max_gets`. This pure planner does not compute page scores or claim
-/// empirical recall, S3 latency, or charged serving memory.
-pub fn choose_budgeted_pages(
-    page_scores: &[f32],
+fn choose_ranked_pages(
+    page_count: usize,
+    score_order: impl IntoIterator<Item = usize>,
     primary: &[usize],
     rows: usize,
     dimensions: usize,
@@ -145,12 +143,9 @@ pub fn choose_budgeted_pages(
         || beta == 0
         || max_gets == 0
         || max_bytes == 0
-        || page_scores.len() != rows.div_ceil(PAGE_ROWS)
+        || page_count != rows.div_ceil(PAGE_ROWS)
     {
         return Err(BudgetedPageError::InvalidGeometry);
-    }
-    if page_scores.iter().any(|score| !score.is_finite()) {
-        return Err(BudgetedPageError::InvalidScore);
     }
     let row_bytes = dimensions
         .checked_add(12)
@@ -174,14 +169,7 @@ pub fn choose_budgeted_pages(
     let target_pages = beta
         .checked_mul(primary_pages.len())
         .ok_or(BudgetedPageError::ArithmeticOverflow)?
-        .min(page_scores.len());
-    let mut score_order = (0..page_scores.len()).collect::<Vec<_>>();
-    score_order.sort_unstable_by(|&left, &right| {
-        page_scores[left]
-            .partial_cmp(&page_scores[right])
-            .expect("finite page scores")
-            .then(left.cmp(&right))
-    });
+        .min(page_count);
     let mut selected = Vec::new();
     let mut gap_scratch = Vec::new();
     let mut final_ranges = Vec::new();
@@ -236,9 +224,127 @@ pub fn choose_budgeted_pages(
     })
 }
 
+/// Admit primary pages in primary-rank order, then other pages by score/ID.
+/// The final range cover bridges the cheapest gaps needed to respect
+/// `max_gets`. This pure planner does not compute page scores or claim
+/// empirical recall, S3 latency, or charged serving memory.
+pub fn choose_budgeted_pages(
+    page_scores: &[f32],
+    primary: &[usize],
+    rows: usize,
+    dimensions: usize,
+    beta: usize,
+    max_gets: usize,
+    max_bytes: usize,
+) -> Result<BudgetedPagePlan, BudgetedPageError> {
+    if page_scores.len() != rows.div_ceil(PAGE_ROWS) {
+        return Err(BudgetedPageError::InvalidGeometry);
+    }
+    if page_scores.iter().any(|score| !score.is_finite()) {
+        return Err(BudgetedPageError::InvalidScore);
+    }
+    let mut score_order = (0..page_scores.len()).collect::<Vec<_>>();
+    score_order.sort_unstable_by(|&left, &right| {
+        page_scores[left]
+            .partial_cmp(&page_scores[right])
+            .expect("finite page scores")
+            .then(left.cmp(&right))
+    });
+    choose_ranked_pages(
+        page_scores.len(),
+        score_order,
+        primary,
+        rows,
+        dimensions,
+        beta,
+        max_gets,
+        max_bytes,
+    )
+}
+
+/// The same admission policy over a sparse set of scored pages. Unlisted
+/// secondary pages are never admitted. Primary pages are always proposed
+/// first, including when their score is absent from `candidates`.
+pub fn choose_budgeted_pages_sparse(
+    candidates: &[(usize, f32)],
+    primary: &[usize],
+    rows: usize,
+    dimensions: usize,
+    beta: usize,
+    max_gets: usize,
+    max_bytes: usize,
+) -> Result<BudgetedPagePlan, BudgetedPageError> {
+    let page_count = rows.div_ceil(PAGE_ROWS);
+    let mut seen = HashSet::new();
+    if candidates
+        .iter()
+        .any(|&(page, score)| page >= page_count || !score.is_finite() || !seen.insert(page))
+    {
+        return Err(BudgetedPageError::InvalidCandidate);
+    }
+    let mut sorted = candidates.to_vec();
+    sorted.sort_unstable_by(|&(left_page, left_score), &(right_page, right_score)| {
+        left_score
+            .partial_cmp(&right_score)
+            .expect("finite page scores")
+            .then(left_page.cmp(&right_page))
+    });
+    choose_ranked_pages(
+        page_count,
+        sorted.into_iter().map(|(page, _)| page),
+        primary,
+        rows,
+        dimensions,
+        beta,
+        max_gets,
+        max_bytes,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_candidates_never_admit_an_unvisited_page() {
+        let plan =
+            choose_budgeted_pages_sparse(&[(3, 0.1), (1, 0.2)], &[0], 1024, 96, 4, 32, 16_777_216)
+                .unwrap();
+        assert_eq!(plan.selected_pages, vec![0, 1, 3]);
+        assert_eq!(plan.target_pages, 4);
+        assert_eq!(plan.target_shortfall, 1);
+    }
+
+    #[test]
+    fn complete_sparse_scores_refine_dense_page_admission() {
+        let scores = [0.3, 0.1, 0.2, 0.0];
+        let dense = choose_budgeted_pages(&scores, &[0], 1024, 96, 4, 2, 82_944).unwrap();
+        let sparse = choose_budgeted_pages_sparse(
+            &[(2, 0.2), (0, 0.3), (3, 0.0), (1, 0.1)],
+            &[0],
+            1024,
+            96,
+            4,
+            2,
+            82_944,
+        )
+        .unwrap();
+        assert_eq!(sparse, dense);
+    }
+
+    #[test]
+    fn sparse_candidates_reject_duplicates_and_unknown_pages() {
+        for candidates in [
+            &[(1, 0.0), (1, 0.1)][..],
+            &[(4, 0.0)][..],
+            &[(1, f32::NAN)][..],
+        ] {
+            assert_eq!(
+                choose_budgeted_pages_sparse(candidates, &[0], 1024, 96, 4, 32, 16_777_216,),
+                Err(BudgetedPageError::InvalidCandidate),
+            );
+        }
+    }
 
     #[test]
     fn incremental_cover_charge_matches_exact_ranges_with_tied_gaps_and_final_page() {
