@@ -57,6 +57,38 @@ impl std::fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
+/// Divide the budget lattice by every page charge's common divisor.
+///
+/// Full pages cost `full_page_units`; the short final page costs
+/// `ceil(last_page_bytes / unit_bytes)`. Every feasible plan uses a multiple
+/// of their gcd, so dividing all charges and the budget by it preserves the
+/// exact feasible plans and physical byte ranges while shrinking DP state.
+pub fn normalize_budget_lattice(
+    geometry: IntervalGeometry,
+) -> Result<IntervalGeometry, PlanError> {
+    let full_page_bytes = geometry.full_page_units
+        .checked_mul(geometry.unit_bytes)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    if geometry.full_page_units == 0 || geometry.unit_bytes == 0
+        || geometry.last_page_bytes == 0 || geometry.last_page_bytes > full_page_bytes
+    {
+        return Err(PlanError::InvalidGeometry);
+    }
+    let mut left = geometry.full_page_units;
+    let mut right = geometry.last_page_bytes.div_ceil(geometry.unit_bytes);
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    Ok(IntervalGeometry {
+        full_page_units: geometry.full_page_units / left,
+        unit_bytes: geometry.unit_bytes
+            .checked_mul(left)
+            .ok_or(PlanError::ArithmeticOverflow)?,
+        max_units: geometry.max_units / left,
+        ..geometry
+    })
+}
+
 struct Step {
     page: usize,
     page_units: usize,
@@ -294,7 +326,8 @@ pub fn plan_weighted_intervals(
 
 #[cfg(test)]
 mod tests {
-    use super::{IntervalGeometry, PlanError, plan_weighted_intervals};
+    use super::{IntervalGeometry, PlanError, normalize_budget_lattice,
+        plan_weighted_intervals};
 
     fn geometry(page_count: usize, max_gets: usize, max_units: usize) -> IntervalGeometry {
         IntervalGeometry {
@@ -305,6 +338,49 @@ mod tests {
             max_gets,
             max_units,
         }
+    }
+
+    #[test]
+    fn normalized_lattice_preserves_exact_plan_with_short_tail() {
+        let original = IntervalGeometry {
+            page_count: 8,
+            full_page_units: 8,
+            last_page_bytes: 28,
+            unit_bytes: 7,
+            max_gets: 3,
+            max_units: 37,
+        };
+        let normalized = normalize_budget_lattice(original).unwrap();
+        assert_eq!(normalized.full_page_units, 2);
+        assert_eq!(normalized.unit_bytes, 28);
+        assert_eq!(normalized.max_units, 9);
+        for mask in 0..256usize {
+            let weights = (0..8)
+                .filter(|page| mask & (1 << page) != 0)
+                .map(|page| (page, (page + 1) as u32))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                plan_weighted_intervals(original, &weights),
+                plan_weighted_intervals(normalized, &weights),
+                "mask={mask}",
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_d96_ten_million_lattice_stays_within_work_guard() {
+        let geometry = normalize_budget_lattice(IntervalGeometry {
+            page_count: 39_024,
+            full_page_units: 8,
+            last_page_bytes: 112 * 108,
+            unit_bytes: 32 * 108,
+            max_gets: 32,
+            max_units: 16_777_216 / (32 * 108),
+        }).unwrap();
+        assert_eq!(geometry.full_page_units, 2);
+        assert_eq!(geometry.max_units, 1_213);
+        assert_eq!((geometry.max_gets + 1) * (geometry.max_units + 1) * 368,
+                   14_742_816);
     }
 
     fn brute_force(weights: &[(usize, u32)], pages: usize, gets: usize, units: usize) -> u64 {

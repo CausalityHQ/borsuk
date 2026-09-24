@@ -23,6 +23,14 @@ harness wiring and launcher exit propagation. The source-only index, query
 cohort, scorer, candidate/control methods and thresholds above remain frozen.
 See `v121-a0001-harness-failure.md` for the sealed failure evidence.
 
+Planner implementation addendum after a0002: replay failed at query ordinal 7
+because D96's redundant 32-row budget lattice exceeded its state guard.
+Attempt a0003 applies only the exact gcd normalization of full and final-page
+charges; it preserves the feasible plan set and scoring rule. No GT values
+were downloaded in a0001 or a0002. These attempts did process query vectors,
+so a0003 is a continuation of the frozen blinded quality measurement rather
+than a fresh untouched-query claim. See `v121-a0002-planner-lattice-failure.md`.
+
 The untouched inputs are the first 1,000 rows, in source order, of the
 publication-v3 **deep-image-96-angular test** split. The query object is
 `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/deep-image-96/attempts/0001/materialized/test.parquet`,

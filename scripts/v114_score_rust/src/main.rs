@@ -22,7 +22,8 @@ use exact_sq8_nominee::{Sq8Geometry, primary_ordinals};
 use pq64_router_artifact::load_source_router;
 use returned_sq8::{ReturnedRange, rank_returned_ranges};
 use sha2::{Digest, Sha256};
-use physical_interval::{IntervalGeometry, IntervalPlan, PlanError, plan_weighted_intervals};
+use physical_interval::{IntervalGeometry, IntervalPlan, PlanError,
+    normalize_budget_lattice, plan_weighted_intervals};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fs::{self, File};
@@ -118,7 +119,7 @@ fn route_primary(
     }
     let votes = weights.into_iter().collect::<Vec<_>>();
     let plan = plan_weighted_intervals(
-        IntervalGeometry {
+        normalize_budget_lattice(IntervalGeometry {
             page_count: rows.div_ceil(256),
             full_page_units: 8,
             last_page_bytes: final_rows
@@ -127,7 +128,7 @@ fn route_primary(
             unit_bytes,
             max_gets: 32,
             max_units: 16_777_216 / unit_bytes,
-        },
+        })?,
         &votes,
     )?;
     Ok((votes, plan))
