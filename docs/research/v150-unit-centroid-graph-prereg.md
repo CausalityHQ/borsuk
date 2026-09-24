@@ -47,15 +47,26 @@ maximum absolute difference ≤0.0001. Include every primary physical
 page and respect all planner/work caps on all 1,000 queries. Recount
 the terminal from raw records independently.
 
+The 16P work cap counts distinct **graph** unit-distance evaluations,
+including upper-layer navigation. Record
+every graph-evaluated unit ID. Exact scores on admitted pages are a
+separate mandatory cost; record their unit-distance computation count,
+the graph-plus-exact total and the distinct union. The CPU gate
+includes both graph navigation and exact page scoring.
+
 The quality proxy is the aggregate fraction of V140 β=4 selected pages
 retained by the new sparse plan: **≥95%** and at least **5 percentage
 points** above the page-ID control policy used in V149, recomputed for
 each query at V150's own number of scored pages. Every query's target
 shortfall must be no worse than V140.
-The work gate is p95 distinct unit-distance evaluations **<3,125**
-(V146 flat unit count). The CPU gate is p95 graph search plus exact
-page scores plus planner **<0.530383 ms/query**, V146's verified flat
-Rust score-plus-planner p95 on this same used D96 cohort. V149's
+The work gate is p95 **distinct graph-plus-exact scored units <1,562**,
+less than half of V146's 3,125 flat unit count. The CPU gate is p95
+graph search plus exact page scores plus planner **below the paired
+flat V146 score-plus-planner p95 measured in the same V150 process**.
+Alternate whether the flat or graph arm runs first by query ordinal;
+record both raw nanosecond samples. V146's historical p95 was
+0.530383 ms/query on this same used D96 cohort and remains a descriptive
+cross-instance reference. V149's
 0.641749 ms p95 and 77.0956% page capture are the rejected route
 baselines; the page-ID control captured 39.8580%.
 

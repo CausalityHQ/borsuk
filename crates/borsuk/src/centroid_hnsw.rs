@@ -104,9 +104,9 @@ impl CatalogRoutingStrategy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CentroidHnswAdjacency {
-    neighbours: Vec<Vec<Vec<u32>>>,
-    entry: u32,
+pub(crate) struct CentroidHnswAdjacency {
+    pub(crate) neighbours: Vec<Vec<Vec<u32>>>,
+    pub(crate) entry: u32,
     ef_search: usize,
 }
 
@@ -396,7 +396,7 @@ fn node_level(index: usize, m: usize) -> usize {
     level
 }
 
-fn build_hnsw_adjacency(
+pub(crate) fn build_hnsw_adjacency(
     centroids: &[Vec<f32>],
     m: usize,
     m0: usize,

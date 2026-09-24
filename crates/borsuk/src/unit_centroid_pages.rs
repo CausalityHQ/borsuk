@@ -1,6 +1,7 @@
 //! Versioned f16 unit centroids for score-first physical page selection.
 
 use half::f16;
+use sha2::{Digest, Sha256};
 use std::io::Read;
 
 const MAGIC: &[u8; 8] = b"BORSUCP1";
@@ -41,6 +42,7 @@ pub struct UnitCentroidPages {
     page_rows: usize,
     centers: Vec<f32>,
     center_norms: Vec<f32>,
+    blob_sha256: [u8; 32],
 }
 
 fn geometry(
@@ -178,11 +180,16 @@ impl UnitCentroidPages {
             page_rows,
             centers,
             center_norms,
+            blob_sha256: Sha256::digest(bytes).into(),
         })
     }
 
     pub fn rows(&self) -> usize {
         self.rows
+    }
+
+    pub fn blob_sha256(&self) -> &[u8; 32] {
+        &self.blob_sha256
     }
 
     pub fn dimensions(&self) -> usize {
