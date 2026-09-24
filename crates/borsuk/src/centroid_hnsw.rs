@@ -110,6 +110,40 @@ struct CentroidHnswAdjacency {
     ef_search: usize,
 }
 
+/// Reusable visited marks for the many searches performed during insertion.
+/// An epoch change avoids clearing the full node array on every search.
+struct EpochVisits {
+    marks: Vec<u32>,
+    epoch: u32,
+}
+
+impl EpochVisits {
+    fn new(node_count: usize) -> Self {
+        Self {
+            marks: vec![0; node_count],
+            epoch: 1,
+        }
+    }
+
+    fn next_search(&mut self) {
+        if self.epoch == u32::MAX {
+            self.marks.fill(0);
+            self.epoch = 1;
+        } else {
+            self.epoch += 1;
+        }
+    }
+
+    fn mark(&mut self, node: usize) -> bool {
+        if self.marks[node] == self.epoch {
+            false
+        } else {
+            self.marks[node] = self.epoch;
+            true
+        }
+    }
+}
+
 impl CentroidHnswAdjacency {
     fn heap_bytes(&self) -> usize {
         self.neighbours
@@ -382,6 +416,7 @@ fn build_hnsw_adjacency(
     // contract. Parallelizing this loop would make adjacency and assignments
     // scheduler-dependent across writers.
     let order = shuffled_indices(centroids.len());
+    let mut visited = EpochVisits::new(centroids.len());
     let mut entry = order[0];
     let mut top_level = levels[entry as usize];
     for &node in &order[1..] {
@@ -405,13 +440,14 @@ fn build_hnsw_adjacency(
         let mut layer = node_top.min(top_level);
         loop {
             let width = if layer == 0 { m0 } else { m };
-            let found = CentroidHnsw::search_layer(
+            let found = CentroidHnsw::search_layer_with_visits(
                 query,
                 &[current],
                 layer,
                 ef_construction,
                 &neighbours,
                 centroids,
+                &mut visited,
             );
             let selected = CentroidHnsw::select_neighbours(&found, width, centroids);
             for &neighbour in &selected {
@@ -757,7 +793,20 @@ impl CentroidHnsw {
         neighbours: &[Vec<Vec<u32>>],
         vectors: &[Vec<f32>],
     ) -> Vec<Candidate> {
-        let mut visited = vec![false; vectors.len()];
+        let mut visits = EpochVisits::new(vectors.len());
+        Self::search_layer_with_visits(query, entries, layer, ef, neighbours, vectors, &mut visits)
+    }
+
+    fn search_layer_with_visits(
+        query: &[f32],
+        entries: &[u32],
+        layer: usize,
+        ef: usize,
+        neighbours: &[Vec<Vec<u32>>],
+        vectors: &[Vec<f32>],
+        visits: &mut EpochVisits,
+    ) -> Vec<Candidate> {
+        visits.next_search();
         // `candidates` is a min-heap (via Reverse) of nodes to expand; `results`
         // is a max-heap holding the ef best found so far.
         let mut candidates: BinaryHeap<std::cmp::Reverse<Candidate>> = BinaryHeap::new();
@@ -772,7 +821,7 @@ impl CentroidHnsw {
                 distance,
                 node: entry,
             });
-            visited[entry as usize] = true;
+            visits.mark(entry as usize);
         }
         while let Some(std::cmp::Reverse(candidate)) = candidates.pop() {
             let worst = results.peek().map_or(f32::INFINITY, |c| c.distance);
@@ -780,10 +829,9 @@ impl CentroidHnsw {
                 break;
             }
             for &neighbour in Self::layer_neighbours(neighbours, candidate.node, layer) {
-                if visited[neighbour as usize] {
+                if !visits.mark(neighbour as usize) {
                     continue;
                 }
-                visited[neighbour as usize] = true;
                 let distance = squared_distance(query, &vectors[neighbour as usize]);
                 let worst = results.peek().map_or(f32::INFINITY, |c| c.distance);
                 if results.len() < ef || distance < worst {
@@ -850,6 +898,23 @@ impl CentroidHnsw {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn epoch_visits_reset_without_reallocating_and_wrap_safely() {
+        let mut visits = EpochVisits::new(3);
+        let allocation = visits.marks.as_ptr();
+        assert!(visits.mark(1));
+        assert!(!visits.mark(1));
+        visits.next_search();
+        assert!(visits.mark(1));
+        assert!(!visits.mark(1));
+        visits.epoch = u32::MAX;
+        assert!(visits.mark(2));
+        assert_eq!(visits.marks.as_ptr(), allocation);
+        visits.next_search();
+        assert!(visits.mark(1));
+        assert!(visits.mark(2));
+    }
 
     fn grid(n: usize, dim: usize) -> Vec<Vec<f32>> {
         (0..n)
