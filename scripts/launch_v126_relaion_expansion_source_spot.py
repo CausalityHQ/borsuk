@@ -8,16 +8,15 @@ import base64
 import hashlib
 import json
 import shlex
+import subprocess
+import tempfile
 import time
 
 from scripts.launch_native_geometric_layout_spot import DEFAULT_TARGETS
 from scripts.launch_v114_1m_paired_spot import _location, _missing
 from scripts.launch_v116_validation_paired_spot import ARTIFACTS
 from scripts.launch_v121_deep_image_paired_spot import Plan, validate_plan
-from scripts.launch_v123_rerank_diagnostic_spot import (
-    reserve_attempt,
-    validate_retired_instance,
-)
+from scripts.launch_v123_rerank_diagnostic_spot import validate_retired_instance
 from scripts.launch_v124_source_tier_precision_spot import (
     INPUTS as V124_INPUTS,
 )
@@ -30,6 +29,39 @@ from scripts.launch_v124_source_tier_precision_spot import (
 BUCKET = "borsuk-bench-453182569524-euc1"
 SCHEMA = "borsuk-v126-relaion-expansion-source-spot-v1"
 TAG = "borsuk-v126-relaion-expansion-source"
+
+
+def reserve_attempt(bucket: str, key: str, receipt: bytes) -> None:
+    with tempfile.NamedTemporaryFile() as body:
+        body.write(receipt)
+        body.flush()
+        subprocess.run(
+            [
+                "aws",
+                "--profile",
+                "causality",
+                "--region",
+                "eu-central-1",
+                "s3api",
+                "put-object",
+                "--bucket",
+                bucket,
+                "--key",
+                key,
+                "--body",
+                body.name,
+                "--if-none-match",
+                "*",
+                "--content-type",
+                "application/json",
+                "--output",
+                "json",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+
 INPUTS = {
     "SOURCE": V124_INPUTS["RELAION_SOURCE"],
     "LAYOUT": V124_INPUTS["RELAION_LAYOUT"],
