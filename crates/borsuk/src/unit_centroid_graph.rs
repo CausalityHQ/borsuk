@@ -68,6 +68,8 @@ pub struct PageDiverseGraphSearch {
     pub pages: Vec<(usize, f32)>,
     /// Every distinct graph-scored unit, in evaluation order.
     pub evaluated_units: Vec<usize>,
+    /// Squared Euclidean distances keyed by evaluated unit, when requested.
+    pub evaluated_scores: HashMap<u32, f32>,
     /// Number of distinct graph-scored units, including primary seeds.
     pub unit_evaluations: usize,
     /// Whether an unseen graph neighbor was rejected by the work cap.
@@ -477,6 +479,44 @@ impl UnitCentroidGraph {
         max_additional_pages: usize,
         max_evaluations: usize,
     ) -> Result<PageDiverseGraphSearch, UnitCentroidGraphError> {
+        self.search_pages_seeded_impl(
+            scorer,
+            query,
+            primary_pages,
+            max_additional_pages,
+            max_evaluations,
+            false,
+        )
+    }
+
+    /// Run the same seeded search and return the evaluated distances for reuse.
+    pub fn search_pages_seeded_with_scores(
+        &self,
+        scorer: &UnitCentroidPages,
+        query: &[f32],
+        primary_pages: &[usize],
+        max_additional_pages: usize,
+        max_evaluations: usize,
+    ) -> Result<PageDiverseGraphSearch, UnitCentroidGraphError> {
+        self.search_pages_seeded_impl(
+            scorer,
+            query,
+            primary_pages,
+            max_additional_pages,
+            max_evaluations,
+            true,
+        )
+    }
+
+    fn search_pages_seeded_impl(
+        &self,
+        scorer: &UnitCentroidPages,
+        query: &[f32],
+        primary_pages: &[usize],
+        max_additional_pages: usize,
+        max_evaluations: usize,
+        export_scores: bool,
+    ) -> Result<PageDiverseGraphSearch, UnitCentroidGraphError> {
         let page_count = self.rows.div_ceil(self.page_rows);
         let units_per_page = self.page_rows / self.unit_rows;
         let primary = primary_pages.iter().copied().collect::<HashSet<_>>();
@@ -569,6 +609,11 @@ impl UnitCentroidGraph {
         Ok(PageDiverseGraphSearch {
             pages,
             unit_evaluations: scores.len(),
+            evaluated_scores: if export_scores {
+                scores
+            } else {
+                HashMap::new()
+            },
             evaluated_units: evaluated.into_iter().map(|unit| unit as usize).collect(),
             work_exhausted: exhausted,
         })
@@ -689,11 +734,39 @@ mod tests {
         assert_eq!(limited.unit_evaluations, 2);
         assert!(limited.work_exhausted);
         let full = loaded
-            .search_pages_seeded(&scorer, &[2.1], &[0], 1, 4)
+            .search_pages_seeded_with_scores(&scorer, &[2.1], &[0], 1, 4)
             .unwrap();
         assert_eq!(full.pages[0].0, 1);
         assert_eq!(full.unit_evaluations, 4);
+        assert_eq!(full.evaluated_scores.len(), full.evaluated_units.len());
+        for &unit in &full.evaluated_units {
+            let center = scorer.unit_centroid(unit).unwrap();
+            let expected = [2.1f32]
+                .iter()
+                .zip(center)
+                .map(|(&query, &value)| {
+                    let delta = query - value;
+                    delta * delta
+                })
+                .sum::<f32>();
+            assert_eq!(full.evaluated_scores[&(unit as u32)], expected);
+        }
         assert!(full.pages.len() <= 1);
+        let mut cached = HashMap::new();
+        for (&unit, &squared) in &full.evaluated_scores {
+            cached.insert(unit, squared);
+        }
+        let (scored, missing) = scorer
+            .score_pages_sparse_cached(&[2.1], &[0, 1], &cached)
+            .unwrap();
+        assert_eq!(missing, 0);
+        assert!((scored[0].1 - scorer.score_page(&[2.1], 0).unwrap()).abs() < 1e-4);
+        assert!((scored[1].1 - scorer.score_page(&[2.1], 1).unwrap()).abs() < 1e-4);
+        let old = loaded
+            .search_pages_seeded(&scorer, &[2.1], &[0], 1, 4)
+            .unwrap();
+        assert!(old.evaluated_scores.is_empty());
+        assert_eq!(old.evaluated_units, full.evaluated_units);
         assert!(
             loaded
                 .search_pages_seeded(&scorer, &[2.1], &[0], 1, 1)

@@ -2,6 +2,7 @@
 
 use half::f16;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::io::Read;
 
 const MAGIC: &[u8; 8] = b"BORSUCP1";
@@ -285,6 +286,58 @@ impl UnitCentroidPages {
         }
         Ok(scores)
     }
+
+    /// Score sorted candidate pages, reusing squared distances from a graph walk.
+    /// Returns the page minima and the number of newly computed unit distances.
+    pub fn score_pages_sparse_cached(
+        &self,
+        query: &[f32],
+        pages: &[usize],
+        cached_squared: &HashMap<u32, f32>,
+    ) -> Result<(Vec<(usize, f32)>, usize), UnitCentroidError> {
+        if query.len() != self.dimensions
+            || query.iter().any(|value| !value.is_finite())
+            || pages.is_empty()
+            || pages
+                .iter()
+                .any(|&page| page >= self.rows.div_ceil(self.page_rows))
+            || pages.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(UnitCentroidError::InvalidGeometry);
+        }
+        let units_per_page = self.page_rows / self.unit_rows;
+        let mut missing = 0;
+        let mut result = Vec::with_capacity(pages.len());
+        for &page in pages {
+            let first = page * units_per_page;
+            let last = (first + units_per_page).min(self.unit_count());
+            let mut best = f32::INFINITY;
+            for unit in first..last {
+                let squared = match cached_squared.get(&(unit as u32)).copied() {
+                    Some(distance) if distance.is_finite() && distance >= 0.0 => distance,
+                    Some(_) => return Err(UnitCentroidError::InvalidPayload),
+                    None => {
+                        missing += 1;
+                        let center = self.unit_centroid(unit).expect("valid centroid unit");
+                        query
+                            .iter()
+                            .zip(center)
+                            .map(|(&left, &right)| {
+                                let difference = left - right;
+                                difference * difference
+                            })
+                            .sum::<f32>()
+                    }
+                };
+                if !squared.is_finite() {
+                    return Err(UnitCentroidError::InvalidQuery);
+                }
+                best = best.min(squared);
+            }
+            result.push((page, best.sqrt()));
+        }
+        Ok((result, missing))
+    }
 }
 
 #[cfg(test)]
@@ -322,6 +375,57 @@ mod tests {
         assert!((scores[1] - 34.0_f32.sqrt()).abs() < 1e-5);
         assert_eq!(scorer.score_page(&[2.0, 0.0], 0).unwrap(), scores[0]);
         assert_eq!(scorer.score_page(&[2.0, 0.0], 1).unwrap(), scores[1]);
+        let (cached, missing) = scorer
+            .score_pages_sparse_cached(&[2.0, 0.0], &[0, 1], &HashMap::from([(0, 0.0)]))
+            .unwrap();
+        assert_eq!(missing, 2);
+        assert_eq!(cached.len(), 2);
+        assert!((cached[0].1 - scores[0]).abs() < 1e-5);
+        assert!((cached[1].1 - scores[1]).abs() < 1e-5);
+        assert!(
+            scorer
+                .score_pages_sparse_cached(&[2.0, 0.0], &[1, 0], &HashMap::new())
+                .is_err()
+        );
+        assert!(matches!(
+            scorer.score_pages_sparse_cached(&[2.0, 0.0], &[0], &HashMap::from([(0, f32::NAN)])),
+            Err(UnitCentroidError::InvalidPayload)
+        ));
+    }
+
+    #[test]
+    fn cached_squared_pages_match_flat_d96_scores() {
+        let mut sq8 = Vec::new();
+        for row in 0..512usize {
+            sq8.extend_from_slice(&[0u8; 12]);
+            for dim in 0..96usize {
+                sq8.push(((row * 17 + dim * 23) % 256) as u8);
+            }
+        }
+        let low = vec![-1.0f32; 96];
+        let step = vec![0.01f32; 96];
+        let blob = UnitCentroidPages::build_from_sq8_reader(
+            &mut Cursor::new(sq8),
+            512,
+            96,
+            32,
+            256,
+            &low,
+            &step,
+        )
+        .unwrap();
+        let scorer = UnitCentroidPages::decode(&blob).unwrap();
+        let query = (0..96)
+            .map(|dim| (dim % 13) as f32 / 13.0)
+            .collect::<Vec<_>>();
+        let flat = scorer.score_pages(&query).unwrap();
+        let (cached, missing) = scorer
+            .score_pages_sparse_cached(&query, &[0, 1], &HashMap::new())
+            .unwrap();
+        assert_eq!(missing, 16);
+        for (page, score) in cached {
+            assert!((score - flat[page]).abs() <= 0.0001);
+        }
     }
 
     #[test]

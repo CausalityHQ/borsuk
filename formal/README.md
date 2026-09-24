@@ -8,6 +8,11 @@ observed unit distance. It does not prove that the Rust traversal
 refines this model, that graph discovery attains recall, or elapsed
 latency and charged memory. Check it with the pinned toolchain using
 `lean PageSeededGraphBounds.lean` from this directory.
+The V152 extension proves that reusing any valid set of previously
+computed unit distances cannot increase distance-computation count;
+if `r` of the exact page units were graph-evaluated, the modeled count
+falls by exactly `r`. It assumes the cache is correct and has no
+claim about elapsed CPU, recall or RAM allocation.
 
 `BudgetedPageAdmission.lean` proves that primary-first page admission stays
 within its GET and byte caps when every proposed coalesced cover is charged

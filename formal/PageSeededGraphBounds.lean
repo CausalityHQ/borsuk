@@ -45,4 +45,25 @@ theorem provisional_min_upper_bounds_exact_min
       · have observedBound := lowerBound distance (by simp)
         omega
 
+def uncachedDistanceWork (graphUnits exactPageUnits : Nat) : Nat :=
+  graphUnits + exactPageUnits
+
+def cachedDistanceWork (graphUnits exactPageUnits reusedUnits : Nat) : Nat :=
+  graphUnits + (exactPageUnits - reusedUnits)
+
+theorem cached_work_never_exceeds_uncached
+    (graphUnits exactPageUnits reusedUnits : Nat) :
+    cachedDistanceWork graphUnits exactPageUnits reusedUnits ≤
+      uncachedDistanceWork graphUnits exactPageUnits := by
+  unfold cachedDistanceWork uncachedDistanceWork
+  omega
+
+theorem cached_work_saves_each_reused_unit
+    (graphUnits exactPageUnits reusedUnits : Nat)
+    (validReuse : reusedUnits ≤ exactPageUnits) :
+    cachedDistanceWork graphUnits exactPageUnits reusedUnits + reusedUnits =
+      uncachedDistanceWork graphUnits exactPageUnits := by
+  unfold cachedDistanceWork uncachedDistanceWork
+  omega
+
 end Borsuk.PageSeededGraphBounds
