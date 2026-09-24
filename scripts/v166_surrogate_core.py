@@ -21,8 +21,8 @@ def predict_count(
     """Predict eligible rows whose SQ8 distance is at most ``threshold``.
 
     The center distance is ``||q-m||²``; the modeled mean is that distance
-    plus residual energy. Mean and variance come from unit-normalized
-    *source* vectors. The
+    plus residual energy. Mean and variance come from raw *source*
+    vectors for the squared-L2 SQ8 scorer. The
     caller must count only non-nominee rows and omit a source pseudoquery
     from its own unit. SQ8 quantization mismatch is an observed error.
     """

@@ -34,9 +34,11 @@ Before implementation, several claims require correction:
 - Higher requested mass has a nondecreasing *minimum feasible cost* for a
   fixed universe/model. Independently selected optimal unit sets need not
   be nested. Lean should prove the cost statement, not set containment.
-- The first source-moment formula applies to cosine. An L2 score-moment
-  formula and a separate ReLAION-100k L2 transfer are required before
-  claiming a generic metric policy.
+- The surrogate must model the score actually used for admission. The
+  pinned SQ8 scorer and V36 ground truth use squared L2, so V166 uses raw
+  source/query moments even though V164's physical order was built from
+  cosine-normalized vectors. A separate cosine-scoring transfer is required
+  before claiming a generic metric policy.
 - The model can select a quality profile only after fresh, cross-corpus
   calibration. `r` in a provisional mass threshold is an internal risk
   allowance, not a proven Recall@100 guarantee.
@@ -53,8 +55,9 @@ charged. We will not relabel planned S3 bytes as a local-tier speedup.
 ## V166 source-only surrogate probe
 
 Keep V164's authenticated source-only cosine order and 32-row units.
-For each unit, build a mean vector and residual second moment from only
-source vectors. The base summary payload is `2D/32 + 4/32` bytes per row
+For each unit, build a mean vector and residual second moment from raw
+source vectors to approximate the pinned squared-L2 SQ8 score. The base
+summary payload is `2D/32 + 4/32` bytes per row
 if the mean is f16 and residual energy f32: **48.125 bytes/row at D768**,
 or 4.8125 GB for 100M rows per generation before headers, maps, cache,
 alignment and graph. This grows linearly with N and contains no N knee.

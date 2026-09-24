@@ -20,11 +20,13 @@ checks from the sealed inputs.
 
 ## Frozen pseudoqueries and comparison
 
-Use SHA-256 of each stable source ID with a fixed domain prefix
-`borsuk-v166-pseudoquery-v1`; take the first 256 IDs in digest order. The
+Use SHA-256 with the fixed domain prefix given by the exact UTF-8 bytes
+`borsuk-v166-pseudoquery-v1:` followed by the decimal
+stable ID; take the first 256 IDs in digest order. The
 first 128 are the fit partition and the next 128 the holdout. This rule is
 independent of source row order and corpus name. The query vector is the
-source vector, normalized for cosine. Generate a fresh PQ64 top-512 roster
+raw source vector, matching the pinned squared-L2 SQ8 scorer. Generate a
+fresh PQ64 top-512 roster
 through the authenticated V115 router, then score those nominees using the
 old authenticated SQ8 representation and take the best 100 as exact-primary
 units. Exclude the pseudoquery's own ID before setting the threshold or
@@ -32,12 +34,12 @@ counting outcomes. Reject duplicate or short rosters.
 
 The candidate universe per query is the union of each nominee's V164
 32-row physical unit and its immediately adjacent units. Deduplicate it.
-Build a per-unit source mean and residual second moment; for the query's
+Build a per-unit raw-source mean and residual second moment; for the query's
 own unit, recompute both without its source row. Compare the modeled count
 of non-nominee rows with SQ8 distance at most the 100th nominee SQ8
 distance against actual SQ8 scores for every non-nominee row in this
 universe. Let `m` be the mean, `r2` the mean squared residual norm, `q`
-the unit-normalized query, `d` the dimension, and `t` the SQ8 threshold.
+the raw query, `d` the dimension, and `t` the SQ8 threshold.
 Set modeled distance mean `u = ||q-m||² + r2`, raw standard deviation
 `s = max(1e-6, 2 sqrt(r2 ||q-m||² / d))`, and predicted per-row exceedance
 probability `Phi((t-u)/(alpha s))`, where `Phi` is the standard normal CDF.
@@ -47,7 +49,7 @@ between predicted and actual fractions of eligible rows across fit units;
 break exact ties toward the lower value. Multiply the probability by the
 number of non-nominee rows in each unit to obtain modeled mass. No mean
 offset, directional correction, or threshold adjustment may be introduced
-after observing the holdout. This isotropic approximation ignores SQ8
+after observing the holdout. This squared-L2 isotropic approximation ignores SQ8
 quantization error and norm variance, which the screen must expose rather
 than repair post hoc.
 Report the source/SQ8 score mismatch and per-unit calibration; a poor fit
@@ -83,5 +85,17 @@ The learned mass is a score-ranking hypothesis. Lean proves only that,
 for a fixed model and universe, the *minimum feasible charge* is
 nondecreasing as its required mass rises, assuming the returned plans are
 optimal. It neither proves the Gaussian model, the planner's optimality,
-nor containment of true neighbors. L2 transfer and the 10M/100M bounded
+nor containment of true neighbors. Cosine-scoring transfer and the 10M/100M bounded
 router and placement gates remain separate decisions.
+
+Run one whole 256-query cell on `c7i.12xlarge` Spot in `eu-central-1` with
+AWS profile `causality` and a 14,400-second hard cap. Record its instance
+ID, source archive and commit, every frozen input digest, peak RSS and wall
+time, all per-query cases and plans, and a terminal marker. If Spot
+interrupts or the hard cap fires, discard the incomplete cell and use a
+new immutable attempt; do not read an incomplete measurement file.
+Immediately terminate compute on any terminal marker, then stream every
+terminal-listed S3 artifact and recheck byte count and SHA-256 from the
+controller. The runner uses eight BLAS threads. A nonfinite or zero source
+norm, or a failed physical-cap check, is a method failure requiring
+diagnosis before any replacement attempt.
