@@ -37,6 +37,28 @@ def _balanced_query(query: np.ndarray, subspaces: int, width: int) -> np.ndarray
     return packed
 
 
+def _valid_ranges(ranges: object, nbytes: object) -> bool:
+    if (type(ranges) is not list or not 1 <= len(ranges) <= GET_CAP
+            or type(nbytes) is not int or nbytes <= 0 or nbytes > BYTE_CAP):
+        return False
+    page_bytes = PAGE_ROWS * (DIMENSIONS + 12)
+    object_bytes = ROWS * (DIMENSIONS + 12)
+    previous_end = 0
+    charged = 0
+    for item in ranges:
+        if (type(item) is not list or len(item) != 2
+                or any(type(value) is not int for value in item)):
+            return False
+        start, end = item
+        if (start < previous_end or start < 0 or start >= end
+                or end > object_bytes or start % page_bytes
+                or (end != object_bytes and end % page_bytes)):
+            return False
+        charged += end - start
+        previous_end = end
+    return charged == nbytes
+
+
 def prepare(queries: Path, output: Path, *, query_count: int = QUERY_COUNT) -> None:
     """Fix the first query ordinals and normalize angular vectors before routing."""
     import pyarrow as pa
@@ -179,9 +201,7 @@ def reduce(requests: Path, replay: Path, truth: Path,
                 ranges, ids, nbytes = result[ranges_key], result[ids_key], result[bytes_key]
                 if (len(ids) != 100 or len(set(ids)) != 100
                         or any(type(item) is not int or item < 0 or item >= ROWS for item in ids)
-                        or not 1 <= len(ranges) <= GET_CAP
-                        or nbytes != sum(end - start for start, end in ranges)
-                        or nbytes > BYTE_CAP):
+                        or not _valid_ranges(ranges, nbytes)):
                     raise ValueError(f"deep-image {arm} physical or result cap differs at {ordinal}")
                 hit = len(truth_set.intersection(ids))
                 hits[arm].append(hit)

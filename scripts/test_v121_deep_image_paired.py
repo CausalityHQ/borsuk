@@ -79,6 +79,14 @@ class DeepImagePairedTests(unittest.TestCase):
                              {"candidate": 100_000, "baseline": 99_000})
             self.assertEqual(result["max_gets"], {"candidate": 1, "baseline": 1})
             self.assertTrue(result["qualifies_cross_corpus_quality"])
+            lines = replay.read_text().splitlines()
+            mutated = json.loads(lines[0])
+            mutated["ranges"] = [[-1, 256 * 108 - 1]]
+            lines[0] = json.dumps(mutated)
+            replay.write_text("\n".join(lines) + "\n")
+            with self.assertRaisesRegex(ValueError, "physical"):
+                reduce(requests, replay, truth, root / "bad-evidence.jsonl",
+                       root / "bad-summary.json")
 
 
 if __name__ == "__main__":
