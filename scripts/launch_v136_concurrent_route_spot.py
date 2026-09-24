@@ -69,7 +69,11 @@ def validate(plan: Plan) -> None:
         or not output_key.startswith(
             f"research/v136-concurrent-route/{plan.source_commit}/runs/"
         )
-        or not output_key.endswith("/a0001")
+        or not (
+            len(output_key.rsplit("/", 1)[-1]) == 5
+            and output_key.rsplit("/", 1)[-1].startswith("a")
+            and output_key.rsplit("/", 1)[-1][1:].isdigit()
+        )
         or plan.archive_bytes <= 0
         or plan.wall_seconds != 5_400
         or plan.instance_type != "c7i.8xlarge"
