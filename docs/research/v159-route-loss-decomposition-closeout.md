@@ -10,14 +10,31 @@ rows and 97.982% in its pages. The V114 weighted-interval plan fetches
 only 77.302%. PQ-first-100 is independently rejected: it retains only
 69.066% in its 100 rows, before planning.
 
-The current SQ8 D768 page layout spreads each query's exact primary over
-many pages. A separate postterminal, GT-blind arithmetic read of all
-1,000 closed V114 primary rosters found a median of 88 distinct primary
+The measured 100k SQ8 D768 mirror preserves source-file row order:
+`v113_100k_score_screen.py::build_from_source` reads vectors and IDs in
+Parquet order, `build_arrays` retains that order, and
+`v114_exact_local_100k.py::build_from_sealed_artifact` writes the arrays
+unchanged. It does **not** use the V63 clustered layout used by the separate
+V114/V155 1M path. This source-order layout spreads each query's exact
+primary over many pages. A separate postterminal, GT-blind arithmetic read
+of all 1,000 closed V114 primary rosters found a median of 88 distinct primary
 pages (p05 83, p95 93). Even the minimum page-aligned contiguous cover
 with 32 GETs needs at least 27,955,200 bytes across the cohort; the
 median is 31,150,080 bytes, p95 34,544,640 bytes, and **zero** queries fit
 16,777,216 bytes. The existing capped planner cannot retain all exact
-primary pages on this layout, regardless of its optimization quality.
+primary pages on this source-order layout, regardless of planner quality.
+
+Prior experiments on the same ReLAION-100k development source already
+tested query-blind geometric grouping. The historical 480-KiB balanced
+two-means layout had a truth-aware 32-page/16-MiB GT100 coverage oracle of
+99.844%, but its actual single-centroid router selected pages containing
+only 94.417% and returned 94.349% after SQ8 ranking (p05 77%). Eight
+page-local microcluster representatives reached 95.462% containment
+(p05 79%). These are closed historical cells in
+`algorithm-first-page-layout-ledger.md`, not V159 measurements. They show
+that physical clustering can create headroom, while selecting the useful
+pages without truth remains a separate unresolved problem. Repeating those
+routers would not be a new architecture test.
 
 Do not patch this with a dataset-specific recall switch or further PQ
 primary tuning. The next material design must concentrate relevant rows
@@ -74,8 +91,8 @@ S3 latency, serving RAM, fresh holdout recall or 10M/100M scale.
 
 ## Next gate
 
-Specify a query-independent, source-only physical grouping or narrow
-retrieval format, a bounded graph/page planner, and a single generic
+Specify a materially revised query-independent, source-only physical
+grouping or narrow retrieval format, a bounded graph/page planner, and a single generic
 recall/resource rule before opening any new quality split. Run the cheapest
 paired 100k D768 returned-quality gate against the strongest currently
 usable BORSUK control under equal bytes, GETs and exact-source scoring.
