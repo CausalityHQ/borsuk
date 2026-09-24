@@ -67,6 +67,7 @@ pub mod returned_sq8;
 pub mod sq8_page_authority;
 pub mod sq8_s3_range;
 pub mod serving_generation;
+pub mod native_source_tier;
 mod physical_layout;
 mod positioned_candidate;
 mod positioned_log;

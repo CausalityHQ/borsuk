@@ -10,6 +10,29 @@ only 96.849% of GT100 positions, whereas V116's separate expanded SQ8
 reader returned 99.208%. These studies have different layout fitters and do
 not constitute one matched cross-corpus production method.
 
+## First implementation slice and remaining boundary
+
+`crates/borsuk/src/native_source_tier.rs` adds a versioned, generation-pinned
+float32 source-plane writer and a local reader that checks the complete
+artifact SHA-256, geometry, source-object identity, and generation at open.
+It computes deterministic float64 cosine rankings within an externally
+supplied candidate union. Four focused library tests cover ranking, ties,
+invalid rows/IDs, nonunit vectors, tampering before open, and generation and
+source-identity mismatch. The final V125 code-check Spot attempt
+`i-0b9f2095ac8843161` ran these four tests successfully from source archive
+SHA-256 `f59eb815a1e36b793530c66d222391447ca703e1837d188ec20835546a985574`;
+all three code-check instances were terminated. Its package-wide Clippy step
+failed on 137 diagnostics in older modules and none in the new module, so
+this is a targeted test gate, not a clean full-assurance result.
+
+The reader authenticates bytes **at open**. It currently relies on the caller
+to pin an immutable local file and to supply an authenticated candidate
+ordinal-to-source-ID map; it does not yet authenticate each later local read,
+hydrate from S3, perform FP16 interval refinement, or account for local I/O
+and S3 GETs in a served query. Those are required before the architecture
+can pass gate 1 below. The writer records a caller-supplied source-object
+digest; the build path must authenticate that original object independently.
+
 ## Query and generation contract
 
 An immutable generation has authenticated objects for (1) a query-blind
