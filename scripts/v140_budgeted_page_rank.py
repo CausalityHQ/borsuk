@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -111,7 +112,10 @@ def run(args: argparse.Namespace) -> None:
     centers32 = centers.astype(np.float32)
     center_norms = np.einsum("ij,ij->i", centers32, centers32)
     records = []
-    with args.raw.open("x") as output:
+    with ExitStack() as files:
+        output = files.enter_context(args.raw.open("x"))
+        scores_output = (files.enter_context(args.scores_output.open("xb"))
+                         if args.scores_output else None)
         for start in range(0, 1000, 32):
             batch = queries[start:start + 32]
             query_norms = np.einsum("ij,ij->i", batch, batch)
@@ -124,6 +128,8 @@ def run(args: argparse.Namespace) -> None:
                     distances[offset], np.arange(0, unit_count, PAGE_UNITS))
                 if not np.all(np.isfinite(page_scores)):
                     raise ValueError("centroid page score is not finite")
+                if scores_output is not None:
+                    scores_output.write(page_scores.astype("<f4", copy=False).tobytes())
                 result = choose_pages(page_scores, primary[ordinal], rows, row_bytes)
                 result["query_ordinal"] = ordinal
                 records.append(result)
@@ -183,6 +189,7 @@ def main() -> None:
     parser.add_argument("--low", type=Path, required=True)
     parser.add_argument("--step", type=Path, required=True)
     parser.add_argument("--raw", type=Path, required=True)
+    parser.add_argument("--scores-output", type=Path)
     parser.add_argument("--summary", type=Path, required=True)
     args = parser.parse_args()
     if ((args.cohort == "deep-image-96-angular-random100k"
