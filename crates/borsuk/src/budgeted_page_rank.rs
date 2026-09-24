@@ -86,6 +86,47 @@ fn cover_pages(
     Ok((ranges, charged))
 }
 
+// The admission loop needs only the cost for rejected candidates. A full
+// cover (and its range allocations) is materialized after admission.
+fn cover_charge(
+    selected: &[usize],
+    rows: usize,
+    row_bytes: usize,
+    full_page_bytes: usize,
+    max_gets: usize,
+    gaps: &mut Vec<usize>,
+) -> Result<usize, BudgetedPageError> {
+    if selected.is_empty() || max_gets == 0 {
+        return Err(BudgetedPageError::InvalidGeometry);
+    }
+    let mut charged = selected
+        .len()
+        .checked_mul(full_page_bytes)
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+    if rows % PAGE_ROWS != 0 && selected.last() == Some(&(rows / PAGE_ROWS)) {
+        charged -= (PAGE_ROWS - rows % PAGE_ROWS) * row_bytes;
+    }
+    gaps.clear();
+    for pair in selected.windows(2) {
+        if pair[1] > pair[0] + 1 {
+            gaps.push(pair[1] - pair[0] - 1);
+        }
+    }
+    let bridges = (gaps.len() + 1).saturating_sub(max_gets);
+    if bridges > 0 {
+        gaps.sort_unstable();
+        for &gap in gaps.iter().take(bridges) {
+            charged = charged
+                .checked_add(
+                    gap.checked_mul(full_page_bytes)
+                        .ok_or(BudgetedPageError::ArithmeticOverflow)?,
+                )
+                .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+        }
+    }
+    Ok(charged)
+}
+
 /// Admit primary pages in primary-rank order, then other pages by score/ID.
 /// The final range cover bridges the cheapest gaps needed to respect
 /// `max_gets`. This pure planner does not compute page scores or claim
@@ -114,6 +155,9 @@ pub fn choose_budgeted_pages(
     let row_bytes = dimensions
         .checked_add(12)
         .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+    let full_page_bytes = PAGE_ROWS
+        .checked_mul(row_bytes)
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?;
     rows.checked_mul(row_bytes)
         .ok_or(BudgetedPageError::ArithmeticOverflow)?;
     if primary.is_empty() || primary.iter().any(|&ordinal| ordinal >= rows) {
@@ -138,7 +182,8 @@ pub fn choose_budgeted_pages(
             .expect("finite page scores")
             .then(left.cmp(&right))
     });
-    let mut selected = BTreeSet::new();
+    let mut selected = Vec::new();
+    let mut gap_scratch = Vec::new();
     let mut final_ranges = Vec::new();
     let mut final_bytes = 0;
     for page in primary_pages.iter().copied().chain(
@@ -146,13 +191,27 @@ pub fn choose_budgeted_pages(
             .into_iter()
             .filter(|page| !primary_seen.contains(page)),
     ) {
-        let mut proposed = selected.clone();
-        proposed.insert(page);
-        let (ranges, charged) = cover_pages(&proposed, rows, row_bytes, max_gets)?;
+        let insertion = selected.binary_search(&page).unwrap_or_else(|index| index);
+        selected.insert(insertion, page);
+        let charged = cover_charge(
+            &selected,
+            rows,
+            row_bytes,
+            full_page_bytes,
+            max_gets,
+            &mut gap_scratch,
+        )?;
         if charged > max_bytes {
+            selected.remove(insertion);
             continue;
         }
-        selected = proposed;
+        let (ranges, exact_charge) = cover_pages(
+            &selected.iter().copied().collect(),
+            rows,
+            row_bytes,
+            max_gets,
+        )?;
+        debug_assert_eq!(charged, exact_charge);
         final_ranges = ranges;
         final_bytes = charged;
         if selected.len() >= target_pages {
@@ -164,9 +223,9 @@ pub fn choose_budgeted_pages(
     }
     let retained = primary_pages
         .iter()
-        .filter(|page| selected.contains(page))
+        .filter(|page| selected.binary_search(page).is_ok())
         .count();
-    let selected_pages = selected.into_iter().collect::<Vec<_>>();
+    let selected_pages = selected;
     Ok(BudgetedPagePlan {
         target_shortfall: target_pages.saturating_sub(selected_pages.len()),
         target_pages,
@@ -180,6 +239,56 @@ pub fn choose_budgeted_pages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_cover_charge_matches_exact_ranges_with_tied_gaps_and_final_page() {
+        let rows = 8 * PAGE_ROWS + 1;
+        let row_bytes = 108;
+        let full_page_bytes = PAGE_ROWS * row_bytes;
+        let pages = [0, 2, 4, 8];
+        let mut gaps = Vec::new();
+        for max_gets in 1..=4 {
+            let exact = cover_pages(&pages.iter().copied().collect(), rows, row_bytes, max_gets)
+                .unwrap()
+                .1;
+            assert_eq!(
+                cover_charge(
+                    &pages,
+                    rows,
+                    row_bytes,
+                    full_page_bytes,
+                    max_gets,
+                    &mut gaps
+                )
+                .unwrap(),
+                exact
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_cover_charge_matches_exact_cover_across_page_patterns() {
+        let mut gaps = Vec::new();
+        for rows in [1usize, 256, 257, 513, 2048, 2049, 4095] {
+            let page_count = rows.div_ceil(PAGE_ROWS);
+            for mask in 1usize..(1usize << page_count.min(12)) {
+                let pages = (0..page_count)
+                    .filter(|page| mask & (1 << page) != 0)
+                    .collect::<Vec<_>>();
+                for max_gets in 1..=4 {
+                    let exact = cover_pages(&pages.iter().copied().collect(), rows, 108, max_gets)
+                        .unwrap()
+                        .1;
+                    assert_eq!(
+                        cover_charge(&pages, rows, 108, 108 * PAGE_ROWS, max_gets, &mut gaps)
+                            .unwrap(),
+                        exact,
+                        "rows={rows} pages={pages:?} max_gets={max_gets}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn primary_page_precedes_better_scoring_secondary_page() {
