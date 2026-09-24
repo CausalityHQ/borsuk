@@ -72,7 +72,7 @@ impl Pq64Router {
         })
     }
 
-    /// Return source-row ordinals in stable ascending PQ score order.
+    /// Return physical SQ8-row ordinals in stable ascending PQ score order.
     pub fn nominate(
         &self,
         query: &[f32],
