@@ -59,6 +59,29 @@ premises. Neither Lean nor a source-only model establishes unseen-query
 recall, S3 tail latency, charged RAM peaks or prices without workload and
 service assumptions. Those remain release measurements.
 
+`formal/FlatRouterScaling.lean` additionally checks the current flat
+router's symbolic payload and a conditional latency bound: if every page
+summary coordinate is evaluated and a machine can perform at most `F`
+coordinate operations per time unit, any budget `L` with `F × L` below the
+required coordinate count is impossible for that scan. At 100M rows,
+256-row pages and two summaries/page, the proof computes a 2.4-billion-byte
+summary plane for D=768, plus 6.4 billion bytes of PQ64 codes, per
+generation. Two pinned generations require 17.6 billion payload bytes for
+those router planes before overhead. If exact SQ8 is also resident, add
+156 billion bytes for two D=768 generations. These are arithmetic bounds,
+not observed memory or latency. V116's 19.83 seconds for 1,000 Rust
+nomination queries is an offline batch measurement at 1M; it does not split
+summary and code-scan time or project linearly to 100M.
+
+A bounded graph walk is a research alternative to the flat scans, with
+unproven recall and construction cost. First compare it with the current
+flat router in a paired 100k source-frozen Spot gate, then promote only if
+quality and compute evidence support it across corpora. An oracle selecting
+the best 84 independent D=768 pages under 16 MiB would be only a relaxed
+upper bound: it ignores the 32 contiguous-range constraint. An actual
+feasible oracle must obey both constraints and is a diagnostic, never a
+query-time routing rule.
+
 ## Promotion sequence
 
 1. Use a source-frozen 100k gate to reject a representation or routing
