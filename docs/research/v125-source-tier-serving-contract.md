@@ -34,9 +34,10 @@ reader rejects it: the final source archive SHA-256 was
 terminal SHA-256 was
 `f48a6378389961cec0b8ebc98e9c65d2c1cb0ab3b1828942207125a9107990e0`,
 and all six focused Rust tests passed. Both new Spot instances were
-terminated. Lean's `sourceDigestBytes` model checks the table payload for
-two complete 100M generations at 64-KiB blocks: 37,500,032 bytes for D96
-and 300,000,064 bytes for D768. This is a modeled digest payload, not
+terminated. The superseded v1 source plane did not carry source IDs.
+Lean's current `sourceDigestBytes` model checks the v2 table payload for
+two complete 100M generations at 64-KiB blocks: 38,281,280 bytes for D96
+and 300,781,312 bytes for D768. This is a modeled digest payload, not
 charged RAM or latency; larger blocks trade lower resident digest memory
 for more local bytes read and hashed per candidate.
 
@@ -53,11 +54,24 @@ The final terminal SHA-256 was
 `a270d52072e23af74eae9cb138f72d9b49c315def32a79809e7ed50fb9a4416f`;
 both gate Spots were observed terminated. The builder's global uniqueness
 check currently uses an O(N) hash set, whose charged build memory must be
-measured before 100M qualification. This slice does not yet hydrate
-from S3, perform FP16 interval refinement, or account for local I/O and S3
-GETs in a served query. Those are required before the architecture can pass
-gate 1 below. The writer records a caller-supplied source-object digest;
+measured before 100M qualification. The writer records a caller-supplied source-object digest;
 the build path must authenticate that original object independently.
+
+`native_source_hydration.rs` now streams one ETag-pinned `object_store` GET
+into a temporary file, verifies declared length, response ETag, SHA-256,
+format, generation, source identity and block digests, then atomically
+publishes and directory-syncs the local cache. A valid cache is rechecked
+and reused after restart; a corrupt cache is replaced from the pinned object.
+The async path dispatches local writes, full-file validation and directory
+sync away from the runtime thread. It returns successful startup GET, byte
+and local-validation counts. The final Spot source archive SHA-256 was
+`beaa726843010797eaf8e643b867efbca96f1e3719f014bfe60cdc533fccd4e7`;
+terminal SHA-256 was
+`b127ae337c615420ab99509d0803bb05d35d6ffd3b4acc17d55f34b13f8e28b3`.
+All ten focused library tests passed and both hydration test Spots were
+observed terminated. These tests use an in-memory object store; live S3
+startup transfer, failed-attempt accounting, FP16 interval refinement and
+per-query local-read/S3 cost remain unqualified. Gate 1 below is still open.
 
 ## Query and generation contract
 

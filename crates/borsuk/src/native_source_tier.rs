@@ -62,7 +62,7 @@ pub struct NativeSourceTier {
     block_digests: Vec<[u8; 32]>,
 }
 
-fn decoded_sha256(value: &str) -> Result<[u8; 32], SourceTierError> {
+pub(crate) fn decoded_sha256(value: &str) -> Result<[u8; 32], SourceTierError> {
     if value.len() != 64 {
         return Err(SourceTierError::Invalid("SHA-256 length"));
     }
@@ -87,7 +87,7 @@ fn row_bytes(dimensions: usize) -> Result<u64, SourceTierError> {
         .ok_or(SourceTierError::Invalid("row width overflow"))
 }
 
-fn expected_len(rows: u64, dimensions: usize) -> Result<u64, SourceTierError> {
+pub(crate) fn expected_len(rows: u64, dimensions: usize) -> Result<u64, SourceTierError> {
     rows.checked_mul(row_bytes(dimensions)?)
         .and_then(|body| body.checked_add(HEADER_BYTES))
         .ok_or(SourceTierError::Invalid("source length overflow"))
