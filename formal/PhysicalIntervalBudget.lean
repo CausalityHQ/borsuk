@@ -104,4 +104,49 @@ theorem partial_final_page_respects_charged_byte_cap
       simp [Nat.add_mul, Nat.mul_assoc]
     _ ≤ maxBytes := chargedCap
 
+/-! The production planner may return the convex hull of all positive-vote
+pages without dynamic programming when its charged units fit the cap. This
+proves the geometric and lexicographic argument conditional on: every
+full-score plan covers both extreme positive pages; a nonempty plan uses a
+request; and one-request plans use at least the hull's charged units. The
+implementation-to-model connection and the actual positive-page roster are
+separate authenticated premises. -/
+
+theorem interval_containing_extremes_cannot_be_shorter
+    (first last start stop : Nat)
+    (startBefore : start ≤ first)
+    (stopAfter : last ≤ stop)
+    (ordered : first ≤ last) :
+    last - first ≤ stop - start := by
+  omega
+
+def beatsLexicographically
+    (score requests units otherScore otherRequests otherUnits : Nat) : Prop :=
+  otherScore < score ∨
+    (score = otherScore ∧
+      (requests < otherRequests ∨
+        (requests = otherRequests ∧ units < otherUnits)))
+
+theorem affordable_full_vote_hull_is_lex_optimal
+    (totalVotes hullUnits maxUnits maxRequests
+      otherVotes otherRequests otherUnits : Nat)
+    (hullFits : hullUnits ≤ maxUnits)
+    (requestFits : 1 ≤ maxRequests)
+    (scoreBound : otherVotes ≤ totalVotes)
+    (fullScoreNeedsRequest : otherVotes = totalVotes → 1 ≤ otherRequests)
+    (oneRequestNeedsHull : otherVotes = totalVotes →
+      otherRequests = 1 → hullUnits ≤ otherUnits) :
+    (1 ≤ maxRequests ∧ hullUnits ≤ maxUnits) ∧
+    ¬ beatsLexicographically otherVotes otherRequests otherUnits
+        totalVotes 1 hullUnits := by
+  constructor
+  · exact ⟨requestFits, hullFits⟩
+  intro better
+  rcases better with lowerScore | ⟨sameScore, fewerRequests | ⟨sameRequests, fewerUnits⟩⟩
+  · omega
+  · have atLeastOne := fullScoreNeedsRequest sameScore
+    omega
+  · have hullMinimal := oneRequestNeedsHull sameScore sameRequests
+    omega
+
 end Borsuk.PhysicalIntervalBudget

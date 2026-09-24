@@ -215,6 +215,43 @@ pub fn plan_weighted_intervals(
     {
         return Err(PlanError::InvalidWeights);
     }
+    // If the smallest interval spanning every positive page fits, it already
+    // has the maximum possible score. Any full-score plan needs at least one
+    // range; among one-range plans this hull charges the fewest units. This
+    // is the DP's exact optimum under its score/GET/byte tie order.
+    if let (Some(&(first, _)), Some(&(last, _))) = (weights.first(), weights.last()) {
+        let span_pages = last - first + 1;
+        let charged_units = if last == geometry.page_count - 1 {
+            (span_pages - 1)
+                .checked_mul(geometry.full_page_units)
+                .and_then(|units| units.checked_add(last_page_units))
+        } else {
+            span_pages.checked_mul(geometry.full_page_units)
+        }
+        .ok_or(PlanError::ArithmeticOverflow)?;
+        if charged_units <= geometry.max_units {
+            let start = first
+                .checked_mul(full_page_bytes)
+                .ok_or(PlanError::ArithmeticOverflow)?;
+            let end = if last == geometry.page_count - 1 {
+                (geometry.page_count - 1)
+                    .checked_mul(full_page_bytes)
+                    .and_then(|prefix| prefix.checked_add(geometry.last_page_bytes))
+            } else {
+                (last + 1).checked_mul(full_page_bytes)
+            }
+            .ok_or(PlanError::ArithmeticOverflow)?;
+            let score = weights.iter().try_fold(0u64, |sum, &(_, weight)| {
+                sum.checked_add(u64::from(weight))
+                    .ok_or(PlanError::ArithmeticOverflow)
+            })?;
+            return Ok(IntervalPlan {
+                score,
+                ranges: vec![start..end],
+                bytes: end - start,
+            });
+        }
+    }
     let gets_width = geometry
         .max_gets
         .checked_add(1)
@@ -599,6 +636,20 @@ mod tests {
         assert_eq!(plan.score, 2);
         assert_eq!(plan.ranges, vec![0..49]);
         assert_eq!(plan.bytes, 49);
+    }
+
+    #[test]
+    fn affordable_positive_weight_hull_is_exact_one_range_optimum() {
+        let weights = [(1, 513), (6, 1)];
+        let shortcut = plan_weighted_intervals(geometry(7, 2, 16), &weights).unwrap();
+        assert_eq!(shortcut.score, 514);
+        assert_eq!(shortcut.ranges, vec![21..133]);
+        assert_eq!(shortcut.bytes, 112);
+
+        let constrained = plan_weighted_intervals(geometry(7, 2, 15), &weights).unwrap();
+        assert_eq!(constrained.score, 514);
+        assert_eq!(constrained.ranges, vec![21..42, 126..133]);
+        assert_eq!(constrained.bytes, 28);
     }
 
     #[test]
