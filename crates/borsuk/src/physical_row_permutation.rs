@@ -15,26 +15,45 @@ use crate::native_source_tier::decoded_sha256;
 const MAGIC: [u8; 16] = *b"BORSUK-ROWMAP-V1";
 const HEADER_BYTES: u64 = 160;
 const ENTRY_BYTES: u64 = 4;
+const BLOCK_BYTES: usize = 64 * 1024;
 
 /// Identity of both physical orders and their common source generation.
 #[derive(Clone, Copy)]
 pub struct RowMapBinding<'a> {
+    /// Immutable generation identifier shared by all mapped artifacts.
     pub generation: u64,
+    /// Number of rows in both physical orders.
     pub rows: u64,
+    /// Digest of the common exact source artifact.
     pub source_sha256: &'a str,
+    /// Digest of the authenticated original router manifest.
     pub router_manifest_sha256: &'a str,
+    /// Digest of the SQ8 object named by the original router.
     pub old_sq8_sha256: &'a str,
+    /// Digest of the relaid SQ8 object used by the page authority.
     pub new_sq8_sha256: &'a str,
 }
 
+/// Failure to create or authenticate a physical row map.
 #[derive(Debug, Error)]
 pub enum RowMapError {
+    /// File read, write or durability operation failed.
     #[error("row-map I/O failed: {0}")]
     Io(#[from] io::Error),
+    /// The supplied shape, identity or permutation violates the format.
     #[error("row-map contract differs: {0}")]
     Invalid(&'static str),
+    /// The complete file differs from the trusted artifact digest.
     #[error("row-map whole-artifact SHA-256 differs")]
     HashMismatch,
+    /// The file was published but syncing its parent failed; reopen by digest.
+    #[error("row-map {sha256} was persisted but parent sync failed: {source}")]
+    PersistedButUnsynced {
+        /// Digest of the published artifact for recovery.
+        sha256: String,
+        /// Directory sync error.
+        source: io::Error,
+    },
 }
 
 /// Both directions are resident; payload is exactly eight bytes per row.
@@ -59,6 +78,13 @@ fn expected_len(rows: u64) -> Result<u64, RowMapError> {
 }
 
 fn decode_hash(value: &str) -> Result<[u8; 32], RowMapError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(RowMapError::Invalid("SHA-256 identity"));
+    }
     decoded_sha256(value).map_err(|_| RowMapError::Invalid("SHA-256 identity"))
 }
 
@@ -110,26 +136,37 @@ pub fn write_row_permutation(
     }
     let parent = path
         .parent()
-        .ok_or(RowMapError::Invalid("row-map path parent"))?;
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let mut temporary = NamedTempFile::new_in(parent)?;
     let mut digest = Sha256::new();
     {
         let mut output = BufWriter::new(temporary.as_file_mut());
         output.write_all(&head)?;
         digest.update(head);
-        for &old in new_to_old {
-            let bytes = old.to_le_bytes();
-            output.write_all(&bytes)?;
+        let mut block = [0_u8; BLOCK_BYTES];
+        for rows in new_to_old.chunks(BLOCK_BYTES / 4) {
+            let bytes = &mut block[..rows.len() * 4];
+            for (slot, &old) in bytes.chunks_exact_mut(4).zip(rows) {
+                slot.copy_from_slice(&old.to_le_bytes());
+            }
+            output.write_all(bytes)?;
             digest.update(bytes);
         }
         output.flush()?;
     }
     temporary.as_file().sync_all()?;
+    let sha256 = format!("{:x}", digest.finalize());
     temporary
         .persist_noclobber(path)
         .map_err(|error| RowMapError::Io(error.error))?;
-    File::open(parent)?.sync_all()?;
-    Ok(format!("{:x}", digest.finalize()))
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| RowMapError::PersistedButUnsynced {
+            sha256: sha256.clone(),
+            source,
+        })?;
+    Ok(sha256)
 }
 
 impl PhysicalRowPermutation {
@@ -164,17 +201,25 @@ impl PhysicalRowPermutation {
             .try_reserve_exact(count)
             .map_err(|_| RowMapError::Invalid("inverse-map allocation"))?;
         old_to_new.resize(count, u32::MAX);
-        for new in 0..count {
-            let mut bytes = [0_u8; 4];
-            input.read_exact(&mut bytes)?;
-            digest.update(bytes);
-            let old = u32::from_le_bytes(bytes);
-            let old_index = old as usize;
-            if old_index >= count || old_to_new[old_index] != u32::MAX {
-                return Err(RowMapError::Invalid("row-map is not a permutation"));
+        let mut block = [0_u8; BLOCK_BYTES];
+        for start in (0..count).step_by(BLOCK_BYTES / 4) {
+            let rows = (count - start).min(BLOCK_BYTES / 4);
+            let bytes = &mut block[..rows * 4];
+            input.read_exact(bytes)?;
+            digest.update(&*bytes);
+            for (offset, slot) in bytes.chunks_exact(4).enumerate() {
+                let old = u32::from_le_bytes(slot.try_into().unwrap());
+                let old_index = old as usize;
+                if old_index >= count || old_to_new[old_index] != u32::MAX {
+                    return Err(RowMapError::Invalid("row-map is not a permutation"));
+                }
+                old_to_new[old_index] = (start + offset) as u32;
+                new_to_old.push(old);
             }
-            old_to_new[old_index] = new as u32;
-            new_to_old.push(old);
+        }
+        let mut extra = [0_u8; 1];
+        if input.read(&mut extra)? != 0 {
+            return Err(RowMapError::Invalid("row-map trailing bytes"));
         }
         if digest.finalize()[..] != expected_digest {
             return Err(RowMapError::HashMismatch);
@@ -190,30 +235,39 @@ impl PhysicalRowPermutation {
         })
     }
 
+    /// Number of rows in either physical order.
     pub fn rows(&self) -> usize {
         self.new_to_old.len()
     }
+    /// Immutable generation identifier.
     pub fn generation(&self) -> u64 {
         self.generation
     }
+    /// Digest of the common exact source artifact.
     pub fn source_sha256(&self) -> [u8; 32] {
         self.source_sha256
     }
+    /// Digest of the authenticated router manifest.
     pub fn router_manifest_sha256(&self) -> [u8; 32] {
         self.router_manifest_sha256
     }
+    /// Digest of the original router's SQ8 object.
     pub fn old_sq8_sha256(&self) -> [u8; 32] {
         self.old_sq8_sha256
     }
+    /// Digest of the relaid SQ8 object.
     pub fn new_sq8_sha256(&self) -> [u8; 32] {
         self.new_sq8_sha256
     }
+    /// Map a relaid SQ8 row to its original router row.
     pub fn new_to_old(&self, new_row: u32) -> Option<u32> {
         self.new_to_old.get(new_row as usize).copied()
     }
+    /// Map an original router row to its relaid SQ8 row.
     pub fn old_to_new(&self, old_row: u32) -> Option<u32> {
         self.old_to_new.get(old_row as usize).copied()
     }
+    /// Bytes in the two resident `u32` maps, excluding allocator overhead.
     pub fn resident_payload_bytes(&self) -> usize {
         (self.new_to_old.len() + self.old_to_new.len()) * 4
     }
@@ -279,6 +333,49 @@ mod tests {
         let mut bytes = fs::read(&path).unwrap();
         bytes[160] ^= 1;
         fs::write(&path, bytes).unwrap();
-        assert!(PhysicalRowPermutation::open_authenticated(&path, &expected, binding()).is_err());
+        assert!(matches!(
+            PhysicalRowPermutation::open_authenticated(&path, &expected, binding()),
+            Err(RowMapError::Invalid("row-map is not a permutation"))
+        ));
+    }
+
+    #[test]
+    fn rejects_a_bijective_payload_change_and_a_wrong_pin_by_hash() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rows.bin");
+        let expected = write_row_permutation(&path, binding(), &[3, 2, 1, 0]).unwrap();
+        assert!(matches!(
+            PhysicalRowPermutation::open_authenticated(&path, E, binding()),
+            Err(RowMapError::HashMismatch)
+        ));
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[160..164].copy_from_slice(&2u32.to_le_bytes());
+        bytes[164..168].copy_from_slice(&3u32.to_le_bytes());
+        fs::write(&path, bytes).unwrap();
+        assert!(matches!(
+            PhysicalRowPermutation::open_authenticated(&path, &expected, binding()),
+            Err(RowMapError::HashMismatch)
+        ));
+    }
+
+    #[test]
+    fn bare_filename_is_durable_and_canonical_hashes_are_required() {
+        let filename = format!(
+            "borsuk-rowmap-{}-{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = Path::new(&filename);
+        let hash = write_row_permutation(path, binding(), &[0, 1, 2, 3]).unwrap();
+        let opened = PhysicalRowPermutation::open_authenticated(path, &hash, binding()).unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(opened.new_to_old(3), Some(3));
+        assert!(matches!(
+            PhysicalRowPermutation::open_authenticated(path, &hash.to_uppercase(), binding()),
+            Err(RowMapError::Invalid("SHA-256 identity"))
+        ));
     }
 }

@@ -29,6 +29,19 @@ maps their rows through `new_to_old` for resident PQ scoring, and maps
 nominees through `old_to_new` for mandatory primary coverage. The binder
 must reject any mismatch before the query can issue GETs.
 
+A bijection and whole-file hash alone do not prove that the payload has
+the correct direction. The generation builder must stream the old and new
+SQ8 bodies and verify `new_sq8_row(i) == old_sq8_row(new_to_old[i])` for
+every row before publishing the map. Duplicate row bodies require the
+source-row identity or another authenticated tie key as well; byte
+equality alone is insufficient in that case. The full-generation test
+must deliberately supply the inverse map and reject it. The existing
+router loader also discards its verified manifest digest, so binder work
+must retain that digest in `SourceRouterArtifact` before comparing it to
+the row-map header. The current `ServingGeneration::bind` equality of
+old-router and new-mirror SQ8 hashes is incompatible with a relaid SQ8
+object and must be replaced by checks through this map, not bypassed.
+
 ## Resource and qualification
 
 Two `u32` arrays cost exactly `8N` payload bytes per pinned generation:
@@ -46,3 +59,20 @@ or persistence recovery. A later complete-generation test must bind a
 nonidentity map, reject a swapped SQ8 object or router manifest, score
 candidate rows through the mapping, and verify returned IDs against an
 independent exact reference.
+
+## Closed narrow compile gate
+
+The writer/loader slice was pushed at `36b9a3e31e376b0e28a4fb2d0a43007fa63be3fe`.
+One Causality Spot `c7i.8xlarge` worker `i-0df21551044d4bcce` ran
+`cargo test --locked -p borsuk --lib physical_row_permutation::tests`:
+**2 passed**, 0 failed, 1,658 filtered. Compile and test took 104.43
+wall seconds and peaked at 4,978,568 KiB process RSS on that build
+worker. This is not a serving latency or resident-index measurement.
+The complete terminal SHA-256 is
+`beaeae8c34160a828049cdf66db42cded2ad21c134a600b24cfd89add8d94442`
+at `s3://borsuk-bench-453182569524-euc1/research/v172-row-map-compile/36b9a3e31e376b0e28a4fb2d0a43007fa63be3fe/runs/a0001/`.
+The controller streamed and rehashed all three terminal-listed artifacts
+and confirmed the instance terminated. The crate emitted 204 warnings,
+including 19 missing-documentation warnings in the new module. Those
+new documentation warnings were corrected after this gate; the closed
+test does not establish a warning-free crate or full-suite pass.
