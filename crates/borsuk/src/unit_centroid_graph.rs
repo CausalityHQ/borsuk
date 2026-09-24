@@ -2,6 +2,7 @@
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::mem::size_of;
 
 use sha2::{Digest, Sha256};
 
@@ -20,6 +21,7 @@ pub enum UnitCentroidGraphError {
     InvalidArtifact,
     InvalidQuery,
     ArithmeticOverflow,
+    MemoryBudgetExceeded,
     Scorer(UnitCentroidError),
 }
 
@@ -187,6 +189,109 @@ impl UnitCentroidGraph {
 
     pub fn node_count(&self) -> usize {
         self.neighbours.len()
+    }
+
+    /// Structural resident bytes of the decoded adjacency. This scans the
+    /// serialized graph without allocating adjacency vectors. It excludes
+    /// allocator overhead, the encoded blob and other generation planes.
+    pub fn preflight_resident_bytes(
+        bytes: &[u8],
+        scorer: &UnitCentroidPages,
+    ) -> Result<usize, UnitCentroidGraphError> {
+        if bytes.len() < HEADER_BYTES
+            || &bytes[..8] != MAGIC
+            || bytes[48..80] != scorer.blob_sha256()[..]
+        {
+            return Err(UnitCentroidGraphError::InvalidArtifact);
+        }
+        let rows = usize::try_from(u64::from_le_bytes(bytes[8..16].try_into().unwrap()))
+            .map_err(|_| UnitCentroidGraphError::ArithmeticOverflow)?;
+        let field = |offset: usize| {
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize
+        };
+        let nodes = field(28);
+        if (rows, field(16), field(20), field(24), nodes)
+            != (
+                scorer.rows(),
+                scorer.dimensions(),
+                scorer.unit_rows(),
+                scorer.page_rows(),
+                scorer.unit_count(),
+            )
+            || nodes < 2
+            || field(32) >= nodes
+            || field(36) != M
+            || field(40) != M0
+            || field(44) != EF_CONSTRUCTION
+        {
+            return Err(UnitCentroidGraphError::InvalidArtifact);
+        }
+        let mut resident = size_of::<Self>()
+            .checked_add(
+                nodes
+                    .checked_mul(size_of::<Vec<Vec<u32>>>())
+                    .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?,
+            )
+            .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?;
+        let mut cursor = HEADER_BYTES;
+        for _ in 0..nodes {
+            let level_bytes = bytes
+                .get(cursor..cursor + 2)
+                .ok_or(UnitCentroidGraphError::InvalidArtifact)?;
+            let levels = u16::from_le_bytes(level_bytes.try_into().unwrap()) as usize;
+            cursor += 2;
+            if levels == 0 || levels > 64 {
+                return Err(UnitCentroidGraphError::InvalidArtifact);
+            }
+            resident = resident
+                .checked_add(
+                    levels
+                        .checked_mul(size_of::<Vec<u32>>())
+                        .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?,
+                )
+                .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?;
+            for level in 0..levels {
+                let count_bytes = bytes
+                    .get(cursor..cursor + 2)
+                    .ok_or(UnitCentroidGraphError::InvalidArtifact)?;
+                let count = u16::from_le_bytes(count_bytes.try_into().unwrap()) as usize;
+                cursor += 2;
+                if count > if level + 1 == levels { M0 } else { M } || count > nodes - 1 {
+                    return Err(UnitCentroidGraphError::InvalidArtifact);
+                }
+                let payload = count
+                    .checked_mul(size_of::<u32>())
+                    .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?;
+                cursor = cursor
+                    .checked_add(payload)
+                    .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?;
+                if cursor > bytes.len() {
+                    return Err(UnitCentroidGraphError::InvalidArtifact);
+                }
+                resident = resident
+                    .checked_add(payload)
+                    .ok_or(UnitCentroidGraphError::ArithmeticOverflow)?;
+            }
+        }
+        if cursor != bytes.len() {
+            return Err(UnitCentroidGraphError::InvalidArtifact);
+        }
+        Ok(resident)
+    }
+
+    /// Reject an over-budget graph before allocating any adjacency vectors.
+    /// The cap applies to structural payload, not charged process memory.
+    pub fn decode_bounded(
+        bytes: &[u8],
+        centroid_blob: &[u8],
+        scorer: &UnitCentroidPages,
+        max_resident_bytes: usize,
+    ) -> Result<Self, UnitCentroidGraphError> {
+        let required = Self::preflight_resident_bytes(bytes, scorer)?;
+        if required > max_resident_bytes {
+            return Err(UnitCentroidGraphError::MemoryBudgetExceeded);
+        }
+        Self::decode(bytes, centroid_blob, scorer)
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, UnitCentroidGraphError> {
@@ -661,6 +766,22 @@ mod tests {
         assert!(UnitCentroidGraph::decode(&persisted, &wrong_blob, &scorer).is_err());
         let wrong_scorer = UnitCentroidPages::decode(&wrong_blob).unwrap();
         assert!(loaded.search(&wrong_scorer, &[2.1], 2, 4).is_err());
+    }
+
+    #[test]
+    fn graph_decode_rejects_resident_cap_before_adjacency_allocation() {
+        let (blob, scorer) = centroids();
+        let graph = UnitCentroidGraph::build(&scorer, &blob).unwrap();
+        let persisted = graph.encode().unwrap();
+        let required = UnitCentroidGraph::preflight_resident_bytes(&persisted, &scorer).unwrap();
+        assert!(required > persisted.len());
+        assert!(matches!(
+            UnitCentroidGraph::decode_bounded(&persisted, &blob, &scorer, required - 1),
+            Err(UnitCentroidGraphError::MemoryBudgetExceeded),
+        ));
+        let loaded =
+            UnitCentroidGraph::decode_bounded(&persisted, &blob, &scorer, required).unwrap();
+        assert_eq!(loaded.encode().unwrap(), persisted);
     }
 
     #[test]
