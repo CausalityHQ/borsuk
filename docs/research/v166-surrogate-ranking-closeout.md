@@ -56,8 +56,13 @@ training, so even a positive result would not have proved external-query
 generalization.
 
 The next method must change the selection signal or route, rather than
-retune this Gaussian on the holdout. Exact geometric score bounds and a
-bounded-work source route are candidate directions. Any replacement needs
+retune this Gaussian on the holdout. V138 already rejected flat exact
+center/radius unit admission on deep-image-96-angular random100k because
+nearly every unit remained promising; that old bound may serve only as an
+optional correctness certificate, not be relaunched as the primary policy.
+A bounded-work source route with a different query-dependent selection
+signal is a candidate direction, provided it also avoids V98's failed
+budgeted hierarchy ceiling. Any replacement needs
 a new source-only construction rule, an explicit memory profile that
 scales smoothly with recall and N, a cheapest decisive 100k gate against
 the strongest 100k BORSUK point, then a frozen 1M returned-quality test
