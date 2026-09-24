@@ -337,3 +337,12 @@ bytes for two complete 100M generations. Run `lean ScoredNeighborField.lean`
 from this directory. The proof assumes authenticated nominee/unit/row
 counters and does not establish router work, code-plane charged RAM,
 empirical recall, build time or query latency.
+
+`RowMapPayload.lean` proves the two resident `u32` permutation arrays
+cost exactly `8 × rows × generations` modeled payload bytes, grow
+monotonically in row and generation counts, and use 800,000,000 bytes
+for one 100M-row generation (1,600,000,000 for two). Run
+`lean RowMapPayload.lean` from this directory. The theorem has no
+vector-count knee or fixed maximum memory; allocator capacity, router,
+source data, query buffers and charged process RSS remain outside this
+model and must be measured.
