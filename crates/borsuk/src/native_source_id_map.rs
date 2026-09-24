@@ -41,6 +41,7 @@ pub struct NativeSourceIdMap {
     source_sha256: [u8; 32],
     source_artifact_sha256: [u8; 32],
     entries: Vec<(u64, u64)>,
+    ordinal_ids: Vec<u64>,
 }
 
 fn expected_len(rows: u64) -> Result<u64, SourceIdMapError> {
@@ -178,6 +179,11 @@ impl NativeSourceIdMap {
         entries
             .try_reserve_exact(capacity)
             .map_err(|_| SourceIdMapError::Invalid("map resident allocation"))?;
+        let mut ordinal_ids = Vec::new();
+        ordinal_ids
+            .try_reserve_exact(capacity)
+            .map_err(|_| SourceIdMapError::Invalid("map ordinal allocation"))?;
+        ordinal_ids.resize(capacity, 0);
         let mut reader = BufReader::new(file);
         let mut actual_head = [0_u8; 96];
         reader.read_exact(&mut actual_head)?;
@@ -204,6 +210,9 @@ impl NativeSourceIdMap {
             }
             visited[byte] |= mask;
             entries.push((id, ordinal));
+            let ordinal_index = usize::try_from(ordinal)
+                .map_err(|_| SourceIdMapError::Invalid("map ordinal exceeds address space"))?;
+            ordinal_ids[ordinal_index] = id;
             previous_id = Some(id);
         }
         let computed: [u8; 32] = digest.finalize().into();
@@ -216,6 +225,7 @@ impl NativeSourceIdMap {
             source_sha256: source,
             source_artifact_sha256: source_artifact,
             entries,
+            ordinal_ids,
         })
     }
 
@@ -223,6 +233,39 @@ impl NativeSourceIdMap {
     #[must_use]
     pub fn resident_entry_bytes(&self) -> usize {
         self.entries.len() * std::mem::size_of::<(u64, u64)>()
+    }
+
+    /// Resident reverse lookup payload, excluding Vec allocation overhead.
+    #[must_use]
+    pub fn resident_ordinal_bytes(&self) -> usize {
+        self.ordinal_ids.len() * std::mem::size_of::<u64>()
+    }
+
+    /// Resolve source ordinals emitted by the bound router without reading
+    /// random source blocks just to discover their IDs.
+    pub fn source_ids_for_ordinals(
+        &self,
+        source: &NativeSourceTier,
+        ordinals: &[usize],
+    ) -> Result<Vec<u64>, SourceIdMapError> {
+        if !self.binds_to(source) {
+            return Err(SourceIdMapError::Invalid("source generation binding"));
+        }
+        if ordinals.is_empty() {
+            return Err(SourceIdMapError::Invalid("empty source ordinal roster"));
+        }
+        let mut ids = Vec::new();
+        ids.try_reserve_exact(ordinals.len())
+            .map_err(|_| SourceIdMapError::Invalid("source ID roster allocation"))?;
+        for &ordinal in ordinals {
+            ids.push(
+                *self
+                    .ordinal_ids
+                    .get(ordinal)
+                    .ok_or(SourceIdMapError::Invalid("source ordinal outside map"))?,
+            );
+        }
+        Ok(ids)
     }
 
     /// Deduplicate two fixed candidate-ID rosters and resolve every ID.
@@ -349,6 +392,12 @@ mod tests {
         );
         assert_eq!(cost.source_rows, 3);
         assert_eq!(map.resident_entry_bytes(), 48);
+        assert_eq!(map.resident_ordinal_bytes(), 24);
+        assert_eq!(
+            map.source_ids_for_ordinals(&source, &[0, 2, 1]).unwrap(),
+            vec![900, 7, 100]
+        );
+        assert!(map.source_ids_for_ordinals(&source, &[3]).is_err());
         assert!(map.resolve_union(&source, &[901], &[7]).is_err());
         assert!(map.resolve_union(&source, &[], &[]).is_err());
     }
