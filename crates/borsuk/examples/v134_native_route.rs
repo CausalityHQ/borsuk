@@ -19,6 +19,8 @@ use std::{
     fs::{self, File},
     io::{self, BufRead, BufReader, BufWriter, Write},
     path::Path,
+    sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    thread,
     time::Instant,
 };
 
@@ -358,12 +360,170 @@ fn run_arm(
     }))
 }
 
+fn run_concurrent(
+    queries: &[Query],
+    evidence: &[Evidence],
+    replay: &[Replay],
+    mirror: &ExactSq8Mirror,
+    generation: &ExactServingGeneration<'_>,
+    output_path: &str,
+    summary_path: &str,
+    startup_ns: u128,
+) -> Result<(), Box<dyn Error>> {
+    const REPEATS: usize = 8;
+    let mut output = BufWriter::new(File::create(output_path)?);
+    let mut cells = Vec::new();
+    // One complete, verified untimed pass hydrates the shared file cache.
+    // Timed cells therefore compare concurrency, not startup hydration.
+    for ordinal in 0..queries.len() {
+        let query = &queries[ordinal];
+        let sealed = &evidence[ordinal];
+        let historical = &replay[ordinal];
+        if query.query_ordinal != ordinal
+            || sealed.query_ordinal != ordinal
+            || historical.query_ordinal != ordinal
+            || query.source_query_ordinal != 9_000 + ordinal
+            || sealed.source_query_ordinal != query.source_query_ordinal
+            || historical.source_query_ordinal != query.source_query_ordinal
+        {
+            return Err(invalid(format!("query {ordinal} identity differs")).into());
+        }
+        let (prepared, ranges) =
+            prepare_candidate_route(ordinal, &query.query, sealed, mirror, generation)?;
+        run_arm(
+            ordinal,
+            "candidate",
+            &query.query,
+            &sealed.truth_ids,
+            &sealed.nominees,
+            &ranges,
+            &historical.candidate,
+            mirror,
+            generation,
+            Some(&prepared),
+        )?;
+    }
+    for concurrency in [1usize, 8, 32] {
+        let requests = REPEATS * queries.len();
+        let next = AtomicUsize::new(0);
+        let started = Instant::now();
+        let mut records = thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for _ in 0..concurrency {
+                let next = &next;
+                handles.push(scope.spawn(move || -> Result<Vec<(usize, Value)>, String> {
+                    let mut local = Vec::new();
+                    loop {
+                        let request_ordinal = next.fetch_add(1, AtomicOrdering::Relaxed);
+                        if request_ordinal >= requests {
+                            break;
+                        }
+                        let ordinal = request_ordinal % queries.len();
+                        let query = &queries[ordinal];
+                        let sealed = &evidence[ordinal];
+                        let historical = &replay[ordinal];
+                        let (prepared, ranges) = prepare_candidate_route(
+                            ordinal,
+                            &query.query,
+                            sealed,
+                            mirror,
+                            generation,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let record = run_arm(
+                            ordinal,
+                            "candidate",
+                            &query.query,
+                            &sealed.truth_ids,
+                            &sealed.nominees,
+                            &ranges,
+                            &historical.candidate,
+                            mirror,
+                            generation,
+                            Some(&prepared),
+                        )
+                        .map_err(|error| error.to_string())?;
+                        local.push((request_ordinal, record));
+                    }
+                    Ok(local)
+                }));
+            }
+            let mut all = Vec::with_capacity(requests);
+            for handle in handles {
+                let worker = handle
+                    .join()
+                    .map_err(|_| invalid("concurrent worker panicked"))?;
+                all.extend(worker.map_err(invalid)?);
+            }
+            Ok::<Vec<(usize, Value)>, io::Error>(all)
+        })?;
+        let wall_ns = started.elapsed().as_nanos();
+        records.sort_unstable_by_key(|record| record.0);
+        if records.len() != requests
+            || records
+                .iter()
+                .enumerate()
+                .any(|(index, row)| row.0 != index)
+        {
+            return Err(invalid("concurrent request inventory differs").into());
+        }
+        let mut times = Vec::with_capacity(requests);
+        let mut hits = 0usize;
+        let mut range_reads = 0usize;
+        let mut sq8_bytes = 0usize;
+        for (request_ordinal, record) in records {
+            let query_ordinal = request_ordinal % queries.len();
+            times.push(
+                record["total_ns"]
+                    .as_u64()
+                    .ok_or_else(|| invalid("total time"))? as u128,
+            );
+            hits += record["hits"].as_u64().ok_or_else(|| invalid("hits"))? as usize;
+            range_reads += record["range_reads"]
+                .as_u64()
+                .ok_or_else(|| invalid("range reads"))? as usize;
+            sq8_bytes += record["sq8_read_bytes"]
+                .as_u64()
+                .ok_or_else(|| invalid("SQ8 bytes"))? as usize;
+            writeln!(
+                output,
+                "{}",
+                json!({
+                    "concurrency":concurrency,"request_ordinal":request_ordinal,
+                    "query_ordinal":query_ordinal,
+                    "source_query_ordinal":queries[query_ordinal].source_query_ordinal,
+                    "candidate":record,
+                })
+            )?;
+        }
+        output.flush()?;
+        cells.push(json!({
+            "concurrency":concurrency,"requests":requests,"hits":hits,
+            "range_reads":range_reads,"sq8_read_bytes":sq8_bytes,
+            "wall_ns":wall_ns,"throughput_qps":requests as f64 * 1e9 / wall_ns as f64,
+            "p50_ms":percentile_ms(&times,50),"p95_ms":percentile_ms(&times,95),
+            "p99_ms":percentile_ms(&times,99),
+        }));
+    }
+    fs::write(
+        summary_path,
+        serde_json::to_vec(&json!({
+            "schema":"borsuk-v136-concurrent-local-route-v1",
+            "generation_manifest_sha256":AUTHORITY_SHA,
+            "queries":queries.len(),"repeats":REPEATS,
+            "startup_auth_ns":startup_ns,"cells":cells,
+        }))?,
+    )?;
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 4 {
-        return Err(
-            invalid("usage: v134_native_route prepared-dir output.jsonl summary.json").into(),
-        );
+    if args.len() != 4 && !(args.len() == 5 && args[4] == "--concurrent") {
+        return Err(invalid(
+            "usage: v134_native_route prepared-dir output.jsonl summary.json [--concurrent]",
+        )
+        .into());
     }
     let root = Path::new(&args[1]);
     let startup = Instant::now();
@@ -449,6 +609,18 @@ fn run() -> Result<(), Box<dyn Error>> {
     let generation = ExactServingGeneration::bind(base, &source, &map)
         .map_err(|error| invalid(format!("exact generation {error:?}")))?;
     let startup_ns = startup.elapsed().as_nanos();
+    if args.len() == 5 {
+        return run_concurrent(
+            &queries,
+            &evidence,
+            &replay,
+            &mirror,
+            &generation,
+            &args[2],
+            &args[3],
+            startup_ns,
+        );
+    }
     let mut output = BufWriter::new(File::create(&args[2])?);
     let mut totals = [0usize; 2];
     let mut ranges_read = [0usize; 2];
