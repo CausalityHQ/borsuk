@@ -202,32 +202,74 @@ impl UnitCentroidPages {
         self.centers.len() * size_of::<f32>() + self.center_norms.len() * size_of::<f32>()
     }
 
-    /// Minimum Euclidean distance from the query to each page's unit means.
-    /// This is a score for ranking, not an exact point-distance bound.
-    pub fn score_pages(&self, query: &[f32]) -> Result<Vec<f32>, UnitCentroidError> {
+    pub fn unit_count(&self) -> usize {
+        self.center_norms.len()
+    }
+
+    pub fn unit_centroid(&self, unit: usize) -> Option<&[f32]> {
+        if unit >= self.unit_count() {
+            return None;
+        }
+        let start = unit * self.dimensions;
+        Some(&self.centers[start..start + self.dimensions])
+    }
+
+    fn query_norm(&self, query: &[f32]) -> Result<f32, UnitCentroidError> {
         if query.len() != self.dimensions || query.iter().any(|value| !value.is_finite()) {
             return Err(UnitCentroidError::InvalidQuery);
         }
-        let query_norm = query.iter().map(|value| value * value).sum::<f32>();
-        if !query_norm.is_finite() {
+        let norm = query.iter().map(|value| value * value).sum::<f32>();
+        if !norm.is_finite() {
             return Err(UnitCentroidError::InvalidQuery);
         }
+        Ok(norm)
+    }
+
+    fn unit_distance(&self, query: &[f32], query_norm: f32, unit: usize) -> f32 {
+        let center = self.unit_centroid(unit).expect("valid centroid unit");
+        let mut lanes = [0.0f32; 8];
+        let mut chunks = query.chunks_exact(8).zip(center.chunks_exact(8));
+        for (query_chunk, center_chunk) in &mut chunks {
+            for lane in 0..8 {
+                lanes[lane] += query_chunk[lane] * center_chunk[lane];
+            }
+        }
+        let consumed = self.dimensions - query.len() % 8;
+        let mut dot = lanes.into_iter().sum::<f32>();
+        for dimension in consumed..self.dimensions {
+            dot += query[dimension] * center[dimension];
+        }
+        (query_norm + self.center_norms[unit] - 2.0 * dot)
+            .max(0.0)
+            .sqrt()
+    }
+
+    /// Score one physical page exactly from its resident unit centroids.
+    pub fn score_page(&self, query: &[f32], page: usize) -> Result<f32, UnitCentroidError> {
+        let query_norm = self.query_norm(query)?;
+        if page >= self.rows.div_ceil(self.page_rows) {
+            return Err(UnitCentroidError::InvalidGeometry);
+        }
+        let units_per_page = self.page_rows / self.unit_rows;
+        let first = page * units_per_page;
+        let last = (first + units_per_page).min(self.unit_count());
+        let mut best = f32::INFINITY;
+        for unit in first..last {
+            best = best.min(self.unit_distance(query, query_norm, unit));
+        }
+        if !best.is_finite() {
+            return Err(UnitCentroidError::InvalidQuery);
+        }
+        Ok(best)
+    }
+
+    /// Minimum Euclidean distance from the query to each page's unit means.
+    /// This is a score for ranking, not an exact point-distance bound.
+    pub fn score_pages(&self, query: &[f32]) -> Result<Vec<f32>, UnitCentroidError> {
+        let query_norm = self.query_norm(query)?;
         let mut scores = vec![f32::INFINITY; self.rows.div_ceil(self.page_rows)];
-        for (unit, center) in self.centers.chunks_exact(self.dimensions).enumerate() {
-            let mut lanes = [0.0f32; 8];
-            let mut chunks = query.chunks_exact(8).zip(center.chunks_exact(8));
-            for (query_chunk, center_chunk) in &mut chunks {
-                for lane in 0..8 {
-                    lanes[lane] += query_chunk[lane] * center_chunk[lane];
-                }
-            }
-            let consumed = self.dimensions - query.len() % 8;
-            let mut dot = lanes.into_iter().sum::<f32>();
-            for dimension in consumed..self.dimensions {
-                dot += query[dimension] * center[dimension];
-            }
-            let squared = (query_norm + self.center_norms[unit] - 2.0 * dot).max(0.0);
-            let score = squared.sqrt();
+        for unit in 0..self.unit_count() {
+            let score = self.unit_distance(query, query_norm, unit);
             if !score.is_finite() {
                 return Err(UnitCentroidError::InvalidQuery);
             }
@@ -271,6 +313,8 @@ mod tests {
         assert_eq!(scores.len(), 2);
         assert_eq!(scores[0], 0.0);
         assert!((scores[1] - 34.0_f32.sqrt()).abs() < 1e-5);
+        assert_eq!(scorer.score_page(&[2.0, 0.0], 0).unwrap(), scores[0]);
+        assert_eq!(scorer.score_page(&[2.0, 0.0], 1).unwrap(), scores[1]);
     }
 
     #[test]
