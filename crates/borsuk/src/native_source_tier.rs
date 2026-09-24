@@ -50,6 +50,17 @@ pub struct ScoredSourceCandidate {
     pub score: f64,
 }
 
+/// Authenticated local source reads made while ranking one candidate set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceReadStats {
+    /// Source rows that were scored.
+    pub source_rows: u64,
+    /// Verification-block reads, including repeated reads of one block.
+    pub verified_block_reads: u64,
+    /// Bytes read from the local plane for block authentication.
+    pub local_read_bytes: u64,
+}
+
 /// A pinned, authenticated local source plane.
 #[derive(Debug)]
 pub struct NativeSourceTier {
@@ -297,6 +308,7 @@ impl NativeSourceTier {
         output: &mut [u8],
         scratch: &mut [u8],
         offset: u64,
+        stats: &mut SourceReadStats,
     ) -> Result<(), SourceTierError> {
         let end = offset
             .checked_add(output.len() as u64)
@@ -318,6 +330,14 @@ impl NativeSourceTier {
             if self.block_digests.get(index) != Some(&digest) {
                 return Err(SourceTierError::Invalid("source block SHA-256"));
             }
+            stats.verified_block_reads = stats
+                .verified_block_reads
+                .checked_add(1)
+                .ok_or(SourceTierError::Invalid("source block read count overflow"))?;
+            stats.local_read_bytes = stats
+                .local_read_bytes
+                .checked_add(count as u64)
+                .ok_or(SourceTierError::Invalid("source local read bytes overflow"))?;
             let copy_start = offset.max(block_start);
             let copy_end = end.min(block_start + count as u64);
             let from = (copy_start - block_start) as usize;
@@ -339,6 +359,18 @@ impl NativeSourceTier {
         candidates: &[SourceCandidate],
         top_k: usize,
     ) -> Result<Vec<ScoredSourceCandidate>, SourceTierError> {
+        self.rank_exact_with_stats(query, candidates, top_k)
+            .map(|(ranked, _)| ranked)
+    }
+
+    /// Exact cosine top-k and authenticated local read cost for one query.
+    /// Startup's full-file validation is accounted separately by hydration.
+    pub fn rank_exact_with_stats(
+        &self,
+        query: &[f32],
+        candidates: &[SourceCandidate],
+        top_k: usize,
+    ) -> Result<(Vec<ScoredSourceCandidate>, SourceReadStats), SourceTierError> {
         if query.len() != self.dimensions
             || top_k == 0
             || top_k > candidates.len()
@@ -366,6 +398,7 @@ impl NativeSourceTier {
             .map_err(|_| SourceTierError::Invalid("row width exceeds address space"))?;
         let mut bytes = vec![0_u8; width];
         let mut scratch = vec![0_u8; self.verification_block_bytes];
+        let mut stats = SourceReadStats::default();
         for candidate in candidates {
             if candidate.ordinal >= self.rows
                 || !ids.insert(candidate.source_id)
@@ -378,7 +411,7 @@ impl NativeSourceTier {
                 .checked_mul(width as u64)
                 .and_then(|body_offset| body_offset.checked_add(HEADER_BYTES))
                 .ok_or(SourceTierError::Invalid("source row offset overflow"))?;
-            self.read_verified_row(&mut bytes, &mut scratch, offset)?;
+            self.read_verified_row(&mut bytes, &mut scratch, offset, &mut stats)?;
             let authenticated_id = u64::from_le_bytes(bytes[..8].try_into().unwrap());
             if authenticated_id != candidate.source_id {
                 return Err(SourceTierError::Invalid("candidate/source ID mismatch"));
@@ -405,6 +438,10 @@ impl NativeSourceTier {
                 source_id: candidate.source_id,
                 score,
             });
+            stats.source_rows = stats
+                .source_rows
+                .checked_add(1)
+                .ok_or(SourceTierError::Invalid("source row count overflow"))?;
         }
         scored.sort_unstable_by(|left, right| {
             right
@@ -413,7 +450,7 @@ impl NativeSourceTier {
                 .then_with(|| left.source_id.cmp(&right.source_id))
         });
         scored.truncate(top_k);
-        Ok(scored)
+        Ok((scored, stats))
     }
 }
 
@@ -486,6 +523,43 @@ mod tests {
             vec![100, 900]
         );
         assert_eq!(result[0].score, 1.0);
+    }
+
+    #[test]
+    fn exact_rank_reports_authenticated_local_read_cost() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.bin");
+        let sha = write_source_tier(
+            &path,
+            2,
+            2,
+            7,
+            SOURCE_SHA,
+            vec![(9, vec![1.0, 0.0]), (4, vec![0.0, 1.0])].into_iter(),
+        )
+        .unwrap();
+        let tier =
+            NativeSourceTier::open_authenticated(&path, &sha, SOURCE_SHA, 2, 2, 7, 4096).unwrap();
+        let (ranked, cost) = tier
+            .rank_exact_with_stats(
+                &[1.0, 0.0],
+                &[
+                    SourceCandidate {
+                        ordinal: 0,
+                        source_id: 9,
+                    },
+                    SourceCandidate {
+                        ordinal: 1,
+                        source_id: 4,
+                    },
+                ],
+                1,
+            )
+            .unwrap();
+        assert_eq!(ranked[0].source_id, 9);
+        assert_eq!(cost.source_rows, 2);
+        assert_eq!(cost.verified_block_reads, 2);
+        assert_eq!(cost.local_read_bytes, 192);
     }
 
     #[test]

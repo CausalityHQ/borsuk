@@ -81,7 +81,21 @@ terminal SHA-256 was
 All ten focused library tests passed and both hydration test Spots were
 observed terminated. These tests use an in-memory object store; live S3
 startup transfer, failed-attempt accounting, FP16 interval refinement and
-per-query local-read/S3 cost remain unqualified. Gate 1 below is still open.
+per-query S3 cost remain unqualified. A focused red/green Spot check then
+added `rank_exact_with_stats`, which reports source rows scored, verified
+local block reads and logical local bytes requested, counting repeated
+blocks. The red source archive SHA-256 was
+`aa812e24d96be53277bc476b23d208552b616b7772d55bebd20b69e1ad1f5d9b`,
+terminal SHA-256
+`a53e11e079fd0acfbe6a933744e1f71e1126fbc1f0994fe455ceaff33f1a658a`:
+it failed only because the new method was absent. The green source archive
+SHA-256 was
+`027c2f28aa5bb271e5aa4ac28d4ad1e97cb76dd4d70a12b8f3fa945b438a4d48`,
+terminal SHA-256
+`0ca28fff529ffb8e834c35898ae14c40ed705beee16864a403cbe3e4b223b6c8`:
+all 11 focused tests passed. Both Spots were observed terminated. These
+logical bytes can be served from page cache; physical SSD I/O and live
+per-query costs still need measurement. Gate 1 below is still open.
 
 ## Query and generation contract
 
