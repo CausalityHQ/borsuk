@@ -1,5 +1,13 @@
 # OPQ8 proofs
 
+`SmoothPageBudget.lean` proves the exact 32-row-unit accounting for the
+V160/V163/V164 D768 SQ8 layout: a 512-row full page is 399,360 bytes, the
+64-row final page is 49,920 bytes, 672 units fit under 16 MiB and 673 do
+not. Given authenticated page and GET counts, its admission theorem proves
+both the 32-GET and 16-MiB caps. It does not prove that the Python planner
+refines the model, that routing captures truth, or elapsed S3 latency.
+Run `lean SmoothPageBudget.lean` from this directory with the pinned toolchain.
+
 `GraphGenerationResources.lean` models the checked V156 graph-generation
 payload estimator. It proves that a graph preflight count no larger than its
 authenticated declaration keeps known steady payload within the model, that
