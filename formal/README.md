@@ -1,5 +1,17 @@
 # OPQ8 proofs
 
+`BudgetedPageAdmission.lean` proves that primary-first page admission stays
+within its GET and byte caps when every proposed coalesced cover is charged
+before admission. It checks the current D96/D768 full-page byte arithmetic
+and proves that a linear resident payload formula grows monotonically with
+vector count and with a chosen higher-recall bytes-per-row budget, without a
+vector-count switch. The 100M payload examples exclude headers, hierarchy,
+allocator, page cache, scratch and concurrent generations beyond the stated
+count. Rust cover refinement, useful page ranking, actual recall, charged RAM
+and S3 latency remain separate obligations. Run
+`lean BudgetedPageAdmission.lean` from this directory with the pinned
+toolchain.
+
 `AdaptiveRerank.lean` proves a conditional score-interval rule for a
 quantized-first exact-source reranker. If a row's sound upper score bound is
 below a threshold and `k` distinct candidate witnesses have sound lower
