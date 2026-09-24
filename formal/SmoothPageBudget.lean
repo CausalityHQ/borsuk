@@ -84,4 +84,25 @@ theorem forty_two_full_pages_fit :
     chargedBytes 43 0 > capBytes := by
   decide
 
+/-! A V166 admission frontier may require a modeled mass rather than
+maximizing all positive votes. This theorem concerns a fixed candidate
+universe, fixed mass function, and fixed charged-cost function. Existence
+and optimality of both returned plans are explicit assumptions; calibration
+of modeled mass against actual neighbors is an empirical obligation. -/
+
+def MinimumCost {Plan : Type} (mass cost : Plan → Nat)
+    (target result : Nat) : Prop :=
+  (∃ plan : Plan, target ≤ mass plan ∧ cost plan = result) ∧
+  ∀ plan : Plan, target ≤ mass plan → result ≤ cost plan
+
+theorem minimum_cost_monotone {Plan : Type}
+    (mass cost : Plan → Nat)
+    {lower higher lowerCost higherCost : Nat}
+    (targets : lower ≤ higher)
+    (lo : MinimumCost mass cost lower lowerCost)
+    (hi : MinimumCost mass cost higher higherCost) :
+    lowerCost ≤ higherCost := by
+  obtain ⟨⟨plan, massBound, costEq⟩, _⟩ := hi
+  exact costEq ▸ lo.2 plan (Nat.le_trans targets massBound)
+
 end Borsuk.SmoothPageBudget

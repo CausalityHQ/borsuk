@@ -67,6 +67,17 @@ global residual-scale parameter only on one source-disjoint fit partition;
 check ranking/calibration on a disjoint source partition. Do not use V36
 validation GT or V155/V164 returned hits to fit it. Exclude a pseudoquery's
 own source row from its neighbor roster and all scored exceedance counts.
+The fit/holdout split is disjoint **as query IDs**, but the existing V115
+router and V164 source order were built from the entire source corpus. Its
+unit summary also contains the pseudoquery itself unless that one unit is
+recomputed leave-one-out. Consequently this split is a useful internal
+diagnostic, not an independent generalization or returned-quality estimate.
+For the own unit, compute moments without that row and reject any unit that
+becomes empty. A later GT-blind check on frozen external validation queries
+can test score ranking without this self-inclusion, but using those queries
+to select the method would consume them for a later quality claim. Reserve
+a fresh query panel for the subsequent returned-quality gate if that check
+influences the selected policy.
 For a pseudoquery,
 the provisional threshold is the 100th exact local SQ8 score among the
 frozen 512 nominees. The candidate universe is the union of each nominee's
@@ -95,3 +106,8 @@ bound below the current exact threshold permits safe pruning. Lean cannot
 prove the Gaussian estimate is calibrated, that its candidate universe
 contains enough true neighbors, or measured recall/latency/cost. Those
 remain separate gates.
+
+`formal/SmoothPageBudget.lean` now proves the minimum-cost monotonicity
+claim conditionally on existence and optimality of both plans. It does not
+prove the Python planner returns an optimum or that increasing a target
+yields nested selected units.
