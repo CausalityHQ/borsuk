@@ -39,6 +39,17 @@ theorem maximum_units_exact :
     capBytes < unitBytes * 673 := by
   decide
 
+/-! V165 treats each 32-row unit as an independent interval atom. This
+states only the arithmetic consequence of an authenticated unit/GET count;
+the Python interval optimizer is a separate refinement obligation. -/
+theorem unit_interval_plan_bounds (gets units : Nat)
+    (getsBound : gets ≤ 32) (unitsBound : units ≤ 672) :
+    gets ≤ 32 ∧ unitBytes * units ≤ capBytes := by
+  constructor
+  · exact getsBound
+  · simp only [unitBytes, capBytes]
+    omega
+
 theorem charged_units_fit_iff_bytes_fit (fullPages finalPages : Nat) :
     chargedUnits fullPages finalPages ≤ 672 ↔
       chargedBytes fullPages finalPages ≤ capBytes := by

@@ -7,6 +7,8 @@ V164 1M final page is 49,920 bytes, and the V160/V163 100k final page is
 Given authenticated page and GET counts, its admission theorem proves
 both the 32-GET and 16-MiB caps. It does not prove that the Python planner
 refines the model, that routing captures truth, or elapsed S3 latency.
+The V165 corollary gives the same conditional caps when each fetched atom
+is one 32-row unit.
 Run `lean SmoothPageBudget.lean` from this directory with the pinned toolchain.
 
 `GraphGenerationResources.lean` models the checked V156 graph-generation
