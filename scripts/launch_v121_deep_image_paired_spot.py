@@ -62,6 +62,8 @@ def validate_plan(plan: Plan) -> None:
             or not plan.archive_uri.startswith("s3://")
             or not plan.output_prefix.startswith("s3://")
             or plan.source_commit not in plan.output_prefix
+            or not (plan.output_prefix.rsplit("/", 1)[-1].startswith("a")
+                    and plan.output_prefix.rsplit("/", 1)[-1][1:].isdigit())
             or plan.instance_type != "c7i.12xlarge"
             or plan.wall_seconds != 7200):
         raise ValueError("V121 immutable paired plan differs")
@@ -177,7 +179,8 @@ def launch_spec(plan: Plan, zone: str, subnet: str,
                                "Groups": [plan.security_group_id], "SubnetId": subnet}],
         "TagSpecifications": [{"ResourceType": "instance", "Tags": [
             {"Key": "Name", "Value": "borsuk-v121-deep-image-paired"},
-            {"Key": "BorsukAttempt", "Value": "a0001"}]}],
+            {"Key": "BorsukAttempt", "Value":
+             plan.output_prefix.rsplit("/", 1)[-1]}]}],
         "UserData": base64.b64encode(user_data(
             plan, index_terminal_sha256).encode()).decode(),
     }

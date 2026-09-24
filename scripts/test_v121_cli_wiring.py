@@ -10,6 +10,14 @@ from scripts import launch_v121_deep_image_paired_spot as launcher
 
 
 class V121CliWiringTests(unittest.TestCase):
+    def test_spot_tag_records_immutable_attempt_number(self) -> None:
+        plan = launcher.Plan("0" * 40, "s3://bucket/source.tar.gz", "0" * 64,
+                             1, "s3://bucket/" + "0" * 40 +
+                             "/runs/v121-20260924T013126Z/a0002")
+        spec = launcher.launch_spec(plan, "eu-central-1c", "subnet-test", "0" * 64)
+        self.assertIn({"Key": "BorsukAttempt", "Value": "a0002"},
+                      spec["TagSpecifications"][0]["Tags"])
+
     def test_compose_uses_queries_argument(self) -> None:
         argv = ["v121_deep_image_paired", "compose", "--router", "router",
                 "--queries", "queries.jsonl", "--rosters", "rosters.jsonl",
