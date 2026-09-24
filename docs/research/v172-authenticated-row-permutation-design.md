@@ -76,3 +76,17 @@ and confirmed the instance terminated. The crate emitted 204 warnings,
 including 19 missing-documentation warnings in the new module. Those
 new documentation warnings were corrected after this gate; the closed
 test does not establish a warning-free crate or full-suite pass.
+
+The review-hardening revision `e49ef38e4c02d955242a9849a03fa0beb0d56d86`
+added canonical lowercase hash parsing, post-persist recovery identity,
+buffered payload hashing, an EOF check, and tests that reach the
+whole-file hash check with a still-bijective payload. One further Causality
+Spot `c7i.8xlarge` worker `i-020274476964d2d17` ran the same narrow
+crate target: **4 passed**, 0 failed, 1,658 filtered. Its complete
+terminal SHA-256 is
+`c125dee235e2a9e9447d4c1bf93cd3ea4bd0ba86b41a05d3ea63f3cf19912568`
+at `s3://borsuk-bench-453182569524-euc1/research/v172-row-map-compile/e49ef38e4c02d955242a9849a03fa0beb0d56d86/runs/a0002/`.
+The controller streamed and rehashed its three artifacts and confirmed
+termination. The remote build peaked at 5,098,148 KiB RSS; the test log
+had 185 crate warnings and none referenced this module. This remains a
+narrow artifact gate, not an end-to-end relaid serving or full-suite gate.
