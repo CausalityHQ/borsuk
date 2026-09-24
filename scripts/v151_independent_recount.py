@@ -25,6 +25,10 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def f32(value: float) -> float:
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
 def rows(data: bytes) -> list[dict]:
     result = [json.loads(line) for line in data.splitlines()]
     if len(result) != 1000:
@@ -145,6 +149,15 @@ def recount(s3: object, prefix: str, decision: dict,
                 scored_unit_cache[unit] = math.sqrt(sum(
                     (a - b) * (a - b) for a, b in zip(query_vector, center)))
             return scored_unit_cache[unit]
+        graph_unit_cache = {}
+        def graph_squared(unit: int) -> float:
+            if unit not in graph_unit_cache:
+                squared = 0.0
+                for left, right in zip(query_vector, centers[unit]):
+                    difference = f32(left - right)
+                    squared = f32(squared + f32(difference * difference))
+                graph_unit_cache[unit] = squared
+            return graph_unit_cache[unit]
         arm_plans = {"flat": plan["flat_plan"],
                      "v150": plan["v150"]["plan"],
                      "v151": plan["v151"]["plan"]}
@@ -194,12 +207,12 @@ def recount(s3: object, prefix: str, decision: dict,
                     page = unit // 8
                     if page not in primary_pages:
                         observed_minima[page] = min(
-                            observed_minima.get(page, math.inf), unit_distance(unit))
+                            observed_minima.get(page, math.inf), graph_squared(unit))
                 expected_provisional = sorted(observed_minima.items(),
                                               key=lambda item: (item[1], item[0]))[:4 * p]
                 if ([page for page, _ in expected_provisional]
                         != [page for page, _ in record["provisional_pages"]]
-                        or any(abs(expected - actual) > 0.001
+                        or any(abs(f32(math.sqrt(expected)) - actual) > 1e-7
                                for (_, expected), (_, actual) in
                                zip(expected_provisional, record["provisional_pages"]))):
                     raise ValueError("V151 provisional page ranking differs")
