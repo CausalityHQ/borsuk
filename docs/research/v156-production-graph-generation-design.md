@@ -70,6 +70,19 @@ request's transport cap. The registered V157 cover gate decides whether
 that exact-primary step is feasible under the same charged cap, and records
 PQ-primary overlap without treating overlap as a recall result. No serving
 query may silently substitute PQ-primary for the V154/V155 method.
+V157 subsequently measured a cap breach on 294/1,000 ReLAION-1M validation
+queries for the page-aligned all-512 SQ8 nomination phase alone. V158 then
+rejected PQ-first-100 on a paired ReLAION-100k D768 development cell:
+62.394% returned Recall@100 versus 77.302% for exact-primary, with PQ
+losing all 1,000 queries. V159 located the larger 100k exact-primary loss
+in physical admission: exact-primary pages contain 97.982% of GT100 but
+the capped plan fetches 77.302%, and the minimum 32-GET cover of all those
+primary pages exceeds 16 MiB on every query. These are used, offline
+cohorts; they invalidate dispatch of this unmodified format/plan as a
+qualified production query path. The measured 1M exact-primary method
+requires an authenticated local exact scorer or a changed charged I/O
+policy, and its page layout/format must be requalified at 100k under a
+generic recall/resource rule before fresh quality or live S3 claims.
 The current full-code router is a
 100M latency blocker: `nominate` scores every page summary, then scans
 the selected PQ codes. V156 initially qualifies only the graph/planner
