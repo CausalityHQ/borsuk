@@ -27,18 +27,22 @@ pub struct OneAttemptS3 {
     store: AmazonS3,
 }
 
+fn one_attempt_builder(bucket: &str, region: &str) -> Result<AmazonS3Builder, RangeFetchError> {
+    if bucket.is_empty() || region.is_empty() {
+        return Err(RangeFetchError::UnexpectedMetadata);
+    }
+    Ok(AmazonS3Builder::new()
+        .with_bucket_name(bucket)
+        .with_region(region)
+        .with_retry(RetryConfig {
+            max_retries: 0,
+            ..Default::default()
+        }))
+}
+
 impl OneAttemptS3 {
     pub fn new(bucket: &str, region: &str) -> Result<Self, RangeFetchError> {
-        if bucket.is_empty() || region.is_empty() {
-            return Err(RangeFetchError::UnexpectedMetadata);
-        }
-        let store = AmazonS3Builder::new()
-            .with_bucket_name(bucket)
-            .with_region(region)
-            .with_retry(RetryConfig {
-                max_retries: 0,
-                ..Default::default()
-            })
+        let store = one_attempt_builder(bucket, region)?
             .build()
             .map_err(RangeFetchError::Store)?;
         Ok(Self { store })
@@ -137,6 +141,192 @@ mod tests {
     use super::*;
     use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
     use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn short_tail_authority() -> (PageAuthority, Vec<u8>) {
+        let object = vec![7u8; 273 * 13];
+        let sidecar = object
+            .chunks(256 * 13)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":1,
+            "rows":273, "dimensions":1, "page_rows":256,
+            "object_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+        }))
+        .unwrap();
+        let authority = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap();
+        (authority, object)
+    }
+
+    fn http_response(
+        status: &str,
+        content_range: Option<&str>,
+        etag: &str,
+        declared_bytes: usize,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut headers = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {declared_bytes}\r\nETag: {etag}\r\nLast-Modified: Wed, 23 Sep 2026 00:00:00 GMT\r\nConnection: close\r\n"
+        );
+        if let Some(range) = content_range {
+            headers.push_str(&format!("Content-Range: {range}\r\n"));
+        }
+        headers.push_str("\r\n");
+        let mut response = headers.into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    async fn request_fixture_once(
+        authority: &PageAuthority,
+        response: Vec<u8>,
+    ) -> (Result<VerifiedRange, RangeFetchError>, Vec<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_stop = Arc::clone(&stop);
+        let server_requests = Arc::clone(&requests);
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while !server_stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                        socket
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let mut raw = Vec::new();
+                        let mut buffer = [0u8; 4096];
+                        while !raw.windows(4).any(|part| part == b"\r\n\r\n") {
+                            let count = socket.read(&mut buffer).unwrap();
+                            if count == 0 {
+                                break;
+                            }
+                            raw.extend_from_slice(&buffer[..count]);
+                            assert!(raw.len() < 64 * 1024);
+                        }
+                        server_requests
+                            .lock()
+                            .unwrap()
+                            .push(String::from_utf8(raw).unwrap());
+                        socket.write_all(&response).unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture accept failed: {error}"),
+                }
+            }
+        });
+        let store = one_attempt_builder("fixture", "eu-central-1")
+            .unwrap()
+            .with_endpoint(format!("http://{address}"))
+            .with_allow_http(true)
+            .with_access_key_id("fixture")
+            .with_secret_access_key("fixture")
+            .build()
+            .unwrap();
+        let reader = OneAttemptS3 { store };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            reader.fetch_verified_pages(
+                &Path::from("sq8.bin"),
+                authority,
+                1,
+                1,
+                "\"frozen\"",
+                17 * 13,
+            ),
+        )
+        .await
+        .expect("fixture request timed out");
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        let captured = requests.lock().unwrap().clone();
+        (result, captured)
+    }
+
+    #[tokio::test]
+    async fn real_http_range_faults_fail_closed_without_hidden_retries() {
+        let (authority, object) = short_tail_authority();
+        let tail = &object[256 * 13..];
+        let correct_range = "bytes 3328-3548/3549";
+        let good = http_response(
+            "206 Partial Content",
+            Some(correct_range),
+            "\"frozen\"",
+            tail.len(),
+            tail,
+        );
+        let (fetched, requests) = request_fixture_once(&authority, good).await;
+        assert_eq!(fetched.unwrap().bytes.as_ref(), tail);
+        assert_eq!(requests.len(), 1);
+        let request = requests[0].to_ascii_lowercase();
+        assert!(request.contains("range: bytes=3328-3548\r\n"));
+        assert!(request.contains("if-match: \"frozen\"\r\n"));
+
+        let mut changed = tail.to_vec();
+        changed[0] ^= 1;
+        let faulty = [
+            http_response(
+                "200 OK",
+                Some(correct_range),
+                "\"frozen\"",
+                tail.len(),
+                tail,
+            ),
+            http_response(
+                "206 Partial Content",
+                Some("bytes 0-220/3549"),
+                "\"frozen\"",
+                tail.len(),
+                tail,
+            ),
+            http_response(
+                "206 Partial Content",
+                Some(correct_range),
+                "\"changed\"",
+                tail.len(),
+                tail,
+            ),
+            http_response(
+                "206 Partial Content",
+                Some(correct_range),
+                "\"frozen\"",
+                tail.len(),
+                &changed,
+            ),
+            http_response(
+                "206 Partial Content",
+                Some(correct_range),
+                "\"frozen\"",
+                tail.len(),
+                &tail[..tail.len() - 1],
+            ),
+            http_response("412 Precondition Failed", None, "\"changed\"", 0, &[]),
+            http_response("500 Internal Server Error", None, "\"frozen\"", 0, &[]),
+        ];
+        for response in faulty {
+            let (result, requests) = request_fixture_once(&authority, response).await;
+            assert!(result.is_err());
+            assert_eq!(requests.len(), 1, "unexpected hidden HTTP retry");
+        }
+    }
 
     #[tokio::test]
     async fn conditional_short_tail_rejects_mutated_object() {
