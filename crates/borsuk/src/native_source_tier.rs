@@ -55,7 +55,7 @@ pub struct ScoredSourceCandidate {
 pub struct SourceReadStats {
     /// Source rows that were scored.
     pub source_rows: u64,
-    /// Verification-block reads, including repeated reads of one block.
+    /// Distinct verification-block reads during this rank call.
     pub verified_block_reads: u64,
     /// Bytes read from the local plane for block authentication.
     pub local_read_bytes: u64,
@@ -315,6 +315,7 @@ impl NativeSourceTier {
         &self,
         output: &mut [u8],
         scratch: &mut [u8],
+        cached_block: &mut Option<u64>,
         offset: u64,
         stats: &mut SourceReadStats,
     ) -> Result<(), SourceTierError> {
@@ -331,21 +332,25 @@ impl NativeSourceTier {
                 .checked_mul(block_width)
                 .ok_or(SourceTierError::Invalid("source block offset overflow"))?;
             let count = (length - block_start).min(block_width) as usize;
-            read_exact_at(&self.file, &mut scratch[..count], block_start)?;
-            let digest: [u8; 32] = Sha256::digest(&scratch[..count]).into();
-            let index = usize::try_from(block_number)
-                .map_err(|_| SourceTierError::Invalid("digest index exceeds address space"))?;
-            if self.block_digests.get(index) != Some(&digest) {
-                return Err(SourceTierError::Invalid("source block SHA-256"));
+            if *cached_block != Some(block_number) {
+                *cached_block = None;
+                read_exact_at(&self.file, &mut scratch[..count], block_start)?;
+                let digest: [u8; 32] = Sha256::digest(&scratch[..count]).into();
+                let index = usize::try_from(block_number)
+                    .map_err(|_| SourceTierError::Invalid("digest index exceeds address space"))?;
+                if self.block_digests.get(index) != Some(&digest) {
+                    return Err(SourceTierError::Invalid("source block SHA-256"));
+                }
+                stats.verified_block_reads = stats
+                    .verified_block_reads
+                    .checked_add(1)
+                    .ok_or(SourceTierError::Invalid("source block read count overflow"))?;
+                stats.local_read_bytes = stats
+                    .local_read_bytes
+                    .checked_add(count as u64)
+                    .ok_or(SourceTierError::Invalid("source local read bytes overflow"))?;
+                *cached_block = Some(block_number);
             }
-            stats.verified_block_reads = stats
-                .verified_block_reads
-                .checked_add(1)
-                .ok_or(SourceTierError::Invalid("source block read count overflow"))?;
-            stats.local_read_bytes = stats
-                .local_read_bytes
-                .checked_add(count as u64)
-                .ok_or(SourceTierError::Invalid("source local read bytes overflow"))?;
             let copy_start = offset.max(block_start);
             let copy_end = end.min(block_start + count as u64);
             let from = (copy_start - block_start) as usize;
@@ -358,9 +363,9 @@ impl NativeSourceTier {
 
     /// Exact cosine top-k within a previously fixed candidate union.
     ///
-    /// It reads one float32 row per candidate from the authenticated local
-    /// plane. Every local read is therefore part of the serving cost, even
-    /// though this method issues no S3 GET itself.
+    /// It scores one float32 row per candidate and authenticates each local
+    /// block needed by the sorted roster. Every local read is part of the
+    /// serving cost, though this method issues no S3 GET itself.
     pub fn rank_exact(
         &self,
         query: &[f32],
@@ -406,8 +411,11 @@ impl NativeSourceTier {
             .map_err(|_| SourceTierError::Invalid("row width exceeds address space"))?;
         let mut bytes = vec![0_u8; width];
         let mut scratch = vec![0_u8; self.verification_block_bytes];
+        let mut cached_block = None;
         let mut stats = SourceReadStats::default();
-        for candidate in candidates {
+        let mut ordered = candidates.to_vec();
+        ordered.sort_unstable_by_key(|candidate| candidate.ordinal);
+        for candidate in &ordered {
             if candidate.ordinal >= self.rows
                 || !ids.insert(candidate.source_id)
                 || !ordinals.insert(candidate.ordinal)
@@ -419,7 +427,13 @@ impl NativeSourceTier {
                 .checked_mul(width as u64)
                 .and_then(|body_offset| body_offset.checked_add(HEADER_BYTES))
                 .ok_or(SourceTierError::Invalid("source row offset overflow"))?;
-            self.read_verified_row(&mut bytes, &mut scratch, offset, &mut stats)?;
+            self.read_verified_row(
+                &mut bytes,
+                &mut scratch,
+                &mut cached_block,
+                offset,
+                &mut stats,
+            )?;
             let authenticated_id = u64::from_le_bytes(bytes[..8].try_into().unwrap());
             if authenticated_id != candidate.source_id {
                 return Err(SourceTierError::Invalid("candidate/source ID mismatch"));
@@ -566,8 +580,8 @@ mod tests {
             .unwrap();
         assert_eq!(ranked[0].source_id, 9);
         assert_eq!(cost.source_rows, 2);
-        assert_eq!(cost.verified_block_reads, 2);
-        assert_eq!(cost.local_read_bytes, 192);
+        assert_eq!(cost.verified_block_reads, 1);
+        assert_eq!(cost.local_read_bytes, 96);
     }
 
     #[test]
@@ -663,8 +677,11 @@ mod tests {
                 source_id: 1,
             },
         ];
-        let result = tier.rank_exact(&query, &candidates, 2).unwrap();
+        let (result, stats) = tier.rank_exact_with_stats(&query, &candidates, 2).unwrap();
         assert_eq!(result[0].source_id, 1);
+        assert_eq!(stats.source_rows, 2);
+        assert_eq!(stats.verified_block_reads, 3);
+        assert_eq!(stats.local_read_bytes, 8_272);
         let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         file.write_all_at(&2.0_f32.to_le_bytes(), HEADER_BYTES + 2 * (8 + 4096) - 4)
             .unwrap();
