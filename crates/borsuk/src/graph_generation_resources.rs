@@ -187,9 +187,11 @@ mod tests {
         assert_eq!(estimate.router_code_bytes, 6_400_000_000);
         assert_eq!(estimate.router_summary_bytes, 2_400_000_000);
         assert_eq!(estimate.decoded_centroid_bytes, 9_612_500_000);
-        assert!(estimate.steady_payload_bytes > 20_000_000_000);
-        assert!(estimate.hydration_peak_bytes > estimate.steady_payload_bytes);
+        assert_eq!(estimate.source_digest_bytes, 9_399_424);
+        assert_eq!(estimate.steady_payload_bytes, 20_838_317_000);
+        assert_eq!(estimate.hydration_peak_bytes, 28_491_734_984);
         assert_eq!(estimate.transient_limit_bytes, 256 * 1024 * 1024);
+        assert_eq!(estimate.total_peak_bytes, 28_760_170_440);
     }
 
     #[test]

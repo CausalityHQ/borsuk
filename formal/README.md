@@ -1,5 +1,17 @@
 # OPQ8 proofs
 
+`GraphGenerationResources.lean` models the checked V156 graph-generation
+payload estimator. It proves that a graph preflight count no larger than its
+authenticated declaration keeps known steady payload within the model, that
+admission covers the modeled steady payload, and that increasing query
+concurrency or graph allowance cannot reduce the modeled peak. The pinned
+100M D768 example matches the Rust unit test exactly: 20,838,317,000 bytes
+steady and 28,760,170,440 bytes at the specified loading/concurrency peak.
+These are conditional arithmetic projections; the artifact loader still has
+to authenticate inputs and refine the model, and measured RAM, latency and
+recall remain empirical gates. Check with `lean GraphGenerationResources.lean`
+from this directory using the pinned toolchain.
+
 `PageSeededGraphBounds.lean` proves V151's conditional 16P distinct
 unit-evaluation cap from an 8P seed bound and an 8P discovery bound,
 the 5P exact candidate-page cap, and the provisional page-minimum
