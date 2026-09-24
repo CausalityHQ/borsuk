@@ -69,10 +69,18 @@ fixed capped control was faster at C1 (23.108-ms p95 versus the candidate's
 48.006-ms serial p95) with lower 98.827% exact-source recall; V136 did not
 rebenchmark that control concurrently.
 
-Next, run an actual S3 Range transport screen from this frozen route and
-compare paired current candidate/control GETs, bytes, p50/p95/p99, and
-charged memory. Separately replace the flat PQ64 router's constant-fraction
-row scan and the constrained weighted-planner path before matched fresh
-ReLAION/deep-image 1M gates. No 10M/100M or commercial performance claim
-follows from this 100k local result. Memory policy should scale smoothly
-with vector count and requested recall, without corpus-specific branches.
+The existing V132 live-S3 replay already fetched this same V122 sealed
+candidate/control range schedule, on this generation and query cohort:
+candidate/control p95 was 152.858/75.625 ms. V135 verified all dynamically
+planned ranges equal those sealed ranges. That earlier result excluded online
+router/planner work and belongs to its historical source revision, so it
+cannot be spliced into V136 timing as a new measurement. Repeating the
+unchanged S3 schedule would not test a material I/O revision. The next
+transport gate must first develop a **generic selective range schedule**
+that cuts response bytes while retaining the ≥99.5% exact-source target on
+reused development data, then preregister a fresh paired live-S3 cell.
+Separately replace the flat PQ64 router's constant-fraction row scan and
+the constrained weighted-planner path before matched fresh ReLAION/deep-image
+1M gates. No 10M/100M or commercial performance claim follows from this
+100k local result. Memory policy should scale smoothly with vector count and
+requested recall, without corpus-specific branches.
