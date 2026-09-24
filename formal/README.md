@@ -1,5 +1,17 @@
 # OPQ8 proofs
 
+`ConditionalRecallWindow.lean` proves a per-query lower bound on true
+top-100 capture under explicit data premises. If each true top-100 row's
+surrogate score has at most `error` upward error, the nominee threshold
+is at least the exact top-100 cutoff minus `error`, and an authenticated
+complete source roster has at most `k` omitted rows within the nominee
+threshold plus `2 × error`, then the selected rows contain at least
+`100 − k` true top-100 rows. This bound needs no independence assumption.
+Lean does not derive the error bound, threshold relation, roster
+completeness, near-window count, or serving latency from the V168 PQ
+scores. Those remain data and implementation obligations. Run
+`lean ConditionalRecallWindow.lean` with the pinned toolchain.
+
 `SmoothPageBudget.lean` proves the exact 32-row-unit accounting for the
 V160/V163/V164 D768 SQ8 layout: a 512-row full page is 399,360 bytes, the
 V164 1M final page is 49,920 bytes, and the V160/V163 100k final page is
