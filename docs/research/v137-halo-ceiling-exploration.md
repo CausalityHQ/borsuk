@@ -60,3 +60,17 @@ outside its fetched ranges and in unvoted pages. Thus the 100k control miss
 comes from unvoted-page discovery, not the GET/byte cap or SQ8 expansion
 width. This is a cohort-specific causal diagnosis; ReLAION-1M may be
 cap-bound for a different reason and requires its own authenticated replay.
+
+As a cross-corpus **structural** check, we independently recounted the
+complete V116 ReLAION-1M **used validation-1000** Rust replay (13,455,525
+bytes, SHA-256
+`3bfd155ac5f9e1b7aacbc263e1732e2314c9722f235d3454e0f17d0c6bc3c960`)
+with `scripts/v137_v116_vote_inventory.py`. There were 59,340 voted pages
+across 1,000 queries, p50/p95 51/131 per query. The capped control did not
+fetch 10,804 voted pages; the candidate did not fetch 8,856. Both dropped
+votes on 294 queries. The control used all 32 GETs on 398 queries and the
+candidate on 250. These are **vote and cap counts**, not GT miss attribution
+or a matched current-method comparison: V116 has a different D768 layout
+and earlier source revision. They show why blindly applying the 100k D96
+halo widths at 1M is unjustified. One policy must handle unvoted-page
+discovery at 100k and budgeted vote selection at D768 1M.
