@@ -1,6 +1,7 @@
 //! Generation-bound local SQ8 placement with authenticated disk block reads.
 
 use crate::exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError, score_nominees};
+use crate::sq8_page_authority::{PageAuthority, PageError};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -53,6 +54,8 @@ pub enum MirrorError {
     HashMismatch,
     /// A query-time block differs from its authenticated digest.
     BlockCorrupt,
+    /// The requested physical page span or its content failed verification.
+    Page(PageError),
     /// The local filesystem returned an error.
     Io(io::Error),
     /// The exact row scorer rejected query or record data.
@@ -66,6 +69,7 @@ impl fmt::Display for MirrorError {
             Self::InvalidPlane => write!(output, "invalid SQ8 mirror plane"),
             Self::HashMismatch => write!(output, "SQ8 mirror hash mismatch"),
             Self::BlockCorrupt => write!(output, "SQ8 mirror block corrupt"),
+            Self::Page(error) => write!(output, "SQ8 page: {error:?}"),
             Self::Io(error) => write!(output, "SQ8 mirror I/O: {error}"),
             Self::Score(error) => write!(output, "SQ8 mirror score: {error:?}"),
         }
@@ -98,6 +102,15 @@ pub struct ExactSq8Mirror {
     manifest: MirrorManifest,
     backing: Backing,
     object_bytes: usize,
+}
+
+/// An authenticated, half-open physical byte range read from the local SQ8
+/// placement. `verified_block_reads` counts disk verification blocks; RAM
+/// reads have no query-time disk verification.
+pub struct LocalVerifiedRange {
+    pub start: usize,
+    pub bytes: Vec<u8>,
+    pub verified_block_reads: usize,
 }
 
 fn valid_hash(value: &str) -> bool {
@@ -225,6 +238,63 @@ impl ExactSq8Mirror {
         self.manifest.generation
     }
 
+    /// Read a complete inclusive span of SQ8 pages from the pinned local
+    /// placement. File reads verify every touched 4 KiB block, including
+    /// bytes outside the page span. Both placements verify the requested page
+    /// digests before the bytes can be ranked.
+    pub fn read_verified_pages(
+        &self,
+        pages: &PageAuthority,
+        first_page: usize,
+        last_page: usize,
+        max_bytes: usize,
+    ) -> Result<LocalVerifiedRange, MirrorError> {
+        if self.manifest.generation != pages.generation()
+            || self.manifest.geometry.rows != pages.rows()
+            || self.manifest.geometry.dimensions != pages.dimensions()
+            || self.manifest.object_sha256 != pages.object_sha256()
+        {
+            return Err(MirrorError::InvalidManifest);
+        }
+        let range = pages
+            .byte_range(first_page, last_page)
+            .map_err(MirrorError::Page)?;
+        let length = range.end - range.start;
+        if length > max_bytes {
+            return Err(MirrorError::InvalidPlane);
+        }
+        let (bytes, verified_block_reads) = match &self.backing {
+            Backing::Ram(plane) => (plane[range.clone()].to_vec(), 0),
+            Backing::File { file, digests } => {
+                let mut output = vec![0u8; length];
+                let first_block = range.start / BLOCK_BYTES;
+                let last_block = (range.end - 1) / BLOCK_BYTES;
+                for block in first_block..=last_block {
+                    let block_start = block * BLOCK_BYTES;
+                    let block_len = (self.object_bytes - block_start).min(BLOCK_BYTES);
+                    let mut data = [0u8; BLOCK_BYTES];
+                    read_exact_at(file, &mut data[..block_len], block_start)?;
+                    if Sha256::digest(&data[..block_len]).as_slice() != digests[block] {
+                        return Err(MirrorError::BlockCorrupt);
+                    }
+                    let copy_start = range.start.max(block_start);
+                    let copy_end = range.end.min(block_start + block_len);
+                    output[copy_start - range.start..copy_end - range.start]
+                        .copy_from_slice(&data[copy_start - block_start..copy_end - block_start]);
+                }
+                (output, last_block - first_block + 1)
+            }
+        };
+        pages
+            .verify_payload(first_page, last_page, &bytes)
+            .map_err(MirrorError::Page)?;
+        Ok(LocalVerifiedRange {
+            start: range.start,
+            bytes,
+            verified_block_reads,
+        })
+    }
+
     /// Score nominated rows after verifying any local file blocks read.
     pub fn score(
         &self,
@@ -311,5 +381,97 @@ impl ExactSq8Mirror {
                 Ok(scored)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+
+    #[test]
+    fn local_page_ranges_preserve_identity_caps_and_detect_late_corruption() {
+        let directory = tempfile::tempdir().unwrap();
+        let object_path = directory.path().join("sq8.bin");
+        let digest_path = directory.path().join("blocks.bin");
+        let object = (0..513 * 13)
+            .map(|position| (position % 251) as u8)
+            .collect::<Vec<_>>();
+        let block_digests = object
+            .chunks(BLOCK_BYTES)
+            .flat_map(|block| Sha256::digest(block).to_vec())
+            .collect::<Vec<_>>();
+        let page_digests = object
+            .chunks(256 * 13)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        fs::write(&object_path, &object).unwrap();
+        fs::write(&digest_path, &block_digests).unwrap();
+        let object_sha = hash_bytes(&object);
+        let mirror_manifest = MirrorManifest {
+            format_version: 1,
+            generation: 7,
+            max_nominees: 1,
+            geometry: Sq8Geometry {
+                rows: 513,
+                dimensions: 1,
+            },
+            object_sha256: object_sha.clone(),
+            block_digest_sha256: hash_bytes(&block_digests),
+            low: vec![0.0],
+            step: vec![1.0],
+        };
+        let page_manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2",
+            "generation":7,"rows":513,"dimensions":1,"page_rows":256,
+            "object_sha256":object_sha,
+            "page_digest_sha256":hash_bytes(&page_digests),
+        }))
+        .unwrap();
+        let pages = PageAuthority::load(&page_manifest, &hash_bytes(&page_manifest), &page_digests)
+            .unwrap();
+        let ram = ExactSq8Mirror::open(
+            &object_path,
+            &digest_path,
+            mirror_manifest.clone(),
+            Placement::Ram,
+        )
+        .unwrap();
+        let file =
+            ExactSq8Mirror::open(&object_path, &digest_path, mirror_manifest, Placement::File)
+                .unwrap();
+        let expected = &object[256 * 13..512 * 13];
+        let from_ram = ram
+            .read_verified_pages(&pages, 1, 1, expected.len())
+            .unwrap();
+        let from_file = file
+            .read_verified_pages(&pages, 1, 1, expected.len())
+            .unwrap();
+        assert_eq!(from_ram.start, 256 * 13);
+        assert_eq!(from_ram.bytes, expected);
+        assert_eq!(from_ram.verified_block_reads, 0);
+        assert_eq!(from_file.bytes, expected);
+        assert_eq!(from_file.verified_block_reads, 2);
+        assert!(matches!(
+            file.read_verified_pages(&pages, 1, 1, expected.len() - 1),
+            Err(MirrorError::InvalidPlane)
+        ));
+        assert!(matches!(
+            file.read_verified_pages(&pages, 2, 3, object.len()),
+            Err(MirrorError::Page(PageError::InvalidRange))
+        ));
+
+        let mut changed = object.clone();
+        changed[4097] ^= 1;
+        fs::write(&object_path, changed).unwrap();
+        assert!(matches!(
+            file.read_verified_pages(&pages, 1, 1, expected.len()),
+            Err(MirrorError::BlockCorrupt)
+        ));
+        assert_eq!(
+            ram.read_verified_pages(&pages, 1, 1, expected.len())
+                .unwrap()
+                .bytes,
+            expected
+        );
     }
 }
