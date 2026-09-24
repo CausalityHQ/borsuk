@@ -51,6 +51,17 @@ seconds for 1,000 queries and peaked at 8,991,004 KiB RSS; wide SQ8 replay
 took 67.13 seconds and peaked at 2,142,976 KiB. These batch observations do
 not measure live latency, throughput, charged serving RAM or 100M capacity.
 
+A separate read-only recount of the sealed V121 `requests.jsonl` (SHA-256
+`31626934383e80ae683bbb21298d019d5b7b985dbc80f8542d4fc363db58818f`)
+and `rust-replay.jsonl` (SHA-256
+`ddc9af991bdc6d3ef77d34a156994daa43aeb78f67f18de2cd0dc5ebb93abe91`)
+mapped the 512 physical nominees to V120's 256-row pages. They spanned 3 to
+368 distinct pages per query, with median 130 and p95 266; the mean was
+136.336. This is measured page spread for the frozen development router.
+One S3 GET per nominee page would exceed a 32-GET cap for many queries.
+Coalesced S3 source ranges, a local SSD/RAM source tier, or a revised router
+must each be measured under its own complete I/O and memory budget.
+
 **Decision and next gate:** the corrected cosine score representation is a
 candidate for a generic accurate rerank tier, but V121/V123 are not qualified
 for production. Freeze the exact score semantics and test a matched
