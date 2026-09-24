@@ -1,5 +1,6 @@
 //! Exact, bounded contiguous page intervals for a one-object dense read.
 
+use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 
 /// Physical units for pages of one contiguous object.
@@ -49,6 +50,84 @@ pub enum PlanError {
     InconsistentWitness,
 }
 
+/// Build the source-only primary/secondary page vote plan from physical SQ8
+/// row ordinals. The primary weight is derived from the nominee roster size,
+/// so one primary vote dominates every secondary vote at any vector count.
+/// Page and byte budgets are explicit policy inputs; no corpus-size branch is
+/// hidden in the planner.
+pub fn plan_weighted_nominee_pages(
+    rows: usize,
+    dimensions: usize,
+    page_rows: usize,
+    primary: &[usize],
+    nominees: &[usize],
+    max_gets: usize,
+    max_bytes: usize,
+) -> Result<(Vec<(usize, u32)>, IntervalPlan), PlanError> {
+    const UNIT_ROWS: usize = 32;
+    if rows == 0
+        || dimensions == 0
+        || page_rows == 0
+        || page_rows % UNIT_ROWS != 0
+        || primary.is_empty()
+        || nominees.is_empty()
+        || max_gets == 0
+    {
+        return Err(PlanError::InvalidGeometry);
+    }
+    let row_bytes = dimensions
+        .checked_add(12)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    let unit_bytes = UNIT_ROWS
+        .checked_mul(row_bytes)
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    let primary_set = primary.iter().copied().collect::<HashSet<_>>();
+    let nominee_set = nominees.iter().copied().collect::<HashSet<_>>();
+    if primary_set.len() != primary.len()
+        || nominee_set.len() != nominees.len()
+        || !primary_set.is_subset(&nominee_set)
+        || nominees.iter().any(|&ordinal| ordinal >= rows)
+    {
+        return Err(PlanError::InvalidWeights);
+    }
+    let primary_weight = nominees
+        .len()
+        .checked_add(1)
+        .and_then(|weight| u32::try_from(weight).ok())
+        .ok_or(PlanError::ArithmeticOverflow)?;
+    let mut weights = BTreeMap::<usize, u32>::new();
+    for &ordinal in nominees {
+        let weight = weights.entry(ordinal / page_rows).or_default();
+        *weight = weight
+            .checked_add(if primary_set.contains(&ordinal) {
+                primary_weight
+            } else {
+                1
+            })
+            .ok_or(PlanError::ArithmeticOverflow)?;
+    }
+    let page_count = rows.div_ceil(page_rows);
+    let final_rows = rows - (page_count - 1) * page_rows;
+    let votes = weights.into_iter().collect::<Vec<_>>();
+    let plan = plan_weighted_intervals(
+        normalize_budget_lattice(IntervalGeometry {
+            page_count,
+            full_page_units: page_rows / UNIT_ROWS,
+            last_page_bytes: final_rows
+                .checked_mul(row_bytes)
+                .ok_or(PlanError::ArithmeticOverflow)?,
+            unit_bytes,
+            max_gets,
+            max_units: max_bytes / unit_bytes,
+        })?,
+        &votes,
+    )?;
+    if plan.bytes > max_bytes || plan.ranges.len() > max_gets || plan.ranges.is_empty() {
+        return Err(PlanError::InconsistentWitness);
+    }
+    Ok((votes, plan))
+}
+
 impl std::fmt::Display for PlanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "physical interval plan error: {self:?}")
@@ -63,14 +142,15 @@ impl std::error::Error for PlanError {}
 /// `ceil(last_page_bytes / unit_bytes)`. Every feasible plan uses a multiple
 /// of their gcd, so dividing all charges and the budget by it preserves the
 /// exact feasible plans and physical byte ranges while shrinking DP state.
-pub fn normalize_budget_lattice(
-    geometry: IntervalGeometry,
-) -> Result<IntervalGeometry, PlanError> {
-    let full_page_bytes = geometry.full_page_units
+pub fn normalize_budget_lattice(geometry: IntervalGeometry) -> Result<IntervalGeometry, PlanError> {
+    let full_page_bytes = geometry
+        .full_page_units
         .checked_mul(geometry.unit_bytes)
         .ok_or(PlanError::ArithmeticOverflow)?;
-    if geometry.full_page_units == 0 || geometry.unit_bytes == 0
-        || geometry.last_page_bytes == 0 || geometry.last_page_bytes > full_page_bytes
+    if geometry.full_page_units == 0
+        || geometry.unit_bytes == 0
+        || geometry.last_page_bytes == 0
+        || geometry.last_page_bytes > full_page_bytes
     {
         return Err(PlanError::InvalidGeometry);
     }
@@ -81,7 +161,8 @@ pub fn normalize_budget_lattice(
     }
     Ok(IntervalGeometry {
         full_page_units: geometry.full_page_units / left,
-        unit_bytes: geometry.unit_bytes
+        unit_bytes: geometry
+            .unit_bytes
             .checked_mul(left)
             .ok_or(PlanError::ArithmeticOverflow)?,
         max_units: geometry.max_units / left,
@@ -115,7 +196,8 @@ pub fn plan_weighted_intervals(
     {
         return Err(PlanError::InvalidGeometry);
     }
-    let full_page_bytes = geometry.full_page_units
+    let full_page_bytes = geometry
+        .full_page_units
         .checked_mul(geometry.unit_bytes)
         .ok_or(PlanError::ArithmeticOverflow)?;
     if geometry.last_page_bytes > full_page_bytes {
@@ -291,9 +373,13 @@ pub fn plan_weighted_intervals(
         .checked_mul(geometry.unit_bytes)
         .ok_or(PlanError::ArithmeticOverflow)?;
     let selected_final_page = ranges.iter().any(|range| range.end == object_bytes);
-    let final_page_slack = last_page_units * geometry.unit_bytes
-        - geometry.last_page_bytes;
-    let selected_bytes = charged_bytes - if selected_final_page { final_page_slack } else { 0 };
+    let final_page_slack = last_page_units * geometry.unit_bytes - geometry.last_page_bytes;
+    let selected_bytes = charged_bytes
+        - if selected_final_page {
+            final_page_slack
+        } else {
+            0
+        };
     let witnessed_score = weights.iter().try_fold(0u64, |score, &(page, weight)| {
         let offset = page
             .checked_mul(full_page_bytes)
@@ -326,8 +412,10 @@ pub fn plan_weighted_intervals(
 
 #[cfg(test)]
 mod tests {
-    use super::{IntervalGeometry, PlanError, normalize_budget_lattice,
-        plan_weighted_intervals};
+    use super::{
+        IntervalGeometry, PlanError, normalize_budget_lattice, plan_weighted_intervals,
+        plan_weighted_nominee_pages,
+    };
 
     fn geometry(page_count: usize, max_gets: usize, max_units: usize) -> IntervalGeometry {
         IntervalGeometry {
@@ -376,11 +464,14 @@ mod tests {
             unit_bytes: 32 * 108,
             max_gets: 32,
             max_units: 16_777_216 / (32 * 108),
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(geometry.full_page_units, 2);
         assert_eq!(geometry.max_units, 1_213);
-        assert_eq!((geometry.max_gets + 1) * (geometry.max_units + 1) * 368,
-                   14_742_816);
+        assert_eq!(
+            (geometry.max_gets + 1) * (geometry.max_units + 1) * 368,
+            14_742_816
+        );
     }
 
     fn brute_force(weights: &[(usize, u32)], pages: usize, gets: usize, units: usize) -> u64 {
@@ -489,7 +580,8 @@ mod tests {
                 max_units: 1,
             },
             &[(1, 1)],
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(plan.ranges, vec![256 * 780..273 * 780]);
         assert_eq!(plan.bytes, 17 * 780);
     }
@@ -522,6 +614,41 @@ mod tests {
         assert_eq!(
             plan_weighted_intervals(geometry(7, 2, 12), &[(2, 0)]),
             Err(PlanError::InvalidWeights)
+        );
+    }
+
+    #[test]
+    fn nominee_votes_preserve_primary_priority_and_short_tail() {
+        let (votes, plan) = plan_weighted_nominee_pages(
+            416,
+            768,
+            256,
+            &[0, 256, 300],
+            &[0, 1, 256, 257, 300],
+            32,
+            16_777_216,
+        )
+        .unwrap();
+        assert_eq!(votes, vec![(0, 7), (1, 13)]);
+        assert_eq!(plan.score, 20);
+        assert_eq!(plan.ranges, vec![0..416 * 780]);
+        assert_eq!(plan.bytes, 416 * 780);
+
+        assert_eq!(
+            plan_weighted_nominee_pages(
+                416,
+                768,
+                256,
+                &[0, 256],
+                &[0, 1, 256, 256],
+                32,
+                16_777_216
+            ),
+            Err(PlanError::InvalidWeights),
+        );
+        assert_eq!(
+            plan_weighted_nominee_pages(416, 768, 256, &[0, 300], &[0, 1, 256], 32, 16_777_216),
+            Err(PlanError::InvalidWeights),
         );
     }
 }
