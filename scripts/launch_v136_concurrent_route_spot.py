@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import shlex
 import subprocess
+import tarfile
 import tempfile
 import time
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ GENERATION_TERMINAL_SHA = (
     "0ec4b70965d11c83eec1c5f0ee70c2f181fb2954df1429c8f02f57837842f4a6"
 )
 TAG = "borsuk-v136-concurrent-route"
+RUNNER = "scripts/run_v136_concurrent_route_remote.sh"
 
 
 @dataclass(frozen=True)
@@ -119,8 +122,7 @@ aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors
 [ "$(stat -c%s source.tar.gz)" = "{plan.archive_bytes}" ]
 printf '%s  source.tar.gz\\n' {plan.archive_sha256} | sha256sum -c -
 mkdir repo && tar -xzf source.tar.gz -C repo
-trap - EXIT
-exec bash repo/scripts/run_v136_hull_route_remote.sh
+exec bash repo/{RUNNER}
 """
 
 
@@ -192,11 +194,17 @@ def check_source(s3: object, plan: Plan) -> None:
     response = s3.get_object(Bucket=bucket, Key=key)
     sha = hashlib.sha256()
     count = 0
+    archive = io.BytesIO()
     for block in response["Body"].iter_chunks(chunk_size=4 * 1024 * 1024):
         sha.update(block)
         count += len(block)
+        archive.write(block)
     if count != plan.archive_bytes or sha.hexdigest() != plan.archive_sha256:
         raise ValueError("source archive differs")
+    archive.seek(0)
+    with tarfile.open(fileobj=archive, mode="r:gz") as source:
+        if RUNNER not in source.getnames():
+            raise ValueError("source archive lacks V136 runner")
     for key, expected_sha in (
         (f"{GENERATION_PREFIX}/generation.json", GENERATION_SHA),
         (f"{GENERATION_PREFIX}/terminal.json", GENERATION_TERMINAL_SHA),
