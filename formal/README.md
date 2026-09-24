@@ -1,5 +1,13 @@
 # OPQ8 proofs
 
+`IntervalLatticeNormalization.lean` proves the arithmetic behind V121's D96
+planner-state reduction: when full and final-page charges share a positive
+divisor, dividing those charges and the budget preserves feasible charged
+plans and physical bytes. It checks the normalized state product of
+14,742,816 at the separately observed 368-page maximum. Rust implementation
+refinement, query quality, planner CPU latency and arbitrary final-page
+complexity remain separate obligations.
+
 `PhysicalIntervalBudget.lean` proves exact SQ8 page-to-byte conversion for
 the V63/V70 one-object layout used by V110/V111: 336 units of 49,920 bytes
 fit under 16 MiB, and 337 do not. Given authenticated page and GET counts,
