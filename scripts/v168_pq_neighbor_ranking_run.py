@@ -97,7 +97,10 @@ def screen_decision(rows: list[dict]) -> dict:
                       for budget in (16, 64)))
     return {"decision": ("advance-to-planner" if passed else
                          "uninformative" if positive_rows == 0 else "killed"),
-            "positive_rows": positive_rows, "captures": totals,
+            "positive_rows": positive_rows,
+            "captures": {kind: {str(budget): count
+                                 for budget, count in counts.items()}
+                         for kind, counts in totals.items()},
             "gain_32": gain, "bootstrap_total_95": list(interval),
             "wins": wins, "ties": ties, "losses": losses}
 

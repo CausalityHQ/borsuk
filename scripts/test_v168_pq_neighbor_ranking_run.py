@@ -30,6 +30,7 @@ class NeighborRankingTests(unittest.TestCase):
         summary = screen_decision(rows)
         self.assertEqual(summary["decision"], "advance-to-planner")
         self.assertEqual(summary["gain_32"], 128)
+        self.assertEqual(summary, json.loads(json.dumps(summary)))
         for row in rows:
             row["direct"][16] = 0
         self.assertEqual(screen_decision(rows)["decision"], "killed")
