@@ -39,23 +39,37 @@ rows. A unit's feature is its minimum row score. Assign rank weight
 Add an exact-primary priority greater than the sum of all candidate weights
 to each primary unit. Maximize total weight with the existing exact interval
 DP, capped **per query** at V163's GET count and full 32-row unit count.
+Plan a second, PQ-free arm over the **identical 32-row candidate universe**,
+primary units, DP, and per-query resource caps. Its feature is the best
+(lowest) nominee rank in a unit; an adjacent-only unit takes the best rank
+from its immediate neighboring nominee units. Break ties by physical unit.
+This isolates the direct PQ score from the change from V163's 512-row pages
+to 32-row units. Both arms must be sealed before truth is downloaded.
 Independently recount that the resulting plan covers every primary unit,
 never exceeds V163's GETs or bytes, and obeys 32 GET/16 MiB global caps.
 The priority is an implementation device, not a learned score; the checker
-must reject any missing primary. Plan and source-feature seals are written
-before truth is downloaded or opened.
+must reject any missing primary. The GT-blind plan and its seal are uploaded
+to distinct immutable S3 keys before truth is downloaded or opened. The
+terminal binds their hashes to the final checked artifacts.
 
 ## Return gate and stop rule
 
 Score only fetched SQ8 rows with the frozen V163 quantizer and deterministic
-top-100 rule. Compare each query with V163's closed returned IDs and GT100,
-including wins/ties/losses, total hits, p05, physical GT coverage, bytes and
-GETs. The screen advances only if total returned GT100 hits are at least
-**99,347** (25 above V163's verified 99,322), p05 hits/query is at least
-**98**, every primary remains covered, and no query exceeds its paired V163
-GET or byte amount. This 25-hit threshold was fixed before new returns were
-computed. If it fails, retain raw evidence and change the responsible
-feature, threshold, or planner layer before another test. Even a pass
+top-100 rule. Compare both arms per query with V163's closed returned IDs
+and GT100, including wins/ties/losses, total hits, p05, physical GT
+coverage, bytes and GETs. The direct PQ feature advances only if its total
+returned GT100 hits are at least **99,347** (25 above V163's verified
+99,322), at least **10 hits above the matched neighbor-rank arm**, and the
+paired query bootstrap 95% interval for the total gain over that arm has a
+strictly positive lower endpoint. Use 10,000 PCG64(170) resamples and the
+nearest-rank 2.5%/97.5% endpoints. Its p05 hits/query must be at least
+**98** and no lower than the neighbor-rank arm. Every primary must remain
+covered, and neither arm may exceed its paired V163 GET or byte amount.
+These thresholds were fixed before new returns were computed. A V163 gain
+without a matched-arm gain is a 32-row planning result, not evidence that
+the direct PQ feature transfers. If the gate fails, retain raw evidence and
+change the responsible feature, threshold, or planner layer before another
+test. Even a pass
 requires an untouched real-query holdout, an independent 1M comparison,
 live-S3 latency, charged RAM, and recovery gates before production selection.
 
