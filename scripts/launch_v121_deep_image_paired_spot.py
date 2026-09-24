@@ -19,6 +19,9 @@ BUCKET = "borsuk-bench-453182569524-euc1"
 INDEX_PREFIX = (f"s3://{BUCKET}/research/v120-deep-image-index/"
                 "b919685cf1db6c14912c2118d5226c0fb426226b/runs/"
                 "v120-20260924T004145Z/a0001")
+SCREEN_COMMIT = "afe07cb5a9ba8518263375595f589639fdf3f4f1"
+SCREEN_PREFIX = (f"s3://{BUCKET}/research/v122-deep-image-100k/"
+                 f"{SCREEN_COMMIT}/runs/v122-20260924T011355Z/a0001")
 STAGE_PREFIX = (f"s3://{BUCKET}/publication/v3/20260812/datasets/"
                 "deep-image-96/attempts/0001/materialized")
 QUERY_URI = STAGE_PREFIX + "/test.parquet"
@@ -62,6 +65,44 @@ def validate_plan(plan: Plan) -> None:
             or plan.instance_type != "c7i.12xlarge"
             or plan.wall_seconds != 7200):
         raise ValueError("V121 immutable paired plan differs")
+
+
+def validate_v122_gate(terminal: dict, summary_raw: bytes) -> str:
+    """Authenticate the preregistered development gate before untouched reads."""
+    artifact = terminal.get("artifacts", {}).get("summary.json", {})
+    if (terminal.get("schema") != "borsuk-v122-deep-image-100k-spot-v1"
+            or terminal.get("source_commit") != SCREEN_COMMIT
+            or terminal.get("status") != "complete"
+            or terminal.get("phase") != "complete"
+            or terminal.get("exit_code") != 0
+            or not terminal.get("instance_id")
+            or artifact.get("bytes") != len(summary_raw)
+            or artifact.get("sha256") != hashlib.sha256(summary_raw).hexdigest()):
+        raise ValueError("V122 sealed terminal differs")
+    summary = json.loads(summary_raw)
+    hits = summary.get("returned_hits", {})
+    p05 = summary.get("p05_hits", {})
+    sub90 = summary.get("sub90_queries", {})
+    gets = summary.get("maximum_gets", {})
+    byte_counts = summary.get("maximum_bytes", {})
+    if (summary.get("schema") != "borsuk-v122-deep-image-100k-development-v1"
+            or summary.get("dataset") != "deep-image-96-angular-random-100k"
+            or summary.get("split") != "test-ordinals-9000-through-9999"
+            or summary.get("rows") != 100_000
+            or summary.get("dimensions") != 96
+            or summary.get("query_count") != 1_000
+            or summary.get("qualifies_100k_screen") is not True
+            or summary.get("live_s3_measured") is not False
+            or not 99_000 <= hits.get("candidate", -1) <= 100_000
+            or not 0 <= hits.get("baseline", -1) <= hits["candidate"]
+            or not 90 <= p05.get("candidate", -1) <= 100
+            or not 0 <= p05.get("baseline", -1) <= p05["candidate"]
+            or not 0 <= sub90.get("candidate", -1) <= sub90.get("baseline", -1)
+            or any(not 1 <= gets.get(arm, -1) <= 32 for arm in ("candidate", "baseline"))
+            or any(not 1 <= byte_counts.get(arm, -1) <= 16_777_216
+                   for arm in ("candidate", "baseline"))):
+        raise ValueError("V122 100k quality gate differs")
+    return terminal["instance_id"]
 
 
 def user_data(plan: Plan, index_terminal_sha256: str) -> str:
@@ -155,11 +196,27 @@ def launch_and_monitor(plan: Plan) -> dict:
     index_bucket, index_prefix = _location(INDEX_PREFIX)
     raw = s3.get_object(Bucket=index_bucket,
                         Key=f"{index_prefix}/terminal.json")["Body"].read()
-    validate_terminal(json.loads(raw))
+    index_terminal = json.loads(raw)
+    validate_terminal(index_terminal)
     index_terminal_sha256 = hashlib.sha256(raw).hexdigest()
+    screen_bucket, screen_prefix = _location(SCREEN_PREFIX)
+    screen_raw = s3.get_object(Bucket=screen_bucket,
+                       Key=f"{screen_prefix}/terminal.json")["Body"].read()
+    screen_summary_raw = s3.get_object(Bucket=screen_bucket,
+                       Key=f"{screen_prefix}/artifacts/summary.json")["Body"].read()
+    screen_instance_id = validate_v122_gate(
+        json.loads(screen_raw), screen_summary_raw,
+    )
+    for prerequisite in (index_terminal["instance_id"], screen_instance_id):
+        state = ec2.describe_instances(InstanceIds=[prerequisite])[
+            "Reservations"][0]["Instances"][0]["State"]["Name"]
+        if state != "terminated":
+            raise ValueError(f"V121 prerequisite Spot {prerequisite} has not terminated")
+    screen_terminal_sha256 = hashlib.sha256(screen_raw).hexdigest()
     receipt = (json.dumps({"schema": SCHEMA, "source_commit": plan.source_commit,
                            "archive_sha256": plan.archive_sha256,
                            "index_terminal_sha256": index_terminal_sha256,
+                           "screen_terminal_sha256": screen_terminal_sha256,
                            "query_sha256": QUERY_SHA256,
                            "truth_sha256": TRUTH_SHA256, "attempt": 1},
                           sort_keys=True, separators=(",", ":")) + "\n").encode()

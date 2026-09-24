@@ -8,6 +8,14 @@ page-authority artifacts are independently authenticated against it. V120
 uses corpus rows only. A V120 failure closes this preregistered V121 cell
 without downloading query/GT data.
 
+Qualification addendum, written after V122's sealed terminal: V121 launch also
+requires the V122 D96 100k development screen to pass its preregistered
+returned-quality rule and its Spot to terminate. The launcher authenticates
+the V122 terminal and summary SHA-256 and rechecks the quality fields before
+reserving V121. V122 used disjoint test ordinals 9000..9999; this addendum
+does not alter V121's first-1000 split or scoring method. See
+`v122-deep-image-100k-closeout.md` for the independently recounted result.
+
 The untouched inputs are the first 1,000 rows, in source order, of the
 publication-v3 **deep-image-96-angular test** split. The query object is
 `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/deep-image-96/attempts/0001/materialized/test.parquet`,
