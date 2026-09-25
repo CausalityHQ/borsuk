@@ -404,3 +404,13 @@ floor; the V194 optional split's measured decomposition
 `51,200 = 50,692 + 62 + 97 + 100 + 249` is checked as arithmetic.
 The floor witness, loss values, Python refinement, FP16 quality and S3
 latency remain empirical or implementation premises.
+
+`ResidentFp16Resources.lean` proves the format-v1 row and generation
+payload is `generations × (64 + rows × (8 + 2 × dimensions))` bytes,
+monotone in row and generation counts. At D768 it checks 1,544,000,064
+bytes for 1M rows, 154,400,000,064 bytes for 100M rows and
+308,800,000,128 bytes for two 100M generations. A conditional admission
+theorem transfers a measured allocator/router/delta/workspace overhead
+bound to process RSS. It proves no fixed vector-count knee, observed
+memory usage, latency or recall. Run `lean ResidentFp16Resources.lean`
+from this directory with the pinned toolchain.
