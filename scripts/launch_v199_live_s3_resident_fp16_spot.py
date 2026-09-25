@@ -49,7 +49,7 @@ INPUTS = ROUTER + (
      "0a61974457030d2e2ce828e7bbbbaf3d8acd9849e70a7aaafd0cb44b0c5dda00"),
 )
 ARTIFACTS = ("page-manifest.json", "page-digests.bin", "page-build.json",
-             "live-raw.jsonl", "live-summary.json", "page-resources.txt",
+             "live-raw.jsonl", "live-summary.json", "live-mismatch.json", "page-resources.txt",
              "live-resources.txt", "build.log", "run-closed.log")
 
 

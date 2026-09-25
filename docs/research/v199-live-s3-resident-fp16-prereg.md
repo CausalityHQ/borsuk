@@ -55,3 +55,23 @@ artifacts to S3, verify their hashes after terminal, and terminate the
 instance immediately. A failure must be diagnosed from closed artifacts
 before any revised attempt. A pass advances to a production Rust planner
 and concurrent end-to-end gate, followed by a distinct real-query dataset.
+
+## Amendment after closed attempt a0001
+
+Attempt `a0001` on source commit `2e27d18e` ended at live query ordinal 84:
+the first 84 SQ8 shortlists and FP16 returned lists matched, then ordered
+SQ8 top-128 parity failed. Its terminal SHA-256 is
+`e7e573b8fd1cea93a3d3423d47afc5e38de712c4c9bb98d8575a900d1d6f9cf3`;
+Spot instance `i-05136be4b13e5f861` was terminated. The full V164 SQ8
+object SHA and 31,250 page digests authenticated, and 84 live query records
+closed, but this is a **failed gate**, not a partial pass. The failure may be
+an order-only floating-point difference or a shortlist set difference;
+neither is established from the first terminal log.
+
+Attempt `a0002` keeps the identical inputs, plan and strict acceptance rule.
+It adds a closed `live-mismatch.json` with the first differing rank, actual
+and expected top-128 identities, actual score bits, intersection size and a
+same-set flag. This is a bounded diagnostic repeat to decide whether the
+production SQ8 arithmetic must be corrected or the parity contract should
+use the set that resident FP16 actually consumes. Do not silently relax the
+frozen gate or treat `a0002` as a pass if ordered parity fails.

@@ -1,6 +1,7 @@
 //! Live conditional S3 execution of the frozen V198 physical plans.
 
 use std::{
+    collections::HashSet,
     error::Error,
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
@@ -235,14 +236,43 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
         )
         .map_err(|error| invalid(format!("SQ8 score failure at {index}: {error:?}")))?;
         let sq8_ns = sq8_started.elapsed().as_nanos() as u64;
-        if ranked
-            .iter()
-            .zip(&case.candidates)
-            .any(|(actual, expected)| {
-                actual.ordinal as u64 != expected.ordinal || actual.id != expected.source_id as i64
-            })
+        if let Some(first_difference) =
+            ranked
+                .iter()
+                .zip(&case.candidates)
+                .position(|(actual, expected)| {
+                    actual.ordinal as u64 != expected.ordinal
+                        || actual.id != expected.source_id as i64
+                })
         {
-            return Err(invalid(format!("SQ8 shortlist parity differs at {index}")));
+            let actual = ranked.iter().map(|item| item.id).collect::<HashSet<_>>();
+            let expected = case
+                .candidates
+                .iter()
+                .map(|item| item.source_id as i64)
+                .collect::<HashSet<_>>();
+            let report = json!({
+                "schema":"borsuk-v199-sq8-mismatch-v1",
+                "ordinal":index,"first_difference":first_difference,
+                "sets_equal":actual==expected,
+                "intersection":actual.intersection(&expected).count(),
+                "actual":ranked.iter().map(|item| json!({
+                    "ordinal":item.ordinal,"source_id":item.id,
+                    "score":item.score,"score_bits":item.score.to_bits(),
+                })).collect::<Vec<_>>(),
+                "expected":case.candidates.iter().map(|item| json!({
+                    "ordinal":item.ordinal,"source_id":item.source_id,
+                })).collect::<Vec<_>>(),
+                "plan_gets":arm.gets,"plan_bytes":arm.bytes,
+            });
+            fs::write(
+                format!("{prefix}-mismatch.json"),
+                serde_json::to_vec(&report)?,
+            )?;
+            return Err(invalid(format!(
+                "SQ8 shortlist parity differs at {index}, first rank {first_difference}, same set {}",
+                actual == expected
+            )));
         }
         let shortlist = ranked
             .iter()
