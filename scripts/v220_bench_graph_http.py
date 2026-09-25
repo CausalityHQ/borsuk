@@ -38,20 +38,18 @@ def run(args: argparse.Namespace) -> None:
             or not all(math.isfinite(value) for value in row["query"])
             for index, row in enumerate(requests))):
         raise ValueError("V219 request panel geometry differs")
-    payloads = [json.dumps({"query": row["query"], "k": 100},
-                           separators=(",", ":")).encode() for row in requests]
-
     def worker(offset: int) -> list[dict]:
         connection = http.client.HTTPConnection(args.host, args.port, timeout=30)
         rows = []
         try:
             for index in range(offset, COUNT, WORKERS):
                 request_start = time.perf_counter_ns()
-                connection.request("POST", "/search", body=payloads[index],
+                payload = json.dumps({"query": requests[index]["query"], "k": 100},
+                                     separators=(",", ":")).encode()
+                connection.request("POST", "/search", body=payload,
                                    headers={"content-type": "application/json"})
                 response = connection.getresponse()
                 body = response.read()
-                request_end = time.perf_counter_ns()
                 if response.status != 200:
                     raise RuntimeError(f"HTTP {response.status} at {index}: {body[:200]!r}")
                 result = json.loads(body)
@@ -59,12 +57,13 @@ def run(args: argparse.Namespace) -> None:
                 if (len(ids) != 100 or len(set(ids)) != 100
                         or result["vector_body_gets"] != 0):
                     raise ValueError(f"HTTP result geometry differs at {index}")
+                request_end = time.perf_counter_ns()
                 rows.append({"ordinal": index, "returned_ids": ids,
                              "whole_ns": request_end - request_start,
                              "start_ns": request_start - started,
                              "end_ns": request_end - started, "worker": offset,
                              "base_visits": result["base_visits"],
-                             "request_bytes": len(payloads[index]),
+                             "request_bytes": len(payload),
                              "response_bytes": len(body), "vector_body_gets": 0})
         finally:
             connection.close()
@@ -83,10 +82,13 @@ def run(args: argparse.Namespace) -> None:
             output.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
     latencies = [row["whole_ns"] for row in rows]
     args.summary.write_text(json.dumps({
-        "schema": "borsuk-v220-graph-http-1m-v1", "requests_sha256": digest(args.requests),
+        "schema": ("borsuk-v220-graph-http-1m-v1" if args.host in {"127.0.0.1", "localhost"}
+                   else "borsuk-v222-graph-http-client-1m-v1"),
+        "requests_sha256": digest(args.requests),
         "raw_sha256": digest(args.raw), "queries": COUNT, "concurrency": WORKERS,
         "transport": ("persistent HTTP/1.1 loopback" if args.host in {"127.0.0.1", "localhost"}
                       else "persistent HTTP/1.1 VPC peer"),
+        "timing_scope": "client JSON encode, HTTP exchange, and JSON decode",
         "cache_state": "resident after authenticated hydration",
         "comparator": "not measured in this cell",
         "pass_label": args.pass_label,
