@@ -392,6 +392,11 @@ GET limits transfer to the emitted plan. It also expands the dense
 two-state DP work model to
 `2 × sites × (GET cap + 1) × (unit cap + 1)` state visits and transfers
 measured per-state and service-time upper bounds to latency ceilings.
+For the V200 uncapped fast path, it also proves that an independently
+established global priced optimum remains optimal under hard caps when
+its witness satisfies those caps, and expands the two-state uncapped
+work count to `2 × sites`. Neither theorem verifies that the executable
+recurrence attains the optimum or that its elapsed time meets a target.
 These are symbolic implications, not measurements of Python/Rust CPU,
 S3 tail latency or charged RAM. The exact offline reference has tests,
 but no formal refinement theorem connecting its recurrence to this model.

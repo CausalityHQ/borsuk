@@ -124,6 +124,35 @@ theorem hard_cap_witness_admission
     actualUnits ≤ unitCap ∧ actualGets ≤ getCap := by
   omega
 
+/-! If an unconstrained priced optimizer emits a cap-feasible plan, that
+plan is also optimal over the constrained set. The optimizer's claimed
+global optimality and physical witness admission are explicit premises;
+this theorem does not establish that the Python/Rust recurrence implements
+the optimizer. -/
+theorem admitted_unconstrained_optimum_is_capped_optimum
+    {Plan : Type} (score : Plan → Int) (feasible : Plan → Prop)
+    (winner : Plan)
+    (unconstrainedOptimal : ∀ alternative, score alternative ≤ score winner)
+    (admitted : feasible winner) :
+    feasible winner ∧
+      ∀ alternative, feasible alternative → score alternative ≤ score winner := by
+  constructor
+  · exact admitted
+  · intro alternative _
+    exact unconstrainedOptimal alternative
+
+/-! The two-state uncapped recurrence visits a linear number of states.
+An elapsed-time ceiling still needs a measured or separately verified
+per-site implementation bound, including scoring and backtrace costs. -/
+def uncappedStateVisits (sites : Nat) : Nat := 2 * sites
+
+theorem uncapped_work_from_per_state_bound
+    (sites perStateNs setupNs elapsedNs : Nat)
+    (implementationBound :
+      elapsedNs ≤ setupNs + uncappedStateVisits sites * perStateNs) :
+    elapsedNs ≤ setupNs + 2 * sites * perStateNs := by
+  simpa [uncappedStateVisits] using implementationBound
+
 /-! A sequential service ceiling follows only from independently
 established upper bounds on request, byte and local work terms. -/
 theorem bounded_plan_latency
