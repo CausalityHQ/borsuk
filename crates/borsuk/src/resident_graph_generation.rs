@@ -334,8 +334,14 @@ impl ResidentGraphGeneration {
     pub fn generation(&self) -> u64 {
         self.plane.generation()
     }
-    pub(crate) fn source_id(&self, ordinal: usize) -> Result<u64, ResidentGraphGenerationError> {
+    /// Public ID at one authenticated physical ordinal.
+    pub fn source_id(&self, ordinal: usize) -> Result<u64, ResidentGraphGenerationError> {
         Ok(self.plane.source_id(ordinal)?)
+    }
+
+    /// Decode one authenticated FP16 row for mutation or compaction work.
+    pub fn vector_f32(&self, ordinal: usize) -> Result<Vec<f32>, ResidentGraphGenerationError> {
+        Ok(self.plane.vector_f32(ordinal)?)
     }
     pub fn cosine_view(&self) -> Result<Pq64CosineView<'_>, ResidentGraphGenerationError> {
         self.pq
