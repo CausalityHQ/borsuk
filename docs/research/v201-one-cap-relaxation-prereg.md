@@ -39,3 +39,12 @@ discarded and restarted at a new attempt. Preserve failures and make a
 root-cause decision before another run. A passing partial hierarchy
 licenses a full two-cap fallback only for its remaining queries, followed
 by an end-to-end concurrent live S3 gate and a distinct real-query dataset.
+
+## Attempt record
+
+`a0001` at source `6775a44b` was canceled before measurement when code
+inspection found that a later DP candidate could replace an interval without
+updating its backtrace flag. Its Spot instance `i-0ac2c1596607d7ab6` was
+verified terminated. This attempt has no scientific measurement. The repaired
+source adds a targeted traceback regression test; the next attempt must run
+that remote test before the frozen 1,000-query gate.

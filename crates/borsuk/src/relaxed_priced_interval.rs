@@ -159,8 +159,13 @@ pub fn relaxed_priced_cover(
                         units: state.units + 1,
                         gets: state.gets + 1,
                     };
-                    next_open[slot + 1] =
-                        prefer(next_open[slot + 1], Some(candidate), unit_price, get_price);
+                    let target = slot + 1;
+                    if next_open[target].is_none_or(|old| {
+                        key(candidate, unit_price, get_price) > key(old, unit_price, get_price)
+                    }) {
+                        next_open[target] = Some(candidate);
+                        continued[target] = false;
+                    }
                 }
             }
             if continuation <= cap && slot <= cap - continuation {
@@ -171,15 +176,12 @@ pub fn relaxed_priced_cover(
                         gets: state.gets,
                     };
                     let target = slot + continuation;
-                    let updated = prefer(next_open[target], Some(candidate), unit_price, get_price);
-                    continued[target] = match (next_open[target], updated) {
-                        (Some(old), Some(new)) => {
-                            key(new, unit_price, get_price) > key(old, unit_price, get_price)
-                        }
-                        (None, Some(_)) => true,
-                        _ => false,
-                    };
-                    next_open[target] = updated;
+                    if next_open[target].is_none_or(|old| {
+                        key(candidate, unit_price, get_price) > key(old, unit_price, get_price)
+                    }) {
+                        next_open[target] = Some(candidate);
+                        continued[target] = true;
+                    }
                 }
             }
         }
@@ -301,5 +303,14 @@ mod tests {
         let gets =
             relaxed_priced_cover(&weights, &[0, 2], 3, FixedCap::Gets, 1, 1, 3, 1024).unwrap();
         assert_eq!(gets.intervals, vec![(0, 2)]);
+    }
+
+    #[test]
+    fn later_new_interval_replaces_earlier_continuation_trace() {
+        let weights = BTreeMap::from([(0, 10), (1, 1), (3, 10)]);
+        let cover =
+            relaxed_priced_cover(&weights, &[3], 4, FixedCap::Units, 3, 1, 3, 1024).unwrap();
+        assert_eq!(cover.intervals, vec![(0, 1), (3, 3)]);
+        assert_eq!((cover.mass, cover.units, cover.gets), (21, 3, 2));
     }
 }

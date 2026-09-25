@@ -37,7 +37,7 @@ INPUTS = (
      "0a61974457030d2e2ce828e7bbbbaf3d8acd9849e70a7aaafd0cb44b0c5dda00"),
 )
 ARTIFACTS = ("raw.jsonl", "bench.json", "bench-resources.txt",
-             "build.log", "run-closed.log")
+             "build.log", "test.log", "run-closed.log")
 
 
 def user_data(commit: str, archive_sha: str, archive_key: str,
@@ -99,6 +99,8 @@ phase=inputs
 phase=build
 cd repo
 "$CARGO_HOME/bin/cargo" build --release --locked -p borsuk --bin v201_relaxed_cover_preflight --jobs 6 >"$root/build.log" 2>&1
+phase=unit_tests
+"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib relaxed_priced_interval::tests --jobs 6 >"$root/test.log" 2>&1
 cd "$root"
 phase=bench
 /usr/bin/time -v -o bench-resources.txt "$CARGO_TARGET_DIR/release/v201_relaxed_cover_preflight" \
