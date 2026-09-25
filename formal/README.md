@@ -395,3 +395,12 @@ measured per-state and service-time upper bounds to latency ceilings.
 These are symbolic implications, not measurements of Python/Rust CPU,
 S3 tail latency or charged RAM. The exact offline reference has tests,
 but no formal refinement theorem connecting its recurrence to this model.
+The same file also proves that a generic cap `max(baseUnits,
+mandatoryFloor)` admits a correctly charged minimum mandatory witness,
+and bounds dense trace state visits when both terms have an admitted
+upper bound. A conditional four-loss equation transfers bounded
+candidate, admission, allocation and rerank losses to a returned-hit
+floor; the V194 optional split's measured decomposition
+`51,200 = 50,692 + 62 + 97 + 100 + 249` is checked as arithmetic.
+The floor witness, loss values, Python refinement, FP16 quality and S3
+latency remain empirical or implementation premises.

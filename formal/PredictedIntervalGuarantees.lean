@@ -142,4 +142,52 @@ theorem bounded_plan_latency
     Nat.mul_le_mul_right transferNsPerByte bytesBound
   omega
 
+/-! A generic request cap may rise with the authenticated mandatory-cover
+floor. This admits any witness whose charged units equal that floor. It
+does not assert that the floor calculation or emitted witness is correct. -/
+def dynamicUnitCap (baseUnits mandatoryFloor : Nat) : Nat :=
+  max baseUnits mandatoryFloor
+
+theorem dynamic_cap_admits_mandatory_floor
+    (baseUnits mandatoryFloor witnessUnits : Nat)
+    (witnessAtFloor : witnessUnits = mandatoryFloor) :
+    witnessUnits ≤ dynamicUnitCap baseUnits mandatoryFloor := by
+  simp only [dynamicUnitCap, witnessAtFloor]
+  omega
+
+/-! Under an explicit maximum floor premise, the dense two-state trace
+model scales with that floor. This bounds trace Boolean cells, not the
+whole process RSS or object-store service time. -/
+theorem dynamic_cap_trace_cells_bounded
+    (sites getCap baseUnits mandatoryFloor admittedFloor : Nat)
+    (baseBound : baseUnits ≤ admittedFloor)
+    (floorBound : mandatoryFloor ≤ admittedFloor) :
+    hardCapStateVisits sites getCap
+      (dynamicUnitCap baseUnits mandatoryFloor) ≤
+    hardCapStateVisits sites getCap admittedFloor := by
+  have capBound : dynamicUnitCap baseUnits mandatoryFloor ≤ admittedFloor := by
+    simp only [dynamicUnitCap]
+    omega
+  have plusBound := Nat.add_le_add_right capBound 1
+  have scaled := Nat.mul_le_mul_left (2 * sites * (getCap + 1)) plusBound
+  simpa [hardCapStateVisits, Nat.mul_assoc] using scaled
+
+/-! A conditional end-to-end returned-hit floor can be budgeted across
+candidate omission, admission failure, fetched-range allocation and
+rerank losses. Each loss term must be measured or independently bounded
+for the target query distribution. -/
+theorem decomposed_returned_recall_floor
+    (truth returned candidateLoss admissionLoss allocationLoss
+      rerankLoss target : Nat)
+    (accounting : truth = returned + candidateLoss + admissionLoss +
+      allocationLoss + rerankLoss)
+    (boundedLoss : candidateLoss + admissionLoss + allocationLoss +
+      rerankLoss + target ≤ truth) :
+    target ≤ returned := by
+  omega
+
+theorem v194_optional_loss_accounting :
+    51200 = 50692 + 62 + 97 + 100 + 249 := by
+  decide
+
 end Borsuk.PredictedIntervalGuarantees
