@@ -991,10 +991,9 @@ impl CentroidHnsw {
         list.push(to);
         if list.len() > width {
             let anchor = &vectors[from as usize];
-            list.sort_by(|&a, &b| {
-                squared_distance(anchor, &vectors[a as usize])
-                    .total_cmp(&squared_distance(anchor, &vectors[b as usize]))
-                    .then(a.cmp(&b))
+            list.sort_by_cached_key(|&node| Candidate {
+                distance: squared_distance(anchor, &vectors[node as usize]),
+                node,
             });
             list.truncate(width);
         }

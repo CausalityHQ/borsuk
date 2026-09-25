@@ -167,7 +167,9 @@ phase=complete
     return template
 
 
-def launch(attempt: str, owned_f32: bool = False) -> None:
+def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False) -> None:
+    if owned_f32 and cached_prune:
+        raise ValueError("select one graph build campaign")
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
@@ -179,8 +181,10 @@ def launch(attempt: str, owned_f32: bool = False) -> None:
         raise ValueError("source is not fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    campaign = "v241-owned-graph-build-100k" if owned_f32 else "v218-reachable-graph-100k"
-    schema = "borsuk-v241-owned-graph-build-100k-spot-v1" if owned_f32 else SCHEMA
+    campaign = ("v242-cached-prune-100k" if cached_prune else
+                "v241-owned-graph-build-100k" if owned_f32 else "v218-reachable-graph-100k")
+    schema = ("borsuk-v242-cached-prune-100k-spot-v1" if cached_prune else
+              "borsuk-v241-owned-graph-build-100k-spot-v1" if owned_f32 else SCHEMA)
     archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
     prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
@@ -226,13 +230,15 @@ def launch(attempt: str, owned_f32: bool = False) -> None:
         "selecting_terminal_sha256": SELECTING_TERMINAL_SHA,
         "construction": {"m": 32, "m0": 64, "ef_construction": 128},
         "arms": [[2048, 2048]],
-        "gate": ("V218 graph sha256 d8b70919243a7cd6ecb9448ce23f776374738476c1882cbc6a651fb34753af2f;build RSS<=600000000B;build<=210s;identical raw IDs"
+        "gate": ("V241 graph sha256 d8b70919243a7cd6ecb9448ce23f776374738476c1882cbc6a651fb34753af2f;build RSS<=600000000B;build<=133s;identical raw IDs"
+                 if cached_prune else
+                 "V218 graph sha256 d8b70919243a7cd6ecb9448ce23f776374738476c1882cbc6a651fb34753af2f;build RSS<=600000000B;build<=210s;identical raw IDs"
                  if owned_f32 else "reachable=100000;min-indegree>=4;PQ-hits>=99521;each-split-no-loss;p05>=98;loaded-eight-worker-p95<10ms;RSS<268435456B;0 vector GET"),
         "interruption_policy": "discard and restart full measurement cell at a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken=("v241-" if owned_f32 else "v218-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
+        ClientToken=("v242-" if cached_prune else "v241-" if owned_f32 else "v218-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
         NetworkInterfaces=[{"AssociatePublicIpAddress": True, "DeviceIndex": 0,
@@ -244,8 +250,8 @@ def launch(attempt: str, owned_f32: bool = False) -> None:
             "DeleteOnTermination": True, "Encrypted": True, "VolumeSize": 30,
             "VolumeType": "gp3"}}],
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
-            {"Key": "Name", "Value": campaign if owned_f32 else TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
-        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix, schema, owned_f32).encode()).decode(),
+            {"Key": "Name", "Value": campaign if owned_f32 or cached_prune else TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
+        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix, schema, owned_f32 or cached_prune).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -302,7 +308,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", default="a0001")
     parser.add_argument("--owned-f32", action="store_true")
+    parser.add_argument("--cached-prune", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-v218-reachable-graph-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        launch(args.attempt, args.owned_f32)
+        launch(args.attempt, args.owned_f32, args.cached_prune)
