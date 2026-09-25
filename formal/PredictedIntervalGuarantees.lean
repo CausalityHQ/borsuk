@@ -97,4 +97,49 @@ theorem every_certified_query_meets_target
     (predicted query) (actual query) target error
     modelError predictedTarget
 
+/-! A dense exact interval DP with two open/closed states has this many
+state visits in the stated model. This is a work count, not elapsed
+time. A sparse or pruned implementation needs its own refinement proof. -/
+def hardCapStateVisits (sites getCap unitCap : Nat) : Nat :=
+  2 * sites * (getCap + 1) * (unitCap + 1)
+
+theorem hard_cap_dp_work_from_per_state_bound
+    (sites getCap unitCap perStateNs setupNs elapsedNs : Nat)
+    (implementationBound :
+      elapsedNs ≤ setupNs +
+        hardCapStateVisits sites getCap unitCap * perStateNs) :
+    elapsedNs ≤ setupNs +
+      2 * sites * (getCap + 1) * (unitCap + 1) * perStateNs := by
+  simpa [hardCapStateVisits] using implementationBound
+
+/-! A hard-cap planner cannot exceed the physical budget if its emitted
+interval witness refines its internal counters. The witness/accounting
+premise must be checked against the implementation and page geometry. -/
+theorem hard_cap_witness_admission
+    (plannedUnits plannedGets actualUnits actualGets unitCap getCap : Nat)
+    (unitAccounting : actualUnits = plannedUnits)
+    (getAccounting : actualGets = plannedGets)
+    (unitBound : plannedUnits ≤ unitCap)
+    (getBound : plannedGets ≤ getCap) :
+    actualUnits ≤ unitCap ∧ actualGets ≤ getCap := by
+  omega
+
+/-! A sequential service ceiling follows only from independently
+established upper bounds on request, byte and local work terms. -/
+theorem bounded_plan_latency
+    (gets bytes localNs requestNsPerGet transferNsPerByte
+      fixedNs elapsedNs getCap byteCap localCap : Nat)
+    (serviceBound : elapsedNs ≤ fixedNs + gets * requestNsPerGet +
+      bytes * transferNsPerByte + localNs)
+    (getsBound : gets ≤ getCap)
+    (bytesBound : bytes ≤ byteCap)
+    (localBound : localNs ≤ localCap) :
+    elapsedNs ≤ fixedNs + getCap * requestNsPerGet +
+      byteCap * transferNsPerByte + localCap := by
+  have getCostBound :=
+    Nat.mul_le_mul_right requestNsPerGet getsBound
+  have byteCostBound :=
+    Nat.mul_le_mul_right transferNsPerByte bytesBound
+  omega
+
 end Borsuk.PredictedIntervalGuarantees

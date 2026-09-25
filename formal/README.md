@@ -386,3 +386,12 @@ does not prove that a source-fitted curve supplies the error premise
 on unseen queries, that the Python DP refines the model, or that S3
 latency/charged RAM meets a bound. V189's fit/holdout drift and V190's
 frozen replication are the corresponding empirical checks.
+The same file now checks conditional hard-cap witness admission: when
+reconstructed interval charges equal the planner counters, hard unit and
+GET limits transfer to the emitted plan. It also expands the dense
+two-state DP work model to
+`2 × sites × (GET cap + 1) × (unit cap + 1)` state visits and transfers
+measured per-state and service-time upper bounds to latency ceilings.
+These are symbolic implications, not measurements of Python/Rust CPU,
+S3 tail latency or charged RAM. The exact offline reference has tests,
+but no formal refinement theorem connecting its recurrence to this model.

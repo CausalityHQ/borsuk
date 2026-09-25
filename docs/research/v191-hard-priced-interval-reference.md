@@ -39,3 +39,25 @@ strongest tested grid penalty `(20000, 400000)` still selected 951 and
 other tested prices also breached the hard cap or aggregate GET limit.
 Those numbers diagnose the old solver's cap handling. No V189/V190
 holdout truth was used to select a new price or model.
+
+A second **closed-fit-only posthoc diagnostic** applied the hard-capped
+reference to all 128 V189 fit queries with the already fixed margin
+model and grid endpoint price `(20000, 400000)`. It produced valid
+≤672-unit/≤32-GET plans, 19,782 total units = 493,758,720 planned
+bytes and 1,375 GETs, but captured only 12,725/12,800 fit truth rows
+with p05 97. This single price is far below the fit quality target and
+does not justify launching it unchanged on a fresh holdout. It does
+show that internal hard caps resolve the "no plan" failure while
+utility/stopping quality remains a separate problem.
+
+The next generic policy should use disjoint model-fit, policy/price-fit,
+calibration and untouched holdout panels. A calibrated error statement
+for a fixed policy can assess that policy on exchangeable future queries;
+it cannot be used to retune the same policy on calibration labels while
+retaining that statement. If calibration affects the plan chosen for
+each query, a plan-uniform error bound or a separate selection split is
+needed. No closed V189/V190 holdout labels enter these stages. The
+utility may depend on query scores and page geometry; physical RAM
+allowance is an explicit function of row count, recall target and
+concurrency, with no vector-count branch. Neither a fitted curve nor
+Lean arithmetic supplies a measured recall or latency guarantee.
