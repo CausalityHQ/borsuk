@@ -271,7 +271,10 @@ impl ResidentVectorGraph {
             || m0 > 256
             || ef_construction < m0
             || ef_construction > 4096
-            || workers == Some(0)
+            || workers.is_some_and(|count| {
+                count == 0
+                    || count > std::thread::available_parallelism().map_or(1, |cores| cores.get())
+            })
         {
             return Err(ResidentFp16Error::Invalid("graph build geometry"));
         }

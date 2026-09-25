@@ -44,8 +44,13 @@ fn peak_rss() -> Result<u64, Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     let fp16_source = args.len() == 6 && args[5] == "--fp16-source";
-    if args.len() != 6 {
-        return Err("usage: v219_build_reachable_graph_1m PREP PLANE VECTORS GRAPH SUMMARY | PREP PLANE GRAPH SUMMARY --fp16-source".into());
+    let workers = if args.len() == 8 && args[6] == "--batched-threads" {
+        Some(args[7].parse::<usize>()?)
+    } else {
+        None
+    };
+    if args.len() != 6 && workers.is_none() {
+        return Err("usage: v219_build_reachable_graph_1m PREP PLANE VECTORS GRAPH SUMMARY [--batched-threads N] | PREP PLANE GRAPH SUMMARY --fp16-source".into());
     }
     let graph_path = if fp16_source { &args[3] } else { &args[4] };
     let summary_path = if fp16_source { &args[4] } else { &args[5] };
@@ -91,7 +96,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         vectors
     };
-    let graph = ResidentVectorGraph::build(vectors, &plane, 32, 64, 128)?;
+    let graph = match workers {
+        Some(workers) => ResidentVectorGraph::build_batched(vectors, &plane, 32, 64, 128, workers)?,
+        None => ResidentVectorGraph::build(vectors, &plane, 32, 64, 128)?,
+    };
     let structure = graph.structural_stats();
     if structure.reachable != ROWS
         || structure.below_four_indegree != 0
@@ -110,7 +118,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "source_sha256":SOURCE,"plane_sha256":prep["plane_sha256"],
         "graph_sha256":graph_sha,"graph_bytes":fs::metadata(graph_path)?.len(),
         "construction_source":if fp16_source { "authenticated-fp16-plane" } else { "authenticated-f32-source" },
-        "graph_heap_bytes":heap_bytes,"structure":structure,
+        "graph_heap_bytes":heap_bytes,"structure":structure,"build_workers":workers.unwrap_or(1),
         "build_ns":elapsed,"build_peak_rss_bytes":peak_rss()?,
         "rows":ROWS,"dimensions":DIMS,"generation":prep["generation"]})
         ),

@@ -1202,7 +1202,7 @@ mod tests {
 
     #[test]
     fn batched_graph_is_thread_count_independent_and_reachable() {
-        let vectors = grid(256, 8);
+        let vectors = grid(257, 8);
         let one = build_reachable_hnsw_adjacency_batched(&vectors, 8, 16, 32, 32, 1).unwrap();
         let four = build_reachable_hnsw_adjacency_batched(&vectors, 8, 16, 32, 32, 4).unwrap();
         assert_eq!(one.entry, four.entry);
