@@ -504,7 +504,7 @@ mod tests {
         });
         let (collection_overlay, collection_stats) = tokio::runtime::Runtime::new().unwrap()
             .block_on(hydrate_graph_collection(&store, &prefix, &collection_head,
-                cache.path(), 100_000, 1, 1024, 20)).unwrap();
+                cache.path(), 100_000, 1, 1024, 21)).unwrap();
         assert_eq!(collection_stats.object_gets, 0);
         let collection_view = collection_overlay.base().cosine_view().unwrap();
         let collection_bound = collection_overlay.bind(&collection_view).unwrap();
@@ -514,7 +514,7 @@ mod tests {
         let collection_slot = ResidentGraphCollectionSlot::new(
             collection_head.revision, Arc::clone(&collection_overlay)).unwrap();
         let held_collection = collection_slot.pin();
-        let replacement = Arc::new(ResidentGraphOverlay::new(Arc::clone(&pinned), vec![], 0).unwrap());
+        let replacement = Arc::new(ResidentGraphOverlay::new(Arc::clone(&pinned), vec![], 1).unwrap());
         let retired = collection_slot.replace(2, replacement).unwrap();
         assert!(Arc::ptr_eq(&held_collection.1, &retired.1));
         assert!(collection_slot.replace(1, Arc::clone(&collection_overlay)).is_err());
@@ -609,7 +609,7 @@ mod tests {
             .unwrap()
             .0;
         assert!(new_ids.contains(&99) && !new_ids.contains(&42));
-        let empty_overlay = ResidentGraphOverlay::new(Arc::clone(&held_reader), vec![], 0).unwrap();
+        let empty_overlay = ResidentGraphOverlay::new(Arc::clone(&held_reader), vec![], 1).unwrap();
         let empty_bound = empty_overlay.bind(&old_view).unwrap();
         assert_eq!(
             empty_bound
@@ -626,8 +626,9 @@ mod tests {
             ResidentMutation { id: 7, vector: None },
             ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) },
         ];
-        assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 39).is_err());
-        let overlay = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 40).unwrap();
+        assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 40).is_err());
+        let overlay = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41).unwrap();
+        assert_eq!(overlay.resident_bytes(), 41);
         let overlay_bound = overlay.bind(&old_view).unwrap();
         let (ids, stats) = overlay_bound
             .search(&[1.0, 0.0], 4, 4, 4, &mut old_workspace)
@@ -635,10 +636,15 @@ mod tests {
         assert_eq!(ids, vec![99, 19, 42, 33]);
         assert_eq!(stats.delta_rows_scanned, 2);
         assert_eq!(stats.masked_shortlist_rows, 2);
+        let extended = ResidentGraphOverlay::new(Arc::clone(&held_reader),
+            vec![ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) }], 21).unwrap();
+        let extended_view = extended.bind(&old_view).unwrap();
+        assert_eq!(extended_view.search(&[1.0, 0.0], 5, 4, 4,
+            &mut old_workspace).unwrap().0.len(), 5);
         assert!(ResidentGraphOverlay::new(
             Arc::clone(&held_reader),
             vec![ResidentMutation { id: 42, vector: None }, ResidentMutation { id: 42, vector: None }],
-            0,
+            1,
         ).is_err());
         assert!(
             ResidentGraphGeneration::open_local_authenticated(

@@ -51,7 +51,7 @@ pub struct ResidentGraphOverlayView<'a, 'b> {
 }
 
 impl ResidentGraphOverlay {
-    /// `max_delta_bytes` is a caller-selected payload cap, independent of N.
+    /// `max_delta_bytes` caps resident put rows and the N/8 tombstone bitmap.
     /// The base graph remains unchanged and traversable through masked rows.
     pub fn new(
         base: Arc<ResidentGraphGeneration>,
@@ -64,8 +64,10 @@ impl ResidentGraphOverlay {
             .and_then(|value| value.checked_add(16))
             .ok_or(ResidentGraphOverlayError::Invalid("delta row width"))?;
         let put_rows = mutations.iter().filter(|row| row.vector.is_some()).count();
+        let mask_bytes = base.rows().div_ceil(8);
         if put_rows
             .checked_mul(row_bytes)
+            .and_then(|bytes| bytes.checked_add(mask_bytes))
             .is_none_or(|bytes| bytes > max_delta_bytes)
         {
             return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
@@ -81,7 +83,7 @@ impl ResidentGraphOverlay {
                 }
             }
         }
-        let mut masked = vec![0_u8; base.rows().div_ceil(8)];
+        let mut masked = vec![0_u8; mask_bytes];
         for ordinal in 0..base.rows() {
             if states.contains_key(&base.source_id(ordinal)?) {
                 masked[ordinal / 8] |= 1 << (ordinal % 8);
@@ -115,13 +117,26 @@ impl ResidentGraphOverlay {
             delta_ids.push(mutation.id);
             delta_norm_inverse.push(norm_squared.sqrt().recip());
         }
-        Ok(Self {
+        let overlay = Self {
             base,
             masked,
             delta_ids,
             delta_coordinates,
             delta_norm_inverse,
-        })
+        };
+        if overlay.resident_bytes() > max_delta_bytes {
+            return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
+        }
+        Ok(overlay)
+    }
+
+    /// Owned bitmap, FP16 coordinates, IDs and cosine norm bytes. The pinned
+    /// base graph is separately charged by its generation loader.
+    pub fn resident_bytes(&self) -> usize {
+        self.masked.capacity()
+            + self.delta_ids.capacity() * 8
+            + self.delta_coordinates.capacity() * 2
+            + self.delta_norm_inverse.capacity() * 8
     }
 
     pub fn base(&self) -> &ResidentGraphGeneration {
@@ -148,9 +163,10 @@ impl ResidentGraphOverlayView<'_, '_> {
         shortlist: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, ResidentGraphOverlayStats), ResidentGraphOverlayError> {
+        let base_k = k.min(self.overlay.base.rows());
         let (mut scored, base_visits, masked_shortlist_rows) = self.graph.search_scored_masked(
             query,
-            k,
+            base_k,
             ef,
             shortlist,
             workspace,
