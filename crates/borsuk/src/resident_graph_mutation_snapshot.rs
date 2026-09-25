@@ -197,6 +197,30 @@ mod tests {
         let mut corrupt = bytes.clone();
         *corrupt.last_mut().unwrap() ^= 1;
         assert!(decode_mutation_snapshot(&corrupt, &sha, &base, 2, 1024).is_err());
+        let mut invalid_operation = bytes.clone();
+        invalid_operation[HEADER_BYTES + 8] = 2;
+        let signed_invalid = format!("{:x}", Sha256::digest(&invalid_operation));
+        assert!(
+            decode_mutation_snapshot(&invalid_operation, &signed_invalid, &base, 2, 1024).is_err()
+        );
+        assert!(
+            encode_mutation_snapshot(
+                &base,
+                2,
+                &[
+                    ResidentMutation {
+                        id: 9,
+                        vector: None
+                    },
+                    ResidentMutation {
+                        id: 9,
+                        vector: None
+                    },
+                ],
+                1024
+            )
+            .is_err()
+        );
         assert!(encode_mutation_snapshot(&base, 2, &mutations, bytes.len() - 1).is_err());
     }
 }
