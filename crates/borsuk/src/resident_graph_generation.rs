@@ -649,6 +649,11 @@ mod tests {
         assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41)
             .unwrap().with_decoded_delta(41).is_err());
         let decoded_bound = decoded.bind(&old_view).unwrap();
+        let blocked = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 100_000)
+            .unwrap().with_blocked_delta(100_000).unwrap();
+        assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41)
+            .unwrap().with_blocked_delta(41).is_err());
+        let blocked_bound = blocked.bind(&old_view).unwrap();
         for query in [[1.0, 0.0], [0.0, 1.0]] {
             assert_eq!(
                 decoded_bound
@@ -659,6 +664,10 @@ mod tests {
                     .search(&query, 4, 4, 4, &mut old_workspace)
                     .unwrap()
                     .0
+            );
+            assert_eq!(
+                blocked_bound.search(&query, 4, 4, 4, &mut old_workspace).unwrap().0,
+                decoded_bound.search(&query, 4, 4, 4, &mut old_workspace).unwrap().0
             );
         }
         let extended = ResidentGraphOverlay::new(Arc::clone(&held_reader),

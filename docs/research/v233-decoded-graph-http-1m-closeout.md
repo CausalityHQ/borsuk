@@ -5,14 +5,13 @@ failed.** Retain decoded FP32 mutation storage as a useful exact
 implementation, but do not promote this query path as the final 1M
 mutation architecture. The 100k V232 in-process p95 reduction did not
 translate into the required 1M HTTP reduction. The base graph and
-HTTP work remain material parts of the end-to-end latency. Another
-representation-only change to the same 10,000-row full scan is unlikely
-to reach the frozen 1.5× throughput gate. The next cheap gate should
-test a materially different **certified exact-pruning** mutation tier:
-use a query-dependent upper bound to skip delta rows whose score cannot
-enter the current top k, then exact-score all survivors. A conservative
-bound must preserve ID ordering for every query; measure its actual
-pruning and overhead on the 100k/10k panel before any further 1M run.
+HTTP work remain material parts of the end-to-end latency. A follow-up
+code inspection identified a **serial FP64 accumulation chain** across
+all 768 coordinates of each delta row. An eight-row blocked resident
+layout can expose independent accumulators while preserving each row's
+coordinate order and exact score. Test that layout on 100k before
+another 1M run. Certified pruning remains a possible later step if the
+exact blocked scan still misses the serving or scaling envelope.
 
 The sole `causality` two-host c7i.4xlarge Spot attempt `a0001` ran in
 `eu-central-1c` on server `i-0db4c7928376a7db2` and client
@@ -69,10 +68,12 @@ unmutated HTTP first pass was 99,664 GT100 hits, p95 20.820 ms and
 Vectors or Turbopuffer win follows from this gate.
 
 **Next single gate:** on the frozen ReLAION-100k D768 10,000-upsert
-panel, compare certified exact pruning against the same-run decoded
-full scan. Require 1,000/1,000 exact ID lists and no per-split recall
-loss; measure rows pruned, bound cost, loaded p50/p90/p95/p99, QPS,
-mutation preparation, RSS and resident bytes. Preregister an actual
-product-relevant speed gain before running. If the bound prunes too
-little or costs too much, reject it before a 1M cell and choose a
-different mutation-tier/compaction architecture.
+panel, compare an eight-row blocked, exact FP64 scan against the
+same-run decoded row-major scan. Require 1,000/1,000 complete ID-list
+parity and no per-split recall loss; measure loaded p50/p90/p95/p99,
+QPS, one-time layout construction, RSS and resident bytes. Preregister
+a material speed gain before running. If the blocked scan fails, choose
+a different mutation-tier/compaction architecture before another 1M
+cell. A synthetic ARM microbenchmark in `/tmp/dotbench` suggested
+1.57 ms versus 5.31 ms per 10,000-row FP32 scan; that is **hypothesis
+evidence only**, not a ReLAION or c7i measurement.

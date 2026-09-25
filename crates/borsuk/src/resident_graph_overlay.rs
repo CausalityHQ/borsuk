@@ -43,6 +43,7 @@ pub struct ResidentGraphOverlay {
     delta_ids: Vec<u64>,
     delta_coordinates: Vec<u16>,
     delta_decoded: Option<Vec<f32>>,
+    delta_blocked: bool,
     delta_norm_inverse: Vec<f64>,
 }
 
@@ -124,6 +125,7 @@ impl ResidentGraphOverlay {
             delta_ids,
             delta_coordinates,
             delta_decoded: None,
+            delta_blocked: false,
             delta_norm_inverse,
         };
         if overlay.resident_bytes() > max_delta_bytes {
@@ -172,6 +174,52 @@ impl ResidentGraphOverlay {
                 .map(|bits| f16::from_bits(bits).to_f32())
                 .collect(),
         );
+        if self.resident_bytes() > max_delta_bytes {
+            return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
+        }
+        Ok(self)
+    }
+
+    /// Decode into eight-row blocks so each row retains its FP64 sum order
+    /// while the CPU can advance eight independent sums together.
+    pub fn with_blocked_delta(
+        mut self,
+        max_delta_bytes: usize,
+    ) -> Result<Self, ResidentGraphOverlayError> {
+        if self.delta_decoded.is_some() {
+            return Err(ResidentGraphOverlayError::Invalid("delta representation"));
+        }
+        let dimensions = self.base.dimensions();
+        let padded_rows = self
+            .delta_ids
+            .len()
+            .div_ceil(8)
+            .checked_mul(8)
+            .ok_or(ResidentGraphOverlayError::Invalid("blocked delta size"))?;
+        let count = padded_rows
+            .checked_mul(dimensions)
+            .ok_or(ResidentGraphOverlayError::Invalid("blocked delta size"))?;
+        let remaining = self.resident_bytes() - self.delta_coordinates.capacity() * 2;
+        if remaining
+            .checked_add(
+                count
+                    .checked_mul(4)
+                    .ok_or(ResidentGraphOverlayError::Invalid("blocked delta size"))?,
+            )
+            .is_none_or(|bytes| bytes > max_delta_bytes)
+        {
+            return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
+        }
+        let mut blocked = vec![0.0_f32; count];
+        for row in 0..self.delta_ids.len() {
+            for coordinate in 0..dimensions {
+                blocked[(row / 8) * dimensions * 8 + coordinate * 8 + row % 8] =
+                    f16::from_bits(self.delta_coordinates[row * dimensions + coordinate]).to_f32();
+            }
+        }
+        self.delta_coordinates = Vec::new();
+        self.delta_decoded = Some(blocked);
+        self.delta_blocked = true;
         if self.resident_bytes() > max_delta_bytes {
             return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
         }
@@ -227,25 +275,43 @@ impl ResidentGraphOverlayView<'_, '_> {
                 .map(|&value| f64::from(value) / norm)
                 .collect::<Vec<_>>();
             let dimensions = self.overlay.base.dimensions();
-            for (row, &id) in self.overlay.delta_ids.iter().enumerate() {
-                let mut dot = 0.0_f64;
-                if let Some(decoded) = &self.overlay.delta_decoded {
-                    for (coordinate, &value) in decoded[row * dimensions..(row + 1) * dimensions]
-                        .iter()
-                        .enumerate()
-                    {
-                        dot += f64::from(value) * normalized[coordinate];
-                    }
-                } else {
-                    for (coordinate, &bits) in self.overlay.delta_coordinates
-                        [row * dimensions..(row + 1) * dimensions]
-                        .iter()
-                        .enumerate()
-                    {
-                        dot += f64::from(f16::from_bits(bits).to_f32()) * normalized[coordinate];
+            if self.overlay.delta_blocked {
+                let decoded = self.overlay.delta_decoded.as_ref().expect("blocked delta");
+                for block in 0..self.overlay.delta_ids.len().div_ceil(8) {
+                    let dots = score_block(decoded, &normalized, block, dimensions);
+                    for (lane, dot) in dots.into_iter().enumerate() {
+                        let row = block * 8 + lane;
+                        if row < self.overlay.delta_ids.len() {
+                            scored.push((
+                                self.overlay.delta_ids[row],
+                                dot * self.overlay.delta_norm_inverse[row],
+                            ));
+                        }
                     }
                 }
-                scored.push((id, dot * self.overlay.delta_norm_inverse[row]));
+            } else {
+                for (row, &id) in self.overlay.delta_ids.iter().enumerate() {
+                    let mut dot = 0.0_f64;
+                    if let Some(decoded) = &self.overlay.delta_decoded {
+                        for (coordinate, &value) in decoded
+                            [row * dimensions..(row + 1) * dimensions]
+                            .iter()
+                            .enumerate()
+                        {
+                            dot += f64::from(value) * normalized[coordinate];
+                        }
+                    } else {
+                        for (coordinate, &bits) in self.overlay.delta_coordinates
+                            [row * dimensions..(row + 1) * dimensions]
+                            .iter()
+                            .enumerate()
+                        {
+                            dot +=
+                                f64::from(f16::from_bits(bits).to_f32()) * normalized[coordinate];
+                        }
+                    }
+                    scored.push((id, dot * self.overlay.delta_norm_inverse[row]));
+                }
             }
         }
         scored.sort_unstable_by(|left, right| {
@@ -262,5 +328,53 @@ impl ResidentGraphOverlayView<'_, '_> {
                 delta_rows_scanned,
             },
         ))
+    }
+}
+
+fn score_block(decoded: &[f32], normalized: &[f64], block: usize, dimensions: usize) -> [f64; 8] {
+    let mut dots = [0.0_f64; 8];
+    let base = block * dimensions * 8;
+    for coordinate in 0..dimensions {
+        let value = normalized[coordinate];
+        for lane in 0..8 {
+            dots[lane] += f64::from(decoded[base + coordinate * 8 + lane]) * value;
+        }
+    }
+    dots
+}
+
+#[cfg(test)]
+mod blocked_tests {
+    use super::score_block;
+
+    #[test]
+    fn blocked_scores_match_scalar_bits_for_adversarial_values() {
+        let values = [
+            0.0_f32,
+            -0.0,
+            0.000_000_059_604_645,
+            -65_504.0,
+            65_504.0,
+            1.0,
+            -1.0,
+            0.5,
+        ];
+        let dimensions = 769;
+        let mut blocked = vec![0.0_f32; dimensions * 8];
+        let mut normalized = vec![0.0_f64; dimensions];
+        for coordinate in 0..dimensions {
+            normalized[coordinate] = (coordinate as f64 % 17.0 - 8.0) / 123.456_f64.sqrt();
+            for lane in 0..8 {
+                blocked[coordinate * 8 + lane] = values[(coordinate + lane) % values.len()];
+            }
+        }
+        let actual = score_block(&blocked, &normalized, 0, dimensions);
+        for lane in 0..8 {
+            let mut expected = 0.0_f64;
+            for coordinate in 0..dimensions {
+                expected += f64::from(blocked[coordinate * 8 + lane]) * normalized[coordinate];
+            }
+            assert_eq!(actual[lane].to_bits(), expected.to_bits());
+        }
     }
 }

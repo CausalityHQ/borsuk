@@ -27,6 +27,9 @@ PARENT = "research/v214-pq-graph-100k/8f8cbd15852ccab48d80ea3c44d21627727b890f/r
 PARENT_TERMINAL_SHA = "ad8db261ab30acaedafb491d2d50bab2349c605c7303bcac9374e18c1df08465"
 BASE_PREFIX = "research/v218-reachable-graph-100k/ce317cac8d1eb0a1b8a8610f0a3756b96090514c/runs/a0001/"
 BASE_TERMINAL_SHA = "cf44ecb95a9d1cc07ac895a222a407c37db090c499f15a887e887d74c8492efd"
+V232_PREFIX = ("research/v232-decoded-delta-100k/"
+               "0a603ba7395045d706227e239085d2ed8856ef5e/runs/a0001/")
+V232_CLOSEOUT_SHA = "a0a144a927a5eef389b532f0710e8874dbb6d39833d8fb921906eeaf1d5fc200"
 INPUTS = (
     ("plane.bin", PARENT + "plane.bin", 154400064,
      "54b9d2e46d2aeccbe28d1afb2c3cdff45df27f7e12a8f0e67354217e948e19a2"),
@@ -58,7 +61,8 @@ def downloads(rows: tuple) -> str:
     )
 
 
-def user_data(commit: str, archive_sha: str, archive_key: str, prefix: str) -> str:
+def user_data(commit: str, archive_sha: str, archive_key: str, prefix: str,
+              blocked: bool = False) -> str:
     template = r'''#!/bin/bash
 set -euo pipefail
 systemd-run --unit=v232-hard-stop --on-active=@@WALL@@s /usr/sbin/shutdown -h now
@@ -142,7 +146,7 @@ cd repo
   --bin v229_serve_mutation_overlay_100k --jobs 6 >"$root/build.log" 2>&1
 cd "$root"
 phase=serve
-for mode in linear decoded; do
+for mode in @@MODES@@; do
   /usr/bin/time -v -o "$mode.time" "$CARGO_TARGET_DIR/release/v229_serve_mutation_overlay_100k" \
     . requests.jsonl baseline-raw.jsonl "$mode.raw.jsonl" "$mode.serving.json" "$mode-10k" "$mode.loaded.raw.jsonl"
   for name in "$mode.raw.jsonl" "$mode.loaded.raw.jsonl"; do
@@ -156,20 +160,32 @@ for mode in linear decoded; do
 done
 phase=truth
 @@LATE_DOWNLOADS@@
-.venv/bin/python -m scripts.v232_score_decoded_delta_100k \
-  --linear-serving linear.serving.json --linear-raw linear.raw.jsonl \
-  --linear-loaded-raw linear.loaded.raw.jsonl \
-  --decoded-serving decoded.serving.json --decoded-raw decoded.raw.jsonl \
-  --decoded-loaded-raw decoded.loaded.raw.jsonl \
+.venv/bin/python -m @@SCORER@@ \
+  @@SCORE_ARGS@@ \
   --baseline baseline-raw.jsonl --truth truth.parquet --output quality.json
 phase=complete
 '''
     replacements = {
-        "WALL": str(WALL_SECONDS), "ARTIFACTS": " ".join(ARTIFACTS),
-        "ARTIFACTS_PY": repr(ARTIFACTS), "BUCKET": BUCKET,
-        "PREFIX": prefix, "SCHEMA": SCHEMA, "COMMIT": commit,
+        "WALL": str(WALL_SECONDS), "ARTIFACTS": " ".join(
+            tuple(name.replace("linear", "blocked") for name in ARTIFACTS) if blocked else ARTIFACTS),
+        "ARTIFACTS_PY": repr(tuple(name.replace("linear", "blocked") for name in ARTIFACTS)
+                              if blocked else ARTIFACTS), "BUCKET": BUCKET,
+        "PREFIX": prefix,
+        "SCHEMA": "borsuk-v234-blocked-delta-100k-spot-v1" if blocked else SCHEMA,
+        "COMMIT": commit,
         "ARCHIVE_SHA": archive_sha, "ARCHIVE_KEY": archive_key,
         "DOWNLOADS": downloads(INPUTS), "LATE_DOWNLOADS": downloads(LATE),
+        "MODES": "decoded blocked" if blocked else "linear decoded",
+        "SCORER": ("scripts.v234_score_blocked_delta_100k" if blocked else
+                   "scripts.v232_score_decoded_delta_100k"),
+        "SCORE_ARGS": ("--control-serving decoded.serving.json --control-raw decoded.raw.jsonl "
+                       "--control-loaded-raw decoded.loaded.raw.jsonl "
+                       "--blocked-serving blocked.serving.json --blocked-raw blocked.raw.jsonl "
+                       "--blocked-loaded-raw blocked.loaded.raw.jsonl" if blocked else
+                       "--linear-serving linear.serving.json --linear-raw linear.raw.jsonl "
+                       "--linear-loaded-raw linear.loaded.raw.jsonl "
+                       "--decoded-serving decoded.serving.json --decoded-raw decoded.raw.jsonl "
+                       "--decoded-loaded-raw decoded.loaded.raw.jsonl"),
     }
     for name, value in replacements.items():
         template = template.replace("@@" + name + "@@", value)
@@ -178,7 +194,7 @@ phase=complete
     return template
 
 
-def launch(attempt: str) -> None:
+def launch(attempt: str, blocked: bool = False) -> None:
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
@@ -190,13 +206,19 @@ def launch(attempt: str) -> None:
         raise ValueError("source is not fast-forward descendant of origin/main")
     archive = archive_source(commit)
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as source:
-        if not {"docs/research/v232-decoded-delta-100k-prereg.md",
-                "scripts/v232_score_decoded_delta_100k.py",
-                "scripts/launch_v232_decoded_delta_100k_spot.py"}.issubset(source.getnames()):
+        required = {"docs/research/v232-decoded-delta-100k-prereg.md",
+                    "scripts/v232_score_decoded_delta_100k.py",
+                    "scripts/launch_v232_decoded_delta_100k_spot.py"}
+        if blocked:
+            required |= {"docs/research/v234-blocked-delta-100k-prereg.md",
+                         "scripts/v234_score_blocked_delta_100k.py"}
+        if not required.issubset(source.getnames()):
             raise ValueError("V232 frozen source roster differs")
     archive_sha = hashlib.sha256(archive).hexdigest()
-    archive_key = f"research/v232-decoded-delta-100k/{commit}/sources/{archive_sha}.tar.gz"
-    prefix = f"research/v232-decoded-delta-100k/{commit}/runs/{attempt}"
+    campaign = "v234-blocked-delta-100k" if blocked else "v232-decoded-delta-100k"
+    schema = "borsuk-v234-blocked-delta-100k-spot-v1" if blocked else SCHEMA
+    archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
+    prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
     ec2, s3 = session.client("ec2"), session.client("s3")
     parent_raw = s3.get_object(Bucket=BUCKET,
@@ -218,6 +240,11 @@ def launch(attempt: str) -> None:
             or base["artifacts"].get("graph.bin") != {
                 "bytes": INPUTS[4][2], "sha256": INPUTS[4][3]}):
         raise ValueError("V218 paired baseline differs")
+    if blocked:
+        prior = s3.get_object(Bucket=BUCKET, Key=V232_PREFIX + "closeout.json")["Body"].read()
+        if (hashlib.sha256(prior).hexdigest() != V232_CLOSEOUT_SHA
+                or json.loads(prior)["gate_pass"] is not True):
+            raise ValueError("V232 decoded control differs")
     if not missing(s3, prefix + "/reservation.json") or not missing(s3, prefix + "/terminal.json"):
         raise ValueError("attempt already registered")
     active = ec2.describe_instances(Filters=[
@@ -235,22 +262,26 @@ def launch(attempt: str) -> None:
         AvailabilityZone="eu-central-1c", MaxResults=1)["SpotPriceHistory"][0]
     quote = float(spot["SpotPrice"])
     put_if_absent(prefix + "/reservation.json", json.dumps({
-        "schema": SCHEMA, "source_commit": commit, "source_archive_sha256": archive_sha,
+        "schema": schema, "source_commit": commit, "source_archive_sha256": archive_sha,
         "dataset": "ReLAION-100k D768", "split": "development-256-plus-method-heldout-744-prior-used",
         "parent_terminal_sha256": PARENT_TERMINAL_SHA,
         "baseline_terminal_sha256": BASE_TERMINAL_SHA,
+        "v232_closeout_sha256": V232_CLOSEOUT_SHA if blocked else None,
         "mutation": "every-10th-physical-row same-ID same-FP16-vector upsert;10000 rows",
         "arm": {"ef": 2048, "shortlist": 2048, "k": 100, "workers": 8},
-        "decoded_delta": {"type": "FP32 from authenticated FP16",
-                          "scoring": "unchanged ordered FP64 accumulation",
-                          "max_resident_bytes": 67108864},
-        "gate": "base-IDs-exact-V218;decoded-IDs-exact-linear-on-1000;p05>=99;decoded-p95<=0.75-linear-p95;QPS>=1.5x-linear;decode<=1s;RSS<=512MiB;0 vector GET",
+        "candidate_delta": {"type": ("eight-row blocked FP32 from authenticated FP16"
+                                      if blocked else "row-major FP32 from authenticated FP16"),
+                            "scoring": "unchanged per-row ordered FP64 accumulation",
+                            "max_resident_bytes": 67108864},
+        "gate": ("base-IDs-exact-V218;blocked-IDs-exact-decoded-on-1000;p05>=99;"
+                 "blocked-p95<=0.5-decoded-p95;QPS>=1.5x-decoded;pack<=1s;RSS<=512MiB;0 vector GET"
+                 if blocked else "base-IDs-exact-V218;decoded-IDs-exact-linear-on-1000;p05>=99;decoded-p95<=0.75-linear-p95;QPS>=1.5x-linear;decode<=1s;RSS<=512MiB;0 vector GET"),
         "spot_quote_usd_per_hour": quote,
         "interruption_policy": "discard and restart full measurement cell at a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken="v232-" + hashlib.sha256(prefix.encode()).hexdigest()[:48],
+        ClientToken=("v234-" if blocked else "v232-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
         NetworkInterfaces=[{"AssociatePublicIpAddress": True, "DeviceIndex": 0,
@@ -262,8 +293,9 @@ def launch(attempt: str) -> None:
             "DeleteOnTermination": True, "Encrypted": True, "VolumeSize": 30,
             "VolumeType": "gp3"}}],
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
-            {"Key": "Name", "Value": TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
-        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix).encode()).decode(),
+            {"Key": "Name", "Value": "borsuk-" + campaign},
+            {"Key": "BorsukAttempt", "Value": attempt}]}],
+        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix, blocked).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     launched_epoch = receipt["Instances"][0]["LaunchTime"].timestamp()
@@ -277,7 +309,7 @@ def launch(attempt: str) -> None:
                 terminal = json.loads(raw)
                 ec2.terminate_instances(InstanceIds=[instance_id])
                 ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
-                if (terminal.get("schema") != SCHEMA or terminal.get("instance_id") != instance_id
+                if (terminal.get("schema") != schema or terminal.get("instance_id") != instance_id
                         or terminal.get("source_commit") != commit
                         or terminal.get("source_archive_sha256") != archive_sha):
                     raise ValueError("V232 terminal identity differs")
@@ -285,7 +317,8 @@ def launch(attempt: str) -> None:
                 print(json.dumps(terminal, sort_keys=True), flush=True)
                 if terminal.get("status") != "complete":
                     raise RuntimeError("V232 failed; inspect only closed terminal artifacts")
-                if set(terminal.get("artifacts", {})) != set(ARTIFACTS):
+                artifact_names = tuple(name.replace("linear", "blocked") for name in ARTIFACTS) if blocked else ARTIFACTS
+                if set(terminal.get("artifacts", {})) != set(artifact_names):
                     raise ValueError("V232 artifact roster differs")
                 for name, identity in terminal["artifacts"].items():
                     body = s3.get_object(Bucket=BUCKET,
@@ -297,7 +330,7 @@ def launch(attempt: str) -> None:
                         size += len(chunk)
                     if size != identity["bytes"] or value.hexdigest() != identity["sha256"]:
                         raise ValueError(f"V232 artifact readback differs: {name}")
-                for mode in ("linear", "decoded"):
+                for mode in (("decoded", "blocked") if blocked else ("linear", "decoded")):
                     for name in (f"{mode}.raw.jsonl", f"{mode}.loaded.raw.jsonl"):
                         body = s3.get_object(Bucket=BUCKET,
                             Key=f"{prefix}/sealed/{name}")["Body"].read()
@@ -305,28 +338,30 @@ def launch(attempt: str) -> None:
                             raise ValueError(f"V232 sealed {name} differs")
                 quality = json.loads(s3.get_object(Bucket=BUCKET,
                     Key=f"{prefix}/artifacts/quality.json")["Body"].read())
-                linear = json.loads(s3.get_object(Bucket=BUCKET,
-                    Key=f"{prefix}/artifacts/linear.serving.json")["Body"].read())
-                decoded = json.loads(s3.get_object(Bucket=BUCKET,
-                    Key=f"{prefix}/artifacts/decoded.serving.json")["Body"].read())
+                control_name = "decoded" if blocked else "linear"
+                candidate_name = "blocked" if blocked else "decoded"
+                control = json.loads(s3.get_object(Bucket=BUCKET,
+                    Key=f"{prefix}/artifacts/{control_name}.serving.json")["Body"].read())
+                candidate = json.loads(s3.get_object(Bucket=BUCKET,
+                    Key=f"{prefix}/artifacts/{candidate_name}.serving.json")["Body"].read())
                 closed_epoch = time.time()
-                closeout = {"schema": SCHEMA + "-closeout", "source_commit": commit,
+                closeout = {"schema": schema + "-closeout", "source_commit": commit,
                             "source_archive_sha256": archive_sha,
                             "terminal_sha256": terminal["terminal_sha256"],
                             "instance_id": instance_id, "final_state": "terminated",
                             "spot_quote_usd_per_hour": quote,
                             "estimated_compute_usd_to_closeout":
                                 (closed_epoch - launched_epoch) * quote / 3600,
-                            "quality": quality, "linear": linear, "decoded": decoded,
+                            "quality": quality, control_name: control, candidate_name: candidate,
                             "gate_pass": quality["pass"]}
                 put_if_absent(prefix + "/closeout.json",
                               json.dumps(closeout, sort_keys=True).encode())
                 print(json.dumps({"instance_id": instance_id,
                                   "final_state": "terminated", "artifact_replay": "pass",
                                   "gate_pass": quality["pass"],
-                                  "linear_loaded": linear["loaded"],
-                                  "decoded_loaded": decoded["loaded"],
-                                  "decode_ns": decoded["decode_ns"]}), flush=True)
+                                  "control_loaded": control["loaded"],
+                                  "candidate_loaded": candidate["loaded"],
+                                  "decode_ns": candidate["decode_ns"]}), flush=True)
                 return
             except ClientError as error:
                 if error.response.get("Error", {}).get("Code") not in {"NoSuchKey", "404", "NotFound"}:
@@ -348,7 +383,8 @@ def launch(attempt: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", default="a0001")
+    parser.add_argument("--blocked", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-v232-mutation-overlay-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        launch(args.attempt)
+        launch(args.attempt, args.blocked)

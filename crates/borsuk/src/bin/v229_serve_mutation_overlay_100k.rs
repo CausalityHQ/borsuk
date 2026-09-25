@@ -67,12 +67,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     if args.len() != 6 && args.len() != 8 {
         return Err(
-            "usage: v229_serve_mutation_overlay_100k ARTIFACT_DIR REQUESTS BASE_RAW RAW SUMMARY [linear-10k|decoded-10k LOADED_RAW]"
+            "usage: v229_serve_mutation_overlay_100k ARTIFACT_DIR REQUESTS BASE_RAW RAW SUMMARY [linear-10k|decoded-10k|blocked-10k LOADED_RAW]"
                 .into(),
         );
     }
     let mode = args.get(6).map(String::as_str).unwrap_or("linear-1k");
-    if !matches!(mode, "linear-1k" | "linear-10k" | "decoded-10k") {
+    if !matches!(
+        mode,
+        "linear-1k" | "linear-10k" | "decoded-10k" | "blocked-10k"
+    ) {
         return Err("unknown mutation gate mode".into());
     }
     let stride = if mode == "linear-1k" { 100 } else { 10 };
@@ -151,8 +154,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let decode_start = Instant::now();
     if mode == "decoded-10k" {
         overlay = overlay.with_decoded_delta(cap)?;
+    } else if mode == "blocked-10k" {
+        overlay = overlay.with_blocked_delta(cap)?;
     }
-    let decode_ns = if mode == "decoded-10k" {
+    let decode_ns = if matches!(mode, "decoded-10k" | "blocked-10k") {
         decode_start.elapsed().as_nanos() as u64
     } else {
         0
@@ -251,6 +256,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({
                 "schema":if mode == "linear-1k" {
                     "borsuk-v229-mutation-overlay-100k-serving-v1"
+                } else if mode == "blocked-10k" {
+                    "borsuk-v234-blocked-delta-100k-serving-v1"
                 } else {
                     "borsuk-v232-decoded-delta-100k-serving-v1"
                 },
