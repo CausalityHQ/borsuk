@@ -65,18 +65,17 @@ fn peak_rss() -> Result<u64, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 6 && args.len() != 7 {
+    if args.len() != 6 && args.len() != 8 {
         return Err(
-            "usage: v229_serve_mutation_overlay_100k ARTIFACT_DIR REQUESTS BASE_RAW RAW SUMMARY [linear-10k|indexed-10k]"
+            "usage: v229_serve_mutation_overlay_100k ARTIFACT_DIR REQUESTS BASE_RAW RAW SUMMARY [linear-10k|decoded-10k LOADED_RAW]"
                 .into(),
         );
     }
     let mode = args.get(6).map(String::as_str).unwrap_or("linear-1k");
-    if !matches!(mode, "linear-1k" | "linear-10k" | "indexed-10k") {
+    if !matches!(mode, "linear-1k" | "linear-10k" | "decoded-10k") {
         return Err("unknown mutation gate mode".into());
     }
     let stride = if mode == "linear-1k" { 100 } else { 10 };
-    let upsert_rows = ROWS / stride;
     let dir = Path::new(&args[1]);
     let artifact = |name: &str| -> Result<Value, Box<dyn Error>> {
         let path = dir.join(name);
@@ -145,16 +144,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cap = if mode == "linear-1k" {
         2_000_000
     } else {
-        128 * 1024 * 1024
+        64 * 1024 * 1024
     };
     let mut overlay = ResidentGraphOverlay::new(generation, mutations, cap)?;
     let mutation_prepare_ns = mutation_start.elapsed().as_nanos() as u64;
-    let index_start = Instant::now();
-    if mode == "indexed-10k" {
-        overlay = overlay.with_delta_index(256, cap)?;
+    let decode_start = Instant::now();
+    if mode == "decoded-10k" {
+        overlay = overlay.with_decoded_delta(cap)?;
     }
-    let index_build_ns = if mode == "indexed-10k" {
-        index_start.elapsed().as_nanos() as u64
+    let decode_ns = if mode == "decoded-10k" {
+        decode_start.elapsed().as_nanos() as u64
     } else {
         0
     };
@@ -188,13 +187,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     raw.flush()?;
     let loaded_wall = Instant::now();
-    let loaded_times = std::thread::scope(|scope| -> Result<Vec<u64>, Box<dyn Error>> {
+    let loaded_times = std::thread::scope(|scope| -> Result<Vec<(usize, u64)>, Box<dyn Error>> {
         let mut handles = Vec::with_capacity(WORKERS);
         for worker in 0..WORKERS {
             let overlay = &overlay;
             let requests = &requests;
             let expected = &expected;
-            handles.push(scope.spawn(move || -> Result<Vec<u64>, String> {
+            handles.push(scope.spawn(move || -> Result<Vec<(usize, u64)>, String> {
                 let view = overlay
                     .base()
                     .cosine_view()
@@ -208,7 +207,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let (ids, _) = bound
                         .search(&requests[ordinal].query, 100, 2048, 2048, &mut workspace)
                         .map_err(|error| error.to_string())?;
-                    times.push(start.elapsed().as_nanos() as u64);
+                    times.push((ordinal, start.elapsed().as_nanos() as u64));
                     if ids != expected[ordinal] {
                         return Err(format!("loaded ID mismatch at {ordinal}"));
                     }
@@ -232,6 +231,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("loaded count differs".into());
     }
     let mut loaded_times = loaded_times;
+    loaded_times.sort_unstable_by_key(|row| row.0);
+    if let Some(path) = args.get(7) {
+        let mut out = BufWriter::new(File::create(path)?);
+        for (ordinal, elapsed) in &loaded_times {
+            serde_json::to_writer(&mut out, &json!({"ordinal":ordinal,"whole_ns":elapsed}))?;
+            out.write_all(b"\n")?;
+        }
+        out.flush()?;
+    }
+    let mut loaded_values = loaded_times
+        .into_iter()
+        .map(|row| row.1)
+        .collect::<Vec<_>>();
     fs::write(
         &args[5],
         format!(
@@ -240,20 +252,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "schema":if mode == "linear-1k" {
                     "borsuk-v229-mutation-overlay-100k-serving-v1"
                 } else {
-                    "borsuk-v231-indexed-delta-100k-serving-v1"
+                    "borsuk-v232-decoded-delta-100k-serving-v1"
                 },
                 "dataset":"ReLAION-100k D768","split":"development-256-plus-method-heldout-744-prior-used",
                 "queries":QUERIES,"workers":WORKERS,"k":100,"ef":2048,"shortlist":2048,
-                "upsert_rows":upsert_rows,"upsert_stride":stride,"unchanged_vectors":true,
-                "mode":mode,"index_candidates":if mode == "indexed-10k" { 256 } else { 0 },
-                "index_build_ns":index_build_ns,
-                "mutation_prepare_ns":mutation_prepare_ns,
+                "upsert_rows":ROWS/stride,"upsert_stride":stride,"unchanged_vectors":true,
+                "mode":mode,"mutation_prepare_ns":mutation_prepare_ns,"decode_ns":decode_ns,
                 "root_sha256":root_sha,"graph_sha256":GRAPH_SHA,
                 "overlay_resident_bytes":overlay.resident_bytes(),
-                "loaded":{"p50_ns":percentile(&mut loaded_times,50),
-                    "p90_ns":percentile(&mut loaded_times,90),
-                    "p95_ns":percentile(&mut loaded_times,95),
-                    "p99_ns":percentile(&mut loaded_times,99),
+                "loaded_raw_sha256":args.get(7).map(|path| digest(Path::new(path))).transpose()?,
+                "loaded_wall_ns":loaded_wall_ns,
+                "loaded":{"p50_ns":percentile(&mut loaded_values,50),
+                    "p90_ns":percentile(&mut loaded_values,90),
+                    "p95_ns":percentile(&mut loaded_values,95),
+                    "p99_ns":percentile(&mut loaded_values,99),
                     "qps":QUERIES as f64/(loaded_wall_ns as f64/1e9)},
                 "sequential":{"p50_ns":percentile(&mut sequential_times,50),
                     "p90_ns":percentile(&mut sequential_times,90),

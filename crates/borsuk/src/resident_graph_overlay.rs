@@ -6,7 +6,6 @@ use half::f16;
 use thiserror::Error;
 
 use crate::{
-    centroid_hnsw::CentroidHnsw,
     pq64_nominee::Pq64CosineView,
     resident_fp16_tier::ResidentFp16Error,
     resident_graph_generation::{ResidentGraphGeneration, ResidentGraphGenerationError},
@@ -43,9 +42,8 @@ pub struct ResidentGraphOverlay {
     masked: Vec<u8>,
     delta_ids: Vec<u64>,
     delta_coordinates: Vec<u16>,
+    delta_decoded: Option<Vec<f32>>,
     delta_norm_inverse: Vec<f64>,
-    delta_index: Option<CentroidHnsw>,
-    delta_candidates: usize,
 }
 
 pub struct ResidentGraphOverlayView<'a, 'b> {
@@ -125,9 +123,8 @@ impl ResidentGraphOverlay {
             masked,
             delta_ids,
             delta_coordinates,
+            delta_decoded: None,
             delta_norm_inverse,
-            delta_index: None,
-            delta_candidates: 0,
         };
         if overlay.resident_bytes() > max_delta_bytes {
             return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
@@ -141,54 +138,40 @@ impl ResidentGraphOverlay {
         self.masked.capacity()
             + self.delta_ids.capacity() * 8
             + self.delta_coordinates.capacity() * 2
-            + self.delta_norm_inverse.capacity() * 8
             + self
-                .delta_index
+                .delta_decoded
                 .as_ref()
-                .map_or(0, CentroidHnsw::resident_bytes)
+                .map_or(0, |rows| rows.capacity() * 4)
+            + self.delta_norm_inverse.capacity() * 8
     }
 
-    /// Index the immutable mutation snapshot with the existing deterministic
-    /// HNSW builder. Exact FP16 reranking still orders returned candidates.
-    pub fn with_delta_index(
+    /// Store exactly equivalent FP32 values once, then keep the original
+    /// FP64 cosine accumulation and tie ordering during every query.
+    pub fn with_decoded_delta(
         mut self,
-        candidate_rows: usize,
         max_delta_bytes: usize,
     ) -> Result<Self, ResidentGraphOverlayError> {
-        let rows = self.delta_ids.len();
-        if rows < 2 || candidate_rows == 0 || candidate_rows > rows {
-            return Err(ResidentGraphOverlayError::Invalid("delta index geometry"));
+        if self.delta_decoded.is_some() {
+            return Err(ResidentGraphOverlayError::Invalid("delta representation"));
         }
-        let dims = self.base.dimensions();
-        let unit_bytes = rows
-            .checked_mul(dims)
-            .and_then(|count| count.checked_mul(4))
-            .ok_or(ResidentGraphOverlayError::Invalid("delta index size"))?;
-        if self
-            .resident_bytes()
-            .checked_add(unit_bytes)
+        let coordinate_bytes = self
+            .delta_coordinates
+            .len()
+            .checked_mul(4)
+            .ok_or(ResidentGraphOverlayError::Invalid("decoded delta size"))?;
+        let remaining = self.resident_bytes() - self.delta_coordinates.capacity() * 2;
+        if remaining
+            .checked_add(coordinate_bytes)
             .is_none_or(|bytes| bytes > max_delta_bytes)
         {
             return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
         }
-        let unit = (0..rows)
-            .map(|row| {
-                self.delta_coordinates[row * dims..(row + 1) * dims]
-                    .iter()
-                    .map(|&bits| {
-                        (f64::from(f16::from_bits(bits).to_f32()) * self.delta_norm_inverse[row])
-                            as f32
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        // ponytail: rebuild the small immutable delta at publication; use an
-        // incremental/tiered index if measured update throughput requires it.
-        self.delta_index = Some(
-            CentroidHnsw::build_reachable_with(&unit, 16, 32, 64, candidate_rows)
-                .ok_or(ResidentGraphOverlayError::Invalid("delta index build"))?,
+        self.delta_decoded = Some(
+            std::mem::take(&mut self.delta_coordinates)
+                .into_iter()
+                .map(|bits| f16::from_bits(bits).to_f32())
+                .collect(),
         );
-        self.delta_candidates = candidate_rows;
         if self.resident_bytes() > max_delta_bytes {
             return Err(ResidentGraphOverlayError::Invalid("delta resident cap"));
         }
@@ -228,8 +211,8 @@ impl ResidentGraphOverlayView<'_, '_> {
             workspace,
             &self.overlay.masked,
         )?;
-        let mut delta_rows_scanned = 0;
-        if !self.overlay.delta_ids.is_empty() {
+        let delta_rows_scanned = self.overlay.delta_ids.len();
+        if delta_rows_scanned != 0 {
             let norm = query
                 .iter()
                 .fold(0.0_f64, |sum, &value| {
@@ -244,37 +227,25 @@ impl ResidentGraphOverlayView<'_, '_> {
                 .map(|&value| f64::from(value) / norm)
                 .collect::<Vec<_>>();
             let dimensions = self.overlay.base.dimensions();
-            let mut score_delta = |row: usize| {
-                delta_rows_scanned += 1;
-                let id = self.overlay.delta_ids[row];
+            for (row, &id) in self.overlay.delta_ids.iter().enumerate() {
                 let mut dot = 0.0_f64;
-                for (coordinate, &bits) in self.overlay.delta_coordinates
-                    [row * dimensions..(row + 1) * dimensions]
-                    .iter()
-                    .enumerate()
-                {
-                    dot += f64::from(f16::from_bits(bits).to_f32()) * normalized[coordinate];
-                }
-                scored.push((id, dot * self.overlay.delta_norm_inverse[row]));
-            };
-            if let Some(index) = &self.overlay.delta_index {
-                if k <= self.overlay.delta_candidates {
-                    let unit = normalized
+                if let Some(decoded) = &self.overlay.delta_decoded {
+                    for (coordinate, &value) in decoded[row * dimensions..(row + 1) * dimensions]
                         .iter()
-                        .map(|&value| value as f32)
-                        .collect::<Vec<_>>();
-                    for row in index.nearest(&unit, self.overlay.delta_candidates) {
-                        score_delta(row as usize);
+                        .enumerate()
+                    {
+                        dot += f64::from(value) * normalized[coordinate];
                     }
                 } else {
-                    for row in 0..self.overlay.delta_ids.len() {
-                        score_delta(row);
+                    for (coordinate, &bits) in self.overlay.delta_coordinates
+                        [row * dimensions..(row + 1) * dimensions]
+                        .iter()
+                        .enumerate()
+                    {
+                        dot += f64::from(f16::from_bits(bits).to_f32()) * normalized[coordinate];
                     }
                 }
-            } else {
-                for row in 0..self.overlay.delta_ids.len() {
-                    score_delta(row);
-                }
+                scored.push((id, dot * self.overlay.delta_norm_inverse[row]));
             }
         }
         scored.sort_unstable_by(|left, right| {

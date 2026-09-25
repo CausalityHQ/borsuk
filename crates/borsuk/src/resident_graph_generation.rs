@@ -642,24 +642,25 @@ mod tests {
         assert_eq!(ids, vec![99, 19, 42, 33]);
         assert_eq!(stats.delta_rows_scanned, 2);
         assert_eq!(stats.masked_shortlist_rows, 2);
-        let indexed = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 100_000)
+        let decoded = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 100_000)
             .unwrap()
-            .with_delta_index(2, 100_000)
+            .with_decoded_delta(100_000)
             .unwrap();
         assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41)
-            .unwrap().with_delta_index(2, 41).is_err());
-        assert!(indexed.resident_bytes() > overlay.resident_bytes());
-        let indexed_bound = indexed.bind(&old_view).unwrap();
-        assert_eq!(
-            indexed_bound
-                .search(&[1.0, 0.0], 2, 4, 4, &mut old_workspace)
-                .unwrap()
-                .0,
-            overlay_bound
-                .search(&[1.0, 0.0], 2, 4, 4, &mut old_workspace)
-                .unwrap()
-                .0
-        );
+            .unwrap().with_decoded_delta(41).is_err());
+        let decoded_bound = decoded.bind(&old_view).unwrap();
+        for query in [[1.0, 0.0], [0.0, 1.0]] {
+            assert_eq!(
+                decoded_bound
+                    .search(&query, 4, 4, 4, &mut old_workspace)
+                    .unwrap()
+                    .0,
+                overlay_bound
+                    .search(&query, 4, 4, 4, &mut old_workspace)
+                    .unwrap()
+                    .0
+            );
+        }
         let extended = ResidentGraphOverlay::new(Arc::clone(&held_reader),
             vec![ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) }], 21).unwrap();
         let extended_view = extended.bind(&old_view).unwrap();
