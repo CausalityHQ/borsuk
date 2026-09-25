@@ -397,6 +397,9 @@ established global priced optimum remains optimal under hard caps when
 its witness satisfies those caps, and expands the two-state uncapped
 work count to `2 × sites`. Neither theorem verifies that the executable
 recurrence attains the optimum or that its elapsed time meets a target.
+The V201 one-cap corollary shows that an optimum under either the unit or
+GET cap is also optimal under both when its witness satisfies the other
+cap. Solver refinement and actual time remain independent obligations.
 These are symbolic implications, not measurements of Python/Rust CPU,
 S3 tail latency or charged RAM. The exact offline reference has tests,
 but no formal refinement theorem connecting its recurrence to this model.

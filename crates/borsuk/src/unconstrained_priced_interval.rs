@@ -20,6 +20,8 @@ pub enum CoverError {
     InvalidGeometry,
     ArithmeticOverflow,
     InvalidWitness,
+    NoFeasibleCover,
+    TraceBudgetExceeded,
 }
 
 #[derive(Clone, Copy)]

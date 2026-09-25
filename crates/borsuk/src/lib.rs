@@ -78,6 +78,7 @@ pub mod serving_generation;
 pub mod native_source_tier;
 pub mod resident_fp16_tier;
 pub mod unconstrained_priced_interval;
+pub mod relaxed_priced_interval;
 pub mod native_source_hydration;
 pub mod native_source_id_map;
 mod physical_layout;

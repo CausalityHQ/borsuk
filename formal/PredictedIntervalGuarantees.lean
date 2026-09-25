@@ -141,6 +141,24 @@ theorem admitted_unconstrained_optimum_is_capped_optimum
   · intro alternative _
     exact unconstrainedOptimal alternative
 
+/-! Solving exactly under either one of two hard caps is enough when the
+relaxed winner also satisfies the other cap. This licenses the V201
+unit-only/GET-only hierarchy conditionally on solver correctness and witness
+accounting; it does not certify either executable recurrence. -/
+theorem admitted_one_cap_optimum_is_two_cap_optimum
+    {Plan : Type} (score : Plan → Int)
+    (firstCap secondCap : Plan → Prop) (winner : Plan)
+    (relaxedOptimal : ∀ alternative, firstCap alternative →
+      score alternative ≤ score winner)
+    (firstAdmitted : firstCap winner)
+    (secondAdmitted : secondCap winner) :
+    firstCap winner ∧ secondCap winner ∧
+      ∀ alternative, firstCap alternative ∧ secondCap alternative →
+        score alternative ≤ score winner := by
+  refine ⟨firstAdmitted, secondAdmitted, ?_⟩
+  intro alternative both
+  exact relaxedOptimal alternative both.1
+
 /-! The two-state uncapped recurrence visits a linear number of states.
 An elapsed-time ceiling still needs a measured or separately verified
 per-site implementation bound, including scoring and backtrace costs. -/
