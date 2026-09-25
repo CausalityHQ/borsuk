@@ -25,11 +25,40 @@ pub struct Pq64Router {
     codes: Vec<u8>,
 }
 
+/// One query's source-trained ADC table, reused across graph visits.
+pub struct Pq64PreparedQuery<'a> {
+    router: &'a Pq64Router,
+    table: Vec<f32>,
+}
+
+impl Pq64PreparedQuery<'_> {
+    /// Score one source physical row without rebuilding the 64-subspace table.
+    pub fn score_row(&self, row: usize) -> Result<f32, Pq64Error> {
+        if row >= self.router.rows {
+            return Err(Pq64Error::InvalidRequest);
+        }
+        let mut score = 0.0f32;
+        for subspace in 0..64 {
+            score += self.table[subspace * 256
+                + usize::from(self.router.codes[row * 64 + subspace])];
+        }
+        if !score.is_finite() {
+            return Err(Pq64Error::InvalidQuery);
+        }
+        Ok(score)
+    }
+}
+
 impl Pq64Router {
     pub fn rows(&self) -> usize { self.rows }
     pub fn dimensions(&self) -> usize { self.dimensions }
     pub fn page_rows(&self) -> usize { self.page_rows }
     pub fn blocks_per_page(&self) -> usize { self.blocks_per_page }
+
+    /// Prepare one ADC lookup table for repeated per-row graph scores.
+    pub fn prepare_query(&self, query: &[f32]) -> Result<Pq64PreparedQuery<'_>, Pq64Error> {
+        Ok(Pq64PreparedQuery { router: self, table: self.adc_table(query)? })
+    }
 
     fn adc_table(&self, query: &[f32]) -> Result<Vec<f32>, Pq64Error> {
         if query.len() != self.dimensions || query.iter().any(|value| !value.is_finite()) {
@@ -277,6 +306,9 @@ mod tests {
             32, 64, 32, 1, vec![0.0f32; 64], books, codes,
         ).unwrap();
         assert_eq!(router.score_rows(&[0.0; 64], &[7, 2]).unwrap(), vec![4.0, 0.0]);
+        let prepared = router.prepare_query(&[0.0; 64]).unwrap();
+        assert_eq!(prepared.score_row(7).unwrap(), 4.0);
+        assert_eq!(prepared.score_row(2).unwrap(), 0.0);
         assert_eq!(router.score_rows(&[0.0; 64], &[32]),
                    Err(super::Pq64Error::InvalidRequest));
         assert_eq!(router.score_rows(&[0.0; 64], &[7, 7]),
