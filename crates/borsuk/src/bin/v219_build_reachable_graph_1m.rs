@@ -43,16 +43,20 @@ fn peak_rss() -> Result<u64, Box<dyn Error>> {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
+    let fp16_source = args.len() == 6 && args[5] == "--fp16-source";
     if args.len() != 6 {
-        return Err("usage: v219_build_reachable_graph_1m PREP PLANE VECTORS GRAPH SUMMARY".into());
+        return Err("usage: v219_build_reachable_graph_1m PREP PLANE VECTORS GRAPH SUMMARY | PREP PLANE GRAPH SUMMARY --fp16-source".into());
     }
+    let graph_path = if fp16_source { &args[3] } else { &args[4] };
+    let summary_path = if fp16_source { &args[4] } else { &args[5] };
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     if prep["schema"] != "borsuk-v217-graph-1m-preparation-v1"
         || prep["source_sha256"] != SOURCE
         || prep["rows"].as_u64() != Some(ROWS as u64)
         || prep["dimensions"].as_u64() != Some(DIMS as u64)
         || prep["plane_sha256"].as_str() != Some(digest(Path::new(&args[2]))?.as_str())
-        || prep["vectors_sha256"].as_str() != Some(digest(Path::new(&args[3]))?.as_str())
+        || (!fp16_source
+            && prep["vectors_sha256"].as_str() != Some(digest(Path::new(&args[3]))?.as_str()))
     {
         return Err("graph build input identity differs".into());
     }
@@ -66,20 +70,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         prep["generation"].as_u64().ok_or("generation missing")?,
         2_000_000_000,
     )?;
-    let mut input = BufReader::new(File::open(&args[3])?);
-    let mut row = vec![0u8; DIMS * 4];
-    let mut vectors = Vec::with_capacity(ROWS);
-    for _ in 0..ROWS {
-        input.read_exact(&mut row)?;
-        vectors.push(
-            row.chunks_exact(4)
-                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                .collect(),
-        );
-    }
-    if input.read(&mut [0u8; 1])? != 0 {
-        return Err("graph source trailing bytes".into());
-    }
+    let vectors = if fp16_source {
+        (0..ROWS)
+            .map(|ordinal| plane.vector_f32(ordinal))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut input = BufReader::new(File::open(&args[3])?);
+        let mut row = vec![0u8; DIMS * 4];
+        let mut vectors = Vec::with_capacity(ROWS);
+        for _ in 0..ROWS {
+            input.read_exact(&mut row)?;
+            vectors.push(
+                row.chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                    .collect(),
+            );
+        }
+        if input.read(&mut [0u8; 1])? != 0 {
+            return Err("graph source trailing bytes".into());
+        }
+        vectors
+    };
     let graph = ResidentVectorGraph::build(&vectors, &plane, 32, 64, 128)?;
     let structure = graph.structural_stats();
     if structure.reachable != ROWS
@@ -89,15 +100,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("reachable graph structural gate failed".into());
     }
     let heap_bytes = graph.heap_bytes();
-    let graph_sha = graph.write_authenticated(Path::new(&args[4]))?;
+    let graph_sha = graph.write_authenticated(Path::new(graph_path))?;
     let elapsed = started.elapsed().as_nanos() as u64;
     fs::write(
-        &args[5],
+        summary_path,
         format!(
             "{}\n",
             json!({"schema":"borsuk-v219-reachable-graph-build-1m-v1",
         "source_sha256":SOURCE,"plane_sha256":prep["plane_sha256"],
-        "graph_sha256":graph_sha,"graph_bytes":fs::metadata(&args[4])?.len(),
+        "graph_sha256":graph_sha,"graph_bytes":fs::metadata(graph_path)?.len(),
+        "construction_source":if fp16_source { "authenticated-fp16-plane" } else { "authenticated-f32-source" },
         "graph_heap_bytes":heap_bytes,"structure":structure,
         "build_ns":elapsed,"build_peak_rss_bytes":peak_rss()?,
         "rows":ROWS,"dimensions":DIMS,"generation":prep["generation"]})
