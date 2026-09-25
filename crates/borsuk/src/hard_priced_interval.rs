@@ -105,6 +105,7 @@ pub fn hard_priced_cover(
     for site in sites {
         let weight = *weights.get(&site).unwrap_or(&0);
         let gap = previous.map_or(1, |old| site - old);
+        let required_here = required.contains(&site);
         let mut next_closed = vec![-1_i64; slots];
         let mut next_open = vec![-1_i64; slots];
         let mut closed_from_open = vec![false; slots];
@@ -115,7 +116,7 @@ pub fn hard_priced_cover(
                 let from_open = opened[slot] > closed[slot];
                 closed_from_open[slot] = from_open;
                 let base = closed[slot].max(opened[slot]);
-                if !required.contains(&site) {
+                if !required_here {
                     next_closed[slot] = base;
                 }
                 if base >= 0 && gets < get_cap && units < unit_cap {
@@ -150,7 +151,7 @@ pub fn hard_priced_cover(
         history.push(Trace {
             site,
             gap,
-            required: required.contains(&site),
+            required: required_here,
             closed_from_open,
             continued,
         });
