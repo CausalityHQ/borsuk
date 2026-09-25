@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use crate::{
-    centroid_hnsw::build_hnsw_adjacency,
+    centroid_hnsw::build_reachable_hnsw_adjacency,
     pq64_nominee::{Pq64CosineView, Pq64Router},
     resident_fp16_tier::{ResidentFp16Error, ResidentFp16Tier},
 };
@@ -25,6 +25,19 @@ pub struct ResidentVectorGraph {
     generation: u64,
     source_sha256: [u8; 32],
     plane_sha256: [u8; 32],
+}
+
+/// Directed base-layer topology of an authenticated resident graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct GraphStructureStats {
+    pub rows: usize,
+    pub base_edges: usize,
+    pub min_degree: usize,
+    pub max_degree: usize,
+    pub min_indegree: usize,
+    pub max_indegree: usize,
+    pub below_four_indegree: usize,
+    pub reachable: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -256,7 +269,7 @@ impl ResidentVectorGraph {
                     .collect::<Vec<_>>(),
             );
         }
-        let built = build_hnsw_adjacency(&unit, m, m0, ef_construction, ef_construction)
+        let built = build_reachable_hnsw_adjacency(&unit, m, m0, ef_construction, ef_construction)
             .ok_or(ResidentFp16Error::Invalid("graph build failed"))?;
         Ok(Self {
             neighbours: built.neighbours,
@@ -282,6 +295,51 @@ impl ResidentVectorGraph {
                             .sum::<usize>()
                 })
                 .sum::<usize>()
+    }
+
+    /// Audit base-layer degree and reachability from the graph entry.
+    pub fn structural_stats(&self) -> GraphStructureStats {
+        let rows = self.neighbours.len();
+        let mut indegree = vec![0usize; rows];
+        let mut seen = vec![false; rows];
+        let mut queue = Vec::with_capacity(rows);
+        let mut min_degree = usize::MAX;
+        let mut max_degree = 0;
+        let mut base_edges = 0;
+        for tower in &self.neighbours {
+            let edges = tower.last().expect("graph has a base layer");
+            min_degree = min_degree.min(edges.len());
+            max_degree = max_degree.max(edges.len());
+            base_edges += edges.len();
+            for &target in edges {
+                indegree[target as usize] += 1;
+            }
+        }
+        seen[self.entry as usize] = true;
+        queue.push(self.entry);
+        let mut front = 0;
+        while front < queue.len() {
+            let source = queue[front] as usize;
+            front += 1;
+            for &target in self.neighbours[source]
+                .last()
+                .expect("graph has a base layer")
+            {
+                if !std::mem::replace(&mut seen[target as usize], true) {
+                    queue.push(target);
+                }
+            }
+        }
+        GraphStructureStats {
+            rows,
+            base_edges,
+            min_degree,
+            max_degree,
+            min_indegree: *indegree.iter().min().expect("graph has rows"),
+            max_indegree: *indegree.iter().max().expect("graph has rows"),
+            below_four_indegree: indegree.iter().filter(|&&degree| degree < 4).count(),
+            reachable: queue.len(),
+        }
     }
 
     /// Graph beam search returns stable IDs ordered by resident cosine score.
@@ -674,10 +732,16 @@ mod tests {
         let tier =
             ResidentFp16Tier::open_authenticated(&path, &digest, SOURCE, 4, 2, 213, 48).unwrap();
         let graph = ResidentVectorGraph::build(&vectors, &tier, 4, 4, 8).unwrap();
+        let structure = graph.structural_stats();
+        assert_eq!(structure.rows, 4);
+        assert_eq!(structure.reachable, 4);
+        assert_eq!(structure.min_indegree, 3);
+        assert_eq!(structure.max_degree, 3);
         let graph_path = directory.path().join("graph.bin");
         let graph_digest = graph.write_authenticated(&graph_path).unwrap();
         let restored =
             ResidentVectorGraph::open_authenticated(&graph_path, &graph_digest, &tier).unwrap();
+        assert_eq!(restored.structural_stats(), structure);
         assert_eq!(
             restored.search(&[1.0, 0.0], &tier, 2, 4).unwrap(),
             vec![42, 7]

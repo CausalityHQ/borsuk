@@ -489,6 +489,113 @@ pub(crate) fn build_hnsw_adjacency(
     })
 }
 
+/// Build source-nearest HNSW edges, then retain a sparse physical-order
+/// backbone and enough local reverse edges to avoid directed row starvation.
+/// The physical order must be chosen without query labels. Added edges are
+/// never paid for by evicting another row's last incoming path.
+pub(crate) fn build_reachable_hnsw_adjacency(
+    vectors: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+) -> Option<CentroidHnswAdjacency> {
+    if m0 >= 256 {
+        return None;
+    }
+    let mut built = build_hnsw_adjacency(vectors, m, m0, ef_construction, ef_search)?;
+    let rows = built.neighbours.len();
+    let required = 4.min(rows - 1);
+    let mut indegree = vec![0usize; rows];
+    for tower in &built.neighbours {
+        for &target in tower.last()? {
+            indegree[target as usize] += 1;
+        }
+    }
+    // A one-edge-per-row directed cycle provides an O(N) reachability
+    // backbone even if all geometric reciprocal bridges were pruned.
+    for source in 0..rows {
+        let target = (source + 1) % rows;
+        let base = built.neighbours[source].last_mut()?;
+        if !base.contains(&(target as u32)) {
+            if base.len() >= 256 {
+                return None;
+            }
+            base.push(target as u32);
+            indegree[target] += 1;
+        }
+    }
+    for target in 0..rows {
+        if indegree[target] >= required {
+            continue;
+        }
+        let local = built.neighbours[target].last()?.clone();
+        for source in local {
+            if indegree[target] >= required {
+                break;
+            }
+            add_incoming_base(
+                &mut built.neighbours,
+                &mut indegree,
+                source as usize,
+                target,
+            );
+        }
+        // The source-only physical order is a deterministic fallback when
+        // existing local links do not supply four distinct incoming rows.
+        // Bound fallback work by the configured degree, independent of N.
+        // If the local window cannot satisfy the floor, fail the build.
+        for offset in 1..=m0.saturating_mul(4).min(rows - 1) {
+            if indegree[target] >= required {
+                break;
+            }
+            let source = (target + rows - offset) % rows;
+            add_incoming_base(&mut built.neighbours, &mut indegree, source, target);
+        }
+        if indegree[target] < required {
+            return None;
+        }
+    }
+    if reachable_base_count(&built.neighbours, built.entry) != rows {
+        return None;
+    }
+    Some(built)
+}
+
+fn add_incoming_base(
+    neighbours: &mut [Vec<Vec<u32>>],
+    indegree: &mut [usize],
+    source: usize,
+    target: usize,
+) {
+    if source == target {
+        return;
+    }
+    let base = neighbours[source].last_mut().expect("base layer exists");
+    if base.len() < 256 && !base.contains(&(target as u32)) {
+        base.push(target as u32);
+        indegree[target] += 1;
+    }
+}
+
+fn reachable_base_count(neighbours: &[Vec<Vec<u32>>], entry: u32) -> usize {
+    let mut seen = vec![false; neighbours.len()];
+    let mut queue = Vec::with_capacity(neighbours.len());
+    seen[entry as usize] = true;
+    queue.push(entry);
+    let mut front = 0;
+    while front < queue.len() {
+        let node = queue[front] as usize;
+        front += 1;
+        for &target in neighbours[node].last().expect("base layer exists") {
+            if !std::mem::replace(&mut seen[target as usize], true) {
+                queue.push(target);
+            }
+        }
+    }
+    queue.len()
+}
+
 fn nearest_with_adjacency(
     adjacency: &CentroidHnswAdjacency,
     vectors: &[Vec<f32>],
@@ -898,6 +1005,49 @@ impl CentroidHnsw {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn constructed_base_graph_keeps_clustered_rows_reachable() {
+        let vectors = (0..1024)
+            .map(|row| {
+                let cluster = (row / 256) as f32;
+                let local = row % 256;
+                vec![
+                    cluster * 10.0 + (local % 16) as f32 * 0.001,
+                    cluster * 0.1 + (local / 16) as f32 * 0.001,
+                ]
+            })
+            .collect::<Vec<_>>();
+        let built = build_reachable_hnsw_adjacency(&vectors, 8, 16, 32, 32).unwrap();
+        let mut indegree = vec![0usize; vectors.len()];
+        for tower in &built.neighbours {
+            for &neighbor in tower.last().unwrap() {
+                indegree[neighbor as usize] += 1;
+            }
+        }
+        let mut seen = vec![false; vectors.len()];
+        let mut queue = vec![built.entry];
+        seen[built.entry as usize] = true;
+        let mut front = 0;
+        while front < queue.len() {
+            let node = queue[front] as usize;
+            front += 1;
+            for &neighbor in built.neighbours[node].last().unwrap() {
+                if !std::mem::replace(&mut seen[neighbor as usize], true) {
+                    queue.push(neighbor);
+                }
+            }
+        }
+        assert_eq!(
+            queue.len(),
+            vectors.len(),
+            "directed base graph is incomplete"
+        );
+        assert!(
+            indegree.iter().all(|&degree| degree >= 4),
+            "base graph has a row with fewer than four incoming edges"
+        );
+    }
 
     #[test]
     fn epoch_visits_reset_without_reallocating_and_wrap_safely() {

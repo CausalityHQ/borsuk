@@ -44,6 +44,23 @@ bytes, PQ cosine norms 4,000,000 bytes, physical map 8,000,000 bytes, and
 eight visit workspaces 32,000,000 bytes. Cold hydration was 3.149 s.
 These are **in-process** timings, not networked product latency.
 
+## Closed graph attribution
+
+After terminal closure, the authenticated graph artifact was streamed and
+SHA-256-checked again. Its directed base layer contains exactly 64,000,000
+edges, but **37,362/1,000,000 nodes have zero in-degree, 70,473 have fewer
+than four in-edges, and 37,780 are unreachable from its entry node**.
+The independently authenticated V214 100k graph, built by the same code,
+has 6,400,000 base edges, 1,760 zero-in-degree nodes, 4,231 with fewer
+than four in-edges, and 1,791 unreachable from its entry. This growth
+from 1.791% to 3.778% unreachable rows is a direct structural failure.
+`centroid_hnsw.rs` selects the nearest M insert candidates and truncates
+overflowing reciprocal lists to their nearest width; its comment about
+robust pruning does not match the code. SQ8 scoring cannot recover a node
+that graph traversal cannot reach. PQ64 score distortion may still be a
+secondary loss, but topology must be repaired first. The proposed SQ8-only
+falsifier was canceled before any remote run.
+
 The separate graph build took 2,708.716 s (45m 8.7s by the Rust timer;
 45m 12.2s by `/usr/bin/time`) and peaked at 8,359,153,664 bytes RSS.
 The graph artifact was 263,200,298 bytes. Source preparation took 18.14 s
@@ -52,12 +69,10 @@ terminal was uploaded at 10:54:53 UTC on 2026-09-25. At the launch-time
 Spot quote of **$0.3631/instance-hour**, this 51m27s interval implies about
 **$0.311 compute**, an estimate excluding EBS, S3, and billing rounding.
 
-Next, use one cheap ReLAION-100k same-graph falsifier to locate and replace
-the traversal representation: compare PQ64 navigation with a more faithful
-source-cosine score on the same edges and queries, recording pre-rerank
-candidate coverage, exact returned hits, p95 latency, bytes and visit counts.
-Choose one material score/index-format change only if it meets the strongest
-100k BORSUK quality gate at useful latency; then preregister one frozen 1M
-rerun. The existing S3 Vectors ReLAION-1M result uses the development split,
+Next, build one generic reachable graph variant, require all
+100k nodes reachable and incoming-edge coverage, then falsify its exact
+and PQ64 returned quality and latency against the strongest paired 100k
+BORSUK baseline. Only a qualified graph advances to one frozen 1M rerun.
+The existing S3 Vectors ReLAION-1M result uses the development split,
 whereas V217 uses validation, and no matched Turbopuffer result exists. No
 competitor win follows from V217.
