@@ -66,6 +66,17 @@ ARTIFACTS = (
 )
 
 
+def require_complete_terminal(terminal: dict) -> None:
+    """Do not seek success-only artifacts from a failed or partial cell."""
+    if terminal.get("status") != "complete":
+        raise RuntimeError(
+            f"V189 terminal {terminal.get('status')} at "
+            f"{terminal.get('phase')} (exit {terminal.get('exit_code')}); "
+            "see closed artifacts")
+    if not set(ARTIFACTS).issubset(terminal.get("artifacts", {})):
+        raise ValueError("complete V189 terminal lacks artifacts")
+
+
 def download_script() -> str:
     return "\n".join(
         f"aws s3 cp 's3://{BUCKET}/{key}' '{name}' --only-show-errors\n"
@@ -250,9 +261,6 @@ def _launch() -> None:
                         or terminal.get("source_commit") != commit
                         or terminal.get("source_archive_sha256") != archive_sha):
                     raise ValueError("terminal identity differs")
-                if terminal.get("status") == "complete":
-                    if not set(ARTIFACTS).issubset(terminal.get("artifacts", {})):
-                        raise ValueError("complete terminal lacks artifacts")
                 for name, identity in terminal.get("artifacts", {}).items():
                     body = s3.get_object(Bucket=BUCKET,
                         Key=f"{prefix}/artifacts/{name}")["Body"]
@@ -263,6 +271,7 @@ def _launch() -> None:
                         size += len(chunk)
                     if size != identity["bytes"] or digest.hexdigest() != identity["sha256"]:
                         raise ValueError(f"V189 S3 artifact read-back differs: {name}")
+                require_complete_terminal(terminal)
                 holdout_labels_time = s3.head_object(
                     Bucket=BUCKET, Key=f"{prefix}/artifacts/out/source-labels.jsonl"
                 )["LastModified"]
@@ -290,8 +299,6 @@ def _launch() -> None:
                         raise ValueError(f"V189 pre-truth S3 seal differs: {name}")
                 terminal["terminal_sha256"] = hashlib.sha256(raw).hexdigest()
                 print(json.dumps(terminal, sort_keys=True), flush=True)
-                if terminal.get("status") != "complete":
-                    raise RuntimeError("V189 terminal reports failed; see closed artifacts")
                 return
             state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
             if state in {"terminated", "shutting-down"}:

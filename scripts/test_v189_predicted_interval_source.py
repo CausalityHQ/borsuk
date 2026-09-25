@@ -4,7 +4,7 @@ import unittest
 
 from scripts.source_rank_utility import RankUtility
 from scripts.v189_predicted_interval_source import (
-    decide, rank_weights, validate_intervals,
+    candidate_truth, decide, rank_weights, validate_intervals,
 )
 
 
@@ -31,6 +31,9 @@ class V189PredictedIntervalSourceTests(unittest.TestCase):
         model = RankUtility((1.25, 0.5), (2, 2))
         self.assertEqual(rank_weights(model, [4, 7]),
                          {4: 1_250_000, 7: 500_000})
+
+    def test_rank_fit_omits_truth_outside_candidate_universe(self):
+        self.assertEqual(candidate_truth({4: 2, 8: 1}, [4, 7]), {4: 2})
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import time
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -87,6 +88,14 @@ def rank_weights(model: RankUtility, ranked_units: list[int]) -> dict[int, int]:
     return {unit: weight for rank, unit in
             enumerate(ranked_units[:len(model.expected_hits)])
             if (weight := round(model.expected_hits[rank] * SCALE)) > 0}
+
+
+def candidate_truth(truth_by_unit: Mapping[int, int],
+                    ranked_units: Sequence[int]) -> dict[int, int]:
+    """Fit rank utility only on scored units; account outside truth separately."""
+    candidates = set(ranked_units)
+    return {unit: int(hits) for unit, hits in truth_by_unit.items()
+            if unit in candidates}
 
 
 def _features(args: argparse.Namespace, prepare_sha: str) -> tuple[dict, list[dict]]:
@@ -242,7 +251,7 @@ def fit_plan(args: argparse.Namespace) -> None:
         (_margins(feature), masses)
         for feature, masses in zip(features[:FIT], fit_masses, strict=True))
     rank_model = fit_rank_utility(
-        (_rank_scores(feature), masses)
+        (_rank_scores(feature), candidate_truth(masses, feature["ranked_units"]))
         for feature, masses in zip(features[:FIT], fit_masses, strict=True))
     models = {"margin_priced": asdict(margin_model),
               "rank_priced": asdict(rank_model)}
@@ -345,7 +354,7 @@ def evaluate(args: argparse.Namespace) -> None:
         (_margins(feature), masses)
         for feature, masses in zip(features[:FIT], fit_masses, strict=True))
     refit_rank = fit_rank_utility(
-        (_rank_scores(feature), masses)
+        (_rank_scores(feature), candidate_truth(masses, feature["ranked_units"]))
         for feature, masses in zip(features[:FIT], fit_masses, strict=True))
     if refit_margin != margin_model or refit_rank != rank_model:
         raise ValueError("V189 fit model replay differs")
