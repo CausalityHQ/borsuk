@@ -115,7 +115,9 @@ pub fn decode_mutation_snapshot(
     if count > (bytes.len() - HEADER_BYTES) / 9 {
         return Err(ResidentGraphMutationSnapshotError::Invalid("row count"));
     }
-    let mut rows = Vec::with_capacity(count);
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(count)
+        .map_err(|_| ResidentGraphMutationSnapshotError::Invalid("row allocation"))?;
     let mut offset = HEADER_BYTES;
     let mut previous = None;
     for _ in 0..count {
@@ -142,7 +144,10 @@ pub fn decode_mutation_snapshot(
                         ResidentGraphMutationSnapshotError::Invalid("truncated vector"),
                     )?;
                     let mut norm_squared = 0.0_f64;
-                    let mut vector = Vec::with_capacity(dimensions);
+                    let mut vector = Vec::new();
+                    vector.try_reserve_exact(dimensions).map_err(|_| {
+                        ResidentGraphMutationSnapshotError::Invalid("vector allocation")
+                    })?;
                     for coordinate in data.chunks_exact(2) {
                         let value =
                             f16::from_bits(u16::from_le_bytes(coordinate.try_into().unwrap()));
