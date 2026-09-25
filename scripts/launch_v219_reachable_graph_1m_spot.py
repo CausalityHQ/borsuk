@@ -52,6 +52,21 @@ def downloads(rows: tuple) -> str:
     )
 
 
+def describe_state(ec2, instance_id: str, retries: int = 30,
+                   pause_seconds: int = 2) -> str:
+    """Wait through EC2's short post-allocation visibility window."""
+    for attempt in range(retries):
+        try:
+            return ec2.describe_instances(InstanceIds=[instance_id])[
+                "Reservations"][0]["Instances"][0]["State"]["Name"]
+        except ClientError as error:
+            if (error.response.get("Error", {}).get("Code")
+                    != "InvalidInstanceID.NotFound" or attempt + 1 == retries):
+                raise
+            time.sleep(pause_seconds)
+    raise AssertionError("unreachable EC2 describe loop")
+
+
 def user_data(commit: str, archive_sha: str, archive_key: str, prefix: str) -> str:
     template = r'''#!/bin/bash
 set -euo pipefail
@@ -266,14 +281,14 @@ def launch(attempt: str) -> None:
             except ClientError as error:
                 if error.response.get("Error", {}).get("Code") not in {"NoSuchKey", "404", "NotFound"}:
                     raise
-            state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
+            state = describe_state(ec2, instance_id)
             if state in {"terminated", "shutting-down"}:
                 raise RuntimeError("V219 worker stopped before terminal")
             time.sleep(20)
         raise TimeoutError("V219 Spot cell exceeded wall cap")
     finally:
         try:
-            state = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"][0]["Instances"][0]["State"]["Name"]
+            state = describe_state(ec2, instance_id)
             if state not in {"terminated", "shutting-down"}:
                 ec2.terminate_instances(InstanceIds=[instance_id])
         except Exception:

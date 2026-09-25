@@ -45,6 +45,16 @@ raw IDs, final artifact hashes and immediate instance termination.
 An interruption discards the entire cell; restart only under a new
 attempt ID after confirming the original is terminal or terminated.
 
+Attempt audit, added after launch: `a0001` reserved and briefly
+allocated `i-0967ef5fdbb5c9eda` at 11:39:57 UTC on 2026-09-25.
+EC2 had not yet made the new instance visible to `DescribeInstances`;
+the launcher treated `InvalidInstanceID.NotFound` as fatal and its
+cleanup terminated the instance at 11:39:58 UTC. There is no terminal
+marker or measurement, and EC2 records `User initiated` termination.
+The launcher now retries that transient describe state, verified by a
+focused regression test. The measurement and gates above are unchanged;
+restart the full cell as `a0002` under the corrected source commit.
+
 If a V219 arm passes, move directly to one same-revision, same-panel
 end-to-end cold/no-cache serving comparison including recall@k,
 p50/p90/p95/p99 from raw per-query samples, concurrency, throughput,
