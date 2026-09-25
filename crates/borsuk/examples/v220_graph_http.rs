@@ -22,6 +22,7 @@ use borsuk::{
     resident_graph_collection::{hydrate_graph_collection_decoded, read_graph_collection_head},
     resident_graph_generation::ResidentGraphGeneration,
     resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation},
+    resident_graph_store::{hydrate_graph_generation, read_graph_head},
     resident_vector_graph::GraphSearchWorkspace,
 };
 use object_store::parse_url_opts;
@@ -179,7 +180,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err("unsupported mutation representation".into());
     }
     let listen: SocketAddr = args[5].parse()?;
-    let (loaded, overlay) = if args[1] == "collection" {
+    let (loaded, overlay) = if args[1] == "generation-s3" {
+        if args.len() != 6 {
+            return Err(
+                "usage: v220_graph_http generation-s3 S3_URI CACHE_DIR MAX_RESIDENT_BYTES LISTEN"
+                    .into(),
+            );
+        }
+        let (store, prefix) =
+            parse_url_opts(&Url::parse(&args[2])?, [("aws_region", "eu-central-1")])?;
+        let head = read_graph_head(store.as_ref(), &prefix)
+            .await?
+            .ok_or("graph head missing")?;
+        let started = Instant::now();
+        let (loaded, stats) = hydrate_graph_generation(
+            store.as_ref(),
+            &prefix,
+            &head,
+            std::path::Path::new(&args[3]),
+            args[4].parse()?,
+            WORKERS,
+        )
+        .await?;
+        fs::write(
+            "hydrate.json",
+            serde_json::to_vec(&serde_json::json!({
+                "generation":head.generation,"base_root_sha256":head.root_sha256,
+                "graph_blob_gets":stats.object_gets,
+                "graph_response_bytes":stats.response_bytes,
+                "hydrate_ms":started.elapsed().as_secs_f64()*1000.0,
+            }))?,
+        )?;
+        (Arc::new(loaded), None)
+    } else if args[1] == "collection" {
         if args.len() != 6 {
             return Err(
                 "usage: v220_graph_http collection S3_URI CACHE_DIR MAX_RESIDENT_BYTES LISTEN"
