@@ -408,7 +408,7 @@ mod tests {
         .unwrap();
         let plane =
             ResidentFp16Tier::open_authenticated(&path, &plane_sha, &source, 4, 2, 7, 48).unwrap();
-        let graph = ResidentVectorGraph::build(&vectors, &plane, 4, 4, 8).unwrap();
+        let graph = ResidentVectorGraph::build(vectors.clone(), &plane, 4, 4, 8).unwrap();
         graph
             .write_authenticated(&dir.path().join("graph.bin"))
             .unwrap();
@@ -587,7 +587,7 @@ mod tests {
             48,
         )
         .unwrap();
-        ResidentVectorGraph::build(&next_vectors, &next_plane, 4, 4, 8)
+        ResidentVectorGraph::build(next_vectors, &next_plane, 4, 4, 8)
             .unwrap()
             .write_authenticated(&next_dir.path().join("graph.bin"))
             .unwrap();

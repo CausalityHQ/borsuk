@@ -90,7 +90,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         vectors
     };
-    let graph = ResidentVectorGraph::build(&vectors, &plane, 32, 64, 128)?;
+    let graph = ResidentVectorGraph::build(vectors, &plane, 32, 64, 128)?;
     let structure = graph.structural_stats();
     if structure.reachable != ROWS
         || structure.below_four_indegree != 0

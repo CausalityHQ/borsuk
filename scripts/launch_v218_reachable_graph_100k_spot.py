@@ -64,7 +64,8 @@ def downloads(rows: tuple) -> str:
     )
 
 
-def user_data(commit: str, archive_sha: str, archive_key: str, prefix: str) -> str:
+def user_data(commit: str, archive_sha: str, archive_key: str, prefix: str,
+              schema: str, owned_f32: bool = False) -> str:
     template = r'''#!/bin/bash
 set -euo pipefail
 systemd-run --unit=v218-hard-stop --on-active=@@WALL@@s /usr/sbin/shutdown -h now
@@ -127,6 +128,7 @@ cd repo
 "$CARGO_HOME/bin/cargo" build --release --locked -p borsuk \
   --bin v218_build_reachable_graph_100k --bin v218_serve_reachable_graph_100k \
   --jobs 6 >"$root/build.log" 2>&1
+@@NARROW_TEST@@
 cd "$root"
 phase=graph
 /usr/bin/time -v -o graph-build-resources.txt "$CARGO_TARGET_DIR/release/v218_build_reachable_graph_100k" \
@@ -151,9 +153,12 @@ phase=complete
     replacements = {
         "WALL": str(WALL_SECONDS), "ARTIFACTS": " ".join(ARTIFACTS),
         "ARTIFACTS_PY": repr(ARTIFACTS), "BUCKET": BUCKET,
-        "PREFIX": prefix, "SCHEMA": SCHEMA, "COMMIT": commit,
+        "PREFIX": prefix, "SCHEMA": schema, "COMMIT": commit,
         "ARCHIVE_SHA": archive_sha, "ARCHIVE_KEY": archive_key,
         "DOWNLOADS": downloads(INPUTS), "LATE_DOWNLOADS": downloads(LATE),
+        "NARROW_TEST": ('''"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib \
+  resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch \
+  -- --exact >>"$root/build.log" 2>&1''' if owned_f32 else ""),
     }
     for name, value in replacements.items():
         template = template.replace("@@" + name + "@@", value)
@@ -162,7 +167,7 @@ phase=complete
     return template
 
 
-def launch(attempt: str) -> None:
+def launch(attempt: str, owned_f32: bool = False) -> None:
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
@@ -174,8 +179,10 @@ def launch(attempt: str) -> None:
         raise ValueError("source is not fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    archive_key = f"research/v218-reachable-graph-100k/{commit}/sources/{archive_sha}.tar.gz"
-    prefix = f"research/v218-reachable-graph-100k/{commit}/runs/{attempt}"
+    campaign = "v241-owned-graph-build-100k" if owned_f32 else "v218-reachable-graph-100k"
+    schema = "borsuk-v241-owned-graph-build-100k-spot-v1" if owned_f32 else SCHEMA
+    archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
+    prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
     ec2, s3 = session.client("ec2"), session.client("s3")
     parent_raw = s3.get_object(Bucket=BUCKET,
@@ -213,18 +220,19 @@ def launch(attempt: str) -> None:
     elif s3.head_object(Bucket=BUCKET, Key=archive_key)["ContentLength"] != len(archive):
         raise ValueError("source archive length differs")
     put_if_absent(prefix + "/reservation.json", json.dumps({
-        "schema": SCHEMA, "source_commit": commit, "source_archive_sha256": archive_sha,
+        "schema": schema, "source_commit": commit, "source_archive_sha256": archive_sha,
         "dataset": "ReLAION-100k D768", "split": "development-256-plus-method-heldout-744-prior-used",
         "parent_terminal_sha256": PARENT_TERMINAL_SHA,
         "selecting_terminal_sha256": SELECTING_TERMINAL_SHA,
         "construction": {"m": 32, "m0": 64, "ef_construction": 128},
         "arms": [[2048, 2048]],
-        "gate": "reachable=100000;min-indegree>=4;PQ-hits>=99521;each-split-no-loss;p05>=98;loaded-eight-worker-p95<10ms;RSS<268435456B;0 vector GET",
+        "gate": ("V218 graph sha256 d8b70919243a7cd6ecb9448ce23f776374738476c1882cbc6a651fb34753af2f;build RSS<=600000000B;build<=210s;identical raw IDs"
+                 if owned_f32 else "reachable=100000;min-indegree>=4;PQ-hits>=99521;each-split-no-loss;p05>=98;loaded-eight-worker-p95<10ms;RSS<268435456B;0 vector GET"),
         "interruption_policy": "discard and restart full measurement cell at a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken="v218-" + hashlib.sha256(prefix.encode()).hexdigest()[:48],
+        ClientToken=("v241-" if owned_f32 else "v218-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
         NetworkInterfaces=[{"AssociatePublicIpAddress": True, "DeviceIndex": 0,
@@ -236,8 +244,8 @@ def launch(attempt: str) -> None:
             "DeleteOnTermination": True, "Encrypted": True, "VolumeSize": 30,
             "VolumeType": "gp3"}}],
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
-            {"Key": "Name", "Value": TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
-        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix).encode()).decode(),
+            {"Key": "Name", "Value": campaign if owned_f32 else TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
+        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix, schema, owned_f32).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -250,7 +258,7 @@ def launch(attempt: str) -> None:
                 terminal = json.loads(raw)
                 ec2.terminate_instances(InstanceIds=[instance_id])
                 ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
-                if (terminal.get("schema") != SCHEMA or terminal.get("instance_id") != instance_id
+                if (terminal.get("schema") != schema or terminal.get("instance_id") != instance_id
                         or terminal.get("source_commit") != commit
                         or terminal.get("source_archive_sha256") != archive_sha):
                     raise ValueError("V218 terminal identity differs")
@@ -293,7 +301,8 @@ def launch(attempt: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", default="a0001")
+    parser.add_argument("--owned-f32", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-v218-reachable-graph-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        launch(args.attempt)
+        launch(args.attempt, args.owned_f32)

@@ -233,7 +233,7 @@ impl ResidentVectorGraph {
     /// order. Parameters are explicit so a recall target can set the degree
     /// and beam without depending on corpus-size thresholds.
     pub fn build(
-        vectors: &[Vec<f32>],
+        mut vectors: Vec<Vec<f32>>,
         plane: &ResidentFp16Tier,
         m: usize,
         m0: usize,
@@ -250,8 +250,7 @@ impl ResidentVectorGraph {
         {
             return Err(ResidentFp16Error::Invalid("graph build geometry"));
         }
-        let mut unit = Vec::with_capacity(vectors.len());
-        for vector in vectors {
+        for vector in &mut vectors {
             if vector.len() != plane.dimensions() || vector.iter().any(|x| !x.is_finite()) {
                 return Err(ResidentFp16Error::Invalid("graph source vector"));
             }
@@ -262,14 +261,11 @@ impl ResidentVectorGraph {
             if !norm.is_finite() || norm <= 0.0 {
                 return Err(ResidentFp16Error::Invalid("graph source norm"));
             }
-            unit.push(
-                vector
-                    .iter()
-                    .map(|&x| (f64::from(x) / norm) as f32)
-                    .collect::<Vec<_>>(),
-            );
+            for coordinate in vector {
+                *coordinate = (f64::from(*coordinate) / norm) as f32;
+            }
         }
-        let built = build_reachable_hnsw_adjacency(&unit, m, m0, ef_construction, ef_construction)
+        let built = build_reachable_hnsw_adjacency(&vectors, m, m0, ef_construction, ef_construction)
             .ok_or(ResidentFp16Error::Invalid("graph build failed"))?;
         Ok(Self {
             neighbours: built.neighbours,
@@ -814,7 +810,7 @@ mod tests {
         .unwrap();
         let tier =
             ResidentFp16Tier::open_authenticated(&path, &digest, SOURCE, 4, 2, 213, 48).unwrap();
-        let graph = ResidentVectorGraph::build(&vectors, &tier, 4, 4, 8).unwrap();
+        let graph = ResidentVectorGraph::build(vectors, &tier, 4, 4, 8).unwrap();
         let structure = graph.structural_stats();
         assert_eq!(structure.rows, 4);
         assert_eq!(structure.reachable, 4);

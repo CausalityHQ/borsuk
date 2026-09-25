@@ -104,8 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if input.read(&mut [0u8; 1])? != 0 {
         return Err("source vector file too long".into());
     }
-    let graph = ResidentVectorGraph::build(&vectors, &plane, 32, 64, 128)?;
-    drop(vectors);
+    let graph = ResidentVectorGraph::build(vectors, &plane, 32, 64, 128)?;
     let build_ns = build_started.elapsed().as_nanos() as u64;
     let build_peak_rss_bytes = memory_kib("VmHWM:")? * 1024;
     let graph_bytes = graph.heap_bytes();

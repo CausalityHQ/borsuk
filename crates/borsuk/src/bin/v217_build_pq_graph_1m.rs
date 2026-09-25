@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if input.read(&mut [0u8; 1])? != 0 {
         return Err("graph source trailing bytes".into());
     }
-    let graph = ResidentVectorGraph::build(&vectors, &plane, 32, 64, 128)?;
+    let graph = ResidentVectorGraph::build(vectors, &plane, 32, 64, 128)?;
     let heap_bytes = graph.heap_bytes();
     let graph_sha = graph.write_authenticated(Path::new(&args[4]))?;
     let elapsed = started.elapsed().as_nanos() as u64;

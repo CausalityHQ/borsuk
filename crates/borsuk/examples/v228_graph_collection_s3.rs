@@ -51,7 +51,7 @@ fn build(
         generation,
         48,
     )?;
-    ResidentVectorGraph::build(&vectors, &plane, 4, 4, 8)?
+    ResidentVectorGraph::build(vectors, &plane, 4, 4, 8)?
         .write_authenticated(&directory.join("graph.bin"))?;
     fs::write(
         directory.join("map.u32"),
