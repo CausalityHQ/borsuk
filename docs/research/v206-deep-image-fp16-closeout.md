@@ -42,6 +42,25 @@ queries below 90 have exactly the same hit count under SQ8, FP16 and
 float32; their severe tail is upstream of final-score precision on this
 panel. FP16 lost only 32 hits to float32 over 32 queries.
 
+### Closed-artifact tail trace (post hoc)
+
+`scripts/check_v206_deep_image_tail.py` authenticates the V120 layout,
+V121 512-row nominee rosters and physical replay, V206 pretruth returned
+IDs, and publication GT, then maps each GT ID to its physical row. Its
+independent trace on this **used** panel found 99,994/100,000 GT IDs in
+the nominee rosters; the ranges covered 99,580. Of the 420 uncovered GT
+IDs, 415 were nominated and then dropped by physical selection, while
+six were absent from nomination (one of those six was covered anyway).
+FP16 returned 99,547 of the covered IDs.
+
+Across the 12 below-90 queries, 1,196/1,200 GT IDs were nominated,
+1,021 were physically covered, and FP16 returned all 1,021. All 12
+plans used the full 32 GETs and 16,699,392–16,754,688 bytes of the
+16,777,216-byte cap. Thus capped physical selection is the immediate
+cause of this panel's severe tail. This is a post hoc layer diagnosis,
+not a prospective quality result or evidence that a different planner
+will recover the misses within the same cap.
+
 The preregistered representation screen **passes**. The offline FP16 and
 float32 return phase took 3:03.45 wall/442.05 user CPU seconds and peaked
 at 9,000,868 KiB process RSS; GT reduction took 0.26 seconds and
