@@ -43,9 +43,9 @@ fn peak_rss() -> Result<u64, Box<dyn Error>> {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 6 {
+    if args.len() != 6 && !(args.len() == 7 && args[6] == "--fp16-source") {
         return Err(
-            "usage: v218_build_reachable_graph_100k PREP PLANE VECTORS GRAPH SUMMARY".into(),
+            "usage: v218_build_reachable_graph_100k PREP PLANE VECTORS GRAPH SUMMARY [--fp16-source]".into(),
         );
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
@@ -68,20 +68,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         prep["generation"].as_u64().ok_or("generation missing")?,
         200_000_000,
     )?;
-    let mut input = BufReader::new(File::open(&args[3])?);
-    let mut row = vec![0u8; DIMS * 4];
-    let mut vectors = Vec::with_capacity(ROWS);
-    for _ in 0..ROWS {
-        input.read_exact(&mut row)?;
-        vectors.push(
-            row.chunks_exact(4)
-                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                .collect(),
-        );
-    }
-    if input.read(&mut [0u8; 1])? != 0 {
-        return Err("graph source trailing bytes".into());
-    }
+    let fp16_source = args.len() == 7;
+    let vectors = if fp16_source {
+        (0..ROWS)
+            .map(|ordinal| plane.vector_f32(ordinal))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut input = BufReader::new(File::open(&args[3])?);
+        let mut row = vec![0u8; DIMS * 4];
+        let mut vectors = Vec::with_capacity(ROWS);
+        for _ in 0..ROWS {
+            input.read_exact(&mut row)?;
+            vectors.push(
+                row.chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                    .collect(),
+            );
+        }
+        if input.read(&mut [0u8; 1])? != 0 {
+            return Err("graph source trailing bytes".into());
+        }
+        vectors
+    };
     let graph = ResidentVectorGraph::build(&vectors, &plane, 32, 64, 128)?;
     let structure = graph.structural_stats();
     if structure.reachable != ROWS
@@ -98,6 +106,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({"schema":"borsuk-v218-reachable-graph-build-v1",
+        "construction_source":if fp16_source { "authenticated-fp16-plane" } else { "authenticated-f32-source" },
         "source_sha256":SOURCE,"plane_sha256":prep["plane_sha256"],
         "graph_sha256":graph_sha,"graph_bytes":fs::metadata(&args[4])?.len(),
         "graph_heap_bytes":heap_bytes,"structure":structure,

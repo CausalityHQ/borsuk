@@ -305,6 +305,20 @@ impl ResidentFp16Tier {
         self.dimensions
     }
 
+    /// Decode one authenticated row for rebuilding a graph generation.
+    pub fn vector_f32(&self, ordinal: usize) -> Result<Vec<f32>, ResidentFp16Error> {
+        if ordinal >= self.ids.len() {
+            return Err(ResidentFp16Error::Invalid("source ordinal"));
+        }
+        let offset = ordinal
+            .checked_mul(self.dimensions)
+            .ok_or(ResidentFp16Error::Invalid("source offset"))?;
+        Ok(self.coordinates[offset..offset + self.dimensions]
+            .iter()
+            .map(|&bits| f16::from_bits(bits).to_f32())
+            .collect())
+    }
+
     /// Authenticated source identity.
     #[must_use]
     pub fn source_sha256(&self) -> [u8; 32] {
@@ -467,6 +481,8 @@ mod tests {
         assert_eq!(tier.generation(), 7);
         assert_eq!(tier.rows(), 3);
         assert_eq!(tier.dimensions(), 2);
+        assert_eq!(tier.vector_f32(2).unwrap(), vec![0.5, 0.5]);
+        assert!(tier.vector_f32(3).is_err());
         let roster = [
             SourceCandidate {
                 ordinal: 1,
