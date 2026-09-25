@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import shlex
@@ -68,6 +67,10 @@ class MatchedSpotPlan:
     attempt: int = 1
     instance_type: str = "c7i.8xlarge"
     wall_seconds: int = 7_200
+    split: str = "development"
+    query_workers: int = 1
+    query_order: str = "shuffled"
+    metric: str = "euclidean"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,8 +110,12 @@ def build_plan(**values: object) -> MatchedSpotPlan:
         or plan.spot_price_usd_per_hour_micros <= 0
         or not 3 <= len(plan.vector_bucket) <= 63
         or plan.attempt != 1
-        or plan.instance_type != "c7i.8xlarge"
+        or plan.instance_type not in {"c7i.4xlarge", "c7i.8xlarge"}
         or plan.wall_seconds != 7_200
+        or plan.split not in {"development", "validation"}
+        or not 1 <= plan.query_workers <= 16
+        or plan.query_order not in {"shuffled", "ordinal"}
+        or plan.metric not in {"euclidean", "cosine"}
     ):
         raise ValueError("matched Spot plan differs")
     return plan
@@ -131,6 +138,10 @@ def worker_script(plan: MatchedSpotPlan) -> str:
         "MATCHED_SPOT_PRICE_MICROS": plan.spot_price_usd_per_hour_micros,
         "MATCHED_VECTOR_BUCKET": plan.vector_bucket,
         "MATCHED_WALL_SECONDS": plan.wall_seconds,
+        "MATCHED_QUERY_WORKERS": plan.query_workers,
+        "MATCHED_QUERY_ORDER": plan.query_order,
+        "MATCHED_SPLIT": plan.split,
+        "MATCHED_METRIC": plan.metric,
     }
     for role, identity in sorted(plan.inputs.items()):
         prefix = f"MATCHED_{role.upper()}"
@@ -160,7 +171,7 @@ exec bash repo/scripts/run_matched_s3_vectors_1m_remote.sh
 def build_launch_specs(plan: MatchedSpotPlan) -> list[dict[str, object]]:
     """Build serial multi-AZ one-time Spot requests."""
 
-    encoded = base64.b64encode(worker_script(plan).encode()).decode()
+    script = worker_script(plan)
     specs: list[dict[str, object]] = []
     for target in plan.targets:
         token = hashlib.sha256(
@@ -211,7 +222,7 @@ def build_launch_specs(plan: MatchedSpotPlan) -> list[dict[str, object]]:
                         ],
                     }
                 ],
-                "UserData": encoded,
+                "UserData": script,
             }
         )
     return specs
@@ -280,10 +291,16 @@ def _launch_receipt(plan: MatchedSpotPlan, instance_id: str | None) -> bytes:
             role: asdict(identity) for role, identity in sorted(plan.inputs.items())
         },
         "instance_id": instance_id,
-        "schema": "borsuk-matched-s3-vectors-launch-v1",
+        "schema": "borsuk-matched-s3-vectors-launch-v2",
         "source_archive": asdict(plan.source_archive),
         "source_commit": plan.source_commit,
         "vector_bucket": plan.vector_bucket,
+        "split": plan.split,
+        "query_workers": plan.query_workers,
+        "query_order": plan.query_order,
+        "instance_type": plan.instance_type,
+        "spot_price_usd_per_hour_micros": plan.spot_price_usd_per_hour_micros,
+        "metric": plan.metric,
     }
     return (
         json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
@@ -466,7 +483,15 @@ def parse_args(argv: Sequence[str] | None = None) -> MatchedSpotPlan:
         default="arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
     )
     parser.add_argument("--spot-price-usd-per-hour-micros", type=int, default=688_000)
+    parser.add_argument("--split", choices=("development", "validation"), default="development")
+    parser.add_argument("--query-workers", type=int, default=1)
+    parser.add_argument("--query-order", choices=("shuffled", "ordinal"), default="shuffled")
+    parser.add_argument("--instance-type", choices=("c7i.4xlarge", "c7i.8xlarge"), default="c7i.8xlarge")
+    parser.add_argument("--metric", choices=("euclidean", "cosine"), default="euclidean")
     args = parser.parse_args(argv)
+    query_name = f"{args.split}-query.parquet"
+    truth_name = f"{args.split}-gt100.parquet"
+    validation = args.split == "validation"
     inputs = {
         "source": ObjectIdentity(
             "source",
@@ -476,15 +501,17 @@ def parse_args(argv: Sequence[str] | None = None) -> MatchedSpotPlan:
         ),
         "queries": ObjectIdentity(
             "queries",
-            "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/development-query.parquet",
+            "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/" + query_name,
+            "869e225181f7d01a972d8faa144eaff4838c7c1f8f7c0c55091487e234f0bd5e" if validation else
             "310bb54f79f2e79d09fe63aa4f6b5c6e9e7ffb31101964f816be978dadb2db54",
-            1_558_506,
+            1_558_594 if validation else 1_558_506,
         ),
         "truth": ObjectIdentity(
             "truth",
-            "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/development-gt100.parquet",
+            "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/" + truth_name,
+            "bf0fb0c934c986d05282e3d1c63dc351c553976ea05bfcab0cd3f06d2979e871" if validation else
             "fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11",
-            2_046_505,
+            2_045_045 if validation else 2_046_505,
         ),
     }
     return build_plan(
@@ -505,6 +532,11 @@ def parse_args(argv: Sequence[str] | None = None) -> MatchedSpotPlan:
         targets=DEFAULT_TARGETS,
         spot_price_usd_per_hour_micros=args.spot_price_usd_per_hour_micros,
         vector_bucket=args.vector_bucket,
+        split=args.split,
+        query_workers=args.query_workers,
+        query_order=args.query_order,
+        instance_type=args.instance_type,
+        metric=args.metric,
     )
 
 

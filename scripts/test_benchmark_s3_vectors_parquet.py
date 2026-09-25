@@ -76,7 +76,8 @@ class _FakeS3Vectors:
                 {"key": key, "distance": float(position)}
                 for position, key in enumerate(answer)
             ],
-            "ResponseMetadata": {"HTTPHeaders": {"content-length": "123"}},
+            "ResponseMetadata": {"HTTPHeaders": {"content-length": "123"},
+                                 "RetryAttempts": 2},
         }
         return response
 
@@ -215,6 +216,9 @@ class MatchedS3VectorsParquetTests(unittest.TestCase):
                 upload_workers=2,
                 query_seed=17,
                 source_commit="1" * 40,
+                query_workers=2,
+                query_order="ordinal",
+                split="validation",
             )
 
             result = run_matched_benchmark(config, fake)
@@ -237,6 +241,15 @@ class MatchedS3VectorsParquetTests(unittest.TestCase):
             )
             samples = pq.read_table(output / "samples.parquet").to_pylist()
             self.assertEqual(len(samples), 4)
+            self.assertTrue(all(row["completed_ns"] >= row["started_ns"]
+                                and row["latency_ns"] == row["completed_ns"] - row["started_ns"]
+                                for row in samples))
+            self.assertGreater(result.passes[0].completed_qps, 0)
+            self.assertEqual(result.passes[0].retries_total, 4)
+            self.assertEqual((result.split, result.query_workers, result.query_order),
+                             ("validation", 2, "ordinal"))
+            self.assertLessEqual(result.passes[0].latency_p50_ns,
+                                 result.passes[0].latency_p90_ns)
             query_zero = next(
                 row
                 for row in samples

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import base64
 import io
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from scripts.launch_matched_s3_vectors_1m_spot import (
@@ -14,6 +14,7 @@ from scripts.launch_matched_s3_vectors_1m_spot import (
     build_plan,
     canonical_terminal_bytes,
     monitor_and_terminate,
+    parse_args,
     validate_terminal_bytes,
     worker_script,
 )
@@ -92,10 +93,40 @@ class MatchedS3VectorsSpotLauncherTests(unittest.TestCase):
                     "SpotInstanceType": "one-time",
                 },
             )
-            self.assertEqual(base64.b64decode(spec["UserData"]).decode(), script)
+            self.assertEqual(spec["UserData"], script)
         self.assertIn("MATCHED_SOURCE_SHA256=" + "1" * 64, script)
         self.assertIn("MATCHED_VECTOR_BUCKET=borsuk-match-123", script)
         self.assertIn("exec bash repo/scripts/run_matched_s3_vectors_1m_remote.sh", script)
+
+    def test_validation_plan_freezes_eight_ordinal_queries(self) -> None:
+        plan = replace(self._plan(), split="validation", query_workers=8,
+                       query_order="ordinal", instance_type="c7i.4xlarge",
+                       metric="cosine")
+        script = worker_script(plan)
+        self.assertIn("MATCHED_QUERY_WORKERS=8", script)
+        self.assertIn("MATCHED_QUERY_ORDER=ordinal", script)
+        self.assertIn("MATCHED_METRIC=cosine", script)
+        self.assertEqual(build_launch_specs(plan)[0]["InstanceType"], "c7i.4xlarge")
+
+    def test_validation_cli_selects_authenticated_panel(self) -> None:
+        plan = parse_args([
+            "--source-commit", "1" * 40,
+            "--source-archive-uri", "s3://frozen/source.tar.gz",
+            "--source-archive-sha256", "f" * 64,
+            "--source-archive-bytes", "123",
+            "--output-prefix", "s3://frozen/validation/a0001",
+            "--vector-bucket", "borsuk-validation-test",
+            "--split", "validation", "--query-workers", "8",
+            "--query-order", "ordinal", "--instance-type", "c7i.4xlarge",
+            "--metric", "cosine",
+        ])
+        self.assertEqual(plan.inputs["queries"].sha256,
+                         "869e225181f7d01a972d8faa144eaff4838c7c1f8f7c0c55091487e234f0bd5e")
+        self.assertEqual(plan.inputs["truth"].sha256,
+                         "bf0fb0c934c986d05282e3d1c63dc351c553976ea05bfcab0cd3f06d2979e871")
+        self.assertEqual((plan.split, plan.query_workers, plan.query_order),
+                         ("validation", 8, "ordinal"))
+        self.assertEqual(plan.metric, "cosine")
 
     def test_terminal_requires_cleanup_evidence_and_always_terminates(self) -> None:
         plan = self._plan()

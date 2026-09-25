@@ -335,4 +335,8 @@ sha256sum -c hashes.txt || exit 93
     --output-dir result \
     --vector-bucket "$MATCHED_VECTOR_BUCKET" \
     --source-commit "$MATCHED_SOURCE_COMMIT" \
+    --query-workers "$MATCHED_QUERY_WORKERS" \
+    --query-order "$MATCHED_QUERY_ORDER" \
+    --split "$MATCHED_SPLIT" \
+    --metric "$MATCHED_METRIC" \
     --settle-seconds 60 || exit 94

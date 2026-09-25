@@ -61,6 +61,9 @@ class BenchmarkConfig:
     query_seed: int
     source_commit: str
     settle_seconds: float = 0.0
+    query_workers: int = 1
+    query_order: str = "shuffled"
+    split: str = "development"
 
     def __post_init__(self) -> None:
         if (
@@ -80,6 +83,9 @@ class BenchmarkConfig:
             )
             or not math.isfinite(self.settle_seconds)
             or self.settle_seconds < 0
+            or not 1 <= self.query_workers <= 16
+            or self.query_order not in {"shuffled", "ordinal"}
+            or self.split not in {"development", "validation"}
         ):
             raise ValueError("benchmark configuration differs")
 
@@ -90,6 +96,9 @@ class QuerySample:
     query_position: int
     query_ordinal: int
     latency_ns: int
+    started_ns: int
+    completed_ns: int
+    retry_attempts: int
     recall10_ppm: int
     recall100_ppm: int
     pages: int
@@ -106,8 +115,12 @@ class PassAggregate:
     p05_recall100_ppm: int
     worst_recall100_ppm: int
     latency_p50_ns: int
+    latency_p90_ns: int
     latency_p95_ns: int
     latency_p99_ns: int
+    wall_ns: int
+    completed_qps: float
+    retries_total: int
     response_bytes: int
 
 
@@ -122,6 +135,11 @@ class BenchmarkResult:
     dimensions: int
     metric: str
     top_k: int
+    split: str
+    query_workers: int
+    query_order: str
+    query_seed: int
+    retry_mode: str
     upload_seconds: float
     upload_vectors_per_second: float
     put_requests: int
@@ -334,7 +352,12 @@ def _query_one(
         if not isinstance(vector, Mapping) or type(vector.get("key")) is not str:
             raise ValueError("query response differs")
         keys.append(vector["key"])
-    latency_ns = time.perf_counter_ns() - started
+    completed = time.perf_counter_ns()
+    latency_ns = completed - started
+    metadata = response.get("ResponseMetadata", {})
+    retry_attempts = metadata.get("RetryAttempts", 0) if isinstance(metadata, Mapping) else 0
+    if type(retry_attempts) is not int or retry_attempts < 0:
+        raise ValueError("query retry metadata differs")
     if len(keys) != config.neighbors or len(set(keys)) != config.neighbors:
         raise ValueError("query result count differs")
     try:
@@ -352,6 +375,9 @@ def _query_one(
         query_position=query_position,
         query_ordinal=query_ordinal,
         latency_ns=latency_ns,
+        started_ns=started,
+        completed_ns=completed,
+        retry_attempts=retry_attempts,
         recall10_ppm=recall10,
         recall100_ppm=recall100,
         pages=1,
@@ -365,7 +391,7 @@ def _nearest_rank(values: list[int], fraction: float) -> int:
     return ordered[max(0, math.ceil(len(ordered) * fraction) - 1)]
 
 
-def _aggregate(label: str, samples: list[QuerySample]) -> PassAggregate:
+def _aggregate(label: str, samples: list[QuerySample], wall_ns: int) -> PassAggregate:
     recall10 = [sample.recall10_ppm for sample in samples]
     recall100 = [sample.recall100_ppm for sample in samples]
     latencies = [sample.latency_ns for sample in samples]
@@ -377,8 +403,12 @@ def _aggregate(label: str, samples: list[QuerySample]) -> PassAggregate:
         p05_recall100_ppm=_nearest_rank(recall100, 0.05),
         worst_recall100_ppm=min(recall100),
         latency_p50_ns=_nearest_rank(latencies, 0.50),
+        latency_p90_ns=_nearest_rank(latencies, 0.90),
         latency_p95_ns=_nearest_rank(latencies, 0.95),
         latency_p99_ns=_nearest_rank(latencies, 0.99),
+        wall_ns=wall_ns,
+        completed_qps=len(samples) * 1e9 / wall_ns,
+        retries_total=sum(sample.retry_attempts for sample in samples),
         response_bytes=sum(sample.response_bytes for sample in samples),
     )
 
@@ -392,6 +422,9 @@ def _write_samples(path: Path, samples: list[QuerySample]) -> None:
                 pa.field("query_position", pa.uint32(), nullable=False),
                 pa.field("query_ordinal", pa.uint32(), nullable=False),
                 pa.field("latency_ns", pa.uint64(), nullable=False),
+                pa.field("started_ns", pa.uint64(), nullable=False),
+                pa.field("completed_ns", pa.uint64(), nullable=False),
+                pa.field("retry_attempts", pa.uint16(), nullable=False),
                 pa.field("recall10_ppm", pa.uint32(), nullable=False),
                 pa.field("recall100_ppm", pa.uint32(), nullable=False),
                 pa.field("pages", pa.uint16(), nullable=False),
@@ -501,20 +534,18 @@ def run_matched_benchmark(config: BenchmarkConfig, client: object) -> BenchmarkR
         upload_seconds = time.monotonic() - upload_started
         if config.settle_seconds:
             time.sleep(config.settle_seconds)
-        positions = _permutation(config.query_count, config.query_seed)
+        positions = (list(range(config.query_count)) if config.query_order == "ordinal"
+                     else _permutation(config.query_count, config.query_seed))
+        pass_walls: dict[str, int] = {}
         for label in ("fresh_index_first_pass", "immediate_repeated_pass"):
-            for query_position, query_ordinal in enumerate(positions):
-                samples.append(
-                    _query_one(
-                        client,
-                        config,
-                        queries[query_ordinal],
-                        truth[query_ordinal],
-                        label=label,
-                        query_position=query_position,
-                        query_ordinal=query_ordinal,
-                    )
-                )
+            pass_started = time.perf_counter_ns()
+            with ThreadPoolExecutor(max_workers=config.query_workers) as executor:
+                pending = [executor.submit(
+                    _query_one, client, config, queries[query_ordinal], truth[query_ordinal],
+                    label=label, query_position=position, query_ordinal=query_ordinal,
+                ) for position, query_ordinal in enumerate(positions)]
+                samples.extend(future.result() for future in pending)
+            pass_walls[label] = time.perf_counter_ns() - pass_started
     finally:
         if created_index or created_bucket:
             delete_service_resources(
@@ -526,11 +557,12 @@ def run_matched_benchmark(config: BenchmarkConfig, client: object) -> BenchmarkR
     samples_path = config.output_dir / "samples.parquet"
     _write_samples(samples_path, samples)
     aggregates = tuple(
-        _aggregate(label, [sample for sample in samples if sample.pass_label == label])
+        _aggregate(label, [sample for sample in samples if sample.pass_label == label],
+                   pass_walls[label])
         for label in ("fresh_index_first_pass", "immediate_repeated_pass")
     )
     result = BenchmarkResult(
-        schema="borsuk-matched-s3-vectors-relaion-1m-v1",
+        schema="borsuk-matched-s3-vectors-relaion-1m-v2",
         source_commit=config.source_commit,
         inputs=dict(sorted(config.inputs.items())),
         vector_bucket=config.vector_bucket,
@@ -539,6 +571,11 @@ def run_matched_benchmark(config: BenchmarkConfig, client: object) -> BenchmarkR
         dimensions=config.dimensions,
         metric=config.metric,
         top_k=config.neighbors,
+        split=config.split,
+        query_workers=config.query_workers,
+        query_order=config.query_order,
+        query_seed=config.query_seed,
+        retry_mode="standard, max_attempts=10",
         upload_seconds=upload_seconds,
         upload_vectors_per_second=config.source_rows / upload_seconds,
         put_requests=put_requests,
@@ -580,6 +617,9 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[BenchmarkConfig, str]
     parser.add_argument("--metric", default="euclidean")
     parser.add_argument("--upload-workers", type=int, default=5)
     parser.add_argument("--query-seed", type=int, default=20260921)
+    parser.add_argument("--query-workers", type=int, default=1)
+    parser.add_argument("--query-order", choices=("shuffled", "ordinal"), default="shuffled")
+    parser.add_argument("--split", choices=("development", "validation"), default="development")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--settle-seconds", type=float, default=60.0)
     args = parser.parse_args(argv)
@@ -609,6 +649,9 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[BenchmarkConfig, str]
             metric=args.metric,
             upload_workers=args.upload_workers,
             query_seed=args.query_seed,
+            query_workers=args.query_workers,
+            query_order=args.query_order,
+            split=args.split,
             source_commit=args.source_commit,
             settle_seconds=args.settle_seconds,
         ),
@@ -624,7 +667,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     client = boto3.client(
         "s3vectors",
         region_name=region,
-        config=Config(retries={"mode": "adaptive", "max_attempts": 10}),
+        config=Config(retries={"mode": "standard", "max_attempts": 10}),
     )
     result = run_matched_benchmark(config, client)
     print(
