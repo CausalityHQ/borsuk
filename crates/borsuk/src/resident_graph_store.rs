@@ -79,7 +79,7 @@ fn blob_path(prefix: &ObjectPath, sha256: &str) -> ObjectPath {
     prefix.clone().join(format!("blobs/{sha256}"))
 }
 
-async fn get_root(
+pub(crate) async fn get_root(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
     sha256: &str,
@@ -226,8 +226,26 @@ pub async fn hydrate_graph_generation(
     if root.generation != head.generation {
         return Err(ResidentGraphStoreError::Invalid("head generation"));
     }
+    hydrate_graph_root(
+        store, prefix, &head.root_bytes, &head.root_sha256,
+        cache_root, max_resident_bytes, active_workers,
+    ).await
+}
+
+/// Hydrate a pinned immutable root named by a collection revision. This
+/// remains valid after the legacy graph head has advanced.
+pub(crate) async fn hydrate_graph_root(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    root_bytes: &[u8],
+    root_sha256: &str,
+    cache_root: &Path,
+    max_resident_bytes: usize,
+    active_workers: usize,
+) -> Result<(ResidentGraphGeneration, ResidentGraphHydrationStats), ResidentGraphStoreError> {
+    let root = parse_authenticated_root(root_bytes, root_sha256)?;
     preflight_root(&root, max_resident_bytes, active_workers)?;
-    let directory = cache_root.join(&head.root_sha256);
+    let directory = cache_root.join(root_sha256);
     tokio::fs::create_dir_all(&directory).await?;
     let mut stats = ResidentGraphHydrationStats::default();
     for (name, artifact) in [
@@ -241,8 +259,8 @@ pub async fn hydrate_graph_generation(
         stats.object_gets += next.object_gets;
         stats.response_bytes += next.response_bytes;
     }
-    let root_bytes = head.root_bytes.clone();
-    let trusted = head.root_sha256.clone();
+    let root_bytes = root_bytes.to_vec();
+    let trusted = root_sha256.to_owned();
     let generation = tokio::task::spawn_blocking(move || {
         ResidentGraphGeneration::open_local_authenticated(
             &root_bytes,

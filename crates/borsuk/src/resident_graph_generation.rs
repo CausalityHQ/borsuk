@@ -366,6 +366,10 @@ mod tests {
         hydrate_graph_generation, publish_graph_generation, read_graph_head,
     };
     use crate::resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation};
+    use crate::resident_graph_collection::{
+        ResidentGraphCollectionSlot, hydrate_graph_collection, publish_graph_collection,
+        read_graph_collection_head,
+    };
     use crate::resident_vector_graph::GraphSearchWorkspace;
     use object_store::{memory::InMemory, path::Path as ObjectPath};
 
@@ -491,6 +495,29 @@ mod tests {
         drop(bound);
         drop(view);
         let pinned = Arc::new(loaded);
+        let collection_head = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            publish_graph_collection(&store, &prefix, &original_head.root_sha256,
+                &[ResidentMutation { id: 42, vector: None },
+                  ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) }],
+                1024, None).await.unwrap();
+            read_graph_collection_head(&store, &prefix, 1024).await.unwrap().unwrap()
+        });
+        let (collection_overlay, collection_stats) = tokio::runtime::Runtime::new().unwrap()
+            .block_on(hydrate_graph_collection(&store, &prefix, &collection_head,
+                cache.path(), 100_000, 1, 1024, 20)).unwrap();
+        assert_eq!(collection_stats.object_gets, 0);
+        let collection_view = collection_overlay.base().cosine_view().unwrap();
+        let collection_bound = collection_overlay.bind(&collection_view).unwrap();
+        let mut collection_workspace = GraphSearchWorkspace::new(4).unwrap();
+        assert_eq!(collection_bound.search(&[1.0, 0.0], 2, 4, 4,
+            &mut collection_workspace).unwrap().0, vec![99, 7]);
+        let collection_slot = ResidentGraphCollectionSlot::new(
+            collection_head.revision, Arc::clone(&collection_overlay)).unwrap();
+        let held_collection = collection_slot.pin();
+        let replacement = Arc::new(ResidentGraphOverlay::new(Arc::clone(&pinned), vec![], 0).unwrap());
+        let retired = collection_slot.replace(2, replacement).unwrap();
+        assert!(Arc::ptr_eq(&held_collection.1, &retired.1));
+        assert!(collection_slot.replace(1, Arc::clone(&collection_overlay)).is_err());
         let slot = ResidentGraphSlot::new(Arc::clone(&pinned));
         let next_dir = tempfile::tempdir().unwrap();
         let next_source = "22".repeat(32);

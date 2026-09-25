@@ -78,6 +78,7 @@ pub mod serving_generation;
 pub mod native_source_tier;
 pub mod resident_fp16_tier;
 pub mod resident_graph_generation;
+pub mod resident_graph_collection;
 pub mod resident_graph_mutation_snapshot;
 pub mod resident_graph_overlay;
 pub mod resident_graph_store;
