@@ -46,14 +46,16 @@ fn peak_rss_bytes() -> Result<u64, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 10 {
-        return Err("usage: v196_resident_fp16_preflight PLANE ARTIFACT_SHA SOURCE_SHA ROWS DIMS GENERATION BUDGET_BYTES CASES_JSONL FIRST_ORDINAL".into());
+    if args.len() != 11 {
+        return Err("usage: v196_resident_fp16_preflight PLANE ARTIFACT_SHA SOURCE_SHA ROWS DIMS GENERATION BUDGET_BYTES CASES_JSONL FIRST_ORDINAL CASE_COUNT".into());
     }
     let rows: u64 = args[4].parse()?;
     let dimensions: usize = args[5].parse()?;
     let generation: u64 = args[6].parse()?;
     let budget: usize = args[7].parse()?;
     let first_ordinal: u64 = args[9].parse()?;
+    let case_count: usize = args[10].parse()?;
+    let returned_sets = case_count.checked_mul(10).ok_or("case count overflow")?;
     let started = Instant::now();
     let tier = ResidentFp16Tier::open_authenticated(
         Path::new(&args[1]),
@@ -69,7 +71,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     for line in BufReader::new(File::open(&args[8])?).lines() {
         cases.push(serde_json::from_str::<Case>(&line?)?);
     }
-    if cases.len() != 512 {
+    if case_count == 0 || cases.len() != case_count {
         return Err("V196 case count differs".into());
     }
     for (index, case) in cases.iter().enumerate() {
@@ -115,14 +117,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "{}",
         json!({
-            "schema": "borsuk-resident-fp16-preflight-v2",
+            "schema": "borsuk-resident-fp16-preflight-v3",
             "first_ordinal": first_ordinal,
             "rows": rows,
             "dimensions": dimensions,
             "generation": generation,
             "cases": cases.len(),
             "repetitions": repetitions,
-            "exact_returned_sets": 5120,
+            "exact_returned_sets": returned_sets,
             "hydration_ns": hydration_ns,
             "charged_plane_bytes": tier.resident_bytes(),
             "process_peak_rss_bytes": peak_rss_bytes()?,

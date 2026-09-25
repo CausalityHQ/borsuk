@@ -15,7 +15,7 @@ validation-GT100 parquet. Use the V115 source router/quantizer, V164
 physical order and SQ8 object, V189 fit, V192 prices, V194 radius 32,
 V197 `max(672, mandatory-floor)` unit cap on every query, and the same
 V196 generation-pinned FP16 plane. The real-query route nominates 512
-old-layout entries without leave-one-out; require exact parity with
+old-layout entries without leave-one-out; require exact set parity with
 V116's sealed source-only nominee list before deriving the 100 mandatory
 SQ8-ranked nominees. Score the same radius-32 PQ unit field, plan with
 optional-risk weights and `(1000, 50000)` price, and rerank the physical
