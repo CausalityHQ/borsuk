@@ -579,7 +579,7 @@ impl ResidentVectorGraph {
                     distance: score(neighbor)?,
                     node: neighbor,
                 };
-                if results.len() < ef || visit.distance < results.peek().unwrap().distance {
+                if results.len() < ef || visit < *results.peek().unwrap() {
                     candidates.push(Reverse(visit));
                     results.push(visit);
                     if results.len() > ef {
@@ -603,6 +603,19 @@ pub struct ResidentPqCosineGraph<'a, 'b> {
 }
 
 impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
+    /// Return physical shortlist rows for an external reranker, in PQ score
+    /// order. The caller must authenticate the matching row body separately.
+    pub fn nominate(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        shortlist: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<usize>, usize), ResidentFp16Error> {
+        self.search_candidates(query, k, ef, shortlist, workspace)
+    }
+
     /// Bind the immutable generation and check physical row identity once.
     pub fn bind(
         graph: &'a ResidentVectorGraph,
@@ -760,6 +773,21 @@ mod tests {
     const SOURCE: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
     #[test]
+    fn graph_ties_keep_smallest_physical_ordinals() {
+        let graph = ResidentVectorGraph {
+            neighbours: vec![vec![vec![1, 2]], vec![vec![0, 2]], vec![vec![1, 0]]],
+            entry: 2,
+            generation: 1,
+            source_sha256: [0; 32],
+            plane_sha256: [0; 32],
+        };
+        let mut workspace = GraphSearchWorkspace::new(3).unwrap();
+        let (mut found, _) = graph.navigate_with_workspace(2, &mut workspace, |_| Ok(0.0)).unwrap();
+        found.sort_unstable();
+        assert_eq!(found.into_iter().map(|visit| visit.node).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
     fn graph_returns_stable_ids_and_rejects_generation_mismatch() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("plane.bin");
@@ -828,6 +856,8 @@ mod tests {
         let bound = ResidentPqCosineGraph::bind(&restored, &tier, &cosine, &[0, 1, 2, 3]).unwrap();
         let mut workspace = GraphSearchWorkspace::new(4).unwrap();
         for _ in 0..2 {
+            let (candidates, _) = bound.nominate(&[1.0, 0.0], 2, 4, 2, &mut workspace).unwrap();
+            assert_eq!(tier.rank_ordinals_cosine(&[1.0, 0.0], &candidates, 2).unwrap(), vec![42, 7]);
             assert_eq!(
                 bound
                     .search(&[1.0, 0.0], 2, 4, 2, &mut workspace)
