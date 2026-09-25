@@ -17,8 +17,8 @@ use crate::{
     resident_vector_graph::{ResidentPqCosineGraph, ResidentVectorGraph},
 };
 
-const SCHEMA: &str = "borsuk-resident-graph-generation-v1";
-const MAX_ROOT_BYTES: usize = 16 * 1024;
+pub(crate) const SCHEMA: &str = "borsuk-resident-graph-generation-v1";
+pub(crate) const MAX_ROOT_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ResidentGraphGenerationError {
@@ -32,24 +32,24 @@ pub enum ResidentGraphGenerationError {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Artifact {
-    bytes: u64,
-    sha256: String,
+pub(crate) struct Artifact {
+    pub(crate) bytes: u64,
+    pub(crate) sha256: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Root {
-    schema: String,
-    generation: u64,
-    source_sha256: String,
-    rows: u64,
-    dimensions: usize,
-    plane: Artifact,
-    graph: Artifact,
-    map: Artifact,
-    books: Artifact,
-    codes: Artifact,
+pub(crate) struct Root {
+    pub(crate) schema: String,
+    pub(crate) generation: u64,
+    pub(crate) source_sha256: String,
+    pub(crate) rows: u64,
+    pub(crate) dimensions: usize,
+    pub(crate) plane: Artifact,
+    pub(crate) graph: Artifact,
+    pub(crate) map: Artifact,
+    pub(crate) books: Artifact,
+    pub(crate) codes: Artifact,
 }
 
 /// Owned, authenticated files for one immutable graph generation. Every
@@ -61,11 +61,46 @@ pub struct ResidentGraphGeneration {
     old_for_new: Vec<usize>,
 }
 
-fn valid_sha256(value: &str) -> bool {
+pub(crate) fn valid_sha256(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(crate) fn parse_authenticated_root(
+    root_bytes: &[u8],
+    trusted_root_sha256: &str,
+) -> Result<Root, ResidentGraphGenerationError> {
+    if root_bytes.len() > MAX_ROOT_BYTES
+        || !valid_sha256(trusted_root_sha256)
+        || format!("{:x}", Sha256::digest(root_bytes)) != trusted_root_sha256
+    {
+        return Err(ResidentGraphGenerationError::Invalid(
+            "trusted root SHA-256",
+        ));
+    }
+    let root: Root = serde_json::from_slice(root_bytes)
+        .map_err(|_| ResidentGraphGenerationError::Invalid("root JSON"))?;
+    if root.schema != SCHEMA
+        || root.generation == 0
+        || root.rows < 2
+        || root.rows > u32::MAX as u64
+        || root.dimensions == 0
+        || !valid_sha256(&root.source_sha256)
+        || [
+            &root.plane,
+            &root.graph,
+            &root.map,
+            &root.books,
+            &root.codes,
+        ]
+        .iter()
+        .any(|artifact| artifact.bytes == 0 || !valid_sha256(&artifact.sha256))
+    {
+        return Err(ResidentGraphGenerationError::Invalid("root identity"));
+    }
+    Ok(root)
 }
 
 #[cfg(test)]
@@ -104,6 +139,62 @@ fn read_authenticated(
     Ok(bytes)
 }
 
+pub(crate) fn preflight_root(
+    root: &Root,
+    max_resident_bytes: usize,
+    active_workers: usize,
+) -> Result<usize, ResidentGraphGenerationError> {
+    let rows = usize::try_from(root.rows)
+        .map_err(|_| ResidentGraphGenerationError::Invalid("row count"))?;
+    if active_workers == 0 {
+        return Err(ResidentGraphGenerationError::Invalid("worker count"));
+    }
+    let width = root.dimensions.div_ceil(64);
+    let plane_bytes = resident_plane_bytes(root.rows, root.dimensions)?;
+    let map_bytes = rows
+        .checked_mul(4)
+        .ok_or(ResidentGraphGenerationError::Invalid("map size"))?;
+    let code_bytes = rows
+        .checked_mul(64)
+        .ok_or(ResidentGraphGenerationError::Invalid("code size"))?;
+    let book_bytes = 64usize
+        .checked_mul(256)
+        .and_then(|n| n.checked_mul(width))
+        .and_then(|n| n.checked_mul(4))
+        .ok_or(ResidentGraphGenerationError::Invalid("book size"))?;
+    let plane_file_bytes = plane_bytes
+        .checked_add(64)
+        .ok_or(ResidentGraphGenerationError::Invalid("plane size"))?;
+    if root.plane.bytes != plane_file_bytes as u64
+        || root.map.bytes != map_bytes as u64
+        || root.codes.bytes != code_bytes as u64
+        || root.books.bytes != book_bytes as u64
+        || root.graph.bytes == 0
+    {
+        return Err(ResidentGraphGenerationError::Invalid("artifact geometry"));
+    }
+    let graph_bytes = usize::try_from(root.graph.bytes)
+        .map_err(|_| ResidentGraphGenerationError::Invalid("graph size"))?;
+    let map_resident_bytes = rows
+        .checked_mul(std::mem::size_of::<usize>())
+        .ok_or(ResidentGraphGenerationError::Invalid("map resident size"))?;
+    let worker_bytes = rows
+        .checked_mul(8)
+        .and_then(|n| n.checked_mul(active_workers))
+        .ok_or(ResidentGraphGenerationError::Invalid("worker size"))?;
+    let floor = plane_bytes
+        .checked_add(map_resident_bytes)
+        .and_then(|n| n.checked_add(code_bytes))
+        .and_then(|n| n.checked_add(book_bytes))
+        .and_then(|n| n.checked_add(graph_bytes))
+        .and_then(|n| n.checked_add(worker_bytes))
+        .ok_or(ResidentGraphGenerationError::Invalid("resident size"))?;
+    if floor > max_resident_bytes {
+        return Err(ResidentGraphGenerationError::Invalid("resident cap"));
+    }
+    Ok(worker_bytes)
+}
+
 impl ResidentGraphGeneration {
     /// Open fixed artifact names from a fully hydrated directory. The digest
     /// must come from a separately trusted, conditional generation pointer.
@@ -116,72 +207,18 @@ impl ResidentGraphGeneration {
         max_resident_bytes: usize,
         active_workers: usize,
     ) -> Result<Self, ResidentGraphGenerationError> {
-        if root_bytes.len() > MAX_ROOT_BYTES
-            || !valid_sha256(trusted_root_sha256)
-            || format!("{:x}", Sha256::digest(root_bytes)) != trusted_root_sha256
-        {
-            return Err(ResidentGraphGenerationError::Invalid(
-                "trusted root SHA-256",
-            ));
-        }
-        let root: Root = serde_json::from_slice(root_bytes)
-            .map_err(|_| ResidentGraphGenerationError::Invalid("root JSON"))?;
-        let rows = usize::try_from(root.rows)
-            .map_err(|_| ResidentGraphGenerationError::Invalid("row count"))?;
-        if root.schema != SCHEMA
-            || root.generation == 0
-            || rows < 2
-            || rows > u32::MAX as usize
-            || root.dimensions == 0
-            || !valid_sha256(&root.source_sha256)
-            || active_workers == 0
-        {
-            return Err(ResidentGraphGenerationError::Invalid("root identity"));
-        }
+        let root = parse_authenticated_root(root_bytes, trusted_root_sha256)?;
+        let worker_bytes = preflight_root(&root, max_resident_bytes, active_workers)?;
+        let rows = root.rows as usize;
         let dimensions = root.dimensions;
-        let width = dimensions.div_ceil(64);
-        let plane_bytes = resident_plane_bytes(root.rows, dimensions)?;
-        let map_bytes = rows
-            .checked_mul(4)
-            .ok_or(ResidentGraphGenerationError::Invalid("map size"))?;
         let code_bytes = rows
             .checked_mul(64)
             .ok_or(ResidentGraphGenerationError::Invalid("code size"))?;
         let book_bytes = 64usize
             .checked_mul(256)
-            .and_then(|n| n.checked_mul(width))
+            .and_then(|n| n.checked_mul(dimensions.div_ceil(64)))
             .and_then(|n| n.checked_mul(4))
             .ok_or(ResidentGraphGenerationError::Invalid("book size"))?;
-        let plane_file_bytes = plane_bytes
-            .checked_add(64)
-            .ok_or(ResidentGraphGenerationError::Invalid("plane size"))?;
-        if root.plane.bytes != plane_file_bytes as u64
-            || root.map.bytes != map_bytes as u64
-            || root.codes.bytes != code_bytes as u64
-            || root.books.bytes != book_bytes as u64
-            || root.graph.bytes == 0
-        {
-            return Err(ResidentGraphGenerationError::Invalid("artifact geometry"));
-        }
-        let graph_bytes = usize::try_from(root.graph.bytes)
-            .map_err(|_| ResidentGraphGenerationError::Invalid("graph size"))?;
-        let map_resident_bytes = rows
-            .checked_mul(std::mem::size_of::<usize>())
-            .ok_or(ResidentGraphGenerationError::Invalid("map resident size"))?;
-        let worker_bytes = rows
-            .checked_mul(8)
-            .and_then(|n| n.checked_mul(active_workers))
-            .ok_or(ResidentGraphGenerationError::Invalid("worker size"))?;
-        let floor = plane_bytes
-            .checked_add(map_resident_bytes)
-            .and_then(|n| n.checked_add(code_bytes))
-            .and_then(|n| n.checked_add(book_bytes))
-            .and_then(|n| n.checked_add(graph_bytes))
-            .and_then(|n| n.checked_add(worker_bytes))
-            .ok_or(ResidentGraphGenerationError::Invalid("resident size"))?;
-        if floor > max_resident_bytes {
-            return Err(ResidentGraphGenerationError::Invalid("resident cap"));
-        }
         let path = |name| directory.join(name);
         if fs::metadata(path("graph.bin"))?.len() != root.graph.bytes {
             return Err(ResidentGraphGenerationError::Invalid("graph length"));
@@ -284,7 +321,11 @@ impl ResidentGraphGeneration {
 mod tests {
     use super::*;
     use crate::resident_fp16_tier::write_resident_fp16_tier;
+    use crate::resident_graph_store::{
+        hydrate_graph_generation, publish_graph_generation, read_graph_head,
+    };
     use crate::resident_vector_graph::GraphSearchWorkspace;
+    use object_store::{memory::InMemory, path::Path as ObjectPath};
 
     #[test]
     fn trusted_root_loads_and_corrupt_artifact_fails_closed() {
@@ -378,6 +419,32 @@ mod tests {
                 .0,
             vec![42, 7]
         );
+        let store = InMemory::new();
+        let prefix = ObjectPath::from("graph");
+        let cache = tempfile::tempdir().unwrap();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            publish_graph_generation(&store, &prefix, root.as_bytes(), dir.path(), None)
+                .await
+                .unwrap();
+            let head = read_graph_head(&store, &prefix).await.unwrap().unwrap();
+            assert!(
+                hydrate_graph_generation(&store, &prefix, &head, cache.path(), 100, 1)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fs::read_dir(cache.path()).unwrap().count(), 0);
+            let (hydrated, cold) =
+                hydrate_graph_generation(&store, &prefix, &head, cache.path(), 100_000, 1)
+                    .await
+                    .unwrap();
+            assert_eq!(hydrated.generation(), 7);
+            assert_eq!(cold.object_gets, 5);
+            let (_, warm) =
+                hydrate_graph_generation(&store, &prefix, &head, cache.path(), 100_000, 1)
+                    .await
+                    .unwrap();
+            assert_eq!(warm.object_gets, 0);
+        });
         assert!(
             ResidentGraphGeneration::open_local_authenticated(
                 root.as_bytes(),

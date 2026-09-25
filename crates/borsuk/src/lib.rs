@@ -78,6 +78,7 @@ pub mod serving_generation;
 pub mod native_source_tier;
 pub mod resident_fp16_tier;
 pub mod resident_graph_generation;
+pub mod resident_graph_store;
 pub mod resident_vector_graph;
 pub mod resident_nominee_generation;
 pub mod unconstrained_priced_interval;
