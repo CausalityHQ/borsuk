@@ -346,7 +346,7 @@ pub async fn hydrate_graph_collection(
 mod tests {
     use super::*;
     use crate::resident_graph_generation::SCHEMA as GRAPH_SCHEMA;
-    use crate::resident_graph_store::publish_graph_generation;
+    use crate::resident_graph_store::{publish_graph_generation, stage_graph_generation};
     use object_store::memory::InMemory;
     use sha2::{Digest, Sha256};
 
@@ -443,6 +443,20 @@ mod tests {
             live.iter().map(|row| row.id).collect::<Vec<_>>(),
             vec![5, 7, 9]
         );
+        let mut next_root: serde_json::Value = serde_json::from_slice(&root).unwrap();
+        next_root["generation"] = serde_json::json!(2);
+        let next_root = serde_json::to_vec(&next_root).unwrap();
+        let staged = stage_graph_generation(&store, &prefix, &next_root, dir.path())
+            .await
+            .unwrap();
+        let switched =
+            publish_graph_collection(&store, &prefix, &staged, &[], 1024, Some(&current))
+                .await
+                .unwrap();
+        assert_eq!(switched.revision, 5);
+        assert_eq!(switched.base_root_sha256, staged);
+        assert_eq!(held.base_root_sha256, base.root_sha256);
+        assert_ne!(held.base_root_sha256, switched.base_root_sha256);
         let old = decode_mutation_snapshot(
             &held.mutation_bytes,
             &held.mutation_sha256,
