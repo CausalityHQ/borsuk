@@ -11,8 +11,8 @@ struct Trace {
     site: usize,
     gap: usize,
     required: bool,
-    closed_from_open: Vec<u8>,
-    continued: Vec<u8>,
+    closed_from_open: Vec<bool>,
+    continued: Vec<bool>,
 }
 
 fn index(gets: usize, units: usize, stride: usize) -> usize {
@@ -108,13 +108,13 @@ pub fn hard_priced_cover(
         let required_here = required.contains(&site);
         let mut next_closed = vec![-1_i64; slots];
         let mut next_open = vec![-1_i64; slots];
-        let mut closed_from_open = vec![0_u8; slots];
-        let mut continued = vec![0_u8; slots];
+        let mut closed_from_open = vec![false; slots];
+        let mut continued = vec![false; slots];
         for gets in 0..=get_cap {
             for units in 0..=unit_cap {
                 let slot = index(gets, units, stride);
                 let from_open = opened[slot] > closed[slot];
-                closed_from_open[slot] = u8::from(from_open);
+                closed_from_open[slot] = from_open;
                 let base = closed[slot].max(opened[slot]);
                 if !required_here {
                     next_closed[slot] = base;
@@ -124,7 +124,7 @@ pub fn hard_priced_cover(
                     let candidate = base + weight;
                     if candidate > next_open[target] {
                         next_open[target] = candidate;
-                        continued[target] = 0;
+                        continued[target] = false;
                     }
                 }
             }
@@ -143,7 +143,7 @@ pub fn hard_priced_cover(
                     let candidate = opened[slot] + weight;
                     if candidate > next_open[target] {
                         next_open[target] = candidate;
-                        continued[target] = 1;
+                        continued[target] = true;
                     }
                 }
             }
@@ -195,12 +195,12 @@ pub fn hard_priced_cover(
             if trace.required {
                 return Err(CoverError::InvalidWitness);
             }
-            best_open = trace.closed_from_open[slot] != 0;
+            best_open = trace.closed_from_open[slot];
         } else {
             if pending_end.is_none() {
                 pending_end = Some(trace.site);
             }
-            if trace.continued[slot] != 0 {
+            if trace.continued[slot] {
                 units = units
                     .checked_sub(trace.gap)
                     .ok_or(CoverError::InvalidWitness)?;
@@ -211,7 +211,7 @@ pub fn hard_priced_cover(
                 ));
                 gets = gets.checked_sub(1).ok_or(CoverError::InvalidWitness)?;
                 units = units.checked_sub(1).ok_or(CoverError::InvalidWitness)?;
-                best_open = trace.closed_from_open[index(gets, units, stride)] != 0;
+                best_open = trace.closed_from_open[index(gets, units, stride)];
             }
         }
     }
