@@ -38,3 +38,15 @@ discard/restart interruptions, verify all terminal artifact digests,
 and terminate compute immediately. No other BORSUK worker should
 overlap. RAM at 100M remains a function of recall, corpus size and
 concurrent generations, with no vector-count cutoff.
+
+## Premeasurement correction
+
+Attempt `a0001` on source `b38e2df41106dd8d546458da737f41764aa4a2ea`
+terminated in the GT-blind prepare phase with CLI exit 2 because the
+parser required late truth arguments even in `prepare`. Its terminal
+SHA-256 is
+`937197debeec569854ae20ca57f9115024e2fee21ac414614c8dab1772a6d23b`;
+Spot instance `i-0e9da493398f4ca62` is terminated. No query result,
+seal or quality measurement exists from that attempt. The next
+attempt changes only phase-specific CLI argument validation and keeps
+the candidate ladder, split, scoring and gates above unchanged.

@@ -88,6 +88,8 @@ def prepare(args: argparse.Namespace) -> None:
 
 
 def score(args: argparse.Namespace) -> None:
+    if any(getattr(args, name) is None for name in ("truth", "baseline", "summary")):
+        raise ValueError("score phase requires truth, baseline and summary paths")
     if sha256(args.seal) != args.seal_sha256:
         raise ValueError("external GT-blind seal differs")
     seal = json.loads(args.seal.read_text())
@@ -143,7 +145,8 @@ if __name__ == "__main__":
     parser.add_argument("phase", choices=("prepare", "score"))
     for name in ("source", "old_sq8", "order", "requests", "raw", "seal",
                  "truth", "baseline", "summary"):
-        parser.add_argument("--" + name.replace("_", "-"), type=Path, required=True)
+        parser.add_argument("--" + name.replace("_", "-"), type=Path,
+                            required=name not in {"truth", "baseline", "summary"})
     parser.add_argument("--seal-sha256")
     arguments = parser.parse_args()
     if arguments.phase == "prepare":
