@@ -63,6 +63,7 @@ print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-terminal-v1',
     'source_archive_sha256':os.environ['BORSUK_V223_ARCHIVE_SHA'],
     'generation_root_sha256':os.environ['BORSUK_V223_ROOT_SHA'],
     'mutation_stride':int(os.environ.get('BORSUK_V223_MUTATION_STRIDE') or 0),
+    'delta_encoding':os.environ.get('BORSUK_V223_DELTA_ENCODING',''),
     'instance_id':identity['instanceId'],'instance_type':identity['instanceType'],
     'region':identity['region'],'availability_zone':identity['availabilityZone'],
     'server_instance_id':os.environ.get('BORSUK_V223_SERVER_ID',''),
@@ -143,6 +144,7 @@ if [ "$role" = server ]; then
   phase=serve
   server_args=(generation.json "$BORSUK_V223_ROOT_SHA" . 3221225472 0.0.0.0:8080)
   if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then server_args+=("$BORSUK_V223_MUTATION_STRIDE"); fi
+  if [ -n "${BORSUK_V223_DELTA_ENCODING:-}" ]; then server_args+=("$BORSUK_V223_DELTA_ENCODING"); fi
   "$CARGO_TARGET_DIR/release/examples/v220_graph_http" "${server_args[@]}" &
   server_pid=$!
   for attempt in $(seq 1 120); do
@@ -153,9 +155,9 @@ if [ "$role" = server ]; then
   curl -fsS http://127.0.0.1:8080/health >health.json
   if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then
     python3 - <<'PY'
-import json
+import json,os
 v=json.load(open('health.json'))
-assert v['status']=='ok' and v['delta_rows']==10000 and v['overlay_resident_bytes']<=32*1024*1024
+assert v['status']=='ok' and v['delta_rows']==10000 and v['overlay_resident_bytes']<=(64 if os.environ.get('BORSUK_V223_DELTA_ENCODING') else 32)*1024*1024
 PY
   fi
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
@@ -170,6 +172,7 @@ print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-ready-v1',
     'instance_id':os.environ['INSTANCE_ID'],'private_ip':os.environ['PRIVATE_IP'],
     'generation_root_sha256':os.environ['BORSUK_V223_ROOT_SHA'],
     'mutation_stride':int(os.environ.get('BORSUK_V223_MUTATION_STRIDE') or 0),
+    'delta_encoding':os.environ.get('BORSUK_V223_DELTA_ENCODING',''),
     'source_commit':os.environ['BORSUK_V223_SOURCE_COMMIT']},sort_keys=True))
 PY
   aws s3api put-object --bucket "$bucket" --key "$prefix/server/ready.json" \
@@ -228,6 +231,14 @@ else
       --only-show-errors | sha256sum | cut -d ' ' -f1)
     [ "$local_sha" = "$remote_sha" ]
   done
+  if [ "${BORSUK_V223_DELTA_ENCODING:-}" = decoded ]; then
+    download v230-first.raw.jsonl \
+      research/v230-mutation-graph-http-1m/014d1fb36f9f69004c2c25b0648765bc369c4cd0/runs/a0001/client/sealed/first.raw.jsonl \
+      1167273 b4597049dd6959dbf5516342408a31e863fbe13505987f88811d58a4ccdd5d14
+    download v230-repeat.raw.jsonl \
+      research/v230-mutation-graph-http-1m/014d1fb36f9f69004c2c25b0648765bc369c4cd0/runs/a0001/client/sealed/repeat.raw.jsonl \
+      1167275 e14e53a2601e0b6f0fe64bdf227b9c4a2431e7db21d93cd4db3acd1967dbf30c
+  fi
   phase=truth
   download v219-raw.jsonl \
     research/v219-reachable-graph-1m/008ab6fbc50e6293e0599a33993c619702109bd9/runs/a0002/artifacts/raw.jsonl \
@@ -238,9 +249,15 @@ else
   for pass in first repeat; do
     scorer=scripts.v222_score_external_graph_http
     [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ] && scorer=scripts.v230_score_mutation_graph_http
-    python3.12 -m "$scorer" --raw "$pass.raw.jsonl" \
-      --summary "$pass.summary.json" --previous v219-raw.jsonl \
-      --truth v198-raw.jsonl --output "$pass.quality.json"
+    if [ "${BORSUK_V223_DELTA_ENCODING:-}" = decoded ]; then
+      python3.12 -m scripts.v233_score_decoded_graph_http --raw "$pass.raw.jsonl" \
+        --reference "v230-$pass.raw.jsonl" --summary "$pass.summary.json" \
+        --truth v198-raw.jsonl --output "$pass.quality.json"
+    else
+      python3.12 -m "$scorer" --raw "$pass.raw.jsonl" \
+        --summary "$pass.summary.json" --previous v219-raw.jsonl \
+        --truth v198-raw.jsonl --output "$pass.quality.json"
+    fi
   done
 fi
 phase=complete

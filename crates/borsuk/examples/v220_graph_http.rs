@@ -165,11 +165,14 @@ async fn search(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 6 && args.len() != 7 {
+    if !matches!(args.len(), 6 | 7 | 8) {
         return Err(
-            "usage: v220_graph_http ROOT_JSON TRUSTED_SHA DIRECTORY MAX_RESIDENT_BYTES LISTEN [SAME_VECTOR_UPSERT_STRIDE]"
+            "usage: v220_graph_http ROOT_JSON TRUSTED_SHA DIRECTORY MAX_RESIDENT_BYTES LISTEN [SAME_VECTOR_UPSERT_STRIDE [decoded]]"
                 .into(),
         );
+    }
+    if args.len() == 8 && args[7] != "decoded" {
+        return Err("unsupported mutation representation".into());
     }
     let listen: SocketAddr = args[5].parse()?;
     let loaded = ResidentGraphGeneration::open_local_authenticated(
@@ -194,11 +197,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 })
             })
             .collect::<Result<Vec<_>, borsuk::resident_graph_generation::ResidentGraphGenerationError>>()?;
-        Some(Arc::new(ResidentGraphOverlay::new(
+        let mut overlay = ResidentGraphOverlay::new(
             Arc::clone(&loaded),
             mutations,
             32 * 1024 * 1024,
-        )?))
+        )?;
+        if args.len() == 8 {
+            overlay = overlay.with_decoded_delta(64 * 1024 * 1024)?;
+        }
+        Some(Arc::new(overlay))
     } else {
         None
     };

@@ -42,7 +42,7 @@ WALL_SECONDS = 7200
 
 def bootstrap(role: str, commit: str, archive_sha: str, archive_key: str,
               prefix: str, server_ip: str = "", server_id: str = "",
-              mutation_stride: int = 0) -> str:
+              mutation_stride: int = 0, delta_encoding: str = "") -> str:
     if role not in ARTIFACTS:
         raise ValueError("unknown V223 role")
     script = f"""#!/bin/bash
@@ -62,6 +62,7 @@ export BORSUK_V223_ROOT_SHA='{ROOT_SHA}'
 export BORSUK_V223_SERVER_IP='{server_ip}'
 export BORSUK_V223_SERVER_ID='{server_id}'
 export BORSUK_V223_MUTATION_STRIDE='{mutation_stride if mutation_stride else ""}'
+export BORSUK_V223_DELTA_ENCODING='{delta_encoding}'
 exec bash repo/scripts/run_v223_authenticated_graph_http.sh
 """
     if len(script.encode()) > 16_384:
@@ -105,7 +106,8 @@ def read_marker(s3, ec2, key: str, instance_id: str, seconds: int) -> bytes:
 
 
 def terminal(s3, role: str, prefix: str, raw: bytes, instance_id: str,
-             commit: str, archive_sha: str, mutation_stride: int = 0) -> dict:
+             commit: str, archive_sha: str, mutation_stride: int = 0,
+             delta_encoding: str = "") -> dict:
     value = json.loads(raw)
     artifacts = set(ARTIFACTS[role])
     if role == "server" and mutation_stride:
@@ -117,6 +119,7 @@ def terminal(s3, role: str, prefix: str, raw: bytes, instance_id: str,
             or value.get("source_archive_sha256") != archive_sha
             or value.get("generation_root_sha256") != ROOT_SHA
             or value.get("mutation_stride", 0) != mutation_stride
+            or value.get("delta_encoding", "") != delta_encoding
             or not set(value.get("artifacts", {})).issubset(artifacts)
             or (value["status"] == "complete" and (
                 value.get("exit_code") != 0 or set(value["artifacts"]) != artifacts))):

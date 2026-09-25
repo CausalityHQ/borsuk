@@ -46,6 +46,13 @@ class V223Test(unittest.TestCase):
             self.assertEqual(spec["NetworkInterfaces"][0]["Groups"],
                              ["sg-0b1fd3e4fbde4af0d"])
 
+    def test_decoded_delta_bootstrap_is_explicit(self):
+        script = bootstrap("server", "0" * 40, "1" * 64, "source.tar.gz",
+                           "research/v233/run", mutation_stride=100,
+                           delta_encoding="decoded")
+        self.assertIn("BORSUK_V223_MUTATION_STRIDE='100'", script)
+        self.assertIn("BORSUK_V223_DELTA_ENCODING='decoded'", script)
+
     def test_client_terminal_replays_all_artifacts_and_seals(self):
         prefix = "research/v223/run"
         objects = {f"{prefix}/client/artifacts/{name}": b"valid"
