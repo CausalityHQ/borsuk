@@ -43,6 +43,7 @@ class BenchTest(unittest.TestCase):
                 prep.write_text(json.dumps({"schema": "borsuk-v217-graph-1m-preparation-v1",
                                             "requests_sha256": bench.digest(requests)}))
                 args = SimpleNamespace(host="127.0.0.1", port=server.server_port,
+                    pass_label="single_pass",
                     prep=prep, requests=requests, raw=root / "raw.jsonl",
                     summary=root / "summary.json")
                 bench.run(args)

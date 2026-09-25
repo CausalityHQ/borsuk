@@ -85,9 +85,11 @@ def run(args: argparse.Namespace) -> None:
     args.summary.write_text(json.dumps({
         "schema": "borsuk-v220-graph-http-1m-v1", "requests_sha256": digest(args.requests),
         "raw_sha256": digest(args.raw), "queries": COUNT, "concurrency": WORKERS,
-        "transport": "persistent HTTP/1.1 loopback",
+        "transport": ("persistent HTTP/1.1 loopback" if args.host in {"127.0.0.1", "localhost"}
+                      else "persistent HTTP/1.1 VPC peer"),
         "cache_state": "resident after authenticated hydration",
-        "comparator": "none; self-gate only",
+        "comparator": "not measured in this cell",
+        "pass_label": args.pass_label,
         "vector_body_gets_basis": "zero by construction; resident plane, no object client",
         "p50_ns": percentile(latencies, 50), "p90_ns": percentile(latencies, 90),
         "p95_ns": percentile(latencies, 95), "p99_ns": percentile(latencies, 99),
@@ -102,6 +104,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--pass-label", choices=("single_pass", "first_pass", "immediate_repeat"),
+                        default="single_pass")
     for name in ("prep", "requests", "raw", "summary"):
         parser.add_argument("--" + name, type=Path, required=True)
     run(parser.parse_args())
