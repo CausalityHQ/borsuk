@@ -426,6 +426,9 @@ bytes for 1M rows, 154,400,000,064 bytes for 100M rows and
 308,800,000,128 bytes for two 100M generations. A conditional admission
 theorem transfers a measured allocator/router/delta/workspace overhead
 bound to process RSS. The payload model has no fixed vector-count knee;
+the two-reader theorem proves that sharing one base saves one modeled
+base allocation versus two independently loaded readers, conditional
+on the Rust pointer/format refinement and measured RSS overhead;
 the theorem does not establish observed memory usage, latency or recall.
 Run `lean ResidentFp16Resources.lean`
 from this directory with the pinned toolchain.

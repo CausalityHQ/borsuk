@@ -41,6 +41,27 @@ theorem admitted_rss_under_measured_overhead_bound
     rss ≤ budget := by
   omega
 
+/-! Mutation-only reader swaps can share one authenticated immutable base.
+This counts model bytes; the allocator/RSS refinement remains a premise. -/
+def sharedTwoReaderBytes (base overlay : Nat) : Nat :=
+  base + 2 * overlay
+
+def copiedTwoReaderBytes (base overlay : Nat) : Nat :=
+  2 * (base + overlay)
+
+theorem shared_two_readers_save_one_base (base overlay : Nat) :
+    copiedTwoReaderBytes base overlay =
+      sharedTwoReaderBytes base overlay + base := by
+  simp [copiedTwoReaderBytes, sharedTwoReaderBytes]
+  omega
+
+theorem shared_two_reader_rss_within_budget
+    (base overlay overhead rss budget : Nat)
+    (refinement : rss ≤ sharedTwoReaderBytes base overlay + overhead)
+    (admission : sharedTwoReaderBytes base overlay + overhead ≤ budget) :
+    rss ≤ budget := by
+  omega
+
 theorem one_million_d768 :
     planeBytes 1000000 768 = 1544000064 := by
   decide
