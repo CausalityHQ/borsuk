@@ -56,6 +56,7 @@ pub(crate) struct Root {
 /// Owned, authenticated files for one immutable graph generation. Every
 /// serving worker creates its own cosine view and graph workspace.
 pub struct ResidentGraphGeneration {
+    root_sha256: String,
     plane: ResidentFp16Tier,
     graph: ResidentVectorGraph,
     pq: Pq64Router,
@@ -318,6 +319,7 @@ impl ResidentGraphGeneration {
             return Err(ResidentGraphGenerationError::Invalid("resident cap"));
         }
         Ok(Self {
+            root_sha256: trusted_root_sha256.to_owned(),
             plane,
             graph,
             pq,
@@ -327,6 +329,10 @@ impl ResidentGraphGeneration {
 
     pub fn rows(&self) -> usize {
         self.plane.rows()
+    }
+    /// Digest authenticated when this immutable base was opened.
+    pub fn root_sha256(&self) -> &str {
+        &self.root_sha256
     }
     pub fn dimensions(&self) -> usize {
         self.plane.dimensions()
@@ -374,7 +380,8 @@ mod tests {
     use crate::resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation};
     use crate::resident_graph_collection::{
         ResidentGraphCollectionSlot, hydrate_graph_collection,
-        hydrate_graph_collection_decoded, publish_graph_collection, read_graph_collection_head,
+        hydrate_graph_collection_decoded, hydrate_graph_collection_decoded_reusing_base,
+        publish_graph_collection, read_graph_collection_head,
     };
     use crate::resident_vector_graph::GraphSearchWorkspace;
     use object_store::{memory::InMemory, path::Path as ObjectPath};
@@ -528,6 +535,20 @@ mod tests {
         let decoded_bound = decoded.bind(&decoded_view).unwrap();
         assert_eq!(decoded_bound.search(&[1.0, 0.0], 2, 4, 4,
             &mut GraphSearchWorkspace::new(4).unwrap()).unwrap().0, vec![99, 7]);
+        let next_collection = tokio::runtime::Runtime::new().unwrap().block_on(
+            publish_graph_collection(&store, &prefix, &original_head.root_sha256,
+                &[ResidentMutation { id: 42, vector: None },
+                  ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) },
+                  ResidentMutation { id: 100, vector: Some(vec![1.0, 0.0]) }],
+                1024, Some(&collection_head))).unwrap();
+        let reused = hydrate_graph_collection_decoded_reusing_base(
+            &next_collection, &collection_overlay, 1024, 64).unwrap();
+        assert!(Arc::ptr_eq(&collection_overlay.base_arc(), &reused.base_arc()));
+        let reused_view = reused.base().cosine_view().unwrap();
+        assert_eq!(reused.bind(&reused_view).unwrap().search(&[1.0, 0.0], 2, 4, 4,
+            &mut GraphSearchWorkspace::new(4).unwrap()).unwrap().0, vec![99, 100]);
+        assert_eq!(collection_bound.search(&[1.0, 0.0], 2, 4, 4,
+            &mut GraphSearchWorkspace::new(4).unwrap()).unwrap().0, vec![99, 7]);
         let collection_slot = ResidentGraphCollectionSlot::new(
             collection_head.revision, Arc::clone(&collection_overlay)).unwrap();
         let held_collection = collection_slot.pin();
@@ -602,6 +623,9 @@ mod tests {
                 .unwrap()
                 .0
         }));
+        let foreign = ResidentGraphOverlay::new(Arc::clone(&next), vec![], 1).unwrap();
+        assert!(hydrate_graph_collection_decoded_reusing_base(
+            &next_collection, &foreign, 1024, 64).is_err());
         let held_reader = slot.pin();
         let retiring = slot.replace(Arc::clone(&next)).unwrap();
         assert!(slot.replace(Arc::clone(&retiring)).is_err());

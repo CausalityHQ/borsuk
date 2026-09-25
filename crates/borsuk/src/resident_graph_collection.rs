@@ -366,6 +366,28 @@ pub async fn hydrate_graph_collection_decoded(
     Ok((Arc::new(overlay), stats))
 }
 
+/// Reload a mutation-only revision over an already authenticated base graph.
+/// A different root requires full hydration; the old overlay stays pinned.
+pub fn hydrate_graph_collection_decoded_reusing_base(
+    head: &ResidentGraphCollectionHead,
+    prior: &ResidentGraphOverlay,
+    max_snapshot_bytes: usize,
+    max_delta_bytes: usize,
+) -> Result<Arc<ResidentGraphOverlay>, ResidentGraphCollectionError> {
+    let root = parse_authenticated_root(&head.base_root_bytes, &head.base_root_sha256)
+        .map_err(ResidentGraphStoreError::from)?;
+    if prior.base().root_sha256() != head.base_root_sha256 {
+        return Err(ResidentGraphCollectionError::Invalid("base root differs"));
+    }
+    let mutations = decode_mutation_snapshot(
+        &head.mutation_bytes, &head.mutation_sha256, &head.base_root_sha256,
+        root.dimensions, max_snapshot_bytes,
+    )?;
+    let overlay = ResidentGraphOverlay::new(prior.base_arc(), mutations, max_delta_bytes)?
+        .with_decoded_delta(max_delta_bytes)?;
+    Ok(Arc::new(overlay))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
