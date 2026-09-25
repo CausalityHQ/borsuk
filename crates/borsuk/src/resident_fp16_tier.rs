@@ -173,7 +173,7 @@ where
 impl ResidentFp16Tier {
     /// Source ID at an authenticated physical row. Graph edges use these row
     /// ordinals and retain the plane identity across generation swaps.
-    pub(crate) fn source_id(&self, ordinal: usize) -> Result<u64, ResidentFp16Error> {
+    pub fn source_id(&self, ordinal: usize) -> Result<u64, ResidentFp16Error> {
         self.ids
             .get(ordinal)
             .copied()
@@ -482,7 +482,9 @@ mod tests {
         assert_eq!(tier.rows(), 3);
         assert_eq!(tier.dimensions(), 2);
         assert_eq!(tier.vector_f32(2).unwrap(), vec![0.5, 0.5]);
+        assert_eq!(tier.source_id(2).unwrap(), 19);
         assert!(tier.vector_f32(3).is_err());
+        assert!(tier.source_id(3).is_err());
         let roster = [
             SourceCandidate {
                 ordinal: 1,
