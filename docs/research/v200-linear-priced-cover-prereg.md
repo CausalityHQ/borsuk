@@ -48,3 +48,13 @@ artifacts and read-back hashes. Stop/terminate immediately at terminal.
 An interruption discards the cell. A negative result requires a root-cause
 decision before another attempt. A pass advances to an exact capped fallback
 for the remaining 139 and then to concurrent end-to-end serving.
+
+## Bootstrap correction after a0001
+
+Attempt `a0001` on source commit `d7f4aff2` ended in GT-blind weight
+generation before any Rust build or timing. The base AMI's default `python3`
+is too old for `zip(strict=True)` in the frozen generator; the closed log
+reported `TypeError: zip() takes no keyword arguments`. No measurement cell
+was produced. The Spot instance `i-00d7e20d6c3b60d79` was terminated.
+Attempt `a0002` uses Python 3.12 explicitly for the same generator, same
+three source artifacts, same model, and same Rust parity/timing rule.

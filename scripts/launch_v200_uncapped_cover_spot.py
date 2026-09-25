@@ -94,14 +94,14 @@ aws s3 cp 's3://@@BUCKET@@/@@ARCHIVE_KEY@@' source.tar.gz --only-show-errors
 printf '%s  source.tar.gz\n' '@@ARCHIVE_SHA@@' | sha256sum -c -
 mkdir repo && tar -xzf source.tar.gz -C repo
 phase=install
-dnf install -y -q gcc gcc-c++ cmake perl tar gzip time
+dnf install -y -q python3.12 gcc gcc-c++ cmake perl tar gzip time
 export RUSTUP_HOME="$root/.rustup" CARGO_HOME="$root/.cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_JOBS=6
 curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.98.0
 export PYTHONPATH="$root/repo"
 phase=inputs
 @@DOWNLOAD@@
 phase=weights
-/usr/bin/time -v -o weights-resources.txt python3 -m scripts.v200_uncapped_weights \
+/usr/bin/time -v -o weights-resources.txt python3.12 -m scripts.v200_uncapped_weights \
   features.jsonl plans.jsonl v192-result.json weights.jsonl >weight-seal.json
 aws s3api put-object --bucket '@@BUCKET@@' --key '@@PREFIX@@/sealed/weights.jsonl' \
   --body weights.jsonl --if-none-match '*' --no-cli-pager >/dev/null
