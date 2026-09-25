@@ -810,7 +810,7 @@ mod tests {
         .unwrap();
         let tier =
             ResidentFp16Tier::open_authenticated(&path, &digest, SOURCE, 4, 2, 213, 48).unwrap();
-        let graph = ResidentVectorGraph::build(vectors, &tier, 4, 4, 8).unwrap();
+        let graph = ResidentVectorGraph::build(vectors.clone(), &tier, 4, 4, 8).unwrap();
         let structure = graph.structural_stats();
         assert_eq!(structure.rows, 4);
         assert_eq!(structure.reachable, 4);
