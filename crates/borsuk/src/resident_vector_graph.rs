@@ -33,6 +33,51 @@ struct Visit {
     node: u32,
 }
 
+/// Reusable per-worker visit marks. A new epoch avoids clearing all corpus
+/// rows for every search; the rare wrap clears marks before reuse.
+pub struct GraphSearchWorkspace {
+    marks: Vec<u32>,
+    epoch: u32,
+}
+
+impl GraphSearchWorkspace {
+    /// Allocate one mark per graph row, charged once per serving worker.
+    pub fn new(rows: usize) -> Result<Self, ResidentFp16Error> {
+        if rows == 0 {
+            return Err(ResidentFp16Error::Invalid("graph workspace rows"));
+        }
+        let mut marks = Vec::new();
+        marks
+            .try_reserve_exact(rows)
+            .map_err(|_| ResidentFp16Error::Invalid("graph workspace allocation"))?;
+        marks.resize(rows, 0);
+        Ok(Self { marks, epoch: 0 })
+    }
+
+    /// Charged mark storage for a single worker.
+    pub fn resident_bytes(&self) -> usize {
+        self.marks.capacity() * 4
+    }
+
+    fn next(&mut self) {
+        if self.epoch == u32::MAX {
+            self.marks.fill(0);
+            self.epoch = 1;
+        } else {
+            self.epoch += 1;
+        }
+    }
+
+    fn mark(&mut self, row: usize) -> bool {
+        if self.marks[row] == self.epoch {
+            false
+        } else {
+            self.marks[row] = self.epoch;
+            true
+        }
+    }
+}
+
 impl Eq for Visit {}
 
 impl Ord for Visit {
@@ -416,8 +461,22 @@ impl ResidentVectorGraph {
     fn navigate_with(
         &self,
         ef: usize,
+        score: impl FnMut(u32) -> Result<f64, ResidentFp16Error>,
+    ) -> Result<(Vec<Visit>, usize), ResidentFp16Error> {
+        let mut workspace = GraphSearchWorkspace::new(self.neighbours.len())?;
+        self.navigate_with_workspace(ef, &mut workspace, score)
+    }
+
+    fn navigate_with_workspace(
+        &self,
+        ef: usize,
+        workspace: &mut GraphSearchWorkspace,
         mut score: impl FnMut(u32) -> Result<f64, ResidentFp16Error>,
     ) -> Result<(Vec<Visit>, usize), ResidentFp16Error> {
+        if workspace.marks.len() != self.neighbours.len() {
+            return Err(ResidentFp16Error::Invalid("graph workspace geometry"));
+        }
+        workspace.next();
         let mut current = self.entry;
         let mut current_distance = score(current)?;
         let top = self.neighbours[current as usize].len() - 1;
@@ -446,8 +505,7 @@ impl ResidentVectorGraph {
         };
         let mut candidates = BinaryHeap::from([Reverse(first)]);
         let mut results = BinaryHeap::from([first]);
-        let mut seen = vec![false; self.neighbours.len()];
-        seen[current as usize] = true;
+        workspace.mark(current as usize);
         let mut visits = 1;
         while let Some(Reverse(candidate)) = candidates.pop() {
             if results.len() >= ef && candidate.distance > results.peek().unwrap().distance {
@@ -455,7 +513,7 @@ impl ResidentVectorGraph {
             }
             let base = self.neighbours[candidate.node as usize].last().unwrap();
             for &neighbor in base {
-                if std::mem::replace(&mut seen[neighbor as usize], true) {
+                if !workspace.mark(neighbor as usize) {
                     continue;
                 }
                 visits += 1;
@@ -473,6 +531,90 @@ impl ResidentVectorGraph {
             }
         }
         Ok((results.into_vec(), visits))
+    }
+}
+
+/// Generation-bound graph, resident plane and source PQ cosine scorer.
+/// The physical map is authenticated by the caller's generation root and
+/// checked as a permutation once here, before request traffic.
+pub struct ResidentPqCosineGraph<'a, 'b> {
+    graph: &'a ResidentVectorGraph,
+    plane: &'a ResidentFp16Tier,
+    pq: &'a Pq64CosineView<'b>,
+    old_for_new: &'a [usize],
+}
+
+impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
+    /// Bind the immutable generation and check physical row identity once.
+    pub fn bind(
+        graph: &'a ResidentVectorGraph,
+        plane: &'a ResidentFp16Tier,
+        pq: &'a Pq64CosineView<'b>,
+        old_for_new: &'a [usize],
+    ) -> Result<Self, ResidentFp16Error> {
+        graph.check_plane(plane)?;
+        if pq.rows() != plane.rows()
+            || pq.dimensions() != plane.dimensions()
+            || old_for_new.len() != plane.rows()
+        {
+            return Err(ResidentFp16Error::Invalid("bound graph PQ geometry"));
+        }
+        let mut seen = vec![false; plane.rows()];
+        for &old in old_for_new {
+            if old >= plane.rows() || std::mem::replace(&mut seen[old], true) {
+                return Err(ResidentFp16Error::Invalid("bound graph PQ row map"));
+            }
+        }
+        Ok(Self {
+            graph,
+            plane,
+            pq,
+            old_for_new,
+        })
+    }
+
+    /// Search one query with a worker-owned epoch workspace. Returns stable
+    /// public IDs and distinct base-layer visits.
+    pub fn search(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        shortlist: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        if query.len() != self.plane.dimensions()
+            || k == 0
+            || ef < k
+            || ef > self.plane.rows()
+            || shortlist < k
+            || shortlist > ef
+        {
+            return Err(ResidentFp16Error::Invalid("bound graph query geometry"));
+        }
+        let prepared = self
+            .pq
+            .prepare_query(query)
+            .map_err(|_| ResidentFp16Error::Invalid("bound graph PQ query"))?;
+        let score = |node: u32| -> Result<f64, ResidentFp16Error> {
+            Ok(-f64::from(
+                prepared
+                    .score_row(self.old_for_new[node as usize])
+                    .map_err(|_| ResidentFp16Error::Invalid("bound graph PQ row"))?,
+            ))
+        };
+        let (mut results, visits) = self.graph.navigate_with_workspace(ef, workspace, score)?;
+        results
+            .sort_unstable_by(|a, b| a.distance.total_cmp(&b.distance).then(a.node.cmp(&b.node)));
+        let physical = results
+            .into_iter()
+            .take(shortlist)
+            .map(|visit| visit.node as usize)
+            .collect::<Vec<_>>();
+        Ok((
+            self.plane.rank_ordinals_cosine(query, &physical, k)?,
+            visits,
+        ))
     }
 }
 
@@ -564,6 +706,18 @@ mod tests {
                 .0,
             vec![42, 7]
         );
+        let bound = ResidentPqCosineGraph::bind(&restored, &tier, &cosine, &[0, 1, 2, 3]).unwrap();
+        let mut workspace = GraphSearchWorkspace::new(4).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                bound
+                    .search(&[1.0, 0.0], 2, 4, 2, &mut workspace)
+                    .unwrap()
+                    .0,
+                vec![42, 7]
+            );
+        }
+        assert!(ResidentPqCosineGraph::bind(&restored, &tier, &cosine, &[0, 0, 2, 3]).is_err());
         assert!(ResidentVectorGraph::open_authenticated(&graph_path, SOURCE, &tier).is_err());
         assert_eq!(graph.search(&[1.0, 0.0], &tier, 2, 4).unwrap(), vec![42, 7]);
         assert!(graph.search(&[0.0, 0.0], &tier, 2, 4).is_err());
