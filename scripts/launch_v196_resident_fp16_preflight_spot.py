@@ -203,7 +203,7 @@ def launch(attempt: str) -> None:
         raise ValueError("attempt already registered")
     active = ec2.describe_instances(Filters=[
         {"Name":"tag:Name", "Values":["borsuk-*"]},
-        {"Name":"instance-state-name", "Values":["pending","running","stopping","stopped"]},
+        {"Name":"instance-state-name", "Values":["pending","running","stopping"]},
     ])
     if any(item.get("Instances") for item in active["Reservations"]):
         raise ValueError("another BORSUK worker is active")
