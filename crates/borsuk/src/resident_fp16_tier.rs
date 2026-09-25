@@ -254,6 +254,18 @@ impl ResidentFp16Tier {
         self.generation
     }
 
+    /// Number of authenticated physical rows in this plane.
+    #[must_use]
+    pub fn rows(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Coordinate width of each physical row.
+    #[must_use]
+    pub fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
     /// Authenticated source identity.
     #[must_use]
     pub fn source_sha256(&self) -> [u8; 32] {
@@ -264,6 +276,32 @@ impl ResidentFp16Tier {
     #[must_use]
     pub fn artifact_sha256(&self) -> [u8; 32] {
         self.artifact_sha256
+    }
+
+    /// Score a complete authenticated physical shortlist without an SQ8
+    /// body read. The plane supplies the public ID for each ordinal; callers
+    /// must first bind this tier and the ordinal mapping to one generation.
+    pub fn rank_ordinals_cosine(
+        &self,
+        query: &[f32],
+        ordinals: &[usize],
+        top_k: usize,
+    ) -> Result<Vec<u64>, ResidentFp16Error> {
+        let mut candidates = Vec::new();
+        candidates
+            .try_reserve_exact(ordinals.len())
+            .map_err(|_| ResidentFp16Error::Invalid("candidate allocation"))?;
+        for &ordinal in ordinals {
+            let &source_id = self
+                .ids
+                .get(ordinal)
+                .ok_or(ResidentFp16Error::Invalid("candidate ordinal"))?;
+            candidates.push(SourceCandidate {
+                ordinal: ordinal as u64,
+                source_id,
+            });
+        }
+        self.rank_cosine(query, &candidates, top_k)
     }
 
     /// Deterministic cosine top-k within a fixed SQ8 physical shortlist.
@@ -362,6 +400,8 @@ mod tests {
             ResidentFp16Tier::open_authenticated(&path, &digest, SOURCE, 3, 2, 7, 36).unwrap();
         assert_eq!(tier.resident_bytes(), 36);
         assert_eq!(tier.generation(), 7);
+        assert_eq!(tier.rows(), 3);
+        assert_eq!(tier.dimensions(), 2);
         let roster = [
             SourceCandidate {
                 ordinal: 1,
@@ -380,6 +420,13 @@ mod tests {
             tier.rank_cosine(&[1.0, 0.0], &roster, 2).unwrap(),
             vec![42, 19]
         );
+        assert_eq!(
+            tier.rank_ordinals_cosine(&[1.0, 0.0], &[1, 0, 2], 2)
+                .unwrap(),
+            vec![42, 19]
+        );
+        assert!(tier.rank_ordinals_cosine(&[1.0, 0.0], &[1, 1], 1).is_err());
+        assert!(tier.rank_ordinals_cosine(&[1.0, 0.0], &[3], 1).is_err());
         assert!(
             tier.rank_cosine(
                 &[1.0, 0.0],

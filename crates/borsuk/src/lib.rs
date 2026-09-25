@@ -77,6 +77,7 @@ pub mod sq8_s3_range;
 pub mod serving_generation;
 pub mod native_source_tier;
 pub mod resident_fp16_tier;
+pub mod resident_nominee_generation;
 pub mod unconstrained_priced_interval;
 pub mod relaxed_priced_interval;
 pub mod hard_priced_interval;
