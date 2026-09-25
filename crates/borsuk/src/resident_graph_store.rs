@@ -332,21 +332,17 @@ async fn upload_artifact(
     result
 }
 
-/// Publish all five blobs and an immutable root, then CAS the head last.
-/// Failed uploads may leave unreachable blobs; they cannot expose a partial
-/// generation. The object store must implement conditional `put_opts`.
-pub async fn publish_graph_generation(
+/// Stage all five authenticated blobs and their immutable root without
+/// moving a mutable head. A compactor can publish a collection revision
+/// pointing at this root after its complete build succeeds.
+pub async fn stage_graph_generation(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
     root_bytes: &[u8],
     directory: &Path,
-    expected: Option<&ResidentGraphHead>,
-) -> Result<ResidentGraphHead, ResidentGraphStoreError> {
+) -> Result<String, ResidentGraphStoreError> {
     let root_sha256 = format!("{:x}", Sha256::digest(root_bytes));
     let root: Root = parse_authenticated_root(root_bytes, &root_sha256)?;
-    if expected.is_some_and(|head| root.generation <= head.generation) {
-        return Err(ResidentGraphStoreError::Invalid("generation order"));
-    }
     for (name, artifact) in [
         ("plane.bin", &root.plane),
         ("graph.bin", &root.graph),
@@ -362,6 +358,25 @@ pub async fn publish_graph_generation(
             PutPayload::from(root_bytes.to_vec()),
         )
         .await?;
+    Ok(root_sha256)
+}
+
+/// Publish all five blobs and an immutable root, then CAS the head last.
+/// Failed uploads may leave unreachable blobs; they cannot expose a partial
+/// generation. The object store must implement conditional `put_opts`.
+pub async fn publish_graph_generation(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    root_bytes: &[u8],
+    directory: &Path,
+    expected: Option<&ResidentGraphHead>,
+) -> Result<ResidentGraphHead, ResidentGraphStoreError> {
+    let root: Root = parse_authenticated_root(
+        root_bytes, &format!("{:x}", Sha256::digest(root_bytes)))?;
+    if expected.is_some_and(|head| root.generation <= head.generation) {
+        return Err(ResidentGraphStoreError::Invalid("generation order"));
+    }
+    let root_sha256 = stage_graph_generation(store, prefix, root_bytes, directory).await?;
     let head_bytes = serde_json::to_vec(&HeadBody {
         schema: HEAD_SCHEMA.to_owned(),
         generation: root.generation,
@@ -456,6 +471,10 @@ mod tests {
         );
 
         let second = fixture(dir.path(), 2);
+        let staged = stage_graph_generation(&store, &prefix, &second, dir.path())
+            .await.unwrap();
+        assert_eq!(staged, format!("{:x}", Sha256::digest(&second)));
+        assert_eq!(read_graph_head(&store, &prefix).await.unwrap().unwrap().root_bytes, first);
         std::fs::write(dir.path().join("codes.bin"), b"corrupt").unwrap();
         assert!(
             publish_graph_generation(&store, &prefix, &second, dir.path(), Some(&original))
