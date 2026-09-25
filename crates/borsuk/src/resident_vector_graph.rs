@@ -13,7 +13,7 @@ use tempfile::NamedTempFile;
 
 use crate::{
     centroid_hnsw::build_hnsw_adjacency,
-    pq64_nominee::Pq64Router,
+    pq64_nominee::{Pq64CosineView, Pq64Router},
     resident_fp16_tier::{ResidentFp16Error, ResidentFp16Tier},
 };
 
@@ -350,6 +350,58 @@ impl ResidentVectorGraph {
         Ok((plane.rank_ordinals_cosine(query, &physical, k)?, visits))
     }
 
+    /// Navigate the source graph using cosine of each PQ reconstruction,
+    /// consistent with the source graph and final FP16 cosine metric.
+    pub fn search_pq_cosine_with_visits(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        pq: &Pq64CosineView<'_>,
+        old_for_new: &[usize],
+        k: usize,
+        ef: usize,
+        shortlist: usize,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        self.check_plane(plane)?;
+        if pq.rows() != plane.rows()
+            || pq.dimensions() != plane.dimensions()
+            || old_for_new.len() != plane.rows()
+            || query.len() != plane.dimensions()
+            || k == 0
+            || ef < k
+            || ef > plane.rows()
+            || shortlist < k
+            || shortlist > ef
+        {
+            return Err(ResidentFp16Error::Invalid("graph PQ cosine geometry"));
+        }
+        let mut seen = vec![false; plane.rows()];
+        for &old in old_for_new {
+            if old >= plane.rows() || std::mem::replace(&mut seen[old], true) {
+                return Err(ResidentFp16Error::Invalid("graph PQ cosine row map"));
+            }
+        }
+        let prepared = pq
+            .prepare_query(query)
+            .map_err(|_| ResidentFp16Error::Invalid("graph PQ cosine query"))?;
+        let score = |node: u32| -> Result<f64, ResidentFp16Error> {
+            Ok(-f64::from(
+                prepared
+                    .score_row(old_for_new[node as usize])
+                    .map_err(|_| ResidentFp16Error::Invalid("graph PQ cosine row"))?,
+            ))
+        };
+        let (mut results, visits) = self.navigate_with(ef, score)?;
+        results
+            .sort_unstable_by(|a, b| a.distance.total_cmp(&b.distance).then(a.node.cmp(&b.node)));
+        let physical = results
+            .into_iter()
+            .take(shortlist)
+            .map(|visit| visit.node as usize)
+            .collect::<Vec<_>>();
+        Ok((plane.rank_ordinals_cosine(query, &physical, k)?, visits))
+    }
+
     fn check_plane(&self, plane: &ResidentFp16Tier) -> Result<(), ResidentFp16Error> {
         if self.generation != plane.generation()
             || self.source_sha256 != plane.source_sha256()
@@ -490,6 +542,7 @@ mod tests {
         );
         let mut books = vec![0.0f32; 64 * 256];
         books[31 * 256 + 1] = 1.0;
+        books[63 * 256] = 0.1;
         let mut codes = vec![0u8; 4 * 64];
         codes[31] = 1;
         codes[64 + 31] = 1;
@@ -502,6 +555,14 @@ mod tests {
             restored
                 .search_pq_with_visits(&[1.0, 0.0], &tier, &pq, &[0, 0, 2, 3], 2, 4, 2,)
                 .is_err()
+        );
+        let cosine = pq.cosine_view().unwrap();
+        assert_eq!(
+            restored
+                .search_pq_cosine_with_visits(&[1.0, 0.0], &tier, &cosine, &[0, 1, 2, 3], 2, 4, 2,)
+                .unwrap()
+                .0,
+            vec![42, 7]
         );
         assert!(ResidentVectorGraph::open_authenticated(&graph_path, SOURCE, &tier).is_err());
         assert_eq!(graph.search(&[1.0, 0.0], &tier, 2, 4).unwrap(), vec![42, 7]);

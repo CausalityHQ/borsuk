@@ -31,6 +31,83 @@ pub struct Pq64PreparedQuery<'a> {
     table: Vec<f32>,
 }
 
+/// Cosine navigation over the vector reconstructed from each row's PQ64
+/// codewords. Norms are prepared once for an immutable source generation.
+pub struct Pq64CosineView<'a> {
+    router: &'a Pq64Router,
+    inverse_norms: Vec<f32>,
+}
+
+/// One query's codeword dot-product table for cosine graph navigation.
+pub struct Pq64CosinePreparedQuery<'a> {
+    router: &'a Pq64Router,
+    inverse_norms: &'a [f32],
+    dots: Vec<f32>,
+    inverse_query_norm: f32,
+}
+
+impl Pq64CosineView<'_> {
+    /// Number of source physical rows.
+    pub fn rows(&self) -> usize { self.router.rows }
+
+    /// Source coordinate width.
+    pub fn dimensions(&self) -> usize { self.router.dimensions }
+
+    /// Additional resident bytes beyond the already loaded PQ books/codes.
+    pub fn resident_bytes(&self) -> usize {
+        self.inverse_norms.capacity() * std::mem::size_of::<f32>()
+    }
+
+    /// Prepare one query for cosine scores of source PQ reconstructions.
+    pub fn prepare_query(&self, query: &[f32]) -> Result<Pq64CosinePreparedQuery<'_>, Pq64Error> {
+        if query.len() != self.router.dimensions || query.iter().any(|x| !x.is_finite()) {
+            return Err(Pq64Error::InvalidQuery);
+        }
+        let norm = query.iter().fold(0.0f64, |sum, &x| sum + f64::from(x) * f64::from(x)).sqrt();
+        if !norm.is_finite() || norm <= 0.0 {
+            return Err(Pq64Error::InvalidQuery);
+        }
+        let mut dots = vec![0.0f32; 64 * 256];
+        for subspace in 0..64 {
+            let first = subspace * self.router.dimensions / 64;
+            let last = (subspace + 1) * self.router.dimensions / 64;
+            for word in 0..256 {
+                let mut dot = 0.0f32;
+                for coordinate in 0..last - first {
+                    dot += query[first + coordinate]
+                        * self.router.books[(subspace * 256 + word) * self.router.width + coordinate];
+                }
+                dots[subspace * 256 + word] = dot;
+            }
+        }
+        Ok(Pq64CosinePreparedQuery {
+            router: self.router,
+            inverse_norms: &self.inverse_norms,
+            dots,
+            inverse_query_norm: (1.0 / norm) as f32,
+        })
+    }
+}
+
+impl Pq64CosinePreparedQuery<'_> {
+    /// Approximate cosine similarity for one old source physical row.
+    pub fn score_row(&self, row: usize) -> Result<f32, Pq64Error> {
+        if row >= self.router.rows {
+            return Err(Pq64Error::InvalidRequest);
+        }
+        let mut dot = 0.0f32;
+        for subspace in 0..64 {
+            dot += self.dots[subspace * 256
+                + usize::from(self.router.codes[row * 64 + subspace])];
+        }
+        let similarity = dot * self.inverse_query_norm * self.inverse_norms[row];
+        if !similarity.is_finite() {
+            return Err(Pq64Error::InvalidQuery);
+        }
+        Ok(similarity)
+    }
+}
+
 impl Pq64PreparedQuery<'_> {
     /// Score one source physical row without rebuilding the 64-subspace table.
     pub fn score_row(&self, row: usize) -> Result<f32, Pq64Error> {
@@ -58,6 +135,35 @@ impl Pq64Router {
     /// Prepare one ADC lookup table for repeated per-row graph scores.
     pub fn prepare_query(&self, query: &[f32]) -> Result<Pq64PreparedQuery<'_>, Pq64Error> {
         Ok(Pq64PreparedQuery { router: self, table: self.adc_table(query)? })
+    }
+
+    /// Prepare source PQ reconstruction norms for cosine navigation.
+    pub fn cosine_view(&self) -> Result<Pq64CosineView<'_>, Pq64Error> {
+        let mut norm_words = vec![0.0f32; 64 * 256];
+        for subspace in 0..64 {
+            let first = subspace * self.dimensions / 64;
+            let last = (subspace + 1) * self.dimensions / 64;
+            for word in 0..256 {
+                let mut squared = 0.0f32;
+                for coordinate in 0..last - first {
+                    let value = self.books[(subspace * 256 + word) * self.width + coordinate];
+                    squared += value * value;
+                }
+                norm_words[subspace * 256 + word] = squared;
+            }
+        }
+        let mut inverse_norms = Vec::with_capacity(self.rows);
+        for row in 0..self.rows {
+            let mut squared = 0.0f32;
+            for subspace in 0..64 {
+                squared += norm_words[subspace * 256 + usize::from(self.codes[row * 64 + subspace])];
+            }
+            if !squared.is_finite() || squared <= 0.0 {
+                return Err(Pq64Error::InvalidPlane);
+            }
+            inverse_norms.push(squared.sqrt().recip());
+        }
+        Ok(Pq64CosineView { router: self, inverse_norms })
     }
 
     fn adc_table(&self, query: &[f32]) -> Result<Vec<f32>, Pq64Error> {
@@ -315,6 +421,24 @@ mod tests {
                    Err(super::Pq64Error::InvalidRequest));
         assert_eq!(router.score_rows(&[0.0; 64], &[]),
                    Err(super::Pq64Error::InvalidRequest));
+    }
+
+    #[test]
+    fn cosine_view_uses_reconstructed_direction_instead_of_squared_l2() {
+        let mut books = vec![0.0f32; 64 * 256];
+        books[31 * 256 + 1] = 2.0;
+        books[31 * 256 + 2] = 1.0;
+        books[63 * 256 + 1] = 1.0;
+        let mut codes = vec![0u8; 2 * 64];
+        codes[31] = 1;
+        codes[64 + 31] = 2;
+        codes[64 + 63] = 1;
+        let router = Pq64Router::new(2, 2, 2, 1, vec![0.0; 2], books, codes).unwrap();
+        let view = router.cosine_view().unwrap();
+        let query = view.prepare_query(&[1.0, 0.0]).unwrap();
+        assert!((query.score_row(0).unwrap() - 1.0).abs() < 1e-6);
+        assert!((query.score_row(1).unwrap() - 0.5f32.sqrt()).abs() < 1e-6);
+        assert!(view.prepare_query(&[0.0, 0.0]).is_err());
     }
 
     #[test]
