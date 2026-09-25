@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import fcntl
+import gzip
 import hashlib
 import io
 import json
@@ -198,6 +199,16 @@ phase=complete
     return template
 
 
+def bootstrap(script: str) -> str:
+    payload = base64.b64encode(gzip.compress(script.encode(), mtime=0)).decode()
+    result = ("#!/bin/bash\nset -euo pipefail\n"
+              "base64 -d <<'V197_WORKER' | gzip -d | bash\n"
+              + payload + "\nV197_WORKER\n")
+    if len(result.encode()) > 16_384:
+        raise ValueError("compressed V197 user data exceeds EC2 limit")
+    return result
+
+
 def launch(attempt: str) -> None:
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
@@ -255,7 +266,7 @@ def launch(attempt: str) -> None:
             "DeleteOnTermination":True,"Encrypted":True,"VolumeSize":40,"VolumeType":"gp3"}}],
         TagSpecifications=[{"ResourceType":"instance","Tags":[
             {"Key":"Name","Value":TAG},{"Key":"BorsukAttempt","Value":attempt}]}],
-        UserData=base64.b64encode(script.encode()).decode(),
+        UserData=base64.b64encode(bootstrap(script).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id":instance_id,"output_prefix":prefix,
