@@ -65,7 +65,8 @@ controls, revise the utility or candidate generator before a fresh
 campaign. The next utility candidate should test row-level SQ8 score
 gaps to the primary boundary, since optional rank order alone leaves
 the same ordering as the prior model. Even a diagnostic win only
-licenses a preregistered fresh 100k transfer and a 1M source holdout
+licenses a preregistered 100k transfer on the used real-query cohort
+and a fresh 1M source holdout
 of at least 512 queries with an uncertainty interval for tail failures,
 then a distinct dataset/distribution transfer and live S3 returned
 quality, latency, charged RAM and cost. Old closed labels cannot

@@ -97,8 +97,9 @@ under its memory pressure; no local full suite was started.
 
 ## Next gate
 
-Freeze this policy and price-selection rule for a fresh 100k transfer
-screen, then a disjoint ReLAION-1M source holdout of at least 512
+Freeze this policy and price-selection rule for a cross-scale 100k
+transfer screen on the already used real-query development cohort,
+then a disjoint fresh ReLAION-1M source holdout of at least 512
 queries with a tail-failure confidence interval. Include the
 full-rank control with its own price fit, constant-risk ablation,
 V189-style greedy and truth-aware hard-cap witness on the **same**
