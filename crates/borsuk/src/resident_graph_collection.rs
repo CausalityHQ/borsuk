@@ -343,6 +343,29 @@ pub async fn hydrate_graph_collection(
     Ok((Arc::new(overlay), stats))
 }
 
+/// Hydrate a pinned revision with FP32-decoded mutation rows for repeated
+/// queries, while preserving the authenticated FP16 snapshot on disk.
+pub async fn hydrate_graph_collection_decoded(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    head: &ResidentGraphCollectionHead,
+    cache_root: &Path,
+    max_graph_resident_bytes: usize,
+    active_workers: usize,
+    max_snapshot_bytes: usize,
+    max_delta_bytes: usize,
+) -> Result<(Arc<ResidentGraphOverlay>, ResidentGraphHydrationStats), ResidentGraphCollectionError>
+{
+    let (overlay, stats) = hydrate_graph_collection(
+        store, prefix, head, cache_root, max_graph_resident_bytes, active_workers,
+        max_snapshot_bytes, max_delta_bytes,
+    ).await?;
+    let overlay = Arc::into_inner(overlay)
+        .ok_or(ResidentGraphCollectionError::Invalid("shared fresh overlay"))?
+        .with_decoded_delta(max_delta_bytes)?;
+    Ok((Arc::new(overlay), stats))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

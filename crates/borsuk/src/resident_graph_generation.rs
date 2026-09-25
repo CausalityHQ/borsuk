@@ -373,8 +373,8 @@ mod tests {
     };
     use crate::resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation};
     use crate::resident_graph_collection::{
-        ResidentGraphCollectionSlot, hydrate_graph_collection, publish_graph_collection,
-        read_graph_collection_head,
+        ResidentGraphCollectionSlot, hydrate_graph_collection,
+        hydrate_graph_collection_decoded, publish_graph_collection, read_graph_collection_head,
     };
     use crate::resident_vector_graph::GraphSearchWorkspace;
     use object_store::{memory::InMemory, path::Path as ObjectPath};
@@ -517,6 +517,15 @@ mod tests {
         let mut collection_workspace = GraphSearchWorkspace::new(4).unwrap();
         assert_eq!(collection_bound.search(&[1.0, 0.0], 2, 4, 4,
             &mut collection_workspace).unwrap().0, vec![99, 7]);
+        let (decoded, decoded_stats) = tokio::runtime::Runtime::new().unwrap()
+            .block_on(hydrate_graph_collection_decoded(&store, &prefix, &collection_head,
+                cache.path(), 100_000, 1, 1024, 25)).unwrap();
+        assert_eq!(decoded_stats.object_gets, 0);
+        assert_eq!(decoded.resident_bytes(), collection_overlay.resident_bytes() + 4);
+        let decoded_view = decoded.base().cosine_view().unwrap();
+        let decoded_bound = decoded.bind(&decoded_view).unwrap();
+        assert_eq!(decoded_bound.search(&[1.0, 0.0], 2, 4, 4,
+            &mut GraphSearchWorkspace::new(4).unwrap()).unwrap().0, vec![99, 7]);
         let collection_slot = ResidentGraphCollectionSlot::new(
             collection_head.revision, Arc::clone(&collection_overlay)).unwrap();
         let held_collection = collection_slot.pin();
