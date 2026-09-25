@@ -74,8 +74,10 @@ infeasible queries, ≤1,425,152,901 bytes and ≤2,832 GETs**, with each
 query ≤672 units and ≤32 GETs. The aggregate ceilings are the integer
 floor of V155's 1000-query resource totals scaled to 128 source queries.
 The byte criterion is checked in bytes; the equivalent full-unit maximum
-is 57,097 at 24,960 bytes/unit. Report A versus B to isolate the utility
-feature, and A versus C to isolate the priced allocator. A tie or failure
+is 57,097 at 24,960 bytes/unit. Report A versus B to assess the utility
+feature under the same envelope, and B versus C to assess priced versus
+greedy allocation with rank utility. These comparisons do not hold exact
+bytes and GETs equal, so attribution remains conditional. A tie or failure
 does not authorize price retuning on holdout; choose a materially revised
 method or layout for a new panel.
 
