@@ -76,6 +76,7 @@ pub mod sq8_page_authority;
 pub mod sq8_s3_range;
 pub mod serving_generation;
 pub mod native_source_tier;
+pub mod resident_fp16_tier;
 pub mod native_source_hydration;
 pub mod native_source_id_map;
 mod physical_layout;
