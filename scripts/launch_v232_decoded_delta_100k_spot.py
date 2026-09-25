@@ -62,7 +62,9 @@ def downloads(rows: tuple) -> str:
 
 
 def user_data(commit: str, archive_sha: str, archive_key: str, prefix: str,
-              blocked: bool = False) -> str:
+              blocked: bool = False, screened: bool = False) -> str:
+    candidate = "screened" if screened else "blocked" if blocked else "decoded"
+    paired = blocked or screened
     template = r'''#!/bin/bash
 set -euo pipefail
 systemd-run --unit=v232-hard-stop --on-active=@@WALL@@s /usr/sbin/shutdown -h now
@@ -167,21 +169,24 @@ phase=complete
 '''
     replacements = {
         "WALL": str(WALL_SECONDS), "ARTIFACTS": " ".join(
-            tuple(name.replace("linear", "blocked") for name in ARTIFACTS) if blocked else ARTIFACTS),
-        "ARTIFACTS_PY": repr(tuple(name.replace("linear", "blocked") for name in ARTIFACTS)
-                              if blocked else ARTIFACTS), "BUCKET": BUCKET,
+            tuple(name.replace("linear", candidate) for name in ARTIFACTS) if paired else ARTIFACTS),
+        "ARTIFACTS_PY": repr(tuple(name.replace("linear", candidate) for name in ARTIFACTS)
+                              if paired else ARTIFACTS), "BUCKET": BUCKET,
         "PREFIX": prefix,
-        "SCHEMA": "borsuk-v234-blocked-delta-100k-spot-v1" if blocked else SCHEMA,
+        "SCHEMA": ("borsuk-v235-screened-delta-100k-spot-v1" if screened else
+                   "borsuk-v234-blocked-delta-100k-spot-v1" if blocked else SCHEMA),
         "COMMIT": commit,
         "ARCHIVE_SHA": archive_sha, "ARCHIVE_KEY": archive_key,
         "DOWNLOADS": downloads(INPUTS), "LATE_DOWNLOADS": downloads(LATE),
-        "MODES": "decoded blocked" if blocked else "linear decoded",
-        "SCORER": ("scripts.v234_score_blocked_delta_100k" if blocked else
+        "MODES": f"decoded {candidate}" if paired else "linear decoded",
+        "SCORER": ("scripts.v235_score_screened_delta_100k" if screened else
+                   "scripts.v234_score_blocked_delta_100k" if blocked else
                    "scripts.v232_score_decoded_delta_100k"),
         "SCORE_ARGS": ("--control-serving decoded.serving.json --control-raw decoded.raw.jsonl "
                        "--control-loaded-raw decoded.loaded.raw.jsonl "
-                       "--blocked-serving blocked.serving.json --blocked-raw blocked.raw.jsonl "
-                       "--blocked-loaded-raw blocked.loaded.raw.jsonl" if blocked else
+                       f"--{'candidate' if screened else 'blocked'}-serving {candidate}.serving.json "
+                       f"--{'candidate' if screened else 'blocked'}-raw {candidate}.raw.jsonl "
+                       f"--{'candidate' if screened else 'blocked'}-loaded-raw {candidate}.loaded.raw.jsonl" if paired else
                        "--linear-serving linear.serving.json --linear-raw linear.raw.jsonl "
                        "--linear-loaded-raw linear.loaded.raw.jsonl "
                        "--decoded-serving decoded.serving.json --decoded-raw decoded.raw.jsonl "
@@ -194,7 +199,11 @@ phase=complete
     return template
 
 
-def launch(attempt: str, blocked: bool = False) -> None:
+def launch(attempt: str, blocked: bool = False, screened: bool = False) -> None:
+    if blocked and screened:
+        raise ValueError("choose one mutation candidate")
+    paired = blocked or screened
+    candidate = "screened" if screened else "blocked" if blocked else "decoded"
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
@@ -212,11 +221,16 @@ def launch(attempt: str, blocked: bool = False) -> None:
         if blocked:
             required |= {"docs/research/v234-blocked-delta-100k-prereg.md",
                          "scripts/v234_score_blocked_delta_100k.py"}
+        if screened:
+            required |= {"docs/research/v235-screened-delta-100k-prereg.md",
+                         "scripts/v235_score_screened_delta_100k.py"}
         if not required.issubset(source.getnames()):
             raise ValueError("V232 frozen source roster differs")
     archive_sha = hashlib.sha256(archive).hexdigest()
-    campaign = "v234-blocked-delta-100k" if blocked else "v232-decoded-delta-100k"
-    schema = "borsuk-v234-blocked-delta-100k-spot-v1" if blocked else SCHEMA
+    campaign = ("v235-screened-delta-100k" if screened else
+                "v234-blocked-delta-100k" if blocked else "v232-decoded-delta-100k")
+    schema = ("borsuk-v235-screened-delta-100k-spot-v1" if screened else
+              "borsuk-v234-blocked-delta-100k-spot-v1" if blocked else SCHEMA)
     archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
     prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
@@ -240,7 +254,7 @@ def launch(attempt: str, blocked: bool = False) -> None:
             or base["artifacts"].get("graph.bin") != {
                 "bytes": INPUTS[4][2], "sha256": INPUTS[4][3]}):
         raise ValueError("V218 paired baseline differs")
-    if blocked:
+    if paired:
         prior = s3.get_object(Bucket=BUCKET, Key=V232_PREFIX + "closeout.json")["Body"].read()
         if (hashlib.sha256(prior).hexdigest() != V232_CLOSEOUT_SHA
                 or json.loads(prior)["gate_pass"] is not True):
@@ -266,14 +280,19 @@ def launch(attempt: str, blocked: bool = False) -> None:
         "dataset": "ReLAION-100k D768", "split": "development-256-plus-method-heldout-744-prior-used",
         "parent_terminal_sha256": PARENT_TERMINAL_SHA,
         "baseline_terminal_sha256": BASE_TERMINAL_SHA,
-        "v232_closeout_sha256": V232_CLOSEOUT_SHA if blocked else None,
+        "v232_closeout_sha256": V232_CLOSEOUT_SHA if paired else None,
         "mutation": "every-10th-physical-row same-ID same-FP16-vector upsert;10000 rows",
         "arm": {"ef": 2048, "shortlist": 2048, "k": 100, "workers": 8},
-        "candidate_delta": {"type": ("eight-row blocked FP32 from authenticated FP16"
+        "candidate_delta": {"type": ("eight-row screened FP32 from authenticated FP16"
+                                      if screened else
+                                      "eight-row blocked FP32 from authenticated FP16"
                                       if blocked else "row-major FP32 from authenticated FP16"),
                             "scoring": "unchanged per-row ordered FP64 accumulation",
                             "max_resident_bytes": 67108864},
-        "gate": ("base-IDs-exact-V218;blocked-IDs-exact-decoded-on-1000;p05>=99;"
+        "gate": ("base-IDs-exact-V218;screened-IDs-exact-decoded-on-1000;p05>=99;"
+                 "screened-p95<=0.75-decoded-p95;QPS>=1.5x-decoded;pack<=1s;RSS<=512MiB;0 vector GET"
+                 if screened else
+                 "base-IDs-exact-V218;blocked-IDs-exact-decoded-on-1000;p05>=99;"
                  "blocked-p95<=0.5-decoded-p95;QPS>=1.5x-decoded;pack<=1s;RSS<=512MiB;0 vector GET"
                  if blocked else "base-IDs-exact-V218;decoded-IDs-exact-linear-on-1000;p05>=99;decoded-p95<=0.75-linear-p95;QPS>=1.5x-linear;decode<=1s;RSS<=512MiB;0 vector GET"),
         "spot_quote_usd_per_hour": quote,
@@ -281,7 +300,8 @@ def launch(attempt: str, blocked: bool = False) -> None:
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken=("v234-" if blocked else "v232-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
+        ClientToken=("v235-" if screened else "v234-" if blocked else "v232-")
+                    + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
         NetworkInterfaces=[{"AssociatePublicIpAddress": True, "DeviceIndex": 0,
@@ -295,7 +315,8 @@ def launch(attempt: str, blocked: bool = False) -> None:
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
             {"Key": "Name", "Value": "borsuk-" + campaign},
             {"Key": "BorsukAttempt", "Value": attempt}]}],
-        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix, blocked).encode()).decode(),
+        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix,
+                                           blocked, screened).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     launched_epoch = receipt["Instances"][0]["LaunchTime"].timestamp()
@@ -317,7 +338,7 @@ def launch(attempt: str, blocked: bool = False) -> None:
                 print(json.dumps(terminal, sort_keys=True), flush=True)
                 if terminal.get("status") != "complete":
                     raise RuntimeError("V232 failed; inspect only closed terminal artifacts")
-                artifact_names = tuple(name.replace("linear", "blocked") for name in ARTIFACTS) if blocked else ARTIFACTS
+                artifact_names = tuple(name.replace("linear", candidate) for name in ARTIFACTS) if paired else ARTIFACTS
                 if set(terminal.get("artifacts", {})) != set(artifact_names):
                     raise ValueError("V232 artifact roster differs")
                 for name, identity in terminal["artifacts"].items():
@@ -330,7 +351,7 @@ def launch(attempt: str, blocked: bool = False) -> None:
                         size += len(chunk)
                     if size != identity["bytes"] or value.hexdigest() != identity["sha256"]:
                         raise ValueError(f"V232 artifact readback differs: {name}")
-                for mode in (("decoded", "blocked") if blocked else ("linear", "decoded")):
+                for mode in (("decoded", candidate) if paired else ("linear", "decoded")):
                     for name in (f"{mode}.raw.jsonl", f"{mode}.loaded.raw.jsonl"):
                         body = s3.get_object(Bucket=BUCKET,
                             Key=f"{prefix}/sealed/{name}")["Body"].read()
@@ -338,8 +359,8 @@ def launch(attempt: str, blocked: bool = False) -> None:
                             raise ValueError(f"V232 sealed {name} differs")
                 quality = json.loads(s3.get_object(Bucket=BUCKET,
                     Key=f"{prefix}/artifacts/quality.json")["Body"].read())
-                control_name = "decoded" if blocked else "linear"
-                candidate_name = "blocked" if blocked else "decoded"
+                control_name = "decoded" if paired else "linear"
+                candidate_name = candidate
                 control = json.loads(s3.get_object(Bucket=BUCKET,
                     Key=f"{prefix}/artifacts/{control_name}.serving.json")["Body"].read())
                 candidate = json.loads(s3.get_object(Bucket=BUCKET,
@@ -383,8 +404,10 @@ def launch(attempt: str, blocked: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", default="a0001")
-    parser.add_argument("--blocked", action="store_true")
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--blocked", action="store_true")
+    choice.add_argument("--screened", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-v232-mutation-overlay-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        launch(args.attempt, args.blocked)
+        launch(args.attempt, args.blocked, args.screened)

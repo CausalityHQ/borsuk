@@ -35,6 +35,8 @@ pub struct ResidentGraphOverlayStats {
     pub base_visits: usize,
     pub masked_shortlist_rows: usize,
     pub delta_rows_scanned: usize,
+    /// Pending rows receiving the ordered FP64 score after any screen.
+    pub delta_rows_scored: usize,
 }
 
 pub struct ResidentGraphOverlay {
@@ -44,6 +46,7 @@ pub struct ResidentGraphOverlay {
     delta_coordinates: Vec<u16>,
     delta_decoded: Option<Vec<f32>>,
     delta_blocked: bool,
+    delta_screened: bool,
     delta_norm_inverse: Vec<f64>,
 }
 
@@ -126,6 +129,7 @@ impl ResidentGraphOverlay {
             delta_coordinates,
             delta_decoded: None,
             delta_blocked: false,
+            delta_screened: false,
             delta_norm_inverse,
         };
         if overlay.resident_bytes() > max_delta_bytes {
@@ -226,6 +230,17 @@ impl ResidentGraphOverlay {
         Ok(self)
     }
 
+    /// Use a conservative FP32 bound to avoid exact work for rows that
+    /// cannot beat the current base top-k threshold.
+    pub fn with_screened_delta(
+        mut self,
+        max_delta_bytes: usize,
+    ) -> Result<Self, ResidentGraphOverlayError> {
+        self = self.with_blocked_delta(max_delta_bytes)?;
+        self.delta_screened = true;
+        Ok(self)
+    }
+
     pub fn base(&self) -> &ResidentGraphGeneration {
         &self.base
     }
@@ -260,6 +275,7 @@ impl ResidentGraphOverlayView<'_, '_> {
             &self.overlay.masked,
         )?;
         let delta_rows_scanned = self.overlay.delta_ids.len();
+        let mut delta_rows_scored = 0;
         if delta_rows_scanned != 0 {
             let norm = query
                 .iter()
@@ -275,7 +291,40 @@ impl ResidentGraphOverlayView<'_, '_> {
                 .map(|&value| f64::from(value) / norm)
                 .collect::<Vec<_>>();
             let dimensions = self.overlay.base.dimensions();
-            if self.overlay.delta_blocked {
+            if self.overlay.delta_screened {
+                let decoded = self.overlay.delta_decoded.as_ref().expect("screened delta");
+                let threshold = if scored.len() == k {
+                    scored.iter().map(|row| row.1).reduce(f64::min).unwrap()
+                } else {
+                    f64::NEG_INFINITY
+                };
+                let slack = screen_slack(dimensions);
+                let normalized32 = normalized
+                    .iter()
+                    .map(|&value| value as f32)
+                    .collect::<Vec<_>>();
+                for block in 0..self.overlay.delta_ids.len().div_ceil(8) {
+                    let approximate = score_block_f32(decoded, &normalized32, block, dimensions);
+                    for (lane, &screen) in approximate.iter().enumerate() {
+                        let row = block * 8 + lane;
+                        if row >= self.overlay.delta_ids.len() {
+                            break;
+                        }
+                        let upper = f64::from(screen) * self.overlay.delta_norm_inverse[row];
+                        if slack
+                            .is_some_and(|margin| upper.is_finite() && upper + margin < threshold)
+                        {
+                            continue;
+                        }
+                        let dot = score_blocked_row(decoded, &normalized, block, lane, dimensions);
+                        scored.push((
+                            self.overlay.delta_ids[row],
+                            dot * self.overlay.delta_norm_inverse[row],
+                        ));
+                        delta_rows_scored += 1;
+                    }
+                }
+            } else if self.overlay.delta_blocked {
                 let decoded = self.overlay.delta_decoded.as_ref().expect("blocked delta");
                 for block in 0..self.overlay.delta_ids.len().div_ceil(8) {
                     let dots = score_block(decoded, &normalized, block, dimensions);
@@ -286,6 +335,7 @@ impl ResidentGraphOverlayView<'_, '_> {
                                 self.overlay.delta_ids[row],
                                 dot * self.overlay.delta_norm_inverse[row],
                             ));
+                            delta_rows_scored += 1;
                         }
                     }
                 }
@@ -311,6 +361,7 @@ impl ResidentGraphOverlayView<'_, '_> {
                         }
                     }
                     scored.push((id, dot * self.overlay.delta_norm_inverse[row]));
+                    delta_rows_scored += 1;
                 }
             }
         }
@@ -326,6 +377,7 @@ impl ResidentGraphOverlayView<'_, '_> {
                 base_visits,
                 masked_shortlist_rows,
                 delta_rows_scanned,
+                delta_rows_scored,
             },
         ))
     }
@@ -343,9 +395,52 @@ fn score_block(decoded: &[f32], normalized: &[f64], block: usize, dimensions: us
     dots
 }
 
+fn score_blocked_row(
+    decoded: &[f32],
+    normalized: &[f64],
+    block: usize,
+    lane: usize,
+    dimensions: usize,
+) -> f64 {
+    let mut dot = 0.0_f64;
+    let base = block * dimensions * 8 + lane;
+    for coordinate in 0..dimensions {
+        dot += f64::from(decoded[base + coordinate * 8]) * normalized[coordinate];
+    }
+    dot
+}
+
+fn score_block_f32(
+    decoded: &[f32],
+    normalized: &[f32],
+    block: usize,
+    dimensions: usize,
+) -> [f32; 8] {
+    let mut dots = [0.0_f32; 8];
+    let base = block * dimensions * 8;
+    for coordinate in 0..dimensions {
+        let value = normalized[coordinate];
+        for lane in 0..8 {
+            dots[lane] += decoded[base + coordinate * 8 + lane] * value;
+        }
+    }
+    dots
+}
+
+// γ for a sequential f32 dot, inflated for query rounding, norm and f64
+// scoring. A width outside the stable error envelope disables pruning.
+fn screen_slack(dimensions: usize) -> Option<f64> {
+    let u = f64::from(f32::EPSILON) / 2.0;
+    let operations = dimensions.checked_mul(2)?.checked_add(3)? as f64;
+    if operations * u >= 0.25 {
+        return None;
+    }
+    Some(8.0 * operations * u / (1.0 - operations * u) + 1e-12)
+}
+
 #[cfg(test)]
 mod blocked_tests {
-    use super::score_block;
+    use super::{score_block, score_block_f32, score_blocked_row, screen_slack};
 
     #[test]
     fn blocked_scores_match_scalar_bits_for_adversarial_values() {
@@ -375,6 +470,80 @@ mod blocked_tests {
                 expected += f64::from(blocked[coordinate * 8 + lane]) * normalized[coordinate];
             }
             assert_eq!(actual[lane].to_bits(), expected.to_bits());
+        }
+    }
+
+    #[test]
+    fn screen_margin_contains_ordered_exact_scores() {
+        let dimensions = 768;
+        let mut state = 7_u64;
+        let mut blocked = vec![0.0_f32; dimensions * 8];
+        let mut query = vec![0.0_f64; dimensions];
+        for coordinate in 0..dimensions {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            query[coordinate] = ((state >> 32) as i32 as f64) / i32::MAX as f64;
+            for lane in 0..8 {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                blocked[coordinate * 8 + lane] =
+                    f32::from_bits((state as u32 & 0x007f_ffff) | 0x3f00_0000) - 0.75;
+            }
+        }
+        let qnorm = query.iter().map(|v| v * v).sum::<f64>().sqrt();
+        for value in &mut query {
+            *value /= qnorm;
+        }
+        let query32 = query.iter().map(|&v| v as f32).collect::<Vec<_>>();
+        let approximate = score_block_f32(&blocked, &query32, 0, dimensions);
+        let slack = screen_slack(dimensions).unwrap();
+        for (lane, &screen) in approximate.iter().enumerate() {
+            let exact = score_blocked_row(&blocked, &query, 0, lane, dimensions);
+            let norm = (0..dimensions)
+                .map(|coordinate| f64::from(blocked[coordinate * 8 + lane]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            assert!(f64::from(screen) / norm + slack >= exact / norm);
+        }
+        assert!(screen_slack(10_000_000).is_none());
+    }
+
+    #[test]
+    fn screen_margin_covers_fp16_extremes_and_cancellation() {
+        use half::f16;
+        let dimensions = 768;
+        let mut state = 17_u64;
+        let slack = screen_slack(dimensions).unwrap();
+        for _ in 0..32 {
+            let mut blocked = vec![0.0_f32; dimensions * 8];
+            let mut query = vec![0.0_f64; dimensions];
+            for coordinate in 0..dimensions {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                query[coordinate] = ((state >> 32) as i32 as f64) / i32::MAX as f64;
+                for lane in 0..8 {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let value = f16::from_bits((state >> 48) as u16);
+                    blocked[coordinate * 8 + lane] = if value.is_finite() {
+                        value.to_f32()
+                    } else {
+                        0.0
+                    };
+                }
+            }
+            let qnorm = query.iter().map(|v| v * v).sum::<f64>().sqrt();
+            for value in &mut query {
+                *value /= qnorm;
+            }
+            let q32 = query.iter().map(|&v| v as f32).collect::<Vec<_>>();
+            let approximate = score_block_f32(&blocked, &q32, 0, dimensions);
+            for (lane, &screen) in approximate.iter().enumerate() {
+                let mut squared = 0.0_f64;
+                for coordinate in 0..dimensions {
+                    let value = f64::from(blocked[coordinate * 8 + lane]);
+                    squared += value * value;
+                }
+                let inverse = squared.sqrt().recip();
+                let exact = score_blocked_row(&blocked, &query, 0, lane, dimensions) * inverse;
+                assert!(f64::from(screen) * inverse + slack >= exact);
+            }
         }
     }
 }

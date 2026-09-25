@@ -67,14 +67,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     if args.len() != 6 && args.len() != 8 {
         return Err(
-            "usage: v229_serve_mutation_overlay_100k ARTIFACT_DIR REQUESTS BASE_RAW RAW SUMMARY [linear-10k|decoded-10k|blocked-10k LOADED_RAW]"
+            "usage: v229_serve_mutation_overlay_100k ARTIFACT_DIR REQUESTS BASE_RAW RAW SUMMARY [linear-10k|decoded-10k|blocked-10k|screened-10k LOADED_RAW]"
                 .into(),
         );
     }
     let mode = args.get(6).map(String::as_str).unwrap_or("linear-1k");
     if !matches!(
         mode,
-        "linear-1k" | "linear-10k" | "decoded-10k" | "blocked-10k"
+        "linear-1k" | "linear-10k" | "decoded-10k" | "blocked-10k" | "screened-10k"
     ) {
         return Err("unknown mutation gate mode".into());
     }
@@ -156,8 +156,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         overlay = overlay.with_decoded_delta(cap)?;
     } else if mode == "blocked-10k" {
         overlay = overlay.with_blocked_delta(cap)?;
+    } else if mode == "screened-10k" {
+        overlay = overlay.with_screened_delta(cap)?;
     }
-    let decode_ns = if matches!(mode, "decoded-10k" | "blocked-10k") {
+    let decode_ns = if matches!(mode, "decoded-10k" | "blocked-10k" | "screened-10k") {
         decode_start.elapsed().as_nanos() as u64
     } else {
         0
@@ -171,6 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut visits = Vec::with_capacity(QUERIES);
     let mut masked_total = 0_u64;
     let mut delta_total = 0_u64;
+    let mut exact_delta_total = 0_u64;
     for (ordinal, request) in requests.iter().enumerate() {
         let start = Instant::now();
         let (ids, stats) = bound.search(&request.query, 100, 2048, 2048, &mut workspace)?;
@@ -179,12 +182,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         visits.push(stats.base_visits as u64);
         masked_total += stats.masked_shortlist_rows as u64;
         delta_total += stats.delta_rows_scanned as u64;
+        exact_delta_total += stats.delta_rows_scored as u64;
         serde_json::to_writer(
             &mut raw,
             &json!({
                 "ordinal":ordinal,"returned_ids":ids,"whole_ns":elapsed,
                 "base_visits":stats.base_visits,"masked_shortlist_rows":stats.masked_shortlist_rows,
-                "delta_rows_scanned":stats.delta_rows_scanned,"vector_body_gets":0,
+                "delta_rows_scanned":stats.delta_rows_scanned,
+                "delta_rows_scored":stats.delta_rows_scored,"vector_body_gets":0,
             }),
         )?;
         raw.write_all(b"\n")?;
@@ -258,6 +263,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "borsuk-v229-mutation-overlay-100k-serving-v1"
                 } else if mode == "blocked-10k" {
                     "borsuk-v234-blocked-delta-100k-serving-v1"
+                } else if mode == "screened-10k" {
+                    "borsuk-v235-screened-delta-100k-serving-v1"
                 } else {
                     "borsuk-v232-decoded-delta-100k-serving-v1"
                 },
@@ -281,6 +288,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "base_visits_p95":percentile(&mut visits,95),
                 "masked_shortlist_rows_total":masked_total,
                 "delta_rows_scanned_total":delta_total,
+                "delta_rows_scored_total":exact_delta_total,
                 "process_peak_rss_bytes":peak_rss()?,"vector_body_gets":0,
                 "raw_sha256":digest(Path::new(&args[4]))?,
             })
