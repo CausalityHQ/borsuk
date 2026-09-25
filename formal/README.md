@@ -400,6 +400,12 @@ recurrence attains the optimum or that its elapsed time meets a target.
 The V201 one-cap corollary shows that an optimum under either the unit or
 GET cap is also optimal under both when its witness satisfies the other
 cap. Solver refinement and actual time remain independent obligations.
+The boundary-priced corollary proves a stronger conditional certificate:
+an exact one-cap optimum under an extra nonnegative price is also optimal
+under both original caps when the emitted witness satisfies the first cap
+and uses exactly the second cap. A below-cap winner has dual slack and is
+not certified by this theorem. The Lean proof does not establish that a
+price with a boundary winner exists or that Rust finds it quickly.
 These are symbolic implications, not measurements of Python/Rust CPU,
 S3 tail latency or charged RAM. The exact offline reference has tests,
 but no formal refinement theorem connecting its recurrence to this model.

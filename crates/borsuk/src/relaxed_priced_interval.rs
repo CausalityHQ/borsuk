@@ -14,6 +14,115 @@ pub enum FixedCap {
     Gets,
 }
 
+/// A searched upper-bound certificate. `certified` is present only when
+/// the priced winner's physical witness meets both original caps and the
+/// added resource price has zero dual slack.
+#[derive(Debug)]
+pub struct BoundarySearch {
+    pub certified: Option<UnconstrainedCover>,
+    pub extra_unit_price: Option<i64>,
+    pub probes: usize,
+}
+
+/// Search a bounded nonnegative extra unit price under the GET cap.
+///
+/// At a positive price, only a witness with `units == unit_cap` certifies
+/// the original two-cap optimum. Failure to find one is inconclusive and
+/// callers must use a hard-cap solver. The search never emits an uncertified
+/// serving plan.
+pub fn get_cap_boundary_certificate(
+    weights: &BTreeMap<usize, i64>,
+    mandatory: &[usize],
+    page_count: usize,
+    get_cap: usize,
+    unit_cap: usize,
+    unit_price: i64,
+    get_price: i64,
+    trace_budget_bytes: usize,
+    max_extra_price: i64,
+    max_probes: usize,
+) -> Result<BoundarySearch, CoverError> {
+    if unit_cap == 0 || max_extra_price < 1 || max_probes == 0 {
+        return Err(CoverError::InvalidGeometry);
+    }
+    let solve = |extra: i64| {
+        let priced_unit = unit_price
+            .checked_add(extra)
+            .ok_or(CoverError::ArithmeticOverflow)?;
+        relaxed_priced_cover(
+            weights,
+            mandatory,
+            page_count,
+            FixedCap::Gets,
+            get_cap,
+            priced_unit,
+            get_price,
+            trace_budget_bytes,
+        )
+    };
+    let restore_original_price = |mut cover: UnconstrainedCover| {
+        cover.objective =
+            cover.mass - unit_price * cover.units as i64 - get_price * cover.gets as i64;
+        cover
+    };
+    let initial = solve(0)?;
+    let mut probes = 1;
+    if initial.units <= unit_cap {
+        return Ok(BoundarySearch {
+            certified: Some(restore_original_price(initial)),
+            extra_unit_price: Some(0),
+            probes,
+        });
+    }
+    let mut low = 0_i64;
+    let mut high = 1_i64;
+    let mut high_cover = None;
+    while probes < max_probes && high <= max_extra_price {
+        let cover = solve(high)?;
+        probes += 1;
+        if cover.units == unit_cap {
+            return Ok(BoundarySearch {
+                certified: Some(restore_original_price(cover)),
+                extra_unit_price: Some(high),
+                probes,
+            });
+        }
+        if cover.units < unit_cap {
+            high_cover = Some(cover);
+            break;
+        }
+        low = high;
+        if high == max_extra_price {
+            break;
+        }
+        high = high.saturating_mul(2).min(max_extra_price);
+    }
+    if high_cover.is_some() {
+        while high - low > 1 && probes < max_probes {
+            let middle = low + (high - low) / 2;
+            let cover = solve(middle)?;
+            probes += 1;
+            if cover.units == unit_cap {
+                return Ok(BoundarySearch {
+                    certified: Some(restore_original_price(cover)),
+                    extra_unit_price: Some(middle),
+                    probes,
+                });
+            }
+            if cover.units < unit_cap {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+    }
+    Ok(BoundarySearch {
+        certified: None,
+        extra_unit_price: None,
+        probes,
+    })
+}
+
 #[derive(Clone, Copy)]
 struct State {
     mass: i64,
@@ -312,5 +421,16 @@ mod tests {
             relaxed_priced_cover(&weights, &[3], 4, FixedCap::Units, 3, 1, 3, 1024).unwrap();
         assert_eq!(cover.intervals, vec![(0, 1), (3, 3)]);
         assert_eq!((cover.mass, cover.units, cover.gets), (22, 3, 2));
+    }
+
+    #[test]
+    fn positive_price_certifies_unit_boundary() {
+        let weights = BTreeMap::from([(0, 10), (2, 10)]);
+        let result =
+            get_cap_boundary_certificate(&weights, &[0, 2], 3, 2, 2, 1, 3, 1024, 16, 32).unwrap();
+        assert_eq!(result.extra_unit_price, Some(2));
+        let cover = result.certified.unwrap();
+        assert_eq!(cover.intervals, vec![(0, 0), (2, 2)]);
+        assert_eq!(cover.objective, 12);
     }
 }

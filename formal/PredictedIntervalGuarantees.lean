@@ -159,6 +159,33 @@ theorem admitted_one_cap_optimum_is_two_cap_optimum
   intro alternative both
   exact relaxedOptimal alternative both.1
 
+/-! A nonnegative extra price on the second resource yields an exact
+two-cap certificate when the priced one-cap winner lands on that second
+cap. This remains conditional on the priced solver's global optimality,
+physical resource accounting and the winner's first-cap feasibility.
+If the winner is below the second cap, the dual upper bound has slack and
+this theorem does not certify it. -/
+theorem boundary_priced_one_cap_certificate
+    {Plan : Type} (score : Plan → Int) (resource : Plan → Nat)
+    (firstCap : Plan → Prop) (cap penalty : Nat) (winner : Plan)
+    (pricedOptimal : ∀ alternative, firstCap alternative →
+      score alternative - (penalty : Int) * (resource alternative : Int) ≤
+        score winner - (penalty : Int) * (resource winner : Int))
+    (firstAdmitted : firstCap winner)
+    (atBoundary : resource winner = cap) :
+    firstCap winner ∧ resource winner ≤ cap ∧
+      ∀ alternative, firstCap alternative → resource alternative ≤ cap →
+        score alternative ≤ score winner := by
+  refine ⟨firstAdmitted, by omega, ?_⟩
+  intro alternative firstBound resourceBound
+  have pricedBound := pricedOptimal alternative firstBound
+  rw [atBoundary] at pricedBound
+  have resourceChargeBound :
+      (penalty : Int) * (resource alternative : Int) ≤
+        (penalty : Int) * (cap : Int) := by
+    exact_mod_cast Nat.mul_le_mul_left penalty resourceBound
+  omega
+
 /-! The two-state uncapped recurrence visits a linear number of states.
 An elapsed-time ceiling still needs a measured or separately verified
 per-site implementation bound, including scoring and backtrace costs. -/
