@@ -16,12 +16,18 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
-from scripts.check_v195_used_1m_rerank_diagnostic import HASHES as V195_HASHES
 from scripts.launch_v157_primary_feasibility_spot import (
     BUCKET, PROFILE_ARN, REGION, SECURITY_GROUP, SUBNET,
     archive_source, missing, put_if_absent,
 )
 from scripts.launch_v195_used_1m_rerank_diagnostic_spot import INPUTS as V195_INPUTS
+
+V195_HASHES = {
+    "terminal": "62a2a7b190983b5e422f679edf8a5120164f9ab886a3e5db5bd32eefc2abdc02",
+    "seal": "77267a71e9c9f40cc086af4e44029943b8a09559b59a7a7a998d652ee9026ca7",
+    "raw": "998cc015f670e470bbb435d47fc49d0aac5b22d0315a7d51eae326e4e48e18fa",
+    "summary": "e4ac85f650a5c8f34f81a77e03c36208d6b952ae7aa732450d272ec493069d20",
+}
 
 SCHEMA = "borsuk-v196-resident-fp16-preflight-spot-v1"
 TAG = "borsuk-v196-resident-fp16-preflight"
