@@ -651,9 +651,46 @@ impl CentroidHnsw {
         })
     }
 
+    pub(crate) fn build_reachable_with(
+        vectors: &[Vec<f32>],
+        m: usize,
+        m0: usize,
+        ef_construction: usize,
+        ef_search: usize,
+    ) -> Option<Self> {
+        let adjacency = build_reachable_hnsw_adjacency(vectors, m, m0, ef_construction, ef_search)?;
+        Some(Self {
+            vectors: vectors.to_vec(),
+            neighbours: adjacency.neighbours,
+            entry: adjacency.entry,
+            ef_search: adjacency.ef_search,
+        })
+    }
+
     /// Number of centroid nodes indexed by this graph.
     pub(crate) fn node_count(&self) -> usize {
         self.vectors.len()
+    }
+
+    pub(crate) fn resident_bytes(&self) -> usize {
+        self.vectors.capacity() * size_of::<Vec<f32>>()
+            + self
+                .vectors
+                .iter()
+                .map(|row| row.capacity() * size_of::<f32>())
+                .sum::<usize>()
+            + self.neighbours.capacity() * size_of::<Vec<Vec<u32>>>()
+            + self
+                .neighbours
+                .iter()
+                .map(|tower| {
+                    tower.capacity() * size_of::<Vec<u32>>()
+                        + tower
+                            .iter()
+                            .map(|layer| layer.capacity() * size_of::<u32>())
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
     }
 
     /// Consume a built graph and detach its adjacency from the full centroid
