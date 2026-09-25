@@ -326,6 +326,19 @@ impl ResidentFp16Tier {
         ordinals: &[usize],
         top_k: usize,
     ) -> Result<Vec<u64>, ResidentFp16Error> {
+        Ok(self
+            .rank_ordinals_cosine_scored(query, ordinals, top_k)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect())
+    }
+
+    pub(crate) fn rank_ordinals_cosine_scored(
+        &self,
+        query: &[f32],
+        ordinals: &[usize],
+        top_k: usize,
+    ) -> Result<Vec<(u64, f64)>, ResidentFp16Error> {
         let mut candidates = Vec::new();
         candidates
             .try_reserve_exact(ordinals.len())
@@ -340,7 +353,7 @@ impl ResidentFp16Tier {
                 source_id,
             });
         }
-        self.rank_cosine(query, &candidates, top_k)
+        self.rank_cosine_scored(query, &candidates, top_k)
     }
 
     /// Deterministic cosine top-k within a fixed SQ8 physical shortlist.
@@ -352,6 +365,19 @@ impl ResidentFp16Tier {
         candidates: &[SourceCandidate],
         top_k: usize,
     ) -> Result<Vec<u64>, ResidentFp16Error> {
+        Ok(self
+            .rank_cosine_scored(query, candidates, top_k)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect())
+    }
+
+    pub(crate) fn rank_cosine_scored(
+        &self,
+        query: &[f32],
+        candidates: &[SourceCandidate],
+        top_k: usize,
+    ) -> Result<Vec<(u64, f64)>, ResidentFp16Error> {
         if (query.len() != self.dimensions
             || query.iter().any(|x| !x.is_finite())
             || top_k == 0
@@ -405,7 +431,7 @@ impl ResidentFp16Tier {
                 .total_cmp(&left.1)
                 .then_with(|| left.0.cmp(&right.0))
         });
-        Ok(scores.into_iter().take(top_k).map(|(id, _)| id).collect())
+        Ok(scores.into_iter().take(top_k).collect())
     }
 }
 

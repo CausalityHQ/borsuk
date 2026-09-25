@@ -334,6 +334,9 @@ impl ResidentGraphGeneration {
     pub fn generation(&self) -> u64 {
         self.plane.generation()
     }
+    pub(crate) fn source_id(&self, ordinal: usize) -> Result<u64, ResidentGraphGenerationError> {
+        Ok(self.plane.source_id(ordinal)?)
+    }
     pub fn cosine_view(&self) -> Result<Pq64CosineView<'_>, ResidentGraphGenerationError> {
         self.pq
             .cosine_view()
@@ -362,6 +365,7 @@ mod tests {
     use crate::resident_graph_store::{
         hydrate_graph_generation, publish_graph_generation, read_graph_head,
     };
+    use crate::resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation};
     use crate::resident_vector_graph::GraphSearchWorkspace;
     use object_store::{memory::InMemory, path::Path as ObjectPath};
 
@@ -578,6 +582,37 @@ mod tests {
             .unwrap()
             .0;
         assert!(new_ids.contains(&99) && !new_ids.contains(&42));
+        let empty_overlay = ResidentGraphOverlay::new(Arc::clone(&held_reader), vec![], 0).unwrap();
+        let empty_bound = empty_overlay.bind(&old_view).unwrap();
+        assert_eq!(
+            empty_bound
+                .search(&[1.0, 0.0], 2, 4, 2, &mut old_workspace)
+                .unwrap()
+                .0,
+            old_graph
+                .search(&[1.0, 0.0], 2, 4, 2, &mut old_workspace)
+                .unwrap()
+                .0
+        );
+        let mutations = || vec![
+            ResidentMutation { id: 42, vector: Some(vec![0.0, 1.0]) },
+            ResidentMutation { id: 7, vector: None },
+            ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) },
+        ];
+        assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 39).is_err());
+        let overlay = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 40).unwrap();
+        let overlay_bound = overlay.bind(&old_view).unwrap();
+        let (ids, stats) = overlay_bound
+            .search(&[1.0, 0.0], 4, 4, 4, &mut old_workspace)
+            .unwrap();
+        assert_eq!(ids, vec![99, 19, 42, 33]);
+        assert_eq!(stats.delta_rows_scanned, 2);
+        assert_eq!(stats.masked_shortlist_rows, 2);
+        assert!(ResidentGraphOverlay::new(
+            Arc::clone(&held_reader),
+            vec![ResidentMutation { id: 42, vector: None }, ResidentMutation { id: 42, vector: None }],
+            0,
+        ).is_err());
         assert!(
             ResidentGraphGeneration::open_local_authenticated(
                 root.as_bytes(),

@@ -641,6 +641,51 @@ impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
         shortlist: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        let (physical, visits) = self.search_candidates(query, k, ef, shortlist, workspace)?;
+        Ok((
+            self.plane.rank_ordinals_cosine(query, &physical, k)?,
+            visits,
+        ))
+    }
+
+    /// Retain graph navigation through tombstoned rows, then remove their
+    /// physical ordinals before FP16 reranking. The mask has one bit per row.
+    pub fn search_scored_masked(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        shortlist: usize,
+        workspace: &mut GraphSearchWorkspace,
+        mask: &[u8],
+    ) -> Result<(Vec<(u64, f64)>, usize, usize), ResidentFp16Error> {
+        if mask.len() != self.plane.rows().div_ceil(8) {
+            return Err(ResidentFp16Error::Invalid("graph tombstone mask"));
+        }
+        let (mut physical, visits) = self.search_candidates(query, k, ef, ef, workspace)?;
+        let shortlist_rows = physical.len();
+        physical.retain(|&row| mask[row / 8] & (1 << (row % 8)) == 0);
+        let masked_rows = shortlist_rows - physical.len();
+        physical.truncate(shortlist);
+        if physical.is_empty() {
+            return Ok((Vec::new(), visits, masked_rows));
+        }
+        Ok((
+            self.plane
+                .rank_ordinals_cosine_scored(query, &physical, k.min(physical.len()))?,
+            visits,
+            masked_rows,
+        ))
+    }
+
+    fn search_candidates(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        shortlist: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<usize>, usize), ResidentFp16Error> {
         if query.len() != self.plane.dimensions()
             || k == 0
             || ef < k
@@ -669,10 +714,7 @@ impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
             .take(shortlist)
             .map(|visit| visit.node as usize)
             .collect::<Vec<_>>();
-        Ok((
-            self.plane.rank_ordinals_cosine(query, &physical, k)?,
-            visits,
-        ))
+        Ok((physical, visits))
     }
 }
 
