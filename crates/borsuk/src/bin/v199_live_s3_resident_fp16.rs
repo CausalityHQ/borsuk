@@ -164,6 +164,8 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut charged_gets = 0_usize;
     let mut charged_bytes = 0_usize;
     let mut ordered_mismatch_queries = 0_usize;
+    let mut set_mismatch_queries = 0_usize;
+    let mut returned_mismatch_queries = 0_usize;
     for (index, (case, plan)) in cases.iter().zip(&plans).enumerate() {
         let started = Instant::now();
         let arm = &plan.optional_risk;
@@ -237,15 +239,13 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
         )
         .map_err(|error| invalid(format!("SQ8 score failure at {index}: {error:?}")))?;
         let sq8_ns = sq8_started.elapsed().as_nanos() as u64;
-        if let Some(first_difference) =
-            ranked
-                .iter()
-                .zip(&case.candidates)
-                .position(|(actual, expected)| {
-                    actual.ordinal as u64 != expected.ordinal
-                        || actual.id != expected.source_id as i64
-                })
-        {
+        let mut sq8_set_equal = true;
+        let sq8_ordered_equal = if let Some(first_difference) = ranked
+            .iter()
+            .zip(&case.candidates)
+            .position(|(actual, expected)| {
+                actual.ordinal as u64 != expected.ordinal || actual.id != expected.source_id as i64
+            }) {
             let actual = ranked
                 .iter()
                 .map(|item| (item.ordinal as u64, item.id))
@@ -269,19 +269,21 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
                 })).collect::<Vec<_>>(),
                 "plan_gets":arm.gets,"plan_bytes":arm.bytes,
             });
-            if ordered_mismatch_queries == 0 || actual != expected {
+            sq8_set_equal = actual == expected;
+            if ordered_mismatch_queries == 0 || (!sq8_set_equal && set_mismatch_queries == 0) {
                 fs::write(
                     format!("{prefix}-mismatch.json"),
                     serde_json::to_vec(&report)?,
                 )?;
             }
             ordered_mismatch_queries += 1;
-            if actual != expected {
-                return Err(invalid(format!(
-                    "SQ8 shortlist set differs at {index}, first rank {first_difference}"
-                )));
+            if !sq8_set_equal {
+                set_mismatch_queries += 1;
             }
-        }
+            false
+        } else {
+            true
+        };
         let shortlist = ranked
             .iter()
             .map(|item| SourceCandidate {
@@ -292,8 +294,9 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
         let fp16_started = Instant::now();
         let ids = tier.rank_cosine(&case.query, &shortlist, 100)?;
         let fp16_ns = fp16_started.elapsed().as_nanos() as u64;
-        if ids != case.expected {
-            return Err(invalid(format!("FP16 returned parity differs at {index}")));
+        let fp16_ordered_equal = ids == case.expected;
+        if !fp16_ordered_equal {
+            returned_mismatch_queries += 1;
         }
         let total_ns = started.elapsed().as_nanos() as u64;
         writeln!(
@@ -302,9 +305,10 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
             json!({"ordinal":index,"gets":arm.gets,
             "bytes":response_bytes,"s3_ns":s3_ns,"sq8_ns":sq8_ns,
             "fp16_ns":fp16_ns,"total_ns":total_ns,
-            "sq8_set_parity":true,"fp16_ordered_parity":true,
-            "sq8_ordered_parity":ranked.iter().zip(&case.candidates).all(|(a,b)|
-                a.ordinal as u64==b.ordinal && a.id==b.source_id as i64)})
+            "sq8_set_parity":sq8_set_equal,
+            "fp16_ordered_parity":fp16_ordered_equal,
+            "sq8_ordered_parity":sq8_ordered_equal,
+            "returned_ids":ids})
         )?;
         s3.push(s3_ns);
         sq8.push(sq8_ns);
@@ -314,9 +318,9 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
     raw.flush()?;
     let summary = json!({
         "schema":"borsuk-v199-live-s3-resident-fp16-v1",
-        "queries":cases.len(),"sq8_shortlist_set_parity":cases.len(),
+        "queries":cases.len(),"sq8_shortlist_set_mismatch_queries":set_mismatch_queries,
         "sq8_ordered_mismatch_queries":ordered_mismatch_queries,
-        "ordered_fp16_returned_parity":cases.len(),
+        "fp16_returned_mismatch_queries":returned_mismatch_queries,
         "submitted_gets":charged_gets,"response_bytes":charged_bytes,
         "etag":args[4],"page_manifest_sha256":manifest_sha,
         "startup_ns":startup_ns,"run_wall_ns":run.elapsed().as_nanos(),

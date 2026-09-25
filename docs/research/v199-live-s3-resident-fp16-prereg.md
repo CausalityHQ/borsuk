@@ -100,3 +100,30 @@ the production result dependency: FP16 ranking is permutation invariant in
 its candidate input. It is method-generic and does not inspect GT or tune an
 individual query. The earlier ordered-parity failure remains negative
 evidence and must not be retroactively called a pass.
+
+## Amendment after closed a0003 boundary failure
+
+Attempt `a0003` on source commit `61ee6f32` closed after 617 complete live
+queries, then found a top-128 **set** difference at query 617, rank 127:
+127/128 pairs matched. Its mismatch artifact SHA-256 is
+`b3caf14730ad268213182cf65f985913726b9767ffa2c14120a0360c5600868d`;
+Spot instance `i-084ed275bfc7e04f3` was terminated. Thus the V198 NumPy
+SQ8 shortlist is not an exact oracle for the Rust production scorer at every
+boundary. A claim that V198's 99,605 returned hits transfer unchanged to
+Rust is unproven. The closed 617-query prefix is diagnostic only.
+
+For attempt `a0004`, keep the same frozen requests, physical plans, object,
+ETag, resident FP16 artifact and Rust SQ8 arithmetic. Execute all 1,000
+queries and record **actual Rust top-100 returned IDs** in every authenticated
+live raw row, alongside ordered/set shortlist and returned parity indicators.
+Do not feed GT into the worker. After the terminal closes, an independent
+checker intersects those IDs with V198's authenticated per-query GT100 lists
+and compares the production result to the paired V155 baseline. Advance only
+if actual Rust output meets the original ≥99,567/100,000 returned-hit,
+p05≥98, zero-failed-request, ≤11,134,007,040-byte and ≤22,126-GET limits;
+observed charge must still equal the V198 frozen plan's 7,388,559,360 bytes
+and 10,047 GETs. Report every numeric parity mismatch without treating the
+Python result as measured Rust quality. This restores the correct dependency:
+production recall is measured from production returned IDs, independent of
+irrelevant upstream score-order differences. The previous strict parity gates
+remain recorded as failed evidence.
