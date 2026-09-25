@@ -18,9 +18,16 @@ class RankUtilityTests(unittest.TestCase):
         curve = fit_rank_utility(examples)
         self.assertEqual(curve.samples, (2, 2, 1))
         self.assertEqual(curve.expected_hits, (1.0, 2 / 3, 2 / 3))
-        self.assertEqual(curve.weights((3, 5, 7)), {3: 1024, 5: 683, 7: 683})
-        self.assertEqual(curve.weights((3, 5, 7, 9)),
+        self.assertEqual(curve.weights((3, 5, 7), units_per_hit=1024),
                          {3: 1024, 5: 683, 7: 683})
+        self.assertEqual(curve.weights((3, 5, 7, 9), units_per_hit=1024),
+                         {3: 1024, 5: 683, 7: 683})
+        self.assertEqual(curve.weights((3, 5, 7), units_per_hit=1_000_000),
+                         {3: 1_000_000, 5: 666_667, 7: 666_667})
+        with self.assertRaises(TypeError):
+            curve.weights((3, 5, 7))
+        with self.assertRaises(ValueError):
+            curve.weights((3, 5, 7), units_per_hit=0)
         self.assertEqual(fit_rank_utility(reversed(examples)), curve)
 
     def test_validation_rejects_labels_outside_candidate_universe(self):

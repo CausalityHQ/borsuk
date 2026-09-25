@@ -85,9 +85,7 @@ def _rank_scores(feature: dict) -> dict[int, float]:
 
 def rank_weights(model: RankUtility, ranked_units: list[int]) -> dict[int, int]:
     """Use the same millionth-hit price scale as margin utility."""
-    return {unit: weight for rank, unit in
-            enumerate(ranked_units[:len(model.expected_hits)])
-            if (weight := round(model.expected_hits[rank] * SCALE)) > 0}
+    return model.weights(ranked_units, units_per_hit=SCALE)
 
 
 def candidate_truth(truth_by_unit: Mapping[int, int],

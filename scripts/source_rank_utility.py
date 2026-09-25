@@ -12,9 +12,6 @@ from math import isfinite
 from numbers import Integral, Real
 from typing import Iterable, Mapping
 
-SCALE = 1024
-
-
 def rank_units(score_by_unit: Mapping[int, float]) -> tuple[int, ...]:
     """Rank candidate physical units by lowest PQ row score, then unit ID."""
     if (not score_by_unit or any(
@@ -33,17 +30,19 @@ class RankUtility:
     expected_hits: tuple[float, ...]
     samples: tuple[int, ...]
 
-    def weights(self, ranked_units: Iterable[int]) -> dict[int, int]:
-        """Positive integer weights for a whole-unit interval planner."""
+    def weights(self, ranked_units: Iterable[int], *,
+                units_per_hit: int) -> dict[int, int]:
+        """Positive integer weights in the caller's explicit price units."""
         ranked = tuple(ranked_units)
-        if (len(set(ranked)) != len(ranked)
+        if (type(units_per_hit) is not int or units_per_hit <= 0
+                or len(set(ranked)) != len(ranked)
                 or any(not isinstance(unit, Integral) or unit < 0
                        for unit in ranked)):
             raise ValueError("PQ ranked unit geometry differs")
         return {
             unit: weight
             for rank, unit in enumerate(ranked[:len(self.expected_hits)])
-            if (weight := round(self.expected_hits[rank] * SCALE)) > 0
+            if (weight := round(self.expected_hits[rank] * units_per_hit)) > 0
         }
 
 
