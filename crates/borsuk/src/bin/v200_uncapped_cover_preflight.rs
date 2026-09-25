@@ -117,8 +117,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return Err(format!("V200 exact feasible witness differs at {index}").into());
             }
         } else {
-            over_units += actual.units > plan.unit_cap;
-            over_gets += actual.gets > 32;
+            over_units += (actual.units > plan.unit_cap) as usize;
+            over_gets += (actual.gets > 32) as usize;
         }
     }
     println!(

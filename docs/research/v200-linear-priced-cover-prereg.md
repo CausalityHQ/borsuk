@@ -58,3 +58,12 @@ reported `TypeError: zip() takes no keyword arguments`. No measurement cell
 was produced. The Spot instance `i-00d7e20d6c3b60d79` was terminated.
 Attempt `a0002` uses Python 3.12 explicitly for the same generator, same
 three source artifacts, same model, and same Rust parity/timing rule.
+
+Attempt `a0002` sealed exactly the expected 1,000-query GT-blind weight
+file (SHA-256
+`797a83a7d830afd5cec491e70de3f49023a52c2f972af2045704b68df6f76313`)
+but ended during Rust compilation: the benchmark counter used invalid
+`usize += bool` syntax at two lines. No planner timing ran. The Spot
+instance `i-00d4fbfe87be452fc` was terminated. Attempt `a0003`
+changes only those counter conversions and retains the same inputs,
+weights, reference plans and pass rule.
