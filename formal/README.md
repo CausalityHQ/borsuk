@@ -370,3 +370,19 @@ units, 57 runs and a 752-unit minimum gap bridge at 32 GETs. With the
 authenticated gap premise, Lean proves any whole-unit cover needs more than
 16,777,216 bytes; the arithmetic minimum is 823 units or 20,542,080 bytes.
 The certificate is in `docs/research/v178-primary-gap-certificate.json`.
+
+`PredictedIntervalGuarantees.lean` proves conditional facts for V189/V190's
+GT-blind interval utility. If a plan's predicted captured mass exceeds a
+target by a validated error bound, its actual captured mass meets the
+target. If the model is uniformly accurate within `ε` for two feasible
+plans and the selected plan maximizes predicted mass, its actual capture
+is within `2ε` of the alternative. An exact fixed-price optimum is
+Pareto undominated in predicted mass, units and GETs. It also has the
+`2ε` comparison against alternatives with equal unit and GET charges.
+A uniform per-query error premise transfers a floor to every query in a cohort,
+and thus to its empirical percentiles. Run
+`lean PredictedIntervalGuarantees.lean` from this directory. The file
+does not prove that a source-fitted curve supplies the error premise
+on unseen queries, that the Python DP refines the model, or that S3
+latency/charged RAM meets a bound. V189's fit/holdout drift and V190's
+frozen replication are the corresponding empirical checks.
