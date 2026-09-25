@@ -968,9 +968,7 @@ impl CentroidHnsw {
     }
 
     /// Add `to` to `from`'s neighbour list on `layer`; when the list overflows
-    /// `width`, re-run [`robust_prune`] over the list so the retained edges stay
-    /// diverse (a plain nearest-`width` trim would collapse the long-range edges
-    /// that keep the graph navigable).
+    /// `width`, retain the nearest neighbours by source distance and node ID.
     fn connect(
         neighbours: &mut [Vec<Vec<u32>>],
         from: u32,
