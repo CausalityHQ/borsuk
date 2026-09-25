@@ -307,10 +307,10 @@ mod tests {
 
     #[test]
     fn later_new_interval_replaces_earlier_continuation_trace() {
-        let weights = BTreeMap::from([(0, 10), (1, 1), (3, 10)]);
+        let weights = BTreeMap::from([(0, 10), (1, 2), (3, 10)]);
         let cover =
             relaxed_priced_cover(&weights, &[3], 4, FixedCap::Units, 3, 1, 3, 1024).unwrap();
         assert_eq!(cover.intervals, vec![(0, 1), (3, 3)]);
-        assert_eq!((cover.mass, cover.units, cover.gets), (21, 3, 2));
+        assert_eq!((cover.mass, cover.units, cover.gets), (22, 3, 2));
     }
 }

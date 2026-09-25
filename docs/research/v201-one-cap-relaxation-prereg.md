@@ -48,3 +48,11 @@ updating its backtrace flag. Its Spot instance `i-0ac2c1596607d7ab6` was
 verified terminated. This attempt has no scientific measurement. The repaired
 source adds a targeted traceback regression test; the next attempt must run
 that remote test before the frozen 1,000-query gate.
+
+`a0002` at source `493a8b28` compiled successfully, then closed in the
+targeted Rust test phase with exit 101; instance `i-07470ab288b5ef73d` was
+verified terminated. The test fixture assigned weight 1 to an optional unit,
+which tied its extra unit cost and made the shorter interval the correct
+winner. A separate four-site exhaustive enumeration showed weight 2 makes
+the intended trace replacement uniquely optimal. The fixture was corrected;
+`a0002` also has no benchmark measurement.
