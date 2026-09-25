@@ -63,6 +63,7 @@ struct HeadBody {
 
 /// A pinned head and its authenticated root. Keep this value while serving;
 /// a later publisher can replace the head without changing these artifacts.
+#[derive(Debug)]
 pub struct ResidentGraphHead {
     pub generation: u64,
     pub root_sha256: String,
