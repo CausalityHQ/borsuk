@@ -171,6 +171,45 @@ where
 }
 
 impl ResidentFp16Tier {
+    /// Source ID at an authenticated physical row. Graph edges use these row
+    /// ordinals and retain the plane identity across generation swaps.
+    pub(crate) fn source_id(&self, ordinal: usize) -> Result<u64, ResidentFp16Error> {
+        self.ids
+            .get(ordinal)
+            .copied()
+            .ok_or(ResidentFp16Error::Invalid("candidate ordinal"))
+    }
+
+    /// Cosine score against a query normalized once by the caller. This
+    /// scores one graph visit without allocating a shortlist or recomputing
+    /// the query norm. The graph validates query geometry and finiteness.
+    pub(crate) fn cosine_similarity_unit_query(
+        &self,
+        normalized: &[f64],
+        ordinal: usize,
+    ) -> Result<f64, ResidentFp16Error> {
+        if normalized.len() != self.dimensions || ordinal >= self.ids.len() {
+            return Err(ResidentFp16Error::Invalid("graph score geometry"));
+        }
+        let offset = ordinal
+            .checked_mul(self.dimensions)
+            .ok_or(ResidentFp16Error::Invalid("candidate offset"))?;
+        let mut dot = 0.0_f64;
+        let mut norm_squared = 0.0_f64;
+        for (index, &bits) in self.coordinates[offset..offset + self.dimensions]
+            .iter()
+            .enumerate()
+        {
+            let value = f64::from(f16::from_bits(bits).to_f32());
+            dot += value * normalized[index];
+            norm_squared += value * value;
+        }
+        if !norm_squared.is_finite() || norm_squared <= 0.0 {
+            return Err(ResidentFp16Error::Invalid("candidate FP16 norm"));
+        }
+        Ok(dot / norm_squared.sqrt())
+    }
+
     /// Open and fully authenticate an immutable plane. The budget check
     /// precedes its large allocation; this object itself owns the charged
     /// ID and coordinate arrays until the pinned generation is released.
