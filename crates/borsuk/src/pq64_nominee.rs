@@ -47,6 +47,7 @@ pub struct Pq64CosinePreparedQuery<'a> {
 }
 
 impl Pq64CosineView<'_> {
+    pub(crate) fn router(&self) -> &Pq64Router { self.router }
     /// Number of source physical rows.
     pub fn rows(&self) -> usize { self.router.rows }
 

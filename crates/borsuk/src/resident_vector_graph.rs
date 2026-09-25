@@ -4,7 +4,7 @@ use std::{
     cmp::Reverse,
     collections::BinaryHeap,
     fs::File,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{self, BufReader, BufWriter, Read, Write},
     path::Path,
 };
 
@@ -152,10 +152,7 @@ impl ResidentVectorGraph {
         expected_sha256: &str,
         plane: &ResidentFp16Tier,
     ) -> Result<Self, ResidentFp16Error> {
-        if graph_digest(path)? != expected_sha256 {
-            return Err(ResidentFp16Error::Invalid("graph SHA-256"));
-        }
-        let mut input = BufReader::new(File::open(path)?);
+        let mut input = BufReader::new(HashingReader { inner: File::open(path)?, digest: Sha256::new() });
         let mut header = [0u8; 96];
         input.read_exact(&mut header)?;
         if &header[..8] != b"BORSVG01"
@@ -208,6 +205,9 @@ impl ResidentVectorGraph {
         }
         if input.read(&mut [0u8; 1])? != 0 {
             return Err(ResidentFp16Error::Invalid("graph trailing bytes"));
+        }
+        if format!("{:x}", input.into_inner().digest.finalize()) != expected_sha256 {
+            return Err(ResidentFp16Error::Invalid("graph SHA-256"));
         }
         for tower in &neighbours {
             for (index, edges) in tower.iter().enumerate() {
@@ -688,6 +688,19 @@ fn graph_digest(path: &Path) -> Result<String, ResidentFp16Error> {
         hash.update(&block[..count]);
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+struct HashingReader<R> {
+    inner: R,
+    digest: Sha256,
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.digest.update(&buf[..n]);
+        Ok(n)
+    }
 }
 
 fn top_level_index(tower: &[Vec<u32>], layer: usize) -> usize {
