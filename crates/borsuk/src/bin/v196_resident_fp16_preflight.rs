@@ -46,13 +46,14 @@ fn peak_rss_bytes() -> Result<u64, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 9 {
-        return Err("usage: v196_resident_fp16_preflight PLANE ARTIFACT_SHA SOURCE_SHA ROWS DIMS GENERATION BUDGET_BYTES CASES_JSONL".into());
+    if args.len() != 10 {
+        return Err("usage: v196_resident_fp16_preflight PLANE ARTIFACT_SHA SOURCE_SHA ROWS DIMS GENERATION BUDGET_BYTES CASES_JSONL FIRST_ORDINAL".into());
     }
     let rows: u64 = args[4].parse()?;
     let dimensions: usize = args[5].parse()?;
     let generation: u64 = args[6].parse()?;
     let budget: usize = args[7].parse()?;
+    let first_ordinal: u64 = args[9].parse()?;
     let started = Instant::now();
     let tier = ResidentFp16Tier::open_authenticated(
         Path::new(&args[1]),
@@ -72,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("V196 case count differs".into());
     }
     for (index, case) in cases.iter().enumerate() {
-        if case.ordinal != 2944 + index as u64
+        if case.ordinal != first_ordinal + index as u64
             || case.query.len() != dimensions
             || case.candidates.len() != 128
             || case.expected.len() != 100
@@ -114,7 +115,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "{}",
         json!({
-            "schema": "borsuk-v196-resident-fp16-preflight-v1",
+            "schema": "borsuk-resident-fp16-preflight-v2",
+            "first_ordinal": first_ordinal,
             "rows": rows,
             "dimensions": dimensions,
             "generation": generation,

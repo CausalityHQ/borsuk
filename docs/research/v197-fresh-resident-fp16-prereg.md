@@ -29,6 +29,11 @@ plan and FP16 under the V194 full-rank model with the same dynamic
 floor. Do not select a different model, radius, cap, precision or
 shortlist size after the GT100 results are opened.
 
+The Rust resident scorer must reproduce all 512 Python FP16 top-100
+lists across 10 timed repetitions. Reuse V196's worst-repetition
+local p95 ≤2 ms, p99 ≤5 ms and process peak RSS ≤2 GiB guards; these
+measure a serving-process primitive, not end-to-end S3 search.
+
 ## Decision gates
 
 The optional-risk FP16 arm advances only if it has at least
