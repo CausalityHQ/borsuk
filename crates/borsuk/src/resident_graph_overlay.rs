@@ -245,6 +245,10 @@ impl ResidentGraphOverlay {
         &self.base
     }
 
+    pub fn base_arc(&self) -> Arc<ResidentGraphGeneration> {
+        Arc::clone(&self.base)
+    }
+
     pub fn bind<'a, 'b>(
         &'a self,
         view: &'a Pq64CosineView<'b>,

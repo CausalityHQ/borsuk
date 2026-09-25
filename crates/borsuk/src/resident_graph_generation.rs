@@ -513,6 +513,8 @@ mod tests {
                 cache.path(), 100_000, 1, 1024, 21)).unwrap();
         assert_eq!(collection_stats.object_gets, 0);
         let collection_view = collection_overlay.base().cosine_view().unwrap();
+        let collection_base = collection_overlay.base_arc();
+        assert!(std::ptr::eq(collection_base.as_ref(), collection_overlay.base()));
         let collection_bound = collection_overlay.bind(&collection_view).unwrap();
         let mut collection_workspace = GraphSearchWorkspace::new(4).unwrap();
         assert_eq!(collection_bound.search(&[1.0, 0.0], 2, 4, 4,

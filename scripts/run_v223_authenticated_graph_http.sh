@@ -13,6 +13,7 @@ watcher_pid=
 if [ "$role" = server ]; then
   artifacts=(ready.json server-resources.json build.log install.log run-closed.log)
   if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then artifacts+=(health.json); fi
+  if [ -n "${BORSUK_V223_COLLECTION_URI:-}" ]; then artifacts+=(hydrate.json); fi
 elif [ "$role" = client ]; then
   artifacts=(first.raw.jsonl first.summary.json first.quality.json first.time
              repeat.raw.jsonl repeat.summary.json repeat.quality.json repeat.time
@@ -50,6 +51,8 @@ names=({'server':['ready.json','server-resources.json','build.log','install.log'
                   'repeat.time','install.log','run-closed.log']}[role])
 if role=='server' and os.environ.get('BORSUK_V223_MUTATION_STRIDE'):
     names.append('health.json')
+if role=='server' and os.environ.get('BORSUK_V223_COLLECTION_URI'):
+    names.append('hydrate.json')
 artifacts={}
 for name in names:
     path=Path(name)
@@ -64,6 +67,7 @@ print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-terminal-v1',
     'generation_root_sha256':os.environ['BORSUK_V223_ROOT_SHA'],
     'mutation_stride':int(os.environ.get('BORSUK_V223_MUTATION_STRIDE') or 0),
     'delta_encoding':os.environ.get('BORSUK_V223_DELTA_ENCODING',''),
+    'collection_uri':os.environ.get('BORSUK_V223_COLLECTION_URI',''),
     'instance_id':identity['instanceId'],'instance_type':identity['instanceType'],
     'region':identity['region'],'availability_zone':identity['availabilityZone'],
     'server_instance_id':os.environ.get('BORSUK_V223_SERVER_ID',''),
@@ -113,6 +117,7 @@ download prep.json \
   research/v219-reachable-graph-1m/008ab6fbc50e6293e0599a33993c619702109bd9/runs/a0002/artifacts/prep.json \
   844 a2afb5d183c1d2dbf43dc8e2f67b7ec61e25ed7ee3daea6f83e27716511fdc82
 if [ "$role" = server ]; then
+  if [ -z "${BORSUK_V223_COLLECTION_URI:-}" ]; then
   download build-summary.json \
     research/v219-reachable-graph-1m/008ab6fbc50e6293e0599a33993c619702109bd9/runs/a0002/artifacts/build-summary.json \
     626 c596e8b8cdbbbc7245ce4d62b3162233370c5b1ce2989a62a0e7fb6bd2dd39d6
@@ -131,6 +136,7 @@ if [ "$role" = server ]; then
   download codes.bin \
     research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/codes.bin \
     64000000 599e359b02ddb85876234f64bac3fcf7bfcb759e121f6a1fbcb4fbd5dfc95460
+  fi
   phase=build
   dnf install -y -q python3.12 gcc gcc-c++ cmake perl tar gzip time >install.log 2>&1
   export RUSTUP_HOME="$root/.rustup" CARGO_HOME="$root/.cargo" \
@@ -142,9 +148,13 @@ if [ "$role" = server ]; then
     --example v220_graph_http --jobs 6 >"$root/build.log" 2>&1
   cd "$root"
   phase=serve
-  server_args=(generation.json "$BORSUK_V223_ROOT_SHA" . 3221225472 0.0.0.0:8080)
-  if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then server_args+=("$BORSUK_V223_MUTATION_STRIDE"); fi
-  if [ -n "${BORSUK_V223_DELTA_ENCODING:-}" ]; then server_args+=("$BORSUK_V223_DELTA_ENCODING"); fi
+  if [ -n "${BORSUK_V223_COLLECTION_URI:-}" ]; then
+    server_args=(collection "$BORSUK_V223_COLLECTION_URI" cache 3221225472 0.0.0.0:8080)
+  else
+    server_args=(generation.json "$BORSUK_V223_ROOT_SHA" . 3221225472 0.0.0.0:8080)
+    if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then server_args+=("$BORSUK_V223_MUTATION_STRIDE"); fi
+    if [ -n "${BORSUK_V223_DELTA_ENCODING:-}" ]; then server_args+=("$BORSUK_V223_DELTA_ENCODING"); fi
+  fi
   "$CARGO_TARGET_DIR/release/examples/v220_graph_http" "${server_args[@]}" &
   server_pid=$!
   for attempt in $(seq 1 120); do
@@ -153,6 +163,15 @@ if [ "$role" = server ]; then
     sleep 1
   done
   curl -fsS http://127.0.0.1:8080/health >health.json
+  if [ -n "${BORSUK_V223_COLLECTION_URI:-}" ]; then
+    python3 - <<'PY'
+import json,os
+v=json.load(open('hydrate.json'))
+assert v['revision']==2 and v['base_root_sha256']==os.environ['BORSUK_V223_ROOT_SHA']
+assert v['mutation_sha256']==os.environ['BORSUK_V223_COLLECTION_SHA']
+assert v['graph_blob_gets']==5 and v['graph_response_bytes']==1879697462
+PY
+  fi
   if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then
     python3 - <<'PY'
 import json,os
@@ -173,6 +192,8 @@ print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-ready-v1',
     'generation_root_sha256':os.environ['BORSUK_V223_ROOT_SHA'],
     'mutation_stride':int(os.environ.get('BORSUK_V223_MUTATION_STRIDE') or 0),
     'delta_encoding':os.environ.get('BORSUK_V223_DELTA_ENCODING',''),
+    'collection_uri':os.environ.get('BORSUK_V223_COLLECTION_URI',''),
+    'mutation_sha256':os.environ.get('BORSUK_V223_COLLECTION_SHA',''),
     'source_commit':os.environ['BORSUK_V223_SOURCE_COMMIT']},sort_keys=True))
 PY
   aws s3api put-object --bucket "$bucket" --key "$prefix/server/ready.json" \

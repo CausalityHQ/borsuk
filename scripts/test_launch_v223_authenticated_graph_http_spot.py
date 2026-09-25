@@ -53,6 +53,30 @@ class V223Test(unittest.TestCase):
         self.assertIn("BORSUK_V223_MUTATION_STRIDE='100'", script)
         self.assertIn("BORSUK_V223_DELTA_ENCODING='decoded'", script)
 
+    def test_persisted_collection_bootstrap_and_terminal_require_hydration(self):
+        uri = "s3://bucket/published"
+        digest = "a" * 64
+        script = bootstrap("server", "0" * 40, "1" * 64, "source.tar.gz",
+                           "research/v237/run", mutation_stride=100,
+                           delta_encoding="decoded", collection_uri=uri,
+                           collection_sha=digest)
+        self.assertIn(f"BORSUK_V223_COLLECTION_URI='{uri}'", script)
+        self.assertIn(f"BORSUK_V223_COLLECTION_SHA='{digest}'", script)
+        artifacts = {name: {"bytes": 5, "sha256": hashlib.sha256(b"valid").hexdigest()}
+                     for name in ARTIFACTS["server"] | {"health.json", "hydrate.json"}}
+        raw = json.dumps({"schema": TERMINAL_SCHEMA, "role": "server",
+                          "status": "complete", "exit_code": 0,
+                          "instance_id": "i-123", "source_commit": "0" * 40,
+                          "source_archive_sha256": "1" * 64,
+                          "generation_root_sha256": ROOT_SHA,
+                          "mutation_stride": 100, "delta_encoding": "decoded",
+                          "collection_uri": uri, "artifacts": artifacts}).encode()
+        objects = {f"research/v237/run/server/artifacts/{name}": b"valid"
+                   for name in artifacts}
+        self.assertEqual(terminal(FakeS3(objects), "server", "research/v237/run",
+                                  raw, "i-123", "0" * 40, "1" * 64,
+                                  100, "decoded", uri)["status"], "complete")
+
     def test_client_terminal_replays_all_artifacts_and_seals(self):
         prefix = "research/v223/run"
         objects = {f"{prefix}/client/artifacts/{name}": b"valid"

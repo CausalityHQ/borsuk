@@ -9,6 +9,7 @@ use std::{
         Arc, Mutex,
         mpsc::{self, SyncSender, TrySendError},
     },
+    time::Instant,
 };
 
 use axum::{
@@ -18,12 +19,15 @@ use axum::{
     routing::{get, post},
 };
 use borsuk::{
+    resident_graph_collection::{hydrate_graph_collection_decoded, read_graph_collection_head},
     resident_graph_generation::ResidentGraphGeneration,
     resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation},
     resident_vector_graph::GraphSearchWorkspace,
 };
+use object_store::parse_url_opts;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+use url::Url;
 
 const WORKERS: usize = 8;
 
@@ -175,39 +179,78 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err("unsupported mutation representation".into());
     }
     let listen: SocketAddr = args[5].parse()?;
-    let loaded = ResidentGraphGeneration::open_local_authenticated(
-        &fs::read(&args[1])?,
-        &args[2],
-        std::path::Path::new(&args[3]),
-        args[4].parse()?,
-        WORKERS,
-    )?;
-    let loaded = Arc::new(loaded);
-    let overlay = if let Some(stride) = args.get(6) {
-        let stride: usize = stride.parse()?;
-        if stride != 100 || loaded.rows() != 1_000_000 || loaded.dimensions() != 768 {
-            return Err("unsupported frozen mutation geometry".into());
+    let (loaded, overlay) = if args[1] == "collection" {
+        if args.len() != 6 {
+            return Err(
+                "usage: v220_graph_http collection S3_URI CACHE_DIR MAX_RESIDENT_BYTES LISTEN"
+                    .into(),
+            );
         }
-        let mutations = (0..loaded.rows())
-            .step_by(stride)
-            .map(|ordinal| {
-                Ok(ResidentMutation {
-                    id: loaded.source_id(ordinal)?,
-                    vector: Some(loaded.vector_f32(ordinal)?),
-                })
-            })
-            .collect::<Result<Vec<_>, borsuk::resident_graph_generation::ResidentGraphGenerationError>>()?;
-        let mut overlay = ResidentGraphOverlay::new(
-            Arc::clone(&loaded),
-            mutations,
-            32 * 1024 * 1024,
+        let (store, prefix) =
+            parse_url_opts(&Url::parse(&args[2])?, [("aws_region", "eu-central-1")])?;
+        let head = read_graph_collection_head(store.as_ref(), &prefix, 16 * 1024 * 1024)
+            .await?
+            .ok_or("collection head missing")?;
+        let started = Instant::now();
+        let (overlay, stats) = hydrate_graph_collection_decoded(
+            store.as_ref(),
+            &prefix,
+            &head,
+            std::path::Path::new(&args[3]),
+            args[4].parse()?,
+            WORKERS,
+            16 * 1024 * 1024,
+            64 * 1024 * 1024,
+        )
+        .await?;
+        fs::write(
+            "hydrate.json",
+            serde_json::to_vec(&serde_json::json!({
+                "revision":head.revision,"base_root_sha256":head.base_root_sha256,
+                "mutation_sha256":head.mutation_sha256,
+                "graph_blob_gets":stats.object_gets,
+                "graph_response_bytes":stats.response_bytes,
+                "hydrate_ms":started.elapsed().as_secs_f64()*1000.0,
+                "overlay_resident_bytes":overlay.resident_bytes(),
+            }))?,
         )?;
-        if args.len() == 8 {
-            overlay = overlay.with_decoded_delta(64 * 1024 * 1024)?;
-        }
-        Some(Arc::new(overlay))
+        (overlay.base_arc(), Some(overlay))
     } else {
-        None
+        let loaded = Arc::new(ResidentGraphGeneration::open_local_authenticated(
+            &fs::read(&args[1])?,
+            &args[2],
+            std::path::Path::new(&args[3]),
+            args[4].parse()?,
+            WORKERS,
+        )?);
+        let overlay = if let Some(stride) = args.get(6) {
+            let stride: usize = stride.parse()?;
+            if stride != 100 || loaded.rows() != 1_000_000 || loaded.dimensions() != 768 {
+                return Err("unsupported frozen mutation geometry".into());
+            }
+            let mutations =
+                (0..loaded.rows())
+                    .step_by(stride)
+                    .map(|ordinal| {
+                        Ok(ResidentMutation {
+                            id: loaded.source_id(ordinal)?,
+                            vector: Some(loaded.vector_f32(ordinal)?),
+                        })
+                    })
+                    .collect::<Result<
+                        Vec<_>,
+                        borsuk::resident_graph_generation::ResidentGraphGenerationError,
+                    >>()?;
+            let mut overlay =
+                ResidentGraphOverlay::new(Arc::clone(&loaded), mutations, 32 * 1024 * 1024)?;
+            if args.len() == 8 {
+                overlay = overlay.with_decoded_delta(64 * 1024 * 1024)?;
+            }
+            Some(Arc::new(overlay))
+        } else {
+            None
+        };
+        (loaded, overlay)
     };
     let state = workers(loaded, overlay)?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
