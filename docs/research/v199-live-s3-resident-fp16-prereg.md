@@ -75,3 +75,28 @@ same-set flag. This is a bounded diagnostic repeat to decide whether the
 production SQ8 arithmetic must be corrected or the parity contract should
 use the set that resident FP16 actually consumes. Do not silently relax the
 frozen gate or treat `a0002` as a pass if ordered parity fails.
+
+## Amendment after closed diagnostic a0002
+
+Attempt `a0002` on source commit `8b4b28b0` again stopped at ordinal 84.
+The closed mismatch artifact SHA-256 is
+`a62402169370a6f7fc981343975f88575a80a508b2a841a561e47a2e7c56335a`;
+Spot instance `i-045137da83eaf7452` was terminated. Its actual and expected
+top-128 `(physical ordinal, stable ID)` **sets were identical** (128/128).
+Only ranks 62 and 63 swapped: Rust's two scores differed by four `f32`
+ULPs. The Rust scalar and NumPy matrix-product arithmetic can order nearly
+equal scores differently. The FP16 reranker consumes all 128 identities and
+orders them afresh, so this swap cannot change its input or returned list.
+This is a verified representation/precision ordering issue, not an S3
+authentication or physical admission failure.
+
+For attempt `a0003`, retain every frozen source artifact and physical plan.
+Change the SQ8 parity gate to exact **set parity of all 128 `(ordinal, ID)`
+pairs** on every query; retain exact ordered FP16 top-100 parity. Record the
+number of SQ8 order-only mismatches and the first full mismatch artifact.
+Any shortlist set difference, FP16 return difference, authentication error,
+unexpected GET or byte count still fails the whole cell. This rule follows
+the production result dependency: FP16 ranking is permutation invariant in
+its candidate input. It is method-generic and does not inspect GT or tune an
+individual query. The earlier ordered-parity failure remains negative
+evidence and must not be retroactively called a pass.

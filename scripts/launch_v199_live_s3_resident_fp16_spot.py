@@ -235,7 +235,9 @@ def launch(attempt: str) -> None:
                 print(json.dumps(terminal,sort_keys=True),flush=True)
                 if terminal.get("status") != "complete":
                     raise RuntimeError("V199 failed; inspect only closed terminal artifacts")
-                if set(ARTIFACTS) != set(terminal.get("artifacts", {})):
+                present = set(terminal.get("artifacts", {}))
+                if (present - {"live-mismatch.json"} !=
+                        set(ARTIFACTS) - {"live-mismatch.json"}):
                     raise ValueError("complete V199 artifact roster differs")
                 for name, identity in terminal["artifacts"].items():
                     body = s3.get_object(Bucket=BUCKET,

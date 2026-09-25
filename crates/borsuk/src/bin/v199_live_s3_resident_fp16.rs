@@ -163,6 +163,7 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut total = Vec::with_capacity(cases.len());
     let mut charged_gets = 0_usize;
     let mut charged_bytes = 0_usize;
+    let mut ordered_mismatch_queries = 0_usize;
     for (index, (case, plan)) in cases.iter().zip(&plans).enumerate() {
         let started = Instant::now();
         let arm = &plan.optional_risk;
@@ -245,11 +246,14 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
                         || actual.id != expected.source_id as i64
                 })
         {
-            let actual = ranked.iter().map(|item| item.id).collect::<HashSet<_>>();
+            let actual = ranked
+                .iter()
+                .map(|item| (item.ordinal as u64, item.id))
+                .collect::<HashSet<_>>();
             let expected = case
                 .candidates
                 .iter()
-                .map(|item| item.source_id as i64)
+                .map(|item| (item.ordinal, item.source_id as i64))
                 .collect::<HashSet<_>>();
             let report = json!({
                 "schema":"borsuk-v199-sq8-mismatch-v1",
@@ -265,14 +269,18 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
                 })).collect::<Vec<_>>(),
                 "plan_gets":arm.gets,"plan_bytes":arm.bytes,
             });
-            fs::write(
-                format!("{prefix}-mismatch.json"),
-                serde_json::to_vec(&report)?,
-            )?;
-            return Err(invalid(format!(
-                "SQ8 shortlist parity differs at {index}, first rank {first_difference}, same set {}",
-                actual == expected
-            )));
+            if ordered_mismatch_queries == 0 || actual != expected {
+                fs::write(
+                    format!("{prefix}-mismatch.json"),
+                    serde_json::to_vec(&report)?,
+                )?;
+            }
+            ordered_mismatch_queries += 1;
+            if actual != expected {
+                return Err(invalid(format!(
+                    "SQ8 shortlist set differs at {index}, first rank {first_difference}"
+                )));
+            }
         }
         let shortlist = ranked
             .iter()
@@ -293,7 +301,10 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
             "{}",
             json!({"ordinal":index,"gets":arm.gets,
             "bytes":response_bytes,"s3_ns":s3_ns,"sq8_ns":sq8_ns,
-            "fp16_ns":fp16_ns,"total_ns":total_ns,"parity":true})
+            "fp16_ns":fp16_ns,"total_ns":total_ns,
+            "sq8_set_parity":true,"fp16_ordered_parity":true,
+            "sq8_ordered_parity":ranked.iter().zip(&case.candidates).all(|(a,b)|
+                a.ordinal as u64==b.ordinal && a.id==b.source_id as i64)})
         )?;
         s3.push(s3_ns);
         sq8.push(sq8_ns);
@@ -303,7 +314,8 @@ async fn execute(args: &[String]) -> Result<(), Box<dyn Error>> {
     raw.flush()?;
     let summary = json!({
         "schema":"borsuk-v199-live-s3-resident-fp16-v1",
-        "queries":cases.len(),"ordered_sq8_shortlist_parity":cases.len(),
+        "queries":cases.len(),"sq8_shortlist_set_parity":cases.len(),
+        "sq8_ordered_mismatch_queries":ordered_mismatch_queries,
         "ordered_fp16_returned_parity":cases.len(),
         "submitted_gets":charged_gets,"response_bytes":charged_bytes,
         "etag":args[4],"page_manifest_sha256":manifest_sha,
