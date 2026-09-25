@@ -21,6 +21,18 @@ The 1M product comparison is matched-workload, not paired query order.
 - An exact brute-force latency cell was not run: exact GT100 already fixes the quality control, and brute-force latency would not choose between the current product integration options.
 - Turbopuffer is blocked: no authenticated tenant/namespace credential was available, so no matched row is emitted.
 
+The historical S3 Vectors ReLAION-1M **development** raw samples also
+give nearest-rank **p90 193.866503 ms** on the fresh-index first pass and
+**p90 79.397588 ms** on the immediate repeated pass (1,000 requests per
+pass). These were recomputed on 2026-09-25 from the immutable
+`samples.parquet` SHA-256
+`870b24d95178f6087c762d248fec10ee7d885ac990346dfe91134e4f777aa346`,
+bound to terminal SHA-256
+`f502f9443b954a674a296896d138d7e039d58f37850c9f1ee46cbabd6f226488`.
+The same raw samples reproduce the table's p50/p95/p99 and mean
+Recall@100. These p90 values are measured historical context for that
+development split, not a new V219 validation or same-revision comparison.
+
 ## Next production gate
 
 The authenticated generation/delta/mutation/compaction integration is verified, but its router fails quality. Redesign the routing/index representation and falsify it at 100k; do not spend on 1M/10M/100M for this revision.
