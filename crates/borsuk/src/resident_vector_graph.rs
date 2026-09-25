@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use crate::{
-    centroid_hnsw::{build_reachable_hnsw_adjacency, build_reachable_hnsw_adjacency_batched},
+    centroid_hnsw::build_reachable_hnsw_adjacency,
     pq64_nominee::{Pq64CosineView, Pq64Router},
     resident_fp16_tier::{ResidentFp16Error, ResidentFp16Tier},
 };
@@ -233,35 +233,11 @@ impl ResidentVectorGraph {
     /// order. Parameters are explicit so a recall target can set the degree
     /// and beam without depending on corpus-size thresholds.
     pub fn build(
-        vectors: Vec<Vec<f32>>,
-        plane: &ResidentFp16Tier,
-        m: usize,
-        m0: usize,
-        ef_construction: usize,
-    ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(vectors, plane, m, m0, ef_construction, None)
-    }
-
-    /// Build from a frozen graph snapshot per batch. The worker count changes
-    /// execution only; the insertion schedule and output are deterministic.
-    pub fn build_batched(
-        vectors: Vec<Vec<f32>>,
-        plane: &ResidentFp16Tier,
-        m: usize,
-        m0: usize,
-        ef_construction: usize,
-        workers: usize,
-    ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(vectors, plane, m, m0, ef_construction, Some(workers))
-    }
-
-    fn build_with_workers(
         mut vectors: Vec<Vec<f32>>,
         plane: &ResidentFp16Tier,
         m: usize,
         m0: usize,
         ef_construction: usize,
-        workers: Option<usize>,
     ) -> Result<Self, ResidentFp16Error> {
         if vectors.len() < 2
             || vectors.len() != plane.rows()
@@ -271,7 +247,6 @@ impl ResidentVectorGraph {
             || m0 > 256
             || ef_construction < m0
             || ef_construction > 4096
-            || workers == Some(0)
         {
             return Err(ResidentFp16Error::Invalid("graph build geometry"));
         }
@@ -290,15 +265,8 @@ impl ResidentVectorGraph {
                 *coordinate = (f64::from(*coordinate) / norm) as f32;
             }
         }
-        let built = match workers {
-            Some(workers) => build_reachable_hnsw_adjacency_batched(
-                &vectors, m, m0, ef_construction, ef_construction, workers,
-            ),
-            None => build_reachable_hnsw_adjacency(
-                &vectors, m, m0, ef_construction, ef_construction,
-            ),
-        }
-        .ok_or(ResidentFp16Error::Invalid("graph build failed"))?;
+        let built = build_reachable_hnsw_adjacency(&vectors, m, m0, ef_construction, ef_construction)
+            .ok_or(ResidentFp16Error::Invalid("graph build failed"))?;
         Ok(Self {
             neighbours: built.neighbours,
             entry: built.entry,
