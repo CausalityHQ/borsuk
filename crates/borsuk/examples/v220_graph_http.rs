@@ -3,10 +3,8 @@
 use std::{
     env,
     error::Error,
-    fs::{self, File},
-    io::{BufReader, Read},
+    fs,
     net::SocketAddr,
-    path::Path,
     sync::{
         Arc, Mutex,
         mpsc::{self, SyncSender, TrySendError},
@@ -20,26 +18,12 @@ use axum::{
     routing::{get, post},
 };
 use borsuk::{
-    pq64_nominee::Pq64Router,
-    resident_fp16_tier::ResidentFp16Tier,
-    resident_vector_graph::{GraphSearchWorkspace, ResidentPqCosineGraph, ResidentVectorGraph},
+    resident_graph_generation::ResidentGraphGeneration, resident_vector_graph::GraphSearchWorkspace,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 
-const ROWS: usize = 1_000_000;
-const DIMS: usize = 768;
 const WORKERS: usize = 8;
-const SOURCE: &str = "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86";
-
-struct Loaded {
-    graph: ResidentVectorGraph,
-    plane: ResidentFp16Tier,
-    pq: Pq64Router,
-    old_for_new: Vec<usize>,
-}
 
 struct Work {
     query: Vec<f32>,
@@ -48,6 +32,7 @@ struct Work {
 
 struct AppState {
     sender: SyncSender<Work>,
+    dimensions: usize,
 }
 
 #[derive(Deserialize)]
@@ -64,90 +49,7 @@ struct SearchResponse {
     vector_body_gets: u8,
 }
 
-fn digest(path: &Path) -> Result<String, Box<dyn Error>> {
-    let mut input = BufReader::new(File::open(path)?);
-    let mut hash = Sha256::new();
-    let mut block = [0u8; 1024 * 1024];
-    loop {
-        let n = input.read(&mut block)?;
-        if n == 0 {
-            break;
-        }
-        hash.update(&block[..n]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
-}
-
-fn load(args: &[String]) -> Result<Loaded, Box<dyn Error>> {
-    let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
-    let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
-    if prep["schema"] != "borsuk-v217-graph-1m-preparation-v1"
-        || build["schema"] != "borsuk-v219-reachable-graph-build-1m-v1"
-        || prep["source_sha256"] != SOURCE
-        || build["source_sha256"] != SOURCE
-        || prep["plane_sha256"] != build["plane_sha256"]
-        || prep["generation"] != build["generation"]
-        || prep["plane_sha256"].as_str() != Some(digest(Path::new(&args[3]))?.as_str())
-        || build["graph_sha256"].as_str() != Some(digest(Path::new(&args[4]))?.as_str())
-        || prep["map_sha256"].as_str() != Some(digest(Path::new(&args[5]))?.as_str())
-        || prep["books_sha256"].as_str() != Some(digest(Path::new(&args[6]))?.as_str())
-        || prep["codes_sha256"].as_str() != Some(digest(Path::new(&args[7]))?.as_str())
-    {
-        return Err("V219 serving artifact identity differs".into());
-    }
-    let plane = ResidentFp16Tier::open_authenticated(
-        Path::new(&args[3]),
-        prep["plane_sha256"].as_str().ok_or("plane SHA missing")?,
-        SOURCE,
-        ROWS as u64,
-        DIMS,
-        prep["generation"].as_u64().ok_or("generation missing")?,
-        2_000_000_000,
-    )?;
-    let graph = ResidentVectorGraph::open_authenticated(
-        Path::new(&args[4]),
-        build["graph_sha256"].as_str().ok_or("graph SHA missing")?,
-        &plane,
-    )?;
-    let structure = graph.structural_stats();
-    if structure.reachable != ROWS || structure.min_indegree < 4 {
-        return Err("V219 graph structure differs".into());
-    }
-    let mapping = fs::read(&args[5])?;
-    if mapping.len() != ROWS * 4 {
-        return Err("V219 row map length differs".into());
-    }
-    let old_for_new = mapping
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()) as usize)
-        .collect::<Vec<_>>();
-    let raw_books = fs::read(&args[6])?;
-    if raw_books.len() != 64 * 256 * 12 * 4 {
-        return Err("V219 PQ books length differs".into());
-    }
-    let books = raw_books
-        .chunks_exact(4)
-        .map(|word| f32::from_le_bytes(word.try_into().unwrap()))
-        .collect::<Vec<_>>();
-    let pq = Pq64Router::new(
-        ROWS,
-        DIMS,
-        256,
-        1,
-        vec![0.0; ROWS.div_ceil(256) * DIMS],
-        books,
-        fs::read(&args[7])?,
-    )
-    .map_err(|error| format!("V219 PQ: {error:?}"))?;
-    Ok(Loaded {
-        graph,
-        plane,
-        pq,
-        old_for_new,
-    })
-}
-
-fn workers(loaded: Arc<Loaded>) -> Result<Arc<AppState>, Box<dyn Error>> {
+fn workers(loaded: Arc<ResidentGraphGeneration>) -> Result<Arc<AppState>, Box<dyn Error>> {
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
     let (sender, receiver) = mpsc::sync_channel::<Work>(WORKERS);
     let receiver = Arc::new(Mutex::new(receiver));
@@ -157,19 +59,10 @@ fn workers(loaded: Arc<Loaded>) -> Result<Arc<AppState>, Box<dyn Error>> {
         let ready = ready_tx.clone();
         std::thread::spawn(move || {
             let run = || -> Result<(), String> {
-                let cosine = loaded
-                    .pq
-                    .cosine_view()
-                    .map_err(|error| format!("{error:?}"))?;
-                let bound = ResidentPqCosineGraph::bind(
-                    &loaded.graph,
-                    &loaded.plane,
-                    &cosine,
-                    &loaded.old_for_new,
-                )
-                .map_err(|error| error.to_string())?;
+                let cosine = loaded.cosine_view().map_err(|error| error.to_string())?;
+                let bound = loaded.bind(&cosine).map_err(|error| error.to_string())?;
                 let mut workspace =
-                    GraphSearchWorkspace::new(ROWS).map_err(|error| error.to_string())?;
+                    GraphSearchWorkspace::new(loaded.rows()).map_err(|error| error.to_string())?;
                 ready.send(Ok(())).map_err(|error| error.to_string())?;
                 loop {
                     let work = match receiver.lock().map_err(|error| error.to_string())?.recv() {
@@ -192,7 +85,10 @@ fn workers(loaded: Arc<Loaded>) -> Result<Arc<AppState>, Box<dyn Error>> {
     for _ in 0..WORKERS {
         ready_rx.recv()??;
     }
-    Ok(Arc::new(AppState { sender }))
+    Ok(Arc::new(AppState {
+        sender,
+        dimensions: loaded.dimensions(),
+    }))
 }
 
 fn router(state: Arc<AppState>) -> Router {
@@ -210,7 +106,7 @@ async fn search(
     Json(request): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, StatusCode> {
     if request.k != 100
-        || request.query.len() != DIMS
+        || request.query.len() != state.dimensions
         || request.query.iter().any(|value| !value.is_finite())
         || !request.query.iter().any(|value| *value != 0.0)
     {
@@ -240,11 +136,21 @@ async fn search(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 9 {
-        return Err("usage: v220_graph_http PREP BUILD PLANE GRAPH MAP BOOKS CODES LISTEN".into());
+    if args.len() != 6 {
+        return Err(
+            "usage: v220_graph_http ROOT_JSON TRUSTED_SHA DIRECTORY MAX_RESIDENT_BYTES LISTEN"
+                .into(),
+        );
     }
-    let listen: SocketAddr = args[8].parse()?;
-    let state = workers(Arc::new(load(&args)?))?;
+    let listen: SocketAddr = args[5].parse()?;
+    let loaded = ResidentGraphGeneration::open_local_authenticated(
+        &fs::read(&args[1])?,
+        &args[2],
+        std::path::Path::new(&args[3]),
+        args[4].parse()?,
+        WORKERS,
+    )?;
+    let state = workers(Arc::new(loaded))?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     axum::serve(listener, router(state)).await?;
     Ok(())
@@ -267,7 +173,10 @@ mod tests {
             let work: Work = receiver.recv().unwrap();
             work.reply.send(Ok((vec![42], 3))).unwrap();
         });
-        let state = Arc::new(AppState { sender });
+        let state = Arc::new(AppState {
+            sender,
+            dimensions: 768,
+        });
         let app = router(state);
         let request = Request::builder()
             .method("POST")
