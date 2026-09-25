@@ -43,9 +43,14 @@ fn peak_rss() -> Result<u64, Box<dyn Error>> {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 6 && !(args.len() == 7 && args[6] == "--fp16-source") {
+    let workers = if args.len() == 8 && args[6] == "--batched-threads" {
+        Some(args[7].parse::<usize>()?)
+    } else {
+        None
+    };
+    if args.len() != 6 && !(args.len() == 7 && args[6] == "--fp16-source") && workers.is_none() {
         return Err(
-            "usage: v218_build_reachable_graph_100k PREP PLANE VECTORS GRAPH SUMMARY [--fp16-source]".into(),
+            "usage: v218_build_reachable_graph_100k PREP PLANE VECTORS GRAPH SUMMARY [--fp16-source | --batched-threads N]".into(),
         );
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
@@ -90,7 +95,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         vectors
     };
-    let graph = ResidentVectorGraph::build(vectors, &plane, 32, 64, 128)?;
+    let graph = match workers {
+        Some(workers) => ResidentVectorGraph::build_batched(vectors, &plane, 32, 64, 128, workers)?,
+        None => ResidentVectorGraph::build(vectors, &plane, 32, 64, 128)?,
+    };
     let structure = graph.structural_stats();
     if structure.reachable != ROWS
         || structure.below_four_indegree != 0
@@ -109,7 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "construction_source":if fp16_source { "authenticated-fp16-plane" } else { "authenticated-f32-source" },
         "source_sha256":SOURCE,"plane_sha256":prep["plane_sha256"],
         "graph_sha256":graph_sha,"graph_bytes":fs::metadata(&args[4])?.len(),
-        "graph_heap_bytes":heap_bytes,"structure":structure,
+        "graph_heap_bytes":heap_bytes,"structure":structure,"build_workers":workers.unwrap_or(1),
         "build_ns":elapsed,"build_peak_rss_bytes":peak_rss()?,
         "rows":ROWS,"dimensions":DIMS,"generation":prep["generation"]})
         ),

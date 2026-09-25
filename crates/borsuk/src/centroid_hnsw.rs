@@ -19,6 +19,8 @@
 
 use std::{collections::BinaryHeap, mem::size_of, sync::Arc};
 
+use rayon::prelude::*;
+
 use crate::{BorsukError, Result, logical_cell_catalog::LogicalCellCatalog, metric::VectorMetric};
 
 /// Neighbours kept per node on layers above 0.
@@ -489,6 +491,137 @@ pub(crate) fn build_hnsw_adjacency(
     })
 }
 
+/// Search one insertion against a frozen adjacency. Edge writes happen only
+/// after every node in the batch has finished planning.
+fn plan_hnsw_insert(
+    node: u32,
+    entry: u32,
+    top_level: usize,
+    levels: &[usize],
+    neighbours: &[Vec<Vec<u32>>],
+    vectors: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    visits: &mut EpochVisits,
+) -> Vec<(usize, Vec<u32>)> {
+    let node_top = levels[node as usize];
+    let query = &vectors[node as usize];
+    let mut current = entry;
+    let mut current_distance = squared_distance(query, &vectors[current as usize]);
+    let mut layer = top_level;
+    while layer > node_top {
+        current = CentroidHnsw::greedy_descend(
+            query,
+            current,
+            &mut current_distance,
+            layer,
+            neighbours,
+            vectors,
+        );
+        layer -= 1;
+    }
+    let mut plan = Vec::with_capacity(node_top.min(top_level) + 1);
+    let mut layer = node_top.min(top_level);
+    loop {
+        let width = if layer == 0 { m0 } else { m };
+        let found = CentroidHnsw::search_layer_with_visits(
+            query,
+            &[current],
+            layer,
+            ef_construction,
+            neighbours,
+            vectors,
+            visits,
+        );
+        plan.push((layer, CentroidHnsw::select_neighbours(&found, width, vectors)));
+        if let Some(nearest) = found.first() {
+            current = nearest.node;
+        }
+        if layer == 0 {
+            break;
+        }
+        layer -= 1;
+    }
+    plan
+}
+
+fn build_hnsw_adjacency_batched(
+    vectors: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    workers: usize,
+) -> Option<CentroidHnswAdjacency> {
+    if vectors.len() < 2 || workers == 0 {
+        return None;
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .ok()?;
+    let levels: Vec<usize> = (0..vectors.len()).map(|i| node_level(i, m)).collect();
+    let mut neighbours: Vec<Vec<Vec<u32>>> = levels
+        .iter()
+        .map(|&level| vec![Vec::new(); level + 1])
+        .collect();
+    let order = shuffled_indices(vectors.len());
+    // ponytail: 4*N bytes per worker; use sparse visit marks if 100M RAM
+    // admission shows this workspace is too expensive.
+    let mut visits = (0..workers)
+        .map(|_| EpochVisits::new(vectors.len()))
+        .collect::<Vec<_>>();
+    let mut entry = order[0];
+    let mut top_level = levels[entry as usize];
+    let mut inserted = 1;
+    while inserted < order.len() {
+        let batch_rows = (inserted / 32)
+            .clamp(1, ef_construction.saturating_mul(8).max(1));
+        let end = inserted.saturating_add(batch_rows).min(order.len());
+        let plans = pool.install(|| {
+            visits
+                .par_iter_mut()
+                .enumerate()
+                .map(|(worker, marks)| {
+                    let start = inserted + (end - inserted) * worker / workers;
+                    let stop = inserted + (end - inserted) * (worker + 1) / workers;
+                    order[start..stop]
+                        .iter()
+                        .map(|&node| {
+                            (node, plan_hnsw_insert(node, entry, top_level, &levels,
+                                &neighbours, vectors, m, m0, ef_construction, marks))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        });
+        for (node, plan) in plans.into_iter().flatten() {
+            for (layer, selected) in plan {
+                let width = if layer == 0 { m0 } else { m };
+                for neighbour in selected {
+                    CentroidHnsw::connect(
+                        &mut neighbours, node, neighbour, layer, width, vectors,
+                    );
+                    CentroidHnsw::connect(
+                        &mut neighbours, neighbour, node, layer, width, vectors,
+                    );
+                }
+            }
+            if levels[node as usize] > top_level {
+                top_level = levels[node as usize];
+                entry = node;
+            }
+        }
+        inserted = end;
+    }
+    Some(CentroidHnswAdjacency {
+        neighbours,
+        entry,
+        ef_search,
+    })
+}
+
 /// Build source-nearest HNSW edges, then retain a sparse physical-order
 /// backbone and enough local reverse edges to avoid directed row starvation.
 /// The physical order must be chosen without query labels. Added edges are
@@ -503,7 +636,31 @@ pub(crate) fn build_reachable_hnsw_adjacency(
     if m0 >= 256 {
         return None;
     }
-    let mut built = build_hnsw_adjacency(vectors, m, m0, ef_construction, ef_search)?;
+    let built = build_hnsw_adjacency(vectors, m, m0, ef_construction, ef_search)?;
+    repair_reachable_hnsw_adjacency(built, m0)
+}
+
+pub(crate) fn build_reachable_hnsw_adjacency_batched(
+    vectors: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    workers: usize,
+) -> Option<CentroidHnswAdjacency> {
+    if m0 >= 256 {
+        return None;
+    }
+    let built = build_hnsw_adjacency_batched(
+        vectors, m, m0, ef_construction, ef_search, workers,
+    )?;
+    repair_reachable_hnsw_adjacency(built, m0)
+}
+
+fn repair_reachable_hnsw_adjacency(
+    mut built: CentroidHnswAdjacency,
+    m0: usize,
+) -> Option<CentroidHnswAdjacency> {
     let rows = built.neighbours.len();
     let required = 4.min(rows - 1);
     let mut indegree = vec![0usize; rows];
@@ -1002,6 +1159,16 @@ impl CentroidHnsw {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn batched_graph_is_thread_count_independent_and_reachable() {
+        let vectors = grid(256, 8);
+        let one = build_reachable_hnsw_adjacency_batched(&vectors, 8, 16, 32, 32, 1).unwrap();
+        let four = build_reachable_hnsw_adjacency_batched(&vectors, 8, 16, 32, 32, 4).unwrap();
+        assert_eq!(one.entry, four.entry);
+        assert_eq!(one.neighbours, four.neighbours);
+        assert_eq!(reachable_base_count(&four.neighbours, four.entry), vectors.len());
+    }
 
     #[test]
     fn constructed_base_graph_keeps_clustered_rows_reachable() {
