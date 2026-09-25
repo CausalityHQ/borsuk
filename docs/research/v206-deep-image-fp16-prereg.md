@@ -17,7 +17,7 @@ Authenticate before use:
 - V119 9,990,000 × 96 source Parquet: 3,566,768,562 bytes, SHA-256
   `8f88122f412554107d97c07f440352f9043b8cb4b58fe08434ac75f4b90776ee`.
 - V120 physical layout: 79,920,128 bytes, SHA-256
-  `419f9280d2e85f6fa275c115dd3428e7d714b7124cfc178ca19a42c249ac31ec6af2d19a42f5b96c38ed247c1`.
+  `419f9280d2e85f6fa275c115dd342c249ac31ec6af2d19a42f5b96c38ed247c1`.
 - V121 closed query JSONL: 2,013,436 bytes, SHA-256
   `331310ae7abc3f0b73ea20010c7ee5a1de5ff04f5ef1d3e45b90dc513a48962d`.
 - V121 closed Rust replay JSONL: 14,740,672 bytes, SHA-256
@@ -50,3 +50,11 @@ Run one Causality Spot cell from a pushed source, with interruption
 discard/restart, 7,200-second wall cap, closed artifact readback and
 immediate instance termination. Monitor only terminal and infrastructure
 while incomplete.
+
+Attempt `a0001` at source `f12d5638` closed in the input phase before
+query or GT processing. Its source Parquet hash passed, but the layout
+hash string in this preregistration and launcher had 89 characters, so
+`sha256sum` rejected the malformed check line. The closed smoke test
+passed; Spot `i-0b4e3cc0b859fdc92` was verified terminated. The corrected
+digest above is the SHA-256 in V120's closed terminal. Attempt `a0002`
+must run from a new immutable source; the scientific method is unchanged.

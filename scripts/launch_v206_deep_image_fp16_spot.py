@@ -37,7 +37,7 @@ INPUTS = (
     ("source.parquet", V119 + "source.parquet", 3_566_768_562,
      "8f88122f412554107d97c07f440352f9043b8cb4b58fe08434ac75f4b90776ee"),
     ("layout.npy", V120 + "built/layout.npy", 79_920_128,
-     "419f9280d2e85f6fa275c115dd3428e7d714b7124cfc178ca19a42c249ac31ec6af2d19a42f5b96c38ed247c1"),
+     "419f9280d2e85f6fa275c115dd342c249ac31ec6af2d19a42f5b96c38ed247c1"),
     ("queries.jsonl", V121 + "queries.jsonl", 2_013_436,
      "331310ae7abc3f0b73ea20010c7ee5a1de5ff04f5ef1d3e45b90dc513a48962d"),
     ("replay.jsonl", V121 + "rust-replay.jsonl", 14_740_672,
@@ -185,7 +185,9 @@ def launch(attempt: str) -> None:
     ])
     if any(item.get("Instances") for item in active["Reservations"]):
         raise ValueError("another BORSUK worker is active")
-    for _, key, size, _ in INPUTS + TRUTH_INPUT:
+    for _, key, size, digest in INPUTS + TRUTH_INPUT:
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise ValueError("V206 frozen input SHA-256 malformed")
         if s3.head_object(Bucket=BUCKET, Key=key)["ContentLength"] != size:
             raise ValueError("V206 frozen input length differs")
     if missing(s3, archive_key):
