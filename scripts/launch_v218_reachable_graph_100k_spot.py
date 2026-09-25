@@ -53,6 +53,8 @@ LATE = tuple(row for row in V158_INPUTS if row[0] == "truth.parquet") + (
 ARTIFACTS = ("graph.bin", "build-summary.json", "raw.jsonl", "serving.json",
              "quality.json", "graph-build-resources.txt", "serving-resources.txt",
              "build.log", "install.log", "run-closed.log")
+BATCH_ARTIFACTS = ARTIFACTS + ("graph-one.bin", "graph-one-summary.json",
+                               "graph-one-resources.txt")
 
 
 def downloads(rows: tuple) -> str:
@@ -65,7 +67,8 @@ def downloads(rows: tuple) -> str:
 
 
 def user_data(commit: str, archive_sha: str, archive_key: str, prefix: str,
-              schema: str, owned_f32: bool = False) -> str:
+              schema: str, owned_f32: bool = False, batched: bool = False,
+              owner_commit: bool = False) -> str:
     template = r'''#!/bin/bash
 set -euo pipefail
 systemd-run --unit=v218-hard-stop --on-active=@@WALL@@s /usr/sbin/shutdown -h now
@@ -131,8 +134,7 @@ cd repo
 @@NARROW_TEST@@
 cd "$root"
 phase=graph
-/usr/bin/time -v -o graph-build-resources.txt "$CARGO_TARGET_DIR/release/v218_build_reachable_graph_100k" \
-  graph-prep.json plane.bin vectors.raw graph.bin build-summary.json
+@@GRAPH_COMMANDS@@
 phase=serve
 /usr/bin/time -v -o serving-resources.txt "$CARGO_TARGET_DIR/release/v218_serve_reachable_graph_100k" \
   prepare.json build-summary.json plane.bin graph.bin new-to-old.u32 books.raw codes.raw \
@@ -151,14 +153,27 @@ phase=truth
 phase=complete
 '''
     replacements = {
-        "WALL": str(WALL_SECONDS), "ARTIFACTS": " ".join(ARTIFACTS),
-        "ARTIFACTS_PY": repr(ARTIFACTS), "BUCKET": BUCKET,
+        "WALL": str(WALL_SECONDS),
+        "ARTIFACTS": " ".join(BATCH_ARTIFACTS if batched else ARTIFACTS),
+        "ARTIFACTS_PY": repr(BATCH_ARTIFACTS if batched else ARTIFACTS), "BUCKET": BUCKET,
         "PREFIX": prefix, "SCHEMA": schema, "COMMIT": commit,
         "ARCHIVE_SHA": archive_sha, "ARCHIVE_KEY": archive_key,
         "DOWNLOADS": downloads(INPUTS), "LATE_DOWNLOADS": downloads(LATE),
         "NARROW_TEST": ('''"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib \
   resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch \
-  -- --exact >>"$root/build.log" 2>&1''' if owned_f32 else ""),
+  -- --exact >>"$root/build.log" 2>&1''' if owned_f32 else "") +
+            ('''\n"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib \
+  centroid_hnsw::tests::batched_graph_is_thread_count_independent_and_reachable \
+  -- --exact >>"$root/build.log" 2>&1''' if batched or owner_commit else ""),
+        "GRAPH_COMMANDS": ('''/usr/bin/time -v -o graph-build-resources.txt "$CARGO_TARGET_DIR/release/v218_build_reachable_graph_100k" \
+  graph-prep.json plane.bin vectors.raw graph.bin build-summary.json --batched-threads 8''' if owner_commit else
+            '''/usr/bin/time -v -o graph-one-resources.txt "$CARGO_TARGET_DIR/release/v218_build_reachable_graph_100k" \
+  graph-prep.json plane.bin vectors.raw graph-one.bin graph-one-summary.json --batched-threads 1
+/usr/bin/time -v -o graph-build-resources.txt "$CARGO_TARGET_DIR/release/v218_build_reachable_graph_100k" \
+  graph-prep.json plane.bin vectors.raw graph.bin build-summary.json --batched-threads 8
+cmp -s graph-one.bin graph.bin''' if batched else
+            '''/usr/bin/time -v -o graph-build-resources.txt "$CARGO_TARGET_DIR/release/v218_build_reachable_graph_100k" \
+  graph-prep.json plane.bin vectors.raw graph.bin build-summary.json'''),
     }
     for name, value in replacements.items():
         template = template.replace("@@" + name + "@@", value)
@@ -167,8 +182,9 @@ phase=complete
     return template
 
 
-def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False) -> None:
-    if owned_f32 and cached_prune:
+def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False,
+           batched: bool = False, owner_commit: bool = False) -> None:
+    if sum((owned_f32, cached_prune, batched, owner_commit)) > 1:
         raise ValueError("select one graph build campaign")
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
@@ -181,10 +197,15 @@ def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False) ->
         raise ValueError("source is not fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    campaign = ("v242-cached-prune-100k" if cached_prune else
+    campaign = ("v244-owner-commit-100k" if owner_commit else
+                "v243-batched-graph-100k" if batched else
+                "v242-cached-prune-100k" if cached_prune else
                 "v241-owned-graph-build-100k" if owned_f32 else "v218-reachable-graph-100k")
-    schema = ("borsuk-v242-cached-prune-100k-spot-v1" if cached_prune else
+    schema = ("borsuk-v244-owner-commit-100k-spot-v1" if owner_commit else
+              "borsuk-v243-batched-graph-100k-spot-v1" if batched else
+              "borsuk-v242-cached-prune-100k-spot-v1" if cached_prune else
               "borsuk-v241-owned-graph-build-100k-spot-v1" if owned_f32 else SCHEMA)
+    artifacts = BATCH_ARTIFACTS if batched else ARTIFACTS
     archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
     prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
@@ -230,7 +251,11 @@ def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False) ->
         "selecting_terminal_sha256": SELECTING_TERMINAL_SHA,
         "construction": {"m": 32, "m0": 64, "ef_construction": 128},
         "arms": [[2048, 2048]],
-        "gate": ("V241 graph sha256 d8b70919243a7cd6ecb9448ce23f776374738476c1882cbc6a651fb34753af2f;build RSS<=600000000B;build<=133s;identical raw IDs"
+        "gate": ("V243 graph SHA 498ab9f5a3da7c672ccf362d4ae5c96a853b7d4f9f2d6fe9d7708f0250045d03;ordered IDs identical;reachable=100000;build<=55s;RSS<=600000000B"
+                 if owner_commit else
+                 "thread1=thread8 graph SHA;reachable=100000;min-indegree>=4;GT100>=99721;held>=74200;p05>=99;p95-visits<=24166;thread8-build<=70s;RSS<=600000000B"
+                 if batched else
+                 "V241 graph sha256 d8b70919243a7cd6ecb9448ce23f776374738476c1882cbc6a651fb34753af2f;build RSS<=600000000B;build<=133s;identical raw IDs"
                  if cached_prune else
                  "V218 graph sha256 d8b70919243a7cd6ecb9448ce23f776374738476c1882cbc6a651fb34753af2f;build RSS<=600000000B;build<=210s;identical raw IDs"
                  if owned_f32 else "reachable=100000;min-indegree>=4;PQ-hits>=99521;each-split-no-loss;p05>=98;loaded-eight-worker-p95<10ms;RSS<268435456B;0 vector GET"),
@@ -238,7 +263,7 @@ def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False) ->
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken=("v242-" if cached_prune else "v241-" if owned_f32 else "v218-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
+        ClientToken=("v244-" if owner_commit else "v243-" if batched else "v242-" if cached_prune else "v241-" if owned_f32 else "v218-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
         NetworkInterfaces=[{"AssociatePublicIpAddress": True, "DeviceIndex": 0,
@@ -250,8 +275,10 @@ def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False) ->
             "DeleteOnTermination": True, "Encrypted": True, "VolumeSize": 30,
             "VolumeType": "gp3"}}],
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
-            {"Key": "Name", "Value": campaign if owned_f32 or cached_prune else TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
-        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix, schema, owned_f32 or cached_prune).encode()).decode(),
+            {"Key": "Name", "Value": "borsuk-" + campaign if batched or owner_commit else campaign if owned_f32 or cached_prune else TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
+        UserData=base64.b64encode(user_data(commit, archive_sha, archive_key, prefix, schema,
+                                           owned_f32 or cached_prune or batched or owner_commit,
+                                           batched, owner_commit).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -272,7 +299,7 @@ def launch(attempt: str, owned_f32: bool = False, cached_prune: bool = False) ->
                 print(json.dumps(terminal, sort_keys=True), flush=True)
                 if terminal.get("status") != "complete":
                     raise RuntimeError("V218 failed; inspect only closed terminal artifacts")
-                if set(terminal.get("artifacts", {})) != set(ARTIFACTS):
+                if set(terminal.get("artifacts", {})) != set(artifacts):
                     raise ValueError("V218 artifact roster differs")
                 for name, identity in terminal["artifacts"].items():
                     body = s3.get_object(Bucket=BUCKET,
@@ -309,7 +336,10 @@ if __name__ == "__main__":
     parser.add_argument("--attempt", default="a0001")
     parser.add_argument("--owned-f32", action="store_true")
     parser.add_argument("--cached-prune", action="store_true")
+    parser.add_argument("--batched", action="store_true")
+    parser.add_argument("--owner-commit", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-v218-reachable-graph-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        launch(args.attempt, args.owned_f32, args.cached_prune)
+        launch(args.attempt, args.owned_f32, args.cached_prune, args.batched,
+               args.owner_commit)
