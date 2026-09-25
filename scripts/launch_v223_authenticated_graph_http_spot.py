@@ -41,7 +41,8 @@ WALL_SECONDS = 7200
 
 
 def bootstrap(role: str, commit: str, archive_sha: str, archive_key: str,
-              prefix: str, server_ip: str = "", server_id: str = "") -> str:
+              prefix: str, server_ip: str = "", server_id: str = "",
+              mutation_stride: int = 0) -> str:
     if role not in ARTIFACTS:
         raise ValueError("unknown V223 role")
     script = f"""#!/bin/bash
@@ -60,6 +61,7 @@ export BORSUK_V223_ARCHIVE_SHA='{archive_sha}'
 export BORSUK_V223_ROOT_SHA='{ROOT_SHA}'
 export BORSUK_V223_SERVER_IP='{server_ip}'
 export BORSUK_V223_SERVER_ID='{server_id}'
+export BORSUK_V223_MUTATION_STRIDE='{mutation_stride if mutation_stride else ""}'
 exec bash repo/scripts/run_v223_authenticated_graph_http.sh
 """
     if len(script.encode()) > 16_384:
@@ -103,17 +105,21 @@ def read_marker(s3, ec2, key: str, instance_id: str, seconds: int) -> bytes:
 
 
 def terminal(s3, role: str, prefix: str, raw: bytes, instance_id: str,
-             commit: str, archive_sha: str) -> dict:
+             commit: str, archive_sha: str, mutation_stride: int = 0) -> dict:
     value = json.loads(raw)
+    artifacts = set(ARTIFACTS[role])
+    if role == "server" and mutation_stride:
+        artifacts.add("health.json")
     if (value.get("schema") != TERMINAL_SCHEMA or value.get("role") != role
             or value.get("status") not in {"complete", "failed", "interrupted"}
             or value.get("instance_id") != instance_id
             or value.get("source_commit") != commit
             or value.get("source_archive_sha256") != archive_sha
             or value.get("generation_root_sha256") != ROOT_SHA
-            or not set(value.get("artifacts", {})).issubset(ARTIFACTS[role])
+            or value.get("mutation_stride", 0) != mutation_stride
+            or not set(value.get("artifacts", {})).issubset(artifacts)
             or (value["status"] == "complete" and (
-                value.get("exit_code") != 0 or set(value["artifacts"]) != ARTIFACTS[role]))):
+                value.get("exit_code") != 0 or set(value["artifacts"]) != artifacts))):
         raise ValueError(f"V223 {role} terminal differs: {value}")
     for name, identity in value["artifacts"].items():
         data = s3.get_object(Bucket=BUCKET,

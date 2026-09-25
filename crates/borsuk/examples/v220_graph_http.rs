@@ -18,7 +18,9 @@ use axum::{
     routing::{get, post},
 };
 use borsuk::{
-    resident_graph_generation::ResidentGraphGeneration, resident_vector_graph::GraphSearchWorkspace,
+    resident_graph_generation::ResidentGraphGeneration,
+    resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation},
+    resident_vector_graph::GraphSearchWorkspace,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -33,6 +35,8 @@ struct Work {
 struct AppState {
     sender: SyncSender<Work>,
     dimensions: usize,
+    delta_rows: usize,
+    overlay_bytes: usize,
 }
 
 #[derive(Deserialize)]
@@ -49,18 +53,29 @@ struct SearchResponse {
     vector_body_gets: u8,
 }
 
-fn workers(loaded: Arc<ResidentGraphGeneration>) -> Result<Arc<AppState>, Box<dyn Error>> {
+fn workers(
+    loaded: Arc<ResidentGraphGeneration>,
+    overlay: Option<Arc<ResidentGraphOverlay>>,
+) -> Result<Arc<AppState>, Box<dyn Error>> {
+    let delta_rows = overlay.as_ref().map_or(0, |_| loaded.rows() / 100);
+    let overlay_bytes = overlay.as_ref().map_or(0, |value| value.resident_bytes());
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
     let (sender, receiver) = mpsc::sync_channel::<Work>(WORKERS);
     let receiver = Arc::new(Mutex::new(receiver));
     for _ in 0..WORKERS {
         let receiver = Arc::clone(&receiver);
         let loaded = Arc::clone(&loaded);
+        let overlay = overlay.clone();
         let ready = ready_tx.clone();
         std::thread::spawn(move || {
             let run = || -> Result<(), String> {
                 let cosine = loaded.cosine_view().map_err(|error| error.to_string())?;
                 let bound = loaded.bind(&cosine).map_err(|error| error.to_string())?;
+                let delta = overlay
+                    .as_ref()
+                    .map(|value| value.bind(&cosine))
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
                 let mut workspace =
                     GraphSearchWorkspace::new(loaded.rows()).map_err(|error| error.to_string())?;
                 ready.send(Ok(())).map_err(|error| error.to_string())?;
@@ -69,9 +84,16 @@ fn workers(loaded: Arc<ResidentGraphGeneration>) -> Result<Arc<AppState>, Box<dy
                         Ok(work) => work,
                         Err(_) => break,
                     };
-                    let result = bound
-                        .search(&work.query, 100, 4096, 4096, &mut workspace)
-                        .map_err(|error| error.to_string());
+                    let result = if let Some(delta) = &delta {
+                        delta
+                            .search(&work.query, 100, 4096, 4096, &mut workspace)
+                            .map(|(ids, stats)| (ids, stats.base_visits))
+                            .map_err(|error| error.to_string())
+                    } else {
+                        bound
+                            .search(&work.query, 100, 4096, 4096, &mut workspace)
+                            .map_err(|error| error.to_string())
+                    };
                     let _ = work.reply.send(result);
                 }
                 Ok(())
@@ -88,6 +110,8 @@ fn workers(loaded: Arc<ResidentGraphGeneration>) -> Result<Arc<AppState>, Box<dy
     Ok(Arc::new(AppState {
         sender,
         dimensions: loaded.dimensions(),
+        delta_rows,
+        overlay_bytes,
     }))
 }
 
@@ -95,7 +119,12 @@ fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route(
             "/health",
-            get(|| async { Json(serde_json::json!({"status":"ok"})) }),
+            get(|State(state): State<Arc<AppState>>| async move {
+                Json(
+                    serde_json::json!({"status":"ok","delta_rows":state.delta_rows,
+                    "overlay_resident_bytes":state.overlay_bytes}),
+                )
+            }),
         )
         .route("/search", post(search))
         .with_state(state)
@@ -136,9 +165,9 @@ async fn search(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 6 {
+    if args.len() != 6 && args.len() != 7 {
         return Err(
-            "usage: v220_graph_http ROOT_JSON TRUSTED_SHA DIRECTORY MAX_RESIDENT_BYTES LISTEN"
+            "usage: v220_graph_http ROOT_JSON TRUSTED_SHA DIRECTORY MAX_RESIDENT_BYTES LISTEN [SAME_VECTOR_UPSERT_STRIDE]"
                 .into(),
         );
     }
@@ -150,7 +179,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args[4].parse()?,
         WORKERS,
     )?;
-    let state = workers(Arc::new(loaded))?;
+    let loaded = Arc::new(loaded);
+    let overlay = if let Some(stride) = args.get(6) {
+        let stride: usize = stride.parse()?;
+        if stride != 100 || loaded.rows() != 1_000_000 || loaded.dimensions() != 768 {
+            return Err("unsupported frozen mutation geometry".into());
+        }
+        let mutations = (0..loaded.rows())
+            .step_by(stride)
+            .map(|ordinal| {
+                Ok(ResidentMutation {
+                    id: loaded.source_id(ordinal)?,
+                    vector: Some(loaded.vector_f32(ordinal)?),
+                })
+            })
+            .collect::<Result<Vec<_>, borsuk::resident_graph_generation::ResidentGraphGenerationError>>()?;
+        Some(Arc::new(ResidentGraphOverlay::new(
+            Arc::clone(&loaded),
+            mutations,
+            32 * 1024 * 1024,
+        )?))
+    } else {
+        None
+    };
+    let state = workers(loaded, overlay)?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     axum::serve(listener, router(state)).await?;
     Ok(())
@@ -176,6 +228,8 @@ mod tests {
         let state = Arc::new(AppState {
             sender,
             dimensions: 768,
+            delta_rows: 0,
+            overlay_bytes: 0,
         });
         let app = router(state);
         let request = Request::builder()

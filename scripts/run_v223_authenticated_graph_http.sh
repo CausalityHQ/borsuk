@@ -12,6 +12,7 @@ server_pid=
 watcher_pid=
 if [ "$role" = server ]; then
   artifacts=(ready.json server-resources.json build.log install.log run-closed.log)
+  if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then artifacts+=(health.json); fi
 elif [ "$role" = client ]; then
   artifacts=(first.raw.jsonl first.summary.json first.quality.json first.time
              repeat.raw.jsonl repeat.summary.json repeat.quality.json repeat.time
@@ -47,6 +48,8 @@ names=({'server':['ready.json','server-resources.json','build.log','install.log'
         'client':['first.raw.jsonl','first.summary.json','first.quality.json','first.time',
                   'repeat.raw.jsonl','repeat.summary.json','repeat.quality.json',
                   'repeat.time','install.log','run-closed.log']}[role])
+if role=='server' and os.environ.get('BORSUK_V223_MUTATION_STRIDE'):
+    names.append('health.json')
 artifacts={}
 for name in names:
     path=Path(name)
@@ -59,6 +62,7 @@ print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-terminal-v1',
     'role':role,'source_commit':os.environ['BORSUK_V223_SOURCE_COMMIT'],
     'source_archive_sha256':os.environ['BORSUK_V223_ARCHIVE_SHA'],
     'generation_root_sha256':os.environ['BORSUK_V223_ROOT_SHA'],
+    'mutation_stride':int(os.environ.get('BORSUK_V223_MUTATION_STRIDE') or 0),
     'instance_id':identity['instanceId'],'instance_type':identity['instanceType'],
     'region':identity['region'],'availability_zone':identity['availabilityZone'],
     'server_instance_id':os.environ.get('BORSUK_V223_SERVER_ID',''),
@@ -137,15 +141,23 @@ if [ "$role" = server ]; then
     --example v220_graph_http --jobs 6 >"$root/build.log" 2>&1
   cd "$root"
   phase=serve
-  "$CARGO_TARGET_DIR/release/examples/v220_graph_http" \
-    generation.json "$BORSUK_V223_ROOT_SHA" . 3221225472 0.0.0.0:8080 &
+  server_args=(generation.json "$BORSUK_V223_ROOT_SHA" . 3221225472 0.0.0.0:8080)
+  if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then server_args+=("$BORSUK_V223_MUTATION_STRIDE"); fi
+  "$CARGO_TARGET_DIR/release/examples/v220_graph_http" "${server_args[@]}" &
   server_pid=$!
   for attempt in $(seq 1 120); do
     if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
     kill -0 "$server_pid"
     sleep 1
   done
-  curl -fsS http://127.0.0.1:8080/health
+  curl -fsS http://127.0.0.1:8080/health >health.json
+  if [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ]; then
+    python3 - <<'PY'
+import json
+v=json.load(open('health.json'))
+assert v['status']=='ok' and v['delta_rows']==10000 and v['overlay_resident_bytes']<=32*1024*1024
+PY
+  fi
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
     http://169.254.169.254/latest/api/token)
   private_ip=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" \
@@ -157,6 +169,7 @@ import json,os
 print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-ready-v1',
     'instance_id':os.environ['INSTANCE_ID'],'private_ip':os.environ['PRIVATE_IP'],
     'generation_root_sha256':os.environ['BORSUK_V223_ROOT_SHA'],
+    'mutation_stride':int(os.environ.get('BORSUK_V223_MUTATION_STRIDE') or 0),
     'source_commit':os.environ['BORSUK_V223_SOURCE_COMMIT']},sort_keys=True))
 PY
   aws s3api put-object --bucket "$bucket" --key "$prefix/server/ready.json" \
@@ -223,7 +236,9 @@ else
     research/v198-real-query-resident-fp16/fdc51a358be350678d9f6f279a2be95a57709c02/runs/a0001/artifacts/out/raw.jsonl \
     3230820 2b18321435642de3fad4df02b84abcc046fb6c9b17808e72d6a50eea54a9ec98
   for pass in first repeat; do
-    python3.12 -m scripts.v222_score_external_graph_http --raw "$pass.raw.jsonl" \
+    scorer=scripts.v222_score_external_graph_http
+    [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ] && scorer=scripts.v230_score_mutation_graph_http
+    python3.12 -m "$scorer" --raw "$pass.raw.jsonl" \
       --summary "$pass.summary.json" --previous v219-raw.jsonl \
       --truth v198-raw.jsonl --output "$pass.quality.json"
   done
