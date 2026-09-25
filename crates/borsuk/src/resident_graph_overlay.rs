@@ -14,6 +14,7 @@ use crate::{
 
 /// A latest-state mutation. The CAS publisher resolves repeated IDs before
 /// constructing this snapshot; `None` is a delete, `Some` is an upsert.
+#[derive(Clone)]
 pub struct ResidentMutation {
     pub id: u64,
     pub vector: Option<Vec<f32>>,

@@ -1,6 +1,7 @@
 //! One conditional collection head pins a graph root and its mutation snapshot.
 
 use std::{
+    collections::BTreeMap,
     path::Path,
     sync::{Arc, RwLock},
 };
@@ -246,6 +247,65 @@ pub async fn publish_graph_collection(
     })
 }
 
+/// Apply one ordered batch against the latest collection revision. A CAS
+/// conflict reloads the winner and reapplies the batch, so distinct writers
+/// cannot silently lose each other's updates. Within a batch, the last
+/// operation for an ID wins.
+pub async fn apply_graph_mutations(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    updates: &[ResidentMutation],
+    max_snapshot_bytes: usize,
+    max_attempts: usize,
+) -> Result<ResidentGraphCollectionHead, ResidentGraphCollectionError> {
+    if updates.is_empty() || max_attempts == 0 {
+        return Err(ResidentGraphCollectionError::Invalid(
+            "mutation batch geometry",
+        ));
+    }
+    for _ in 0..max_attempts {
+        let head = read_graph_collection_head(store, prefix, max_snapshot_bytes)
+            .await?
+            .ok_or(ResidentGraphCollectionError::Invalid(
+                "collection not initialized",
+            ))?;
+        let root = parse_authenticated_root(&head.base_root_bytes, &head.base_root_sha256)
+            .map_err(ResidentGraphStoreError::from)?;
+        let old = decode_mutation_snapshot(
+            &head.mutation_bytes,
+            &head.mutation_sha256,
+            &head.base_root_sha256,
+            root.dimensions,
+            max_snapshot_bytes,
+        )?;
+        let mut latest = old
+            .into_iter()
+            .map(|row| (row.id, row))
+            .collect::<BTreeMap<_, _>>();
+        for update in updates {
+            latest.insert(update.id, update.clone());
+        }
+        let rows = latest.into_values().collect::<Vec<_>>();
+        match publish_graph_collection(
+            store,
+            prefix,
+            &head.base_root_sha256,
+            &rows,
+            max_snapshot_bytes,
+            Some(&head),
+        )
+        .await
+        {
+            Ok(next) => return Ok(next),
+            Err(ResidentGraphCollectionError::Store(object_store::Error::Precondition {
+                ..
+            })) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ResidentGraphCollectionError::Invalid("CAS retry limit"))
+}
+
 /// Hydrate an already pinned revision. The graph and mutation snapshot
 /// remain aligned even if another writer advances the collection head.
 pub async fn hydrate_graph_collection(
@@ -353,6 +413,36 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(current.mutation_sha256, next.mutation_sha256);
+        let third_batch = [ResidentMutation {
+            id: 5,
+            vector: Some(vec![0.0, 1.0]),
+        }];
+        let fourth_batch = [ResidentMutation {
+            id: 7,
+            vector: None,
+        }];
+        let (third, fourth) = tokio::join!(
+            apply_graph_mutations(&store, &prefix, &third_batch, 1024, 4),
+            apply_graph_mutations(&store, &prefix, &fourth_batch, 1024, 4),
+        );
+        assert!(third.is_ok() && fourth.is_ok());
+        let current = read_graph_collection_head(&store, &prefix, 1024)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.revision, 4);
+        let live = decode_mutation_snapshot(
+            &current.mutation_bytes,
+            &current.mutation_sha256,
+            &current.base_root_sha256,
+            2,
+            1024,
+        )
+        .unwrap();
+        assert_eq!(
+            live.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![5, 7, 9]
+        );
         let old = decode_mutation_snapshot(
             &held.mutation_bytes,
             &held.mutation_sha256,
