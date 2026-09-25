@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{self, Read},
     path::Path,
+    sync::{Arc, RwLock},
 };
 
 use serde::Deserialize;
@@ -59,6 +60,43 @@ pub struct ResidentGraphGeneration {
     graph: ResidentVectorGraph,
     pq: Pq64Router,
     old_for_new: Vec<usize>,
+}
+
+/// Readers retain their authenticated generation while a replacement becomes
+/// current. Callers must budget RAM for all generations still pinned by readers.
+pub struct ResidentGraphSlot {
+    current: RwLock<Arc<ResidentGraphGeneration>>,
+}
+
+impl ResidentGraphSlot {
+    pub fn new(initial: Arc<ResidentGraphGeneration>) -> Self {
+        Self {
+            current: RwLock::new(initial),
+        }
+    }
+
+    pub fn pin(&self) -> Arc<ResidentGraphGeneration> {
+        self.current
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    /// Swap only after publication and hydration of the new head succeed.
+    /// The returned old generation can be used to delay cache reclamation.
+    pub fn replace(
+        &self,
+        next: Arc<ResidentGraphGeneration>,
+    ) -> Result<Arc<ResidentGraphGeneration>, ResidentGraphGenerationError> {
+        let mut current = self
+            .current
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        if next.generation() <= current.generation() {
+            return Err(ResidentGraphGenerationError::Invalid("generation order"));
+        }
+        Ok(std::mem::replace(&mut *current, next))
+    }
 }
 
 pub(crate) fn valid_sha256(value: &str) -> bool {
@@ -422,7 +460,7 @@ mod tests {
         let store = InMemory::new();
         let prefix = ObjectPath::from("graph");
         let cache = tempfile::tempdir().unwrap();
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let original_head = tokio::runtime::Runtime::new().unwrap().block_on(async {
             publish_graph_generation(&store, &prefix, root.as_bytes(), dir.path(), None)
                 .await
                 .unwrap();
@@ -444,7 +482,102 @@ mod tests {
                     .await
                     .unwrap();
             assert_eq!(warm.object_gets, 0);
+            head
         });
+        drop(bound);
+        drop(view);
+        let pinned = Arc::new(loaded);
+        let slot = ResidentGraphSlot::new(Arc::clone(&pinned));
+        let next_dir = tempfile::tempdir().unwrap();
+        let next_source = "22".repeat(32);
+        let next_vectors = vec![
+            vec![0.0, 1.0],
+            vec![0.9, 0.1],
+            vec![0.0, 1.0],
+            vec![-1.0, 0.0],
+        ];
+        let next_plane_path = next_dir.path().join("plane.bin");
+        let next_plane_sha = write_resident_fp16_tier(
+            &next_plane_path,
+            4,
+            2,
+            8,
+            &next_source,
+            [99, 7, 19, 33]
+                .into_iter()
+                .zip(next_vectors.iter().cloned()),
+        )
+        .unwrap();
+        let next_plane = ResidentFp16Tier::open_authenticated(
+            &next_plane_path,
+            &next_plane_sha,
+            &next_source,
+            4,
+            2,
+            8,
+            48,
+        )
+        .unwrap();
+        ResidentVectorGraph::build(&next_vectors, &next_plane, 4, 4, 8)
+            .unwrap()
+            .write_authenticated(&next_dir.path().join("graph.bin"))
+            .unwrap();
+        for name in ["map.u32", "books.bin", "codes.bin"] {
+            fs::copy(dir.path().join(name), next_dir.path().join(name)).unwrap();
+        }
+        let next_artifact = |name: &str| {
+            let file = next_dir.path().join(name);
+            serde_json::json!({"bytes":fs::metadata(&file).unwrap().len(),
+                "sha256":digest_file(&file).unwrap()})
+        };
+        let next_root = serde_json::json!({
+            "schema":SCHEMA,"generation":8,"source_sha256":next_source,
+            "rows":4,"dimensions":2,"plane":next_artifact("plane.bin"),
+            "graph":next_artifact("graph.bin"),"map":next_artifact("map.u32"),
+            "books":next_artifact("books.bin"),"codes":next_artifact("codes.bin")
+        })
+        .to_string();
+        let next = Arc::new(tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let published = publish_graph_generation(
+                &store,
+                &prefix,
+                next_root.as_bytes(),
+                next_dir.path(),
+                Some(&original_head),
+            )
+            .await
+            .unwrap();
+            let readback = read_graph_head(&store, &prefix).await.unwrap().unwrap();
+            assert_eq!(published.root_sha256, readback.root_sha256);
+            hydrate_graph_generation(&store, &prefix, &readback, cache.path(), 100_000, 1)
+                .await
+                .unwrap()
+                .0
+        }));
+        let held_reader = slot.pin();
+        let retiring = slot.replace(Arc::clone(&next)).unwrap();
+        assert!(slot.replace(Arc::clone(&retiring)).is_err());
+        assert_eq!(slot.pin().generation(), 8);
+        assert_eq!(held_reader.generation(), 7);
+        assert!(Arc::ptr_eq(&held_reader, &retiring));
+        let old_view = held_reader.cosine_view().unwrap();
+        let old_graph = held_reader.bind(&old_view).unwrap();
+        let new_view = next.cosine_view().unwrap();
+        let new_graph = next.bind(&new_view).unwrap();
+        let mut old_workspace = GraphSearchWorkspace::new(4).unwrap();
+        let mut new_workspace = GraphSearchWorkspace::new(4).unwrap();
+        assert!(
+            old_graph
+                .search(&[1.0, 0.0], 4, 4, 4, &mut old_workspace)
+                .unwrap()
+                .0
+                .contains(&42)
+        );
+        let new_ids = new_graph
+            .search(&[1.0, 0.0], 4, 4, 4, &mut new_workspace)
+            .unwrap()
+            .0;
+        assert!(new_ids.contains(&99) && !new_ids.contains(&42));
         assert!(
             ResidentGraphGeneration::open_local_authenticated(
                 root.as_bytes(),
