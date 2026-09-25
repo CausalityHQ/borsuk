@@ -61,6 +61,40 @@ cause of this panel's severe tail. This is a post hoc layer diagnosis,
 not a prospective quality result or evidence that a different planner
 will recover the misses within the same cap.
 
+The same checker computes a **GT-aware, non-deployable exact oracle** for
+each tail query: among all unions of at most 32 page-aligned intervals
+under 16,777,216 bytes, it maximizes the number of GT100 IDs covered.
+The dynamic program minimizes pages needed for each hit count and GET
+count; interval endpoints can be trimmed to GT-bearing pages without
+losing hits or increasing cost. None of these 12 queries has a GT hit
+on the short final page, so full-page accounting is exact here.
+`scripts/test_v206_deep_image_tail.py` checked the DP against exhaustive
+physical-page subsets in 50 small random layouts.
+
+| Test ordinal | V206 FP16 hits | Oracle maximum hits at 32 GET / 16 MiB | Minimum bytes for 90 hits at 32 GET |
+| ---: | ---: | ---: | ---: |
+| 63 | 89 | 91 | 13,492,224 |
+| 212 | 86 | 86 | 24,662,016 |
+| 327 | 84 | 84 | 36,135,936 |
+| 552 | 84 | 84 | 36,412,416 |
+| 591 | 88 | 88 | 20,321,280 |
+| 681 | 88 | 89 | 18,220,032 |
+| 684 | 89 | 91 | 14,155,776 |
+| 772 | 78 | 78 | 51,674,112 |
+| 895 | 89 | 91 | 11,335,680 |
+| 925 | 87 | 87 | 22,422,528 |
+| 928 | 84 | 85 | 31,297,536 |
+| 999 | 75 | 76 | 82,750,464 |
+
+**Nine of 12 cannot reach 90 hits with any planner under this layout and
+I/O cap.** Three have theoretical room to clear 90, but the GT-aware
+oracle is an upper bound, not a serving algorithm. The severe tail
+therefore calls first for a generic physical-layout or resource-policy
+change. The I/O cap should be a measured recall/latency/cost choice,
+not an arbitrary vector-count knee. Any candidate must be frozen before
+untouched queries and measured for real GET, byte, latency and memory
+costs; these oracle byte minima are not observed serving costs.
+
 The preregistered representation screen **passes**. The offline FP16 and
 float32 return phase took 3:03.45 wall/442.05 user CPU seconds and peaked
 at 9,000,868 KiB process RSS; GT reduction took 0.26 seconds and
@@ -73,10 +107,12 @@ build measurement.
 This is a strong cross-dimensional **representation** result on a used
 real-query split. V120's Deep-Image layout/router builder and V197's
 ReLAION layout/planner are different, so these results do not establish
-one frozen corpus-generic end-to-end method. The 12 severe-tail queries
-still require a generic routing/physical-allocation diagnosis; do not
-insert dataset-name branches or query exceptions. Freeze the source-only
-D96 method plus FP16, then run untouched Deep-Image real-query ordinals
-with the same cap and a paired SQ8 control. Build the same source-only
-method on ReLAION for a matched cross-corpus comparison before defaults,
-live S3, 10M scale claims for one architecture, or a 100M RAM policy.
+one frozen corpus-generic end-to-end method. The severe-tail diagnosis
+now points to layout/cap feasibility, with limited planner headroom on
+three queries. Do not insert dataset-name branches or query exceptions.
+Define a corpus-only physical-layout or resource-policy candidate on
+development evidence, then freeze it and run untouched Deep-Image
+real-query ordinals with a paired FP16/SQ8 control. Build the same
+source-only method on ReLAION for a matched cross-corpus comparison
+before defaults, live S3, 10M scale claims for one architecture, or a
+100M RAM policy.

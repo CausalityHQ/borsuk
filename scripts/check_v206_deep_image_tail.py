@@ -19,6 +19,9 @@ SHA = {
     "truth": "d305fcea7387988941defd2942cca1673693271329f977ba073da888cac3de8d",
 }
 ROWS, ROW_BYTES, QUERY_COUNT = 9_990_000, 108, 1_000
+PAGE_ROWS, GET_CAP = 256, 32
+PAGE_BYTES = PAGE_ROWS * ROW_BYTES
+BYTE_CAP = 16_777_216
 
 
 def authenticate(path: Path, expected: str) -> None:
@@ -28,6 +31,48 @@ def authenticate(path: Path, expected: str) -> None:
             digest.update(block)
     if digest.hexdigest() != expected:
         raise ValueError(f"closed artifact identity differs: {path}")
+
+
+def min_pages_by_hits(pages: np.ndarray, weights: np.ndarray,
+                      get_cap: int) -> np.ndarray:
+    """Exact GT-aware minimum full pages by hits with at most get_cap GETs."""
+    hits = int(weights.sum())
+    infinity = ROWS + 1
+    initial = np.full((get_cap + 1, hits + 1), infinity, np.int32)
+    initial[0, 0] = 0
+    prefix = [initial]
+    for end in range(len(pages)):
+        next_state = prefix[-1].copy()  # skip the final GT-bearing page
+        gained = 0
+        for start in range(end, -1, -1):
+            gained += int(weights[start])
+            cost = int(pages[end] - pages[start] + 1)
+            source = prefix[start][:get_cap]
+            remaining = hits - gained + 1
+            np.minimum(next_state[1:, gained:],
+                       source[:, :remaining] + cost,
+                       out=next_state[1:, gained:])
+            if remaining < hits + 1:
+                saturated = source[:, remaining:].min(axis=1) + cost
+                np.minimum(next_state[1:, hits], saturated,
+                           out=next_state[1:, hits])
+        prefix.append(next_state)
+    return prefix[-1].min(axis=0)
+
+
+def oracle_page_bounds(positions: np.ndarray) -> tuple[int, int]:
+    """Exact GT-aware maximum coverage and byte minimum for 90 hits.
+
+    Endpoints at GT-bearing pages suffice: trimming an interval to those
+    endpoints preserves covered GT and never increases either resource.
+    """
+    pages, weights = np.unique(positions // PAGE_ROWS, return_counts=True)
+    if pages[-1] == (ROWS - 1) // PAGE_ROWS:
+        raise ValueError("oracle needs exact short-last-page accounting")
+    costs = min_pages_by_hits(pages, weights, GET_CAP)
+    max_hits = int(np.flatnonzero(costs * PAGE_BYTES <= BYTE_CAP)[-1])
+    pages_for_90 = int(costs[90])
+    return max_hits, pages_for_90
 
 
 def trace(paths: dict[str, Path]) -> dict:
@@ -86,9 +131,12 @@ def trace(paths: dict[str, Path]) -> dict:
             for name, count in counts.items():
                 totals[name] += count
             if counts["fp16_returned"] < 90:
+                oracle_hits, oracle_pages_for_90 = oracle_page_bounds(positions)
                 tail.append({"ordinal": ordinal, **counts,
                              "gets": len(replay["ranges"]),
-                             "planned_bytes": replay["plan_bytes"]})
+                             "planned_bytes": replay["plan_bytes"],
+                             "oracle_max_hits": oracle_hits,
+                             "oracle_min_bytes_for_90": oracle_pages_for_90 * PAGE_BYTES})
     if ordinal != QUERY_COUNT - 1 or len(tail) != 12:
         raise ValueError("closed query cohort or tail differs")
     return {"schema": "borsuk-v206-tail-trace-v1", "queries": QUERY_COUNT,
