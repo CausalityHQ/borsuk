@@ -19,6 +19,16 @@ or fixed 100M branch. It proves neither the correctness of the fitted
 utility nor a low serving CPU cost. Its state/trace work grows as
 `O(scored sites × GET cap × unit cap)`, so production needs a bounded
 Rust refinement or a certified fast path with an exact fallback.
+The reference now requires a caller-supplied trace-byte budget before
+allocating its two Boolean trace arrays per site, clamps the unit cap
+to the object page count, and rejects a mandatory cover whose cheapest
+required bridges already exceed the hard caps. The byte budget covers
+trace array data only; NumPy state arrays, Python objects and allocator
+headroom still require measurement. This explicit budget can grow with
+the requested recall and corpus geometry rather than a vector-count
+switch.
+The earlier postterminal numbers above came from the archived
+pre-budget source; current calls must supply `max_trace_bytes`.
 
 Narrow exhaustive tests compare 90 random physical layouts against all
 small page subsets and cover mandatory and infeasible cases. Under a

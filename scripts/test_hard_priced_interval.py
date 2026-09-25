@@ -30,7 +30,8 @@ class HardPricedIntervalTests(unittest.TestCase):
     def test_hard_unit_cap_changes_unconstrained_optimum(self):
         plan = hard_priced_cover({0: 10, 2: 8}, (0,), page_count=3,
                                  max_gets=2, max_units=1,
-                                 unit_price=0, get_price=0)
+                                 unit_price=0, get_price=0,
+                                 max_trace_bytes=1_000_000)
         self.assertEqual(plan.intervals, ((0, 0),))
         self.assertEqual((plan.mass, plan.units, plan.gets), (10, 1, 1))
 
@@ -38,7 +39,8 @@ class HardPricedIntervalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "infeasible"):
             hard_priced_cover({0: 1, 2: 1}, (0, 2), page_count=3,
                               max_gets=1, max_units=2,
-                              unit_price=1, get_price=1)
+                              unit_price=1, get_price=1,
+                              max_trace_bytes=1)
 
     def test_optimum_matches_exhaustive_small_covers(self):
         rng = random.Random(190)
@@ -56,16 +58,32 @@ class HardPricedIntervalTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     hard_priced_cover(weights, mandatory, page_count=count,
                                       max_gets=gets, max_units=units,
-                                      unit_price=up, get_price=gp)
+                                      unit_price=up, get_price=gp,
+                                      max_trace_bytes=1_000_000)
                 continue
             plan = hard_priced_cover(weights, mandatory, page_count=count,
                                      max_gets=gets, max_units=units,
-                                     unit_price=up, get_price=gp)
+                                     unit_price=up, get_price=gp,
+                                     max_trace_bytes=1_000_000)
             self.assertEqual((plan.objective, -plan.units, -plan.gets,
                               plan.mass), expected)
             self.assertTrue(set(mandatory) <= {unit
                             for a, b in plan.intervals
                             for unit in range(a, b+1)})
+
+    def test_trace_budget_rejects_before_allocation(self):
+        with self.assertRaisesRegex(ValueError, "trace budget"):
+            hard_priced_cover({0: 1, 2: 1}, (0,), page_count=3,
+                              max_gets=2, max_units=3,
+                              unit_price=0, get_price=0,
+                              max_trace_bytes=1)
+
+    def test_unit_cap_larger_than_object_is_clamped(self):
+        plan = hard_priced_cover({0: 1, 2: 1}, (0,), page_count=3,
+                                 max_gets=2, max_units=1_000_000,
+                                 unit_price=0, get_price=0,
+                                 max_trace_bytes=1_000_000)
+        self.assertEqual(plan.units, 2)
 
 
 if __name__ == "__main__":

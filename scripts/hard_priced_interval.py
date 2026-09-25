@@ -27,15 +27,20 @@ class HardPricedCover:
 def hard_priced_cover(
     weight_by_unit: Mapping[int, int], mandatory_units: Sequence[int], *,
     page_count: int, max_gets: int, max_units: int,
-    unit_price: int, get_price: int,
+    unit_price: int, get_price: int, max_trace_bytes: int,
 ) -> HardPricedCover:
-    """Maximize modeled mass minus prices among physically feasible plans."""
+    """Maximize modeled mass minus prices among physically feasible plans.
+
+    `max_trace_bytes` caps the two retained Boolean trace arrays per site.
+    Other NumPy arrays and Python objects still need separate RAM headroom.
+    """
     mandatory = tuple(mandatory_units)
     if (type(page_count) is not int or page_count <= 0
             or type(max_gets) is not int or max_gets <= 0
             or type(max_units) is not int or max_units <= 0
             or type(unit_price) is not int or unit_price < 0
             or type(get_price) is not int or get_price < 0
+            or type(max_trace_bytes) is not int or max_trace_bytes <= 0
             or len(set(mandatory)) != len(mandatory)
             or any(type(unit) is not int or not 0 <= unit < page_count
                    for unit in mandatory)
@@ -47,8 +52,20 @@ def hard_priced_cover(
     sites = sorted(set(mandatory) | set(weight_by_unit))
     if not sites:
         return HardPricedCover((), 0, 0, 0, 0)
-    gets_cap = min(max_gets, len(sites))
+    max_units = min(max_units, page_count)
+    if mandatory:
+        required_sorted = sorted(mandatory)
+        gaps = sorted(right - left - 1 for left, right in
+                      zip(required_sorted, required_sorted[1:])
+                      if right > left + 1)
+        bridges = max(0, len(gaps) + 1 - max_gets)
+        if len(mandatory) + sum(gaps[:bridges]) > max_units:
+            raise ValueError("mandatory cover infeasible within hard caps")
+    gets_cap = min(max_gets, len(sites), max_units)
     shape = (gets_cap + 1, max_units + 1)
+    trace_bytes = 2 * len(sites) * shape[0] * shape[1]
+    if trace_bytes > max_trace_bytes:
+        raise ValueError("hard priced interval trace budget exceeded")
     negative = -(2**40)
     closed = np.full(shape, negative, dtype=np.int64)
     opened = np.full(shape, negative, dtype=np.int64)
