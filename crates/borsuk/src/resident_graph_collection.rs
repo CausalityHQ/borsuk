@@ -53,6 +53,7 @@ struct HeadBody {
 
 /// Pinned, authenticated collection revision. Readers retain this value
 /// while later CAS updates replace the current head.
+#[derive(Debug)]
 pub struct ResidentGraphCollectionHead {
     pub revision: u64,
     pub base_root_sha256: String,
