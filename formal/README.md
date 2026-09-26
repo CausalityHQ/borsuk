@@ -94,6 +94,11 @@ ReLAION-1M validation-1000 nominee sets cannot reach 99,000 GT100 hits if
 their independently authenticated capture is 96,849. The proof uses that
 capture count as an external premise and does not apply to V116's expanded
 remote candidate set, a changed router or unseen queries.
+The same conditional ceiling applied to the closed V257 CoHere-1M panel
+shows that any reranker confined to its unchanged graph-plus-coarse
+candidate union (99,411 authenticated GT100 IDs) cannot meet the
+99,500-hit gate. This does not bound V258, which changes graph navigation,
+or any new candidate-generation method.
 The same file checks exact payload and digest-table arithmetic for a
 block-verified float32 source tier with an 8-byte source ID per row and a
 64-byte header. At 100M rows and two complete generations the source

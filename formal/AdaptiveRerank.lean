@@ -130,4 +130,15 @@ theorem relaion_v124_nominee_only_below_99_percent
   exact target_impossible_below_capture returned captured 99_000
     restricted (by omega)
 
+/-! The V257 capture count is an authenticated external premise from the
+closed CoHere-1M panel. This theorem applies only to final results restricted
+to that unchanged graph-plus-coarse candidate union. -/
+theorem cohere_v257_unchanged_candidates_cannot_meet_gate
+    (returned captured : Nat)
+    (restricted : returned ≤ captured)
+    (sealedCapture : captured = 99_411) :
+    returned < 99_500 := by
+  exact target_impossible_below_capture returned captured 99_500
+    restricted (by omega)
+
 end Borsuk.AdaptiveRerank
