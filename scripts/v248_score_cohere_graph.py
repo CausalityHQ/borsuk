@@ -14,6 +14,7 @@ from scripts.v248_prepare_cohere_graph import DIMS, digest
 
 TEST_SHA = "5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e"
 ARMS = ("2048-2048", "4096-4096", "8192-8192")
+EXACT_ARMS = ("exact-512", "exact-1024", "exact-2048")
 
 
 def canonical(value):
@@ -56,14 +57,16 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
             or serving["schema"] not in (
                 "borsuk-v248-cohere-graph-100k-serving-v1",
                 "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1",
-                "borsuk-v250-cohere-diverse-graph-100k-serving-v1")
+                "borsuk-v250-cohere-diverse-graph-100k-serving-v1",
+                "borsuk-v251-cohere-fp16-navigation-v1")
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
+    arms = EXACT_ARMS if serving["schema"] == "borsuk-v251-cohere-fp16-navigation-v1" else ARMS
     rows = [json.loads(line) for line in raw_file.read_text().splitlines()]
     queries = [json.loads(line) for line in request_file.read_text().splitlines()]
     if (len(rows) != 1000 or len(queries) != 1000
-            or any(row["ordinal"] != i or set(row["arms"]) != set(ARMS)
+            or any(row["ordinal"] != i or set(row["arms"]) != set(arms)
                    or row["vector_body_gets"] != 0
                    or queries[i]["query_ordinal"] != i
                    for i, row in enumerate(rows))):
@@ -74,7 +77,7 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
     q = np.asarray([row["query"] for row in queries], dtype=np.float64)
     q /= np.linalg.norm(q, axis=1)[:, None]
     ids = np.arange(100_000)
-    hits = {arm: [] for arm in ARMS}
+    hits = {arm: [] for arm in arms}
     with truth_output.open("xb") as truth:
         for first in range(0, 1000, 16):
             scores = q[first:first + 16] @ corpus.T
@@ -85,7 +88,7 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 exact = candidates[np.lexsort((candidates, -vector[candidates]))][:100]
                 truth.write(np.asarray(exact, dtype="<u4").tobytes())
                 ordinal = first + offset
-                for arm in ARMS:
+                for arm in arms:
                     returned = rows[ordinal]["arms"][arm]["returned_ids"]
                     if (len(returned) != 100 or len(set(returned)) != 100
                             or min(returned) < 0 or max(returned) >= 100_000):
@@ -93,7 +96,7 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                     hits[arm].append(len(set(returned) & set(exact.tolist())))
     summary = {}
     selected = None
-    for arm in ARMS:
+    for arm in arms:
         def split(start, stop):
             values = hits[arm][start:stop]
             return {"queries": len(values), "gt100_hits": sum(values),
@@ -109,7 +112,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         summary[selected]["validation_remaining_744_prior_used"]["mean_r100"] >= .995
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
-        "borsuk-v250-cohere-diverse-quality-v1"
+        "borsuk-v251-cohere-fp16-navigation-quality-v1"
+        if serving["schema"] == "borsuk-v251-cohere-fp16-navigation-v1"
+        else "borsuk-v250-cohere-diverse-quality-v1"
         if serving["schema"] == "borsuk-v250-cohere-diverse-graph-100k-serving-v1"
         else "borsuk-v249-cohere-pq-aligned-quality-v1"
         if serving["schema"] == "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1"

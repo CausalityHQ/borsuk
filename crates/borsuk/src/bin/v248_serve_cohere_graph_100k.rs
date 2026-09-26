@@ -64,8 +64,9 @@ fn memory(field: &str) -> Result<u64, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 11 {
-        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING".into());
+    let exact_nav = args.len() == 12 && args[11] == "--exact-nav";
+    if args.len() != 11 && !exact_nav {
+        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
@@ -79,6 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         || (build["schema"] != "borsuk-v248-cohere-graph-build-v1"
             && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1"
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
+        || (exact_nav && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
         || prep["rows"].as_u64() != Some(ROWS as u64)
@@ -164,30 +166,43 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut workspace = GraphSearchWorkspace::new(ROWS)?;
     let workspace_bytes = workspace.resident_bytes();
-    let mut expected = vec![vec![Vec::<u64>::new(); QUERIES]; ARMS.len()];
-    let mut times = vec![Vec::<u64>::with_capacity(QUERIES); ARMS.len()];
-    let mut visits = vec![Vec::<u64>::with_capacity(QUERIES); ARMS.len()];
+    let arms = if exact_nav {
+        [(512, 0), (1024, 0), (2048, 0)]
+    } else {
+        ARMS
+    };
+    let mut expected = vec![vec![Vec::<u64>::new(); QUERIES]; arms.len()];
+    let mut times = vec![Vec::<u64>::with_capacity(QUERIES); arms.len()];
+    let mut visits = vec![Vec::<u64>::with_capacity(QUERIES); arms.len()];
     let mut raw = BufWriter::new(File::create(&args[9])?);
     let sequential_wall = Instant::now();
     for (index, request) in requests.iter().enumerate() {
-        let mut arms = serde_json::Map::new();
-        for offset in 0..ARMS.len() {
-            let arm = (index + offset) % ARMS.len();
-            let (ef, shortlist) = ARMS[arm];
+        let mut row_arms = serde_json::Map::new();
+        for offset in 0..arms.len() {
+            let arm = (index + offset) % arms.len();
+            let (ef, shortlist) = arms[arm];
             let start = Instant::now();
-            let (ids, count) = bound.search(&request.query, 100, ef, shortlist, &mut workspace)?;
+            let (ids, count) = if exact_nav {
+                graph.search_with_workspace(&request.query, &plane, 100, ef, &mut workspace)?
+            } else {
+                bound.search(&request.query, 100, ef, shortlist, &mut workspace)?
+            };
             let elapsed = start.elapsed().as_nanos() as u64;
             times[arm].push(elapsed);
             visits[arm].push(count as u64);
             expected[arm][index] = ids.clone();
-            arms.insert(
-                format!("{ef}-{shortlist}"),
+            row_arms.insert(
+                if exact_nav {
+                    format!("exact-{ef}")
+                } else {
+                    format!("{ef}-{shortlist}")
+                },
                 json!({"returned_ids":ids,"whole_ns":elapsed,"base_visits":count}),
             );
         }
         serde_json::to_writer(
             &mut raw,
-            &json!({"ordinal":index,"arms":arms,"vector_body_gets":0}),
+            &json!({"ordinal":index,"arms":row_arms,"vector_body_gets":0}),
         )?;
         raw.write_all(b"\n")?;
     }
@@ -196,7 +211,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     drop(workspace);
 
     let mut summaries = serde_json::Map::new();
-    for (arm, (ef, shortlist)) in ARMS.into_iter().enumerate() {
+    for (arm, (ef, shortlist)) in arms.into_iter().enumerate() {
         let sequential_sum = times[arm].iter().sum::<u64>();
         let loaded_wall = Instant::now();
         let mut loaded = Vec::with_capacity(QUERIES);
@@ -204,6 +219,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut handles = Vec::with_capacity(WORKERS);
             for worker in 0..WORKERS {
                 let bound = &bound;
+                let graph = &graph;
+                let plane = &plane;
                 let requests = &requests;
                 let expected = &expected[arm];
                 handles.push(scope.spawn(move || -> Result<Vec<u64>, String> {
@@ -212,9 +229,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut worker_times = Vec::new();
                     for index in (worker..QUERIES).step_by(WORKERS) {
                         let start = Instant::now();
-                        let (ids, _) = bound
-                            .search(&requests[index].query, 100, ef, shortlist, &mut workspace)
-                            .map_err(|e| e.to_string())?;
+                        let (ids, _) = if exact_nav {
+                            graph.search_with_workspace(
+                                &requests[index].query,
+                                plane,
+                                100,
+                                ef,
+                                &mut workspace,
+                            )
+                        } else {
+                            bound.search(&requests[index].query, 100, ef, shortlist, &mut workspace)
+                        }
+                        .map_err(|e| e.to_string())?;
                         let elapsed = start.elapsed().as_nanos() as u64;
                         if ids != expected[index] {
                             return Err(format!("loaded ID mismatch at {index}"));
@@ -238,7 +264,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let loaded_wall_ns = loaded_wall.elapsed().as_nanos() as u64;
         summaries.insert(
-            format!("{ef}-{shortlist}"),
+            if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
             json!({
                 "sequential":{"p50_ns":percentile(&mut times[arm],50),
                     "p90_ns":percentile(&mut times[arm],90),"p95_ns":percentile(&mut times[arm],95),"p99_ns":percentile(&mut times[arm],99),
@@ -255,7 +281,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if build["schema"] == "borsuk-v250-cohere-diverse-graph-build-v1" {
+                "schema":if exact_nav {
+                    "borsuk-v251-cohere-fp16-navigation-v1"
+                } else if build["schema"] == "borsuk-v250-cohere-diverse-graph-build-v1" {
                     "borsuk-v250-cohere-diverse-graph-100k-serving-v1"
                 } else if build["schema"] == "borsuk-v249-cohere-pq-aligned-graph-build-v1" {
                     "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1"

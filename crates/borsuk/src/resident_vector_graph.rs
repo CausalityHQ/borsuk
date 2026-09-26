@@ -428,6 +428,19 @@ impl ResidentVectorGraph {
         k: usize,
         ef: usize,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        let mut workspace = GraphSearchWorkspace::new(plane.rows())?;
+        self.search_with_workspace(query, plane, k, ef, &mut workspace)
+    }
+
+    /// Exact FP16 navigation with a reusable per-worker visit workspace.
+    pub fn search_with_workspace(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        k: usize,
+        ef: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
         self.check_plane(plane)?;
         if query.len() != plane.dimensions()
             || query.iter().any(|x| !x.is_finite())
@@ -452,7 +465,7 @@ impl ResidentVectorGraph {
         let score = |node: u32| -> Result<f64, ResidentFp16Error> {
             Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?)
         };
-        let (results, visits) = self.navigate_with(ef, score)?;
+        let (results, visits) = self.navigate_with_workspace(ef, workspace, score)?;
         let mut ranked = results
             .into_iter()
             .map(|visit| Ok((visit.distance, plane.source_id(visit.node as usize)?)))
@@ -901,6 +914,15 @@ mod tests {
         assert_eq!(
             restored.search(&[1.0, 0.0], &tier, 2, 4).unwrap(),
             vec![42, 7]
+        );
+        let mut workspace = GraphSearchWorkspace::new(4).unwrap();
+        assert_eq!(
+            restored
+                .search_with_workspace(&[1.0, 0.0], &tier, 2, 4, &mut workspace)
+                .unwrap(),
+            restored
+                .search_with_visits(&[1.0, 0.0], &tier, 2, 4)
+                .unwrap()
         );
         let mut books = vec![0.0f32; 64 * 256];
         books[31 * 256 + 1] = 1.0;
