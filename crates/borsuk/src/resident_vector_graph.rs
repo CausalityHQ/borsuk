@@ -830,6 +830,17 @@ pub struct ResidentPqCosineGraph<'a, 'b> {
 }
 
 impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
+    pub(crate) fn is_bound_to(
+        &self,
+        graph: &ResidentVectorGraph,
+        plane: &ResidentFp16Tier,
+        pq: &Pq64Router,
+    ) -> bool {
+        std::ptr::eq(self.graph, graph)
+            && std::ptr::eq(self.plane, plane)
+            && std::ptr::eq(self.pq.router(), pq)
+    }
+
     /// Return physical shortlist rows for an external reranker, in PQ score
     /// order. The caller must authenticate the matching row body separately.
     pub fn nominate(

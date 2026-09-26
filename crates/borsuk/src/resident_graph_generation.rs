@@ -226,6 +226,7 @@ pub(crate) fn preflight_root(
         .and_then(|n| n.checked_mul(active_workers))
         .ok_or(ResidentGraphGenerationError::Invalid("worker size"))?;
     let floor = plane_bytes
+        .checked_add(rows.checked_mul(8).ok_or(ResidentGraphGenerationError::Invalid("fast norm size"))?)
         .checked_add(map_resident_bytes)
         .and_then(|n| n.checked_add(source_lookup_bytes))
         .and_then(|n| n.checked_add(code_bytes))
@@ -270,7 +271,7 @@ impl ResidentGraphGeneration {
         let mapping = read_authenticated(&path("map.u32"), &root.map)?;
         let raw_books = read_authenticated(&path("books.bin"), &root.books)?;
         let codes = read_authenticated(&path("codes.bin"), &root.codes)?;
-        let plane = ResidentFp16Tier::open_authenticated(
+        let mut plane = ResidentFp16Tier::open_authenticated(
             &path("plane.bin"),
             &root.plane.sha256,
             &root.source_sha256,
@@ -279,6 +280,7 @@ impl ResidentGraphGeneration {
             root.generation,
             max_resident_bytes,
         )?;
+        plane.prepare_fast_navigation(max_resident_bytes)?;
         let graph = ResidentVectorGraph::open_authenticated(
             &path("graph.bin"),
             &root.graph.sha256,
@@ -391,19 +393,23 @@ impl ResidentGraphGeneration {
         )?)
     }
 
-    /// Merge a prebound PQ graph result with exact graph finalists in FP16.
+    /// Reuse authenticated PQ shortlist scores in the fast exact graph, then
+    /// rerank the distinct two-route union against the same FP16 generation.
     pub fn search_dual_graph(
         &self,
+        bound: &ResidentPqCosineGraph<'_, '_>,
         query: &[f32],
         k: usize,
+        pq_ef: usize,
+        shortlist: usize,
         exact_ef: usize,
-        pq_result: (Vec<u64>, usize),
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentGraphGenerationError> {
-        let (pq_ids, pq_visits) = pq_result;
-        let (exact_ids, exact_visits) = self
-            .graph
-            .search_with_workspace(query, &self.plane, k, exact_ef, workspace)?;
+        if !bound.is_bound_to(&self.graph, &self.plane, &self.pq) {
+            return Err(ResidentGraphGenerationError::Invalid("foreign dual graph binding"));
+        }
+        let (pq_ids, exact_ids, pq_visits, exact_visits, _) =
+            bound.search_fast_cached(query, k, pq_ef, shortlist, exact_ef, workspace)?;
         let mut physical = Vec::with_capacity(pq_ids.len() + exact_ids.len());
         for id in pq_ids.into_iter().chain(exact_ids) {
             let position = self
@@ -530,8 +536,7 @@ mod tests {
             vec![42, 7]
         );
         assert_eq!(
-            loaded.search_dual_graph(&[1.0, 0.0], 2, 4,
-                bound.search(&[1.0, 0.0], 2, 4, 2, &mut workspace).unwrap(),
+            loaded.search_dual_graph(&bound, &[1.0, 0.0], 2, 4, 2, 4,
                 &mut workspace).unwrap().0,
             vec![42, 7]
         );

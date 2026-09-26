@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish the sealed V261 generation and measure one two-host HTTP cell."""
+"""Qualify cached dual-graph serving on one sealed CoHere first1M HTTP cell."""
 
 import argparse
 import fcntl
@@ -18,10 +18,14 @@ from scripts.launch_v223_authenticated_graph_http_spot import (
     bootstrap, read_marker, spot_request, summaries, terminal, terminate_confirmed,
 )
 
-SCHEMA = "borsuk-v262-cohere-dual-http-1m-v1"
+SCHEMA = "borsuk-v269-cohere-cached-dual-http-1m-v1"
 V261_PREFIX = ("research/v261-cohere-dual-graph-1m/"
                "2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001")
 V261_TERMINAL_SHA = "00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82"
+V268_PREFIX = ("research/v268-cohere-cached-dual-graph-1m/"
+               "5b83f6c3ba50bb09b2cb65ca063df925c284a555/runs/a0001")
+V268_TERMINAL_SHA = "22843310d0cb599ba2141cbb38cfe71c448359d97720c4975b7239370d4e7530"
+V268_RAW_SHA = "6a2a1621c43b31d6dc89bdba4d800cd530eb455f0adfe67842fbcc1e4fd9ee86"
 ROOT_SHA = "1e483859b96f5270209678e0f76f7cc9e26a80162a24c7fa48a942cf010ec92e"
 BLOB_BYTES = 1_880_914_634
 
@@ -54,6 +58,15 @@ def launch(attempt):
             or prior["artifacts"]["truth.u32"]["sha256"]
             != "62e14eba043fafb8d8ec7c833d7d320c5d823c549683d15e5eacdff365a87f39"):
         raise ValueError("V261 predecessor identity differs")
+    promoted_raw = get(s3, V268_PREFIX + "/terminal.json")
+    promoted = json.loads(promoted_raw)
+    if (sha(promoted_raw) != V268_TERMINAL_SHA
+            or promoted.get("status") != "complete"
+            or promoted["artifacts"]["raw.jsonl"]["sha256"] != V268_RAW_SHA
+            or any(promoted["artifacts"][name] != prior["artifacts"][name]
+                   for name in ("vectors.raw", "plane.bin", "graph.bin", "map.u32",
+                                "books.bin", "codes.bin", "requests.jsonl", "truth.u32"))):
+        raise ValueError("V268 promotion identity differs")
     archive = archive_source(commit)
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as source:
         required = {"scripts/run_v223_authenticated_graph_http.sh",
@@ -62,9 +75,9 @@ def launch(attempt):
                     "crates/borsuk/examples/v220_graph_http.rs",
                     "crates/borsuk/examples/v246_publish_graph_s3.rs",
                     "docs/research/v262-cohere-1m-generation.json",
-                    "docs/research/v262-cohere-dual-graph-http-1m-prereg.md"}
+                    "docs/research/v269-cohere-cached-dual-http-1m-prereg.md"}
         if not required.issubset(source.getnames()):
-            raise ValueError("source archive lacks V262 inputs")
+            raise ValueError("source archive lacks V269 inputs")
         root = source.extractfile("docs/research/v262-cohere-1m-generation.json").read()
     identity = json.loads(root)
     if (sha(root) != ROOT_SHA or identity["source_sha256"]
@@ -83,8 +96,8 @@ def launch(attempt):
     if any(row.get("Instances") for row in active["Reservations"]):
         raise ValueError("another BORSUK worker is active")
     archive_sha = sha(archive)
-    archive_key = f"research/v262-cohere-dual-http-1m/{commit}/sources/{archive_sha}.tar.gz"
-    prefix = f"research/v262-cohere-dual-http-1m/{commit}/runs/{attempt}"
+    archive_key = f"research/v269-cohere-cached-dual-http-1m/{commit}/sources/{archive_sha}.tar.gz"
+    prefix = f"research/v269-cohere-cached-dual-http-1m/{commit}/runs/{attempt}"
     uri = f"s3://{BUCKET}/{prefix}/published"
     if not missing(s3, prefix + "/reservation.json"):
         raise ValueError("attempt already reserved")
@@ -97,13 +110,14 @@ def launch(attempt):
     put_if_absent(prefix + "/reservation.json", json.dumps({
         "schema": SCHEMA + "-reservation", "source_commit": commit,
         "source_archive_sha256": archive_sha, "v261_terminal_sha256": V261_TERMINAL_SHA,
+        "v268_terminal_sha256": V268_TERMINAL_SHA,
         "generation_root_sha256": ROOT_SHA, "generation_uri": uri,
         "dataset": "CoHere-large-10M first1M D768 cosine k100",
         "split": "prior-used development0-255 validation256-999",
-        "search": "PQ ef4096/shortlist4096 + exact FP16 ef2048; final FP16 union",
+        "search": "PQ ef4096/shortlist4096 + fast FP16 ef2048; cached exact beam scores; final FP16 union",
         "concurrency": 8, "transport": "VPC peer persistent HTTP/1.1",
         "cache_state": "resident after empty-cache S3 hydration; no response cache",
-        "gate": "both passes exact 1000 V261 ID lists; p95<=150ms p99<=175ms QPS>=65 RSS<=3GiB five cold blob GETs zero query GETs",
+        "gate": "both passes exact 1000 V261/V268 ID lists; p95<=110ms p99<=130ms QPS>=85 RSS<=3GiB five cold blob GETs zero query GETs",
         "spot_quote_usd_per_hour_per_host": quote,
         "spot_quote_timestamp": quote_row["Timestamp"].isoformat(),
         "interruption_policy": "discard both hosts and restart the entire cell",
@@ -116,7 +130,7 @@ def launch(attempt):
                                server_ip=server_ip, server_id=ids.get("server", ""),
                                root_sha=ROOT_SHA, generation_uri=uri, cohere_dual=True)
             request = spot_request(role, prefix, script)
-            request["TagSpecifications"][0]["Tags"][0]["Value"] = "borsuk-v262-cohere-dual-http"
+            request["TagSpecifications"][0]["Tags"][0]["Value"] = "borsuk-v269-cohere-cached-http"
             row = ec2.run_instances(**request)["Instances"][0]
             ids[role] = row["InstanceId"]
             launched[role] = row["LaunchTime"].timestamp()
@@ -148,7 +162,7 @@ def launch(attempt):
                           archive_sha, root_sha=ROOT_SHA, generation_uri=uri, cohere_dual=True)
         terminate_confirmed(ec2, ids["server"])
         if client["status"] != server["status"] or client["status"] != "complete":
-            raise RuntimeError("V262 measurement incomplete")
+            raise RuntimeError("V269 measurement incomplete")
         published = json.loads(get(s3, prefix + "/server/artifacts/publish.json"))
         hydrate = json.loads(get(s3, prefix + "/server/artifacts/hydrate.json"))
         resources = json.loads(get(s3, prefix + "/server/artifacts/server-resources.json"))
@@ -164,15 +178,16 @@ def launch(attempt):
                      and resources["peak_rss_bytes"] <= 3 * 1024**3
                      and all(row["quality_pass"] and row["exact_v261_id_lists"] == 1000
                              and row["hits"] == 99_717 for row in quality)
-                     and all(row["p95_ns"] <= 150_000_000
-                             and row["p99_ns"] <= 175_000_000
-                             and row["qps"] >= 65 and row["vector_body_gets"] == 0
+                     and all(row["p95_ns"] <= 110_000_000
+                             and row["p99_ns"] <= 130_000_000
+                             and row["qps"] >= 85 and row["vector_body_gets"] == 0
                              for row in transport))
         cost = sum((receipt["worker_finished_epoch"] - launched[role]) * quote / 3600
                    for role, receipt in (("server", server), ("client", client)))
         result = {"schema": SCHEMA + "-closeout", "source_commit": commit,
                   "source_archive_sha256": archive_sha,
                   "v261_terminal_sha256": V261_TERMINAL_SHA,
+                  "v268_terminal_sha256": V268_TERMINAL_SHA,
                   "generation_root_sha256": ROOT_SHA, "generation_uri": uri,
                   "server_instance_id": ids["server"], "client_instance_id": ids["client"],
                   "server_terminal_sha256": server["terminal_sha256"],

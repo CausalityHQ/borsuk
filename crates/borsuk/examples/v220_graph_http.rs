@@ -96,14 +96,10 @@ fn workers(
                             .map(|(ids, stats)| (ids, stats.base_visits))
                             .map_err(|error| error.to_string())
                     } else if dual_graph {
-                        bound
-                            .search(&work.query, 100, 4096, 4096, &mut workspace)
+                        loaded
+                            .search_dual_graph(&bound, &work.query, 100, 4096, 4096, 2048,
+                                               &mut workspace)
                             .map_err(|error| error.to_string())
-                            .and_then(|pq| {
-                                loaded
-                                    .search_dual_graph(&work.query, 100, 2048, pq, &mut workspace)
-                                    .map_err(|error| error.to_string())
-                            })
                     } else {
                         bound
                             .search(&work.query, 100, 4096, 4096, &mut workspace)

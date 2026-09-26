@@ -187,6 +187,9 @@ if [ "$role" = server ]; then
     "$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib \
       resident_graph_generation::tests::trusted_root_loads_and_corrupt_artifact_fails_closed \
       -- --exact >>"$root/build.log" 2>&1
+    "$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib \
+      resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch \
+      -- --exact >>"$root/build.log" 2>&1
   fi
   cd "$root"
   phase=serve
