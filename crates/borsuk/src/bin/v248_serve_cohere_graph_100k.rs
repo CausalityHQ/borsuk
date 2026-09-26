@@ -66,8 +66,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     let exact_nav = args.len() == 12 && args[11] == "--exact-nav";
     let anchored = args.len() == 12 && args[11] == "--strided-anchors";
-    if args.len() != 11 && !exact_nav && !anchored {
-        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors]".into());
+    let global_pq = args.len() == 12 && args[11] == "--global-pq";
+    if args.len() != 11 && !exact_nav && !anchored && !global_pq {
+        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors|--global-pq]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
@@ -81,7 +82,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         || (build["schema"] != "borsuk-v248-cohere-graph-build-v1"
             && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1"
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
-        || ((exact_nav || anchored)
+        || ((exact_nav || anchored || global_pq)
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
@@ -150,6 +151,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cosine_view()
         .map_err(|error| format!("PQ cosine: {error:?}"))?;
     let bound = ResidentPqCosineGraph::bind(&graph, &plane, &cosine, &old_for_new)?;
+    let mut new_for_old = vec![0; ROWS];
+    for (new, &old) in old_for_new.iter().enumerate() {
+        new_for_old[old] = new;
+    }
     let hydration_ns = started.elapsed().as_nanos() as u64;
     let hydrated_rss_bytes = memory("VmRSS:")?;
     let requests = BufReader::new(File::open(&args[8])?)
@@ -168,7 +173,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut workspace = GraphSearchWorkspace::new(ROWS)?;
     let workspace_bytes = workspace.resident_bytes();
-    let arms = if anchored {
+    let arms = if global_pq {
+        vec![(0, 8192)]
+    } else if anchored {
         vec![(512, 0)]
     } else if exact_nav {
         vec![(512, 0), (1024, 0), (2048, 0)]
@@ -186,7 +193,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             let arm = (index + offset) % arms.len();
             let (ef, shortlist) = arms[arm];
             let start = Instant::now();
-            let (ids, count) = if anchored {
+            let (ids, count) = if global_pq {
+                let old = cosine
+                    .nominate_global(&request.query, shortlist)
+                    .map_err(|error| format!("global PQ: {error:?}"))?;
+                let physical = old
+                    .into_iter()
+                    .map(|row| new_for_old[row])
+                    .collect::<Vec<_>>();
+                (
+                    plane.rank_ordinals_cosine(&request.query, &physical, 100)?,
+                    shortlist,
+                )
+            } else if anchored {
                 graph.search_with_strided_anchors_workspace(
                     &request.query,
                     &plane,
@@ -205,7 +224,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             visits[arm].push(count as u64);
             expected[arm][index] = ids.clone();
             row_arms.insert(
-                if anchored {
+                if global_pq {
+                    format!("global-pq-{shortlist}")
+                } else if anchored {
                     format!("anchor-256-{ef}")
                 } else if exact_nav {
                     format!("exact-{ef}")
@@ -236,6 +257,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let bound = &bound;
                 let graph = &graph;
                 let plane = &plane;
+                let cosine = &cosine;
+                let new_for_old = &new_for_old;
                 let requests = &requests;
                 let expected = &expected[arm];
                 handles.push(scope.spawn(move || -> Result<Vec<u64>, String> {
@@ -244,7 +267,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut worker_times = Vec::new();
                     for index in (worker..QUERIES).step_by(WORKERS) {
                         let start = Instant::now();
-                        let (ids, _) = if anchored {
+                        let (ids, _) = if global_pq {
+                            let old = cosine
+                                .nominate_global(&requests[index].query, shortlist)
+                                .map_err(|error| format!("global PQ: {error:?}"))?;
+                            let physical = old
+                                .into_iter()
+                                .map(|row| new_for_old[row])
+                                .collect::<Vec<_>>();
+                            plane
+                                .rank_ordinals_cosine(&requests[index].query, &physical, 100)
+                                .map(|ids| (ids, shortlist))
+                        } else if anchored {
                             graph.search_with_strided_anchors_workspace(
                                 &requests[index].query,
                                 plane,
@@ -288,7 +322,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let loaded_wall_ns = loaded_wall.elapsed().as_nanos() as u64;
         summaries.insert(
-            if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
+            if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
             json!({
                 "sequential":{"p50_ns":percentile(&mut times[arm],50),
                     "p90_ns":percentile(&mut times[arm],90),"p95_ns":percentile(&mut times[arm],95),"p99_ns":percentile(&mut times[arm],99),
@@ -305,7 +339,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if anchored {
+                "schema":if global_pq {
+                    "borsuk-v253-cohere-global-pq-v1"
+                } else if anchored {
                     "borsuk-v252-cohere-strided-anchor-v1"
                 } else if exact_nav {
                     "borsuk-v251-cohere-fp16-navigation-v1"
@@ -323,6 +359,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "physical_map_bytes":old_for_new.capacity()*8,
                 "worker_workspace_bytes":workspace_bytes*WORKERS,
                 "anchor_scores_per_query":if anchored {256} else {0},
+                "pq_scores_per_query":if global_pq {ROWS} else {0},
                 "sequential_wall_ns":sequential_wall_ns,"vector_body_gets":0,
                 "raw_sha256":digest(Path::new(&args[9]))?,
                 "requests_sha256":digest(Path::new(&args[8]))?,
