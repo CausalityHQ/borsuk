@@ -225,9 +225,12 @@ pub(crate) fn preflight_root(
         .checked_mul(8)
         .and_then(|n| n.checked_mul(active_workers))
         .ok_or(ResidentGraphGenerationError::Invalid("worker size"))?;
+    let fast_norm_bytes = rows
+        .checked_mul(8)
+        .ok_or(ResidentGraphGenerationError::Invalid("fast norm size"))?;
     let floor = plane_bytes
-        .checked_add(rows.checked_mul(8).ok_or(ResidentGraphGenerationError::Invalid("fast norm size"))?)
-        .checked_add(map_resident_bytes)
+        .checked_add(fast_norm_bytes)
+        .and_then(|n| n.checked_add(map_resident_bytes))
         .and_then(|n| n.checked_add(source_lookup_bytes))
         .and_then(|n| n.checked_add(code_bytes))
         .and_then(|n| n.checked_add(book_bytes))

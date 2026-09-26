@@ -34,3 +34,13 @@ size/SHA-256 replay for both hosts; terminate both immediately after
 the terminal. Discard and restart the entire cell after interruption.
 Before terminal, monitor only markers and infrastructure. Do not read
 partial client samples.
+
+Attempt `a0001` at source `4fae4b97fe7a73258432fc48d68a5305ac650024`
+stopped in the server build before readiness or client launch. Remote
+Rust error E0599 identified an `Option<usize>` chaining typo in the
+fast-norm resident cap calculation. Closed server terminal SHA-256
+`f0006ad37e31c1f305fa1f8d752396864e8428f4f09e34149cae1f9e8d1a27ec`,
+status `failed`, phase `build`, exit101; server
+`i-0cf48abda9f284ffe` is terminated. No measurement was made.
+Attempt `a0002` fixes only that compile expression. All frozen
+dataset, method, quality and performance gates remain unchanged.
