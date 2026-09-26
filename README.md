@@ -117,7 +117,9 @@ For a source install, pin a release commit and run
 checkout. Extract the bundle and run `bash scripts/smoke_resident_graph_rc.sh`
 inside it. The bundle includes the workspace's local Rust dependencies;
 another Rust project can depend on `borsuk` by path to the extracted
-`crates/borsuk` directory. This release candidate is not a crates.io package.
+`crates/borsuk` directory. The Rust graph release-candidate CI job attaches
+the verified source bundle to its exact commit. This release candidate is not
+a crates.io package.
 
 The following APIs remain available as the legacy graph-free path.
 

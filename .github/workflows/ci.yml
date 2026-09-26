@@ -95,6 +95,11 @@ jobs:
           cd "$RUNNER_TEMP/borsuk-rust-rc"
           cargo test --locked -p borsuk --test resident_graph_api
           bash scripts/smoke_resident_graph_rc.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: borsuk-rust-rc-${{ github.sha }}
+          path: ${{ runner.temp }}/borsuk-rust-rc.tar.gz
+          retention-days: 30
 
   rust-msrv:
     name: Rust MSRV 1.91
