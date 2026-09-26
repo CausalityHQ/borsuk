@@ -830,6 +830,16 @@ pub struct ResidentPqCosineGraph<'a, 'b> {
 }
 
 impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
+    /// The generation loader has already checked this exact mapping and graph.
+    pub(crate) fn bind_after_validation(
+        graph: &'a ResidentVectorGraph,
+        plane: &'a ResidentFp16Tier,
+        pq: &'a Pq64CosineView<'b>,
+        old_for_new: &'a [usize],
+    ) -> Self {
+        Self { graph, plane, pq, old_for_new }
+    }
+
     pub(crate) fn is_bound_to(
         &self,
         graph: &ResidentVectorGraph,

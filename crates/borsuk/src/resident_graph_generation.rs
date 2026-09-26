@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{self, Read},
     path::Path,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, atomic::{AtomicUsize, Ordering}},
 };
 
 use serde::Deserialize;
@@ -62,6 +62,41 @@ pub struct ResidentGraphGeneration {
     pq: Pq64Router,
     old_for_new: Vec<usize>,
     physical_for_source: Vec<(u64, usize)>,
+    active_workers: usize,
+    leased_workers: AtomicUsize,
+}
+
+/// One bounded search worker for the authenticated cached dual graph.
+pub struct ResidentGraphSearcher<'a> {
+    generation: &'a ResidentGraphGeneration,
+    view: Pq64CosineView<'a>,
+    workspace: GraphSearchWorkspace,
+}
+
+impl ResidentGraphSearcher<'_> {
+    /// Search the frozen cached dual route. Evidence is for k=100; smaller k
+    /// uses the same navigation widths and returns that many ranked IDs.
+    pub fn search(&mut self, query: &[f32], k: usize)
+        -> Result<(Vec<u64>, usize), ResidentGraphGenerationError> {
+        let rows = self.generation.rows();
+        if k == 0 || k > 100 || k > rows {
+            return Err(ResidentGraphGenerationError::Invalid("search k"));
+        }
+        let bound = ResidentPqCosineGraph::bind_after_validation(
+            &self.generation.graph, &self.generation.plane,
+            &self.view, &self.generation.old_for_new,
+        );
+        self.generation.search_dual_graph(
+            &bound, query, k, 4096.min(rows), 4096.min(rows), 2048.min(rows),
+            &mut self.workspace,
+        )
+    }
+}
+
+impl Drop for ResidentGraphSearcher<'_> {
+    fn drop(&mut self) {
+        self.generation.leased_workers.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// Readers retain their authenticated generation while a replacement becomes
@@ -351,7 +386,27 @@ impl ResidentGraphGeneration {
             pq,
             old_for_new,
             physical_for_source,
+            active_workers,
+            leased_workers: AtomicUsize::new(0),
         })
+    }
+
+    /// Lease a worker within the concurrency and memory cap declared at open.
+    pub fn searcher(&self) -> Result<ResidentGraphSearcher<'_>, ResidentGraphGenerationError> {
+        self.leased_workers.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |count| (count < self.active_workers).then_some(count + 1))
+            .map_err(|_| ResidentGraphGenerationError::Invalid("worker capacity"))?;
+        let result = (|| {
+            let view = self.cosine_view()?;
+            let workspace = GraphSearchWorkspace::new(self.rows())?;
+            // Validate the binding once, before the worker serves queries.
+            self.bind(&view)?;
+            Ok(ResidentGraphSearcher { generation: self, view, workspace })
+        })();
+        if result.is_err() {
+            self.leased_workers.fetch_sub(1, Ordering::AcqRel);
+        }
+        result
     }
 
     pub fn rows(&self) -> usize {
@@ -543,6 +598,11 @@ mod tests {
                 &mut workspace).unwrap().0,
             vec![42, 7]
         );
+        let mut searcher = loaded.searcher().unwrap();
+        assert!(loaded.searcher().is_err());
+        assert_eq!(searcher.search(&[1.0, 0.0], 2).unwrap().0, vec![42, 7]);
+        drop(searcher);
+        assert!(loaded.searcher().is_ok());
         let store = InMemory::new();
         let prefix = ObjectPath::from("graph");
         let cache = tempfile::tempdir().unwrap();
