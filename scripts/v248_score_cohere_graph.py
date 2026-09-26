@@ -15,6 +15,7 @@ from scripts.v248_prepare_cohere_graph import DIMS, digest
 TEST_SHA = "5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e"
 ARMS = ("2048-2048", "4096-4096", "8192-8192")
 EXACT_ARMS = ("exact-512", "exact-1024", "exact-2048")
+ANCHOR_ARMS = ("anchor-256-512",)
 
 
 def canonical(value):
@@ -58,11 +59,14 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 "borsuk-v248-cohere-graph-100k-serving-v1",
                 "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1",
                 "borsuk-v250-cohere-diverse-graph-100k-serving-v1",
-                "borsuk-v251-cohere-fp16-navigation-v1")
+                "borsuk-v251-cohere-fp16-navigation-v1",
+                "borsuk-v252-cohere-strided-anchor-v1")
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
-    arms = EXACT_ARMS if serving["schema"] == "borsuk-v251-cohere-fp16-navigation-v1" else ARMS
+    arms = (ANCHOR_ARMS if serving["schema"] == "borsuk-v252-cohere-strided-anchor-v1"
+            else EXACT_ARMS if serving["schema"] == "borsuk-v251-cohere-fp16-navigation-v1"
+            else ARMS)
     rows = [json.loads(line) for line in raw_file.read_text().splitlines()]
     queries = [json.loads(line) for line in request_file.read_text().splitlines()]
     if (len(rows) != 1000 or len(queries) != 1000
@@ -112,7 +116,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         summary[selected]["validation_remaining_744_prior_used"]["mean_r100"] >= .995
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
-        "borsuk-v251-cohere-fp16-navigation-quality-v1"
+        "borsuk-v252-cohere-strided-anchor-quality-v1"
+        if serving["schema"] == "borsuk-v252-cohere-strided-anchor-v1"
+        else "borsuk-v251-cohere-fp16-navigation-quality-v1"
         if serving["schema"] == "borsuk-v251-cohere-fp16-navigation-v1"
         else "borsuk-v250-cohere-diverse-quality-v1"
         if serving["schema"] == "borsuk-v250-cohere-diverse-graph-100k-serving-v1"

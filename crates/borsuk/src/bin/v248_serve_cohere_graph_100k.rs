@@ -65,8 +65,9 @@ fn memory(field: &str) -> Result<u64, Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     let exact_nav = args.len() == 12 && args[11] == "--exact-nav";
-    if args.len() != 11 && !exact_nav {
-        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav]".into());
+    let anchored = args.len() == 12 && args[11] == "--strided-anchors";
+    if args.len() != 11 && !exact_nav && !anchored {
+        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
@@ -80,7 +81,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         || (build["schema"] != "borsuk-v248-cohere-graph-build-v1"
             && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1"
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
-        || (exact_nav && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
+        || ((exact_nav || anchored)
+            && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
         || prep["rows"].as_u64() != Some(ROWS as u64)
@@ -166,10 +168,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut workspace = GraphSearchWorkspace::new(ROWS)?;
     let workspace_bytes = workspace.resident_bytes();
-    let arms = if exact_nav {
-        [(512, 0), (1024, 0), (2048, 0)]
+    let arms = if anchored {
+        vec![(512, 0)]
+    } else if exact_nav {
+        vec![(512, 0), (1024, 0), (2048, 0)]
     } else {
-        ARMS
+        ARMS.to_vec()
     };
     let mut expected = vec![vec![Vec::<u64>::new(); QUERIES]; arms.len()];
     let mut times = vec![Vec::<u64>::with_capacity(QUERIES); arms.len()];
@@ -182,7 +186,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             let arm = (index + offset) % arms.len();
             let (ef, shortlist) = arms[arm];
             let start = Instant::now();
-            let (ids, count) = if exact_nav {
+            let (ids, count) = if anchored {
+                graph.search_with_strided_anchors_workspace(
+                    &request.query,
+                    &plane,
+                    100,
+                    ef,
+                    256,
+                    &mut workspace,
+                )?
+            } else if exact_nav {
                 graph.search_with_workspace(&request.query, &plane, 100, ef, &mut workspace)?
             } else {
                 bound.search(&request.query, 100, ef, shortlist, &mut workspace)?
@@ -192,7 +205,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             visits[arm].push(count as u64);
             expected[arm][index] = ids.clone();
             row_arms.insert(
-                if exact_nav {
+                if anchored {
+                    format!("anchor-256-{ef}")
+                } else if exact_nav {
                     format!("exact-{ef}")
                 } else {
                     format!("{ef}-{shortlist}")
@@ -229,7 +244,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut worker_times = Vec::new();
                     for index in (worker..QUERIES).step_by(WORKERS) {
                         let start = Instant::now();
-                        let (ids, _) = if exact_nav {
+                        let (ids, _) = if anchored {
+                            graph.search_with_strided_anchors_workspace(
+                                &requests[index].query,
+                                plane,
+                                100,
+                                ef,
+                                256,
+                                &mut workspace,
+                            )
+                        } else if exact_nav {
                             graph.search_with_workspace(
                                 &requests[index].query,
                                 plane,
@@ -264,7 +288,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let loaded_wall_ns = loaded_wall.elapsed().as_nanos() as u64;
         summaries.insert(
-            if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
+            if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
             json!({
                 "sequential":{"p50_ns":percentile(&mut times[arm],50),
                     "p90_ns":percentile(&mut times[arm],90),"p95_ns":percentile(&mut times[arm],95),"p99_ns":percentile(&mut times[arm],99),
@@ -281,7 +305,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if exact_nav {
+                "schema":if anchored {
+                    "borsuk-v252-cohere-strided-anchor-v1"
+                } else if exact_nav {
                     "borsuk-v251-cohere-fp16-navigation-v1"
                 } else if build["schema"] == "borsuk-v250-cohere-diverse-graph-build-v1" {
                     "borsuk-v250-cohere-diverse-graph-100k-serving-v1"
@@ -296,6 +322,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "pq_code_bytes":ROWS*64,"pq_cosine_norm_bytes":cosine.resident_bytes(),
                 "physical_map_bytes":old_for_new.capacity()*8,
                 "worker_workspace_bytes":workspace_bytes*WORKERS,
+                "anchor_scores_per_query":if anchored {256} else {0},
                 "sequential_wall_ns":sequential_wall_ns,"vector_body_gets":0,
                 "raw_sha256":digest(Path::new(&args[9]))?,
                 "requests_sha256":digest(Path::new(&args[8]))?,

@@ -441,6 +441,35 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, workspace)
+    }
+
+    /// Route from the nearest of evenly spaced source rows. Returned work
+    /// counts anchor scores as well as base-layer scores.
+    pub fn search_with_strided_anchors_workspace(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        k: usize,
+        ef: usize,
+        anchor_count: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        if anchor_count == 0 || anchor_count > plane.rows() {
+            return Err(ResidentFp16Error::Invalid("graph anchor count"));
+        }
+        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, workspace)
+    }
+
+    fn search_with_anchor_count_workspace(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        k: usize,
+        ef: usize,
+        anchor_count: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
         self.check_plane(plane)?;
         if query.len() != plane.dimensions()
             || query.iter().any(|x| !x.is_finite())
@@ -462,10 +491,23 @@ impl ResidentVectorGraph {
             .iter()
             .map(|&x| f64::from(x) / norm)
             .collect::<Vec<_>>();
-        let score = |node: u32| -> Result<f64, ResidentFp16Error> {
+        let mut score = |node: u32| -> Result<f64, ResidentFp16Error> {
             Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?)
         };
-        let (results, visits) = self.navigate_with_workspace(ef, workspace, score)?;
+        let start = if anchor_count == 0 {
+            None
+        } else {
+            let mut best = (f64::INFINITY, u32::MAX);
+            for index in 0..anchor_count {
+                let node = ((index as u128 * plane.rows() as u128) / anchor_count as u128) as u32;
+                let candidate = (score(node)?, node);
+                if candidate < best {
+                    best = candidate;
+                }
+            }
+            Some(best.1)
+        };
+        let (results, visits) = self.navigate_from_with_workspace(ef, workspace, score, start)?;
         let mut ranked = results
             .into_iter()
             .map(|visit| Ok((visit.distance, plane.source_id(visit.node as usize)?)))
@@ -473,7 +515,7 @@ impl ResidentVectorGraph {
         ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         Ok((
             ranked.into_iter().take(k).map(|(_, id)| id).collect(),
-            visits,
+            visits + anchor_count,
         ))
     }
 
@@ -607,15 +649,29 @@ impl ResidentVectorGraph {
         &self,
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
+        score: impl FnMut(u32) -> Result<f64, ResidentFp16Error>,
+    ) -> Result<(Vec<Visit>, usize), ResidentFp16Error> {
+        self.navigate_from_with_workspace(ef, workspace, score, None)
+    }
+
+    fn navigate_from_with_workspace(
+        &self,
+        ef: usize,
+        workspace: &mut GraphSearchWorkspace,
         mut score: impl FnMut(u32) -> Result<f64, ResidentFp16Error>,
+        start: Option<u32>,
     ) -> Result<(Vec<Visit>, usize), ResidentFp16Error> {
         if workspace.marks.len() != self.neighbours.len() {
             return Err(ResidentFp16Error::Invalid("graph workspace geometry"));
         }
         workspace.next();
-        let mut current = self.entry;
+        let mut current = start.unwrap_or(self.entry);
         let mut current_distance = score(current)?;
-        let top = self.neighbours[current as usize].len() - 1;
+        let top = if start.is_some() {
+            0
+        } else {
+            self.neighbours[current as usize].len() - 1
+        };
         for layer in (1..=top).rev() {
             loop {
                 let mut better = None;
@@ -923,6 +979,16 @@ mod tests {
             restored
                 .search_with_visits(&[1.0, 0.0], &tier, 2, 4)
                 .unwrap()
+        );
+        let (routed, scores) = restored
+            .search_with_strided_anchors_workspace(&[1.0, 0.0], &tier, 2, 2, 2, &mut workspace)
+            .unwrap();
+        assert_eq!(routed, vec![42, 7]);
+        assert!(scores >= 2);
+        assert!(
+            restored
+                .search_with_strided_anchors_workspace(&[1.0, 0.0], &tier, 2, 2, 5, &mut workspace)
+                .is_err()
         );
         let mut books = vec![0.0f32; 64 * 256];
         books[31 * 256 + 1] = 1.0;
