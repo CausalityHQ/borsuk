@@ -42,8 +42,9 @@ fn peak_rss() -> Result<u64, Box<dyn Error>> {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 6 {
-        return Err("usage: v248_build_cohere_graph_100k PREP PLANE VECTORS GRAPH SUMMARY".into());
+    let pq_topology = args.len() == 9 && args[6] == "--pq-topology";
+    if args.len() != 6 && !pq_topology {
+        return Err("usage: v248_build_cohere_graph_100k PREP PLANE VECTORS GRAPH SUMMARY [--pq-topology BOOKS CODES]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let source = prep["source_sha256"]
@@ -63,6 +64,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             != prep["artifacts"]["vectors.raw"]["sha256"]
                 .as_str()
                 .ok_or("raw hash missing")?
+        || (pq_topology
+            && (prep["artifacts"]["books.bin"]["sha256"].as_str()
+                != Some(digest(Path::new(&args[7]))?.as_str())
+                || prep["artifacts"]["codes.bin"]["sha256"].as_str()
+                    != Some(digest(Path::new(&args[8]))?.as_str())))
     {
         return Err("graph build input identity differs".into());
     }
@@ -78,7 +84,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         prep["generation"].as_u64().ok_or("generation missing")?,
         200_000_000,
     )?;
-    let vectors = {
+    let vectors = if pq_topology {
+        let books = fs::read(&args[7])?;
+        let codes = fs::read(&args[8])?;
+        if books.len() != 64 * 256 * 12 * 4 || codes.len() != ROWS * 64 {
+            return Err("PQ topology geometry differs".into());
+        }
+        let mut vectors = Vec::with_capacity(ROWS);
+        for row in 0..ROWS {
+            let mut vector = Vec::with_capacity(DIMS);
+            for subspace in 0..64 {
+                let word = codes[row * 64 + subspace] as usize;
+                let first = (subspace * 256 + word) * 12 * 4;
+                vector.extend(
+                    books[first..first + 12 * 4]
+                        .chunks_exact(4)
+                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap())),
+                );
+            }
+            vectors.push(vector);
+        }
+        vectors
+    } else {
         let mut input = BufReader::new(File::open(&args[3])?);
         let mut row = vec![0u8; DIMS * 4];
         let mut vectors = Vec::with_capacity(ROWS);
@@ -110,8 +137,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         &args[5],
         format!(
             "{}\n",
-            json!({"schema":"borsuk-v248-cohere-graph-build-v1",
-        "construction_source":"authenticated-f32-source",
+            json!({"schema":if pq_topology {"borsuk-v249-cohere-pq-aligned-graph-build-v1"} else {"borsuk-v248-cohere-graph-build-v1"},
+        "construction_source":if pq_topology {"authenticated-pq-reconstruction"} else {"authenticated-f32-source"},
         "source_sha256":source,"plane_sha256":prep["artifacts"]["plane.bin"]["sha256"],
         "graph_sha256":graph_sha,"graph_bytes":fs::metadata(&args[4])?.len(),
         "graph_heap_bytes":heap_bytes,"structure":structure,"build_workers":8,

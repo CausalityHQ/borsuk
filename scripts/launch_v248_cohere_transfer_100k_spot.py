@@ -18,11 +18,15 @@ from scripts.launch_v157_primary_feasibility_spot import (
 )
 
 SCHEMA = "borsuk-v248-cohere-transfer-100k-spot-v1"
+PQ_SCHEMA = "borsuk-v249-cohere-pq-aligned-100k-spot-v1"
 IMAGE = "ami-06121aa3085b6f918"
 WALL_SECONDS = 10_800
 SOURCE = "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/"
 RECEIPT_SHA = "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
 TEST_SHA = "5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e"
+PARENT_PREFIX = ("research/v248-cohere-transfer-100k/"
+                 "7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001")
+PARENT_TERMINAL_SHA = "9e45f55216518fec13bba3c40002aedb8d356ce8fe1fa943d6ac4caf9ac817f6"
 ARTIFACTS = ("prep.json", "build.json", "serving.json", "quality.json",
              "requests.json", "requests.jsonl", "raw.jsonl", "truth.u32", "graph.bin",
              "vectors.raw", "plane.bin", "books.bin", "codes.bin", "map.u32",
@@ -30,7 +34,7 @@ ARTIFACTS = ("prep.json", "build.json", "serving.json", "quality.json",
              "truth-resources.txt", "build.log", "install.log", "run-closed.log")
 
 
-def worker(commit, archive_sha, archive_key, prefix):
+def worker(commit, archive_sha, archive_key, prefix, pq_topology=False):
     script = r'''#!/bin/bash
 set -euo pipefail
 systemd-run --unit=v248-hard-stop --on-active=10800s /usr/sbin/shutdown -h now
@@ -97,6 +101,7 @@ phase=prepare
   --receipt receipt.json --receipt-sha256 '@@RECEIPT_SHA@@' \
   --train train-0000000{0,1,2,3,4}.parquet --rows 100000 --generation 248 --output prepared
 cp prepared/* .
+@@MATCHED_PREP@@
 phase=compile
 cd repo
 "$CARGO_HOME/bin/cargo" build --release --locked -p borsuk \
@@ -105,12 +110,13 @@ cd repo
 cd "$root"
 phase=graph
 /usr/bin/time -v -o graph-resources.txt "$CARGO_TARGET_DIR/release/v248_build_cohere_graph_100k" \
-  prep.json plane.bin vectors.raw graph.bin build.json
+  prep.json plane.bin vectors.raw graph.bin build.json @@PQ_ARGS@@
 phase=queries
 aws s3 cp 's3://@@BUCKET@@/@@SOURCE@@/materialized/test.parquet' test.parquet --only-show-errors
 printf '%s  test.parquet\n' '@@TEST_SHA@@' | sha256sum -c -
 .venv/bin/python -m scripts.v248_score_cohere_graph requests \
   --test test.parquet --request-file requests.jsonl --output requests.json
+@@MATCHED_REQUESTS@@
 phase=serve
 /usr/bin/time -v -o serving-resources.txt "$CARGO_TARGET_DIR/release/v248_serve_cohere_graph_100k" \
   prep.json build.json plane.bin graph.bin map.u32 books.bin codes.bin \
@@ -126,20 +132,32 @@ phase=truth
   --source vectors.raw --prep prep.json --request-file requests.jsonl \
   --raw-file raw.jsonl --serving-file serving.json --truth-output truth.u32 \
   --output quality.json
+@@MATCHED_TRUTH@@
 phase=complete
 '''
+    matched_prep = '''printf '%s  %s\\n' \\
+  '0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e' vectors.raw \\
+  '4e164997e53e2e59c0930403386de863ceb17eaa000cd904b699370eca0d9de7' plane.bin \\
+  'd6d36b22f66ecb5cfc750c117392ab1c0f264dc5bac3e9785cdab92dc6a75b19' books.bin \\
+  'a645cf66c8fd92d1f248438807f97cfd676ca8fb4233efd23d7adc299ff5e9e3' codes.bin \\
+  '20ff50e632cc575386b15d7fcd9c3842ef435388ed29ae8c30617158ee907dc5' map.u32 | sha256sum -c -'''
     for key, value in {"ARTIFACTS": " ".join(ARTIFACTS), "ARTIFACTS_PY": repr(ARTIFACTS),
-                       "SCHEMA": SCHEMA, "BUCKET": BUCKET, "PREFIX": prefix,
+                       "SCHEMA": PQ_SCHEMA if pq_topology else SCHEMA,
+                       "BUCKET": BUCKET, "PREFIX": prefix,
                        "COMMIT": commit, "ARCHIVE_SHA": archive_sha,
                        "ARCHIVE_KEY": archive_key, "SOURCE": SOURCE.rstrip("/"),
-                       "RECEIPT_SHA": RECEIPT_SHA, "TEST_SHA": TEST_SHA}.items():
+                       "RECEIPT_SHA": RECEIPT_SHA, "TEST_SHA": TEST_SHA,
+                       "PQ_ARGS": "--pq-topology books.bin codes.bin" if pq_topology else "",
+                       "MATCHED_PREP": matched_prep if pq_topology else "",
+                       "MATCHED_REQUESTS": ("printf '%s  requests.jsonl\\n' '86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812' | sha256sum -c -" if pq_topology else ""),
+                       "MATCHED_TRUTH": ("printf '%s  truth.u32\\n' '06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8' | sha256sum -c -" if pq_topology else "")}.items():
         script = script.replace("@@" + key + "@@", value)
     if "@@" in script:
         raise ValueError("unresolved V248 worker placeholder")
     return script
 
 
-def launch(attempt):
+def launch(attempt, pq_topology=False):
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
@@ -151,10 +169,32 @@ def launch(attempt):
         raise ValueError("source is not a fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    archive_key = f"research/v248-cohere-transfer-100k/{commit}/sources/{archive_sha}.tar.gz"
-    prefix = f"research/v248-cohere-transfer-100k/{commit}/runs/{attempt}"
+    campaign = "v249-cohere-pq-aligned-100k" if pq_topology else "v248-cohere-transfer-100k"
+    schema = PQ_SCHEMA if pq_topology else SCHEMA
+    archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
+    prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
     ec2, s3 = session.client("ec2"), session.client("s3")
+    if pq_topology:
+        parent_raw = s3.get_object(Bucket=BUCKET,
+                                   Key=PARENT_PREFIX + "/terminal.json")["Body"].read()
+        parent = json.loads(parent_raw)
+        if (hashlib.sha256(parent_raw).hexdigest() != PARENT_TERMINAL_SHA
+                or parent.get("status") != "complete"
+                or parent.get("source_commit")
+                != "7b66f9f7d306a0f1febc2091783de68a6ece72c7"):
+            raise ValueError("paired V248 terminal differs")
+        for name, digest in {
+            "vectors.raw": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e",
+            "plane.bin": "4e164997e53e2e59c0930403386de863ceb17eaa000cd904b699370eca0d9de7",
+            "books.bin": "d6d36b22f66ecb5cfc750c117392ab1c0f264dc5bac3e9785cdab92dc6a75b19",
+            "codes.bin": "a645cf66c8fd92d1f248438807f97cfd676ca8fb4233efd23d7adc299ff5e9e3",
+            "map.u32": "20ff50e632cc575386b15d7fcd9c3842ef435388ed29ae8c30617158ee907dc5",
+            "requests.jsonl": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+            "truth.u32": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+        }.items():
+            if parent["artifacts"].get(name, {}).get("sha256") != digest:
+                raise ValueError(f"paired V248 artifact differs: {name}")
     if not missing(s3, prefix + "/reservation.json") or not missing(s3, prefix + "/terminal.json"):
         raise ValueError("attempt already registered")
     active = ec2.describe_instances(Filters=[
@@ -168,18 +208,20 @@ def launch(attempt):
     elif s3.head_object(Bucket=BUCKET, Key=archive_key)["ContentLength"] != len(archive):
         raise ValueError("source archive length differs")
     put_if_absent(prefix + "/reservation.json", json.dumps({
-        "schema": SCHEMA, "source_commit": commit,
+        "schema": schema, "source_commit": commit,
         "source_archive_sha256": archive_sha, "staging_receipt_sha256": RECEIPT_SHA,
         "test_sha256": TEST_SHA, "dataset": "CoHere-large-10M first 100k D768 cosine",
         "split": "development 0-255; validation 256-999 prior used",
         "construction": {"m": 32, "m0": 64, "ef_construction": 128,
                          "workers": 8, "source_only_pq64": True},
         "arms": [[2048, 2048], [4096, 4096], [8192, 8192]],
+        "pq_aligned_topology": pq_topology,
+        "paired_v248_terminal_sha256": PARENT_TERMINAL_SHA if pq_topology else None,
         "interruption_policy": "discard interrupted cell, restart under a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken="v248-" + hashlib.sha256(prefix.encode()).hexdigest()[:48],
+        ClientToken=("v249-" if pq_topology else "v248-") + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
         NetworkInterfaces=[{"AssociatePublicIpAddress": True, "DeviceIndex": 0,
@@ -191,9 +233,10 @@ def launch(attempt):
             "DeleteOnTermination": True, "Encrypted": True, "VolumeSize": 30,
             "VolumeType": "gp3"}}],
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
-            {"Key": "Name", "Value": "borsuk-v248-cohere-100k"},
+            {"Key": "Name", "Value": "borsuk-" + campaign},
             {"Key": "BorsukAttempt", "Value": attempt}]}],
-        UserData=base64.b64encode(worker(commit, archive_sha, archive_key, prefix).encode()).decode(),
+        UserData=base64.b64encode(worker(commit, archive_sha, archive_key, prefix,
+                                          pq_topology).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -206,7 +249,7 @@ def launch(attempt):
                 terminal = json.loads(raw)
                 ec2.terminate_instances(InstanceIds=[instance_id])
                 ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
-                if (terminal.get("schema") != SCHEMA or terminal.get("instance_id") != instance_id
+                if (terminal.get("schema") != schema or terminal.get("instance_id") != instance_id
                         or terminal.get("source_commit") != commit
                         or terminal.get("source_archive_sha256") != archive_sha):
                     raise ValueError("V248 terminal identity differs")
@@ -249,7 +292,8 @@ def launch(attempt):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", default="a0001")
+    parser.add_argument("--pq-topology", action="store_true")
     args = parser.parse_args()
-    with open("/tmp/borsuk-v248-cohere-launch.lock", "a+") as lock:
+    with open("/tmp/borsuk-cohere-graph-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        launch(args.attempt)
+        launch(args.attempt, args.pq_topology)
