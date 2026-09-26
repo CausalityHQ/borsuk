@@ -47,3 +47,25 @@ Keep 10M closed until 1M exact quality and HTTP resource gates pass.
 One `causality` c7i.4xlarge Spot attempt, immutable source archive and
 S3 prefix, terminal SHA-256 readback, interruption discard/restart,
 immediate termination. Do not inspect incomplete measurement files.
+
+## Closed attempt and serving repair
+
+Attempt `a0001` on `i-07bd3db116577a500` reached the serving loader
+then failed before sealing IDs or reading exact truth. Its closed
+terminal SHA-256 is
+`e1cef23d26f9d3fb96276541084de06ec6ba09bd6b75206267518fc958530f06`;
+the instance is terminated. The source, plane, books/codes, map,
+graph and requests matched V255 byte for byte, and the newly built
+coarse artifacts are authenticated in that terminal. The cause was a
+serving schema guard that mistakenly required V250's **100k** graph
+schema for hybrid mode at **1M**, despite accepting the authenticated
+V255 1M graph in the adjacent row-count branch. This is a harness
+loader error, not a measured algorithm result.
+
+Attempt `a0002` may reuse `a0001`'s closed source/graph/coarse/request
+artifacts only after replaying the full prior terminal SHA-256 and
+each reused artifact's size/hash. It runs a narrow regression test for
+the 1M hybrid schema, then executes the **same frozen single arm** and
+seals new IDs before computing truth. Preparation/build resources from
+`a0001` are reported as reused historical costs, not as new `a0002`
+measurements. The quality and query gates above remain unchanged.

@@ -27,6 +27,15 @@ class V255WorkerTest(unittest.TestCase):
         self.assertIn("loaded-raw.jsonl", script)
         self.assertNotIn("@@", script)
 
+    def test_closed_v257_retry_reuses_hash_verified_artifacts(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt",
+                        million_hybrid=True, reuse_v257=True)
+        self.assertIn("prior-terminal.json", script)
+        self.assertIn("tests::million_row_hybrid_accepts_only_the_diverse_million_graph", script)
+        self.assertIn("if [ '1' = 1 ]; then", script)
+        self.assertIn("--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json", script)
+        self.assertNotIn("@@", script)
+
 
 if __name__ == "__main__":
     unittest.main()

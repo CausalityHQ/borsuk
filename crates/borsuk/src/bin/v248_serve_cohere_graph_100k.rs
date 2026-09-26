@@ -62,6 +62,19 @@ fn memory(field: &str) -> Result<u64, Box<dyn Error>> {
         * 1024)
 }
 
+fn graph_schema_matches(rows: usize, schema: &str, special: bool) -> bool {
+    match rows {
+        100_000 => {
+            matches!(schema, "borsuk-v248-cohere-graph-build-v1"
+                | "borsuk-v249-cohere-pq-aligned-graph-build-v1"
+                | "borsuk-v250-cohere-diverse-graph-build-v1")
+                && (!special || schema == "borsuk-v250-cohere-diverse-graph-build-v1")
+        }
+        1_000_000 => schema == "borsuk-v255-cohere-diverse-graph-build-1m-v1" && !special,
+        _ => false,
+    }
+}
+
 struct CoarsePq {
     centroids: Vec<f32>,
     offsets: Vec<usize>,
@@ -206,17 +219,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["dataset_id"] != "cohere-large-10m-768"
         || prep["staging_receipt_sha256"]
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
-        || (build["schema"] != "borsuk-v248-cohere-graph-build-v1"
-            && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1"
-            && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1"
-            && build["schema"] != "borsuk-v255-cohere-diverse-graph-build-1m-v1")
-        || !matches!(rows, 100_000 | 1_000_000)
-        || (rows == 1_000_000
-            && (build["schema"] != "borsuk-v255-cohere-diverse-graph-build-1m-v1"
-                || exact_nav || anchored || global_pq || coarse_pq))
-        || (rows == 100_000
-            && build["schema"] == "borsuk-v255-cohere-diverse-graph-build-1m-v1")
-        || ((exact_nav || anchored || global_pq || coarse_pq || hybrid)
+        || !graph_schema_matches(rows, build["schema"].as_str().unwrap_or(""),
+            exact_nav || anchored || global_pq || coarse_pq)
+        || (rows == 100_000 && hybrid
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
@@ -606,4 +611,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::graph_schema_matches;
+
+    #[test]
+    fn million_row_hybrid_accepts_only_the_diverse_million_graph() {
+        assert!(graph_schema_matches(1_000_000,
+            "borsuk-v255-cohere-diverse-graph-build-1m-v1", false));
+        assert!(!graph_schema_matches(1_000_000,
+            "borsuk-v250-cohere-diverse-graph-build-v1", false));
+        assert!(!graph_schema_matches(1_000_000,
+            "borsuk-v255-cohere-diverse-graph-build-1m-v1", true));
+        assert!(graph_schema_matches(100_000,
+            "borsuk-v250-cohere-diverse-graph-build-v1", true));
+    }
 }

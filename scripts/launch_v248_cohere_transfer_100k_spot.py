@@ -59,6 +59,9 @@ V255_TERMINAL_SHA = "253f787ba8fe6efa4334c259d55ecaae557d1f8e302063291e0e108aefe
 V256_PREFIX = ("research/v256-cohere-hybrid-100k/"
                "1ba78eaf8322ad47b9553ede6f1d9f8848277678/runs/a0001")
 V256_TERMINAL_SHA = "b4ce612b6bf3a4b636b23586fd795c7d418dd669adf3078d9f3e4eedcc3243f6"
+V257_PREFIX = ("research/v257-cohere-hybrid-1m/"
+               "80f9d35c1283e0161983e578b3d779c58aebd62e/runs/a0001")
+V257_TERMINAL_SHA = "e1cef23d26f9d3fb96276541084de06ec6ba09bd6b75206267518fc958530f06"
 ARTIFACTS = ("prep.json", "build.json", "serving.json", "quality.json",
              "requests.json", "requests.jsonl", "raw.jsonl", "truth.u32", "graph.bin",
              "vectors.raw", "plane.bin", "books.bin", "codes.bin", "map.u32",
@@ -71,7 +74,8 @@ HYBRID_ARTIFACTS = COARSE_ARTIFACTS + ("loaded-raw.jsonl",)
 
 def worker(commit, archive_sha, archive_key, prefix, pq_topology=False,
            diverse=False, exact_nav=False, anchored=False, global_pq=False,
-           coarse_pq=False, million=False, hybrid=False, million_hybrid=False):
+           coarse_pq=False, million=False, hybrid=False, million_hybrid=False,
+           reuse_v257=False):
     big = million or million_hybrid
     hybrid_mode = hybrid or million_hybrid
     script = r'''#!/bin/bash
@@ -128,6 +132,33 @@ python3.12 -m venv .venv
 export RUSTUP_HOME="$root/.rustup" CARGO_HOME="$root/.cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_JOBS=6
 curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.98.0 >>install.log 2>&1
 export PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=8 OMP_NUM_THREADS=8 MKL_NUM_THREADS=8
+if [ '@@REUSE_V257@@' = 1 ]; then
+  phase=reuse
+  aws s3 cp 's3://@@BUCKET@@/@@REUSE_PREFIX@@/terminal.json' prior-terminal.json --only-show-errors
+  printf '%s  prior-terminal.json\n' '@@REUSE_TERMINAL_SHA@@' | sha256sum -c -
+  for name in prep.json build.json vectors.raw plane.bin books.bin codes.bin map.u32 \
+              graph.bin centroids.f32 offsets.u32 postings.u32 coarse.json \
+              requests.json requests.jsonl prep-resources.txt graph-resources.txt \
+              coarse-resources.txt; do
+    aws s3 cp "s3://@@BUCKET@@/@@REUSE_PREFIX@@/artifacts/$name" "$name" --only-show-errors
+  done
+  python3 - <<'PY'
+import hashlib,json
+from pathlib import Path
+prior=json.loads(Path('prior-terminal.json').read_text())
+assert prior['status']=='failed' and prior['phase']=='serve'
+for name in ('prep.json','build.json','vectors.raw','plane.bin','books.bin',
+             'codes.bin','map.u32','graph.bin','centroids.f32','offsets.u32',
+             'postings.u32','coarse.json','requests.json','requests.jsonl',
+             'prep-resources.txt','graph-resources.txt','coarse-resources.txt'):
+    path=Path(name); h=hashlib.sha256()
+    with path.open('rb') as source:
+        for block in iter(lambda:source.read(1024*1024),b''):
+            h.update(block)
+    assert path.stat().st_size==prior['artifacts'][name]['bytes']
+    assert h.hexdigest()==prior['artifacts'][name]['sha256']
+PY
+else
 phase=inputs
 aws s3 cp 's3://@@BUCKET@@/@@SOURCE@@/STAGING_COMPLETE.json' receipt.json --only-show-errors
 printf '%s  receipt.json\n' '@@RECEIPT_SHA@@' | sha256sum -c -
@@ -146,6 +177,7 @@ phase=prepare
 cp prepared/* .
 @@MATCHED_PREP@@
 @@COARSE_PREP@@
+fi
 phase=compile
 cd repo
 "$CARGO_HOME/bin/cargo" build --release --locked -p borsuk \
@@ -153,6 +185,7 @@ cd repo
   --jobs 6 >"$root/build.log" 2>&1
 @@EXACT_TEST@@
 cd "$root"
+if [ '@@REUSE_V257@@' != 1 ]; then
 phase=graph
 /usr/bin/time -v -o graph-resources.txt "$CARGO_TARGET_DIR/release/v248_build_cohere_graph_100k" \
   prep.json plane.bin vectors.raw graph.bin build.json @@PQ_ARGS@@
@@ -163,6 +196,7 @@ printf '%s  test.parquet\n' '@@TEST_SHA@@' | sha256sum -c -
 .venv/bin/python -m scripts.v248_score_cohere_graph requests \
   --test test.parquet --request-file requests.jsonl --output requests.json
 @@MATCHED_REQUESTS@@
+fi
 phase=serve
 /usr/bin/time -v -o serving-resources.txt "$CARGO_TARGET_DIR/release/v248_serve_cohere_graph_100k" \
   prep.json build.json plane.bin graph.bin map.u32 books.bin codes.bin \
@@ -205,12 +239,17 @@ cp coarse/* .'''
                        "COMMIT": commit, "ARCHIVE_SHA": archive_sha,
                        "ARCHIVE_KEY": archive_key, "SOURCE": SOURCE.rstrip("/"),
                        "RECEIPT_SHA": RECEIPT_SHA, "TEST_SHA": TEST_SHA,
+                       "REUSE_V257": "1" if reuse_v257 else "0",
+                       "REUSE_PREFIX": V257_PREFIX,
+                       "REUSE_TERMINAL_SHA": V257_TERMINAL_SHA,
                        "SHARDS": "$(seq 0 45)" if big else "0 1 2 3 4",
                        "ROWS": "1000000" if big else "100000",
                        "GENERATION": "255" if big else "248",
                        "PQ_ARGS": "--diverse" if diverse or exact_nav or anchored or global_pq or coarse_pq or big or hybrid_mode else "--pq-topology books.bin codes.bin" if pq_topology else "",
                        "SERVE_ARGS": "--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json" if hybrid_mode else "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
-                       "EXACT_TEST": ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib '
+                       "EXACT_TEST": ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --bin v248_serve_cohere_graph_100k '
+                                      'tests::million_row_hybrid_accepts_only_the_diverse_million_graph -- --exact >>"$root/build.log" 2>&1\n'
+                                      if reuse_v257 else '') + ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib '
                                       + ('pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2' if global_pq or coarse_pq or hybrid_mode
                                          else 'resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch')
                                       + ' -- --exact >>"$root/build.log" 2>&1' if exact_nav or anchored or global_pq or coarse_pq or big or hybrid_mode else ""),
@@ -227,10 +266,12 @@ cp coarse/* .'''
 
 def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=False,
            global_pq=False, coarse_pq=False, million=False, hybrid=False,
-           million_hybrid=False):
+           million_hybrid=False, reuse_v257=False):
     if sum((pq_topology, diverse, exact_nav, anchored, global_pq, coarse_pq,
             million, hybrid, million_hybrid)) > 1:
         raise ValueError("select one graph treatment")
+    if reuse_v257 and (not million_hybrid or attempt != "a0002"):
+        raise ValueError("V257 reuse is only the a0002 serving repair")
     big = million or million_hybrid
     hybrid_mode = hybrid or million_hybrid
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
@@ -329,6 +370,13 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
             if (hashlib.sha256(previous).hexdigest() != prior_sha
                     or json.loads(previous).get("status") != "complete"):
                 raise ValueError("V255/V256 paired terminal differs")
+    if reuse_v257:
+        previous = s3.get_object(Bucket=BUCKET,
+                                 Key=V257_PREFIX + "/terminal.json")["Body"].read()
+        prior = json.loads(previous)
+        if (hashlib.sha256(previous).hexdigest() != V257_TERMINAL_SHA
+                or prior.get("status") != "failed" or prior.get("phase") != "serve"):
+            raise ValueError("closed V257 a0001 reuse authority differs")
     if not missing(s3, prefix + "/reservation.json") or not missing(s3, prefix + "/terminal.json"):
         raise ValueError("attempt already registered")
     active = ec2.describe_instances(Filters=[
@@ -368,6 +416,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         "paired_v254_terminal_sha256": V254_TERMINAL_SHA if hybrid else None,
         "paired_v255_terminal_sha256": V255_TERMINAL_SHA if million_hybrid else None,
         "paired_v256_terminal_sha256": V256_TERMINAL_SHA if million_hybrid else None,
+        "reused_v257_a0001_terminal_sha256": V257_TERMINAL_SHA if reuse_v257 else None,
         "interruption_policy": "discard interrupted cell, restart under a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
@@ -389,7 +438,8 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
             {"Key": "BorsukAttempt", "Value": attempt}]}],
         UserData=base64.b64encode(worker(commit, archive_sha, archive_key, prefix,
                                           pq_topology, diverse, exact_nav, anchored, global_pq,
-                                          coarse_pq, million, hybrid, million_hybrid).encode()).decode(),
+                                          coarse_pq, million, hybrid, million_hybrid,
+                                          reuse_v257).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -454,9 +504,10 @@ if __name__ == "__main__":
     parser.add_argument("--million", action="store_true")
     parser.add_argument("--hybrid", action="store_true")
     parser.add_argument("--million-hybrid", action="store_true")
+    parser.add_argument("--reuse-v257", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-cohere-graph-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         launch(args.attempt, args.pq_topology, args.diverse, args.exact_nav,
                args.anchored, args.global_pq, args.coarse_pq, args.million,
-               args.hybrid, args.million_hybrid)
+               args.hybrid, args.million_hybrid, args.reuse_v257)
