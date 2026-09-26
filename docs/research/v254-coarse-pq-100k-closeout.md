@@ -49,10 +49,25 @@ route is rejected. The preregistered rule forbids tuning its K, copies
 or probes on this used panel.
 
 **Decision:** retain V253 as the strongest CoHere 100k quality baseline
-and its authenticated PQ/FP16 artifacts. Replace the coarse candidate
-route with a materially different search method before another 100k
-falsifier: a PQ-score-aware index whose pruning uses an upper bound on
-the actual query/PQ score, rather than centroid proximity to source F32.
-First measure its bound tightness and scored-row work on this closed
-panel, then freeze one implementation for the exact-truth gate. The 1M
-and 10M promotions remain closed until both recall and bounded work pass.
+and its authenticated PQ/FP16 artifacts. A read-only, non-preregistered
+bound diagnostic on closed query ordinals 0–9 evaluated the exact PQ
+top8,192 cutoff and an admissible list bound: sum the best query/PQ
+codeword dot product seen in each of 64 subspaces, then divide by that
+list's minimum reconstructed norm and the query norm. For query 0 the
+bound covered every posting's actual PQ score, but retained 172/391
+lists and **45,035 unique rows** above the true PQ cutoff. Across the
+ten queries it retained 45,035–54,965 unique rows. Computing these
+bounds also requires list/codeword work. This simple score-aware bound
+does not meet V254's 20,000-row work target; no new benchmark claim
+follows from this diagnostic.
+
+The practical next scale candidate is the already measured V250
+diverse graph with PQ navigation and FP16 rerank: at 100k its ef4096
+arm met exact quality and loaded latency, though its p95 33,637 PQ
+scores exceeded that campaign's frozen 10,000-score scale threshold.
+That 100k result is not relabeled a pass. Freeze a **new** CoHere-1M
+gate around its unchanged source-only graph method, explicit
+score-work and memory budgets that scale with N, exact recall and
+end-to-end serving latency. The gate will determine whether the graph
+work actually scales; it cannot be inferred from either 100k result.
+Keep 10M closed until the 1M gate passes.
