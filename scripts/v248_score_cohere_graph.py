@@ -18,6 +18,7 @@ EXACT_ARMS = ("exact-512", "exact-1024", "exact-2048")
 ANCHOR_ARMS = ("anchor-256-512",)
 GLOBAL_ARMS = ("global-pq-8192",)
 COARSE_ARMS = ("coarse-pq-32-8192",)
+HYBRID_ARMS = ("hybrid-4096-8192",)
 
 
 def canonical(value):
@@ -67,12 +68,14 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 "borsuk-v252-cohere-strided-anchor-v1",
                 "borsuk-v253-cohere-global-pq-v1",
                 "borsuk-v254-cohere-coarse-pq-v1",
+                "borsuk-v256-cohere-hybrid-v1",
                 "borsuk-v255-cohere-diverse-graph-1m-serving-v1")
             or (million != (serving["schema"] == "borsuk-v255-cohere-diverse-graph-1m-serving-v1"))
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
     arms = (("4096-4096",) if million
+            else HYBRID_ARMS if serving["schema"] == "borsuk-v256-cohere-hybrid-v1"
             else COARSE_ARMS if serving["schema"] == "borsuk-v254-cohere-coarse-pq-v1"
             else GLOBAL_ARMS if serving["schema"] == "borsuk-v253-cohere-global-pq-v1"
             else ANCHOR_ARMS if serving["schema"] == "borsuk-v252-cohere-strided-anchor-v1"
@@ -128,7 +131,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
         "borsuk-v255-cohere-diverse-quality-1m-v1"
-        if million else "borsuk-v254-cohere-coarse-pq-quality-v1"
+        if million else "borsuk-v256-cohere-hybrid-quality-v1"
+        if serving["schema"] == "borsuk-v256-cohere-hybrid-v1"
+        else "borsuk-v254-cohere-coarse-pq-quality-v1"
         if serving["schema"] == "borsuk-v254-cohere-coarse-pq-v1"
         else "borsuk-v253-cohere-global-pq-quality-v1"
         if serving["schema"] == "borsuk-v253-cohere-global-pq-v1"

@@ -189,8 +189,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let anchored = args.len() == 12 && args[11] == "--strided-anchors";
     let global_pq = args.len() == 12 && args[11] == "--global-pq";
     let coarse_pq = args.len() == 16 && args[11] == "--coarse-pq";
-    if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq {
-        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors|--global-pq|--coarse-pq CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
+    let hybrid = args.len() == 16 && args[11] == "--hybrid";
+    if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq && !hybrid {
+        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors|--global-pq|--coarse-pq|--hybrid CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
@@ -209,10 +210,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         || !matches!(rows, 100_000 | 1_000_000)
         || (rows == 1_000_000
             && (build["schema"] != "borsuk-v255-cohere-diverse-graph-build-1m-v1"
-                || exact_nav || anchored || global_pq || coarse_pq))
+                || exact_nav || anchored || global_pq || coarse_pq || hybrid))
         || (rows == 100_000
             && build["schema"] == "borsuk-v255-cohere-diverse-graph-build-1m-v1")
-        || ((exact_nav || anchored || global_pq || coarse_pq)
+        || ((exact_nav || anchored || global_pq || coarse_pq || hybrid)
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
@@ -281,7 +282,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cosine_view()
         .map_err(|error| format!("PQ cosine: {error:?}"))?;
     let bound = ResidentPqCosineGraph::bind(&graph, &plane, &cosine, &old_for_new)?;
-    let coarse = if coarse_pq {
+    let coarse = if coarse_pq || hybrid {
         Some(CoarsePq::open(&args, &prep)?)
     } else {
         None
@@ -308,7 +309,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut workspace = GraphSearchWorkspace::new(rows)?;
     let workspace_bytes = workspace.resident_bytes();
-    let arms = if global_pq || coarse_pq {
+    let arms = if hybrid {
+        vec![(4096, 8192)]
+    } else if global_pq || coarse_pq {
         vec![(0, 8192)]
     } else if anchored {
         vec![(512, 0)]
@@ -331,7 +334,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             let arm = (index + offset) % arms.len();
             let (ef, shortlist) = arms[arm];
             let start = Instant::now();
-            let (ids, count) = if coarse_pq {
+            let (ids, count) = if hybrid {
+                let graph_result = bound.search(&request.query, 100, ef, 4096, &mut workspace)?;
+                let rows = coarse.as_ref().unwrap().candidates(&request.query, &mut coarse_seen);
+                let old = cosine.nominate_rows(&request.query, &rows, shortlist)
+                    .map_err(|error| format!("hybrid PQ: {error:?}"))?;
+                let mut physical = old.into_iter().map(|row| new_for_old[row]).collect::<Vec<_>>();
+                for id in graph_result.0 {
+                    let old = usize::try_from(id)?;
+                    physical.push(*new_for_old.get(old).ok_or("hybrid graph id outside map")?);
+                }
+                physical.sort_unstable();
+                physical.dedup();
+                (plane.rank_ordinals_cosine(&request.query, &physical, 100)?,
+                 graph_result.1 + rows.len())
+            } else if coarse_pq {
                 let rows = coarse
                     .as_ref()
                     .unwrap()
@@ -379,7 +396,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             visits[arm].push(count as u64);
             expected[arm][index] = ids.clone();
             row_arms.insert(
-                if coarse_pq {
+                if hybrid {
+                    "hybrid-4096-8192".to_string()
+                } else if coarse_pq {
                     format!("coarse-pq-32-{shortlist}")
                 } else if global_pq {
                     format!("global-pq-{shortlist}")
@@ -408,6 +427,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let sequential_sum = times[arm].iter().sum::<u64>();
         let loaded_wall = Instant::now();
         let mut loaded = Vec::with_capacity(QUERIES);
+        let mut loaded_raw = Vec::with_capacity(QUERIES);
         std::thread::scope(|scope| -> Result<(), Box<dyn Error>> {
             let mut handles = Vec::with_capacity(WORKERS);
             for worker in 0..WORKERS {
@@ -419,14 +439,33 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let new_for_old = &new_for_old;
                 let requests = &requests;
                 let expected = &expected[arm];
-                handles.push(scope.spawn(move || -> Result<Vec<u64>, String> {
+                handles.push(scope.spawn(move || -> Result<Vec<(usize, u64)>, String> {
                     let mut workspace =
                         GraphSearchWorkspace::new(rows).map_err(|e| e.to_string())?;
                     let mut coarse_seen = HashSet::with_capacity(20_000);
                     let mut worker_times = Vec::new();
                     for index in (worker..QUERIES).step_by(WORKERS) {
                         let start = Instant::now();
-                        let (ids, _) = if coarse_pq {
+                        let (ids, _) = if hybrid {
+                            let graph_result = bound.search(
+                                &requests[index].query, 100, ef, 4096, &mut workspace)
+                                .map_err(|e| e.to_string())?;
+                            let rows = coarse.as_ref().unwrap().candidates(
+                                &requests[index].query, &mut coarse_seen);
+                            let old = cosine.nominate_rows(&requests[index].query, &rows, shortlist)
+                                .map_err(|e| format!("hybrid PQ: {e:?}"))?;
+                            let mut physical = old.into_iter().map(|row| new_for_old[row])
+                                .collect::<Vec<_>>();
+                            for id in graph_result.0 {
+                                let old = usize::try_from(id).map_err(|e| e.to_string())?;
+                                physical.push(*new_for_old.get(old)
+                                    .ok_or("hybrid graph id outside map")?);
+                            }
+                            physical.sort_unstable();
+                            physical.dedup();
+                            plane.rank_ordinals_cosine(&requests[index].query, &physical, 100)
+                                .map(|ids| (ids, graph_result.1 + rows.len()))
+                        } else if coarse_pq {
                             let rows = coarse
                                 .as_ref()
                                 .unwrap()
@@ -478,7 +517,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         if ids != expected[index] {
                             return Err(format!("loaded ID mismatch at {index}"));
                         }
-                        worker_times.push(elapsed);
+                        worker_times.push((index, elapsed));
                     }
                     Ok(worker_times)
                 }));
@@ -488,16 +527,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .join()
                     .map_err(|_| "loaded worker panic")?
                     .map_err(|error| format!("loaded worker: {error}"))?;
-                loaded.extend(value);
+                loaded.extend(value.iter().map(|&(_, elapsed)| elapsed));
+                loaded_raw.extend(value);
             }
             Ok(())
         })?;
         if loaded.len() != QUERIES {
             return Err("loaded request count differs".into());
         }
+        if hybrid {
+            loaded_raw.sort_unstable_by_key(|&(index, _)| index);
+            let mut out = BufWriter::new(File::create("loaded-raw.jsonl")?);
+            for (index, elapsed) in loaded_raw {
+                serde_json::to_writer(&mut out, &json!({"ordinal":index,
+                    "arm":"hybrid-4096-8192","whole_ns":elapsed}))?;
+                out.write_all(b"\n")?;
+            }
+            out.flush()?;
+        }
         let loaded_wall_ns = loaded_wall.elapsed().as_nanos() as u64;
         summaries.insert(
-            if coarse_pq { format!("coarse-pq-32-{shortlist}") } else if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
+            if hybrid { "hybrid-4096-8192".to_string() } else if coarse_pq { format!("coarse-pq-32-{shortlist}") } else if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
             json!({
                 "sequential":{"p50_ns":percentile(&mut times[arm],50),
                     "p90_ns":percentile(&mut times[arm],90),"p95_ns":percentile(&mut times[arm],95),"p99_ns":percentile(&mut times[arm],99),
@@ -514,7 +564,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if coarse_pq {
+                "schema":if hybrid {
+                    "borsuk-v256-cohere-hybrid-v1"
+                } else if coarse_pq {
                     "borsuk-v254-cohere-coarse-pq-v1"
                 } else if global_pq {
                     "borsuk-v253-cohere-global-pq-v1"
@@ -539,10 +591,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "worker_workspace_bytes":workspace_bytes*WORKERS,
                 "anchor_scores_per_query":if anchored {256} else {0},
                 "pq_scores_per_query":if global_pq {rows} else {0},
-                "coarse_probe_cells":if coarse_pq {32} else {0},
+                "coarse_probe_cells":if coarse_pq || hybrid {32} else {0},
+                "fp16_rows_per_query_upper_bound":if hybrid {12_388} else {0},
                 "fp16_rows_per_query":if coarse_pq || global_pq {8192} else {0},
                 "sequential_wall_ns":sequential_wall_ns,"vector_body_gets":0,
                 "raw_sha256":digest(Path::new(&args[9]))?,
+                "loaded_raw_sha256":if hybrid {Some(digest(Path::new("loaded-raw.jsonl"))?)} else {None},
                 "requests_sha256":digest(Path::new(&args[8]))?,
             })
         ),
