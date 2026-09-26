@@ -113,6 +113,35 @@ impl Pq64CosineView<'_> {
         scored.sort_unstable_by(compare);
         Ok(scored.into_iter().map(|(_, row)| row).collect())
     }
+
+    /// Rank a bounded, distinct source-row set with the same PQ cosine
+    /// ordering as `nominate_global`.
+    pub fn nominate_rows(
+        &self,
+        query: &[f32],
+        rows: &[usize],
+        shortlist: usize,
+    ) -> Result<Vec<usize>, Pq64Error> {
+        if shortlist == 0 || shortlist > rows.len() || rows.len() > self.router.rows {
+            return Err(Pq64Error::InvalidRequest);
+        }
+        let prepared = self.prepare_query(query)?;
+        let mut seen = HashSet::new();
+        seen.try_reserve(rows.len()).map_err(|_| Pq64Error::InvalidRequest)?;
+        let mut scored = Vec::new();
+        scored.try_reserve_exact(rows.len()).map_err(|_| Pq64Error::InvalidRequest)?;
+        for &row in rows {
+            if !seen.insert(row) {
+                return Err(Pq64Error::InvalidRequest);
+            }
+            scored.push((prepared.score_row(row)?, row));
+        }
+        let compare = |a: &(f32, usize), b: &(f32, usize)| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1));
+        scored.select_nth_unstable_by(shortlist - 1, compare);
+        scored.truncate(shortlist);
+        scored.sort_unstable_by(compare);
+        Ok(scored.into_iter().map(|(_, row)| row).collect())
+    }
 }
 
 impl Pq64CosinePreparedQuery<'_> {
@@ -465,6 +494,8 @@ mod tests {
         assert!((query.score_row(0).unwrap() - 1.0).abs() < 1e-6);
         assert!((query.score_row(1).unwrap() - 0.5f32.sqrt()).abs() < 1e-6);
         assert_eq!(view.nominate_global(&[1.0, 0.0], 1).unwrap(), vec![0]);
+        assert_eq!(view.nominate_rows(&[1.0, 0.0], &[1, 0], 2).unwrap(), vec![0, 1]);
+        assert_eq!(view.nominate_rows(&[1.0, 0.0], &[0, 0], 1), Err(super::Pq64Error::InvalidRequest));
         assert_eq!(view.nominate_global(&[1.0, 0.0], 0), Err(super::Pq64Error::InvalidRequest));
         assert!(view.prepare_query(&[0.0, 0.0]).is_err());
     }

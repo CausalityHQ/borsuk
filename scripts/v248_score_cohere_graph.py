@@ -17,6 +17,7 @@ ARMS = ("2048-2048", "4096-4096", "8192-8192")
 EXACT_ARMS = ("exact-512", "exact-1024", "exact-2048")
 ANCHOR_ARMS = ("anchor-256-512",)
 GLOBAL_ARMS = ("global-pq-8192",)
+COARSE_ARMS = ("coarse-pq-32-8192",)
 
 
 def canonical(value):
@@ -62,11 +63,13 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 "borsuk-v250-cohere-diverse-graph-100k-serving-v1",
                 "borsuk-v251-cohere-fp16-navigation-v1",
                 "borsuk-v252-cohere-strided-anchor-v1",
-                "borsuk-v253-cohere-global-pq-v1")
+                "borsuk-v253-cohere-global-pq-v1",
+                "borsuk-v254-cohere-coarse-pq-v1")
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
-    arms = (GLOBAL_ARMS if serving["schema"] == "borsuk-v253-cohere-global-pq-v1"
+    arms = (COARSE_ARMS if serving["schema"] == "borsuk-v254-cohere-coarse-pq-v1"
+            else GLOBAL_ARMS if serving["schema"] == "borsuk-v253-cohere-global-pq-v1"
             else ANCHOR_ARMS if serving["schema"] == "borsuk-v252-cohere-strided-anchor-v1"
             else EXACT_ARMS if serving["schema"] == "borsuk-v251-cohere-fp16-navigation-v1"
             else ARMS)
@@ -119,7 +122,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         summary[selected]["validation_remaining_744_prior_used"]["mean_r100"] >= .995
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
-        "borsuk-v253-cohere-global-pq-quality-v1"
+        "borsuk-v254-cohere-coarse-pq-quality-v1"
+        if serving["schema"] == "borsuk-v254-cohere-coarse-pq-v1"
+        else "borsuk-v253-cohere-global-pq-quality-v1"
         if serving["schema"] == "borsuk-v253-cohere-global-pq-v1"
         else "borsuk-v252-cohere-strided-anchor-quality-v1"
         if serving["schema"] == "borsuk-v252-cohere-strided-anchor-v1"

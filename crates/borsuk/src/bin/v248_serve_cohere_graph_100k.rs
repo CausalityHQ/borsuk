@@ -1,6 +1,7 @@
 //! Frozen CoHere-100k source-only graph/PQ/FP16 transfer gate.
 
 use std::{
+    collections::HashSet,
     env,
     error::Error,
     fs::{self, File},
@@ -62,13 +63,134 @@ fn memory(field: &str) -> Result<u64, Box<dyn Error>> {
         * 1024)
 }
 
+struct CoarsePq {
+    centroids: Vec<f32>,
+    offsets: Vec<usize>,
+    postings: Vec<usize>,
+}
+
+impl CoarsePq {
+    fn open(args: &[String], prep: &Value) -> Result<Self, Box<dyn Error>> {
+        let manifest: Value = serde_json::from_slice(&fs::read(&args[15])?)?;
+        if manifest["schema"] != "borsuk-v254-coarse-pq-v1"
+            || manifest["rows"].as_u64() != Some(ROWS as u64)
+            || manifest["dimensions"].as_u64() != Some(DIMS as u64)
+            || manifest["centroids"].as_u64() != Some(ROWS.div_ceil(256) as u64)
+            || manifest["rows_per_cell"] != 256
+            || manifest["copies"] != 2
+            || manifest["seed"] != 254
+            || manifest["lloyd_iterations"] != 6
+            || manifest["source_sha256"] != prep["source_sha256"]
+            || manifest["codes_sha256"] != prep["artifacts"]["codes.bin"]["sha256"]
+        {
+            return Err("coarse PQ authority differs".into());
+        }
+        for (name, path) in [
+            ("centroids.f32", &args[12]),
+            ("offsets.u32", &args[13]),
+            ("postings.u32", &args[14]),
+        ] {
+            if manifest["artifacts"][name]["sha256"].as_str()
+                != Some(digest(Path::new(path))?.as_str())
+                || manifest["artifacts"][name]["bytes"].as_u64() != Some(fs::metadata(path)?.len())
+            {
+                return Err("coarse PQ artifact differs".into());
+            }
+        }
+        let raw_centroids = fs::read(&args[12])?;
+        let raw_offsets = fs::read(&args[13])?;
+        let raw_postings = fs::read(&args[14])?;
+        let cells = ROWS.div_ceil(256);
+        if raw_centroids.len() != cells * DIMS * 4
+            || raw_offsets.len() != (cells + 1) * 4
+            || raw_postings.len() != ROWS * 2 * 4
+        {
+            return Err("coarse PQ byte geometry differs".into());
+        }
+        let centroids = raw_centroids
+            .chunks_exact(4)
+            .map(|x| f32::from_le_bytes(x.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let offsets = raw_offsets
+            .chunks_exact(4)
+            .map(|x| u32::from_le_bytes(x.try_into().unwrap()) as usize)
+            .collect::<Vec<_>>();
+        let postings = raw_postings
+            .chunks_exact(4)
+            .map(|x| u32::from_le_bytes(x.try_into().unwrap()) as usize)
+            .collect::<Vec<_>>();
+        if centroids.len() != cells * DIMS
+            || centroids.iter().any(|x| !x.is_finite())
+            || offsets.len() != cells + 1
+            || offsets[0] != 0
+            || offsets[cells] != ROWS * 2
+            || postings.len() != ROWS * 2
+            || offsets
+                .windows(2)
+                .any(|pair| pair[0] > pair[1] || pair[1] - pair[0] > 8 * postings.len() / cells)
+        {
+            return Err("coarse PQ geometry differs".into());
+        }
+        let mut counts = vec![0u8; ROWS];
+        for pair in offsets.windows(2) {
+            let mut previous = None;
+            for &row in &postings[pair[0]..pair[1]] {
+                if row >= ROWS || previous.is_some_and(|prior| row <= prior) {
+                    return Err("coarse PQ posting order differs".into());
+                }
+                if counts[row] == 2 {
+                    return Err("coarse PQ duplicate row".into());
+                }
+                counts[row] += 1;
+                previous = Some(row);
+            }
+        }
+        if counts.iter().any(|&count| count != 2) {
+            return Err("coarse PQ posting multiplicity differs".into());
+        }
+        Ok(Self {
+            centroids,
+            offsets,
+            postings,
+        })
+    }
+
+    fn candidates(&self, query: &[f32], seen: &mut HashSet<usize>) -> Vec<usize> {
+        let mut cells = self
+            .centroids
+            .chunks_exact(DIMS)
+            .enumerate()
+            .map(|(cell, centroid)| {
+                let score = centroid
+                    .iter()
+                    .zip(query)
+                    .map(|(&x, &y)| f64::from(x) * f64::from(y))
+                    .sum::<f64>();
+                (score, cell)
+            })
+            .collect::<Vec<_>>();
+        cells.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        seen.clear();
+        let mut rows = Vec::with_capacity(20_000);
+        for &(_, cell) in cells.iter().take(32) {
+            for &row in &self.postings[self.offsets[cell]..self.offsets[cell + 1]] {
+                if seen.insert(row) {
+                    rows.push(row);
+                }
+            }
+        }
+        rows
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     let exact_nav = args.len() == 12 && args[11] == "--exact-nav";
     let anchored = args.len() == 12 && args[11] == "--strided-anchors";
     let global_pq = args.len() == 12 && args[11] == "--global-pq";
-    if args.len() != 11 && !exact_nav && !anchored && !global_pq {
-        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors|--global-pq]".into());
+    let coarse_pq = args.len() == 16 && args[11] == "--coarse-pq";
+    if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq {
+        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors|--global-pq|--coarse-pq CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
@@ -82,7 +204,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         || (build["schema"] != "borsuk-v248-cohere-graph-build-v1"
             && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1"
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
-        || ((exact_nav || anchored || global_pq)
+        || ((exact_nav || anchored || global_pq || coarse_pq)
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
@@ -151,6 +273,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cosine_view()
         .map_err(|error| format!("PQ cosine: {error:?}"))?;
     let bound = ResidentPqCosineGraph::bind(&graph, &plane, &cosine, &old_for_new)?;
+    let coarse = if coarse_pq {
+        Some(CoarsePq::open(&args, &prep)?)
+    } else {
+        None
+    };
     let mut new_for_old = vec![0; ROWS];
     for (new, &old) in old_for_new.iter().enumerate() {
         new_for_old[old] = new;
@@ -173,7 +300,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut workspace = GraphSearchWorkspace::new(ROWS)?;
     let workspace_bytes = workspace.resident_bytes();
-    let arms = if global_pq {
+    let arms = if global_pq || coarse_pq {
         vec![(0, 8192)]
     } else if anchored {
         vec![(512, 0)]
@@ -186,6 +313,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut times = vec![Vec::<u64>::with_capacity(QUERIES); arms.len()];
     let mut visits = vec![Vec::<u64>::with_capacity(QUERIES); arms.len()];
     let mut raw = BufWriter::new(File::create(&args[9])?);
+    let mut coarse_seen = HashSet::with_capacity(20_000);
     let sequential_wall = Instant::now();
     for (index, request) in requests.iter().enumerate() {
         let mut row_arms = serde_json::Map::new();
@@ -193,7 +321,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             let arm = (index + offset) % arms.len();
             let (ef, shortlist) = arms[arm];
             let start = Instant::now();
-            let (ids, count) = if global_pq {
+            let (ids, count) = if coarse_pq {
+                let rows = coarse
+                    .as_ref()
+                    .unwrap()
+                    .candidates(&request.query, &mut coarse_seen);
+                let count = rows.len();
+                let old = cosine
+                    .nominate_rows(&request.query, &rows, shortlist)
+                    .map_err(|error| format!("coarse PQ: {error:?}"))?;
+                let physical = old
+                    .into_iter()
+                    .map(|row| new_for_old[row])
+                    .collect::<Vec<_>>();
+                (
+                    plane.rank_ordinals_cosine(&request.query, &physical, 100)?,
+                    count,
+                )
+            } else if global_pq {
                 let old = cosine
                     .nominate_global(&request.query, shortlist)
                     .map_err(|error| format!("global PQ: {error:?}"))?;
@@ -224,7 +369,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             visits[arm].push(count as u64);
             expected[arm][index] = ids.clone();
             row_arms.insert(
-                if global_pq {
+                if coarse_pq {
+                    format!("coarse-pq-32-{shortlist}")
+                } else if global_pq {
                     format!("global-pq-{shortlist}")
                 } else if anchored {
                     format!("anchor-256-{ef}")
@@ -258,16 +405,34 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let graph = &graph;
                 let plane = &plane;
                 let cosine = &cosine;
+                let coarse = &coarse;
                 let new_for_old = &new_for_old;
                 let requests = &requests;
                 let expected = &expected[arm];
                 handles.push(scope.spawn(move || -> Result<Vec<u64>, String> {
                     let mut workspace =
                         GraphSearchWorkspace::new(ROWS).map_err(|e| e.to_string())?;
+                    let mut coarse_seen = HashSet::with_capacity(20_000);
                     let mut worker_times = Vec::new();
                     for index in (worker..QUERIES).step_by(WORKERS) {
                         let start = Instant::now();
-                        let (ids, _) = if global_pq {
+                        let (ids, _) = if coarse_pq {
+                            let rows = coarse
+                                .as_ref()
+                                .unwrap()
+                                .candidates(&requests[index].query, &mut coarse_seen);
+                            let count = rows.len();
+                            let old = cosine
+                                .nominate_rows(&requests[index].query, &rows, shortlist)
+                                .map_err(|error| format!("coarse PQ: {error:?}"))?;
+                            let physical = old
+                                .into_iter()
+                                .map(|row| new_for_old[row])
+                                .collect::<Vec<_>>();
+                            plane
+                                .rank_ordinals_cosine(&requests[index].query, &physical, 100)
+                                .map(|ids| (ids, count))
+                        } else if global_pq {
                             let old = cosine
                                 .nominate_global(&requests[index].query, shortlist)
                                 .map_err(|error| format!("global PQ: {error:?}"))?;
@@ -322,7 +487,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let loaded_wall_ns = loaded_wall.elapsed().as_nanos() as u64;
         summaries.insert(
-            if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
+            if coarse_pq { format!("coarse-pq-32-{shortlist}") } else if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
             json!({
                 "sequential":{"p50_ns":percentile(&mut times[arm],50),
                     "p90_ns":percentile(&mut times[arm],90),"p95_ns":percentile(&mut times[arm],95),"p99_ns":percentile(&mut times[arm],99),
@@ -339,7 +504,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if global_pq {
+                "schema":if coarse_pq {
+                    "borsuk-v254-cohere-coarse-pq-v1"
+                } else if global_pq {
                     "borsuk-v253-cohere-global-pq-v1"
                 } else if anchored {
                     "borsuk-v252-cohere-strided-anchor-v1"
@@ -360,6 +527,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "worker_workspace_bytes":workspace_bytes*WORKERS,
                 "anchor_scores_per_query":if anchored {256} else {0},
                 "pq_scores_per_query":if global_pq {ROWS} else {0},
+                "coarse_probe_cells":if coarse_pq {32} else {0},
+                "fp16_rows_per_query":if coarse_pq || global_pq {8192} else {0},
                 "sequential_wall_ns":sequential_wall_ns,"vector_body_gets":0,
                 "raw_sha256":digest(Path::new(&args[9]))?,
                 "requests_sha256":digest(Path::new(&args[8]))?,

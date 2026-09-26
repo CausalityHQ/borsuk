@@ -23,6 +23,7 @@ DIVERSE_SCHEMA = "borsuk-v250-cohere-diverse-100k-spot-v1"
 EXACT_SCHEMA = "borsuk-v251-cohere-fp16-navigation-100k-spot-v1"
 ANCHOR_SCHEMA = "borsuk-v252-cohere-strided-anchor-100k-spot-v1"
 GLOBAL_SCHEMA = "borsuk-v253-cohere-global-pq-100k-spot-v1"
+COARSE_SCHEMA = "borsuk-v254-cohere-coarse-pq-100k-spot-v1"
 IMAGE = "ami-06121aa3085b6f918"
 WALL_SECONDS = 10_800
 SOURCE = "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/"
@@ -43,15 +44,21 @@ V251_TERMINAL_SHA = "a92bd99b3c5739819894bed011ad9b766914476892c64b2137987f1f9f9
 V252_PREFIX = ("research/v252-cohere-strided-anchor-100k/"
                "136e6ed61e64a5a9ee8b18ab86fd8637b3f2d771/runs/a0001")
 V252_TERMINAL_SHA = "3e87061f17a06266244e3192cd5849a013ff86eef1cd34753a216ec63ee43294"
+V253_PREFIX = ("research/v253-cohere-global-pq-100k/"
+               "bd14239fbc22156fc7fe53bfbe0e9a7bdcb6879a/runs/a0001")
+V253_TERMINAL_SHA = "eaed2fd2640846cc7326616030eec0843314a3b0b926f01d83c54a76492b7d2d"
 ARTIFACTS = ("prep.json", "build.json", "serving.json", "quality.json",
              "requests.json", "requests.jsonl", "raw.jsonl", "truth.u32", "graph.bin",
              "vectors.raw", "plane.bin", "books.bin", "codes.bin", "map.u32",
              "prep-resources.txt", "graph-resources.txt", "serving-resources.txt",
              "truth-resources.txt", "build.log", "install.log", "run-closed.log")
+COARSE_ARTIFACTS = ("centroids.f32", "offsets.u32", "postings.u32",
+                    "coarse.json", "coarse-resources.txt")
 
 
 def worker(commit, archive_sha, archive_key, prefix, pq_topology=False,
-           diverse=False, exact_nav=False, anchored=False, global_pq=False):
+           diverse=False, exact_nav=False, anchored=False, global_pq=False,
+           coarse_pq=False):
     script = r'''#!/bin/bash
 set -euo pipefail
 systemd-run --unit=v248-hard-stop --on-active=10800s /usr/sbin/shutdown -h now
@@ -119,6 +126,7 @@ phase=prepare
   --train train-0000000{0,1,2,3,4}.parquet --rows 100000 --generation 248 --output prepared
 cp prepared/* .
 @@MATCHED_PREP@@
+@@COARSE_PREP@@
 phase=compile
 cd repo
 "$CARGO_HOME/bin/cargo" build --release --locked -p borsuk \
@@ -160,22 +168,29 @@ phase=complete
   'd6d36b22f66ecb5cfc750c117392ab1c0f264dc5bac3e9785cdab92dc6a75b19' books.bin \\
   'a645cf66c8fd92d1f248438807f97cfd676ca8fb4233efd23d7adc299ff5e9e3' codes.bin \\
   '20ff50e632cc575386b15d7fcd9c3842ef435388ed29ae8c30617158ee907dc5' map.u32 | sha256sum -c -'''
-    for key, value in {"ARTIFACTS": " ".join(ARTIFACTS), "ARTIFACTS_PY": repr(ARTIFACTS),
-                       "SCHEMA": GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
+    artifacts = ARTIFACTS + COARSE_ARTIFACTS if coarse_pq else ARTIFACTS
+    coarse_prep = '''phase=coarse
+/usr/bin/time -v -o coarse-resources.txt env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \\
+  .venv/bin/python -m scripts.v254_prepare_coarse_pq --source vectors.raw \\
+  --prep prep.json --codes codes.bin --output coarse
+cp coarse/* .'''
+    for key, value in {"ARTIFACTS": " ".join(artifacts), "ARTIFACTS_PY": repr(artifacts),
+                       "SCHEMA": COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
                        "BUCKET": BUCKET, "PREFIX": prefix,
                        "COMMIT": commit, "ARCHIVE_SHA": archive_sha,
                        "ARCHIVE_KEY": archive_key, "SOURCE": SOURCE.rstrip("/"),
                        "RECEIPT_SHA": RECEIPT_SHA, "TEST_SHA": TEST_SHA,
-                       "PQ_ARGS": "--diverse" if diverse or exact_nav or anchored or global_pq else "--pq-topology books.bin codes.bin" if pq_topology else "",
-                       "SERVE_ARGS": "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
+                       "PQ_ARGS": "--diverse" if diverse or exact_nav or anchored or global_pq or coarse_pq else "--pq-topology books.bin codes.bin" if pq_topology else "",
+                       "SERVE_ARGS": "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
                        "EXACT_TEST": ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib '
-                                      + ('pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2' if global_pq
+                                      + ('pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2' if global_pq or coarse_pq
                                          else 'resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch')
-                                      + ' -- --exact >>"$root/build.log" 2>&1' if exact_nav or anchored or global_pq else ""),
-                       "MATCHED_PREP": matched_prep if pq_topology or diverse or exact_nav or anchored or global_pq else "",
-                       "MATCHED_GRAPH": ("printf '%s  graph.bin\\n' '688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7' | sha256sum -c -" if exact_nav or anchored or global_pq else ""),
-                       "MATCHED_REQUESTS": ("printf '%s  requests.jsonl\\n' '86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812' | sha256sum -c -" if pq_topology or diverse or exact_nav or anchored or global_pq else ""),
-                       "MATCHED_TRUTH": ("printf '%s  truth.u32\\n' '06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8' | sha256sum -c -" if pq_topology or diverse or exact_nav or anchored or global_pq else "")}.items():
+                                      + ' -- --exact >>"$root/build.log" 2>&1' if exact_nav or anchored or global_pq or coarse_pq else ""),
+                       "COARSE_PREP": coarse_prep if coarse_pq else "",
+                       "MATCHED_PREP": matched_prep if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq else "",
+                       "MATCHED_GRAPH": ("printf '%s  graph.bin\\n' '688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7' | sha256sum -c -" if exact_nav or anchored or global_pq or coarse_pq else ""),
+                       "MATCHED_REQUESTS": ("printf '%s  requests.jsonl\\n' '86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812' | sha256sum -c -" if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq else ""),
+                       "MATCHED_TRUTH": ("printf '%s  truth.u32\\n' '06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8' | sha256sum -c -" if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq else "")}.items():
         script = script.replace("@@" + key + "@@", value)
     if "@@" in script:
         raise ValueError("unresolved V248 worker placeholder")
@@ -183,8 +198,8 @@ phase=complete
 
 
 def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=False,
-           global_pq=False):
-    if sum((pq_topology, diverse, exact_nav, anchored, global_pq)) > 1:
+           global_pq=False, coarse_pq=False):
+    if sum((pq_topology, diverse, exact_nav, anchored, global_pq, coarse_pq)) > 1:
         raise ValueError("select one graph treatment")
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
@@ -197,18 +212,19 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         raise ValueError("source is not a fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    campaign = ("v253-cohere-global-pq-100k" if global_pq else
+    campaign = ("v254-cohere-coarse-pq-100k" if coarse_pq else
+                "v253-cohere-global-pq-100k" if global_pq else
                 "v252-cohere-strided-anchor-100k" if anchored else
                 "v251-cohere-fp16-navigation-100k" if exact_nav else
                 "v250-cohere-diverse-100k" if diverse else
                 "v249-cohere-pq-aligned-100k" if pq_topology else
                 "v248-cohere-transfer-100k")
-    schema = GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
+    schema = COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
     archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
     prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
     ec2, s3 = session.client("ec2"), session.client("s3")
-    if pq_topology or diverse or exact_nav or anchored or global_pq:
+    if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq:
         parent_raw = s3.get_object(Bucket=BUCKET,
                                    Key=PARENT_PREFIX + "/terminal.json")["Body"].read()
         parent = json.loads(parent_raw)
@@ -228,13 +244,13 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         }.items():
             if parent["artifacts"].get(name, {}).get("sha256") != digest:
                 raise ValueError(f"paired V248 artifact differs: {name}")
-    if diverse or exact_nav or anchored or global_pq:
+    if diverse or exact_nav or anchored or global_pq or coarse_pq:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V249_PREFIX + "/terminal.json")["Body"].read()
         if (hashlib.sha256(previous).hexdigest() != V249_TERMINAL_SHA
                 or json.loads(previous).get("status") != "complete"):
             raise ValueError("V249 baseline terminal differs")
-    if exact_nav or anchored or global_pq:
+    if exact_nav or anchored or global_pq or coarse_pq:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V250_PREFIX + "/terminal.json")["Body"].read()
         prior = json.loads(previous)
@@ -243,7 +259,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 or prior["artifacts"].get("graph.bin", {}).get("sha256")
                 != "688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7"):
             raise ValueError("V250 paired graph terminal differs")
-    if anchored or global_pq:
+    if anchored or global_pq or coarse_pq:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V251_PREFIX + "/terminal.json")["Body"].read()
         prior = json.loads(previous)
@@ -252,12 +268,18 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 or prior["artifacts"].get("graph.bin", {}).get("sha256")
                 != "688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7"):
             raise ValueError("V251 paired graph terminal differs")
-    if global_pq:
+    if global_pq or coarse_pq:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V252_PREFIX + "/terminal.json")["Body"].read()
         if (hashlib.sha256(previous).hexdigest() != V252_TERMINAL_SHA
                 or json.loads(previous).get("status") != "complete"):
             raise ValueError("V252 paired terminal differs")
+    if coarse_pq:
+        previous = s3.get_object(Bucket=BUCKET,
+                                 Key=V253_PREFIX + "/terminal.json")["Body"].read()
+        if (hashlib.sha256(previous).hexdigest() != V253_TERMINAL_SHA
+                or json.loads(previous).get("status") != "complete"):
+            raise ValueError("V253 paired terminal differs")
     if not missing(s3, prefix + "/reservation.json") or not missing(s3, prefix + "/terminal.json"):
         raise ValueError("attempt already registered")
     active = ec2.describe_instances(Filters=[
@@ -277,25 +299,28 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         "split": "development 0-255; validation 256-999 prior used",
         "construction": {"m": 32, "m0": 64, "ef_construction": 128,
                          "workers": 8, "source_only_pq64": True},
-        "arms": [[0, 8192]] if global_pq else
+        "arms": [[0, 8192]] if global_pq or coarse_pq else
                 [[512, 0]] if anchored else
                 [[512, 0], [1024, 0], [2048, 0]] if exact_nav else
                 [[2048, 2048], [4096, 4096], [8192, 8192]],
         "pq_aligned_topology": pq_topology,
-        "diverse_pruning": diverse or exact_nav or anchored or global_pq,
+        "diverse_pruning": diverse or exact_nav or anchored or global_pq or coarse_pq,
         "exact_fp16_navigation": exact_nav or anchored,
         "strided_anchors": 256 if anchored else 0,
         "global_pq_scan_rows": 100_000 if global_pq else 0,
-        "paired_v248_terminal_sha256": PARENT_TERMINAL_SHA if pq_topology or diverse or exact_nav or anchored or global_pq else None,
-        "paired_v249_terminal_sha256": V249_TERMINAL_SHA if diverse or exact_nav or anchored or global_pq else None,
-        "paired_v250_terminal_sha256": V250_TERMINAL_SHA if exact_nav or anchored or global_pq else None,
-        "paired_v251_terminal_sha256": V251_TERMINAL_SHA if anchored or global_pq else None,
-        "paired_v252_terminal_sha256": V252_TERMINAL_SHA if global_pq else None,
+        "coarse_pq": {"rows_per_cell": 256, "copies": 2, "probes": 32,
+                      "shortlist": 8192, "seed": 254, "lloyd_iterations": 6} if coarse_pq else None,
+        "paired_v248_terminal_sha256": PARENT_TERMINAL_SHA if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq else None,
+        "paired_v249_terminal_sha256": V249_TERMINAL_SHA if diverse or exact_nav or anchored or global_pq or coarse_pq else None,
+        "paired_v250_terminal_sha256": V250_TERMINAL_SHA if exact_nav or anchored or global_pq or coarse_pq else None,
+        "paired_v251_terminal_sha256": V251_TERMINAL_SHA if anchored or global_pq or coarse_pq else None,
+        "paired_v252_terminal_sha256": V252_TERMINAL_SHA if global_pq or coarse_pq else None,
+        "paired_v253_terminal_sha256": V253_TERMINAL_SHA if coarse_pq else None,
         "interruption_policy": "discard interrupted cell, restart under a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken=("v253-" if global_pq else "v252-" if anchored else "v251-" if exact_nav else "v250-" if diverse else "v249-" if pq_topology else "v248-")
+        ClientToken=("v254-" if coarse_pq else "v253-" if global_pq else "v252-" if anchored else "v251-" if exact_nav else "v250-" if diverse else "v249-" if pq_topology else "v248-")
         + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
@@ -311,7 +336,8 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
             {"Key": "Name", "Value": "borsuk-" + campaign},
             {"Key": "BorsukAttempt", "Value": attempt}]}],
         UserData=base64.b64encode(worker(commit, archive_sha, archive_key, prefix,
-                                          pq_topology, diverse, exact_nav, anchored, global_pq).encode()).decode(),
+                                          pq_topology, diverse, exact_nav, anchored, global_pq,
+                                          coarse_pq).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -332,7 +358,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 print(json.dumps(terminal, sort_keys=True), flush=True)
                 if terminal.get("status") != "complete":
                     raise RuntimeError("V248 failed; inspect only closed terminal artifacts")
-                if set(terminal.get("artifacts", {})) != set(ARTIFACTS):
+                if set(terminal.get("artifacts", {})) != set(ARTIFACTS + COARSE_ARTIFACTS if coarse_pq else ARTIFACTS):
                     raise ValueError("V248 artifact roster differs")
                 for name, identity in terminal["artifacts"].items():
                     body = s3.get_object(Bucket=BUCKET,
@@ -372,8 +398,9 @@ if __name__ == "__main__":
     parser.add_argument("--exact-nav", action="store_true")
     parser.add_argument("--anchored", action="store_true")
     parser.add_argument("--global-pq", action="store_true")
+    parser.add_argument("--coarse-pq", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-cohere-graph-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         launch(args.attempt, args.pq_topology, args.diverse, args.exact_nav,
-               args.anchored, args.global_pq)
+               args.anchored, args.global_pq, args.coarse_pq)
