@@ -71,6 +71,7 @@ fn graph_schema_matches(rows: usize, schema: &str, special: bool) -> bool {
                 && (!special || schema == "borsuk-v250-cohere-diverse-graph-build-v1")
         }
         1_000_000 => schema == "borsuk-v255-cohere-diverse-graph-build-1m-v1" && !special,
+        10_000_000 => schema == "borsuk-v270-cohere-diverse-graph-build-10m-v1" && !special,
         _ => false,
     }
 }
@@ -345,7 +346,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         vec![(512, 0)]
     } else if exact_nav {
         vec![(512, 0), (1024, 0), (2048, 0)]
-    } else if rows == 1_000_000 {
+    } else if rows >= 1_000_000 {
         vec![(4096, 4096)]
     } else {
         ARMS.to_vec()
@@ -703,7 +704,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "{}\n",
             json!({
                 "schema":if cached_dual_graph {
-                    if rows == 1_000_000 {"borsuk-v268-cohere-cached-dual-graph-1m-v1"}
+                    if rows == 10_000_000 {"borsuk-v270-cohere-cached-dual-graph-10m-v1"}
+                    else if rows == 1_000_000 {"borsuk-v268-cohere-cached-dual-graph-1m-v1"}
                     else {"borsuk-v267-cohere-cached-dual-graph-100k-v1"}
                 } else if sq8_dual_graph {
                     "borsuk-v266-cohere-sq8-dual-graph-100k-v1"
@@ -735,7 +737,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else if build["schema"] == "borsuk-v249-cohere-pq-aligned-graph-build-v1" {
                     "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1"
                 } else {"borsuk-v248-cohere-graph-100k-serving-v1"},
-                "dataset":if rows == 1_000_000 {"CoHere-1M D768 cosine"} else {"CoHere-100k D768 cosine"},"split":"development-256-plus-validation-744-prior-used",
+                "dataset":if rows == 10_000_000 {"CoHere-10M D768 cosine"} else if rows == 1_000_000 {"CoHere-1M D768 cosine"} else {"CoHere-100k D768 cosine"},"split":"development-256-plus-validation-744-prior-used",
                 "queries":QUERIES,"workers":WORKERS,"arms":summaries,
                 "cold_hydration_ns":hydration_ns,"hydrated_rss_bytes":hydrated_rss_bytes,
                 "process_peak_rss_bytes":memory("VmHWM:")?,
@@ -772,5 +774,13 @@ mod tests {
             "borsuk-v255-cohere-diverse-graph-build-1m-v1", true));
         assert!(graph_schema_matches(100_000,
             "borsuk-v250-cohere-diverse-graph-build-v1", true));
+    }
+
+    #[test]
+    fn ten_million_graph_requires_its_own_schema() {
+        assert!(graph_schema_matches(10_000_000,
+            "borsuk-v270-cohere-diverse-graph-build-10m-v1", false));
+        assert!(!graph_schema_matches(10_000_000,
+            "borsuk-v255-cohere-diverse-graph-build-1m-v1", false));
     }
 }

@@ -55,8 +55,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["dataset_id"] != "cohere-large-10m-768"
         || prep["staging_receipt_sha256"]
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
-        || !matches!(rows, 100_000 | 1_000_000)
-        || (rows == 1_000_000 && !diverse)
+        || !matches!(rows, 100_000 | 1_000_000 | 10_000_000)
+        || (rows >= 1_000_000 && !diverse)
         || prep["dimensions"].as_u64() != Some(DIMS as u64)
         || prep["artifacts"]["plane.bin"]["sha256"].as_str()
             != Some(digest(Path::new(&args[2]))?.as_str())
@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &args[5],
         format!(
             "{}\n",
-            json!({"schema":if rows == 1_000_000 {"borsuk-v255-cohere-diverse-graph-build-1m-v1"} else if diverse {"borsuk-v250-cohere-diverse-graph-build-v1"} else if pq_topology {"borsuk-v249-cohere-pq-aligned-graph-build-v1"} else {"borsuk-v248-cohere-graph-build-v1"},
+            json!({"schema":if rows == 10_000_000 {"borsuk-v270-cohere-diverse-graph-build-10m-v1"} else if rows == 1_000_000 {"borsuk-v255-cohere-diverse-graph-build-1m-v1"} else if diverse {"borsuk-v250-cohere-diverse-graph-build-v1"} else if pq_topology {"borsuk-v249-cohere-pq-aligned-graph-build-v1"} else {"borsuk-v248-cohere-graph-build-v1"},
         "construction_source":if pq_topology {"authenticated-pq-reconstruction"} else {"authenticated-f32-source"},
         "source_sha256":source,"plane_sha256":prep["artifacts"]["plane.bin"]["sha256"],
         "graph_sha256":graph_sha,"graph_bytes":fs::metadata(&args[4])?.len(),

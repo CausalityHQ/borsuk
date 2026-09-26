@@ -110,6 +110,16 @@ class V255WorkerTest(unittest.TestCase):
         self.assertIn("loaded-raw.jsonl", script)
         self.assertNotIn("@@", script)
 
+    def test_ten_million_cached_graph_uses_full_source_and_own_cap(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt",
+                        ten_million_cached_graph=True)
+        self.assertIn("--rows 10000000 --generation 270", script)
+        self.assertIn("seq 0 457", script)
+        self.assertIn("--cached-dual-graph", script)
+        self.assertIn("borsuk-v270-cohere-cached-dual-graph-10m-spot-v1", script)
+        self.assertIn("--on-active=43200s", script)
+        self.assertNotIn("@@", script)
+
     def test_million_dual_graph_reuses_closed_graph_without_coarse(self):
         script = worker("0" * 40, "1" * 64, "source", "attempt",
                         million_dual_graph=True, reuse_v257=True)
