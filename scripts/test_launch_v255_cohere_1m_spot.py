@@ -36,6 +36,16 @@ class V255WorkerTest(unittest.TestCase):
         self.assertIn("--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json", script)
         self.assertNotIn("@@", script)
 
+    def test_million_exact_reuses_closed_graph_and_seals_loaded_samples(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt",
+                        million_exact=True, reuse_v257=True)
+        self.assertIn("--million-exact", script)
+        self.assertIn("borsuk-v258-cohere-fp16-navigation-1m-spot-v1", script)
+        self.assertIn("prior-terminal.json", script)
+        self.assertIn("loaded-raw.jsonl", script)
+        self.assertIn("62e14eba043fafb8d8ec7c833d7d320c5d823c549683d15e5eacdff365a87f39", script)
+        self.assertNotIn("@@", script)
+
 
 if __name__ == "__main__":
     unittest.main()

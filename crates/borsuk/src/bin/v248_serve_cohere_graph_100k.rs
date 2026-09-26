@@ -201,13 +201,14 @@ impl CoarsePq {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
-    let exact_nav = args.len() == 12 && args[11] == "--exact-nav";
+    let million_exact = args.len() == 12 && args[11] == "--million-exact";
+    let exact_nav = args.len() == 12 && (args[11] == "--exact-nav" || million_exact);
     let anchored = args.len() == 12 && args[11] == "--strided-anchors";
     let global_pq = args.len() == 12 && args[11] == "--global-pq";
     let coarse_pq = args.len() == 16 && args[11] == "--coarse-pq";
     let hybrid = args.len() == 16 && args[11] == "--hybrid";
     if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq && !hybrid {
-        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--strided-anchors|--global-pq|--coarse-pq|--hybrid CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
+        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--million-exact|--strided-anchors|--global-pq|--coarse-pq|--hybrid CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
@@ -220,7 +221,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["staging_receipt_sha256"]
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
         || !graph_schema_matches(rows, build["schema"].as_str().unwrap_or(""),
-            exact_nav || anchored || global_pq || coarse_pq)
+            (exact_nav && !million_exact) || anchored || global_pq || coarse_pq)
+        || (million_exact && rows != 1_000_000)
         || (rows == 100_000 && hybrid
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
@@ -317,7 +319,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut workspace = GraphSearchWorkspace::new(rows)?;
     let workspace_bytes = workspace.resident_bytes();
-    let arms = if hybrid {
+    let arms = if million_exact {
+        vec![(2048, 0)]
+    } else if hybrid {
         vec![(4096, 8192)]
     } else if global_pq || coarse_pq {
         vec![(0, 8192)]
@@ -543,12 +547,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         if loaded.len() != QUERIES {
             return Err("loaded request count differs".into());
         }
-        if hybrid {
+        if hybrid || million_exact {
             loaded_raw.sort_unstable_by_key(|&(index, _)| index);
             let mut out = BufWriter::new(File::create("loaded-raw.jsonl")?);
             for (index, elapsed) in loaded_raw {
                 serde_json::to_writer(&mut out, &json!({"ordinal":index,
-                    "arm":"hybrid-4096-8192","whole_ns":elapsed}))?;
+                    "arm":if million_exact {"exact-2048"} else {"hybrid-4096-8192"},
+                    "whole_ns":elapsed}))?;
                 out.write_all(b"\n")?;
             }
             out.flush()?;
@@ -582,7 +587,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else if anchored {
                     "borsuk-v252-cohere-strided-anchor-v1"
                 } else if exact_nav {
-                    "borsuk-v251-cohere-fp16-navigation-v1"
+                    if million_exact {"borsuk-v258-cohere-fp16-navigation-1m-v1"}
+                    else {"borsuk-v251-cohere-fp16-navigation-v1"}
                 } else if rows == 1_000_000 {
                     "borsuk-v255-cohere-diverse-graph-1m-serving-v1"
                 } else if build["schema"] == "borsuk-v250-cohere-diverse-graph-build-v1" {
@@ -605,7 +611,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "fp16_rows_per_query":if coarse_pq || global_pq {8192} else {0},
                 "sequential_wall_ns":sequential_wall_ns,"vector_body_gets":0,
                 "raw_sha256":digest(Path::new(&args[9]))?,
-                "loaded_raw_sha256":if hybrid {Some(digest(Path::new("loaded-raw.jsonl"))?)} else {None},
+                "loaded_raw_sha256":if hybrid || million_exact {Some(digest(Path::new("loaded-raw.jsonl"))?)} else {None},
                 "requests_sha256":digest(Path::new(&args[8]))?,
             })
         ),
