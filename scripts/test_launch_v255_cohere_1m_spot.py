@@ -101,6 +101,15 @@ class V255WorkerTest(unittest.TestCase):
         self.assertIn("fast_navigation_scores_full_simd_chunk_and_tail", script)
         self.assertNotIn("@@", script)
 
+    def test_million_cached_dual_graph_reuses_sealed_generation(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt",
+                        million_cached_dual_graph=True, reuse_v257=True)
+        self.assertIn("--cached-dual-graph", script)
+        self.assertIn("borsuk-v268-cohere-cached-dual-graph-1m-spot-v1", script)
+        self.assertIn("prior-terminal.json", script)
+        self.assertIn("loaded-raw.jsonl", script)
+        self.assertNotIn("@@", script)
+
     def test_million_dual_graph_reuses_closed_graph_without_coarse(self):
         script = worker("0" * 40, "1" * 64, "source", "attempt",
                         million_dual_graph=True, reuse_v257=True)

@@ -703,7 +703,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "{}\n",
             json!({
                 "schema":if cached_dual_graph {
-                    "borsuk-v267-cohere-cached-dual-graph-100k-v1"
+                    if rows == 1_000_000 {"borsuk-v268-cohere-cached-dual-graph-1m-v1"}
+                    else {"borsuk-v267-cohere-cached-dual-graph-100k-v1"}
                 } else if sq8_dual_graph {
                     "borsuk-v266-cohere-sq8-dual-graph-100k-v1"
                 } else if fast_dual_graph {

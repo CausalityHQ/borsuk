@@ -84,17 +84,20 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 "borsuk-v265-cohere-fast-dual-graph-100k-v1",
                 "borsuk-v266-cohere-sq8-dual-graph-100k-v1",
                 "borsuk-v267-cohere-cached-dual-graph-100k-v1",
+                "borsuk-v268-cohere-cached-dual-graph-1m-v1",
                 "borsuk-v255-cohere-diverse-graph-1m-serving-v1")
             or (million != (serving["schema"] in (
                 "borsuk-v255-cohere-diverse-graph-1m-serving-v1",
                 "borsuk-v257-cohere-hybrid-1m-v1",
                 "borsuk-v258-cohere-fp16-navigation-1m-v1",
-                "borsuk-v261-cohere-dual-graph-1m-v1")))
+                "borsuk-v261-cohere-dual-graph-1m-v1",
+                "borsuk-v268-cohere-cached-dual-graph-1m-v1")))
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
-    arms = (CACHED_DUAL_GRAPH_ARMS if serving["schema"] ==
-                "borsuk-v267-cohere-cached-dual-graph-100k-v1"
+    arms = (CACHED_DUAL_GRAPH_ARMS if serving["schema"] in (
+                "borsuk-v267-cohere-cached-dual-graph-100k-v1",
+                "borsuk-v268-cohere-cached-dual-graph-1m-v1")
             else SQ8_DUAL_GRAPH_ARMS if serving["schema"] ==
                 "borsuk-v266-cohere-sq8-dual-graph-100k-v1"
             else FAST_DUAL_GRAPH_ARMS if serving["schema"] ==
@@ -163,7 +166,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         summary[selected]["validation_remaining_744_prior_used"]["mean_r100"] >= .995
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
-        "borsuk-v261-cohere-dual-graph-quality-1m-v1"
+        "borsuk-v268-cohere-cached-dual-graph-quality-1m-v1"
+        if serving["schema"] == "borsuk-v268-cohere-cached-dual-graph-1m-v1"
+        else "borsuk-v261-cohere-dual-graph-quality-1m-v1"
         if serving["schema"] == "borsuk-v261-cohere-dual-graph-1m-v1"
         else "borsuk-v267-cohere-cached-dual-graph-quality-100k-v1"
         if serving["schema"] == "borsuk-v267-cohere-cached-dual-graph-100k-v1"
