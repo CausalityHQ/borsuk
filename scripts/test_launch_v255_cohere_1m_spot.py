@@ -62,6 +62,16 @@ class V255WorkerTest(unittest.TestCase):
         self.assertNotIn("v254_prepare_coarse_pq", script)
         self.assertNotIn("@@", script)
 
+    def test_million_dual_graph_reuses_closed_graph_without_coarse(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt",
+                        million_dual_graph=True, reuse_v257=True)
+        self.assertIn("--dual-graph", script)
+        self.assertIn("borsuk-v261-cohere-dual-graph-1m-spot-v1", script)
+        self.assertIn("prior-terminal.json", script)
+        self.assertIn("loaded-raw.jsonl", script)
+        self.assertNotIn("v254_prepare_coarse_pq", script)
+        self.assertNotIn("@@", script)
+
 
 if __name__ == "__main__":
     unittest.main()

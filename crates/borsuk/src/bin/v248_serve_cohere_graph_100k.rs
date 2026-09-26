@@ -223,9 +223,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["staging_receipt_sha256"]
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
         || !graph_schema_matches(rows, build["schema"].as_str().unwrap_or(""),
-            (exact_nav && !million_exact) || anchored || global_pq || coarse_pq || dual || dual_graph)
+            (exact_nav && !million_exact) || anchored || global_pq || coarse_pq || dual
+                || (dual_graph && rows == 100_000))
         || (million_exact && rows != 1_000_000)
-        || ((dual || dual_graph) && rows != 100_000)
+        || (dual && rows != 100_000)
         || (rows == 100_000 && (hybrid || dual || dual_graph)
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
@@ -642,7 +643,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "{}\n",
             json!({
                 "schema":if dual_graph {
-                    "borsuk-v260-cohere-dual-graph-100k-v1"
+                    if rows == 1_000_000 {"borsuk-v261-cohere-dual-graph-1m-v1"}
+                    else {"borsuk-v260-cohere-dual-graph-100k-v1"}
                 } else if dual {
                     "borsuk-v259-cohere-dual-navigation-100k-v1"
                 } else if hybrid {
