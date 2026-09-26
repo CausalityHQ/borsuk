@@ -15,7 +15,7 @@ use thiserror::Error;
 use crate::{
     pq64_nominee::{Pq64CosineView, Pq64Router},
     resident_fp16_tier::{ResidentFp16Error, ResidentFp16Tier, resident_plane_bytes},
-    resident_vector_graph::{ResidentPqCosineGraph, ResidentVectorGraph},
+    resident_vector_graph::{GraphSearchWorkspace, ResidentPqCosineGraph, ResidentVectorGraph},
 };
 
 pub(crate) const SCHEMA: &str = "borsuk-resident-graph-generation-v1";
@@ -61,6 +61,7 @@ pub struct ResidentGraphGeneration {
     graph: ResidentVectorGraph,
     pq: Pq64Router,
     old_for_new: Vec<usize>,
+    physical_for_source: Vec<(u64, usize)>,
 }
 
 /// Readers retain their authenticated generation while a replacement becomes
@@ -217,12 +218,16 @@ pub(crate) fn preflight_root(
     let map_resident_bytes = rows
         .checked_mul(std::mem::size_of::<usize>())
         .ok_or(ResidentGraphGenerationError::Invalid("map resident size"))?;
+    let source_lookup_bytes = rows
+        .checked_mul(std::mem::size_of::<(u64, usize)>())
+        .ok_or(ResidentGraphGenerationError::Invalid("source lookup size"))?;
     let worker_bytes = rows
         .checked_mul(8)
         .and_then(|n| n.checked_mul(active_workers))
         .ok_or(ResidentGraphGenerationError::Invalid("worker size"))?;
     let floor = plane_bytes
         .checked_add(map_resident_bytes)
+        .and_then(|n| n.checked_add(source_lookup_bytes))
         .and_then(|n| n.checked_add(code_bytes))
         .and_then(|n| n.checked_add(book_bytes))
         .and_then(|n| n.checked_add(graph_bytes))
@@ -279,6 +284,17 @@ impl ResidentGraphGeneration {
             &root.graph.sha256,
             &plane,
         )?;
+        let mut physical_for_source = Vec::with_capacity(rows);
+        for ordinal in 0..rows {
+            physical_for_source.push((plane.source_id(ordinal)?, ordinal));
+        }
+        physical_for_source.sort_unstable_by_key(|&(id, _)| id);
+        if physical_for_source
+            .windows(2)
+            .any(|pair| pair[0].0 == pair[1].0)
+        {
+            return Err(ResidentGraphGenerationError::Invalid("duplicate source ID"));
+        }
         let old_for_new = mapping
             .chunks_exact(4)
             .map(|word| u32::from_le_bytes(word.try_into().unwrap()) as usize)
@@ -306,10 +322,15 @@ impl ResidentGraphGeneration {
             .capacity()
             .checked_mul(std::mem::size_of::<usize>())
             .ok_or(ResidentGraphGenerationError::Invalid("map resident size"))?;
+        let source_lookup_allocation = physical_for_source
+            .capacity()
+            .checked_mul(std::mem::size_of::<(u64, usize)>())
+            .ok_or(ResidentGraphGenerationError::Invalid("source lookup size"))?;
         let actual = plane
             .resident_bytes()
             .checked_add(graph.heap_bytes())
             .and_then(|n| n.checked_add(map_allocation))
+            .and_then(|n| n.checked_add(source_lookup_allocation))
             .and_then(|n| n.checked_add(code_bytes))
             .and_then(|n| n.checked_add(book_bytes))
             .and_then(|n| n.checked_add(dimensions.checked_mul(4)?))
@@ -324,6 +345,7 @@ impl ResidentGraphGeneration {
             graph,
             pq,
             old_for_new,
+            physical_for_source,
         })
     }
 
@@ -367,6 +389,35 @@ impl ResidentGraphGeneration {
             view,
             &self.old_for_new,
         )?)
+    }
+
+    /// Merge a prebound PQ graph result with exact graph finalists in FP16.
+    pub fn search_dual_graph(
+        &self,
+        query: &[f32],
+        k: usize,
+        exact_ef: usize,
+        pq_result: (Vec<u64>, usize),
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentGraphGenerationError> {
+        let (pq_ids, pq_visits) = pq_result;
+        let (exact_ids, exact_visits) = self
+            .graph
+            .search_with_workspace(query, &self.plane, k, exact_ef, workspace)?;
+        let mut physical = Vec::with_capacity(pq_ids.len() + exact_ids.len());
+        for id in pq_ids.into_iter().chain(exact_ids) {
+            let position = self
+                .physical_for_source
+                .binary_search_by_key(&id, |&(source_id, _)| source_id)
+                .map_err(|_| ResidentGraphGenerationError::Invalid("returned source ID"))?;
+            physical.push(self.physical_for_source[position].1);
+        }
+        physical.sort_unstable();
+        physical.dedup();
+        Ok((
+            self.plane.rank_ordinals_cosine(query, &physical, k)?,
+            pq_visits + exact_visits,
+        ))
     }
 }
 
@@ -476,6 +527,12 @@ mod tests {
                 .search(&[1.0, 0.0], 2, 4, 2, &mut workspace)
                 .unwrap()
                 .0,
+            vec![42, 7]
+        );
+        assert_eq!(
+            loaded.search_dual_graph(&[1.0, 0.0], 2, 4,
+                bound.search(&[1.0, 0.0], 2, 4, 2, &mut workspace).unwrap(),
+                &mut workspace).unwrap().0,
             vec![42, 7]
         );
         let store = InMemory::new();

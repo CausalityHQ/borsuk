@@ -61,6 +61,7 @@ struct SearchResponse {
 fn workers(
     loaded: Arc<ResidentGraphGeneration>,
     overlay: Option<Arc<ResidentGraphOverlay>>,
+    dual_graph: bool,
 ) -> Result<Arc<AppState>, Box<dyn Error>> {
     let delta_rows = overlay.as_ref().map_or(0, |_| loaded.rows() / 100);
     let overlay_bytes = overlay.as_ref().map_or(0, |value| value.resident_bytes());
@@ -94,6 +95,15 @@ fn workers(
                             .search(&work.query, 100, 4096, 4096, &mut workspace)
                             .map(|(ids, stats)| (ids, stats.base_visits))
                             .map_err(|error| error.to_string())
+                    } else if dual_graph {
+                        bound
+                            .search(&work.query, 100, 4096, 4096, &mut workspace)
+                            .map_err(|error| error.to_string())
+                            .and_then(|pq| {
+                                loaded
+                                    .search_dual_graph(&work.query, 100, 2048, pq, &mut workspace)
+                                    .map_err(|error| error.to_string())
+                            })
                     } else {
                         bound
                             .search(&work.query, 100, 4096, 4096, &mut workspace)
@@ -180,10 +190,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err("unsupported mutation representation".into());
     }
     let listen: SocketAddr = args[5].parse()?;
-    let (loaded, overlay) = if args[1] == "generation-s3" {
+    let dual_graph = args[1] == "generation-s3-dual";
+    let (loaded, overlay) = if args[1] == "generation-s3" || dual_graph {
         if args.len() != 6 {
             return Err(
-                "usage: v220_graph_http generation-s3 S3_URI CACHE_DIR MAX_RESIDENT_BYTES LISTEN"
+                "usage: v220_graph_http generation-s3[-dual] S3_URI CACHE_DIR MAX_RESIDENT_BYTES LISTEN"
                     .into(),
             );
         }
@@ -285,7 +296,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
         (loaded, overlay)
     };
-    let state = workers(loaded, overlay)?;
+    let state = workers(loaded, overlay, dual_graph)?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     axum::serve(listener, router(state)).await?;
     Ok(())

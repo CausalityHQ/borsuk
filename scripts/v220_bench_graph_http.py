@@ -29,8 +29,16 @@ def percentile(values: list[int], percent: int) -> int:
 
 def run(args: argparse.Namespace) -> None:
     prep = json.loads(args.prep.read_text())
-    if (prep["schema"] != "borsuk-v217-graph-1m-preparation-v1"
-            or prep["requests_sha256"] != digest(args.requests)):
+    cohere = prep["schema"] == "borsuk-v248-source-preparation-v1"
+    valid_requests = (prep.get("requests_sha256") == digest(args.requests)
+                      if not cohere else
+                      prep.get("dataset_id") == "cohere-large-10m-768"
+                      and prep.get("rows") == 1_000_000
+                      and digest(args.requests) ==
+                      "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812")
+    if (prep["schema"] not in ("borsuk-v217-graph-1m-preparation-v1",
+                               "borsuk-v248-source-preparation-v1")
+            or not valid_requests):
         raise ValueError("V219 request panel identity differs")
     requests = [json.loads(line) for line in args.requests.read_text().splitlines()]
     if (len(requests) != COUNT or any(
@@ -82,7 +90,8 @@ def run(args: argparse.Namespace) -> None:
             output.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
     latencies = [row["whole_ns"] for row in rows]
     args.summary.write_text(json.dumps({
-        "schema": ("borsuk-v220-graph-http-1m-v1" if args.host in {"127.0.0.1", "localhost"}
+        "schema": ("borsuk-v262-cohere-dual-http-client-1m-v1" if cohere else
+                   "borsuk-v220-graph-http-1m-v1" if args.host in {"127.0.0.1", "localhost"}
                    else "borsuk-v222-graph-http-client-1m-v1"),
         "requests_sha256": digest(args.requests),
         "raw_sha256": digest(args.raw), "queries": COUNT, "concurrency": WORKERS,
