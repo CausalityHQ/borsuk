@@ -46,6 +46,14 @@ class V255WorkerTest(unittest.TestCase):
         self.assertIn("62e14eba043fafb8d8ec7c833d7d320c5d823c549683d15e5eacdff365a87f39", script)
         self.assertNotIn("@@", script)
 
+    def test_dual_navigation_keeps_both_paths_and_seals_loaded_samples(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt", dual=True)
+        self.assertIn("--dual centroids.f32 offsets.u32 postings.u32 coarse.json", script)
+        self.assertIn("borsuk-v259-cohere-dual-navigation-100k-spot-v1", script)
+        self.assertIn("loaded-raw.jsonl", script)
+        self.assertIn("688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7", script)
+        self.assertNotIn("@@", script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,6 +28,7 @@ MILLION_SCHEMA = "borsuk-v255-cohere-diverse-graph-1m-spot-v1"
 HYBRID_SCHEMA = "borsuk-v256-cohere-hybrid-100k-spot-v1"
 MILLION_HYBRID_SCHEMA = "borsuk-v257-cohere-hybrid-1m-spot-v1"
 MILLION_EXACT_SCHEMA = "borsuk-v258-cohere-fp16-navigation-1m-spot-v1"
+DUAL_SCHEMA = "borsuk-v259-cohere-dual-navigation-100k-spot-v1"
 IMAGE = "ami-06121aa3085b6f918"
 WALL_SECONDS = 10_800
 SOURCE = "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/"
@@ -76,9 +77,9 @@ HYBRID_ARTIFACTS = COARSE_ARTIFACTS + ("loaded-raw.jsonl",)
 def worker(commit, archive_sha, archive_key, prefix, pq_topology=False,
            diverse=False, exact_nav=False, anchored=False, global_pq=False,
            coarse_pq=False, million=False, hybrid=False, million_hybrid=False,
-           reuse_v257=False, million_exact=False):
+           reuse_v257=False, million_exact=False, dual=False):
     big = million or million_hybrid or million_exact
-    hybrid_mode = hybrid or million_hybrid
+    hybrid_mode = hybrid or million_hybrid or dual
     script = r'''#!/bin/bash
 set -euo pipefail
 systemd-run --unit=v248-hard-stop --on-active=10800s /usr/sbin/shutdown -h now
@@ -235,7 +236,7 @@ phase=complete
   --prep prep.json --codes codes.bin --output coarse
 cp coarse/* .'''
     for key, value in {"ARTIFACTS": " ".join(artifacts), "ARTIFACTS_PY": repr(artifacts),
-                       "SCHEMA": MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
+                       "SCHEMA": DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
                        "BUCKET": BUCKET, "PREFIX": prefix,
                        "COMMIT": commit, "ARCHIVE_SHA": archive_sha,
                        "ARCHIVE_KEY": archive_key, "SOURCE": SOURCE.rstrip("/"),
@@ -247,7 +248,7 @@ cp coarse/* .'''
                        "ROWS": "1000000" if big else "100000",
                        "GENERATION": "255" if big else "248",
                        "PQ_ARGS": "--diverse" if diverse or exact_nav or anchored or global_pq or coarse_pq or big or hybrid_mode else "--pq-topology books.bin codes.bin" if pq_topology else "",
-                       "SERVE_ARGS": "--million-exact" if million_exact else "--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json" if hybrid_mode else "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
+                       "SERVE_ARGS": "--million-exact" if million_exact else "--dual centroids.f32 offsets.u32 postings.u32 coarse.json" if dual else "--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json" if hybrid_mode else "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
                        "EXACT_TEST": ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --bin v248_serve_cohere_graph_100k '
                                       'tests::million_row_hybrid_accepts_only_the_diverse_million_graph -- --exact >>"$root/build.log" 2>&1\n'
                                       if reuse_v257 else '') + ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib '
@@ -267,9 +268,10 @@ cp coarse/* .'''
 
 def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=False,
            global_pq=False, coarse_pq=False, million=False, hybrid=False,
-           million_hybrid=False, reuse_v257=False, million_exact=False):
+           million_hybrid=False, reuse_v257=False, million_exact=False,
+           dual=False):
     if sum((pq_topology, diverse, exact_nav, anchored, global_pq, coarse_pq,
-            million, hybrid, million_hybrid, million_exact)) > 1:
+            million, hybrid, million_hybrid, million_exact, dual)) > 1:
         raise ValueError("select one graph treatment")
     if reuse_v257 and not ((million_hybrid and attempt == "a0002") or
                            (million_exact and attempt == "a0001")):
@@ -277,7 +279,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
     if million_exact and not reuse_v257:
         raise ValueError("V258 must reuse the closed V257 source graph")
     big = million or million_hybrid or million_exact
-    hybrid_mode = hybrid or million_hybrid
+    hybrid_mode = hybrid or million_hybrid or dual
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
@@ -289,7 +291,8 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         raise ValueError("source is not a fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    campaign = ("v258-cohere-exact-navigation-1m" if million_exact else
+    campaign = ("v259-cohere-dual-navigation-100k" if dual else
+                "v258-cohere-exact-navigation-1m" if million_exact else
                 "v257-cohere-hybrid-1m" if million_hybrid else
                 "v256-cohere-hybrid-100k" if hybrid else
                 "v255-cohere-diverse-graph-1m" if million else
@@ -300,7 +303,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 "v250-cohere-diverse-100k" if diverse else
                 "v249-cohere-pq-aligned-100k" if pq_topology else
                 "v248-cohere-transfer-100k")
-    schema = MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
+    schema = DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
     archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
     prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
@@ -340,7 +343,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 or prior["artifacts"].get("graph.bin", {}).get("sha256")
                 != "688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7"):
             raise ValueError("V250 paired graph terminal differs")
-    if anchored or global_pq or coarse_pq:
+    if anchored or global_pq or coarse_pq or dual:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V251_PREFIX + "/terminal.json")["Body"].read()
         prior = json.loads(previous)
@@ -361,7 +364,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         if (hashlib.sha256(previous).hexdigest() != V253_TERMINAL_SHA
                 or json.loads(previous).get("status") != "complete"):
             raise ValueError("V253 paired terminal differs")
-    if hybrid:
+    if hybrid or dual:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V254_PREFIX + "/terminal.json")["Body"].read()
         if (hashlib.sha256(previous).hexdigest() != V254_TERMINAL_SHA
@@ -375,6 +378,12 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
             if (hashlib.sha256(previous).hexdigest() != prior_sha
                     or json.loads(previous).get("status") != "complete"):
                 raise ValueError("V255/V256 paired terminal differs")
+    if dual:
+        previous = s3.get_object(Bucket=BUCKET,
+                                 Key=V256_PREFIX + "/terminal.json")["Body"].read()
+        if (hashlib.sha256(previous).hexdigest() != V256_TERMINAL_SHA
+                or json.loads(previous).get("status") != "complete"):
+            raise ValueError("V256 hybrid baseline terminal differs")
     if reuse_v257:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V257_PREFIX + "/terminal.json")["Body"].read()
@@ -401,32 +410,32 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         "split": "development 0-255; validation 256-999 prior used",
         "construction": {"m": 32, "m0": 64, "ef_construction": 128,
                          "workers": 8, "source_only_pq64": True},
-        "arms": [[2048, 0]] if million_exact else [[4096, 8192]] if hybrid_mode else [[4096, 4096]] if million else [[0, 8192]] if global_pq or coarse_pq else
+        "arms": [[4096, 2048, 8192]] if dual else [[2048, 0]] if million_exact else [[4096, 8192]] if hybrid_mode else [[4096, 4096]] if million else [[0, 8192]] if global_pq or coarse_pq else
                 [[512, 0]] if anchored else
                 [[512, 0], [1024, 0], [2048, 0]] if exact_nav else
                 [[2048, 2048], [4096, 4096], [8192, 8192]],
         "pq_aligned_topology": pq_topology,
         "diverse_pruning": hybrid_mode or big or diverse or exact_nav or anchored or global_pq or coarse_pq,
-        "exact_fp16_navigation": exact_nav or anchored or million_exact,
+        "exact_fp16_navigation": exact_nav or anchored or million_exact or dual,
         "strided_anchors": 256 if anchored else 0,
         "global_pq_scan_rows": 100_000 if global_pq else 0,
         "coarse_pq": {"rows_per_cell": 256, "copies": 2, "probes": 32,
                       "shortlist": 8192, "seed": 254, "lloyd_iterations": 6} if coarse_pq or hybrid_mode else None,
-        "paired_v248_terminal_sha256": PARENT_TERMINAL_SHA if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid else None,
-        "paired_v249_terminal_sha256": V249_TERMINAL_SHA if diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid else None,
+        "paired_v248_terminal_sha256": PARENT_TERMINAL_SHA if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid or dual else None,
+        "paired_v249_terminal_sha256": V249_TERMINAL_SHA if diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid or dual else None,
         "paired_v250_terminal_sha256": V250_TERMINAL_SHA if big or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode else None,
-        "paired_v251_terminal_sha256": V251_TERMINAL_SHA if anchored or global_pq or coarse_pq else None,
+        "paired_v251_terminal_sha256": V251_TERMINAL_SHA if anchored or global_pq or coarse_pq or dual else None,
         "paired_v252_terminal_sha256": V252_TERMINAL_SHA if global_pq or coarse_pq else None,
         "paired_v253_terminal_sha256": V253_TERMINAL_SHA if coarse_pq else None,
-        "paired_v254_terminal_sha256": V254_TERMINAL_SHA if hybrid else None,
+        "paired_v254_terminal_sha256": V254_TERMINAL_SHA if hybrid or dual else None,
         "paired_v255_terminal_sha256": V255_TERMINAL_SHA if million_hybrid or million_exact else None,
-        "paired_v256_terminal_sha256": V256_TERMINAL_SHA if million_hybrid or million_exact else None,
+        "paired_v256_terminal_sha256": V256_TERMINAL_SHA if million_hybrid or million_exact or dual else None,
         "reused_v257_a0001_terminal_sha256": V257_TERMINAL_SHA if reuse_v257 else None,
         "interruption_policy": "discard interrupted cell, restart under a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken=("v258-" if million_exact else "v257-" if million_hybrid else "v256-" if hybrid else "v255-" if million else "v254-" if coarse_pq else "v253-" if global_pq else "v252-" if anchored else "v251-" if exact_nav else "v250-" if diverse else "v249-" if pq_topology else "v248-")
+        ClientToken=("v259-" if dual else "v258-" if million_exact else "v257-" if million_hybrid else "v256-" if hybrid else "v255-" if million else "v254-" if coarse_pq else "v253-" if global_pq else "v252-" if anchored else "v251-" if exact_nav else "v250-" if diverse else "v249-" if pq_topology else "v248-")
         + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
@@ -444,7 +453,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         UserData=base64.b64encode(worker(commit, archive_sha, archive_key, prefix,
                                           pq_topology, diverse, exact_nav, anchored, global_pq,
                                           coarse_pq, million, hybrid, million_hybrid,
-                                          reuse_v257, million_exact).encode()).decode(),
+                                          reuse_v257, million_exact, dual).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -510,6 +519,7 @@ if __name__ == "__main__":
     parser.add_argument("--hybrid", action="store_true")
     parser.add_argument("--million-hybrid", action="store_true")
     parser.add_argument("--million-exact", action="store_true")
+    parser.add_argument("--dual", action="store_true")
     parser.add_argument("--reuse-v257", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-cohere-graph-launch.lock", "a+") as lock:
@@ -517,4 +527,4 @@ if __name__ == "__main__":
         launch(args.attempt, args.pq_topology, args.diverse, args.exact_nav,
                args.anchored, args.global_pq, args.coarse_pq, args.million,
                args.hybrid, args.million_hybrid, args.reuse_v257,
-               args.million_exact)
+               args.million_exact, args.dual)
