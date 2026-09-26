@@ -74,6 +74,12 @@ jobs:
         run: cargo run --locked -p borsuk --example local_index
       - name: Run Rust docs ladder example
         run: cargo run --locked -p borsuk --example docs_ladder
+      - name: Build and smoke Rust release source bundle
+        run: |
+          bash scripts/package_rust_rc.sh "$RUNNER_TEMP/borsuk-rust-rc.tar.gz"
+          mkdir "$RUNNER_TEMP/borsuk-rust-rc"
+          tar -xzf "$RUNNER_TEMP/borsuk-rust-rc.tar.gz" -C "$RUNNER_TEMP/borsuk-rust-rc" --strip-components=1
+          (cd "$RUNNER_TEMP/borsuk-rust-rc" && bash scripts/smoke_resident_graph_rc.sh)
       - name: Build benches
         run: cargo bench --locked --workspace --no-run
 

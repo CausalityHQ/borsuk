@@ -1,5 +1,14 @@
 # BORSUK
 
+> **Rust v0.1 release candidate in progress.** The authenticated cached dual
+> graph is available through the Rust `resident_graph_build`,
+> `resident_graph_store`, and `resident_graph_generation` modules. Run
+> `bash scripts/smoke_resident_graph_rc.sh` for a create → publish → cold open
+> → search → warm process reopen demo. The older `BorsukIndex`, Python and
+> TypeScript APIs still use the graph-free path; their results are not the
+> measured V269 cached graph result. See the
+> [release checklist](docs/release/rust-v0.1-rc-checklist.md).
+
 **Vector search that lives in your bucket.**
 
 *BORSUK — **B**lob-**O**riented **R**etrieval with **S**egmental **U**nified **K**NN.*
@@ -19,10 +28,10 @@ database cluster. The process still uses real CPU and bounded working memory.
 Legacy v7 AWS traces remain in research as historical evidence; v8 rows are
 promoted only after fresh source recreation and repetition.
 
-- 🪣 **The index is the bucket or directory.** Routing is Parquet; packed
-  quantized-code and typed lossless-vector slices are independent buffers in
-  immutable Arrow IPC files. New indexes are graph-free by
-  default; experimental graph files are built only when explicitly enabled.
+- 🪣 **The index is the bucket or directory.** The Rust release-candidate route
+  uses an authenticated immutable FP16 graph, PQ64 codes, and a conditional
+  object-store head. The legacy `BorsukIndex` route uses Parquet and Arrow IPC
+  and remains graph-free by default.
 - 🧠 **Bounded across users.** The production default admits four searches and 24 active
   cell reads/decodes per handle. Four CPU workers perform build and query compute;
   24 process-wide small-stack I/O waiters overlap object-store latency without
@@ -85,7 +94,31 @@ flowchart LR
 
 ## Quick start
 
-Three lines: create an index, add vectors, search. That's it.
+The Rust release-candidate path creates an immutable generation from unique
+`u64` IDs and finite nonzero F32 vectors. Its `root.json` SHA-256 is the trust
+anchor for local open or object-store publication. `ResidentGraphGeneration`
+opens a pinned generation with a resident-byte and worker cap; each
+`searcher()` lease reuses its PQ view and graph workspace. Search accepts
+`1..=100` results, with current quality and latency evidence only for CoHere
+first1M D768 cosine `k=100` and the V269 research builder. The new generic
+Rust builder uses the same source-only PQ64/FP16 graph format but a distinct
+deterministic centroid initialization, so it needs fresh recall qualification.
+The object-store account and conditional head are trusted; cached blobs and
+roots are authenticated against the pinned head. This library does not supply
+an HTTP authentication layer or tenant isolation.
+
+```bash
+cargo run --locked -p borsuk --example resident_graph_rc -- create /tmp/borsuk-graph
+cargo run --locked -p borsuk --example resident_graph_rc -- search /tmp/borsuk-graph
+```
+
+For a source install, pin a release commit and run
+`bash scripts/package_rust_rc.sh /tmp/borsuk-rust-rc.tar.gz` from a clean
+checkout. Extract the bundle and run `bash scripts/smoke_resident_graph_rc.sh`
+inside it. The bundle includes the workspace's local Rust dependencies;
+this release candidate is not a crates.io package.
+
+The following APIs remain available as the legacy graph-free path.
 
 **Python**
 
