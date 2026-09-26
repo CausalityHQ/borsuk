@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,6 +91,32 @@ class _FakeS3Vectors:
 
 
 class MatchedS3VectorsParquetTests(unittest.TestCase):
+    def test_cohere_raw_inputs_keep_source_ids_and_exact_truth(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, queries, truth = (root / name for name in
+                                      ("vectors.raw", "requests.jsonl", "truth.u32"))
+            source.write_bytes(b"".join(struct.pack("<2f", float(i), 0.0)
+                                        for i in range(100)))
+            queries.write_text(json.dumps({"query_ordinal": 0,
+                                           "query": [0.0, 1.0]}) + "\n")
+            truth.write_bytes(struct.pack("<100I", *range(100)))
+            config = BenchmarkConfig(
+                source=source, queries=queries, truth=truth, output_dir=root / "result",
+                inputs={role: _identity(path, role) for role, path in
+                        (("source", source), ("queries", queries), ("truth", truth))},
+                vector_bucket="borsuk-cohere-test", index_name="vectors",
+                dimensions=2, source_rows=100, query_count=1, neighbors=100,
+                metric="cosine", upload_workers=1, query_seed=1,
+                source_commit="1" * 40, query_workers=1, query_order="ordinal",
+                split="prior_used_test", input_format="cohere_raw")
+            fake = _FakeS3Vectors({0: [str(i) for i in range(100)]})
+            result = run_matched_benchmark(config, fake)
+            self.assertEqual(result.schema, "borsuk-matched-s3-vectors-cohere-1m-v1")
+            self.assertEqual(result.passes[0].average_recall100_ppm, 1_000_000)
+            self.assertEqual([row["key"] for row in fake.put_batches[0]],
+                             [str(i) for i in range(100)])
+
     def test_cleanup_attempts_bucket_after_index_delete_failure(self) -> None:
         class FailingCleanupClient:
             def __init__(self) -> None:

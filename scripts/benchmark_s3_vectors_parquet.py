@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import math
+import struct
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -64,6 +65,7 @@ class BenchmarkConfig:
     query_workers: int = 1
     query_order: str = "shuffled"
     split: str = "development"
+    input_format: str = "parquet"
 
     def __post_init__(self) -> None:
         if (
@@ -85,7 +87,8 @@ class BenchmarkConfig:
             or self.settle_seconds < 0
             or not 1 <= self.query_workers <= 16
             or self.query_order not in {"shuffled", "ordinal"}
-            or self.split not in {"development", "validation"}
+            or self.split not in {"development", "validation", "prior_used_test"}
+            or self.input_format not in {"parquet", "cohere_raw"}
         ):
             raise ValueError("benchmark configuration differs")
 
@@ -122,6 +125,10 @@ class PassAggregate:
     completed_qps: float
     retries_total: int
     response_bytes: int
+    development_hits100: int
+    validation_hits100: int
+    development_p05_hits100: int | None
+    validation_p05_hits100: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +234,22 @@ def _vectors_from_list_array(array: pa.Array, dimensions: int) -> list[list[floa
 def _source_batches(
     config: BenchmarkConfig,
 ) -> Iterator[tuple[list[dict[str, object]], int]]:
+    if config.input_format == "cohere_raw":
+        row_bytes = config.dimensions * 4
+        if config.source.stat().st_size != config.source_rows * row_bytes:
+            raise ValueError("CoHere source geometry differs")
+        with config.source.open("rb") as source:
+            for first in range(0, config.source_rows, 500):
+                batch = []
+                logical_bytes = 0
+                for row_id in range(first, min(first + 500, config.source_rows)):
+                    vector = list(struct.unpack(f"<{config.dimensions}f", source.read(row_bytes)))
+                    if not all(map(math.isfinite, vector)):
+                        raise ValueError("CoHere source value differs")
+                    batch.append({"key": str(row_id), "data": {"float32": vector}})
+                    logical_bytes += row_bytes + len(str(row_id))
+                yield batch, logical_bytes
+        return
     parquet = pq.ParquetFile(config.source)
     if parquet.schema_arrow != _source_schema(config.dimensions):
         raise ValueError("source schema differs")
@@ -253,6 +276,25 @@ def _source_batches(
 def _read_queries_and_truth(
     config: BenchmarkConfig,
 ) -> tuple[list[list[float]], list[list[str]]]:
+    if config.input_format == "cohere_raw":
+        rows = [json.loads(line) for line in config.queries.read_text().splitlines()]
+        truth_bytes = config.truth.read_bytes()
+        if (len(rows) != config.query_count
+                or len(truth_bytes) != config.query_count * config.neighbors * 4):
+            raise ValueError("CoHere query/truth geometry differs")
+        queries = []
+        for ordinal, row in enumerate(rows):
+            vector = row["query"]
+            if (row["query_ordinal"] != ordinal
+                    or len(vector) != config.dimensions
+                    or not all(map(math.isfinite, vector))):
+                raise ValueError("CoHere query geometry differs")
+            queries.append(vector)
+        truth = [[str(value) for value in row] for row in
+                 struct.iter_unpack(f"<{config.neighbors}I", truth_bytes)]
+        if any(len(set(row)) != config.neighbors for row in truth):
+            raise ValueError("CoHere truth duplicates")
+        return queries, truth
     query_table = pq.read_table(config.queries)
     if (
         query_table.schema != _query_schema(config.dimensions)
@@ -395,6 +437,10 @@ def _aggregate(label: str, samples: list[QuerySample], wall_ns: int) -> PassAggr
     recall10 = [sample.recall10_ppm for sample in samples]
     recall100 = [sample.recall100_ppm for sample in samples]
     latencies = [sample.latency_ns for sample in samples]
+    development = [sample.recall100_ppm // 10_000 for sample in samples
+                   if sample.query_ordinal < 256]
+    validation = [sample.recall100_ppm // 10_000 for sample in samples
+                  if sample.query_ordinal >= 256]
     return PassAggregate(
         label=label,
         queries=len(samples),
@@ -410,6 +456,12 @@ def _aggregate(label: str, samples: list[QuerySample], wall_ns: int) -> PassAggr
         completed_qps=len(samples) * 1e9 / wall_ns,
         retries_total=sum(sample.retry_attempts for sample in samples),
         response_bytes=sum(sample.response_bytes for sample in samples),
+        development_hits100=sum(development),
+        validation_hits100=sum(validation),
+        development_p05_hits100=(_nearest_rank(development, 0.05)
+                                  if development else None),
+        validation_p05_hits100=(_nearest_rank(validation, 0.05)
+                                 if validation else None),
     )
 
 
@@ -562,7 +614,9 @@ def run_matched_benchmark(config: BenchmarkConfig, client: object) -> BenchmarkR
         for label in ("fresh_index_first_pass", "immediate_repeated_pass")
     )
     result = BenchmarkResult(
-        schema="borsuk-matched-s3-vectors-relaion-1m-v2",
+        schema=("borsuk-matched-s3-vectors-cohere-1m-v1" if
+                config.input_format == "cohere_raw" else
+                "borsuk-matched-s3-vectors-relaion-1m-v2"),
         source_commit=config.source_commit,
         inputs=dict(sorted(config.inputs.items())),
         vector_bucket=config.vector_bucket,
@@ -619,7 +673,8 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[BenchmarkConfig, str]
     parser.add_argument("--query-seed", type=int, default=20260921)
     parser.add_argument("--query-workers", type=int, default=1)
     parser.add_argument("--query-order", choices=("shuffled", "ordinal"), default="shuffled")
-    parser.add_argument("--split", choices=("development", "validation"), default="development")
+    parser.add_argument("--split", choices=("development", "validation", "prior_used_test"), default="development")
+    parser.add_argument("--input-format", choices=("parquet", "cohere_raw"), default="parquet")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--settle-seconds", type=float, default=60.0)
     args = parser.parse_args(argv)
@@ -652,6 +707,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[BenchmarkConfig, str]
             query_workers=args.query_workers,
             query_order=args.query_order,
             split=args.split,
+            input_format=args.input_format,
             source_commit=args.source_commit,
             settle_seconds=args.settle_seconds,
         ),

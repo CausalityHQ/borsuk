@@ -306,29 +306,39 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 dnf install -y -q python3.12 python3.12-pip tar gzip time >/dev/null 2>&1 || exit 91
 python3.12 -m venv .venv || exit 91
 .venv/bin/pip install -q -r repo/scripts/requirements-s3-vectors-match.txt || exit 91
+if [ "${MATCHED_INPUT_FORMAT:-parquet}" = cohere_raw ]; then
+  PYTHONPATH="$root/repo" .venv/bin/python -m unittest \
+    scripts.test_benchmark_s3_vectors_parquet.MatchedS3VectorsParquetTests.test_cohere_raw_inputs_keep_source_ids_and_exact_truth \
+    -q || exit 91
+fi
 
 for role in source queries truth; do
   upper=${role^^}
   uri_name=MATCHED_${upper}_URI
   sha_name=MATCHED_${upper}_SHA256
   bytes_name=MATCHED_${upper}_BYTES
-  aws s3 cp "${!uri_name}" "$role.parquet" --only-show-errors || exit 92
-  [ "$(stat -c%s "$role.parquet")" = "${!bytes_name}" ] || exit 93
-  printf '%s  %s.parquet\n' "${!sha_name}" "$role" >>hashes.txt
+  suffix=parquet
+  [ "${MATCHED_INPUT_FORMAT:-parquet}" = cohere_raw ] && suffix=raw
+  aws s3 cp "${!uri_name}" "$role.$suffix" --only-show-errors || exit 92
+  [ "$(stat -c%s "$role.$suffix")" = "${!bytes_name}" ] || exit 93
+  printf '%s  %s.%s\n' "${!sha_name}" "$role" "$suffix" >>hashes.txt
 done
 sha256sum -c hashes.txt || exit 93
 
+suffix=parquet
+[ "${MATCHED_INPUT_FORMAT:-parquet}" = cohere_raw ] && suffix=raw
+
 /usr/bin/time -v -o benchmark.time timeout "$MATCHED_WALL_SECONDS" \
   .venv/bin/python repo/scripts/benchmark_s3_vectors_parquet.py \
-    --source source.parquet \
+    --source "source.$suffix" \
     --source-uri "$MATCHED_SOURCE_URI" \
     --source-sha256 "$MATCHED_SOURCE_SHA256" \
     --source-bytes "$MATCHED_SOURCE_BYTES" \
-    --queries queries.parquet \
+    --queries "queries.$suffix" \
     --queries-uri "$MATCHED_QUERIES_URI" \
     --queries-sha256 "$MATCHED_QUERIES_SHA256" \
     --queries-bytes "$MATCHED_QUERIES_BYTES" \
-    --truth truth.parquet \
+    --truth "truth.$suffix" \
     --truth-uri "$MATCHED_TRUTH_URI" \
     --truth-sha256 "$MATCHED_TRUTH_SHA256" \
     --truth-bytes "$MATCHED_TRUTH_BYTES" \
@@ -339,4 +349,5 @@ sha256sum -c hashes.txt || exit 93
     --query-order "$MATCHED_QUERY_ORDER" \
     --split "$MATCHED_SPLIT" \
     --metric "$MATCHED_METRIC" \
+    --input-format "${MATCHED_INPUT_FORMAT:-parquet}" \
     --settle-seconds 60 || exit 94

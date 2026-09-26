@@ -108,6 +108,11 @@ class MatchedS3VectorsSpotLauncherTests(unittest.TestCase):
         self.assertIn("MATCHED_METRIC=cosine", script)
         self.assertEqual(build_launch_specs(plan)[0]["InstanceType"], "c7i.4xlarge")
 
+    def test_cohere_raw_plan_exports_input_format(self) -> None:
+        plan = replace(self._plan(), split="prior_used_test",
+                       input_format="cohere_raw", metric="cosine")
+        self.assertIn("MATCHED_INPUT_FORMAT=cohere_raw", worker_script(plan))
+
     def test_validation_cli_selects_authenticated_panel(self) -> None:
         plan = parse_args([
             "--source-commit", "1" * 40,

@@ -71,6 +71,7 @@ class MatchedSpotPlan:
     query_workers: int = 1
     query_order: str = "shuffled"
     metric: str = "euclidean"
+    input_format: str = "parquet"
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +113,8 @@ def build_plan(**values: object) -> MatchedSpotPlan:
         or plan.attempt != 1
         or plan.instance_type not in {"c7i.4xlarge", "c7i.8xlarge"}
         or plan.wall_seconds != 7_200
-        or plan.split not in {"development", "validation"}
+        or plan.split not in {"development", "validation", "prior_used_test"}
+        or plan.input_format not in {"parquet", "cohere_raw"}
         or not 1 <= plan.query_workers <= 16
         or plan.query_order not in {"shuffled", "ordinal"}
         or plan.metric not in {"euclidean", "cosine"}
@@ -142,6 +144,7 @@ def worker_script(plan: MatchedSpotPlan) -> str:
         "MATCHED_QUERY_ORDER": plan.query_order,
         "MATCHED_SPLIT": plan.split,
         "MATCHED_METRIC": plan.metric,
+        "MATCHED_INPUT_FORMAT": plan.input_format,
     }
     for role, identity in sorted(plan.inputs.items()):
         prefix = f"MATCHED_{role.upper()}"
@@ -301,6 +304,7 @@ def _launch_receipt(plan: MatchedSpotPlan, instance_id: str | None) -> bytes:
         "instance_type": plan.instance_type,
         "spot_price_usd_per_hour_micros": plan.spot_price_usd_per_hour_micros,
         "metric": plan.metric,
+        "input_format": plan.input_format,
     }
     return (
         json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
