@@ -39,6 +39,8 @@ pub struct ResidentFp16Tier {
     artifact_sha256: [u8; 32],
     source_sha256: [u8; 32],
     fast_norms: Vec<f64>,
+    sq8_codes: Vec<i8>,
+    sq8_scales: Vec<f32>,
 }
 
 fn decode_digest(value: &str) -> Result<[u8; 32], ResidentFp16Error> {
@@ -247,6 +249,45 @@ impl ResidentFp16Tier {
         Ok(f64::from(dot) / self.fast_norms[ordinal])
     }
 
+    /// Score one authenticated row through a derived block-scaled SQ8
+    /// navigation cache. Final candidate ranking still uses the FP16 plane.
+    pub(crate) fn cosine_similarity_unit_query_sq8(
+        &self,
+        normalized: &[f32],
+        ordinal: usize,
+    ) -> Result<f64, ResidentFp16Error> {
+        let blocks = self.dimensions.div_ceil(32);
+        if normalized.len() != self.dimensions || ordinal >= self.rows()
+            || self.sq8_codes.len() != self.rows() * self.dimensions
+            || self.sq8_scales.len() != self.rows() * blocks {
+            return Err(ResidentFp16Error::Invalid("SQ8 graph score geometry"));
+        }
+        let codes = &self.sq8_codes[ordinal * self.dimensions..(ordinal + 1) * self.dimensions];
+        let scales = &self.sq8_scales[ordinal * blocks..(ordinal + 1) * blocks];
+        let mut score = 0.0_f64;
+        for (block, code_chunk) in codes.chunks(32).enumerate() {
+            if scales[block] == 0.0 {
+                continue;
+            }
+            let query_chunk = &normalized[block * 32..block * 32 + code_chunk.len()];
+            let mut lanes = f32x8::ZERO;
+            for (q, c) in query_chunk.chunks_exact(8).zip(code_chunk.chunks_exact(8)) {
+                let mut values = [0.0_f32; 8];
+                let mut codes = [0.0_f32; 8];
+                values.copy_from_slice(q);
+                for (destination, &code) in codes.iter_mut().zip(c) {
+                    *destination = f32::from(code);
+                }
+                lanes += f32x8::from(values) * f32x8::from(codes);
+            }
+            let tail = code_chunk.len() / 8 * 8;
+            let dot = lanes.reduce_add() + query_chunk[tail..].iter()
+                .zip(&code_chunk[tail..]).map(|(q, &c)| q * f32::from(c)).sum::<f32>();
+            score += f64::from(dot * scales[block]);
+        }
+        Ok(score)
+    }
+
     /// Open and fully authenticate an immutable plane. The budget check
     /// precedes its large allocation; this object itself owns the charged
     /// ID and coordinate arrays until the pinned generation is released.
@@ -322,6 +363,8 @@ impl ResidentFp16Tier {
             artifact_sha256: expected_artifact,
             source_sha256: expected_source,
             fast_norms: Vec::new(),
+            sq8_codes: Vec::new(),
+            sq8_scales: Vec::new(),
         })
     }
 
@@ -330,6 +373,8 @@ impl ResidentFp16Tier {
     pub fn resident_bytes(&self) -> usize {
         self.ids.capacity() * 8 + self.coordinates.capacity() * 2
             + self.fast_norms.capacity() * 8
+            + self.sq8_codes.capacity()
+            + self.sq8_scales.capacity() * 4
     }
 
     /// Cache decoded row norms for the optional fast graph navigation scorer.
@@ -364,6 +409,66 @@ impl ResidentFp16Tier {
                 return Err(ResidentFp16Error::Invalid("fast norm"));
             }
             self.fast_norms.push(norm_squared.sqrt());
+        }
+        Ok(())
+    }
+
+    /// Derive 32-coordinate block-scaled SQ8 navigation codes from the
+    /// authenticated FP16 plane, with an explicit total resident budget.
+    pub fn prepare_sq8_navigation(
+        &mut self,
+        resident_budget_bytes: usize,
+    ) -> Result<(), ResidentFp16Error> {
+        let blocks = self.dimensions.div_ceil(32);
+        if self.sq8_codes.len() == self.rows() * self.dimensions
+            && self.sq8_scales.len() == self.rows() * blocks {
+            return if self.resident_bytes() <= resident_budget_bytes {
+                Ok(())
+            } else {
+                Err(ResidentFp16Error::Invalid("resident budget"))
+            };
+        }
+        self.sq8_codes.clear();
+        self.sq8_scales.clear();
+        let code_bytes = self.rows().checked_mul(self.dimensions)
+            .ok_or(ResidentFp16Error::Invalid("SQ8 code byte overflow"))?;
+        let scale_count = self.rows().checked_mul(blocks)
+            .ok_or(ResidentFp16Error::Invalid("SQ8 scale count overflow"))?;
+        let required = scale_count.checked_mul(4)
+            .and_then(|bytes| bytes.checked_add(code_bytes))
+            .and_then(|bytes| self.resident_bytes().checked_add(bytes))
+            .ok_or(ResidentFp16Error::Invalid("SQ8 resident byte overflow"))?;
+        if required > resident_budget_bytes {
+            return Err(ResidentFp16Error::Invalid("resident budget"));
+        }
+        self.sq8_codes.try_reserve_exact(code_bytes)
+            .map_err(|_| ResidentFp16Error::Invalid("SQ8 code allocation"))?;
+        self.sq8_scales.try_reserve_exact(scale_count)
+            .map_err(|_| ResidentFp16Error::Invalid("SQ8 scale allocation"))?;
+        for row in self.coordinates.chunks_exact(self.dimensions) {
+            let norm_squared = row.iter().fold(0.0_f64, |sum, &bits| {
+                let value = f64::from(f16::from_bits(bits).to_f32());
+                sum + value * value
+            });
+            if !norm_squared.is_finite() || norm_squared <= 0.0 {
+                return Err(ResidentFp16Error::Invalid("SQ8 source norm"));
+            }
+            let norm = norm_squared.sqrt();
+            for chunk in row.chunks(32) {
+                let maximum = chunk.iter().map(|&bits| f16::from_bits(bits).to_f32().abs())
+                    .fold(0.0_f32, f32::max);
+                if maximum == 0.0 {
+                    self.sq8_scales.push(0.0);
+                    self.sq8_codes.extend(std::iter::repeat_n(0, chunk.len()));
+                    continue;
+                }
+                let step = maximum / 127.0;
+                self.sq8_scales.push((f64::from(step) / norm) as f32);
+                for &bits in chunk {
+                    let value = f16::from_bits(bits).to_f32();
+                    self.sq8_codes.push((value / step).round().clamp(-127.0, 127.0) as i8);
+                }
+            }
         }
         Ok(())
     }
@@ -678,5 +783,10 @@ mod tests {
         let exact = tier.cosine_similarity_unit_query(&unit, 0).unwrap();
         assert!((fast - exact).abs() < 1.0e-6);
         assert!(tier.cosine_similarity_unit_query_fast(&query, 0, &mut scratch[..8]).is_err());
+        assert!(tier.cosine_similarity_unit_query_sq8(&query, 0).is_err());
+        assert!(tier.prepare_sq8_navigation(46).is_err());
+        tier.prepare_sq8_navigation(47).unwrap();
+        let sq8 = tier.cosine_similarity_unit_query_sq8(&query, 0).unwrap();
+        assert!((sq8 - exact).abs() < 0.01);
     }
 }

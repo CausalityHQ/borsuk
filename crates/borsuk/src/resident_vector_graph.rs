@@ -49,6 +49,13 @@ struct Visit {
     node: u32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NavigationScore {
+    Fp64,
+    FastFp16,
+    Sq8,
+}
+
 /// Reusable per-worker visit marks. A new epoch avoids clearing all corpus
 /// rows for every search; the rare wrap clears marks before reuse.
 pub struct GraphSearchWorkspace {
@@ -441,7 +448,7 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, false, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, NavigationScore::Fp64, workspace)
     }
 
     /// FP32 SIMD navigation over cached FP16 row norms, followed by FP64
@@ -454,7 +461,20 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, true, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, NavigationScore::FastFp16, workspace)
+    }
+
+    /// Navigate the graph with block-scaled SQ8 scores and FP64-rank its
+    /// retained beam before returning stable source IDs.
+    pub fn search_sq8_with_workspace(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        k: usize,
+        ef: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, NavigationScore::Sq8, workspace)
     }
 
     /// Start exact navigation from an authenticated physical row nominated by
@@ -468,7 +488,7 @@ impl ResidentVectorGraph {
         seed: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, Some(seed), false, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, Some(seed), NavigationScore::Fp64, workspace)
     }
 
     /// Route from the nearest of evenly spaced source rows. Returned work
@@ -485,7 +505,7 @@ impl ResidentVectorGraph {
         if anchor_count == 0 || anchor_count > plane.rows() {
             return Err(ResidentFp16Error::Invalid("graph anchor count"));
         }
-        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, None, false, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, None, NavigationScore::Fp64, workspace)
     }
 
     fn search_with_anchor_count_workspace(
@@ -496,7 +516,7 @@ impl ResidentVectorGraph {
         ef: usize,
         anchor_count: usize,
         seed: Option<usize>,
-        fast: bool,
+        mode: NavigationScore,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
         self.check_plane(plane)?;
@@ -521,18 +541,21 @@ impl ResidentVectorGraph {
             .iter()
             .map(|&x| f64::from(x) / norm)
             .collect::<Vec<_>>();
-        let unit_f32 = if fast {
+        let unit_f32 = if mode != NavigationScore::Fp64 {
             unit.iter().map(|&x| x as f32).collect::<Vec<_>>()
         } else {
             Vec::new()
         };
-        let mut scratch = if fast {vec![0.0_f32; plane.dimensions()]} else {Vec::new()};
+        let mut scratch = if mode == NavigationScore::FastFp16 {
+            vec![0.0_f32; plane.dimensions()]
+        } else {Vec::new()};
         let mut score = |node: u32| -> Result<f64, ResidentFp16Error> {
-            if fast {
-                Ok(-plane.cosine_similarity_unit_query_fast(
-                    &unit_f32, node as usize, &mut scratch)?)
-            } else {
-                Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?)
+            match mode {
+                NavigationScore::Fp64 => Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?),
+                NavigationScore::FastFp16 => Ok(-plane.cosine_similarity_unit_query_fast(
+                    &unit_f32, node as usize, &mut scratch)?),
+                NavigationScore::Sq8 => Ok(-plane.cosine_similarity_unit_query_sq8(
+                    &unit_f32, node as usize)?),
             }
         };
         let start = if let Some(seed) = seed {
@@ -554,7 +577,7 @@ impl ResidentVectorGraph {
         let mut ranked = results
             .into_iter()
             .map(|visit| Ok((
-                if fast {-plane.cosine_similarity_unit_query(&unit, visit.node as usize)?}
+                if mode != NavigationScore::Fp64 {-plane.cosine_similarity_unit_query(&unit, visit.node as usize)?}
                 else {visit.distance},
                 plane.source_id(visit.node as usize)?)))
             .collect::<Result<Vec<_>, ResidentFp16Error>>()?;
@@ -1036,6 +1059,9 @@ mod tests {
             &[1.0, 0.0], &tier, 2, 4, &mut workspace).is_err());
         tier.prepare_fast_navigation(100).unwrap();
         assert_eq!(restored.search_fast_with_workspace(
+            &[1.0, 0.0], &tier, 2, 4, &mut workspace).unwrap().0, vec![42, 7]);
+        tier.prepare_sq8_navigation(104).unwrap();
+        assert_eq!(restored.search_sq8_with_workspace(
             &[1.0, 0.0], &tier, 2, 4, &mut workspace).unwrap().0, vec![42, 7]);
         assert!(restored
             .search_from_seed_with_workspace(&[1.0, 0.0], &tier, 2, 4, 4, &mut workspace)

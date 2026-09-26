@@ -82,6 +82,16 @@ class V255WorkerTest(unittest.TestCase):
         self.assertNotIn("v254_prepare_coarse_pq", script)
         self.assertNotIn("@@", script)
 
+    def test_sq8_dual_graph_has_its_own_frozen_cell(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt",
+                        sq8_dual_graph=True)
+        self.assertIn("--sq8-dual-graph", script)
+        self.assertIn("borsuk-v266-cohere-sq8-dual-graph-100k-spot-v1", script)
+        self.assertIn("fast_navigation_scores_full_simd_chunk_and_tail", script)
+        self.assertIn("loaded-raw.jsonl", script)
+        self.assertNotIn("v254_prepare_coarse_pq", script)
+        self.assertNotIn("@@", script)
+
     def test_million_dual_graph_reuses_closed_graph_without_coarse(self):
         script = worker("0" * 40, "1" * 64, "source", "attempt",
                         million_dual_graph=True, reuse_v257=True)
