@@ -77,7 +77,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["staging_receipt_sha256"]
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
         || (build["schema"] != "borsuk-v248-cohere-graph-build-v1"
-            && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1")
+            && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1"
+            && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
         || prep["rows"].as_u64() != Some(ROWS as u64)
@@ -254,7 +255,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if build["schema"] == "borsuk-v249-cohere-pq-aligned-graph-build-v1" {
+                "schema":if build["schema"] == "borsuk-v250-cohere-diverse-graph-build-v1" {
+                    "borsuk-v250-cohere-diverse-graph-100k-serving-v1"
+                } else if build["schema"] == "borsuk-v249-cohere-pq-aligned-graph-build-v1" {
                     "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1"
                 } else {"borsuk-v248-cohere-graph-100k-serving-v1"},
                 "dataset":"CoHere-100k D768 cosine","split":"development-256-plus-validation-744-prior-used",

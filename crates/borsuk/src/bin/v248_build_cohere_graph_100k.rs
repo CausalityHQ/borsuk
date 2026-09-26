@@ -43,8 +43,9 @@ fn peak_rss() -> Result<u64, Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     let pq_topology = args.len() == 9 && args[6] == "--pq-topology";
-    if args.len() != 6 && !pq_topology {
-        return Err("usage: v248_build_cohere_graph_100k PREP PLANE VECTORS GRAPH SUMMARY [--pq-topology BOOKS CODES]".into());
+    let diverse = args.len() == 7 && args[6] == "--diverse";
+    if args.len() != 6 && !pq_topology && !diverse {
+        return Err("usage: v248_build_cohere_graph_100k PREP PLANE VECTORS GRAPH SUMMARY [--pq-topology BOOKS CODES | --diverse]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let source = prep["source_sha256"]
@@ -122,7 +123,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         vectors
     };
-    let graph = ResidentVectorGraph::build_batched(vectors, &plane, 32, 64, 128, 8)?;
+    let graph = if diverse {
+        ResidentVectorGraph::build_batched_diverse(vectors, &plane, 32, 64, 128, 8)?
+    } else {
+        ResidentVectorGraph::build_batched(vectors, &plane, 32, 64, 128, 8)?
+    };
     let structure = graph.structural_stats();
     if structure.reachable != ROWS
         || structure.below_four_indegree != 0
@@ -137,7 +142,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &args[5],
         format!(
             "{}\n",
-            json!({"schema":if pq_topology {"borsuk-v249-cohere-pq-aligned-graph-build-v1"} else {"borsuk-v248-cohere-graph-build-v1"},
+            json!({"schema":if diverse {"borsuk-v250-cohere-diverse-graph-build-v1"} else if pq_topology {"borsuk-v249-cohere-pq-aligned-graph-build-v1"} else {"borsuk-v248-cohere-graph-build-v1"},
         "construction_source":if pq_topology {"authenticated-pq-reconstruction"} else {"authenticated-f32-source"},
         "source_sha256":source,"plane_sha256":prep["artifacts"]["plane.bin"]["sha256"],
         "graph_sha256":graph_sha,"graph_bytes":fs::metadata(&args[4])?.len(),

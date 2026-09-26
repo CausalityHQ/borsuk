@@ -55,7 +55,8 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
             or prepared["source_sha256"] != digest(source)
             or serving["schema"] not in (
                 "borsuk-v248-cohere-graph-100k-serving-v1",
-                "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1")
+                "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1",
+                "borsuk-v250-cohere-diverse-graph-100k-serving-v1")
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
@@ -108,7 +109,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         summary[selected]["validation_remaining_744_prior_used"]["mean_r100"] >= .995
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
-        "borsuk-v249-cohere-pq-aligned-quality-v1"
+        "borsuk-v250-cohere-diverse-quality-v1"
+        if serving["schema"] == "borsuk-v250-cohere-diverse-graph-100k-serving-v1"
+        else "borsuk-v249-cohere-pq-aligned-quality-v1"
         if serving["schema"] == "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1"
         else "borsuk-v248-cohere-quality-v1"),
         "dataset": "CoHere-large-10M first 100k D768 cosine", "k": 100,

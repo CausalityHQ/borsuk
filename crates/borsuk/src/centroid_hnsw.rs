@@ -451,7 +451,7 @@ pub(crate) fn build_hnsw_adjacency(
                 centroids,
                 &mut visited,
             );
-            let selected = CentroidHnsw::select_neighbours(&found, width, centroids);
+            let selected = CentroidHnsw::select_neighbours(&found, width, centroids, false);
             for &neighbour in &selected {
                 CentroidHnsw::connect(
                     &mut neighbours,
@@ -504,6 +504,7 @@ fn plan_hnsw_insert(
     m0: usize,
     ef_construction: usize,
     visits: &mut EpochVisits,
+    diverse: bool,
 ) -> Vec<(usize, Vec<u32>)> {
     let node_top = levels[node as usize];
     let query = &vectors[node as usize];
@@ -534,7 +535,10 @@ fn plan_hnsw_insert(
             vectors,
             visits,
         );
-        plan.push((layer, CentroidHnsw::select_neighbours(&found, width, vectors)));
+        plan.push((
+            layer,
+            CentroidHnsw::select_neighbours(&found, width, vectors, diverse),
+        ));
         if let Some(nearest) = found.first() {
             current = nearest.node;
         }
@@ -561,6 +565,7 @@ fn build_hnsw_adjacency_batched(
     ef_construction: usize,
     ef_search: usize,
     workers: usize,
+    diverse: bool,
 ) -> Option<CentroidHnswAdjacency> {
     if vectors.len() < 2 || workers == 0 || workers > vectors.len() {
         return None;
@@ -584,8 +589,7 @@ fn build_hnsw_adjacency_batched(
     let mut top_level = levels[entry as usize];
     let mut inserted = 1;
     while inserted < order.len() {
-        let batch_rows = (inserted / 32)
-            .clamp(1, ef_construction.saturating_mul(8).max(1));
+        let batch_rows = (inserted / 32).clamp(1, ef_construction.saturating_mul(8).max(1));
         let end = inserted.saturating_add(batch_rows).min(order.len());
         let plans = pool.install(|| {
             visits
@@ -597,8 +601,22 @@ fn build_hnsw_adjacency_batched(
                     order[start..stop]
                         .iter()
                         .map(|&node| {
-                            (node, plan_hnsw_insert(node, entry, top_level, &levels,
-                                &neighbours, vectors, m, m0, ef_construction, marks))
+                            (
+                                node,
+                                plan_hnsw_insert(
+                                    node,
+                                    entry,
+                                    top_level,
+                                    &levels,
+                                    &neighbours,
+                                    vectors,
+                                    m,
+                                    m0,
+                                    ef_construction,
+                                    marks,
+                                    diverse,
+                                ),
+                            )
                         })
                         .collect::<Vec<_>>()
                 })
@@ -611,10 +629,16 @@ fn build_hnsw_adjacency_batched(
                 let width = if layer == 0 { m0 } else { m };
                 for neighbour in selected {
                     updates[node as usize / chunk_rows].push(EdgeUpdate {
-                        owner: node, to: neighbour, layer, width,
+                        owner: node,
+                        to: neighbour,
+                        layer,
+                        width,
                     });
                     updates[neighbour as usize / chunk_rows].push(EdgeUpdate {
-                        owner: neighbour, to: node, layer, width,
+                        owner: neighbour,
+                        to: node,
+                        layer,
+                        width,
                     });
                 }
             }
@@ -638,6 +662,7 @@ fn build_hnsw_adjacency_batched(
                             event.layer,
                             event.width,
                             vectors,
+                            diverse,
                         );
                     }
                 });
@@ -680,9 +705,24 @@ pub(crate) fn build_reachable_hnsw_adjacency_batched(
     if m0 >= 256 {
         return None;
     }
-    let built = build_hnsw_adjacency_batched(
-        vectors, m, m0, ef_construction, ef_search, workers,
-    )?;
+    let built =
+        build_hnsw_adjacency_batched(vectors, m, m0, ef_construction, ef_search, workers, false)?;
+    repair_reachable_hnsw_adjacency(built, m0)
+}
+
+pub(crate) fn build_reachable_hnsw_adjacency_batched_diverse(
+    vectors: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    workers: usize,
+) -> Option<CentroidHnswAdjacency> {
+    if m0 >= 256 {
+        return None;
+    }
+    let built =
+        build_hnsw_adjacency_batched(vectors, m, m0, ef_construction, ef_search, workers, true)?;
     repair_reachable_hnsw_adjacency(built, m0)
 }
 
@@ -1149,8 +1189,42 @@ impl CentroidHnsw {
 
     /// Keep the `width` nearest candidates (they arrive sorted ascending by
     /// distance to the point being connected).
-    fn select_neighbours(found: &[Candidate], width: usize, _vectors: &[Vec<f32>]) -> Vec<u32> {
-        found.iter().take(width).map(|c| c.node).collect()
+    fn select_neighbours(
+        found: &[Candidate],
+        width: usize,
+        vectors: &[Vec<f32>],
+        diverse: bool,
+    ) -> Vec<u32> {
+        if diverse {
+            Self::diverse_nodes(found, width, vectors)
+        } else {
+            found.iter().take(width).map(|c| c.node).collect()
+        }
+    }
+
+    fn diverse_nodes(found: &[Candidate], width: usize, vectors: &[Vec<f32>]) -> Vec<u32> {
+        let mut kept = Vec::with_capacity(width);
+        let mut deferred = Vec::new();
+        for candidate in found {
+            if kept.iter().any(|&prior| {
+                1.44 * squared_distance(&vectors[prior as usize], &vectors[candidate.node as usize])
+                    <= candidate.distance
+            }) {
+                deferred.push(candidate.node);
+            } else {
+                kept.push(candidate.node);
+                if kept.len() == width {
+                    return kept;
+                }
+            }
+        }
+        for node in deferred {
+            if kept.len() == width {
+                break;
+            }
+            kept.push(node);
+        }
+        kept
     }
 
     /// Add `to` to `from`'s neighbour list on `layer`; when the list overflows
@@ -1163,7 +1237,15 @@ impl CentroidHnsw {
         width: usize,
         vectors: &[Vec<f32>],
     ) {
-        Self::connect_row(&mut neighbours[from as usize], from, to, layer, width, vectors);
+        Self::connect_row(
+            &mut neighbours[from as usize],
+            from,
+            to,
+            layer,
+            width,
+            vectors,
+            false,
+        );
     }
 
     fn connect_row(
@@ -1173,6 +1255,7 @@ impl CentroidHnsw {
         layer: usize,
         width: usize,
         vectors: &[Vec<f32>],
+        diverse: bool,
     ) {
         let tower_len = tower.len();
         if layer >= tower_len {
@@ -1186,11 +1269,23 @@ impl CentroidHnsw {
         list.push(to);
         if list.len() > width {
             let anchor = &vectors[from as usize];
-            list.sort_by_cached_key(|&node| Candidate {
-                distance: squared_distance(anchor, &vectors[node as usize]),
-                node,
-            });
-            list.truncate(width);
+            if diverse {
+                let mut ordered = list
+                    .iter()
+                    .map(|&node| Candidate {
+                        distance: squared_distance(anchor, &vectors[node as usize]),
+                        node,
+                    })
+                    .collect::<Vec<_>>();
+                ordered.sort_unstable();
+                *list = Self::diverse_nodes(&ordered, width, vectors);
+            } else {
+                list.sort_by_cached_key(|&node| Candidate {
+                    distance: squared_distance(anchor, &vectors[node as usize]),
+                    node,
+                });
+                list.truncate(width);
+            }
         }
     }
 }
@@ -1201,13 +1296,49 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn diverse_prune_retains_a_bridge_and_is_thread_count_independent() {
+        let vectors = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![1.1, 0.0],
+            vec![-2.0, 0.0],
+        ];
+        let found = vec![
+            Candidate {
+                distance: 1.0,
+                node: 1,
+            },
+            Candidate {
+                distance: 1.21,
+                node: 2,
+            },
+            Candidate {
+                distance: 4.0,
+                node: 3,
+            },
+        ];
+        assert_eq!(CentroidHnsw::diverse_nodes(&found, 2, &vectors), vec![1, 3]);
+        let data = grid(257, 8);
+        let one = build_reachable_hnsw_adjacency_batched_diverse(&data, 8, 16, 32, 32, 1).unwrap();
+        let four = build_reachable_hnsw_adjacency_batched_diverse(&data, 8, 16, 32, 32, 4).unwrap();
+        assert_eq!(one.neighbours, four.neighbours);
+        assert_eq!(
+            reachable_base_count(&four.neighbours, four.entry),
+            data.len()
+        );
+    }
+
+    #[test]
     fn batched_graph_is_thread_count_independent_and_reachable() {
         let vectors = grid(257, 8);
         let one = build_reachable_hnsw_adjacency_batched(&vectors, 8, 16, 32, 32, 1).unwrap();
         let four = build_reachable_hnsw_adjacency_batched(&vectors, 8, 16, 32, 32, 4).unwrap();
         assert_eq!(one.entry, four.entry);
         assert_eq!(one.neighbours, four.neighbours);
-        assert_eq!(reachable_base_count(&four.neighbours, four.entry), vectors.len());
+        assert_eq!(
+            reachable_base_count(&four.neighbours, four.entry),
+            vectors.len()
+        );
     }
 
     #[test]

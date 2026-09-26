@@ -12,7 +12,10 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use crate::{
-    centroid_hnsw::{build_reachable_hnsw_adjacency, build_reachable_hnsw_adjacency_batched},
+    centroid_hnsw::{
+        build_reachable_hnsw_adjacency, build_reachable_hnsw_adjacency_batched,
+        build_reachable_hnsw_adjacency_batched_diverse,
+    },
     pq64_nominee::{Pq64CosineView, Pq64Router},
     resident_fp16_tier::{ResidentFp16Error, ResidentFp16Tier},
 };
@@ -152,7 +155,10 @@ impl ResidentVectorGraph {
         expected_sha256: &str,
         plane: &ResidentFp16Tier,
     ) -> Result<Self, ResidentFp16Error> {
-        let mut input = BufReader::new(HashingReader { inner: File::open(path)?, digest: Sha256::new() });
+        let mut input = BufReader::new(HashingReader {
+            inner: File::open(path)?,
+            digest: Sha256::new(),
+        });
         let mut header = [0u8; 96];
         input.read_exact(&mut header)?;
         if &header[..8] != b"BORSVG01"
@@ -239,7 +245,7 @@ impl ResidentVectorGraph {
         m0: usize,
         ef_construction: usize,
     ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(vectors, plane, m, m0, ef_construction, None)
+        Self::build_with_workers(vectors, plane, m, m0, ef_construction, None, false)
     }
 
     /// Build from a frozen graph snapshot per batch. The worker count changes
@@ -252,7 +258,21 @@ impl ResidentVectorGraph {
         ef_construction: usize,
         workers: usize,
     ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(vectors, plane, m, m0, ef_construction, Some(workers))
+        Self::build_with_workers(vectors, plane, m, m0, ef_construction, Some(workers), false)
+    }
+
+    /// Build a source graph with deterministic diversity pruning of both
+    /// insertion and reciprocal edges. Search and authenticated layout match
+    /// `build_batched`; only source-derived adjacency changes.
+    pub fn build_batched_diverse(
+        vectors: Vec<Vec<f32>>,
+        plane: &ResidentFp16Tier,
+        m: usize,
+        m0: usize,
+        ef_construction: usize,
+        workers: usize,
+    ) -> Result<Self, ResidentFp16Error> {
+        Self::build_with_workers(vectors, plane, m, m0, ef_construction, Some(workers), true)
     }
 
     fn build_with_workers(
@@ -262,6 +282,7 @@ impl ResidentVectorGraph {
         m0: usize,
         ef_construction: usize,
         workers: Option<usize>,
+        diverse: bool,
     ) -> Result<Self, ResidentFp16Error> {
         if vectors.len() < 2
             || vectors.len() != plane.rows()
@@ -294,12 +315,25 @@ impl ResidentVectorGraph {
             }
         }
         let built = match workers {
+            Some(workers) if diverse => build_reachable_hnsw_adjacency_batched_diverse(
+                &vectors,
+                m,
+                m0,
+                ef_construction,
+                ef_construction,
+                workers,
+            ),
             Some(workers) => build_reachable_hnsw_adjacency_batched(
-                &vectors, m, m0, ef_construction, ef_construction, workers,
+                &vectors,
+                m,
+                m0,
+                ef_construction,
+                ef_construction,
+                workers,
             ),
-            None => build_reachable_hnsw_adjacency(
-                &vectors, m, m0, ef_construction, ef_construction,
-            ),
+            None => {
+                build_reachable_hnsw_adjacency(&vectors, m, m0, ef_construction, ef_construction)
+            }
         }
         .ok_or(ResidentFp16Error::Invalid("graph build failed"))?;
         Ok(Self {
@@ -813,9 +847,17 @@ mod tests {
             plane_sha256: [0; 32],
         };
         let mut workspace = GraphSearchWorkspace::new(3).unwrap();
-        let (mut found, _) = graph.navigate_with_workspace(2, &mut workspace, |_| Ok(0.0)).unwrap();
+        let (mut found, _) = graph
+            .navigate_with_workspace(2, &mut workspace, |_| Ok(0.0))
+            .unwrap();
         found.sort_unstable();
-        assert_eq!(found.into_iter().map(|visit| visit.node).collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(
+            found
+                .into_iter()
+                .map(|visit| visit.node)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
     }
 
     #[test]
@@ -887,8 +929,14 @@ mod tests {
         let bound = ResidentPqCosineGraph::bind(&restored, &tier, &cosine, &[0, 1, 2, 3]).unwrap();
         let mut workspace = GraphSearchWorkspace::new(4).unwrap();
         for _ in 0..2 {
-            let (candidates, _) = bound.nominate(&[1.0, 0.0], 2, 4, 2, &mut workspace).unwrap();
-            assert_eq!(tier.rank_ordinals_cosine(&[1.0, 0.0], &candidates, 2).unwrap(), vec![42, 7]);
+            let (candidates, _) = bound
+                .nominate(&[1.0, 0.0], 2, 4, 2, &mut workspace)
+                .unwrap();
+            assert_eq!(
+                tier.rank_ordinals_cosine(&[1.0, 0.0], &candidates, 2)
+                    .unwrap(),
+                vec![42, 7]
+            );
             assert_eq!(
                 bound
                     .search(&[1.0, 0.0], 2, 4, 2, &mut workspace)
