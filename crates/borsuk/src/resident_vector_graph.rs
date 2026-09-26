@@ -2,7 +2,7 @@
 
 use std::{
     cmp::Reverse,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap},
     fs::File,
     io::{self, BufReader, BufWriter, Read, Write},
     path::Path,
@@ -519,6 +519,22 @@ impl ResidentVectorGraph {
         mode: NavigationScore,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        self.search_with_anchor_count_workspace_cached(query, plane, k, ef, anchor_count, seed, mode, workspace, None, &mut 0)
+    }
+
+    fn search_with_anchor_count_workspace_cached(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        k: usize,
+        ef: usize,
+        anchor_count: usize,
+        seed: Option<usize>,
+        mode: NavigationScore,
+        workspace: &mut GraphSearchWorkspace,
+        exact_scores: Option<&HashMap<u64, f64>>,
+        cache_hits: &mut usize,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
         self.check_plane(plane)?;
         if query.len() != plane.dimensions()
             || query.iter().any(|x| !x.is_finite())
@@ -576,10 +592,18 @@ impl ResidentVectorGraph {
         let (results, visits) = self.navigate_from_with_workspace(ef, workspace, score, start)?;
         let mut ranked = results
             .into_iter()
-            .map(|visit| Ok((
-                if mode != NavigationScore::Fp64 {-plane.cosine_similarity_unit_query(&unit, visit.node as usize)?}
-                else {visit.distance},
-                plane.source_id(visit.node as usize)?)))
+            .map(|visit| {
+                let id = plane.source_id(visit.node as usize)?;
+                let distance = if mode == NavigationScore::Fp64 {
+                    visit.distance
+                } else if let Some(&cached) = exact_scores.and_then(|scores| scores.get(&id)) {
+                    *cache_hits += 1;
+                    -cached
+                } else {
+                    -plane.cosine_similarity_unit_query(&unit, visit.node as usize)?
+                };
+                Ok((distance, id))
+            })
             .collect::<Result<Vec<_>, ResidentFp16Error>>()?;
         ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         Ok((
@@ -864,6 +888,29 @@ impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
         ))
     }
 
+    /// Both authenticated routes reuse exact shortlist scores during fast
+    /// graph beam reranking. The caller performs its existing final union.
+    pub fn search_fast_cached(
+        &self,
+        query: &[f32],
+        k: usize,
+        pq_ef: usize,
+        shortlist: usize,
+        exact_ef: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, Vec<u64>, usize, usize, usize), ResidentFp16Error> {
+        let (physical, pq_visits) = self.search_candidates(query, k, pq_ef, shortlist, workspace)?;
+        let scored = self.plane.rank_ordinals_cosine_scored(query, &physical, physical.len())?;
+        let pq_ids = scored.iter().take(k).map(|&(id, _)| id).collect();
+        let scores = scored.into_iter().collect::<HashMap<_, _>>();
+        let mut cache_hits = 0;
+        let (exact_ids, exact_visits) = self.graph.search_with_anchor_count_workspace_cached(
+            query, self.plane, k, exact_ef, 0, None, NavigationScore::FastFp16,
+            workspace, Some(&scores), &mut cache_hits,
+        )?;
+        Ok((pq_ids, exact_ids, pq_visits, exact_visits, cache_hits))
+    }
+
     /// Retain graph navigation through tombstoned rows, then remove their
     /// physical ordinals before FP16 reranking. The mask has one bit per row.
     pub fn search_scored_masked(
@@ -1119,6 +1166,11 @@ mod tests {
                 vec![42, 7]
             );
         }
+        let cached = bound.search_fast_cached(&[1.0, 0.0], 2, 4, 2, 4, &mut workspace).unwrap();
+        assert_eq!(cached.0, vec![42, 7]);
+        assert_eq!(cached.1, vec![42, 7]);
+        assert!(cached.4 > 0);
+        assert!(bound.search_fast_cached(&[0.0, 0.0], 2, 4, 2, 4, &mut workspace).is_err());
         assert!(ResidentPqCosineGraph::bind(&restored, &tier, &cosine, &[0, 0, 2, 3]).is_err());
         assert!(ResidentVectorGraph::open_authenticated(&graph_path, SOURCE, &tier).is_err());
         assert_eq!(graph.search(&[1.0, 0.0], &tier, 2, 4).unwrap(), vec![42, 7]);

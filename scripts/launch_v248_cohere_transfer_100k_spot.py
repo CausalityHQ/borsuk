@@ -34,6 +34,7 @@ MILLION_DUAL_GRAPH_SCHEMA = "borsuk-v261-cohere-dual-graph-1m-spot-v1"
 SEEDED_DUAL_GRAPH_SCHEMA = "borsuk-v264-cohere-seeded-dual-graph-100k-spot-v1"
 FAST_DUAL_GRAPH_SCHEMA = "borsuk-v265-cohere-fast-dual-graph-100k-spot-v1"
 SQ8_DUAL_GRAPH_SCHEMA = "borsuk-v266-cohere-sq8-dual-graph-100k-spot-v1"
+CACHED_DUAL_GRAPH_SCHEMA = "borsuk-v267-cohere-cached-dual-graph-100k-spot-v1"
 IMAGE = "ami-06121aa3085b6f918"
 WALL_SECONDS = 10_800
 SOURCE = "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/"
@@ -93,9 +94,9 @@ def worker(commit, archive_sha, archive_key, prefix, pq_topology=False,
            coarse_pq=False, million=False, hybrid=False, million_hybrid=False,
            reuse_v257=False, million_exact=False, dual=False, dual_graph=False,
 million_dual_graph=False, seeded_dual_graph=False, fast_dual_graph=False,
-sq8_dual_graph=False):
+sq8_dual_graph=False, cached_dual_graph=False):
     big = million or million_hybrid or million_exact or million_dual_graph
-    dual_graph_mode = dual_graph or million_dual_graph or seeded_dual_graph or fast_dual_graph or sq8_dual_graph
+    dual_graph_mode = dual_graph or million_dual_graph or seeded_dual_graph or fast_dual_graph or sq8_dual_graph or cached_dual_graph
     hybrid_mode = hybrid or million_hybrid or dual
     script = r'''#!/bin/bash
 set -euo pipefail
@@ -253,7 +254,7 @@ phase=complete
   --prep prep.json --codes codes.bin --output coarse
 cp coarse/* .'''
     for key, value in {"ARTIFACTS": " ".join(artifacts), "ARTIFACTS_PY": repr(artifacts),
-                       "SCHEMA": SQ8_DUAL_GRAPH_SCHEMA if sq8_dual_graph else FAST_DUAL_GRAPH_SCHEMA if fast_dual_graph else SEEDED_DUAL_GRAPH_SCHEMA if seeded_dual_graph else MILLION_DUAL_GRAPH_SCHEMA if million_dual_graph else DUAL_GRAPH_SCHEMA if dual_graph else DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
+                       "SCHEMA": CACHED_DUAL_GRAPH_SCHEMA if cached_dual_graph else SQ8_DUAL_GRAPH_SCHEMA if sq8_dual_graph else FAST_DUAL_GRAPH_SCHEMA if fast_dual_graph else SEEDED_DUAL_GRAPH_SCHEMA if seeded_dual_graph else MILLION_DUAL_GRAPH_SCHEMA if million_dual_graph else DUAL_GRAPH_SCHEMA if dual_graph else DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
                        "BUCKET": BUCKET, "PREFIX": prefix,
                        "COMMIT": commit, "ARCHIVE_SHA": archive_sha,
                        "ARCHIVE_KEY": archive_key, "SOURCE": SOURCE.rstrip("/"),
@@ -265,15 +266,15 @@ cp coarse/* .'''
                        "ROWS": "1000000" if big else "100000",
                        "GENERATION": "255" if big else "248",
                        "PQ_ARGS": "--diverse" if diverse or exact_nav or anchored or global_pq or coarse_pq or big or hybrid_mode or dual_graph_mode else "--pq-topology books.bin codes.bin" if pq_topology else "",
-                       "SERVE_ARGS": "--sq8-dual-graph" if sq8_dual_graph else "--fast-dual-graph" if fast_dual_graph else "--seeded-dual-graph" if seeded_dual_graph else "--dual-graph" if dual_graph_mode else "--million-exact" if million_exact else "--dual centroids.f32 offsets.u32 postings.u32 coarse.json" if dual else "--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json" if hybrid_mode else "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
+                       "SERVE_ARGS": "--cached-dual-graph" if cached_dual_graph else "--sq8-dual-graph" if sq8_dual_graph else "--fast-dual-graph" if fast_dual_graph else "--seeded-dual-graph" if seeded_dual_graph else "--dual-graph" if dual_graph_mode else "--million-exact" if million_exact else "--dual centroids.f32 offsets.u32 postings.u32 coarse.json" if dual else "--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json" if hybrid_mode else "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
                        "EXACT_TEST": ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --bin v248_serve_cohere_graph_100k '
                                       'tests::million_row_hybrid_accepts_only_the_diverse_million_graph -- --exact >>"$root/build.log" 2>&1\n'
                                       if reuse_v257 else '') + ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib '
                                       + ('pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2' if global_pq or coarse_pq or hybrid_mode
                                          else 'resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch')
                                       + ' -- --exact >>"$root/build.log" 2>&1' if exact_nav or million_exact or anchored or global_pq or coarse_pq or big or hybrid_mode or dual_graph_mode else "") + ('\n"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib resident_fp16_tier::tests::fast_navigation_scores_full_simd_chunk_and_tail -- --exact >>"$root/build.log" 2>&1'
-                                      if fast_dual_graph or sq8_dual_graph else "") + ('\n"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib resident_fp16_tier::tests::corrupt_artifact_and_invalid_source_fail_closed -- --exact >>"$root/build.log" 2>&1'
-                                      if fast_dual_graph or sq8_dual_graph else ""),
+                                      if fast_dual_graph or sq8_dual_graph or cached_dual_graph else "") + ('\n"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib resident_fp16_tier::tests::corrupt_artifact_and_invalid_source_fail_closed -- --exact >>"$root/build.log" 2>&1'
+                                      if fast_dual_graph or sq8_dual_graph or cached_dual_graph else ""),
                        "COARSE_PREP": coarse_prep if coarse_pq or hybrid_mode else "",
                        "MATCHED_PREP": matched_million_prep if million_hybrid or million_exact or million_dual_graph else matched_prep if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph_mode) else "",
                        "MATCHED_GRAPH": ("printf '%s  graph.bin\\n' '688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7' | sha256sum -c -" if not big and (exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph_mode) else "printf '%s  graph.bin\\n' 'dff17235c4b674848d52ae11260445f97fd399039e18119f922aaa82d77309a2' | sha256sum -c -" if million_hybrid or million_exact or million_dual_graph else ""),
@@ -290,11 +291,11 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
            million_hybrid=False, reuse_v257=False, million_exact=False,
            dual=False, dual_graph=False, million_dual_graph=False,
            seeded_dual_graph=False, fast_dual_graph=False,
-           sq8_dual_graph=False):
+           sq8_dual_graph=False, cached_dual_graph=False):
     if sum((pq_topology, diverse, exact_nav, anchored, global_pq, coarse_pq,
             million, hybrid, million_hybrid, million_exact, dual, dual_graph,
             million_dual_graph, seeded_dual_graph, fast_dual_graph,
-            sq8_dual_graph)) > 1:
+            sq8_dual_graph, cached_dual_graph)) > 1:
         raise ValueError("select one graph treatment")
     if reuse_v257 and not ((million_hybrid and attempt == "a0002") or
                            ((million_exact or million_dual_graph) and attempt == "a0001")):
@@ -303,7 +304,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         raise ValueError("V258/V261 must reuse the closed V257 source graph")
     big = million or million_hybrid or million_exact or million_dual_graph
     hybrid_mode = hybrid or million_hybrid or dual
-    dual_graph_mode = dual_graph or seeded_dual_graph or fast_dual_graph or sq8_dual_graph
+    dual_graph_mode = dual_graph or seeded_dual_graph or fast_dual_graph or sq8_dual_graph or cached_dual_graph
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
@@ -315,7 +316,8 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         raise ValueError("source is not a fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    campaign = ("v266-cohere-sq8-dual-graph-100k" if sq8_dual_graph else
+    campaign = ("v267-cohere-cached-dual-graph-100k" if cached_dual_graph else
+                "v266-cohere-sq8-dual-graph-100k" if sq8_dual_graph else
                 "v265-cohere-fast-dual-graph-100k" if fast_dual_graph else
                 "v264-cohere-seeded-dual-graph-100k" if seeded_dual_graph else
                 "v261-cohere-dual-graph-1m" if million_dual_graph else
@@ -332,7 +334,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 "v250-cohere-diverse-100k" if diverse else
                 "v249-cohere-pq-aligned-100k" if pq_topology else
                 "v248-cohere-transfer-100k")
-    schema = SQ8_DUAL_GRAPH_SCHEMA if sq8_dual_graph else FAST_DUAL_GRAPH_SCHEMA if fast_dual_graph else SEEDED_DUAL_GRAPH_SCHEMA if seeded_dual_graph else MILLION_DUAL_GRAPH_SCHEMA if million_dual_graph else DUAL_GRAPH_SCHEMA if dual_graph else DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
+    schema = CACHED_DUAL_GRAPH_SCHEMA if cached_dual_graph else SQ8_DUAL_GRAPH_SCHEMA if sq8_dual_graph else FAST_DUAL_GRAPH_SCHEMA if fast_dual_graph else SEEDED_DUAL_GRAPH_SCHEMA if seeded_dual_graph else MILLION_DUAL_GRAPH_SCHEMA if million_dual_graph else DUAL_GRAPH_SCHEMA if dual_graph else DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
     archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
     prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
@@ -421,13 +423,13 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
             if (hashlib.sha256(previous).hexdigest() != prior_sha
                     or json.loads(previous).get("status") != "complete"):
                 raise ValueError("V258/V260 dual graph baseline terminal differs")
-    if seeded_dual_graph or fast_dual_graph or sq8_dual_graph:
+    if seeded_dual_graph or fast_dual_graph or sq8_dual_graph or cached_dual_graph:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V260_PREFIX + "/terminal.json")["Body"].read()
         if (hashlib.sha256(previous).hexdigest() != V260_TERMINAL_SHA
                 or json.loads(previous).get("status") != "complete"):
             raise ValueError("V260 seeded graph baseline terminal differs")
-    if sq8_dual_graph:
+    if sq8_dual_graph or cached_dual_graph:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V265_PREFIX + "/terminal.json")["Body"].read()
         if (hashlib.sha256(previous).hexdigest() != V265_TERMINAL_SHA
@@ -480,8 +482,8 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         "paired_v254_terminal_sha256": V254_TERMINAL_SHA if hybrid or dual else None,
         "paired_v255_terminal_sha256": V255_TERMINAL_SHA if million_hybrid or million_exact or million_dual_graph else None,
         "paired_v256_terminal_sha256": V256_TERMINAL_SHA if million_hybrid or million_exact or million_dual_graph or dual or dual_graph_mode else None,
-        "paired_v260_terminal_sha256": V260_TERMINAL_SHA if million_dual_graph or seeded_dual_graph or fast_dual_graph or sq8_dual_graph else None,
-        "paired_v265_terminal_sha256": V265_TERMINAL_SHA if sq8_dual_graph else None,
+        "paired_v260_terminal_sha256": V260_TERMINAL_SHA if million_dual_graph or seeded_dual_graph or fast_dual_graph or sq8_dual_graph or cached_dual_graph else None,
+        "paired_v265_terminal_sha256": V265_TERMINAL_SHA if sq8_dual_graph or cached_dual_graph else None,
         "paired_v258_terminal_sha256": V258_TERMINAL_SHA if million_dual_graph else None,
         "reused_v257_a0001_terminal_sha256": V257_TERMINAL_SHA if reuse_v257 else None,
         "interruption_policy": "discard interrupted cell, restart under a new attempt",
@@ -508,7 +510,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                                           coarse_pq, million, hybrid, million_hybrid,
                                           reuse_v257, million_exact, dual, dual_graph,
                                           million_dual_graph, seeded_dual_graph,
-                                          fast_dual_graph, sq8_dual_graph).encode()).decode(),
+                                          fast_dual_graph, sq8_dual_graph, cached_dual_graph).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -580,6 +582,7 @@ if __name__ == "__main__":
     parser.add_argument("--seeded-dual-graph", action="store_true")
     parser.add_argument("--fast-dual-graph", action="store_true")
     parser.add_argument("--sq8-dual-graph", action="store_true")
+    parser.add_argument("--cached-dual-graph", action="store_true")
     parser.add_argument("--reuse-v257", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-cohere-graph-launch.lock", "a+") as lock:
@@ -589,4 +592,4 @@ if __name__ == "__main__":
                args.hybrid, args.million_hybrid, args.reuse_v257,
                args.million_exact, args.dual, args.dual_graph,
                args.million_dual_graph, args.seeded_dual_graph,
-               args.fast_dual_graph, args.sq8_dual_graph)
+               args.fast_dual_graph, args.sq8_dual_graph, args.cached_dual_graph)
