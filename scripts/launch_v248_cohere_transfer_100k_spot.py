@@ -29,6 +29,7 @@ HYBRID_SCHEMA = "borsuk-v256-cohere-hybrid-100k-spot-v1"
 MILLION_HYBRID_SCHEMA = "borsuk-v257-cohere-hybrid-1m-spot-v1"
 MILLION_EXACT_SCHEMA = "borsuk-v258-cohere-fp16-navigation-1m-spot-v1"
 DUAL_SCHEMA = "borsuk-v259-cohere-dual-navigation-100k-spot-v1"
+DUAL_GRAPH_SCHEMA = "borsuk-v260-cohere-dual-graph-100k-spot-v1"
 IMAGE = "ami-06121aa3085b6f918"
 WALL_SECONDS = 10_800
 SOURCE = "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/"
@@ -77,7 +78,7 @@ HYBRID_ARTIFACTS = COARSE_ARTIFACTS + ("loaded-raw.jsonl",)
 def worker(commit, archive_sha, archive_key, prefix, pq_topology=False,
            diverse=False, exact_nav=False, anchored=False, global_pq=False,
            coarse_pq=False, million=False, hybrid=False, million_hybrid=False,
-           reuse_v257=False, million_exact=False, dual=False):
+           reuse_v257=False, million_exact=False, dual=False, dual_graph=False):
     big = million or million_hybrid or million_exact
     hybrid_mode = hybrid or million_hybrid or dual
     script = r'''#!/bin/bash
@@ -229,14 +230,14 @@ phase=complete
   '13ed1ebcb37e132da2eb58dae957b4cfceff8ea018ce25e7da24e1ea58c938b9' books.bin \\
   'b019a7ab11ee0a378ea91a54dac3b5d557231d218e14c1800d62f9325b7c966e' codes.bin \\
   '02e21fa3c89fa7d7b61826918a8bd35d3127827b4ef3f3ee47ade5e64e3c2a80' map.u32 | sha256sum -c -'''
-    artifacts = ARTIFACTS + HYBRID_ARTIFACTS if hybrid_mode else ARTIFACTS + ("loaded-raw.jsonl",) if million_exact else ARTIFACTS + COARSE_ARTIFACTS if coarse_pq else ARTIFACTS
+    artifacts = ARTIFACTS + HYBRID_ARTIFACTS if hybrid_mode else ARTIFACTS + ("loaded-raw.jsonl",) if million_exact or dual_graph else ARTIFACTS + COARSE_ARTIFACTS if coarse_pq else ARTIFACTS
     coarse_prep = '''phase=coarse
 /usr/bin/time -v -o coarse-resources.txt env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \\
   .venv/bin/python -m scripts.v254_prepare_coarse_pq --source vectors.raw \\
   --prep prep.json --codes codes.bin --output coarse
 cp coarse/* .'''
     for key, value in {"ARTIFACTS": " ".join(artifacts), "ARTIFACTS_PY": repr(artifacts),
-                       "SCHEMA": DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
+                       "SCHEMA": DUAL_GRAPH_SCHEMA if dual_graph else DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA,
                        "BUCKET": BUCKET, "PREFIX": prefix,
                        "COMMIT": commit, "ARCHIVE_SHA": archive_sha,
                        "ARCHIVE_KEY": archive_key, "SOURCE": SOURCE.rstrip("/"),
@@ -247,19 +248,19 @@ cp coarse/* .'''
                        "SHARDS": "$(seq 0 45)" if big else "0 1 2 3 4",
                        "ROWS": "1000000" if big else "100000",
                        "GENERATION": "255" if big else "248",
-                       "PQ_ARGS": "--diverse" if diverse or exact_nav or anchored or global_pq or coarse_pq or big or hybrid_mode else "--pq-topology books.bin codes.bin" if pq_topology else "",
-                       "SERVE_ARGS": "--million-exact" if million_exact else "--dual centroids.f32 offsets.u32 postings.u32 coarse.json" if dual else "--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json" if hybrid_mode else "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
+                       "PQ_ARGS": "--diverse" if diverse or exact_nav or anchored or global_pq or coarse_pq or big or hybrid_mode or dual_graph else "--pq-topology books.bin codes.bin" if pq_topology else "",
+                       "SERVE_ARGS": "--dual-graph" if dual_graph else "--million-exact" if million_exact else "--dual centroids.f32 offsets.u32 postings.u32 coarse.json" if dual else "--hybrid centroids.f32 offsets.u32 postings.u32 coarse.json" if hybrid_mode else "--coarse-pq centroids.f32 offsets.u32 postings.u32 coarse.json" if coarse_pq else "--global-pq" if global_pq else "--strided-anchors" if anchored else "--exact-nav" if exact_nav else "",
                        "EXACT_TEST": ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --bin v248_serve_cohere_graph_100k '
                                       'tests::million_row_hybrid_accepts_only_the_diverse_million_graph -- --exact >>"$root/build.log" 2>&1\n'
                                       if reuse_v257 else '') + ('"$CARGO_HOME/bin/cargo" test --release --locked -p borsuk --lib '
                                       + ('pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2' if global_pq or coarse_pq or hybrid_mode
                                          else 'resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch')
-                                      + ' -- --exact >>"$root/build.log" 2>&1' if exact_nav or million_exact or anchored or global_pq or coarse_pq or big or hybrid_mode else ""),
+                                      + ' -- --exact >>"$root/build.log" 2>&1' if exact_nav or million_exact or anchored or global_pq or coarse_pq or big or hybrid_mode or dual_graph else ""),
                        "COARSE_PREP": coarse_prep if coarse_pq or hybrid_mode else "",
-                       "MATCHED_PREP": matched_million_prep if million_hybrid or million_exact else matched_prep if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode) else "",
-                       "MATCHED_GRAPH": ("printf '%s  graph.bin\\n' '688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7' | sha256sum -c -" if not big and (exact_nav or anchored or global_pq or coarse_pq or hybrid_mode) else "printf '%s  graph.bin\\n' 'dff17235c4b674848d52ae11260445f97fd399039e18119f922aaa82d77309a2' | sha256sum -c -" if million_hybrid or million_exact else ""),
-                       "MATCHED_REQUESTS": ("printf '%s  requests.jsonl\\n' '86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812' | sha256sum -c -" if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode) or million_hybrid or million_exact else ""),
-                       "MATCHED_TRUTH": ("printf '%s  truth.u32\\n' '06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8' | sha256sum -c -" if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode) else "printf '%s  truth.u32\\n' '62e14eba043fafb8d8ec7c833d7d320c5d823c549683d15e5eacdff365a87f39' | sha256sum -c -" if million_hybrid or million_exact else "")}.items():
+                       "MATCHED_PREP": matched_million_prep if million_hybrid or million_exact else matched_prep if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph) else "",
+                       "MATCHED_GRAPH": ("printf '%s  graph.bin\\n' '688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7' | sha256sum -c -" if not big and (exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph) else "printf '%s  graph.bin\\n' 'dff17235c4b674848d52ae11260445f97fd399039e18119f922aaa82d77309a2' | sha256sum -c -" if million_hybrid or million_exact else ""),
+                       "MATCHED_REQUESTS": ("printf '%s  requests.jsonl\\n' '86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812' | sha256sum -c -" if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph) or million_hybrid or million_exact else ""),
+                       "MATCHED_TRUTH": ("printf '%s  truth.u32\\n' '06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8' | sha256sum -c -" if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph) else "printf '%s  truth.u32\\n' '62e14eba043fafb8d8ec7c833d7d320c5d823c549683d15e5eacdff365a87f39' | sha256sum -c -" if million_hybrid or million_exact else "")}.items():
         script = script.replace("@@" + key + "@@", value)
     if "@@" in script:
         raise ValueError("unresolved V248 worker placeholder")
@@ -269,9 +270,9 @@ cp coarse/* .'''
 def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=False,
            global_pq=False, coarse_pq=False, million=False, hybrid=False,
            million_hybrid=False, reuse_v257=False, million_exact=False,
-           dual=False):
+           dual=False, dual_graph=False):
     if sum((pq_topology, diverse, exact_nav, anchored, global_pq, coarse_pq,
-            million, hybrid, million_hybrid, million_exact, dual)) > 1:
+            million, hybrid, million_hybrid, million_exact, dual, dual_graph)) > 1:
         raise ValueError("select one graph treatment")
     if reuse_v257 and not ((million_hybrid and attempt == "a0002") or
                            (million_exact and attempt == "a0001")):
@@ -291,7 +292,8 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         raise ValueError("source is not a fast-forward descendant of origin/main")
     archive = archive_source(commit)
     archive_sha = hashlib.sha256(archive).hexdigest()
-    campaign = ("v259-cohere-dual-navigation-100k" if dual else
+    campaign = ("v260-cohere-dual-graph-100k" if dual_graph else
+                "v259-cohere-dual-navigation-100k" if dual else
                 "v258-cohere-exact-navigation-1m" if million_exact else
                 "v257-cohere-hybrid-1m" if million_hybrid else
                 "v256-cohere-hybrid-100k" if hybrid else
@@ -303,12 +305,12 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 "v250-cohere-diverse-100k" if diverse else
                 "v249-cohere-pq-aligned-100k" if pq_topology else
                 "v248-cohere-transfer-100k")
-    schema = DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
+    schema = DUAL_GRAPH_SCHEMA if dual_graph else DUAL_SCHEMA if dual else MILLION_EXACT_SCHEMA if million_exact else MILLION_HYBRID_SCHEMA if million_hybrid else HYBRID_SCHEMA if hybrid else MILLION_SCHEMA if million else COARSE_SCHEMA if coarse_pq else GLOBAL_SCHEMA if global_pq else ANCHOR_SCHEMA if anchored else EXACT_SCHEMA if exact_nav else DIVERSE_SCHEMA if diverse else PQ_SCHEMA if pq_topology else SCHEMA
     archive_key = f"research/{campaign}/{commit}/sources/{archive_sha}.tar.gz"
     prefix = f"research/{campaign}/{commit}/runs/{attempt}"
     session = boto3.Session(profile_name="causality", region_name=REGION)
     ec2, s3 = session.client("ec2"), session.client("s3")
-    if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode):
+    if not big and (pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph):
         parent_raw = s3.get_object(Bucket=BUCKET,
                                    Key=PARENT_PREFIX + "/terminal.json")["Body"].read()
         parent = json.loads(parent_raw)
@@ -328,13 +330,13 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         }.items():
             if parent["artifacts"].get(name, {}).get("sha256") != digest:
                 raise ValueError(f"paired V248 artifact differs: {name}")
-    if not big and (diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode):
+    if not big and (diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph):
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V249_PREFIX + "/terminal.json")["Body"].read()
         if (hashlib.sha256(previous).hexdigest() != V249_TERMINAL_SHA
                 or json.loads(previous).get("status") != "complete"):
             raise ValueError("V249 baseline terminal differs")
-    if big or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode:
+    if big or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V250_PREFIX + "/terminal.json")["Body"].read()
         prior = json.loads(previous)
@@ -343,7 +345,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 or prior["artifacts"].get("graph.bin", {}).get("sha256")
                 != "688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7"):
             raise ValueError("V250 paired graph terminal differs")
-    if anchored or global_pq or coarse_pq or dual:
+    if anchored or global_pq or coarse_pq or dual or dual_graph:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V251_PREFIX + "/terminal.json")["Body"].read()
         prior = json.loads(previous)
@@ -378,7 +380,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
             if (hashlib.sha256(previous).hexdigest() != prior_sha
                     or json.loads(previous).get("status") != "complete"):
                 raise ValueError("V255/V256 paired terminal differs")
-    if dual:
+    if dual or dual_graph:
         previous = s3.get_object(Bucket=BUCKET,
                                  Key=V256_PREFIX + "/terminal.json")["Body"].read()
         if (hashlib.sha256(previous).hexdigest() != V256_TERMINAL_SHA
@@ -410,32 +412,32 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         "split": "development 0-255; validation 256-999 prior used",
         "construction": {"m": 32, "m0": 64, "ef_construction": 128,
                          "workers": 8, "source_only_pq64": True},
-        "arms": [[4096, 2048, 8192]] if dual else [[2048, 0]] if million_exact else [[4096, 8192]] if hybrid_mode else [[4096, 4096]] if million else [[0, 8192]] if global_pq or coarse_pq else
+        "arms": [[4096, 2048]] if dual_graph else [[4096, 2048, 8192]] if dual else [[2048, 0]] if million_exact else [[4096, 8192]] if hybrid_mode else [[4096, 4096]] if million else [[0, 8192]] if global_pq or coarse_pq else
                 [[512, 0]] if anchored else
                 [[512, 0], [1024, 0], [2048, 0]] if exact_nav else
                 [[2048, 2048], [4096, 4096], [8192, 8192]],
         "pq_aligned_topology": pq_topology,
-        "diverse_pruning": hybrid_mode or big or diverse or exact_nav or anchored or global_pq or coarse_pq,
-        "exact_fp16_navigation": exact_nav or anchored or million_exact or dual,
+        "diverse_pruning": hybrid_mode or big or diverse or exact_nav or anchored or global_pq or coarse_pq or dual_graph,
+        "exact_fp16_navigation": exact_nav or anchored or million_exact or dual or dual_graph,
         "strided_anchors": 256 if anchored else 0,
         "global_pq_scan_rows": 100_000 if global_pq else 0,
         "coarse_pq": {"rows_per_cell": 256, "copies": 2, "probes": 32,
                       "shortlist": 8192, "seed": 254, "lloyd_iterations": 6} if coarse_pq or hybrid_mode else None,
-        "paired_v248_terminal_sha256": PARENT_TERMINAL_SHA if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid or dual else None,
-        "paired_v249_terminal_sha256": V249_TERMINAL_SHA if diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid or dual else None,
-        "paired_v250_terminal_sha256": V250_TERMINAL_SHA if big or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode else None,
-        "paired_v251_terminal_sha256": V251_TERMINAL_SHA if anchored or global_pq or coarse_pq or dual else None,
+        "paired_v248_terminal_sha256": PARENT_TERMINAL_SHA if pq_topology or diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid or dual or dual_graph else None,
+        "paired_v249_terminal_sha256": V249_TERMINAL_SHA if diverse or exact_nav or anchored or global_pq or coarse_pq or hybrid or dual or dual_graph else None,
+        "paired_v250_terminal_sha256": V250_TERMINAL_SHA if big or exact_nav or anchored or global_pq or coarse_pq or hybrid_mode or dual_graph else None,
+        "paired_v251_terminal_sha256": V251_TERMINAL_SHA if anchored or global_pq or coarse_pq or dual or dual_graph else None,
         "paired_v252_terminal_sha256": V252_TERMINAL_SHA if global_pq or coarse_pq else None,
         "paired_v253_terminal_sha256": V253_TERMINAL_SHA if coarse_pq else None,
         "paired_v254_terminal_sha256": V254_TERMINAL_SHA if hybrid or dual else None,
         "paired_v255_terminal_sha256": V255_TERMINAL_SHA if million_hybrid or million_exact else None,
-        "paired_v256_terminal_sha256": V256_TERMINAL_SHA if million_hybrid or million_exact or dual else None,
+        "paired_v256_terminal_sha256": V256_TERMINAL_SHA if million_hybrid or million_exact or dual or dual_graph else None,
         "reused_v257_a0001_terminal_sha256": V257_TERMINAL_SHA if reuse_v257 else None,
         "interruption_policy": "discard interrupted cell, restart under a new attempt",
         "output_prefix": f"s3://{BUCKET}/{prefix}",
     }, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken=("v259-" if dual else "v258-" if million_exact else "v257-" if million_hybrid else "v256-" if hybrid else "v255-" if million else "v254-" if coarse_pq else "v253-" if global_pq else "v252-" if anchored else "v251-" if exact_nav else "v250-" if diverse else "v249-" if pq_topology else "v248-")
+        ClientToken=("v260-" if dual_graph else "v259-" if dual else "v258-" if million_exact else "v257-" if million_hybrid else "v256-" if hybrid else "v255-" if million else "v254-" if coarse_pq else "v253-" if global_pq else "v252-" if anchored else "v251-" if exact_nav else "v250-" if diverse else "v249-" if pq_topology else "v248-")
         + hashlib.sha256(prefix.encode()).hexdigest()[:48],
         ImageId=IMAGE, InstanceType="c7i.4xlarge", MinCount=1, MaxCount=1,
         IamInstanceProfile={"Arn": PROFILE_ARN},
@@ -453,7 +455,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
         UserData=base64.b64encode(worker(commit, archive_sha, archive_key, prefix,
                                           pq_topology, diverse, exact_nav, anchored, global_pq,
                                           coarse_pq, million, hybrid, million_hybrid,
-                                          reuse_v257, million_exact, dual).encode()).decode(),
+                                          reuse_v257, million_exact, dual, dual_graph).encode()).decode(),
     )
     instance_id = receipt["Instances"][0]["InstanceId"]
     print(json.dumps({"instance_id": instance_id, "output_prefix": prefix,
@@ -474,7 +476,7 @@ def launch(attempt, pq_topology=False, diverse=False, exact_nav=False, anchored=
                 print(json.dumps(terminal, sort_keys=True), flush=True)
                 if terminal.get("status") != "complete":
                     raise RuntimeError("V248 failed; inspect only closed terminal artifacts")
-                if set(terminal.get("artifacts", {})) != set(ARTIFACTS + HYBRID_ARTIFACTS if hybrid_mode else ARTIFACTS + ("loaded-raw.jsonl",) if million_exact else ARTIFACTS + COARSE_ARTIFACTS if coarse_pq else ARTIFACTS):
+                if set(terminal.get("artifacts", {})) != set(ARTIFACTS + HYBRID_ARTIFACTS if hybrid_mode else ARTIFACTS + ("loaded-raw.jsonl",) if million_exact or dual_graph else ARTIFACTS + COARSE_ARTIFACTS if coarse_pq else ARTIFACTS):
                     raise ValueError("V248 artifact roster differs")
                 for name, identity in terminal["artifacts"].items():
                     body = s3.get_object(Bucket=BUCKET,
@@ -520,6 +522,7 @@ if __name__ == "__main__":
     parser.add_argument("--million-hybrid", action="store_true")
     parser.add_argument("--million-exact", action="store_true")
     parser.add_argument("--dual", action="store_true")
+    parser.add_argument("--dual-graph", action="store_true")
     parser.add_argument("--reuse-v257", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-cohere-graph-launch.lock", "a+") as lock:
@@ -527,4 +530,4 @@ if __name__ == "__main__":
         launch(args.attempt, args.pq_topology, args.diverse, args.exact_nav,
                args.anchored, args.global_pq, args.coarse_pq, args.million,
                args.hybrid, args.million_hybrid, args.reuse_v257,
-               args.million_exact, args.dual)
+               args.million_exact, args.dual, args.dual_graph)

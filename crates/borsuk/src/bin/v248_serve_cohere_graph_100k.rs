@@ -208,8 +208,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let coarse_pq = args.len() == 16 && args[11] == "--coarse-pq";
     let hybrid = args.len() == 16 && args[11] == "--hybrid";
     let dual = args.len() == 16 && args[11] == "--dual";
-    if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq && !hybrid && !dual {
-        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--million-exact|--strided-anchors|--global-pq|--coarse-pq|--hybrid|--dual CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
+    let dual_graph = args.len() == 12 && args[11] == "--dual-graph";
+    if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq && !hybrid && !dual && !dual_graph {
+        return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--million-exact|--dual-graph|--strided-anchors|--global-pq|--coarse-pq|--hybrid|--dual CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
@@ -222,10 +223,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["staging_receipt_sha256"]
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
         || !graph_schema_matches(rows, build["schema"].as_str().unwrap_or(""),
-            (exact_nav && !million_exact) || anchored || global_pq || coarse_pq || dual)
+            (exact_nav && !million_exact) || anchored || global_pq || coarse_pq || dual || dual_graph)
         || (million_exact && rows != 1_000_000)
-        || (dual && rows != 100_000)
-        || (rows == 100_000 && (hybrid || dual)
+        || ((dual || dual_graph) && rows != 100_000)
+        || (rows == 100_000 && (hybrid || dual || dual_graph)
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
@@ -321,7 +322,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut workspace = GraphSearchWorkspace::new(rows)?;
     let workspace_bytes = workspace.resident_bytes();
-    let arms = if million_exact {
+    let arms = if dual_graph {
+        vec![(4096, 4096)]
+    } else if million_exact {
         vec![(2048, 0)]
     } else if hybrid || dual {
         vec![(4096, 8192)]
@@ -349,7 +352,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             let (ef, shortlist) = arms[arm];
             let start = Instant::now();
             let mut dual_work = None;
-            let (ids, count) = if hybrid || dual {
+            let (ids, count) = if dual_graph {
+                let pq_result = bound.search(&request.query, 100, 4096, 4096, &mut workspace)?;
+                let exact = graph.search_with_workspace(&request.query, &plane, 100, 2048, &mut workspace)?;
+                let mut union = pq_result.0.into_iter().chain(exact.0)
+                    .map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
+                union.sort_unstable();
+                union.dedup();
+                dual_work = Some((pq_result.1, 0, exact.1, union.len()));
+                (plane.rank_ordinals_cosine(&request.query, &union, 100)?,
+                 pq_result.1 + exact.1)
+            } else if hybrid || dual {
                 let graph_result = bound.search(&request.query, 100, ef, 4096, &mut workspace)?;
                 let rows = coarse.as_ref().unwrap().candidates(&request.query, &mut coarse_seen);
                 let old = cosine.nominate_rows(&request.query, &rows, shortlist)
@@ -422,7 +435,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             visits[arm].push(count as u64);
             expected[arm][index] = ids.clone();
             row_arms.insert(
-                if dual {
+                if dual_graph {
+                    "dual-graph-4096-2048".to_string()
+                } else if dual {
                     "dual-4096-2048-8192".to_string()
                 } else if hybrid {
                     "hybrid-4096-8192".to_string()
@@ -480,7 +495,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut worker_times = Vec::new();
                     for index in (worker..QUERIES).step_by(WORKERS) {
                         let start = Instant::now();
-                        let (ids, _) = if hybrid || dual {
+                        let (ids, _) = if dual_graph {
+                            let pq_result = bound.search(
+                                &requests[index].query, 100, 4096, 4096, &mut workspace)
+                                .map_err(|e| e.to_string())?;
+                            let exact = graph.search_with_workspace(
+                                &requests[index].query, plane, 100, 2048, &mut workspace)
+                                .map_err(|e| e.to_string())?;
+                            let mut union = pq_result.0.into_iter().chain(exact.0)
+                                .map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
+                            union.sort_unstable();
+                            union.dedup();
+                            plane.rank_ordinals_cosine(&requests[index].query, &union, 100)
+                                .map(|ids| (ids, pq_result.1 + exact.1))
+                        } else if hybrid || dual {
                             let graph_result = bound.search(
                                 &requests[index].query, 100, ef, 4096, &mut workspace)
                                 .map_err(|e| e.to_string())?;
@@ -583,12 +611,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         if loaded.len() != QUERIES {
             return Err("loaded request count differs".into());
         }
-        if hybrid || dual || million_exact {
+        if hybrid || dual || dual_graph || million_exact {
             loaded_raw.sort_unstable_by_key(|&(index, _)| index);
             let mut out = BufWriter::new(File::create("loaded-raw.jsonl")?);
             for (index, elapsed) in loaded_raw {
                 serde_json::to_writer(&mut out, &json!({"ordinal":index,
-                    "arm":if million_exact {"exact-2048"} else if dual {"dual-4096-2048-8192"} else {"hybrid-4096-8192"},
+                    "arm":if million_exact {"exact-2048"} else if dual_graph {"dual-graph-4096-2048"} else if dual {"dual-4096-2048-8192"} else {"hybrid-4096-8192"},
                     "whole_ns":elapsed}))?;
                 out.write_all(b"\n")?;
             }
@@ -596,7 +624,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let loaded_wall_ns = loaded_wall.elapsed().as_nanos() as u64;
         summaries.insert(
-            if dual { "dual-4096-2048-8192".to_string() } else if hybrid { "hybrid-4096-8192".to_string() } else if coarse_pq { format!("coarse-pq-32-{shortlist}") } else if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
+            if dual_graph { "dual-graph-4096-2048".to_string() } else if dual { "dual-4096-2048-8192".to_string() } else if hybrid { "hybrid-4096-8192".to_string() } else if coarse_pq { format!("coarse-pq-32-{shortlist}") } else if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
             json!({
                 "sequential":{"p50_ns":percentile(&mut times[arm],50),
                     "p90_ns":percentile(&mut times[arm],90),"p95_ns":percentile(&mut times[arm],95),"p99_ns":percentile(&mut times[arm],99),
@@ -613,7 +641,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if dual {
+                "schema":if dual_graph {
+                    "borsuk-v260-cohere-dual-graph-100k-v1"
+                } else if dual {
                     "borsuk-v259-cohere-dual-navigation-100k-v1"
                 } else if hybrid {
                     if rows == 1_000_000 {"borsuk-v257-cohere-hybrid-1m-v1"}
@@ -649,7 +679,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "fp16_rows_per_query":if coarse_pq || global_pq {8192} else {0},
                 "sequential_wall_ns":sequential_wall_ns,"vector_body_gets":0,
                 "raw_sha256":digest(Path::new(&args[9]))?,
-                "loaded_raw_sha256":if hybrid || dual || million_exact {Some(digest(Path::new("loaded-raw.jsonl"))?)} else {None},
+                "loaded_raw_sha256":if hybrid || dual || dual_graph || million_exact {Some(digest(Path::new("loaded-raw.jsonl"))?)} else {None},
                 "requests_sha256":digest(Path::new(&args[8]))?,
             })
         ),

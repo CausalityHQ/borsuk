@@ -20,6 +20,7 @@ GLOBAL_ARMS = ("global-pq-8192",)
 COARSE_ARMS = ("coarse-pq-32-8192",)
 HYBRID_ARMS = ("hybrid-4096-8192",)
 DUAL_ARMS = ("dual-4096-2048-8192",)
+DUAL_GRAPH_ARMS = ("dual-graph-4096-2048",)
 
 
 def canonical(value):
@@ -73,6 +74,7 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 "borsuk-v257-cohere-hybrid-1m-v1",
                 "borsuk-v258-cohere-fp16-navigation-1m-v1",
                 "borsuk-v259-cohere-dual-navigation-100k-v1",
+                "borsuk-v260-cohere-dual-graph-100k-v1",
                 "borsuk-v255-cohere-diverse-graph-1m-serving-v1")
             or (million != (serving["schema"] in (
                 "borsuk-v255-cohere-diverse-graph-1m-serving-v1",
@@ -81,7 +83,8 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
-    arms = (DUAL_ARMS if serving["schema"] == "borsuk-v259-cohere-dual-navigation-100k-v1"
+    arms = (DUAL_GRAPH_ARMS if serving["schema"] == "borsuk-v260-cohere-dual-graph-100k-v1"
+            else DUAL_ARMS if serving["schema"] == "borsuk-v259-cohere-dual-navigation-100k-v1"
             else HYBRID_ARMS if serving["schema"] in (
                 "borsuk-v256-cohere-hybrid-v1", "borsuk-v257-cohere-hybrid-1m-v1")
             else ("exact-2048",) if serving["schema"] == "borsuk-v258-cohere-fp16-navigation-1m-v1"
@@ -140,7 +143,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         summary[selected]["validation_remaining_744_prior_used"]["mean_r100"] >= .995
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
-        "borsuk-v259-cohere-dual-navigation-quality-100k-v1"
+        "borsuk-v260-cohere-dual-graph-quality-100k-v1"
+        if serving["schema"] == "borsuk-v260-cohere-dual-graph-100k-v1"
+        else "borsuk-v259-cohere-dual-navigation-quality-100k-v1"
         if serving["schema"] == "borsuk-v259-cohere-dual-navigation-100k-v1"
         else "borsuk-v258-cohere-fp16-navigation-quality-1m-v1"
         if serving["schema"] == "borsuk-v258-cohere-fp16-navigation-1m-v1"

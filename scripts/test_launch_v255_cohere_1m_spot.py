@@ -54,6 +54,14 @@ class V255WorkerTest(unittest.TestCase):
         self.assertIn("688941c7c61c89a39739909af14cb2b4a935a7a4967a168f9503ac34e170d0e7", script)
         self.assertNotIn("@@", script)
 
+    def test_dual_graph_omits_coarse_route_and_seals_loaded_samples(self):
+        script = worker("0" * 40, "1" * 64, "source", "attempt", dual_graph=True)
+        self.assertIn("--dual-graph", script)
+        self.assertIn("borsuk-v260-cohere-dual-graph-100k-spot-v1", script)
+        self.assertIn("loaded-raw.jsonl", script)
+        self.assertNotIn("v254_prepare_coarse_pq", script)
+        self.assertNotIn("@@", script)
+
 
 if __name__ == "__main__":
     unittest.main()
