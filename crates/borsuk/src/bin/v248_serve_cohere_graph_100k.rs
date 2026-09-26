@@ -19,7 +19,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const ROWS: usize = 100_000;
 const DIMS: usize = 768;
 const QUERIES: usize = 1_000;
 const WORKERS: usize = 8;
@@ -72,10 +71,14 @@ struct CoarsePq {
 impl CoarsePq {
     fn open(args: &[String], prep: &Value) -> Result<Self, Box<dyn Error>> {
         let manifest: Value = serde_json::from_slice(&fs::read(&args[15])?)?;
+        let rows = prep["rows"].as_u64().ok_or("coarse row count missing")? as usize;
+        if !matches!(rows, 100_000 | 1_000_000) {
+            return Err("coarse row count differs".into());
+        }
         if manifest["schema"] != "borsuk-v254-coarse-pq-v1"
-            || manifest["rows"].as_u64() != Some(ROWS as u64)
+            || manifest["rows"].as_u64() != Some(rows as u64)
             || manifest["dimensions"].as_u64() != Some(DIMS as u64)
-            || manifest["centroids"].as_u64() != Some(ROWS.div_ceil(256) as u64)
+            || manifest["centroids"].as_u64() != Some(rows.div_ceil(256) as u64)
             || manifest["rows_per_cell"] != 256
             || manifest["copies"] != 2
             || manifest["seed"] != 254
@@ -100,10 +103,10 @@ impl CoarsePq {
         let raw_centroids = fs::read(&args[12])?;
         let raw_offsets = fs::read(&args[13])?;
         let raw_postings = fs::read(&args[14])?;
-        let cells = ROWS.div_ceil(256);
+        let cells = rows.div_ceil(256);
         if raw_centroids.len() != cells * DIMS * 4
             || raw_offsets.len() != (cells + 1) * 4
-            || raw_postings.len() != ROWS * 2 * 4
+            || raw_postings.len() != rows * 2 * 4
         {
             return Err("coarse PQ byte geometry differs".into());
         }
@@ -123,19 +126,19 @@ impl CoarsePq {
             || centroids.iter().any(|x| !x.is_finite())
             || offsets.len() != cells + 1
             || offsets[0] != 0
-            || offsets[cells] != ROWS * 2
-            || postings.len() != ROWS * 2
+            || offsets[cells] != rows * 2
+            || postings.len() != rows * 2
             || offsets
                 .windows(2)
                 .any(|pair| pair[0] > pair[1] || pair[1] - pair[0] > 8 * postings.len() / cells)
         {
             return Err("coarse PQ geometry differs".into());
         }
-        let mut counts = vec![0u8; ROWS];
+        let mut counts = vec![0u8; rows];
         for pair in offsets.windows(2) {
             let mut previous = None;
             for &row in &postings[pair[0]..pair[1]] {
-                if row >= ROWS || previous.is_some_and(|prior| row <= prior) {
+                if row >= rows || previous.is_some_and(|prior| row <= prior) {
                     return Err("coarse PQ posting order differs".into());
                 }
                 if counts[row] == 2 {
@@ -210,7 +213,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         || !matches!(rows, 100_000 | 1_000_000)
         || (rows == 1_000_000
             && (build["schema"] != "borsuk-v255-cohere-diverse-graph-build-1m-v1"
-                || exact_nav || anchored || global_pq || coarse_pq || hybrid))
+                || exact_nav || anchored || global_pq || coarse_pq))
         || (rows == 100_000
             && build["schema"] == "borsuk-v255-cohere-diverse-graph-build-1m-v1")
         || ((exact_nav || anchored || global_pq || coarse_pq || hybrid)
@@ -565,7 +568,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "{}\n",
             json!({
                 "schema":if hybrid {
-                    "borsuk-v256-cohere-hybrid-v1"
+                    if rows == 1_000_000 {"borsuk-v257-cohere-hybrid-1m-v1"}
+                    else {"borsuk-v256-cohere-hybrid-v1"}
                 } else if coarse_pq {
                     "borsuk-v254-cohere-coarse-pq-v1"
                 } else if global_pq {
