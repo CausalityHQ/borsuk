@@ -54,8 +54,10 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
           serving_file: Path, truth_output: Path, output: Path):
     prepared = json.loads(prep.read_text())
     serving = json.loads(serving_file.read_text())
+    source_rows = prepared["rows"]
+    million = source_rows == 1_000_000
     if (prepared["schema"] != "borsuk-v248-source-preparation-v1"
-            or prepared["rows"] != 100_000
+            or source_rows not in (100_000, 1_000_000)
             or prepared["source_sha256"] != digest(source)
             or serving["schema"] not in (
                 "borsuk-v248-cohere-graph-100k-serving-v1",
@@ -64,11 +66,14 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 "borsuk-v251-cohere-fp16-navigation-v1",
                 "borsuk-v252-cohere-strided-anchor-v1",
                 "borsuk-v253-cohere-global-pq-v1",
-                "borsuk-v254-cohere-coarse-pq-v1")
+                "borsuk-v254-cohere-coarse-pq-v1",
+                "borsuk-v255-cohere-diverse-graph-1m-serving-v1")
+            or (million != (serving["schema"] == "borsuk-v255-cohere-diverse-graph-1m-serving-v1"))
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
-    arms = (COARSE_ARMS if serving["schema"] == "borsuk-v254-cohere-coarse-pq-v1"
+    arms = (("4096-4096",) if million
+            else COARSE_ARMS if serving["schema"] == "borsuk-v254-cohere-coarse-pq-v1"
             else GLOBAL_ARMS if serving["schema"] == "borsuk-v253-cohere-global-pq-v1"
             else ANCHOR_ARMS if serving["schema"] == "borsuk-v252-cohere-strided-anchor-v1"
             else EXACT_ARMS if serving["schema"] == "borsuk-v251-cohere-fp16-navigation-v1"
@@ -81,12 +86,12 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                    or queries[i]["query_ordinal"] != i
                    for i, row in enumerate(rows))):
         raise ValueError("CoHere query or returned ID panel differs")
-    data = np.memmap(source, dtype="<f4", mode="r", shape=(100_000, DIMS))
+    data = np.memmap(source, dtype="<f4", mode="r", shape=(source_rows, DIMS))
     corpus = np.asarray(data, dtype=np.float64)
     corpus /= np.linalg.norm(corpus, axis=1)[:, None]
     q = np.asarray([row["query"] for row in queries], dtype=np.float64)
     q /= np.linalg.norm(q, axis=1)[:, None]
-    ids = np.arange(100_000)
+    ids = np.arange(source_rows)
     hits = {arm: [] for arm in arms}
     with truth_output.open("xb") as truth:
         for first in range(0, 1000, 16):
@@ -101,7 +106,7 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 for arm in arms:
                     returned = rows[ordinal]["arms"][arm]["returned_ids"]
                     if (len(returned) != 100 or len(set(returned)) != 100
-                            or min(returned) < 0 or max(returned) >= 100_000):
+                            or min(returned) < 0 or max(returned) >= source_rows):
                         raise ValueError("CoHere returned IDs differ")
                     hits[arm].append(len(set(returned) & set(exact.tolist())))
     summary = {}
@@ -122,7 +127,8 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         summary[selected]["validation_remaining_744_prior_used"]["mean_r100"] >= .995
         and summary[selected]["validation_remaining_744_prior_used"]["p05_hits"] >= 98)
     output.write_text(canonical({"schema": (
-        "borsuk-v254-cohere-coarse-pq-quality-v1"
+        "borsuk-v255-cohere-diverse-quality-1m-v1"
+        if million else "borsuk-v254-cohere-coarse-pq-quality-v1"
         if serving["schema"] == "borsuk-v254-cohere-coarse-pq-v1"
         else "borsuk-v253-cohere-global-pq-quality-v1"
         if serving["schema"] == "borsuk-v253-cohere-global-pq-v1"
@@ -135,7 +141,7 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
         else "borsuk-v249-cohere-pq-aligned-quality-v1"
         if serving["schema"] == "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1"
         else "borsuk-v248-cohere-quality-v1"),
-        "dataset": "CoHere-large-10M first 100k D768 cosine", "k": 100,
+        "dataset": f"CoHere-large-10M first {source_rows} D768 cosine", "k": 100,
         "source_sha256": digest(source), "test_sha256": TEST_SHA,
         "requests_sha256": digest(request_file), "raw_sha256": digest(raw_file),
         "serving_sha256": digest(serving_file),

@@ -194,6 +194,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
     let build: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
+    let rows = prep["rows"].as_u64().ok_or("row count missing")? as usize;
     let source = prep["source_sha256"]
         .as_str()
         .ok_or("source hash missing")?;
@@ -203,12 +204,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
         || (build["schema"] != "borsuk-v248-cohere-graph-build-v1"
             && build["schema"] != "borsuk-v249-cohere-pq-aligned-graph-build-v1"
-            && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
+            && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1"
+            && build["schema"] != "borsuk-v255-cohere-diverse-graph-build-1m-v1")
+        || !matches!(rows, 100_000 | 1_000_000)
+        || (rows == 1_000_000
+            && (build["schema"] != "borsuk-v255-cohere-diverse-graph-build-1m-v1"
+                || exact_nav || anchored || global_pq || coarse_pq))
+        || (rows == 100_000
+            && build["schema"] == "borsuk-v255-cohere-diverse-graph-build-1m-v1")
         || ((exact_nav || anchored || global_pq || coarse_pq)
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
-        || prep["rows"].as_u64() != Some(ROWS as u64)
+        || build["rows"].as_u64() != Some(rows as u64)
         || prep["dimensions"].as_u64() != Some(DIMS as u64)
         || prep["generation"] != build["generation"]
         || prep["artifacts"]["plane.bin"]["sha256"].as_str()
@@ -221,7 +229,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["artifacts"]["codes.bin"]["sha256"].as_str()
             != Some(digest(Path::new(&args[7]))?.as_str())
     {
-        return Err("CoHere-100k graph/PQ serving identity differs".into());
+        return Err("CoHere graph/PQ serving identity differs".into());
     }
     let started = Instant::now();
     let plane = ResidentFp16Tier::open_authenticated(
@@ -230,10 +238,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             .as_str()
             .ok_or("plane digest missing")?,
         source,
-        ROWS as u64,
+        rows as u64,
         DIMS,
         prep["generation"].as_u64().ok_or("generation missing")?,
-        200_000_000,
+        rows * 2_000,
     )?;
     let graph = ResidentVectorGraph::open_authenticated(
         Path::new(&args[4]),
@@ -243,7 +251,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &plane,
     )?;
     let raw_map = fs::read(&args[5])?;
-    if raw_map.len() != ROWS * 4 {
+    if raw_map.len() != rows * 4 {
         return Err("physical map length differs".into());
     }
     let old_for_new = raw_map
@@ -260,11 +268,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect::<Vec<_>>();
     let codes = fs::read(&args[7])?;
     let pq = Pq64Router::new(
-        ROWS,
+        rows,
         DIMS,
         256,
         1,
-        vec![0.0; ROWS.div_ceil(256) * DIMS],
+        vec![0.0; rows.div_ceil(256) * DIMS],
         books,
         codes,
     )
@@ -278,7 +286,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-    let mut new_for_old = vec![0; ROWS];
+    let mut new_for_old = vec![0; rows];
     for (new, &old) in old_for_new.iter().enumerate() {
         new_for_old[old] = new;
     }
@@ -298,7 +306,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("request panel differs".into());
     }
 
-    let mut workspace = GraphSearchWorkspace::new(ROWS)?;
+    let mut workspace = GraphSearchWorkspace::new(rows)?;
     let workspace_bytes = workspace.resident_bytes();
     let arms = if global_pq || coarse_pq {
         vec![(0, 8192)]
@@ -306,6 +314,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         vec![(512, 0)]
     } else if exact_nav {
         vec![(512, 0), (1024, 0), (2048, 0)]
+    } else if rows == 1_000_000 {
+        vec![(4096, 4096)]
     } else {
         ARMS.to_vec()
     };
@@ -411,7 +421,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let expected = &expected[arm];
                 handles.push(scope.spawn(move || -> Result<Vec<u64>, String> {
                     let mut workspace =
-                        GraphSearchWorkspace::new(ROWS).map_err(|e| e.to_string())?;
+                        GraphSearchWorkspace::new(rows).map_err(|e| e.to_string())?;
                     let mut coarse_seen = HashSet::with_capacity(20_000);
                     let mut worker_times = Vec::new();
                     for index in (worker..QUERIES).step_by(WORKERS) {
@@ -512,21 +522,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "borsuk-v252-cohere-strided-anchor-v1"
                 } else if exact_nav {
                     "borsuk-v251-cohere-fp16-navigation-v1"
+                } else if rows == 1_000_000 {
+                    "borsuk-v255-cohere-diverse-graph-1m-serving-v1"
                 } else if build["schema"] == "borsuk-v250-cohere-diverse-graph-build-v1" {
                     "borsuk-v250-cohere-diverse-graph-100k-serving-v1"
                 } else if build["schema"] == "borsuk-v249-cohere-pq-aligned-graph-build-v1" {
                     "borsuk-v249-cohere-pq-aligned-graph-100k-serving-v1"
                 } else {"borsuk-v248-cohere-graph-100k-serving-v1"},
-                "dataset":"CoHere-100k D768 cosine","split":"development-256-plus-validation-744-prior-used",
+                "dataset":if rows == 1_000_000 {"CoHere-1M D768 cosine"} else {"CoHere-100k D768 cosine"},"split":"development-256-plus-validation-744-prior-used",
                 "queries":QUERIES,"workers":WORKERS,"arms":summaries,
                 "cold_hydration_ns":hydration_ns,"hydrated_rss_bytes":hydrated_rss_bytes,
                 "process_peak_rss_bytes":memory("VmHWM:")?,
                 "graph_heap_bytes":graph.heap_bytes(),"plane_resident_bytes":plane.resident_bytes(),
-                "pq_code_bytes":ROWS*64,"pq_cosine_norm_bytes":cosine.resident_bytes(),
+                "pq_code_bytes":rows*64,"pq_cosine_norm_bytes":cosine.resident_bytes(),
                 "physical_map_bytes":old_for_new.capacity()*8,
                 "worker_workspace_bytes":workspace_bytes*WORKERS,
                 "anchor_scores_per_query":if anchored {256} else {0},
-                "pq_scores_per_query":if global_pq {ROWS} else {0},
+                "pq_scores_per_query":if global_pq {rows} else {0},
                 "coarse_probe_cells":if coarse_pq {32} else {0},
                 "fp16_rows_per_query":if coarse_pq || global_pq {8192} else {0},
                 "sequential_wall_ns":sequential_wall_ns,"vector_body_gets":0,
