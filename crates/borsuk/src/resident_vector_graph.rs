@@ -441,7 +441,21 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, workspace)
+    }
+
+    /// Start exact navigation from an authenticated physical row nominated by
+    /// another search on the same graph generation.
+    pub fn search_from_seed_with_workspace(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        k: usize,
+        ef: usize,
+        seed: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, Some(seed), workspace)
     }
 
     /// Route from the nearest of evenly spaced source rows. Returned work
@@ -458,7 +472,7 @@ impl ResidentVectorGraph {
         if anchor_count == 0 || anchor_count > plane.rows() {
             return Err(ResidentFp16Error::Invalid("graph anchor count"));
         }
-        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, None, workspace)
     }
 
     fn search_with_anchor_count_workspace(
@@ -468,6 +482,7 @@ impl ResidentVectorGraph {
         k: usize,
         ef: usize,
         anchor_count: usize,
+        seed: Option<usize>,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
         self.check_plane(plane)?;
@@ -477,6 +492,7 @@ impl ResidentVectorGraph {
             || k > plane.rows()
             || ef < k
             || ef > plane.rows()
+            || seed.is_some_and(|node| node >= plane.rows())
         {
             return Err(ResidentFp16Error::Invalid("graph query geometry"));
         }
@@ -494,7 +510,9 @@ impl ResidentVectorGraph {
         let mut score = |node: u32| -> Result<f64, ResidentFp16Error> {
             Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?)
         };
-        let start = if anchor_count == 0 {
+        let start = if let Some(seed) = seed {
+            Some(u32::try_from(seed).map_err(|_| ResidentFp16Error::Invalid("graph seed"))?)
+        } else if anchor_count == 0 {
             None
         } else {
             let mut best = (f64::INFINITY, u32::MAX);
@@ -980,6 +998,15 @@ mod tests {
                 .search_with_visits(&[1.0, 0.0], &tier, 2, 4)
                 .unwrap()
         );
+        assert_eq!(
+            restored
+                .search_from_seed_with_workspace(&[1.0, 0.0], &tier, 2, 4, 0, &mut workspace)
+                .unwrap().0,
+            vec![42, 7]
+        );
+        assert!(restored
+            .search_from_seed_with_workspace(&[1.0, 0.0], &tier, 2, 4, 4, &mut workspace)
+            .is_err());
         let (routed, scores) = restored
             .search_with_strided_anchors_workspace(&[1.0, 0.0], &tier, 2, 2, 2, &mut workspace)
             .unwrap();

@@ -208,7 +208,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let coarse_pq = args.len() == 16 && args[11] == "--coarse-pq";
     let hybrid = args.len() == 16 && args[11] == "--hybrid";
     let dual = args.len() == 16 && args[11] == "--dual";
-    let dual_graph = args.len() == 12 && args[11] == "--dual-graph";
+    let seeded_dual_graph = args.len() == 12 && args[11] == "--seeded-dual-graph";
+    let dual_graph = args.len() == 12 &&
+        (args[11] == "--dual-graph" || seeded_dual_graph);
     if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq && !hybrid && !dual && !dual_graph {
         return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--million-exact|--dual-graph|--strided-anchors|--global-pq|--coarse-pq|--hybrid|--dual CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
     }
@@ -355,7 +357,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut dual_work = None;
             let (ids, count) = if dual_graph {
                 let pq_result = bound.search(&request.query, 100, 4096, 4096, &mut workspace)?;
-                let exact = graph.search_with_workspace(&request.query, &plane, 100, 2048, &mut workspace)?;
+                let exact = if seeded_dual_graph {
+                    graph.search_from_seed_with_workspace(
+                        &request.query, &plane, 100, 2048,
+                        new_for_old[pq_result.0[0] as usize], &mut workspace)?
+                } else {
+                    graph.search_with_workspace(&request.query, &plane, 100, 2048, &mut workspace)?
+                };
                 let mut union = pq_result.0.into_iter().chain(exact.0)
                     .map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
                 union.sort_unstable();
@@ -436,7 +444,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             visits[arm].push(count as u64);
             expected[arm][index] = ids.clone();
             row_arms.insert(
-                if dual_graph {
+                if seeded_dual_graph {
+                    "seeded-dual-graph-4096-2048".to_string()
+                } else if dual_graph {
                     "dual-graph-4096-2048".to_string()
                 } else if dual {
                     "dual-4096-2048-8192".to_string()
@@ -500,9 +510,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let pq_result = bound.search(
                                 &requests[index].query, 100, 4096, 4096, &mut workspace)
                                 .map_err(|e| e.to_string())?;
-                            let exact = graph.search_with_workspace(
-                                &requests[index].query, plane, 100, 2048, &mut workspace)
-                                .map_err(|e| e.to_string())?;
+                            let exact = if seeded_dual_graph {
+                                graph.search_from_seed_with_workspace(
+                                    &requests[index].query, plane, 100, 2048,
+                                    new_for_old[pq_result.0[0] as usize], &mut workspace)
+                            } else {
+                                graph.search_with_workspace(
+                                    &requests[index].query, plane, 100, 2048, &mut workspace)
+                            }.map_err(|e| e.to_string())?;
                             let mut union = pq_result.0.into_iter().chain(exact.0)
                                 .map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
                             union.sort_unstable();
@@ -617,7 +632,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut out = BufWriter::new(File::create("loaded-raw.jsonl")?);
             for (index, elapsed) in loaded_raw {
                 serde_json::to_writer(&mut out, &json!({"ordinal":index,
-                    "arm":if million_exact {"exact-2048"} else if dual_graph {"dual-graph-4096-2048"} else if dual {"dual-4096-2048-8192"} else {"hybrid-4096-8192"},
+                    "arm":if million_exact {"exact-2048"} else if seeded_dual_graph {"seeded-dual-graph-4096-2048"} else if dual_graph {"dual-graph-4096-2048"} else if dual {"dual-4096-2048-8192"} else {"hybrid-4096-8192"},
                     "whole_ns":elapsed}))?;
                 out.write_all(b"\n")?;
             }
@@ -625,7 +640,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let loaded_wall_ns = loaded_wall.elapsed().as_nanos() as u64;
         summaries.insert(
-            if dual_graph { "dual-graph-4096-2048".to_string() } else if dual { "dual-4096-2048-8192".to_string() } else if hybrid { "hybrid-4096-8192".to_string() } else if coarse_pq { format!("coarse-pq-32-{shortlist}") } else if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
+            if seeded_dual_graph { "seeded-dual-graph-4096-2048".to_string() } else if dual_graph { "dual-graph-4096-2048".to_string() } else if dual { "dual-4096-2048-8192".to_string() } else if hybrid { "hybrid-4096-8192".to_string() } else if coarse_pq { format!("coarse-pq-32-{shortlist}") } else if global_pq { format!("global-pq-{shortlist}") } else if anchored { format!("anchor-256-{ef}") } else if exact_nav { format!("exact-{ef}") } else { format!("{ef}-{shortlist}") },
             json!({
                 "sequential":{"p50_ns":percentile(&mut times[arm],50),
                     "p90_ns":percentile(&mut times[arm],90),"p95_ns":percentile(&mut times[arm],95),"p99_ns":percentile(&mut times[arm],99),
@@ -642,7 +657,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!(
             "{}\n",
             json!({
-                "schema":if dual_graph {
+                "schema":if seeded_dual_graph {
+                    "borsuk-v264-cohere-seeded-dual-graph-100k-v1"
+                } else if dual_graph {
                     if rows == 1_000_000 {"borsuk-v261-cohere-dual-graph-1m-v1"}
                     else {"borsuk-v260-cohere-dual-graph-100k-v1"}
                 } else if dual {
