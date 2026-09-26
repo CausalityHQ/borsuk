@@ -357,11 +357,20 @@ pub async fn hydrate_graph_collection_decoded(
 ) -> Result<(Arc<ResidentGraphOverlay>, ResidentGraphHydrationStats), ResidentGraphCollectionError>
 {
     let (overlay, stats) = hydrate_graph_collection(
-        store, prefix, head, cache_root, max_graph_resident_bytes, active_workers,
-        max_snapshot_bytes, max_delta_bytes,
-    ).await?;
+        store,
+        prefix,
+        head,
+        cache_root,
+        max_graph_resident_bytes,
+        active_workers,
+        max_snapshot_bytes,
+        max_delta_bytes,
+    )
+    .await?;
     let overlay = Arc::into_inner(overlay)
-        .ok_or(ResidentGraphCollectionError::Invalid("shared fresh overlay"))?
+        .ok_or(ResidentGraphCollectionError::Invalid(
+            "shared fresh overlay",
+        ))?
         .with_decoded_delta(max_delta_bytes)?;
     Ok((Arc::new(overlay), stats))
 }
@@ -380,8 +389,11 @@ pub fn hydrate_graph_collection_decoded_reusing_base(
         return Err(ResidentGraphCollectionError::Invalid("base root differs"));
     }
     let mutations = decode_mutation_snapshot(
-        &head.mutation_bytes, &head.mutation_sha256, &head.base_root_sha256,
-        root.dimensions, max_snapshot_bytes,
+        &head.mutation_bytes,
+        &head.mutation_sha256,
+        &head.base_root_sha256,
+        root.dimensions,
+        max_snapshot_bytes,
     )?;
     let overlay = ResidentGraphOverlay::new(prior.base_arc(), mutations, max_delta_bytes)?
         .with_decoded_delta(max_delta_bytes)?;

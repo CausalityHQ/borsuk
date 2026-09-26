@@ -7,7 +7,10 @@ use std::{
     path::Path,
 };
 
-use half::{f16, slice::{HalfBitsSliceExt, HalfFloatSliceExt}};
+use half::{
+    f16,
+    slice::{HalfBitsSliceExt, HalfFloatSliceExt},
+};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
@@ -159,8 +162,8 @@ where
                 row[8 + 2 * index..10 + 2 * index]
                     .copy_from_slice(&encoded.to_bits().to_le_bytes());
             }
-            if !norm.is_finite() || norm <= 0.0
-                || !encoded_norm.is_finite() || encoded_norm <= 0.0 {
+            if !norm.is_finite() || norm <= 0.0 || !encoded_norm.is_finite() || encoded_norm <= 0.0
+            {
                 return Err(ResidentFp16Error::Invalid("source zero/nonfinite norm"));
             }
             writer.write_all(&row)?;
@@ -226,14 +229,19 @@ impl ResidentFp16Tier {
         ordinal: usize,
         scratch: &mut [f32],
     ) -> Result<f64, ResidentFp16Error> {
-        if normalized.len() != self.dimensions || scratch.len() != self.dimensions
-            || self.fast_norms.len() != self.rows() || ordinal >= self.rows() {
+        if normalized.len() != self.dimensions
+            || scratch.len() != self.dimensions
+            || self.fast_norms.len() != self.rows()
+            || ordinal >= self.rows()
+        {
             return Err(ResidentFp16Error::Invalid("fast graph score geometry"));
         }
-        let offset = ordinal.checked_mul(self.dimensions)
+        let offset = ordinal
+            .checked_mul(self.dimensions)
             .ok_or(ResidentFp16Error::Invalid("candidate offset"))?;
         self.coordinates[offset..offset + self.dimensions]
-            .reinterpret_cast::<f16>().convert_to_f32_slice(scratch);
+            .reinterpret_cast::<f16>()
+            .convert_to_f32_slice(scratch);
         let mut lanes = f32x8::ZERO;
         let mut chunks = normalized.chunks_exact(8).zip(scratch.chunks_exact(8));
         for (query, row) in &mut chunks {
@@ -244,8 +252,12 @@ impl ResidentFp16Tier {
             lanes += f32x8::from(q) * f32x8::from(r);
         }
         let tail = normalized.len() / 8 * 8;
-        let dot = lanes.reduce_add() + normalized[tail..].iter()
-            .zip(&scratch[tail..]).map(|(q, r)| q * r).sum::<f32>();
+        let dot = lanes.reduce_add()
+            + normalized[tail..]
+                .iter()
+                .zip(&scratch[tail..])
+                .map(|(q, r)| q * r)
+                .sum::<f32>();
         Ok(f64::from(dot) / self.fast_norms[ordinal])
     }
 
@@ -257,9 +269,11 @@ impl ResidentFp16Tier {
         ordinal: usize,
     ) -> Result<f64, ResidentFp16Error> {
         let blocks = self.dimensions.div_ceil(32);
-        if normalized.len() != self.dimensions || ordinal >= self.rows()
+        if normalized.len() != self.dimensions
+            || ordinal >= self.rows()
             || self.sq8_codes.len() != self.rows() * self.dimensions
-            || self.sq8_scales.len() != self.rows() * blocks {
+            || self.sq8_scales.len() != self.rows() * blocks
+        {
             return Err(ResidentFp16Error::Invalid("SQ8 graph score geometry"));
         }
         let codes = &self.sq8_codes[ordinal * self.dimensions..(ordinal + 1) * self.dimensions];
@@ -281,8 +295,12 @@ impl ResidentFp16Tier {
                 lanes += f32x8::from(values) * f32x8::from(codes);
             }
             let tail = code_chunk.len() / 8 * 8;
-            let dot = lanes.reduce_add() + query_chunk[tail..].iter()
-                .zip(&code_chunk[tail..]).map(|(q, &c)| q * f32::from(c)).sum::<f32>();
+            let dot = lanes.reduce_add()
+                + query_chunk[tail..]
+                    .iter()
+                    .zip(&code_chunk[tail..])
+                    .map(|(q, &c)| q * f32::from(c))
+                    .sum::<f32>();
             score += f64::from(dot * scales[block]);
         }
         Ok(score)
@@ -371,7 +389,8 @@ impl ResidentFp16Tier {
     /// Charged ID and FP16 payload bytes owned by this generation.
     #[must_use]
     pub fn resident_bytes(&self) -> usize {
-        self.ids.capacity() * 8 + self.coordinates.capacity() * 2
+        self.ids.capacity() * 8
+            + self.coordinates.capacity() * 2
             + self.fast_norms.capacity() * 8
             + self.sq8_codes.capacity()
             + self.sq8_scales.capacity() * 4
@@ -392,13 +411,16 @@ impl ResidentFp16Tier {
             };
         }
         self.fast_norms.clear();
-        let required = self.rows().checked_mul(8)
+        let required = self
+            .rows()
+            .checked_mul(8)
             .and_then(|bytes| self.resident_bytes().checked_add(bytes))
             .ok_or(ResidentFp16Error::Invalid("fast norm byte count overflow"))?;
         if required > resident_budget_bytes {
             return Err(ResidentFp16Error::Invalid("resident budget"));
         }
-        self.fast_norms.try_reserve_exact(self.rows())
+        self.fast_norms
+            .try_reserve_exact(self.rows())
             .map_err(|_| ResidentFp16Error::Invalid("fast norm allocation"))?;
         for row in self.coordinates.chunks_exact(self.dimensions) {
             let norm_squared = row.iter().fold(0.0_f64, |sum, &bits| {
@@ -421,7 +443,8 @@ impl ResidentFp16Tier {
     ) -> Result<(), ResidentFp16Error> {
         let blocks = self.dimensions.div_ceil(32);
         if self.sq8_codes.len() == self.rows() * self.dimensions
-            && self.sq8_scales.len() == self.rows() * blocks {
+            && self.sq8_scales.len() == self.rows() * blocks
+        {
             return if self.resident_bytes() <= resident_budget_bytes {
                 Ok(())
             } else {
@@ -430,20 +453,27 @@ impl ResidentFp16Tier {
         }
         self.sq8_codes.clear();
         self.sq8_scales.clear();
-        let code_bytes = self.rows().checked_mul(self.dimensions)
+        let code_bytes = self
+            .rows()
+            .checked_mul(self.dimensions)
             .ok_or(ResidentFp16Error::Invalid("SQ8 code byte overflow"))?;
-        let scale_count = self.rows().checked_mul(blocks)
+        let scale_count = self
+            .rows()
+            .checked_mul(blocks)
             .ok_or(ResidentFp16Error::Invalid("SQ8 scale count overflow"))?;
-        let required = scale_count.checked_mul(4)
+        let required = scale_count
+            .checked_mul(4)
             .and_then(|bytes| bytes.checked_add(code_bytes))
             .and_then(|bytes| self.resident_bytes().checked_add(bytes))
             .ok_or(ResidentFp16Error::Invalid("SQ8 resident byte overflow"))?;
         if required > resident_budget_bytes {
             return Err(ResidentFp16Error::Invalid("resident budget"));
         }
-        self.sq8_codes.try_reserve_exact(code_bytes)
+        self.sq8_codes
+            .try_reserve_exact(code_bytes)
             .map_err(|_| ResidentFp16Error::Invalid("SQ8 code allocation"))?;
-        self.sq8_scales.try_reserve_exact(scale_count)
+        self.sq8_scales
+            .try_reserve_exact(scale_count)
             .map_err(|_| ResidentFp16Error::Invalid("SQ8 scale allocation"))?;
         for row in self.coordinates.chunks_exact(self.dimensions) {
             let norm_squared = row.iter().fold(0.0_f64, |sum, &bits| {
@@ -455,7 +485,9 @@ impl ResidentFp16Tier {
             }
             let norm = norm_squared.sqrt();
             for chunk in row.chunks(32) {
-                let maximum = chunk.iter().map(|&bits| f16::from_bits(bits).to_f32().abs())
+                let maximum = chunk
+                    .iter()
+                    .map(|&bits| f16::from_bits(bits).to_f32().abs())
                     .fold(0.0_f32, f32::max);
                 if maximum == 0.0 {
                     self.sq8_scales.push(0.0);
@@ -466,7 +498,8 @@ impl ResidentFp16Tier {
                 self.sq8_scales.push((f64::from(step) / norm) as f32);
                 for &bits in chunk {
                     let value = f16::from_bits(bits).to_f32();
-                    self.sq8_codes.push((value / step).round().clamp(-127.0, 127.0) as i8);
+                    self.sq8_codes
+                        .push((value / step).round().clamp(-127.0, 127.0) as i8);
                 }
             }
         }
@@ -750,19 +783,34 @@ mod tests {
             )
             .is_err()
         );
-        assert!(write_resident_fp16_tier(
-            &directory.path().join("underflow.bin"), 1, 2, 1, SOURCE,
-            vec![(3, vec![1.0e-8, 0.0])].into_iter(),
-        ).is_err());
+        assert!(
+            write_resident_fp16_tier(
+                &directory.path().join("underflow.bin"),
+                1,
+                2,
+                1,
+                SOURCE,
+                vec![(3, vec![1.0e-8, 0.0])].into_iter(),
+            )
+            .is_err()
+        );
         let zero = directory.path().join("zero.bin");
-        write_resident_fp16_tier(&zero, 1, 2, 1, SOURCE,
-            vec![(3, vec![1.0, 0.0])].into_iter()).unwrap();
+        write_resident_fp16_tier(
+            &zero,
+            1,
+            2,
+            1,
+            SOURCE,
+            vec![(3, vec![1.0, 0.0])].into_iter(),
+        )
+        .unwrap();
         let mut bytes = std::fs::read(&zero).unwrap();
         bytes[72..76].fill(0);
         std::fs::write(&zero, &bytes).unwrap();
         let zero_digest = format!("{:x}", Sha256::digest(&bytes));
-        assert!(ResidentFp16Tier::open_authenticated(
-            &zero, &zero_digest, SOURCE, 1, 2, 1, 12).is_err());
+        assert!(
+            ResidentFp16Tier::open_authenticated(&zero, &zero_digest, SOURCE, 1, 2, 1, 12).is_err()
+        );
     }
 
     #[test]
@@ -770,19 +818,24 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("plane.bin");
         let row = vec![0.5, -0.5, 0.25, 0.125, -0.25, 0.0625, 0.125, 0.5, -0.125];
-        let digest = write_resident_fp16_tier(&path, 1, 9, 1, SOURCE,
-            vec![(7, row)].into_iter()).unwrap();
-        let mut tier = ResidentFp16Tier::open_authenticated(
-            &path, &digest, SOURCE, 1, 9, 1, 26).unwrap();
+        let digest =
+            write_resident_fp16_tier(&path, 1, 9, 1, SOURCE, vec![(7, row)].into_iter()).unwrap();
+        let mut tier =
+            ResidentFp16Tier::open_authenticated(&path, &digest, SOURCE, 1, 9, 1, 26).unwrap();
         assert!(tier.prepare_fast_navigation(33).is_err());
         tier.prepare_fast_navigation(34).unwrap();
         let query = vec![1.0_f32 / 3.0; 9];
         let unit = vec![1.0_f64 / 3.0; 9];
         let mut scratch = vec![0.0; 9];
-        let fast = tier.cosine_similarity_unit_query_fast(&query, 0, &mut scratch).unwrap();
+        let fast = tier
+            .cosine_similarity_unit_query_fast(&query, 0, &mut scratch)
+            .unwrap();
         let exact = tier.cosine_similarity_unit_query(&unit, 0).unwrap();
         assert!((fast - exact).abs() < 1.0e-6);
-        assert!(tier.cosine_similarity_unit_query_fast(&query, 0, &mut scratch[..8]).is_err());
+        assert!(
+            tier.cosine_similarity_unit_query_fast(&query, 0, &mut scratch[..8])
+                .is_err()
+        );
         assert!(tier.cosine_similarity_unit_query_sq8(&query, 0).is_err());
         assert!(tier.prepare_sq8_navigation(46).is_err());
         tier.prepare_sq8_navigation(47).unwrap();

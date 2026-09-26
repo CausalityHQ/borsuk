@@ -65,10 +65,12 @@ fn memory(field: &str) -> Result<u64, Box<dyn Error>> {
 fn graph_schema_matches(rows: usize, schema: &str, special: bool) -> bool {
     match rows {
         100_000 => {
-            matches!(schema, "borsuk-v248-cohere-graph-build-v1"
-                | "borsuk-v249-cohere-pq-aligned-graph-build-v1"
-                | "borsuk-v250-cohere-diverse-graph-build-v1")
-                && (!special || schema == "borsuk-v250-cohere-diverse-graph-build-v1")
+            matches!(
+                schema,
+                "borsuk-v248-cohere-graph-build-v1"
+                    | "borsuk-v249-cohere-pq-aligned-graph-build-v1"
+                    | "borsuk-v250-cohere-diverse-graph-build-v1"
+            ) && (!special || schema == "borsuk-v250-cohere-diverse-graph-build-v1")
         }
         1_000_000 => schema == "borsuk-v255-cohere-diverse-graph-build-1m-v1" && !special,
         10_000_000 => schema == "borsuk-v270-cohere-diverse-graph-build-10m-v1" && !special,
@@ -213,9 +215,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let fast_dual_graph = args.len() == 12 && args[11] == "--fast-dual-graph";
     let sq8_dual_graph = args.len() == 12 && args[11] == "--sq8-dual-graph";
     let cached_dual_graph = args.len() == 12 && args[11] == "--cached-dual-graph";
-    let dual_graph = args.len() == 12 &&
-        (args[11] == "--dual-graph" || seeded_dual_graph || fast_dual_graph || sq8_dual_graph || cached_dual_graph);
-    if args.len() != 11 && !exact_nav && !anchored && !global_pq && !coarse_pq && !hybrid && !dual && !dual_graph {
+    let dual_graph = args.len() == 12
+        && (args[11] == "--dual-graph"
+            || seeded_dual_graph
+            || fast_dual_graph
+            || sq8_dual_graph
+            || cached_dual_graph);
+    if args.len() != 11
+        && !exact_nav
+        && !anchored
+        && !global_pq
+        && !coarse_pq
+        && !hybrid
+        && !dual
+        && !dual_graph
+    {
         return Err("usage: v248_serve_cohere_graph_100k PREP BUILD PLANE GRAPH MAP BOOKS CODES REQUESTS RAW SERVING [--exact-nav|--million-exact|--dual-graph|--strided-anchors|--global-pq|--coarse-pq|--hybrid|--dual CENTROIDS OFFSETS POSTINGS MANIFEST]".into());
     }
     let prep: Value = serde_json::from_slice(&fs::read(&args[1])?)?;
@@ -228,12 +242,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         || prep["dataset_id"] != "cohere-large-10m-768"
         || prep["staging_receipt_sha256"]
             != "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
-        || !graph_schema_matches(rows, build["schema"].as_str().unwrap_or(""),
-            (exact_nav && !million_exact) || anchored || global_pq || coarse_pq || dual
-                || (dual_graph && rows == 100_000))
+        || !graph_schema_matches(
+            rows,
+            build["schema"].as_str().unwrap_or(""),
+            (exact_nav && !million_exact)
+                || anchored
+                || global_pq
+                || coarse_pq
+                || dual
+                || (dual_graph && rows == 100_000),
+        )
         || (million_exact && rows != 1_000_000)
         || (dual && rows != 100_000)
-        || (rows == 100_000 && (hybrid || dual || dual_graph)
+        || (rows == 100_000
+            && (hybrid || dual || dual_graph)
             && build["schema"] != "borsuk-v250-cohere-diverse-graph-build-v1")
         || build["source_sha256"] != source
         || prep["artifacts"]["plane.bin"]["sha256"] != build["plane_sha256"]
@@ -366,8 +388,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut dual_work = None;
             let (ids, count) = if dual_graph {
                 let cached = if cached_dual_graph {
-                    Some(bound.search_fast_cached(&request.query, 100, 4096, 4096, 2048, &mut workspace)?)
-                } else { None };
+                    Some(bound.search_fast_cached(
+                        &request.query,
+                        100,
+                        4096,
+                        4096,
+                        2048,
+                        &mut workspace,
+                    )?)
+                } else {
+                    None
+                };
                 let pq_result = if let Some(ref result) = cached {
                     (result.0.clone(), result.2)
                 } else {
@@ -377,30 +408,70 @@ fn main() -> Result<(), Box<dyn Error>> {
                     (result.1.clone(), result.3)
                 } else if sq8_dual_graph {
                     graph.search_sq8_with_workspace(
-                        &request.query, &plane, 100, 2048, &mut workspace)?
+                        &request.query,
+                        &plane,
+                        100,
+                        2048,
+                        &mut workspace,
+                    )?
                 } else if fast_dual_graph {
                     graph.search_fast_with_workspace(
-                        &request.query, &plane, 100, 2048, &mut workspace)?
+                        &request.query,
+                        &plane,
+                        100,
+                        2048,
+                        &mut workspace,
+                    )?
                 } else if seeded_dual_graph {
                     graph.search_from_seed_with_workspace(
-                        &request.query, &plane, 100, 2048,
-                        new_for_old[pq_result.0[0] as usize], &mut workspace)?
+                        &request.query,
+                        &plane,
+                        100,
+                        2048,
+                        new_for_old[pq_result.0[0] as usize],
+                        &mut workspace,
+                    )?
                 } else {
-                    graph.search_with_workspace(&request.query, &plane, 100, 2048, &mut workspace)?
+                    graph.search_with_workspace(
+                        &request.query,
+                        &plane,
+                        100,
+                        2048,
+                        &mut workspace,
+                    )?
                 };
-                let mut union = pq_result.0.into_iter().chain(exact.0)
-                    .map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
+                let mut union = pq_result
+                    .0
+                    .into_iter()
+                    .chain(exact.0)
+                    .map(|id| new_for_old[id as usize])
+                    .collect::<Vec<_>>();
                 union.sort_unstable();
                 union.dedup();
-                dual_work = Some((pq_result.1, 0, exact.1, union.len(), cached.as_ref().map_or(0, |result| result.4)));
-                (plane.rank_ordinals_cosine(&request.query, &union, 100)?,
-                 pq_result.1 + exact.1)
+                dual_work = Some((
+                    pq_result.1,
+                    0,
+                    exact.1,
+                    union.len(),
+                    cached.as_ref().map_or(0, |result| result.4),
+                ));
+                (
+                    plane.rank_ordinals_cosine(&request.query, &union, 100)?,
+                    pq_result.1 + exact.1,
+                )
             } else if hybrid || dual {
                 let graph_result = bound.search(&request.query, 100, ef, 4096, &mut workspace)?;
-                let rows = coarse.as_ref().unwrap().candidates(&request.query, &mut coarse_seen);
-                let old = cosine.nominate_rows(&request.query, &rows, shortlist)
+                let rows = coarse
+                    .as_ref()
+                    .unwrap()
+                    .candidates(&request.query, &mut coarse_seen);
+                let old = cosine
+                    .nominate_rows(&request.query, &rows, shortlist)
                     .map_err(|error| format!("hybrid PQ: {error:?}"))?;
-                let mut physical = old.into_iter().map(|row| new_for_old[row]).collect::<Vec<_>>();
+                let mut physical = old
+                    .into_iter()
+                    .map(|row| new_for_old[row])
+                    .collect::<Vec<_>>();
                 for id in graph_result.0 {
                     let old = usize::try_from(id)?;
                     physical.push(*new_for_old.get(old).ok_or("hybrid graph id outside map")?);
@@ -410,13 +481,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let hybrid_ids = plane.rank_ordinals_cosine(&request.query, &physical, 100)?;
                 if dual {
                     let exact = graph.search_with_workspace(
-                        &request.query, &plane, 100, 2048, &mut workspace)?;
-                    let mut union = hybrid_ids.into_iter().chain(exact.0).map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
+                        &request.query,
+                        &plane,
+                        100,
+                        2048,
+                        &mut workspace,
+                    )?;
+                    let mut union = hybrid_ids
+                        .into_iter()
+                        .chain(exact.0)
+                        .map(|id| new_for_old[id as usize])
+                        .collect::<Vec<_>>();
                     union.sort_unstable();
                     union.dedup();
                     dual_work = Some((graph_result.1, rows.len(), exact.1, union.len(), 0));
-                    (plane.rank_ordinals_cosine(&request.query, &union, 100)?,
-                     graph_result.1 + rows.len() + exact.1)
+                    (
+                        plane.rank_ordinals_cosine(&request.query, &union, 100)?,
+                        graph_result.1 + rows.len() + exact.1,
+                    )
                 } else {
                     (hybrid_ids, graph_result.1 + rows.len())
                 }
@@ -493,7 +575,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     format!("{ef}-{shortlist}")
                 },
-                if let Some((pq_graph, coarse_rows, fp16_graph, union_rows, cache_hits)) = dual_work {
+                if let Some((pq_graph, coarse_rows, fp16_graph, union_rows, cache_hits)) = dual_work
+                {
                     json!({"returned_ids":ids,"whole_ns":elapsed,"base_visits":count,
                         "pq_graph_scores":pq_graph,"coarse_pq_scores":coarse_rows,
                         "fp16_graph_scores":fp16_graph,"final_union_rows":union_rows,
@@ -539,66 +622,121 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let start = Instant::now();
                         let (ids, _) = if dual_graph {
                             let cached = if cached_dual_graph {
-                                Some(bound.search_fast_cached(&requests[index].query, 100, 4096, 4096, 2048, &mut workspace)
-                                    .map_err(|e| e.to_string())?)
-                            } else { None };
+                                Some(
+                                    bound
+                                        .search_fast_cached(
+                                            &requests[index].query,
+                                            100,
+                                            4096,
+                                            4096,
+                                            2048,
+                                            &mut workspace,
+                                        )
+                                        .map_err(|e| e.to_string())?,
+                                )
+                            } else {
+                                None
+                            };
                             let pq_result = if let Some(ref result) = cached {
                                 (result.0.clone(), result.2)
                             } else {
-                                bound.search(&requests[index].query, 100, 4096, 4096, &mut workspace)
+                                bound
+                                    .search(&requests[index].query, 100, 4096, 4096, &mut workspace)
                                     .map_err(|e| e.to_string())?
                             };
                             let exact = if let Some(ref result) = cached {
                                 Ok((result.1.clone(), result.3))
                             } else if sq8_dual_graph {
                                 graph.search_sq8_with_workspace(
-                                    &requests[index].query, plane, 100, 2048, &mut workspace)
+                                    &requests[index].query,
+                                    plane,
+                                    100,
+                                    2048,
+                                    &mut workspace,
+                                )
                             } else if fast_dual_graph {
                                 graph.search_fast_with_workspace(
-                                    &requests[index].query, plane, 100, 2048, &mut workspace)
+                                    &requests[index].query,
+                                    plane,
+                                    100,
+                                    2048,
+                                    &mut workspace,
+                                )
                             } else if seeded_dual_graph {
                                 graph.search_from_seed_with_workspace(
-                                    &requests[index].query, plane, 100, 2048,
-                                    new_for_old[pq_result.0[0] as usize], &mut workspace)
+                                    &requests[index].query,
+                                    plane,
+                                    100,
+                                    2048,
+                                    new_for_old[pq_result.0[0] as usize],
+                                    &mut workspace,
+                                )
                             } else {
                                 graph.search_with_workspace(
-                                    &requests[index].query, plane, 100, 2048, &mut workspace)
-                            }.map_err(|e| e.to_string())?;
-                            let mut union = pq_result.0.into_iter().chain(exact.0)
-                                .map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
+                                    &requests[index].query,
+                                    plane,
+                                    100,
+                                    2048,
+                                    &mut workspace,
+                                )
+                            }
+                            .map_err(|e| e.to_string())?;
+                            let mut union = pq_result
+                                .0
+                                .into_iter()
+                                .chain(exact.0)
+                                .map(|id| new_for_old[id as usize])
+                                .collect::<Vec<_>>();
                             union.sort_unstable();
                             union.dedup();
-                            plane.rank_ordinals_cosine(&requests[index].query, &union, 100)
+                            plane
+                                .rank_ordinals_cosine(&requests[index].query, &union, 100)
                                 .map(|ids| (ids, pq_result.1 + exact.1))
                         } else if hybrid || dual {
-                            let graph_result = bound.search(
-                                &requests[index].query, 100, ef, 4096, &mut workspace)
+                            let graph_result = bound
+                                .search(&requests[index].query, 100, ef, 4096, &mut workspace)
                                 .map_err(|e| e.to_string())?;
-                            let rows = coarse.as_ref().unwrap().candidates(
-                                &requests[index].query, &mut coarse_seen);
-                            let old = cosine.nominate_rows(&requests[index].query, &rows, shortlist)
+                            let rows = coarse
+                                .as_ref()
+                                .unwrap()
+                                .candidates(&requests[index].query, &mut coarse_seen);
+                            let old = cosine
+                                .nominate_rows(&requests[index].query, &rows, shortlist)
                                 .map_err(|e| format!("hybrid PQ: {e:?}"))?;
-                            let mut physical = old.into_iter().map(|row| new_for_old[row])
+                            let mut physical = old
+                                .into_iter()
+                                .map(|row| new_for_old[row])
                                 .collect::<Vec<_>>();
                             for id in graph_result.0 {
                                 let old = usize::try_from(id).map_err(|e| e.to_string())?;
-                                physical.push(*new_for_old.get(old)
-                                    .ok_or("hybrid graph id outside map")?);
+                                physical.push(
+                                    *new_for_old.get(old).ok_or("hybrid graph id outside map")?,
+                                );
                             }
                             physical.sort_unstable();
                             physical.dedup();
-                            let hybrid_ids = plane.rank_ordinals_cosine(
-                                &requests[index].query, &physical, 100)
+                            let hybrid_ids = plane
+                                .rank_ordinals_cosine(&requests[index].query, &physical, 100)
                                 .map_err(|e| e.to_string())?;
                             if dual {
-                                let exact = graph.search_with_workspace(
-                                    &requests[index].query, plane, 100, 2048, &mut workspace)
+                                let exact = graph
+                                    .search_with_workspace(
+                                        &requests[index].query,
+                                        plane,
+                                        100,
+                                        2048,
+                                        &mut workspace,
+                                    )
                                     .map_err(|e| e.to_string())?;
-                                let mut union = hybrid_ids.into_iter().chain(exact.0)
-                                    .map(|id| new_for_old[id as usize]).collect::<Vec<_>>();
+                                let mut union = hybrid_ids
+                                    .into_iter()
+                                    .chain(exact.0)
+                                    .map(|id| new_for_old[id as usize])
+                                    .collect::<Vec<_>>();
                                 union.sort_unstable();
                                 union.dedup();
-                                plane.rank_ordinals_cosine(&requests[index].query, &union, 100)
+                                plane
+                                    .rank_ordinals_cosine(&requests[index].query, &union, 100)
                                     .map(|ids| (ids, graph_result.1 + rows.len() + exact.1))
                             } else {
                                 Ok((hybrid_ids, graph_result.1 + rows.len()))
@@ -677,9 +815,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             loaded_raw.sort_unstable_by_key(|&(index, _)| index);
             let mut out = BufWriter::new(File::create("loaded-raw.jsonl")?);
             for (index, elapsed) in loaded_raw {
-                serde_json::to_writer(&mut out, &json!({"ordinal":index,
+                serde_json::to_writer(
+                    &mut out,
+                    &json!({"ordinal":index,
                     "arm":if million_exact {"exact-2048"} else if cached_dual_graph {"cached-dual-graph-4096-2048"} else if sq8_dual_graph {"sq8-dual-graph-4096-2048"} else if fast_dual_graph {"fast-dual-graph-4096-2048"} else if seeded_dual_graph {"seeded-dual-graph-4096-2048"} else if dual_graph {"dual-graph-4096-2048"} else if dual {"dual-4096-2048-8192"} else {"hybrid-4096-8192"},
-                    "whole_ns":elapsed}))?;
+                    "whole_ns":elapsed}),
+                )?;
                 out.write_all(b"\n")?;
             }
             out.flush()?;
@@ -766,21 +907,39 @@ mod tests {
 
     #[test]
     fn million_row_hybrid_accepts_only_the_diverse_million_graph() {
-        assert!(graph_schema_matches(1_000_000,
-            "borsuk-v255-cohere-diverse-graph-build-1m-v1", false));
-        assert!(!graph_schema_matches(1_000_000,
-            "borsuk-v250-cohere-diverse-graph-build-v1", false));
-        assert!(!graph_schema_matches(1_000_000,
-            "borsuk-v255-cohere-diverse-graph-build-1m-v1", true));
-        assert!(graph_schema_matches(100_000,
-            "borsuk-v250-cohere-diverse-graph-build-v1", true));
+        assert!(graph_schema_matches(
+            1_000_000,
+            "borsuk-v255-cohere-diverse-graph-build-1m-v1",
+            false
+        ));
+        assert!(!graph_schema_matches(
+            1_000_000,
+            "borsuk-v250-cohere-diverse-graph-build-v1",
+            false
+        ));
+        assert!(!graph_schema_matches(
+            1_000_000,
+            "borsuk-v255-cohere-diverse-graph-build-1m-v1",
+            true
+        ));
+        assert!(graph_schema_matches(
+            100_000,
+            "borsuk-v250-cohere-diverse-graph-build-v1",
+            true
+        ));
     }
 
     #[test]
     fn ten_million_graph_requires_its_own_schema() {
-        assert!(graph_schema_matches(10_000_000,
-            "borsuk-v270-cohere-diverse-graph-build-10m-v1", false));
-        assert!(!graph_schema_matches(10_000_000,
-            "borsuk-v255-cohere-diverse-graph-build-1m-v1", false));
+        assert!(graph_schema_matches(
+            10_000_000,
+            "borsuk-v270-cohere-diverse-graph-build-10m-v1",
+            false
+        ));
+        assert!(!graph_schema_matches(
+            10_000_000,
+            "borsuk-v255-cohere-diverse-graph-build-1m-v1",
+            false
+        ));
     }
 }

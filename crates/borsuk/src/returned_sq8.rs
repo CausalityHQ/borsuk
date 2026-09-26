@@ -22,9 +22,13 @@ pub fn rank_returned_ranges(
     top_k: usize,
     max_bytes: usize,
 ) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
-    let row_bytes = geometry.dimensions.checked_add(12)
+    let row_bytes = geometry
+        .dimensions
+        .checked_add(12)
         .ok_or(Sq8ScoreError::InvalidGeometry)?;
-    let object_bytes = geometry.rows.checked_mul(row_bytes)
+    let object_bytes = geometry
+        .rows
+        .checked_mul(row_bytes)
         .ok_or(Sq8ScoreError::InvalidGeometry)?;
     if geometry.rows == 0 || geometry.dimensions == 0 || top_k == 0 {
         return Err(Sq8ScoreError::InvalidGeometry);
@@ -34,13 +38,19 @@ pub fn rank_returned_ranges(
     let mut scores = Vec::new();
     let mut ids = HashSet::new();
     for range in ranges {
-        let end = range.start.checked_add(range.bytes.len())
+        let end = range
+            .start
+            .checked_add(range.bytes.len())
             .ok_or(Sq8ScoreError::InvalidPlane)?;
-        total_bytes = total_bytes.checked_add(range.bytes.len())
+        total_bytes = total_bytes
+            .checked_add(range.bytes.len())
             .ok_or(Sq8ScoreError::InvalidPlane)?;
-        if range.bytes.is_empty() || range.start < previous_end
-            || range.start % row_bytes != 0 || end % row_bytes != 0
-            || end > object_bytes || total_bytes > max_bytes
+        if range.bytes.is_empty()
+            || range.start < previous_end
+            || range.start % row_bytes != 0
+            || end % row_bytes != 0
+            || end > object_bytes
+            || total_bytes > max_bytes
         {
             return Err(Sq8ScoreError::InvalidPlane);
         }
@@ -49,8 +59,14 @@ pub fn rank_returned_ranges(
         let local_ordinals = (0..count).collect::<Vec<_>>();
         let local = score_nominees(
             range.bytes,
-            Sq8Geometry { rows: count, dimensions: geometry.dimensions },
-            &local_ordinals, query, low, step,
+            Sq8Geometry {
+                rows: count,
+                dimensions: geometry.dimensions,
+            },
+            &local_ordinals,
+            query,
+            low,
+            step,
         )?;
         for mut score in local {
             if !ids.insert(score.id) {
@@ -64,8 +80,11 @@ pub fn rank_returned_ranges(
     if scores.len() < top_k {
         return Err(Sq8ScoreError::InvalidRoster);
     }
-    scores.sort_by(|left, right| left.score.total_cmp(&right.score)
-        .then(left.id.cmp(&right.id)));
+    scores.sort_by(|left, right| {
+        left.score
+            .total_cmp(&right.score)
+            .then(left.id.cmp(&right.id))
+    });
     scores.truncate(top_k);
     Ok(scores)
 }
@@ -88,31 +107,97 @@ mod tests {
         let mut second = row(20, 1.0, 1);
         second.extend_from_slice(&row(10, 1.0, 1));
         let result = rank_returned_ranges(
-            Sq8Geometry { rows: 5, dimensions: 1 },
-            &[ReturnedRange { start: 0, bytes: &first },
-              ReturnedRange { start: 3 * 13, bytes: &second }],
-            &[0.0], &[0.0], &[1.0], 2, 39,
-        ).unwrap();
-        assert_eq!(result.iter().map(|entry| (entry.ordinal, entry.id))
-            .collect::<Vec<_>>(), vec![(4, 10), (3, 20)]);
+            Sq8Geometry {
+                rows: 5,
+                dimensions: 1,
+            },
+            &[
+                ReturnedRange {
+                    start: 0,
+                    bytes: &first,
+                },
+                ReturnedRange {
+                    start: 3 * 13,
+                    bytes: &second,
+                },
+            ],
+            &[0.0],
+            &[0.0],
+            &[1.0],
+            2,
+            39,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .iter()
+                .map(|entry| (entry.ordinal, entry.id))
+                .collect::<Vec<_>>(),
+            vec![(4, 10), (3, 20)]
+        );
     }
 
     #[test]
     fn rejects_overlap_unaligned_budget_and_duplicate_ids() {
         let row = row(7, 1.0, 1);
-        let geometry = Sq8Geometry { rows: 3, dimensions: 1 };
-        let score = |ranges: &[ReturnedRange<'_>], cap| rank_returned_ranges(
-            geometry, ranges, &[0.0], &[0.0], &[1.0], 1, cap,
+        let geometry = Sq8Geometry {
+            rows: 3,
+            dimensions: 1,
+        };
+        let score = |ranges: &[ReturnedRange<'_>], cap| {
+            rank_returned_ranges(geometry, ranges, &[0.0], &[0.0], &[1.0], 1, cap)
+        };
+        assert_eq!(
+            score(
+                &[
+                    ReturnedRange {
+                        start: 0,
+                        bytes: &row
+                    },
+                    ReturnedRange {
+                        start: 0,
+                        bytes: &row
+                    }
+                ],
+                26
+            ),
+            Err(Sq8ScoreError::InvalidPlane)
         );
-        assert_eq!(score(&[ReturnedRange { start: 0, bytes: &row },
-                           ReturnedRange { start: 0, bytes: &row }], 26),
-                   Err(Sq8ScoreError::InvalidPlane));
-        assert_eq!(score(&[ReturnedRange { start: 1, bytes: &row }], 13),
-                   Err(Sq8ScoreError::InvalidPlane));
-        assert_eq!(score(&[ReturnedRange { start: 0, bytes: &row }], 12),
-                   Err(Sq8ScoreError::InvalidPlane));
-        assert_eq!(score(&[ReturnedRange { start: 0, bytes: &row },
-                           ReturnedRange { start: 26, bytes: &row }], 26),
-                   Err(Sq8ScoreError::InvalidPlane));
+        assert_eq!(
+            score(
+                &[ReturnedRange {
+                    start: 1,
+                    bytes: &row
+                }],
+                13
+            ),
+            Err(Sq8ScoreError::InvalidPlane)
+        );
+        assert_eq!(
+            score(
+                &[ReturnedRange {
+                    start: 0,
+                    bytes: &row
+                }],
+                12
+            ),
+            Err(Sq8ScoreError::InvalidPlane)
+        );
+        assert_eq!(
+            score(
+                &[
+                    ReturnedRange {
+                        start: 0,
+                        bytes: &row
+                    },
+                    ReturnedRange {
+                        start: 26,
+                        bytes: &row
+                    }
+                ],
+                26
+            ),
+            Err(Sq8ScoreError::InvalidPlane)
+        );
     }
 }

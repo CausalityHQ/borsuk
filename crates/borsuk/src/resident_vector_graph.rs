@@ -448,7 +448,16 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, NavigationScore::Fp64, workspace)
+        self.search_with_anchor_count_workspace(
+            query,
+            plane,
+            k,
+            ef,
+            0,
+            None,
+            NavigationScore::Fp64,
+            workspace,
+        )
     }
 
     /// FP32 SIMD navigation over cached FP16 row norms, followed by FP64
@@ -461,7 +470,16 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, NavigationScore::FastFp16, workspace)
+        self.search_with_anchor_count_workspace(
+            query,
+            plane,
+            k,
+            ef,
+            0,
+            None,
+            NavigationScore::FastFp16,
+            workspace,
+        )
     }
 
     /// Navigate the graph with block-scaled SQ8 scores and FP64-rank its
@@ -474,7 +492,16 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, NavigationScore::Sq8, workspace)
+        self.search_with_anchor_count_workspace(
+            query,
+            plane,
+            k,
+            ef,
+            0,
+            None,
+            NavigationScore::Sq8,
+            workspace,
+        )
     }
 
     /// Start exact navigation from an authenticated physical row nominated by
@@ -488,7 +515,16 @@ impl ResidentVectorGraph {
         seed: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, Some(seed), NavigationScore::Fp64, workspace)
+        self.search_with_anchor_count_workspace(
+            query,
+            plane,
+            k,
+            ef,
+            0,
+            Some(seed),
+            NavigationScore::Fp64,
+            workspace,
+        )
     }
 
     /// Route from the nearest of evenly spaced source rows. Returned work
@@ -505,7 +541,16 @@ impl ResidentVectorGraph {
         if anchor_count == 0 || anchor_count > plane.rows() {
             return Err(ResidentFp16Error::Invalid("graph anchor count"));
         }
-        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, None, NavigationScore::Fp64, workspace)
+        self.search_with_anchor_count_workspace(
+            query,
+            plane,
+            k,
+            ef,
+            anchor_count,
+            None,
+            NavigationScore::Fp64,
+            workspace,
+        )
     }
 
     fn search_with_anchor_count_workspace(
@@ -519,7 +564,18 @@ impl ResidentVectorGraph {
         mode: NavigationScore,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace_cached(query, plane, k, ef, anchor_count, seed, mode, workspace, None, &mut 0)
+        self.search_with_anchor_count_workspace_cached(
+            query,
+            plane,
+            k,
+            ef,
+            anchor_count,
+            seed,
+            mode,
+            workspace,
+            None,
+            &mut 0,
+        )
     }
 
     fn search_with_anchor_count_workspace_cached(
@@ -564,14 +620,22 @@ impl ResidentVectorGraph {
         };
         let mut scratch = if mode == NavigationScore::FastFp16 {
             vec![0.0_f32; plane.dimensions()]
-        } else {Vec::new()};
+        } else {
+            Vec::new()
+        };
         let mut score = |node: u32| -> Result<f64, ResidentFp16Error> {
             match mode {
-                NavigationScore::Fp64 => Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?),
+                NavigationScore::Fp64 => {
+                    Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?)
+                }
                 NavigationScore::FastFp16 => Ok(-plane.cosine_similarity_unit_query_fast(
-                    &unit_f32, node as usize, &mut scratch)?),
-                NavigationScore::Sq8 => Ok(-plane.cosine_similarity_unit_query_sq8(
-                    &unit_f32, node as usize)?),
+                    &unit_f32,
+                    node as usize,
+                    &mut scratch,
+                )?),
+                NavigationScore::Sq8 => {
+                    Ok(-plane.cosine_similarity_unit_query_sq8(&unit_f32, node as usize)?)
+                }
             }
         };
         let start = if let Some(seed) = seed {
@@ -837,7 +901,12 @@ impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
         pq: &'a Pq64CosineView<'b>,
         old_for_new: &'a [usize],
     ) -> Self {
-        Self { graph, plane, pq, old_for_new }
+        Self {
+            graph,
+            plane,
+            pq,
+            old_for_new,
+        }
     }
 
     pub(crate) fn is_bound_to(
@@ -920,14 +989,25 @@ impl<'a, 'b> ResidentPqCosineGraph<'a, 'b> {
         exact_ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, Vec<u64>, usize, usize, usize), ResidentFp16Error> {
-        let (physical, pq_visits) = self.search_candidates(query, k, pq_ef, shortlist, workspace)?;
-        let scored = self.plane.rank_ordinals_cosine_scored(query, &physical, physical.len())?;
+        let (physical, pq_visits) =
+            self.search_candidates(query, k, pq_ef, shortlist, workspace)?;
+        let scored = self
+            .plane
+            .rank_ordinals_cosine_scored(query, &physical, physical.len())?;
         let pq_ids = scored.iter().take(k).map(|&(id, _)| id).collect();
         let scores = scored.into_iter().collect::<HashMap<_, _>>();
         let mut cache_hits = 0;
         let (exact_ids, exact_visits) = self.graph.search_with_anchor_count_workspace_cached(
-            query, self.plane, k, exact_ef, 0, None, NavigationScore::FastFp16,
-            workspace, Some(&scores), &mut cache_hits,
+            query,
+            self.plane,
+            k,
+            exact_ef,
+            0,
+            None,
+            NavigationScore::FastFp16,
+            workspace,
+            Some(&scores),
+            &mut cache_hits,
         )?;
         Ok((pq_ids, exact_ids, pq_visits, exact_visits, cache_hits))
     }
@@ -1120,20 +1200,36 @@ mod tests {
         assert_eq!(
             restored
                 .search_from_seed_with_workspace(&[1.0, 0.0], &tier, 2, 4, 0, &mut workspace)
-                .unwrap().0,
+                .unwrap()
+                .0,
             vec![42, 7]
         );
-        assert!(restored.search_fast_with_workspace(
-            &[1.0, 0.0], &tier, 2, 4, &mut workspace).is_err());
+        assert!(
+            restored
+                .search_fast_with_workspace(&[1.0, 0.0], &tier, 2, 4, &mut workspace)
+                .is_err()
+        );
         tier.prepare_fast_navigation(100).unwrap();
-        assert_eq!(restored.search_fast_with_workspace(
-            &[1.0, 0.0], &tier, 2, 4, &mut workspace).unwrap().0, vec![42, 7]);
+        assert_eq!(
+            restored
+                .search_fast_with_workspace(&[1.0, 0.0], &tier, 2, 4, &mut workspace)
+                .unwrap()
+                .0,
+            vec![42, 7]
+        );
         tier.prepare_sq8_navigation(104).unwrap();
-        assert_eq!(restored.search_sq8_with_workspace(
-            &[1.0, 0.0], &tier, 2, 4, &mut workspace).unwrap().0, vec![42, 7]);
-        assert!(restored
-            .search_from_seed_with_workspace(&[1.0, 0.0], &tier, 2, 4, 4, &mut workspace)
-            .is_err());
+        assert_eq!(
+            restored
+                .search_sq8_with_workspace(&[1.0, 0.0], &tier, 2, 4, &mut workspace)
+                .unwrap()
+                .0,
+            vec![42, 7]
+        );
+        assert!(
+            restored
+                .search_from_seed_with_workspace(&[1.0, 0.0], &tier, 2, 4, 4, &mut workspace)
+                .is_err()
+        );
         let (routed, scores) = restored
             .search_with_strided_anchors_workspace(&[1.0, 0.0], &tier, 2, 2, 2, &mut workspace)
             .unwrap();
@@ -1187,11 +1283,17 @@ mod tests {
                 vec![42, 7]
             );
         }
-        let cached = bound.search_fast_cached(&[1.0, 0.0], 2, 4, 2, 4, &mut workspace).unwrap();
+        let cached = bound
+            .search_fast_cached(&[1.0, 0.0], 2, 4, 2, 4, &mut workspace)
+            .unwrap();
         assert_eq!(cached.0, vec![42, 7]);
         assert_eq!(cached.1, vec![42, 7]);
         assert!(cached.4 > 0);
-        assert!(bound.search_fast_cached(&[0.0, 0.0], 2, 4, 2, 4, &mut workspace).is_err());
+        assert!(
+            bound
+                .search_fast_cached(&[0.0, 0.0], 2, 4, 2, 4, &mut workspace)
+                .is_err()
+        );
         assert!(ResidentPqCosineGraph::bind(&restored, &tier, &cosine, &[0, 0, 2, 3]).is_err());
         assert!(ResidentVectorGraph::open_authenticated(&graph_path, SOURCE, &tier).is_err());
         assert_eq!(graph.search(&[1.0, 0.0], &tier, 2, 4).unwrap(), vec![42, 7]);

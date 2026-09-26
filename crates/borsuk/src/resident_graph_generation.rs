@@ -5,7 +5,10 @@ use std::{
     fs,
     io::{self, Read},
     path::Path,
-    sync::{Arc, RwLock, atomic::{AtomicUsize, Ordering}},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use serde::Deserialize;
@@ -76,18 +79,28 @@ pub struct ResidentGraphSearcher<'a> {
 impl ResidentGraphSearcher<'_> {
     /// Search the frozen cached dual route. Evidence is for k=100; smaller k
     /// uses the same navigation widths and returns that many ranked IDs.
-    pub fn search(&mut self, query: &[f32], k: usize)
-        -> Result<(Vec<u64>, usize), ResidentGraphGenerationError> {
+    pub fn search(
+        &mut self,
+        query: &[f32],
+        k: usize,
+    ) -> Result<(Vec<u64>, usize), ResidentGraphGenerationError> {
         let rows = self.generation.rows();
         if k == 0 || k > 100 || k > rows {
             return Err(ResidentGraphGenerationError::Invalid("search k"));
         }
         let bound = ResidentPqCosineGraph::bind_after_validation(
-            &self.generation.graph, &self.generation.plane,
-            &self.view, &self.generation.old_for_new,
+            &self.generation.graph,
+            &self.generation.plane,
+            &self.view,
+            &self.generation.old_for_new,
         );
         self.generation.search_dual_graph(
-            &bound, query, k, 4096.min(rows), 4096.min(rows), 2048.min(rows),
+            &bound,
+            query,
+            k,
+            4096.min(rows),
+            4096.min(rows),
+            2048.min(rows),
             &mut self.workspace,
         )
     }
@@ -95,7 +108,9 @@ impl ResidentGraphSearcher<'_> {
 
 impl Drop for ResidentGraphSearcher<'_> {
     fn drop(&mut self) {
-        self.generation.leased_workers.fetch_sub(1, Ordering::AcqRel);
+        self.generation
+            .leased_workers
+            .fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -393,15 +408,21 @@ impl ResidentGraphGeneration {
 
     /// Lease a worker within the concurrency and memory cap declared at open.
     pub fn searcher(&self) -> Result<ResidentGraphSearcher<'_>, ResidentGraphGenerationError> {
-        self.leased_workers.fetch_update(Ordering::AcqRel, Ordering::Acquire,
-            |count| (count < self.active_workers).then_some(count + 1))
+        self.leased_workers
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < self.active_workers).then_some(count + 1)
+            })
             .map_err(|_| ResidentGraphGenerationError::Invalid("worker capacity"))?;
         let result = (|| {
             let view = self.cosine_view()?;
             let workspace = GraphSearchWorkspace::new(self.rows())?;
             // Validate the binding once, before the worker serves queries.
             self.bind(&view)?;
-            Ok(ResidentGraphSearcher { generation: self, view, workspace })
+            Ok(ResidentGraphSearcher {
+                generation: self,
+                view,
+                workspace,
+            })
         })();
         if result.is_err() {
             self.leased_workers.fetch_sub(1, Ordering::AcqRel);
@@ -464,7 +485,9 @@ impl ResidentGraphGeneration {
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentGraphGenerationError> {
         if !bound.is_bound_to(&self.graph, &self.plane, &self.pq) {
-            return Err(ResidentGraphGenerationError::Invalid("foreign dual graph binding"));
+            return Err(ResidentGraphGenerationError::Invalid(
+                "foreign dual graph binding",
+            ));
         }
         let (pq_ids, exact_ids, pq_visits, exact_visits, _) =
             bound.search_fast_cached(query, k, pq_ef, shortlist, exact_ef, workspace)?;
@@ -489,14 +512,14 @@ impl ResidentGraphGeneration {
 mod tests {
     use super::*;
     use crate::resident_fp16_tier::write_resident_fp16_tier;
-    use crate::resident_graph_store::{
-        hydrate_graph_generation, publish_graph_generation, read_graph_head,
+    use crate::resident_graph_collection::{
+        ResidentGraphCollectionSlot, hydrate_graph_collection, hydrate_graph_collection_decoded,
+        hydrate_graph_collection_decoded_reusing_base, publish_graph_collection,
+        read_graph_collection_head,
     };
     use crate::resident_graph_overlay::{ResidentGraphOverlay, ResidentMutation};
-    use crate::resident_graph_collection::{
-        ResidentGraphCollectionSlot, hydrate_graph_collection,
-        hydrate_graph_collection_decoded, hydrate_graph_collection_decoded_reusing_base,
-        publish_graph_collection, read_graph_collection_head,
+    use crate::resident_graph_store::{
+        hydrate_graph_generation, publish_graph_generation, read_graph_head,
     };
     use crate::resident_vector_graph::GraphSearchWorkspace;
     use object_store::{memory::InMemory, path::Path as ObjectPath};
@@ -594,8 +617,10 @@ mod tests {
             vec![42, 7]
         );
         assert_eq!(
-            loaded.search_dual_graph(&bound, &[1.0, 0.0], 2, 4, 2, 4,
-                &mut workspace).unwrap().0,
+            loaded
+                .search_dual_graph(&bound, &[1.0, 0.0], 2, 4, 2, 4, &mut workspace)
+                .unwrap()
+                .0,
             vec![42, 7]
         );
         let mut searcher = loaded.searcher().unwrap();
@@ -634,53 +659,171 @@ mod tests {
         drop(view);
         let pinned = Arc::new(loaded);
         let collection_head = tokio::runtime::Runtime::new().unwrap().block_on(async {
-            publish_graph_collection(&store, &prefix, &original_head.root_sha256,
-                &[ResidentMutation { id: 42, vector: None },
-                  ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) }],
-                1024, None).await.unwrap();
-            read_graph_collection_head(&store, &prefix, 1024).await.unwrap().unwrap()
+            publish_graph_collection(
+                &store,
+                &prefix,
+                &original_head.root_sha256,
+                &[
+                    ResidentMutation {
+                        id: 42,
+                        vector: None,
+                    },
+                    ResidentMutation {
+                        id: 99,
+                        vector: Some(vec![1.0, 0.0]),
+                    },
+                ],
+                1024,
+                None,
+            )
+            .await
+            .unwrap();
+            read_graph_collection_head(&store, &prefix, 1024)
+                .await
+                .unwrap()
+                .unwrap()
         });
-        let (collection_overlay, collection_stats) = tokio::runtime::Runtime::new().unwrap()
-            .block_on(hydrate_graph_collection(&store, &prefix, &collection_head,
-                cache.path(), 100_000, 1, 1024, 21)).unwrap();
+        let (collection_overlay, collection_stats) = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(hydrate_graph_collection(
+                &store,
+                &prefix,
+                &collection_head,
+                cache.path(),
+                100_000,
+                1,
+                1024,
+                21,
+            ))
+            .unwrap();
         assert_eq!(collection_stats.object_gets, 0);
         let collection_view = collection_overlay.base().cosine_view().unwrap();
         let collection_base = collection_overlay.base_arc();
-        assert!(std::ptr::eq(collection_base.as_ref(), collection_overlay.base()));
+        assert!(std::ptr::eq(
+            collection_base.as_ref(),
+            collection_overlay.base()
+        ));
         let collection_bound = collection_overlay.bind(&collection_view).unwrap();
         let mut collection_workspace = GraphSearchWorkspace::new(4).unwrap();
-        assert_eq!(collection_bound.search(&[1.0, 0.0], 2, 4, 4,
-            &mut collection_workspace).unwrap().0, vec![99, 7]);
-        let (decoded, decoded_stats) = tokio::runtime::Runtime::new().unwrap()
-            .block_on(hydrate_graph_collection_decoded(&store, &prefix, &collection_head,
-                cache.path(), 100_000, 1, 1024, 25)).unwrap();
+        assert_eq!(
+            collection_bound
+                .search(&[1.0, 0.0], 2, 4, 4, &mut collection_workspace)
+                .unwrap()
+                .0,
+            vec![99, 7]
+        );
+        let (decoded, decoded_stats) = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(hydrate_graph_collection_decoded(
+                &store,
+                &prefix,
+                &collection_head,
+                cache.path(),
+                100_000,
+                1,
+                1024,
+                25,
+            ))
+            .unwrap();
         assert_eq!(decoded_stats.object_gets, 0);
-        assert_eq!(decoded.resident_bytes(), collection_overlay.resident_bytes() + 4);
+        assert_eq!(
+            decoded.resident_bytes(),
+            collection_overlay.resident_bytes() + 4
+        );
         let decoded_view = decoded.base().cosine_view().unwrap();
         let decoded_bound = decoded.bind(&decoded_view).unwrap();
-        assert_eq!(decoded_bound.search(&[1.0, 0.0], 2, 4, 4,
-            &mut GraphSearchWorkspace::new(4).unwrap()).unwrap().0, vec![99, 7]);
-        let next_collection = tokio::runtime::Runtime::new().unwrap().block_on(
-            publish_graph_collection(&store, &prefix, &original_head.root_sha256,
-                &[ResidentMutation { id: 42, vector: None },
-                  ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) },
-                  ResidentMutation { id: 100, vector: Some(vec![1.0, 0.0]) }],
-                1024, Some(&collection_head))).unwrap();
+        assert_eq!(
+            decoded_bound
+                .search(
+                    &[1.0, 0.0],
+                    2,
+                    4,
+                    4,
+                    &mut GraphSearchWorkspace::new(4).unwrap()
+                )
+                .unwrap()
+                .0,
+            vec![99, 7]
+        );
+        let next_collection = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(publish_graph_collection(
+                &store,
+                &prefix,
+                &original_head.root_sha256,
+                &[
+                    ResidentMutation {
+                        id: 42,
+                        vector: None,
+                    },
+                    ResidentMutation {
+                        id: 99,
+                        vector: Some(vec![1.0, 0.0]),
+                    },
+                    ResidentMutation {
+                        id: 100,
+                        vector: Some(vec![1.0, 0.0]),
+                    },
+                ],
+                1024,
+                Some(&collection_head),
+            ))
+            .unwrap();
         let reused = hydrate_graph_collection_decoded_reusing_base(
-            &next_collection, &collection_overlay, 1024, 64).unwrap();
-        assert!(Arc::ptr_eq(&collection_overlay.base_arc(), &reused.base_arc()));
+            &next_collection,
+            &collection_overlay,
+            1024,
+            64,
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(
+            &collection_overlay.base_arc(),
+            &reused.base_arc()
+        ));
         let reused_view = reused.base().cosine_view().unwrap();
-        assert_eq!(reused.bind(&reused_view).unwrap().search(&[1.0, 0.0], 2, 4, 4,
-            &mut GraphSearchWorkspace::new(4).unwrap()).unwrap().0, vec![99, 100]);
-        assert_eq!(collection_bound.search(&[1.0, 0.0], 2, 4, 4,
-            &mut GraphSearchWorkspace::new(4).unwrap()).unwrap().0, vec![99, 7]);
+        assert_eq!(
+            reused
+                .bind(&reused_view)
+                .unwrap()
+                .search(
+                    &[1.0, 0.0],
+                    2,
+                    4,
+                    4,
+                    &mut GraphSearchWorkspace::new(4).unwrap()
+                )
+                .unwrap()
+                .0,
+            vec![99, 100]
+        );
+        assert_eq!(
+            collection_bound
+                .search(
+                    &[1.0, 0.0],
+                    2,
+                    4,
+                    4,
+                    &mut GraphSearchWorkspace::new(4).unwrap()
+                )
+                .unwrap()
+                .0,
+            vec![99, 7]
+        );
         let collection_slot = ResidentGraphCollectionSlot::new(
-            collection_head.revision, Arc::clone(&collection_overlay)).unwrap();
+            collection_head.revision,
+            Arc::clone(&collection_overlay),
+        )
+        .unwrap();
         let held_collection = collection_slot.pin();
-        let replacement = Arc::new(ResidentGraphOverlay::new(Arc::clone(&pinned), vec![], 1).unwrap());
+        let replacement =
+            Arc::new(ResidentGraphOverlay::new(Arc::clone(&pinned), vec![], 1).unwrap());
         let retired = collection_slot.replace(2, replacement).unwrap();
         assert!(Arc::ptr_eq(&held_collection.1, &retired.1));
-        assert!(collection_slot.replace(1, Arc::clone(&collection_overlay)).is_err());
+        assert!(
+            collection_slot
+                .replace(1, Arc::clone(&collection_overlay))
+                .is_err()
+        );
         let slot = ResidentGraphSlot::new(Arc::clone(&pinned));
         let next_dir = tempfile::tempdir().unwrap();
         let next_source = "22".repeat(32);
@@ -749,8 +892,10 @@ mod tests {
                 .0
         }));
         let foreign = ResidentGraphOverlay::new(Arc::clone(&next), vec![], 1).unwrap();
-        assert!(hydrate_graph_collection_decoded_reusing_base(
-            &next_collection, &foreign, 1024, 64).is_err());
+        assert!(
+            hydrate_graph_collection_decoded_reusing_base(&next_collection, &foreign, 1024, 64)
+                .is_err()
+        );
         let held_reader = slot.pin();
         let retiring = slot.replace(Arc::clone(&next)).unwrap();
         assert!(slot.replace(Arc::clone(&retiring)).is_err());
@@ -787,11 +932,22 @@ mod tests {
                 .unwrap()
                 .0
         );
-        let mutations = || vec![
-            ResidentMutation { id: 42, vector: Some(vec![0.0, 1.0]) },
-            ResidentMutation { id: 7, vector: None },
-            ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) },
-        ];
+        let mutations = || {
+            vec![
+                ResidentMutation {
+                    id: 42,
+                    vector: Some(vec![0.0, 1.0]),
+                },
+                ResidentMutation {
+                    id: 7,
+                    vector: None,
+                },
+                ResidentMutation {
+                    id: 99,
+                    vector: Some(vec![1.0, 0.0]),
+                },
+            ]
+        };
         assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 40).is_err());
         let overlay = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41).unwrap();
         assert_eq!(overlay.resident_bytes(), 41);
@@ -806,16 +962,28 @@ mod tests {
             .unwrap()
             .with_decoded_delta(100_000)
             .unwrap();
-        assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41)
-            .unwrap().with_decoded_delta(41).is_err());
+        assert!(
+            ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41)
+                .unwrap()
+                .with_decoded_delta(41)
+                .is_err()
+        );
         let decoded_bound = decoded.bind(&old_view).unwrap();
         let blocked = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 100_000)
-            .unwrap().with_blocked_delta(100_000).unwrap();
-        assert!(ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41)
-            .unwrap().with_blocked_delta(41).is_err());
+            .unwrap()
+            .with_blocked_delta(100_000)
+            .unwrap();
+        assert!(
+            ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 41)
+                .unwrap()
+                .with_blocked_delta(41)
+                .is_err()
+        );
         let blocked_bound = blocked.bind(&old_view).unwrap();
         let screened = ResidentGraphOverlay::new(Arc::clone(&held_reader), mutations(), 100_000)
-            .unwrap().with_screened_delta(100_000).unwrap();
+            .unwrap()
+            .with_screened_delta(100_000)
+            .unwrap();
         let screened_bound = screened.bind(&old_view).unwrap();
         for query in [[1.0, 0.0], [0.0, 1.0]] {
             assert_eq!(
@@ -829,24 +997,61 @@ mod tests {
                     .0
             );
             assert_eq!(
-                blocked_bound.search(&query, 4, 4, 4, &mut old_workspace).unwrap().0,
-                decoded_bound.search(&query, 4, 4, 4, &mut old_workspace).unwrap().0
+                blocked_bound
+                    .search(&query, 4, 4, 4, &mut old_workspace)
+                    .unwrap()
+                    .0,
+                decoded_bound
+                    .search(&query, 4, 4, 4, &mut old_workspace)
+                    .unwrap()
+                    .0
             );
             assert_eq!(
-                screened_bound.search(&query, 4, 4, 4, &mut old_workspace).unwrap().0,
-                decoded_bound.search(&query, 4, 4, 4, &mut old_workspace).unwrap().0
+                screened_bound
+                    .search(&query, 4, 4, 4, &mut old_workspace)
+                    .unwrap()
+                    .0,
+                decoded_bound
+                    .search(&query, 4, 4, 4, &mut old_workspace)
+                    .unwrap()
+                    .0
             );
         }
-        let extended = ResidentGraphOverlay::new(Arc::clone(&held_reader),
-            vec![ResidentMutation { id: 99, vector: Some(vec![1.0, 0.0]) }], 21).unwrap();
-        let extended_view = extended.bind(&old_view).unwrap();
-        assert_eq!(extended_view.search(&[1.0, 0.0], 5, 4, 4,
-            &mut old_workspace).unwrap().0.len(), 5);
-        assert!(ResidentGraphOverlay::new(
+        let extended = ResidentGraphOverlay::new(
             Arc::clone(&held_reader),
-            vec![ResidentMutation { id: 42, vector: None }, ResidentMutation { id: 42, vector: None }],
-            1,
-        ).is_err());
+            vec![ResidentMutation {
+                id: 99,
+                vector: Some(vec![1.0, 0.0]),
+            }],
+            21,
+        )
+        .unwrap();
+        let extended_view = extended.bind(&old_view).unwrap();
+        assert_eq!(
+            extended_view
+                .search(&[1.0, 0.0], 5, 4, 4, &mut old_workspace)
+                .unwrap()
+                .0
+                .len(),
+            5
+        );
+        assert!(
+            ResidentGraphOverlay::new(
+                Arc::clone(&held_reader),
+                vec![
+                    ResidentMutation {
+                        id: 42,
+                        vector: None
+                    },
+                    ResidentMutation {
+                        id: 42,
+                        vector: None
+                    }
+                ],
+                1,
+            )
+            .is_err()
+        );
         assert!(
             ResidentGraphGeneration::open_local_authenticated(
                 root.as_bytes(),

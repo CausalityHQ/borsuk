@@ -32,13 +32,13 @@ does not provide HTTP authentication or tenant isolation.
   format/training contract and no CoHere-specific source or path assumption.
 - [x] One runnable create → publish → cold open → search → warm reopen demo
   using the public Rust API and a local object store.
-- [ ] Wrong root, corrupt blob, wrong generation, duplicate ID, bad vector,
+- [x] Wrong root, corrupt blob, wrong generation, duplicate ID, bad vector,
   and stale conditional publication fail closed in focused tests.
-- [ ] Worker cap, bounded resident memory, concurrent queries, pinned reader
+- [x] Worker cap, bounded resident memory, concurrent queries, pinned reader
   during replacement, and process restart/reload pass focused tests.
 - [x] README points Rust users to the authenticated graph route and clearly
   labels the legacy `BorsukIndex` graph-free path and Python/TS scope.
-- [ ] A revision-pinned Rust workspace source bundle contains the crate and
+- [x] A revision-pinned Rust workspace source bundle contains the crate and
   all local path dependencies; create/open/search runs from a clean extraction.
   A registry `.crate` is blocked by unpublished workspace dependencies and is
   outside this first cut.

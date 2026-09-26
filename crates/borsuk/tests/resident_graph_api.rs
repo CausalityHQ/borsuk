@@ -31,6 +31,10 @@ async fn create_publish_open_search_and_reopen() {
         .unwrap();
     let head = read_graph_head(&store, &prefix).await.unwrap().unwrap();
     assert_eq!(head.root_sha256, root_sha);
+    assert!(
+        ResidentGraphGeneration::open_local_authenticated(&root, &root_sha, &directory, 1, 1)
+            .is_err()
+    );
     let cache = tempfile::tempdir().unwrap();
     let (cold, first) =
         hydrate_graph_generation(&store, &prefix, &head, cache.path(), 32 * 1024 * 1024, 2)
@@ -94,6 +98,10 @@ async fn create_publish_open_search_and_reopen() {
 #[test]
 fn builder_rejects_duplicate_ids_and_zero_vectors_before_writing() {
     let parent = tempfile::tempdir().unwrap();
+    let zero_generation = (0..256).map(|id| (id, vec![1.0; 64])).collect();
+    let path = parent.path().join("zero_generation");
+    assert!(build_graph_generation(&path, zero_generation, 0).is_err());
+    assert!(!path.exists());
     let duplicate = vec![(7, vec![1.0; 64]); 256];
     let path = parent.path().join("duplicate");
     assert!(build_graph_generation(&path, duplicate, 1).is_err());

@@ -97,8 +97,15 @@ fn workers(
                             .map_err(|error| error.to_string())
                     } else if dual_graph {
                         loaded
-                            .search_dual_graph(&bound, &work.query, 100, 4096, 4096, 2048,
-                                               &mut workspace)
+                            .search_dual_graph(
+                                &bound,
+                                &work.query,
+                                100,
+                                4096,
+                                4096,
+                                2048,
+                                &mut workspace,
+                            )
                             .map_err(|error| error.to_string())
                     } else {
                         bound

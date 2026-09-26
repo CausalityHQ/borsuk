@@ -227,9 +227,15 @@ pub async fn hydrate_graph_generation(
         return Err(ResidentGraphStoreError::Invalid("head generation"));
     }
     hydrate_graph_root(
-        store, prefix, &head.root_bytes, &head.root_sha256,
-        cache_root, max_resident_bytes, active_workers,
-    ).await
+        store,
+        prefix,
+        &head.root_bytes,
+        &head.root_sha256,
+        cache_root,
+        max_resident_bytes,
+        active_workers,
+    )
+    .await
 }
 
 /// Hydrate a pinned immutable root named by a collection revision. This
@@ -371,8 +377,8 @@ pub async fn publish_graph_generation(
     directory: &Path,
     expected: Option<&ResidentGraphHead>,
 ) -> Result<ResidentGraphHead, ResidentGraphStoreError> {
-    let root: Root = parse_authenticated_root(
-        root_bytes, &format!("{:x}", Sha256::digest(root_bytes)))?;
+    let root: Root =
+        parse_authenticated_root(root_bytes, &format!("{:x}", Sha256::digest(root_bytes)))?;
     if expected.is_some_and(|head| root.generation <= head.generation) {
         return Err(ResidentGraphStoreError::Invalid("generation order"));
     }
@@ -472,9 +478,17 @@ mod tests {
 
         let second = fixture(dir.path(), 2);
         let staged = stage_graph_generation(&store, &prefix, &second, dir.path())
-            .await.unwrap();
+            .await
+            .unwrap();
         assert_eq!(staged, format!("{:x}", Sha256::digest(&second)));
-        assert_eq!(read_graph_head(&store, &prefix).await.unwrap().unwrap().root_bytes, first);
+        assert_eq!(
+            read_graph_head(&store, &prefix)
+                .await
+                .unwrap()
+                .unwrap()
+                .root_bytes,
+            first
+        );
         std::fs::write(dir.path().join("codes.bin"), b"corrupt").unwrap();
         assert!(
             publish_graph_generation(&store, &prefix, &second, dir.path(), Some(&original))
