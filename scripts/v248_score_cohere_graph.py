@@ -22,6 +22,7 @@ HYBRID_ARMS = ("hybrid-4096-8192",)
 DUAL_ARMS = ("dual-4096-2048-8192",)
 DUAL_GRAPH_ARMS = ("dual-graph-4096-2048",)
 SEEDED_DUAL_GRAPH_ARMS = ("seeded-dual-graph-4096-2048",)
+FAST_DUAL_GRAPH_ARMS = ("fast-dual-graph-4096-2048",)
 
 
 def canonical(value):
@@ -78,6 +79,7 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
                 "borsuk-v260-cohere-dual-graph-100k-v1",
                 "borsuk-v261-cohere-dual-graph-1m-v1",
                 "borsuk-v264-cohere-seeded-dual-graph-100k-v1",
+                "borsuk-v265-cohere-fast-dual-graph-100k-v1",
                 "borsuk-v255-cohere-diverse-graph-1m-serving-v1")
             or (million != (serving["schema"] in (
                 "borsuk-v255-cohere-diverse-graph-1m-serving-v1",
@@ -87,7 +89,9 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
             or serving["raw_sha256"] != digest(raw_file)
             or serving["requests_sha256"] != digest(request_file)):
         raise ValueError("CoHere source or pretruth identity differs")
-    arms = (SEEDED_DUAL_GRAPH_ARMS if serving["schema"] ==
+    arms = (FAST_DUAL_GRAPH_ARMS if serving["schema"] ==
+                "borsuk-v265-cohere-fast-dual-graph-100k-v1"
+            else SEEDED_DUAL_GRAPH_ARMS if serving["schema"] ==
                 "borsuk-v264-cohere-seeded-dual-graph-100k-v1"
             else DUAL_GRAPH_ARMS if serving["schema"] in (
                 "borsuk-v260-cohere-dual-graph-100k-v1",
@@ -153,6 +157,8 @@ def score(source: Path, prep: Path, request_file: Path, raw_file: Path,
     output.write_text(canonical({"schema": (
         "borsuk-v261-cohere-dual-graph-quality-1m-v1"
         if serving["schema"] == "borsuk-v261-cohere-dual-graph-1m-v1"
+        else "borsuk-v265-cohere-fast-dual-graph-quality-100k-v1"
+        if serving["schema"] == "borsuk-v265-cohere-fast-dual-graph-100k-v1"
         else "borsuk-v264-cohere-seeded-dual-graph-quality-100k-v1"
         if serving["schema"] == "borsuk-v264-cohere-seeded-dual-graph-100k-v1"
         else "borsuk-v260-cohere-dual-graph-quality-100k-v1"

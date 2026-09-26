@@ -441,7 +441,20 @@ impl ResidentVectorGraph {
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, false, workspace)
+    }
+
+    /// FP32 SIMD navigation over cached FP16 row norms, followed by FP64
+    /// ranking of the complete retained beam before the final k truncation.
+    pub fn search_fast_with_workspace(
+        &self,
+        query: &[f32],
+        plane: &ResidentFp16Tier,
+        k: usize,
+        ef: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, None, true, workspace)
     }
 
     /// Start exact navigation from an authenticated physical row nominated by
@@ -455,7 +468,7 @@ impl ResidentVectorGraph {
         seed: usize,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
-        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, Some(seed), workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, 0, Some(seed), false, workspace)
     }
 
     /// Route from the nearest of evenly spaced source rows. Returned work
@@ -472,7 +485,7 @@ impl ResidentVectorGraph {
         if anchor_count == 0 || anchor_count > plane.rows() {
             return Err(ResidentFp16Error::Invalid("graph anchor count"));
         }
-        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, None, workspace)
+        self.search_with_anchor_count_workspace(query, plane, k, ef, anchor_count, None, false, workspace)
     }
 
     fn search_with_anchor_count_workspace(
@@ -483,6 +496,7 @@ impl ResidentVectorGraph {
         ef: usize,
         anchor_count: usize,
         seed: Option<usize>,
+        fast: bool,
         workspace: &mut GraphSearchWorkspace,
     ) -> Result<(Vec<u64>, usize), ResidentFp16Error> {
         self.check_plane(plane)?;
@@ -507,8 +521,19 @@ impl ResidentVectorGraph {
             .iter()
             .map(|&x| f64::from(x) / norm)
             .collect::<Vec<_>>();
+        let unit_f32 = if fast {
+            unit.iter().map(|&x| x as f32).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut scratch = if fast {vec![0.0_f32; plane.dimensions()]} else {Vec::new()};
         let mut score = |node: u32| -> Result<f64, ResidentFp16Error> {
-            Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?)
+            if fast {
+                Ok(-plane.cosine_similarity_unit_query_fast(
+                    &unit_f32, node as usize, &mut scratch)?)
+            } else {
+                Ok(-plane.cosine_similarity_unit_query(&unit, node as usize)?)
+            }
         };
         let start = if let Some(seed) = seed {
             Some(u32::try_from(seed).map_err(|_| ResidentFp16Error::Invalid("graph seed"))?)
@@ -528,7 +553,10 @@ impl ResidentVectorGraph {
         let (results, visits) = self.navigate_from_with_workspace(ef, workspace, score, start)?;
         let mut ranked = results
             .into_iter()
-            .map(|visit| Ok((visit.distance, plane.source_id(visit.node as usize)?)))
+            .map(|visit| Ok((
+                if fast {-plane.cosine_similarity_unit_query(&unit, visit.node as usize)?}
+                else {visit.distance},
+                plane.source_id(visit.node as usize)?)))
             .collect::<Result<Vec<_>, ResidentFp16Error>>()?;
         ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         Ok((
@@ -972,7 +1000,7 @@ mod tests {
             .into_iter(),
         )
         .unwrap();
-        let tier =
+        let mut tier =
             ResidentFp16Tier::open_authenticated(&path, &digest, SOURCE, 4, 2, 213, 48).unwrap();
         let graph = ResidentVectorGraph::build(vectors.clone(), &tier, 4, 4, 8).unwrap();
         let structure = graph.structural_stats();
@@ -1004,6 +1032,11 @@ mod tests {
                 .unwrap().0,
             vec![42, 7]
         );
+        assert!(restored.search_fast_with_workspace(
+            &[1.0, 0.0], &tier, 2, 4, &mut workspace).is_err());
+        tier.prepare_fast_navigation(100).unwrap();
+        assert_eq!(restored.search_fast_with_workspace(
+            &[1.0, 0.0], &tier, 2, 4, &mut workspace).unwrap().0, vec![42, 7]);
         assert!(restored
             .search_from_seed_with_workspace(&[1.0, 0.0], &tier, 2, 4, 4, &mut workspace)
             .is_err());

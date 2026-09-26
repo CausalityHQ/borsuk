@@ -7,12 +7,13 @@ use std::{
     path::Path,
 };
 
-use half::f16;
+use half::{f16, slice::{HalfBitsSliceExt, HalfFloatSliceExt}};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
 use crate::native_source_tier::SourceCandidate;
+use crate::simd_control::f32x8;
 
 const MAGIC: [u8; 8] = *b"BORSF160";
 const VERSION: u32 = 1;
@@ -37,6 +38,7 @@ pub struct ResidentFp16Tier {
     generation: u64,
     artifact_sha256: [u8; 32],
     source_sha256: [u8; 32],
+    fast_norms: Vec<f64>,
 }
 
 fn decode_digest(value: &str) -> Result<[u8; 32], ResidentFp16Error> {
@@ -140,6 +142,7 @@ where
             }
             row[..8].copy_from_slice(&id.to_le_bytes());
             let mut norm = 0.0_f64;
+            let mut encoded_norm = 0.0_f64;
             for (index, coordinate) in vector.into_iter().enumerate() {
                 if !coordinate.is_finite() {
                     return Err(ResidentFp16Error::Invalid("source nonfinite coordinate"));
@@ -149,10 +152,13 @@ where
                 if !encoded.is_finite() {
                     return Err(ResidentFp16Error::Invalid("FP16 coordinate overflow"));
                 }
+                let decoded = f64::from(encoded.to_f32());
+                encoded_norm += decoded * decoded;
                 row[8 + 2 * index..10 + 2 * index]
                     .copy_from_slice(&encoded.to_bits().to_le_bytes());
             }
-            if !norm.is_finite() || norm <= 0.0 {
+            if !norm.is_finite() || norm <= 0.0
+                || !encoded_norm.is_finite() || encoded_norm <= 0.0 {
                 return Err(ResidentFp16Error::Invalid("source zero/nonfinite norm"));
             }
             writer.write_all(&row)?;
@@ -210,6 +216,37 @@ impl ResidentFp16Tier {
         Ok(dot / norm_squared.sqrt())
     }
 
+    /// Fast navigation score using a cached authenticated row norm. Returned
+    /// graph candidates must still be ranked with the FP64 scorer.
+    pub(crate) fn cosine_similarity_unit_query_fast(
+        &self,
+        normalized: &[f32],
+        ordinal: usize,
+        scratch: &mut [f32],
+    ) -> Result<f64, ResidentFp16Error> {
+        if normalized.len() != self.dimensions || scratch.len() != self.dimensions
+            || self.fast_norms.len() != self.rows() || ordinal >= self.rows() {
+            return Err(ResidentFp16Error::Invalid("fast graph score geometry"));
+        }
+        let offset = ordinal.checked_mul(self.dimensions)
+            .ok_or(ResidentFp16Error::Invalid("candidate offset"))?;
+        self.coordinates[offset..offset + self.dimensions]
+            .reinterpret_cast::<f16>().convert_to_f32_slice(scratch);
+        let mut lanes = f32x8::ZERO;
+        let mut chunks = normalized.chunks_exact(8).zip(scratch.chunks_exact(8));
+        for (query, row) in &mut chunks {
+            let mut q = [0.0_f32; 8];
+            let mut r = [0.0_f32; 8];
+            q.copy_from_slice(query);
+            r.copy_from_slice(row);
+            lanes += f32x8::from(q) * f32x8::from(r);
+        }
+        let tail = normalized.len() / 8 * 8;
+        let dot = lanes.reduce_add() + normalized[tail..].iter()
+            .zip(&scratch[tail..]).map(|(q, r)| q * r).sum::<f32>();
+        Ok(f64::from(dot) / self.fast_norms[ordinal])
+    }
+
     /// Open and fully authenticate an immutable plane. The budget check
     /// precedes its large allocation; this object itself owns the charged
     /// ID and coordinate arrays until the pinned generation is released.
@@ -259,12 +296,18 @@ impl ResidentFp16Tier {
             reader.read_exact(&mut row)?;
             digest.update(&row);
             ids.push(u64::from_le_bytes(row[..8].try_into().unwrap()));
+            let mut norm_squared = 0.0_f64;
             for coordinate in row[8..].chunks_exact(2) {
                 let bits = u16::from_le_bytes(coordinate.try_into().unwrap());
                 if !f16::from_bits(bits).is_finite() {
                     return Err(ResidentFp16Error::Invalid("nonfinite FP16 artifact"));
                 }
+                let value = f64::from(f16::from_bits(bits).to_f32());
+                norm_squared += value * value;
                 data.push(bits);
+            }
+            if !norm_squared.is_finite() || norm_squared <= 0.0 {
+                return Err(ResidentFp16Error::Invalid("zero FP16 artifact norm"));
             }
         }
         let computed: [u8; 32] = digest.finalize().into();
@@ -278,6 +321,7 @@ impl ResidentFp16Tier {
             generation,
             artifact_sha256: expected_artifact,
             source_sha256: expected_source,
+            fast_norms: Vec::new(),
         })
     }
 
@@ -285,6 +329,43 @@ impl ResidentFp16Tier {
     #[must_use]
     pub fn resident_bytes(&self) -> usize {
         self.ids.capacity() * 8 + self.coordinates.capacity() * 2
+            + self.fast_norms.capacity() * 8
+    }
+
+    /// Cache decoded row norms for the optional fast graph navigation scorer.
+    /// The cache is derived from the authenticated plane and charged to the
+    /// caller's total resident budget before allocation.
+    pub fn prepare_fast_navigation(
+        &mut self,
+        resident_budget_bytes: usize,
+    ) -> Result<(), ResidentFp16Error> {
+        if self.fast_norms.len() == self.rows() {
+            return if self.resident_bytes() <= resident_budget_bytes {
+                Ok(())
+            } else {
+                Err(ResidentFp16Error::Invalid("resident budget"))
+            };
+        }
+        self.fast_norms.clear();
+        let required = self.rows().checked_mul(8)
+            .and_then(|bytes| self.resident_bytes().checked_add(bytes))
+            .ok_or(ResidentFp16Error::Invalid("fast norm byte count overflow"))?;
+        if required > resident_budget_bytes {
+            return Err(ResidentFp16Error::Invalid("resident budget"));
+        }
+        self.fast_norms.try_reserve_exact(self.rows())
+            .map_err(|_| ResidentFp16Error::Invalid("fast norm allocation"))?;
+        for row in self.coordinates.chunks_exact(self.dimensions) {
+            let norm_squared = row.iter().fold(0.0_f64, |sum, &bits| {
+                let value = f64::from(f16::from_bits(bits).to_f32());
+                sum + value * value
+            });
+            if !norm_squared.is_finite() || norm_squared <= 0.0 {
+                return Err(ResidentFp16Error::Invalid("fast norm"));
+            }
+            self.fast_norms.push(norm_squared.sqrt());
+        }
+        Ok(())
     }
 
     /// Pinned generation number.
@@ -564,5 +645,38 @@ mod tests {
             )
             .is_err()
         );
+        assert!(write_resident_fp16_tier(
+            &directory.path().join("underflow.bin"), 1, 2, 1, SOURCE,
+            vec![(3, vec![1.0e-8, 0.0])].into_iter(),
+        ).is_err());
+        let zero = directory.path().join("zero.bin");
+        write_resident_fp16_tier(&zero, 1, 2, 1, SOURCE,
+            vec![(3, vec![1.0, 0.0])].into_iter()).unwrap();
+        let mut bytes = std::fs::read(&zero).unwrap();
+        bytes[72..76].fill(0);
+        std::fs::write(&zero, &bytes).unwrap();
+        let zero_digest = format!("{:x}", Sha256::digest(&bytes));
+        assert!(ResidentFp16Tier::open_authenticated(
+            &zero, &zero_digest, SOURCE, 1, 2, 1, 12).is_err());
+    }
+
+    #[test]
+    fn fast_navigation_scores_full_simd_chunk_and_tail() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("plane.bin");
+        let row = vec![0.5, -0.5, 0.25, 0.125, -0.25, 0.0625, 0.125, 0.5, -0.125];
+        let digest = write_resident_fp16_tier(&path, 1, 9, 1, SOURCE,
+            vec![(7, row)].into_iter()).unwrap();
+        let mut tier = ResidentFp16Tier::open_authenticated(
+            &path, &digest, SOURCE, 1, 9, 1, 26).unwrap();
+        assert!(tier.prepare_fast_navigation(33).is_err());
+        tier.prepare_fast_navigation(34).unwrap();
+        let query = vec![1.0_f32 / 3.0; 9];
+        let unit = vec![1.0_f64 / 3.0; 9];
+        let mut scratch = vec![0.0; 9];
+        let fast = tier.cosine_similarity_unit_query_fast(&query, 0, &mut scratch).unwrap();
+        let exact = tier.cosine_similarity_unit_query(&unit, 0).unwrap();
+        assert!((fast - exact).abs() < 1.0e-6);
+        assert!(tier.cosine_similarity_unit_query_fast(&query, 0, &mut scratch[..8]).is_err());
     }
 }
