@@ -19,10 +19,18 @@ use serde_json::json;
 use url::Url;
 
 const DIMS: usize = 768;
-const CAP: usize = 3 * 1024 * 1024 * 1024;
+fn resident_cap(root: &[u8]) -> Result<usize, Box<dyn Error>> {
+    let rows = serde_json::from_slice::<serde_json::Value>(root)?["rows"]
+        .as_u64()
+        .ok_or("root row count")?;
+    Ok(usize::try_from(rows)?
+        .checked_mul(2_500)
+        .ok_or("resident cap overflow")?)
+}
 
 fn vectors(path: &Path, rows: usize) -> Result<Vec<(u64, Vec<f32>)>, Box<dyn Error>> {
-    if !matches!(rows, 100_000 | 1_000_000) || fs::metadata(path)?.len() < (rows * DIMS * 4) as u64
+    if !matches!(rows, 100_000 | 1_000_000 | 10_000_000)
+        || fs::metadata(path)?.len() < (rows * DIMS * 4) as u64
     {
         return Err("source geometry".into());
     }
@@ -106,8 +114,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("local") if args.len() == 7 => {
             let root = fs::read(Path::new(&args[2]).join("root.json"))?;
+            let cap = resident_cap(&root)?;
             let generation = ResidentGraphGeneration::open_local_authenticated(
-                &root, &args[3], Path::new(&args[2]), CAP, 1,
+                &root, &args[3], Path::new(&args[2]), cap, 1,
             )?;
             search(generation, Path::new(&args[4]), args[5].parse()?,
                 Path::new(&args[6]), json!({"object_gets":0,"response_bytes":0}))?;
@@ -117,9 +126,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 [("aws_region", "eu-central-1")])?;
             let head = read_graph_head(store.as_ref(), &prefix).await?.ok_or("head missing")?;
             if head.root_sha256 != args[3] { return Err("wrong generation root".into()); }
+            let cap = resident_cap(&head.root_bytes)?;
             let started = Instant::now();
             let (generation, stats) = hydrate_graph_generation(store.as_ref(), &prefix,
-                &head, Path::new(&args[4]), CAP, 1).await?;
+                &head, Path::new(&args[4]), cap, 1).await?;
             search(generation, Path::new(&args[5]), args[6].parse()?,
                 Path::new(&args[7]), json!({"object_gets":stats.object_gets,
                     "response_bytes":stats.response_bytes,
