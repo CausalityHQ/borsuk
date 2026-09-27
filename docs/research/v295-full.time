@@ -1,0 +1,23 @@
+	Command being timed: "timeout 600s /data/target/agents/borsuk-prod-ready-v9/debug/v295_rust_two_bit_route .borsuk-scratch/v283/v294-reference/mean.bin .borsuk-scratch/v283/v294-full.records 224d6c64758106f8d67ef1cc1a1f9a2088df9c7811d420c0d1a003f45a5db596 .borsuk-scratch/v283/cohere-dev64-requests.jsonl .borsuk-scratch/v283/v292-candidates.jsonl 64 .borsuk-scratch/v283/v295-full-plans.jsonl .borsuk-scratch/v283/v295-full.json"
+	User time (seconds): 14.19
+	System time (seconds): 0.01
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:14.21
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 25388
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 6212
+	Voluntary context switches: 3
+	Involuntary context switches: 63
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 56
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
