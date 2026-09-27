@@ -27,3 +27,20 @@ with truth and therefore does not answer this question. This exact scan is
 O(ND) per query and cannot be a 1M/100M serving route. One local run only,
 <=2 minutes and <=2 GiB process RSS; no full panel, paid machine or vendor
 claim. Compute p05, mean, max planned GET and bytes, and the gap to V284.
+
+## Completed diagnostic (2026-09-27 UTC)
+
+The frozen `ac8ebf83` script completed exit 0 in 2.29 s with 365,164 KiB
+peak process RSS. The [result](v285-exact-page-rank-bound-result.json) SHA-256
+is `986380714c2247f70c530e7cbbc53d1296de82caeba6f44b1e5798cd780ad72e`.
+On CoHere first100k D768 cosine k100 development0–63, exact nearest-row page
+ordering fetched **100/100 GT rows mean and p05** with at most 32 planned GET,
+84 pages and 16,773,120 bytes/query. This exceeds the 98.7/p05 95 necessary
+gate. V284's source-only f16 unit-centroid page ranking under the same schedule
+fetched 97.0625 mean/p05 92; the measured gap to exact page ordering is
+2.9375 mean hits and 8 p05 hits. Thus the page schedule and V283 physical
+layout can capture the GT set on this used development sample when page
+ordering is exact. The immediate bottleneck is compact page representation /
+nomination, not scheduler capacity at 100k. The exact scan reads every vector
+per query and cannot serve 1M or 100M. It is neither returned SQ8 recall nor
+an end-to-end latency result; no architecture or vendor win follows.
