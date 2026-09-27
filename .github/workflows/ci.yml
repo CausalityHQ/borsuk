@@ -146,6 +146,7 @@ jobs:
         run: |
           if ! python -m unittest discover -s scripts -p 'test_*.py' > methodology.log 2>&1; then
             tail -n 50 methodology.log
+            python -c 'import pathlib,re; s=pathlib.Path("methodology.log").read_text(); [print("::error::"+m.group()[:2500].replace("%","%25").replace("\n","%0A")) for m in re.finditer(r"(?ms)^(?:FAIL|ERROR):.*?(?=^={20,}|^Ran \d+ tests|\Z)",s)]'
             echo "::error::$(tail -n 50 methodology.log | tr '\n' ' ' | cut -c1-3000)"
             exit 1
           fi
