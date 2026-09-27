@@ -92,3 +92,45 @@ The pending cell seals `borsuk-object-native-generation-v2`: its trusted root
 binds the full S3 object key under the attempt prefix. The V282 a0002 v1 root
 remains immutable historical evidence and is deliberately incompatible with
 the v2 loader; V282 query and quality receipts remain the paired control.
+
+## a0001 terminal decision (2026-09-27 UTC)
+
+**KILL V283 semantic-cell layout for further panels and 1M.** The sole frozen
+CoHere first100k D768 cosine k100 development0–63 cell completed with exit 0.
+Source commit `9f8007a507e06970639a71432544d7fe0a22bf63`, archive SHA-256
+`f6f748fa76f0b26d618b38da8d3391dd916bfcb0c5cf89075012fe06ba384ea6`,
+layout SHA-256 `303f31ab8a182a0aaa304c4ef551a046be41071ac24e67a793882eb74c5b532e`,
+and SQ8 SHA-256 `301696df05ca03122951b66ad8a9bedb5d5f1e675c6fc66f6019abbce3fcda58`
+match the reservation. The runner authenticated the V248 raw vectors, requests,
+truth, layout and SQ8 input before replay. The original launcher independently
+replayed all 11 terminal artifact sizes and hashes; the terminal SHA-256 is
+`2069defa6ff7dfacdca20e09e62f4bb01d65aeb9625aa30cd253313bb177c58f`,
+closeout SHA-256 `fde4f369d2cace30729f1ea7302fa9491125f4b426e25e295a258066c122d057`,
+and candidate raw SHA-256 `2d5e5c03fd333c3475c771ddaf45e2b47e30dbef6013460c521647ca953394b1`.
+The [exact summary](v283-cohere-dev64-a0001-summary.json) is copied from the
+authenticated terminal artifact (SHA-256
+`a50c022e483c60f16270e62fb21c7d7dc7dd4cd9eb77a5dbde17b198def163f5`).
+Raw receipts and terminal are preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v283-cohere-dev64/9f8007a507e06970639a71432544d7fe0a22bf63/runs/a0001/`.
+Spot `c7i.8xlarge` instance `i-026d77be53dc1fda8` is confirmed terminated;
+compute through terminal is estimated at $0.07766 at the $0.7262/hour quote,
+excluding storage and request charges.
+
+| Same 64 CoHere development queries | PQ shortlist GT hits/query | Fetched GT hits/query | Returned R@100 | p05 hits | Max planned GET / bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| V282 graph paired control | 84.328 | 97.047 | 96.250% | 92 | 32 / 16,773,120 |
+| V283 graph candidate | 82.922 | 96.672 | 95.984% | 93 | 32 / 16,773,120 |
+| V283 flat page-discovery diagnostic | 82.922 | 97.625 | 96.703% | 93 | 32 / 16,773,120 |
+
+The preregistered one-point improvement gate required at least 97.25% mean
+returned recall and p05 at least 92. The graph candidate misses the mean gate
+by 1.266 percentage points and is 0.266 points below the paired V282 control.
+The flat diagnostic is also below 97.25%. The optimistic GT-aware page oracle
+of 100/100 was therefore insufficient: unchanged PQ nomination on the new
+layout loses 1.406 GT hits/query versus V282, and graph page discovery then
+loses 0.719 returned hits/query versus V283 flat. SQ8 scoring loses another
+0.688 hit/query after V283 graph fetch. The first causal deficit is PQ-primary
+nomination/physical-page coverage, with an additional graph-discovery deficit;
+neither widening a reused panel nor a 1M run is justified. The 64-query replay
+took 3.26 s with 102,600 KiB peak process RSS; it is **local replay, not live
+S3 or end-to-end latency**, and cannot support a vendor claim.
