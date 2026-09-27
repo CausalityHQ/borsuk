@@ -25,7 +25,7 @@ def evaluate(archive, root_sha, layout, requests, truth):
     assert raw[:8] == b"BORSUCP1"
     assert int.from_bytes(raw[8:16], "little") == 100_000
     assert [int.from_bytes(raw[i:i+4], "little") for i in (16, 20, 24)] == [768, 32, 256]
-    centers = np.frombuffer(raw, dtype="<f2", offset=32).astype(np.float32).reshape(391, 8, 768)
+    centers = np.frombuffer(raw, dtype="<f2", offset=32).astype(np.float32).reshape(3125, 768)
     assert np.isfinite(centers).all()
     order = np.load(layout, allow_pickle=False)
     assert order.shape == (100_000,) and np.array_equal(np.sort(order), np.arange(100_000))
@@ -36,13 +36,13 @@ def evaluate(archive, root_sha, layout, requests, truth):
     assert len(req) == 64 and [q["query_ordinal"] for q in req] == list(range(64))
     assert (gt < 100_000).all()
     candidate_count = math.ceil(8 * math.sqrt(391))
-    norms = np.einsum("ijk,ijk->ij", centers, centers)
+    norms = np.einsum("ij,ij->i", centers, centers)
     hits = []
     for request, neighbors in zip(req, gt):
         q = np.asarray(request["query"], dtype=np.float32)
         assert q.shape == (768,) and np.isfinite(q).all()
-        distances = norms - 2 * (centers.reshape(-1, 768) @ q).reshape(391, 8)
-        pages = np.lexsort((np.arange(391), distances.min(axis=1)))[:candidate_count]
+        distances = norms - 2 * (centers @ q)
+        pages = np.lexsort((np.arange(391), np.minimum.reduceat(distances, np.arange(0, 3125, 8))))[:candidate_count]
         hits.append(int(np.isin(page_of[neighbors], pages).sum()))
     p05 = sorted(hits)[math.ceil(.05 * 64) - 1]
     return {"schema": "borsuk-v290-centroid-prefilter-v1",

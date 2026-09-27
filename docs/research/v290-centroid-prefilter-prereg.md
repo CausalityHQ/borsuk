@@ -16,6 +16,10 @@ Use authenticated V283 f16 centroids, layout, CoHere first100k D768 cosine
 k100 development0–63 requests/truth. Rank pages by the minimum squared
 Euclidean distance to their eight unit centroids with stable page ties,
 take exactly 159, and count GT100 rows whose physical page is retained.
+The final partial page has five centroids; the artifact has 3,125 total,
+not 3,128. The first local command stopped on that reshape before reading
+requests or truth. The script was corrected to use the actual last-page
+geometry, with the rule and gate unchanged.
 No two-bit row scoring, SQ8 plan, S3 read, or validation query occurs here.
 KILL this precursor if mean candidate GT100 <98.9 or p05 <96; otherwise
 allow exactly one same-candidate V289 two-bit refinement and returned-SQ8
