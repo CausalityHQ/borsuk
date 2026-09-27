@@ -76,3 +76,18 @@ attempt ID. Never inspect incomplete measurement artifacts. Sync terminal
 artifacts to S3, replay every size/SHA-256 and published root, then
 terminate the instance immediately. Record the instance and quote; compute
 cost from quote×time and label it an estimate, not a bill.
+
+## Capacity exception before retry
+
+Attempt `a0001` reserved its prefix, but EC2 `RunInstances` returned
+`InsufficientInstanceCapacity` after SDK retries for the frozen
+eu-central-1c r7i.8xlarge Spot request. EC2 confirms no instance was
+created and the attempt has no terminal or measurement. Do not reuse that
+reservation. To avoid a stalled product gate, attempt `a0002` will use
+the same instance type, AZ, AMI, disk and 12-hour stop as **On-Demand**;
+the source, method and measurement gates above remain frozen. The AWS
+Price List API returned Linux/shared/used Frankfurt SKU
+`HJJTV8GSDPQXFMCX` at **$2.5536 per instance-hour** on 2026-09-27 UTC,
+versus the failed Spot request's $0.968/hour quote. The 12-hour compute
+ceiling at list price is $30.6432, excluding disk, transfer, S3 and taxes.
+Record actual launch/terminal times and label resulting cost an estimate.

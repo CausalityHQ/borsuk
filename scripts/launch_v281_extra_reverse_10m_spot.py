@@ -29,6 +29,8 @@ V272_ROOT_SHA = "948e8a5555f44011b22681ca2cd20edde93f6fec5e6261e20e3a7b799d46702
 V278_PREFIX = ("research/v278-extra-reverse-1m/"
                "42c48d5e8e6696d9c991faec0d9b43f00dc1b61e/runs/a0001")
 V278_TERMINAL_SHA = "cd5ddfdbc321478361e428ef702e573a14532e7c58cbe265649a8d38de76008e"
+ON_DEMAND_SKU = "HJJTV8GSDPQXFMCX"
+ON_DEMAND_PRICE = 2.5536
 
 
 def bootstrap(commit, archive_sha, archive_key, prefix):
@@ -73,9 +75,11 @@ exec bash repo/scripts/run_v281_extra_reverse_10m.sh
     return script
 
 
-def launch(attempt, dry_run=False):
+def launch(attempt, dry_run=False, on_demand=False):
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
+    if on_demand and attempt != "a0002":
+        raise ValueError("documented On-Demand exception applies only to a0002")
     if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
         raise ValueError("worktree must be clean")
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -118,16 +122,37 @@ def launch(attempt, dry_run=False):
     prefix = f"research/v281-extra-reverse-10m/{commit}/runs/{attempt}"
     if not missing(s3, prefix + "/reservation.json"):
         raise ValueError("attempt already reserved")
-    quote_row = ec2.describe_spot_price_history(
-        InstanceTypes=["r7i.8xlarge"], ProductDescriptions=["Linux/UNIX"],
-        AvailabilityZone="eu-central-1c", MaxResults=1)["SpotPriceHistory"][0]
-    quote = float(quote_row["SpotPrice"])
+    if on_demand:
+        pricing = session.client("pricing", region_name="us-east-1")
+        filters = [{"Type": "TERM_MATCH", "Field": key, "Value": value}
+                   for key, value in (("instanceType", "r7i.8xlarge"),
+                                      ("location", "EU (Frankfurt)"),
+                                      ("operatingSystem", "Linux"),
+                                      ("tenancy", "Shared"),
+                                      ("preInstalledSw", "NA"),
+                                      ("capacitystatus", "Used"))]
+        offers = pricing.get_products(ServiceCode="AmazonEC2", Filters=filters,
+                                      MaxResults=20)["PriceList"]
+        prices = [(product["product"]["sku"], float(dimension["pricePerUnit"]["USD"]))
+                  for raw in offers for product in [json.loads(raw)]
+                  for term in product.get("terms", {}).get("OnDemand", {}).values()
+                  for dimension in term["priceDimensions"].values()
+                  if dimension["unit"] == "Hrs"]
+        if prices != [(ON_DEMAND_SKU, ON_DEMAND_PRICE)]:
+            raise ValueError(f"On-Demand price identity differs: {prices}")
+        quote, purchase = ON_DEMAND_PRICE, "on-demand"
+    else:
+        quote_row = ec2.describe_spot_price_history(
+            InstanceTypes=["r7i.8xlarge"], ProductDescriptions=["Linux/UNIX"],
+            AvailabilityZone="eu-central-1c", MaxResults=1)["SpotPriceHistory"][0]
+        quote, purchase = float(quote_row["SpotPrice"]), "spot"
     if dry_run:
         print(json.dumps({"source_commit": commit, "archive_sha256": archive_sha,
                           "v272_terminal_sha256": V272_TERMINAL_SHA,
                           "v278_terminal_sha256": V278_TERMINAL_SHA,
                           "prefix": prefix, "active_borsuk_instances": 0,
-                          "spot_quote_usd_per_hour": quote}, sort_keys=True))
+                          "purchase_option": purchase,
+                          "compute_quote_usd_per_hour": quote}, sort_keys=True))
         return
     if missing(s3, archive_key):
         put_if_absent(archive_key, archive)
@@ -138,8 +163,9 @@ def launch(attempt, dry_run=False):
         "dataset": "CoHere-large-10M full10M D768 cosine k100",
         "split": "prior-used canonical test dev0-255/validation256-999",
         "method": "one bounded extra reverse-edge build; same-host baseline/candidate search",
-        "spot_quote_usd_per_hour": quote,
-        "spot_quote_timestamp": quote_row["Timestamp"].isoformat(),
+        "purchase_option": purchase, "compute_quote_usd_per_hour": quote,
+        "price_sku": ON_DEMAND_SKU if on_demand else None,
+        "quote_timestamp": None if on_demand else quote_row["Timestamp"].isoformat(),
         "interruption": "discard full cell, new attempt only",
     }, sort_keys=True).encode())
     instance_id = None
@@ -148,13 +174,15 @@ def launch(attempt, dry_run=False):
         request["InstanceType"] = "r7i.8xlarge"
         request["BlockDeviceMappings"][0]["Ebs"]["VolumeSize"] = 250
         request["TagSpecifications"][0]["Tags"][0]["Value"] = "borsuk-v281-extra-reverse-10m"
+        if on_demand:
+            request.pop("InstanceMarketOptions")
         launched = ec2.run_instances(**request)["Instances"][0]
         instance_id = launched["InstanceId"]
         launch_epoch = launched["LaunchTime"].timestamp()
         put_if_absent(prefix + "/launch.json", json.dumps({
             "instance_id": instance_id, "launch_epoch": launch_epoch,
             "source_commit": commit, "source_archive_sha256": archive_sha,
-            "spot_quote_usd_per_hour": quote,
+            "purchase_option": purchase, "compute_quote_usd_per_hour": quote,
         }, sort_keys=True).encode())
         print(json.dumps({"instance_id": instance_id, "prefix": prefix,
                           "archive_sha256": archive_sha}), flush=True)
@@ -195,8 +223,9 @@ def launch(attempt, dry_run=False):
                   "v278_terminal_sha256": V278_TERMINAL_SHA, "instance_id": instance_id,
                   "terminal_sha256": sha(raw), "terminal_status": terminal["status"],
                   "phase": terminal.get("phase"), "root_sha256": root_sha,
-                  "decision": decision, "spot_quote_usd_per_hour": quote,
-                  "spot_compute_usd_through_terminal": max(0, terminal["finished_epoch"] - launch_epoch)
+                  "decision": decision, "purchase_option": purchase,
+                  "compute_quote_usd_per_hour": quote,
+                  "compute_usd_through_terminal_estimate": max(0, terminal["finished_epoch"] - launch_epoch)
                       * quote / 3600}
         body = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
         put_if_absent(prefix + "/closeout.json", body)
@@ -212,7 +241,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", default="a0001")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--on-demand", action="store_true")
     args = parser.parse_args()
     with open("/tmp/borsuk-v281-10m-launch.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        launch(args.attempt, args.dry_run)
+        launch(args.attempt, args.dry_run, args.on_demand)
