@@ -69,3 +69,19 @@ layer is visible. A pass is only permission for development0–255 on both
 datasets; it cannot certify the 98%/p05 95 full gate, HTTP latency, or vendor
 superiority. Local execution only, <=4 GiB process RSS and <=15 minutes;
 no cloud instance or replacement run.
+
+The exact local V115 trainer did not finish: one attempt was stopped after
+1:32 because this devbox cgroup was under reclaim pressure (exit 143, peak
+2,042,876 KiB RSS); after reclaiming only this cgroup's file cache, the same
+source/layout/training rule hit a 12:00 timeout (exit 124, peak 2,033,360 KiB
+RSS). Neither produced a sealed router or quality measurement. The 64-query
+requests/truth slices are SHA-256
+`1de0122f73d1b72e54498640b9701ce6d156b513629596447580c85fac302ba4`
+and `f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355`.
+No local retry is planned. A single c7i.8xlarge Spot development cell is
+prepared as a conditional compute-only exception: same frozen V283 physical
+layout, V115 PQ rule, V282 planner/scorer, and dev0–63 gate; 30-minute
+hard measurement limit, quoted compute <=$0.40, terminal artifact hashes,
+original-launcher closeout and EC2 termination. It must not launch until the
+operator answers the explicit compute request. A non-paid remote host can run
+the same cell instead. Neither path permits a full panel or vendor claim.

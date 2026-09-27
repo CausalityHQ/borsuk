@@ -35,10 +35,14 @@ fn rss_bytes() -> Result<u64, io::Error> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 7 {
+    if args.len() != 7 && args.len() != 8 {
         return Err(
-            "usage: v282_local_falsifier ROOT ROOT_SHA SQ8 REQUESTS GT_U32 OUTPUT_JSONL".into(),
+            "usage: v282_local_falsifier ROOT ROOT_SHA SQ8 REQUESTS GT_U32 OUTPUT_JSONL [QUERY_COUNT]".into(),
         );
+    }
+    let expected_count = args.get(7).map_or(Ok(1000), |value| value.parse::<usize>())?;
+    if expected_count == 0 || expected_count > 1000 {
+        return Err(invalid("query count must be in 1..=1000").into());
     }
     let root = Path::new(&args[1]);
     let root_bytes = fs::read(root.join("manifest.json"))?;
@@ -176,8 +180,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         count += 1;
     }
-    if count != 1000 || truth.len() != count * 400 {
-        return Err(invalid("expected exactly 1,000 queries and GT100 rows").into());
+    if count != expected_count || truth.len() != count * 400 {
+        return Err(invalid("query and GT100 roster length differs").into());
     }
     output.flush()?;
     Ok(())
