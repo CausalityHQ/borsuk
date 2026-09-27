@@ -118,6 +118,10 @@ impl PartialOrd for Visit {
 }
 
 impl ResidentVectorGraph {
+    pub(crate) fn base_neighbours(&self, ordinal: usize) -> &[u32] {
+        self.neighbours[ordinal].last().unwrap()
+    }
+
     /// Persist a versioned graph bound to the complete resident plane.
     /// The returned digest belongs in the generation's authenticated root.
     pub fn write_authenticated(&self, path: &Path) -> Result<String, ResidentFp16Error> {

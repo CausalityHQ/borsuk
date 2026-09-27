@@ -76,6 +76,7 @@ fn search(
     raw_path: &Path,
     hydration: serde_json::Value,
     stress: bool,
+    expand: bool,
 ) -> Result<(), Box<dyn Error>> {
     let panel = queries(query_path, expected)?;
     let mut worker = if stress {
@@ -99,7 +100,11 @@ fn search(
     };
     let mut run = |query: &[f32]| {
         if let (Some(bound), Some(workspace)) = (&bound, &mut workspace) {
-            generation.search_dual_graph(bound, query, 100, 256, 256, 128, workspace)
+            if expand {
+                generation.search_dual_graph_neighbours(bound, query, 100, 256, 256, 128, workspace)
+            } else {
+                generation.search_dual_graph(bound, query, 100, 256, 256, 128, workspace)
+            }
         } else {
             worker.as_mut().unwrap().search(query, 100)
         }
@@ -123,7 +128,7 @@ fn search(
         json!({"root_sha256":generation.root_sha256(),"generation":generation.generation(),
             "rows":generation.rows(),"dimensions":generation.dimensions(),
             "queries":expected,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,
-            "mode":if stress {"diagnostic-stress"} else {"default"},
+            "mode":if expand {"diagnostic-neighbours"} else if stress {"diagnostic-stress"} else {"default"},
             "hydration":hydration})
     );
     Ok(())
@@ -140,7 +145,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("{}",json!({"root_sha256":sha,"rows":rows,
                 "build_ms":started.elapsed().as_secs_f64()*1000.0}));
         }
-        Some("local" | "local_stress") if args.len() == 7 => {
+        Some("local" | "local_stress" | "local_neighbours") if args.len() == 7 => {
             let root = fs::read(Path::new(&args[2]).join("root.json"))?;
             let cap = resident_cap(&root)?;
             let generation = ResidentGraphGeneration::open_local_authenticated(
@@ -148,7 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )?;
             search(generation, Path::new(&args[4]), args[5].parse()?,
                 Path::new(&args[6]), json!({"object_gets":0,"response_bytes":0}),
-                args[1] == "local_stress")?;
+                args[1] != "local", args[1] == "local_neighbours")?;
         }
         Some("s3") if args.len() == 8 => {
             let (store, prefix) = parse_url_opts(&Url::parse(&args[2])?,
@@ -162,9 +167,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             search(generation, Path::new(&args[5]), args[6].parse()?,
                 Path::new(&args[7]), json!({"object_gets":stats.object_gets,
                     "response_bytes":stats.response_bytes,
-                    "elapsed_ms":started.elapsed().as_secs_f64()*1000.0}), false)?;
+                "elapsed_ms":started.elapsed().as_secs_f64()*1000.0}), false, false)?;
         }
-        _ => return Err("usage: resident_graph_frontier build RAW ROWS DIR | local|local_stress DIR TRUSTED_SHA QUERIES COUNT RAW_OUT | s3 URI TRUSTED_SHA CACHE QUERIES COUNT RAW_OUT".into()),
+        _ => return Err("usage: resident_graph_frontier build RAW ROWS DIR | local|local_stress|local_neighbours DIR TRUSTED_SHA QUERIES COUNT RAW_OUT | s3 URI TRUSTED_SHA CACHE QUERIES COUNT RAW_OUT".into()),
     }
     Ok(())
 }

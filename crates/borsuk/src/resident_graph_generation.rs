@@ -506,6 +506,46 @@ impl ResidentGraphGeneration {
             pq_visits + exact_visits,
         ))
     }
+
+    /// Experimental bounded one-hop rerank around the dual route's final hits.
+    pub fn search_dual_graph_neighbours(
+        &self,
+        bound: &ResidentPqCosineGraph<'_, '_>,
+        query: &[f32],
+        k: usize,
+        pq_ef: usize,
+        shortlist: usize,
+        exact_ef: usize,
+        workspace: &mut GraphSearchWorkspace,
+    ) -> Result<(Vec<u64>, usize), ResidentGraphGenerationError> {
+        let (ids, visits) =
+            self.search_dual_graph(bound, query, k, pq_ef, shortlist, exact_ef, workspace)?;
+        let mut physical = Vec::with_capacity(k.saturating_mul(32));
+        for id in ids {
+            let position = self
+                .physical_for_source
+                .binary_search_by_key(&id, |&(source_id, _)| source_id)
+                .map_err(|_| ResidentGraphGenerationError::Invalid("returned source ID"))?;
+            let ordinal = self.physical_for_source[position].1;
+            physical.push(ordinal);
+        }
+        let seeds = physical.clone();
+        for ordinal in seeds {
+            for &neighbour in self.graph.base_neighbours(ordinal) {
+                if physical.len() >= k.saturating_mul(32) {
+                    break;
+                }
+                physical.push(neighbour as usize);
+            }
+        }
+        physical.sort_unstable();
+        physical.dedup();
+        let extra_visits = physical.len().saturating_sub(k);
+        Ok((
+            self.plane.rank_ordinals_cosine(query, &physical, k)?,
+            visits + extra_visits,
+        ))
+    }
 }
 
 #[cfg(test)]

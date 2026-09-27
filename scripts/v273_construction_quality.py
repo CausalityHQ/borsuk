@@ -47,12 +47,12 @@ def unit(values):
     return result
 
 
-def prepare(source, queries, truth):
+def prepare(source, queries, truth, query_sha):
     import faiss
 
     if (digest(source) != SOURCE_RAW_SHA
             or source_identity(source) != SOURCE_IDENTITY_SHA
-            or digest(queries) != QUERY_SHA):
+            or digest(queries) != query_sha):
         raise ValueError("source or fresh query SHA differs")
     rows = np.memmap(source, dtype="<f4", mode="r", shape=(100_000, DIMS))
     panel = np.memmap(queries, dtype="<f4", mode="r", shape=(1_000, DIMS))
@@ -95,7 +95,7 @@ def score(raw, truth):
             "raw_sha256": digest(raw), "truth_sha256": digest(truth)}
 
 
-def compare(baseline, candidate, truth, output):
+def compare(baseline, candidate, truth, output, query_sha):
     old, new = score(baseline, truth), score(candidate, truth)
     if old["misses"] < 100:
         decision = "inconclusive"
@@ -110,7 +110,7 @@ def compare(baseline, candidate, truth, output):
               "dataset": "CoHere-large-10M train first100k D768 cosine",
               "split": "excluded train rows100000-100999", "k": 100,
               "queries": 1_000, "mode": "diagnostic-stress",
-              "query_sha256": QUERY_SHA, "source_raw_sha256": SOURCE_RAW_SHA,
+              "query_sha256": query_sha, "source_raw_sha256": SOURCE_RAW_SHA,
               "source_identity_sha256": SOURCE_IDENTITY_SHA}
     Path(output).write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
     print(json.dumps(result, sort_keys=True))
@@ -122,14 +122,16 @@ def main():
     prep = sub.add_parser("prepare")
     for name in ("source", "queries", "truth"):
         prep.add_argument(name, type=Path)
+    prep.add_argument("--query-sha", default=QUERY_SHA)
     paired = sub.add_parser("compare")
     for name in ("baseline", "candidate", "truth", "output"):
         paired.add_argument(name, type=Path)
+    paired.add_argument("--query-sha", default=QUERY_SHA)
     args = parser.parse_args()
     if args.command == "prepare":
-        prepare(args.source, args.queries, args.truth)
+        prepare(args.source, args.queries, args.truth, args.query_sha)
     else:
-        compare(args.baseline, args.candidate, args.truth, args.output)
+        compare(args.baseline, args.candidate, args.truth, args.output, args.query_sha)
 
 
 if __name__ == "__main__":
