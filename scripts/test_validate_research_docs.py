@@ -232,6 +232,13 @@ class ResearchDocsValidatorTest(unittest.TestCase):
         errors = validate_repository(self.root)
         self.assertTrue(any("missing.md" in error for error in errors))
 
+    def test_s3_artifact_link_is_not_a_local_file(self):
+        page = self.root / "docs/research/README.md"
+        page.write_text(
+            page.read_text() + "\n[terminal](s3://bucket/run/terminal.json)\n"
+        )
+        self.assertEqual(validate_repository(self.root), [])
+
     def test_rejects_research_tables_in_default_docs(self):
         (self.root / "docs/api.md").write_text("## Uncapped research ceiling\n")
         errors = validate_repository(self.root)

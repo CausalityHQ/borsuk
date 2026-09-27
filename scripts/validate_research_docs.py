@@ -108,7 +108,7 @@ def require_dataset_coverage(path: Path, errors: list[str]) -> None:
 def validate_links(research_root: Path, errors: list[str]) -> None:
     for page in research_root.glob("*.md"):
         for target in MARKDOWN_LINK.findall(page.read_text()):
-            if target.startswith(("http://", "https://", "#", "mailto:")):
+            if target.startswith(("http://", "https://", "s3://", "#", "mailto:")):
                 continue
             local = target.split("#", 1)[0]
             if local and not (page.parent / local).resolve().exists():
