@@ -33,7 +33,8 @@ that already sealed graph. The V272 historical quality was99,299/100,000
 GT hits, development25,421/25,600 and validation73,878/74,400. Compare
 quality against both that immutable receipt and the same-host baseline raw
 search; require all1,000 baseline ID lists to match V272 or invalidate the
-cell before comparing arms. Exact truth is unchanged.
+cell before comparing arms. Run this parity check before the candidate build
+to avoid paying for a cell with an invalid comparator. Exact truth is unchanged.
 
 Build one candidate through the public Rust
 `build_graph_generation_reverse_extra` route from the re-materialized source,
@@ -66,6 +67,8 @@ one HTTP serving/resource gate of this quality option; it does not promote
 the option as a generic default or establish a vendor win. A fail requires
 a material quality-layer decision before further paid10M work.
 
+The candidate build has a37,194-second timeout at the frozen 150% build-time
+limit; a timeout produces a failed terminal, not a valid quality result.
 One `causality` r7i.8xlarge Spot host, encrypted250 GiB gp3, 12-hour hard
 stop. Reserve a unique attempt only after code and focused tests pass. A
 Spot interruption invalidates this full cell; restart only under a new
