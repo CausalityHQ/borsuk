@@ -31,6 +31,15 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
         root = json.loads(root_raw)
         blob = source.extractfile("generation/centroids.bin").read()
         assert sha(blob) == root["centroids_sha256"]
+        router_raw = source.extractfile("generation/router/manifest.json").read()
+        assert sha(router_raw) == root["router_manifest_sha256"]
+        router = json.loads(router_raw)
+        coefficients = {}
+        for name in ("low", "step"):
+            body = source.extractfile(f"generation/router/{name}.bin").read()
+            assert sha(body) == router["sections"][name]["sha256"]
+            assert len(body) == router["sections"][name]["bytes"]
+            coefficients[name] = np.frombuffer(body, dtype="<f4").copy()
     assert blob[:8] == b"BORSUCP1" and int.from_bytes(blob[8:16], "little") == 100_000
     assert [int.from_bytes(blob[i:i+4], "little") for i in (16, 20, 24)] == [768, 32, 256]
     centers = np.frombuffer(blob, dtype="<f2", offset=32).astype(np.float32).reshape(3125, 768)
@@ -40,9 +49,9 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
     order = np.load(layout, allow_pickle=False)
     assert order.shape == (100_000,) and np.array_equal(np.sort(order), np.arange(100_000))
     mean = np.asarray(np.mean(vectors, axis=0, dtype=np.float64), dtype=np.float32)
-    low = vectors.min(axis=0).astype(np.float32)
-    span = np.maximum(vectors.max(axis=0) - low, np.float32(1e-12)).astype(np.float32)
-    step = (span / np.float32(255)).astype(np.float32)
+    low, step = coefficients["low"], coefficients["step"]
+    assert low.shape == step.shape == (768,) and np.isfinite(low).all()
+    assert np.isfinite(step).all() and (step > 0).all()
     records = np.empty((100_000, 200), dtype=np.uint8)
     for first in range(0, 100_000, BATCH_ROWS):
         last = min(first + BATCH_ROWS, 100_000)
@@ -52,6 +61,9 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
     sq8_type = np.dtype([("id", "<i8"), ("norm", "<f4"), ("code", "u1", (768,))])
     sq8 = np.memmap(sq8_path, dtype=sq8_type, mode="r", shape=(100_000,))
     assert np.array_equal(sq8["id"], order) and np.isfinite(sq8["norm"]).all()
+    restored = low + sq8["code"][:256].astype(np.float32) * step
+    assert np.allclose(np.einsum("ij,ij->i", restored, restored), sq8["norm"][:256],
+                       rtol=1e-5, atol=1e-4)
     req = [json.loads(line) for line in requests.read_text().splitlines()]
     gt = np.fromfile(truth, dtype="<u4").reshape(64, 100)
     assert len(req) == 64 and [q["query_ordinal"] for q in req] == list(range(64))

@@ -25,3 +25,17 @@ that passes. This 100k route still flat-scores all 3,125 centroids, so a pass
 cannot certify 100M work, latency or cost; hierarchical first-stage search
 must meet a separate visit and recall gate. One local run <=300 seconds and
 2 GiB RSS; no new cloud or full panel.
+
+## Coefficient correction before a valid SQ8 decision
+
+The first local command exited 0 but its returned score is invalid: the script
+derived SQ8 `low` and `step` from the authenticated *raw* CoHere input, whose
+sample vector norms are 12.53–15.81. V282 normalized that input before
+encoding SQ8; sample stored SQ8 norms are 0.999–1.001. The first output SHA
+is `ceec9e3a1bb04723444f9787733d800f6bc2df2291f74777b0effcc0afbee80c`;
+it reported 99.765625 fetched GT100 but only 91.375 returned, and must not
+be used as a quality measurement or KILL decision. The frozen route and
+thresholds remain unchanged. The correction loads `low`/`step` from sections
+whose hashes are bound by the authenticated V283 router manifest, exactly as
+the Rust scorer does, before one replacement local replay. The first command
+took 14.43 s/874,832 KiB RSS, exit 0; its flaw is semantic, not a crash.
