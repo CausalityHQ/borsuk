@@ -62,7 +62,7 @@ class HybridRetrievalBenchTests(unittest.TestCase):
                     "--dense-backend",
                     "hash",
                     "--dense-dimensions",
-                    "16",
+                    "64",
                 ],
                 cwd=ROOT,
                 check=True,
