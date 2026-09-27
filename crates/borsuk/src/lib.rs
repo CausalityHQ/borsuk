@@ -66,6 +66,7 @@ mod native_ann_router;
 pub mod native_source_hydration;
 pub mod native_source_id_map;
 pub mod native_source_tier;
+pub mod object_native_generation;
 mod observability;
 mod parallel;
 pub mod physical_interval;

@@ -24,6 +24,17 @@ and a resident FP16 final scorer. Neither is a same-revision complete product
 measurement. V280's 61.694 ms first-pass client p95 used 1.88 GB startup
 hydration and 2.06 GB peak RSS; it is a resident reference only.
 
+Freeze one size-scaled policy before the 100k falsifier: `regions =
+ceil(1024 * ceil(rows/256) / 3907)`, PQ shortlist 512, page expansion
+`beta = 4`, and 32 GET / 16,777,216-byte per-query caps. This retains the
+historical V155 1M region fraction, with the same formula on both 100k
+datasets. It is a preregistered candidate, not a measured 100k quality claim.
+PQ nomination still materializes rows from selected regions, so its CPU work
+and scratch scale with `regions × 256`; generation admission charges this
+scratch. A 1M pass does not qualify 100M latency. The later 10M/100M gate
+must measure whether this routing method remains viable under a declared RAM
+budget and change the router if it does not.
+
 V239 already falsified a naive PQ-graph candidate-to-page mapping: its
 quality-passing 1,024 candidate prefix touched 147 distinct 256-row SQ8
 pages at p95, at least 29,352,960 bytes/query on ReLAION-100k. V240's
@@ -70,9 +81,15 @@ range GET for each graph candidate is excluded.
 
 The first code increment is `OneAttemptS3::rank_verified_sq8_pages`: it
 preflights the GET/byte plan, limits parallel reads, authenticates ETag and
-page hashes, ranks SQ8 rows and returns physical/error accounting. It does
-not yet build the source-only route, open a complete generation, or qualify
-latency. The next implementation step is the new generation root and route
-binding, then the 100k falsifier. Lean can prove arithmetic caps and
+page hashes, ranks SQ8 rows and returns submitted-read/error accounting.
+`ObjectNativeGeneration::open` adds a new authenticated root for the router,
+centroids, page graph, page sidecar and remote SQ8 object, admits routing
+metadata and concurrent query buffers against a declared memory budget, and
+limits simultaneous reads. Its `plan_pages` and `search` methods reuse the
+V155 cached sparse plan and the authenticated range reader.
+The caller must supply an authorized root digest; no S3 vector plane is
+loaded. These increments do not yet build a complete artifact from user data,
+serve HTTP or qualify latency. The next implementation step is a 100k
+artifact and local query falsifier, then the cold HTTP gate. Lean can prove arithmetic caps and
 generation-binding invariants under explicit assumptions; recall, latency,
 RSS and vendor superiority require measured samples.

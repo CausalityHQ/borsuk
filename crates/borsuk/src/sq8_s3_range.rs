@@ -151,11 +151,7 @@ async fn rank_verified_sq8_pages_inner(
         error,
         stats: Sq8ReadStats::default(),
     };
-    if ranges.is_empty()
-        || ranges.len() > max_gets
-        || max_parallel == 0
-        || etag.is_empty()
-    {
+    if ranges.is_empty() || ranges.len() > max_gets || max_parallel == 0 || etag.is_empty() {
         return Err(fail(RangeFetchError::UnexpectedMetadata));
     }
     if top_k == 0 || top_k > authority.rows() {
