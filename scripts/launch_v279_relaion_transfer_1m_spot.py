@@ -104,7 +104,7 @@ def launch(attempt):
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as source:
         required = {"scripts/run_v279_relaion_transfer_1m.sh",
                     "scripts/v279_relaion_transfer_1m.py",
-                    "docs/research/v279-relaion-transfer-1m-prereg.md"}
+                    "docs/research/v279-extra-reverse-relaion-1m-prereg.md"}
         if not required.issubset(source.getnames()):
             raise ValueError("archive lacks frozen V279 method")
     archive_sha = sha(archive)
