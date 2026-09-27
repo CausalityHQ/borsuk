@@ -9,10 +9,11 @@ cached dual graph until an independent parity gate passes.
 The release route is one immutable, authenticated FP16 source plane, diverse
 source graph, source-trained PQ64 books/codes and physical row map. Search
 uses the V269 cached PQ and fast exact graph union with PQ width 4096,
-shortlist 4096 and exact width 2048, then ranks the union in FP16. Recall and
-latency evidence is currently limited to the V269 CoHere first1M D768 cosine
-k100 prior-used panel, so other builders, dimensions and queries need fresh
-quality evidence. No 10M or competitor superiority claim follows.
+shortlist 4096 and exact width 2048, then ranks the union in FP16. V271 has
+fresh CoHere first1M evidence; V280 verified the ReLAION-1M cosine baseline
+through the authenticated HTTP path with exact local ID parity. V272's
+CoHere10M library scale gate failed its frozen recall threshold. These are
+different workloads and do not establish competitor superiority.
 
 The crate must expose a small create/publish/open/search path. The caller
 supplies unique `u64` IDs and finite nonzero F32 vectors, a monotonic generation
@@ -44,9 +45,9 @@ does not provide HTTP authentication or tenant isolation.
   outside this first cut.
 - [ ] Required CI gates pass on the exact release commit. The current broad
   Rust formatting drift is a known gate blocker; fix it before the cut.
-- [ ] No release benchmark claim beyond V269's exact measured scope. After
-  the cut, one fresh-query matched recall/latency frontier plus a standard
-  ANN control precedes one 10M scale/cost gate.
+- [x] Benchmark claims remain tied to their source revisions and scopes:
+  V271 fresh CoHere1M frontier and ANN control, V272 10M no-go, and V280
+  ReLAION1M HTTP serving pass. A matched vendor win remains unverified.
 
 V270 `a0001` was launched before the release-cut directive, then deliberately
 stopped at 2026-09-26 UTC without a terminal measurement. Spot instance
