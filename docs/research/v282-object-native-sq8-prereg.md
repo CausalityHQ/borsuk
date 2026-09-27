@@ -10,14 +10,19 @@ Use a compact source-only router and authenticated, generation-pinned S3 SQ8
 page ranges for the first non-resident serving candidate. Do not hydrate the
 FP16 or SQ8 vector plane and do not keep query-read pages between queries in
 the cold gate. Reuse `PageAuthority`, the conditional one-attempt S3 reader,
-`budgeted_page_rank`, and `rank_returned_ranges`. The V155 source-only cached
-sparse planner is the fixed first route; no new score calibration or graph
-parameter sweep enters this gate. A new generation schema must bind router,
+`budgeted_page_rank`, and `rank_returned_ranges`. Reuse V155's cached sparse
+graph expansion with the top PQ nominees as provisional primary seeds. V155
+used SQ8-exact primary seeds scored from a local vector plane, so this cold
+route is a new quality candidate and V155 recall cannot be carried over.
+No new score calibration or graph parameter sweep enters this gate. A new
+generation schema binds router,
 SQ8 page digests, object identity and ETag without a local exact-source file.
 
 The verified ReLAION-1M validation V155 SQ8-only result was 99,222/100,000
 GT100 hits with 22,126 **planned** GETs and 11,134,007,040 **planned** bytes
-over 1,000 queries. It included no live S3 latency. V199 separately verified
+over 1,000 queries. Those numbers depended on local SQ8-exact primary scoring
+and included no live S3 latency. They are context, not a quality baseline for
+the provisional PQ-primary route. V199 separately verified
 live conditional range transport at 10,047 GETs and 7,388,559,360 received
 bytes over 1,000 ReLAION-1M validation queries, but used precomputed plans
 and a resident FP16 final scorer. Neither is a same-revision complete product
@@ -25,8 +30,9 @@ measurement. V280's 61.694 ms first-pass client p95 used 1.88 GB startup
 hydration and 2.06 GB peak RSS; it is a resident reference only.
 
 Freeze one size-scaled policy before the 100k falsifier: `regions =
-ceil(1024 * ceil(rows/256) / 3907)`, PQ shortlist 512, page expansion
-`beta = 4`, and 32 GET / 16,777,216-byte per-query caps. This retains the
+ceil(1024 * ceil(rows/256) / 3907)`, PQ shortlist 512, the first 100
+PQ nominees as provisional primary seeds for k100, page expansion `beta = 4`, and 32 GET /
+16,777,216-byte per-query caps. This retains the
 historical V155 1M region fraction, with the same formula on both 100k
 datasets. It is a preregistered candidate, not a measured 100k quality claim.
 PQ nomination still materializes rows from selected regions, so its CPU work
@@ -39,12 +45,13 @@ V239 already falsified a naive PQ-graph candidate-to-page mapping: its
 quality-passing 1,024 candidate prefix touched 147 distinct 256-row SQ8
 pages at p95, at least 29,352,960 bytes/query on ReLAION-100k. V240's
 graph-local order made this 218 pages. The V155 physical planner is retained
-because it was measured as a joint quality/read method; simply issuing one
+as a measured page scheduling method, while the changed primary seeds require
+new quality evidence; simply issuing one
 range GET for each graph candidate is excluded.
 
 ## Gates
 
-1. **100k falsifier.** Build the unchanged source-only route from corpus rows
+1. **100k falsifier.** Build the preregistered PQ-primary route from corpus rows
    on ReLAION-100k and CoHere first100k, D768 cosine, k100. Seal build and
    query-independent layout before reading the existing 1,000-query panels.
    Report development0–255 and validation256–999 separately, with exact
@@ -86,7 +93,8 @@ page hashes, ranks SQ8 rows and returns submitted-read/error accounting.
 centroids, page graph, page sidecar and remote SQ8 object, admits routing
 metadata and concurrent query buffers against a declared memory budget, and
 limits simultaneous reads. Its `plan_pages` and `search` methods reuse the
-V155 cached sparse plan and the authenticated range reader.
+cached sparse graph expansion with PQ-primary seeds and the authenticated
+range reader.
 The caller must supply an authorized root digest; no S3 vector plane is
 loaded. These increments do not yet build a complete artifact from user data,
 serve HTTP or qualify latency. The next implementation step is a 100k

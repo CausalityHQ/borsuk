@@ -342,23 +342,31 @@ impl ObjectNativeGeneration {
         &self.etag
     }
 
-    /// Source-only PQ nomination followed by V155's cached sparse page plan.
-    /// The caller freezes `regions`, `shortlist` and `beta` before evaluation.
+    /// PQ-primary nomination followed by cached sparse graph page expansion.
+    /// Historical V155 used local SQ8-exact primaries; its recall does not
+    /// transfer to this cold object-native proxy without a new measurement.
+    /// The caller freezes `regions`, `shortlist`, `primary_count` and `beta`.
     pub fn plan_pages(
         &self,
         query: &[f32],
         regions: usize,
         shortlist: usize,
+        primary_count: usize,
         beta: usize,
     ) -> Result<BudgetedPagePlan, ObjectNativePlanError> {
-        if regions > self.max_router_regions || shortlist > self.max_router_shortlist {
+        if regions > self.max_router_regions
+            || shortlist > self.max_router_shortlist
+            || primary_count == 0
+            || primary_count > shortlist
+        {
             return Err(ObjectNativePlanError::Router(Pq64Error::InvalidRequest));
         }
-        let primary = self
+        let nominees = self
             .router
             .router
             .nominate(query, regions, shortlist)
             .map_err(ObjectNativePlanError::Router)?;
+        let primary = &nominees[..primary_count];
         let primary_pages = primary
             .iter()
             .map(|row| row / self.pages.page_rows())
@@ -386,7 +394,7 @@ impl ObjectNativeGeneration {
             .map_err(ObjectNativePlanError::Centroid)?;
         choose_budgeted_pages_sparse(
             &scored,
-            &primary,
+            primary,
             self.pages.rows(),
             self.pages.dimensions(),
             beta,
@@ -413,7 +421,7 @@ impl ObjectNativeGeneration {
             })
         })?;
         let plan = self
-            .plan_pages(query, regions, shortlist, beta)
+            .plan_pages(query, regions, shortlist, top_k, beta)
             .map_err(ObjectNativeSearchError::Plan)?;
         let page_bytes = self
             .pages
@@ -583,7 +591,7 @@ mod tests {
         assert_eq!(opened.router().router.rows(), 256);
         assert_eq!(opened.pages().object_sha256(), sq8_hash);
         assert_eq!(opened.graph().node_count(), 8);
-        let plan = opened.plan_pages(&[0.0; 64], 1, 128, 4).unwrap();
+        let plan = opened.plan_pages(&[0.0; 64], 1, 128, 100, 4).unwrap();
         assert_eq!(plan.ranges, vec![0..sq8.len()]);
         assert_eq!(opened.object_key().as_ref(), format!("objects/{sq8_hash}"));
         assert!(matches!(
