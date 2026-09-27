@@ -58,24 +58,6 @@ pub fn build_graph_generation(
     vectors: Vec<(u64, Vec<f32>)>,
     generation: u64,
 ) -> Result<String, ResidentGraphBuildError> {
-    build_graph_generation_with_reverse(directory, vectors, generation, false)
-}
-
-/// Experimental reverse-neighbour topology with the same authenticated layout.
-pub fn build_graph_generation_reverse(
-    directory: &Path,
-    vectors: Vec<(u64, Vec<f32>)>,
-    generation: u64,
-) -> Result<String, ResidentGraphBuildError> {
-    build_graph_generation_with_reverse(directory, vectors, generation, true)
-}
-
-fn build_graph_generation_with_reverse(
-    directory: &Path,
-    vectors: Vec<(u64, Vec<f32>)>,
-    generation: u64,
-    reverse: bool,
-) -> Result<String, ResidentGraphBuildError> {
     let rows = vectors.len();
     let dimensions = vectors.first().map_or(0, |(_, row)| row.len());
     if generation == 0
@@ -163,11 +145,7 @@ fn build_graph_generation_with_reverse(
     let workers = std::thread::available_parallelism()
         .map_or(1, |count| count.get())
         .min(8);
-    let graph = if reverse {
-        ResidentVectorGraph::build_batched_diverse_reverse(data, &plane, 32, 64, 128, workers)?
-    } else {
-        ResidentVectorGraph::build_batched_diverse(data, &plane, 32, 64, 128, workers)?
-    };
+    let graph = ResidentVectorGraph::build_batched_diverse(data, &plane, 32, 64, 128, workers)?;
     let structure = graph.structural_stats();
     if structure.reachable != rows || structure.below_four_indegree != 0 {
         return Err(ResidentGraphBuildError::Invalid("graph reachability"));

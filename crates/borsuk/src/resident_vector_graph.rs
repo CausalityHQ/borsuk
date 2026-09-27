@@ -15,7 +15,6 @@ use crate::{
     centroid_hnsw::{
         build_reachable_hnsw_adjacency, build_reachable_hnsw_adjacency_batched,
         build_reachable_hnsw_adjacency_batched_diverse,
-        build_reachable_hnsw_adjacency_batched_diverse_reverse,
     },
     pq64_nominee::{Pq64CosineView, Pq64Router},
     resident_fp16_tier::{ResidentFp16Error, ResidentFp16Tier},
@@ -253,7 +252,7 @@ impl ResidentVectorGraph {
         m0: usize,
         ef_construction: usize,
     ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(vectors, plane, m, m0, ef_construction, None, false, false)
+        Self::build_with_workers(vectors, plane, m, m0, ef_construction, None, false)
     }
 
     /// Build from a frozen graph snapshot per batch. The worker count changes
@@ -266,16 +265,7 @@ impl ResidentVectorGraph {
         ef_construction: usize,
         workers: usize,
     ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(
-            vectors,
-            plane,
-            m,
-            m0,
-            ef_construction,
-            Some(workers),
-            false,
-            false,
-        )
+        Self::build_with_workers(vectors, plane, m, m0, ef_construction, Some(workers), false)
     }
 
     /// Build a source graph with deterministic diversity pruning of both
@@ -289,37 +279,7 @@ impl ResidentVectorGraph {
         ef_construction: usize,
         workers: usize,
     ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(
-            vectors,
-            plane,
-            m,
-            m0,
-            ef_construction,
-            Some(workers),
-            true,
-            false,
-        )
-    }
-
-    /// Experimental bounded-degree reverse-neighbour repair for low in-degree rows.
-    pub fn build_batched_diverse_reverse(
-        vectors: Vec<Vec<f32>>,
-        plane: &ResidentFp16Tier,
-        m: usize,
-        m0: usize,
-        ef_construction: usize,
-        workers: usize,
-    ) -> Result<Self, ResidentFp16Error> {
-        Self::build_with_workers(
-            vectors,
-            plane,
-            m,
-            m0,
-            ef_construction,
-            Some(workers),
-            true,
-            true,
-        )
+        Self::build_with_workers(vectors, plane, m, m0, ef_construction, Some(workers), true)
     }
 
     fn build_with_workers(
@@ -330,7 +290,6 @@ impl ResidentVectorGraph {
         ef_construction: usize,
         workers: Option<usize>,
         diverse: bool,
-        reverse: bool,
     ) -> Result<Self, ResidentFp16Error> {
         if vectors.len() < 2
             || vectors.len() != plane.rows()
@@ -363,14 +322,6 @@ impl ResidentVectorGraph {
             }
         }
         let built = match workers {
-            Some(workers) if reverse => build_reachable_hnsw_adjacency_batched_diverse_reverse(
-                &vectors,
-                m,
-                m0,
-                ef_construction,
-                ef_construction,
-                workers,
-            ),
             Some(workers) if diverse => build_reachable_hnsw_adjacency_batched_diverse(
                 &vectors,
                 m,

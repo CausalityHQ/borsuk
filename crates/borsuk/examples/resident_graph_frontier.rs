@@ -10,7 +10,7 @@ use std::{
 };
 
 use borsuk::{
-    resident_graph_build::{build_graph_generation, build_graph_generation_reverse},
+    resident_graph_build::build_graph_generation,
     resident_graph_generation::ResidentGraphGeneration,
     resident_graph_store::{hydrate_graph_generation, read_graph_head},
     resident_vector_graph::GraphSearchWorkspace,
@@ -133,15 +133,10 @@ fn search(
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     match args.get(1).map(String::as_str) {
-        Some("build" | "build_reverse") if args.len() == 5 => {
+        Some("build") if args.len() == 5 => {
             let rows: usize = args[3].parse()?;
             let started = Instant::now();
-            let build = if args[1] == "build_reverse" {
-                build_graph_generation_reverse
-            } else {
-                build_graph_generation
-            };
-            let sha = build(Path::new(&args[4]), vectors(Path::new(&args[2]), rows)?, 1)?;
+            let sha = build_graph_generation(Path::new(&args[4]), vectors(Path::new(&args[2]), rows)?, 1)?;
             println!("{}",json!({"root_sha256":sha,"rows":rows,
                 "build_ms":started.elapsed().as_secs_f64()*1000.0}));
         }
@@ -169,7 +164,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     "response_bytes":stats.response_bytes,
                     "elapsed_ms":started.elapsed().as_secs_f64()*1000.0}), false)?;
         }
-        _ => return Err("usage: resident_graph_frontier build|build_reverse RAW ROWS DIR | local|local_stress DIR TRUSTED_SHA QUERIES COUNT RAW_OUT | s3 URI TRUSTED_SHA CACHE QUERIES COUNT RAW_OUT".into()),
+        _ => return Err("usage: resident_graph_frontier build RAW ROWS DIR | local|local_stress DIR TRUSTED_SHA QUERIES COUNT RAW_OUT | s3 URI TRUSTED_SHA CACHE QUERIES COUNT RAW_OUT".into()),
     }
     Ok(())
 }
