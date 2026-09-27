@@ -73,7 +73,12 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        run: |
+          if ! cargo clippy --locked --workspace --all-targets -- -D warnings > clippy.log 2>&1; then
+            tail -n 50 clippy.log
+            echo "::error::$(tail -n 50 clippy.log | tr '\n' ' ' | cut -c1-3000)"
+            exit 1
+          fi
       - name: Build test binaries with bounded compiler concurrency
         run: bash scripts/check_rust_test_build.sh
       - name: Test
@@ -118,7 +123,12 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.91.0
       - name: Check the declared minimum Rust version
-        run: cargo check --locked --workspace --all-targets
+        run: |
+          if ! cargo check --locked --workspace --all-targets > msrv.log 2>&1; then
+            tail -n 50 msrv.log
+            echo "::error::$(tail -n 50 msrv.log | tr '\n' ' ' | cut -c1-3000)"
+            exit 1
+          fi
 
   methodology:
     name: Methodology and artifact contracts
@@ -134,7 +144,11 @@ jobs:
         run: python -m pip install --requirement scripts/requirements-format-bench.txt
       - name: Run all script and evidence tests
         run: |
-          python -m unittest discover -s scripts -p 'test_*.py'
+          if ! python -m unittest discover -s scripts -p 'test_*.py' > methodology.log 2>&1; then
+            tail -n 50 methodology.log
+            echo "::error::$(tail -n 50 methodology.log | tr '\n' ' ' | cut -c1-3000)"
+            exit 1
+          fi
           python scripts/validate_research_docs.py
 
   python-package:
