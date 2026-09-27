@@ -116,6 +116,21 @@ fn is_hash(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+fn valid_object_key(key: &str, hash: &str) -> bool {
+    let parts = key.split('/').collect::<Vec<_>>();
+    parts.len() >= 2
+        && parts[parts.len() - 2] == "objects"
+        && parts[parts.len() - 1] == hash
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && *part != "."
+                && *part != ".."
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        })
+}
+
 fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, ObjectNativeOpenError> {
     let file = File::open(path).map_err(ObjectNativeOpenError::Io)?;
     let size = file.metadata().map_err(ObjectNativeOpenError::Io)?.len();
@@ -172,7 +187,7 @@ impl ObjectNativeGeneration {
         }
         let manifest: Manifest = serde_json::from_slice(&raw)
             .map_err(|_| ObjectNativeOpenError::Invalid("generation schema"))?;
-        if manifest.schema != "borsuk-object-native-generation-v1"
+        if manifest.schema != "borsuk-object-native-generation-v2"
             || manifest.generation == 0
             || manifest.rows == 0
             || manifest.dimensions == 0
@@ -185,7 +200,7 @@ impl ObjectNativeGeneration {
             || !is_hash(&manifest.graph_sha256)
             || manifest.graph_resident_bytes == 0
             || !is_hash(&manifest.sq8_object_sha256)
-            || manifest.sq8_object_key != format!("objects/{}", manifest.sq8_object_sha256)
+            || !valid_object_key(&manifest.sq8_object_key, &manifest.sq8_object_sha256)
             || manifest.sq8_etag.is_empty()
             || manifest.sq8_etag.chars().any(char::is_control)
             || limits.max_active_queries == 0
@@ -604,7 +619,7 @@ mod tests {
         .unwrap();
         fs::write(router_dir.join("manifest.json"), &router_manifest).unwrap();
         let manifest = serde_json::to_vec(&serde_json::json!({
-            "schema":"borsuk-object-native-generation-v1", "generation":1,
+            "schema":"borsuk-object-native-generation-v2", "generation":1,
             "rows":256,"dimensions":64,"page_rows":256,"unit_rows":32,
             "router_manifest_sha256":sha256(&router_manifest),
             "page_manifest_sha256":sha256(&page_manifest),
@@ -612,7 +627,7 @@ mod tests {
             "graph_sha256":sha256(&graph_blob),
             "graph_resident_bytes":graph_resident,
             "sq8_object_sha256":sq8_hash,
-            "sq8_object_key":format!("objects/{sq8_hash}"), "sq8_etag":"etag-1",
+            "sq8_object_key":format!("tenant/g1/objects/{sq8_hash}"), "sq8_etag":"etag-1",
         }))
         .unwrap();
         fs::write(root.join("manifest.json"), &manifest).unwrap();
@@ -639,7 +654,7 @@ mod tests {
                 .ranges,
             plan.ranges,
         );
-        assert_eq!(opened.object_key().as_ref(), format!("objects/{sq8_hash}"));
+        assert_eq!(opened.object_key().as_ref(), format!("tenant/g1/objects/{sq8_hash}"));
         assert!(matches!(
             ObjectNativeGeneration::open(&root, &"f".repeat(64), limits),
             Err(ObjectNativeOpenError::HashMismatch("generation manifest"))
@@ -655,6 +670,16 @@ mod tests {
             ),
             Err(ObjectNativeOpenError::Invalid("memory cap"))
         ));
+        let mut unsafe_root: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        unsafe_root["sq8_object_key"] =
+            serde_json::json!(format!("tenant/../objects/{sq8_hash}"));
+        let unsafe_bytes = serde_json::to_vec(&unsafe_root).unwrap();
+        fs::write(root.join("manifest.json"), &unsafe_bytes).unwrap();
+        assert!(matches!(
+            ObjectNativeGeneration::open(&root, &sha256(&unsafe_bytes), limits),
+            Err(ObjectNativeOpenError::Invalid("generation identity"))
+        ));
+        fs::write(root.join("manifest.json"), &manifest).unwrap();
         fs::write(root.join("page_digests.bin"), vec![0; 32]).unwrap();
         assert!(matches!(
             ObjectNativeGeneration::open(&root, &sha256(&manifest), limits),

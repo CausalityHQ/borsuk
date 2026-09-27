@@ -45,12 +45,21 @@ class SealGenerationTest(unittest.TestCase):
                 "graph_resident_bytes": 1,
             }))
             output = root / "sealed"
-            expected = seal(router, pages, routing, '"etag"', output)
+            object_key = f"tenant/g1/objects/{sq8_sha}"
+            expected = seal(router, pages, routing, '"etag"', output,
+                            object_key=object_key)
             self.assertEqual(expected, digest(output / "manifest.json"))
-            self.assertEqual(json.loads((output / "manifest.json").read_text())["sq8_etag"], '"etag"')
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["sq8_etag"], '"etag"')
+            self.assertEqual(manifest["sq8_object_key"], object_key)
+            self.assertEqual(manifest["schema"], "borsuk-object-native-generation-v2")
+            with self.assertRaisesRegex(ValueError, "object key"):
+                seal(router, pages, routing, '"etag"', root / "unsafe",
+                     object_key=f"tenant/../objects/{sq8_sha}")
             (routing / "graph.bin").write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "routing blob differs"):
-                seal(router, pages, routing, '"etag"', root / "rejected")
+                seal(router, pages, routing, '"etag"', root / "rejected",
+                     object_key=object_key)
 
 
 if __name__ == "__main__":

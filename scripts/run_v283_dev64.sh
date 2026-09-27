@@ -109,7 +109,8 @@ object_key="$BORSUK_V283_PREFIX/objects/301696df05ca03122951b66ad8a9bedb5d5f1e67
 aws s3 cp sq8.bin "s3://$BORSUK_V283_BUCKET/$object_key" --only-show-errors
 etag=$(aws s3api head-object --bucket "$BORSUK_V283_BUCKET" --key "$object_key" --query ETag --output text)
 .venv/bin/python -m scripts.v282_seal_generation --router router --pages pages \
-  --routing routing --etag "$etag" --output generation >root.sha256
+  --routing routing --etag "$etag" --object-key "$object_key" \
+  --output generation >root.sha256
 tar -czf generation.tar.gz generation
 phase=replay
 /usr/bin/time -v -o replay.time "$CARGO_TARGET_DIR/release/v282_local_falsifier" \

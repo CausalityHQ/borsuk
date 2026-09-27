@@ -87,3 +87,8 @@ terminal artifact hashes,
 original-launcher closeout and EC2 termination. It must not launch until the
 operator answers the explicit compute request. A non-paid remote host can run
 the same cell instead. Neither path permits a full panel or vendor claim.
+
+The pending cell seals `borsuk-object-native-generation-v2`: its trusted root
+binds the full S3 object key under the attempt prefix. The V282 a0002 v1 root
+remains immutable historical evidence and is deliberately incompatible with
+the v2 loader; V282 query and quality receipts remain the paired control.

@@ -18,9 +18,16 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
-def seal(router: Path, pages: Path, routing: Path, etag: str, output: Path) -> str:
+def seal(router: Path, pages: Path, routing: Path, etag: str, output: Path, *,
+         object_key: str) -> str:
     if output.exists() or not etag or any(ord(c) < 32 for c in etag):
         raise ValueError("output or ETag differs")
+    parts = object_key.split("/")
+    if (len(parts) < 2 or parts[-2] != "objects"
+            or any(not part or part in (".", "..") or any(
+                not (char.isascii() and (char.isalnum() or char in "._-"))
+                for char in part) for part in parts)):
+        raise ValueError("object key differs")
     router_manifest = json.loads((router / "manifest.json").read_bytes())
     page_manifest = json.loads((pages / "manifest.json").read_bytes())
     graph_manifest = json.loads((routing / "build.json").read_bytes())
@@ -38,6 +45,8 @@ def seal(router: Path, pages: Path, routing: Path, etag: str, output: Path) -> s
             != (geometry["rows"], geometry["dimensions"], geometry["page_rows"], 32)
             or graph_manifest["graph_resident_bytes"] <= 0):
         raise ValueError("generation geometry or identity differs")
+    if parts[-1] != page_manifest["object_sha256"]:
+        raise ValueError("object key differs from SQ8 identity")
     if set(router_manifest["sections"]) != {"summaries", "books", "codes", "low", "step"}:
         raise ValueError("router sections differ")
     for name, section in router_manifest["sections"].items():
@@ -53,7 +62,7 @@ def seal(router: Path, pages: Path, routing: Path, etag: str, output: Path) -> s
         if digest(routing / name) != graph_manifest[field]:
             raise ValueError(f"routing blob differs: {name}")
     root_manifest = {
-        "schema": "borsuk-object-native-generation-v1",
+        "schema": "borsuk-object-native-generation-v2",
         "generation": router_manifest["generation"],
         "rows": geometry["rows"], "dimensions": geometry["dimensions"],
         "page_rows": geometry["page_rows"], "unit_rows": graph_manifest["unit_rows"],
@@ -63,7 +72,7 @@ def seal(router: Path, pages: Path, routing: Path, etag: str, output: Path) -> s
         "graph_sha256": graph_manifest["graph_sha256"],
         "graph_resident_bytes": graph_manifest["graph_resident_bytes"],
         "sq8_object_sha256": page_manifest["object_sha256"],
-        "sq8_object_key": f"objects/{page_manifest['object_sha256']}",
+        "sq8_object_key": object_key,
         "sq8_etag": etag,
     }
     with tempfile.TemporaryDirectory(prefix=output.name + ".tmp-", dir=output.parent) as temporary:
@@ -87,6 +96,8 @@ if __name__ == "__main__":
     parser.add_argument("--pages", type=Path, required=True)
     parser.add_argument("--routing", type=Path, required=True)
     parser.add_argument("--etag", required=True)
+    parser.add_argument("--object-key", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    print(seal(args.router, args.pages, args.routing, args.etag, args.output))
+    print(seal(args.router, args.pages, args.routing, args.etag, args.output,
+               object_key=args.object_key))

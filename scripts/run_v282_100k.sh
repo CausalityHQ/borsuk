@@ -93,7 +93,7 @@ PY
   aws s3 cp "$dataset/layout/sq8.bin" "s3://$BORSUK_V282_BUCKET/$object_key" --only-show-errors
   etag=$(aws s3api head-object --bucket "$BORSUK_V282_BUCKET" --key "$object_key" --query ETag --output text)
   phase="${dataset}-seal"
-  .venv/bin/python -m scripts.v282_seal_generation --router "$dataset/router" --pages "$dataset/pages" --routing "$dataset/routing" --etag "$etag" --output "$dataset/generation" >"$dataset/evidence/root.sha256"
+  .venv/bin/python -m scripts.v282_seal_generation --router "$dataset/router" --pages "$dataset/pages" --routing "$dataset/routing" --etag "$etag" --object-key "$object_key" --output "$dataset/generation" >"$dataset/evidence/root.sha256"
   cp "$dataset/generation/manifest.json" "$dataset/evidence/generation-manifest.json"
   cp "$dataset/source/provenance.json" "$dataset/evidence/provenance.json"
   cp "$dataset/source/original_ids.u64" "$dataset/evidence/original_ids.u64"
