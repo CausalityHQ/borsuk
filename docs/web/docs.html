@@ -385,7 +385,7 @@ console.log("hybrid (dense + text):", hits);</code></pre>
               </li>
               <li class="rung" id="rung-s3">
                 <div class="rung-head"><span class="rung-num">6</span><h3>Run it on object storage</h3></div>
-                <p>Point the same index at an <code>s3://…</code> URI. Paged routing (the default) avoids loading the complete routing table; a local <code>cache_dir</code> keeps fetched objects on fast disk for disk-cached queries. This snippet runs in CI against live MinIO and SeaweedFS.</p>
+                <p>Point the same index at an <code>s3://…</code> URI. Paged routing (the default) avoids loading the complete routing table; a local <code>cache_dir</code> keeps fetched objects on fast disk for disk-cached queries. This snippet runs in CI against live SeaweedFS; MinIO can be checked with the optional local stack.</p>
                 <div class="code-tabs" data-code-tabs>
                   <div class="tab-row" role="tablist" aria-label="Object-storage example">
                     <button type="button" data-code-tab="rust">Rust</button>
@@ -944,7 +944,7 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         </article>
         <article>
           <h2>S3 Proof</h2>
-          <p>Local 100M+ attempts validate algorithm shape, object counts, and memory behavior. The <code>s3_soak</code> test then measures request rate (requests per query and per add), QPS, p50/p95 latency, and cache hit ratio against live MinIO and SeaweedFS. Every <code>SearchReport</code> and <code>AddReport</code> also carries a <code>requests</code> breakdown (<code>gets</code>/<code>puts</code>/<code>deletes</code>/<code>heads</code>/<code>lists</code>), so request rate is observable in production, not just in the soak.</p>
+          <p>Local 100M+ attempts validate algorithm shape, object counts, and memory behavior. The <code>s3_soak</code> test then measures request rate (requests per query and per add), QPS, p50/p95 latency, and cache hit ratio against live SeaweedFS in CI. The optional MinIO stack exercises the same test. Every <code>SearchReport</code> and <code>AddReport</code> also carries a <code>requests</code> breakdown (<code>gets</code>/<code>puts</code>/<code>deletes</code>/<code>heads</code>/<code>lists</code>), so request rate is observable in production, not just in the soak.</p>
         </article>
         <article>
           <h2>Durability &amp; SLA</h2>
