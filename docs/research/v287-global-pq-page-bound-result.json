@@ -1,0 +1,1 @@
+{"arms":{"cosine":{"advance":false,"mean_fetched_gt_hits":98.390625,"p05_fetched_gt_hits":93},"euclidean":{"advance":false,"mean_fetched_gt_hits":98.59375,"p05_fetched_gt_hits":94}},"dataset":"CoHere first100k D768 cosine k100","max_gets":32,"max_planned_bytes":16773120,"queries":64,"schema":"borsuk-v287-global-pq-page-bound-v1","split":"development0-63"}
