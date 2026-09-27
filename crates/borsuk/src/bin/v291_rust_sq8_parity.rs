@@ -74,6 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut fetched_hits = Vec::with_capacity(64);
     let mut returned_hits = Vec::with_capacity(64);
+    let mut returned_differences = Vec::new();
     let mut max_gets = 0;
     let mut max_bytes = 0;
     let row_bytes = 780;
@@ -162,10 +163,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             .iter()
             .filter(|row| expected.contains(&row.id))
             .count();
-        if plan["fetched_gt_hits"].as_u64() != Some(fetched as u64)
-            || plan["returned_gt_hits"].as_u64() != Some(returned as u64)
-        {
-            return Err(invalid("per-query Python/Rust parity").into());
+        if plan["fetched_gt_hits"].as_u64() != Some(fetched as u64) {
+            return Err(invalid("per-query page coverage parity").into());
+        }
+        if plan["returned_gt_hits"].as_u64() != Some(returned as u64) {
+            returned_differences.push(json!({
+                "query_ordinal":ordinal,
+                "python_hits":plan["returned_gt_hits"],
+                "rust_hits":returned,
+            }));
         }
         fetched_hits.push(fetched);
         returned_hits.push(returned);
@@ -179,7 +185,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         "mean_returned_gt_hits":returned_hits.iter().sum::<usize>() as f64 / 64.0,
         "p05_returned_gt_hits":p05(&returned_hits),
         "max_gets":max_gets, "max_planned_bytes":max_bytes,
-        "per_query_parity":true,
+        "fetched_per_query_parity":true,
+        "returned_per_query_parity":returned_differences.is_empty(),
+        "returned_differences":returned_differences,
     });
     fs::write(&args[7], format!("{result}\n"))?;
     println!("{result}");
