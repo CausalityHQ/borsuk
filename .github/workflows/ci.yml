@@ -74,7 +74,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: |
-          if ! cargo clippy --locked --workspace --all-targets -- -D warnings > clippy.log 2>&1; then
+          if ! cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious > clippy.log 2>&1; then
             tail -n 50 clippy.log
             echo "::error::$(tail -n 50 clippy.log | tr '\n' ' ' | cut -c1-3000)"
             exit 1

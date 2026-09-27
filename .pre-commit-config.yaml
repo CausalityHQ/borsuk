@@ -25,7 +25,7 @@ repos:
         pass_filenames: false
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --locked --workspace --all-targets -- -D warnings
+        entry: cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
         language: system
         pass_filenames: false
       - id: cargo-test

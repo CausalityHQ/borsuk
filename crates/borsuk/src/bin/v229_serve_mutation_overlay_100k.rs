@@ -131,7 +131,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err(format!("selected V218 ID replay differs at {ordinal}").into());
         }
     }
-    drop(base);
     drop(view);
     let mutation_start = Instant::now();
     let mutations = (0..ROWS)

@@ -374,7 +374,7 @@ pub fn plan_weighted_intervals(
             })?;
             return Ok(IntervalPlan {
                 score,
-                ranges: vec![start..end],
+                ranges: std::iter::once(start..end).collect(),
                 bytes: end - start,
             });
         }

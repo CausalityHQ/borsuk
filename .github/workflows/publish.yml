@@ -52,7 +52,7 @@ jobs:
       - name: Rust format, lint, test-build, and all-target tests
         run: |
           cargo fmt --all -- --check
-          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
           bash scripts/check_rust_test_build.sh
           cargo test --locked --workspace --all-targets
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps

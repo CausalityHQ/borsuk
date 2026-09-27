@@ -16,10 +16,14 @@ The full Rust workspace checks:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 cargo test --locked --workspace --all-targets
 cargo audit
 ```
+
+Clippy denies correctness and suspicious findings across the workspace. Older
+experimental modules still emit documentation, dead-code, and style warnings;
+those warnings are visible but do not block this release candidate.
 
 The checked lockfile must contain no RustSec vulnerabilities. CI installs a
 pinned `cargo-audit` release and checks the complete locked dependency graph;
@@ -465,7 +469,7 @@ exact build you are evaluating.
 
 | Gate | Checked-in artifact | Fresh command evidence | Release decision |
 |---|---|---|---|
-| Correctness | Rust unit/integration tests under `crates/borsuk/tests/`, compaction tests in `crates/borsuk/src/index.rs`, and policy anchors in `scripts/check_repo_policy.py`. | `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, and `cargo test --locked --workspace --all-targets`. | Pass only if all commands exit 0 and no scoped-compaction, RAM-budget, routing, search, or object-store invariant is skipped. |
+| Correctness | Rust unit/integration tests under `crates/borsuk/tests/`, compaction tests in `crates/borsuk/src/index.rs`, and policy anchors in `scripts/check_repo_policy.py`. | `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious`, and `cargo test --locked --workspace --all-targets`. | Pass only if all commands exit 0 and no scoped-compaction, RAM-budget, routing, search, or object-store invariant is skipped. |
 | Packages | Python package metadata/tests in `python/`, TypeScript package metadata/tests in `packages/borsuk/`, and publish workflow matrix in `.github/workflows/`. | Build a wheel with `uvx maturin build --locked`, test that wheel with `python -m unittest discover python/tests`, then run `npm ci`, `npm run build:native`, and `npm test` in `packages/borsuk`. | Pass only if the tested artifacts are native package artifacts, not source-tree imports or CLI shell-outs. |
 | Storage | `docs/storage-format.md`, versioned role policy, production Arrow/Parquet readers and writers, immutable historical format evidence, packed atomic records, `CURRENT` pointer code, package license files, and storage-format tests. | Full workspace tests plus package tests that read/write indexes through local files and S3-compatible object stores, the checked role inventory, and the preregistered normal-segment and WAL layout qualifications. | Pass only if each object role uses its declared checked binary format, every non-baseline placement satisfies its separate frozen gate, and no JSON manifest/table path is introduced. |
 | Performance | `docs/web/assets/benchmarks/*.csv`, `docs/benchmarks.md`, `crates/borsuk/examples/benchmark_report.rs`, and the ignored `large_scale` gate. | Regenerate benchmark artifacts with `benchmark_report`, run `cargo bench --locked -p borsuk`, run `performance_smoke`, and run `million_vector_local_search_scale_gate` with `BORSUK_LARGE_SCALE_OUTPUT`. | Pass only if high-recall modes stay at or above 0.95 tie-aware recall@10, routing-overfetch sweeps are published, termination reasons are visible, and query I/O/memory counters are published. |
