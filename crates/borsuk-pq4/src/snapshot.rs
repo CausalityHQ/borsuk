@@ -1,4 +1,34 @@
-use std::{fs, io::Read, os::unix::fs::FileExt, path::Path, sync::Arc};
+use std::{fs, io::Read, path::Path, sync::Arc};
+
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt;
+
+#[cfg(windows)]
+trait ReadExactAt {
+    fn read_exact_at(&self, bytes: &mut [u8], offset: u64) -> std::io::Result<()>;
+}
+
+#[cfg(windows)]
+impl ReadExactAt for fs::File {
+    fn read_exact_at(&self, mut bytes: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+        while !bytes.is_empty() {
+            match self.seek_read(bytes, offset) {
+                Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+                Ok(read) => {
+                    bytes = &mut bytes[read..];
+                    offset = offset
+                        .checked_add(read as u64)
+                        .ok_or(std::io::ErrorKind::InvalidInput)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+}
 
 use arrow_array::{
     Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
