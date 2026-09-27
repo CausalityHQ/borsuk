@@ -39,3 +39,15 @@ not retain enough query-neighbor geometry for this physical layout and budget;
 the next candidate must encode more within-page detail rather than tune the
 same mean scores or page count. This short fetched-coverage diagnostic is not
 returned recall or live S3 performance. No full panel or paid run follows.
+
+The completed read-only Fable consultation `418e158ae6644129` suggested
+epsilon-spill copies as the next layout change. Do not implement that as an
+unchanged drop-in: the historical ReLAION2B-1M development V36 epsilon-0.15
+closure averaged 1.144779 copies/row, and even the largest tested epsilon
+improved K14 containment by only 50 ppm over no closure. V40's query-blind
+accepted-spill router covered
+91,307/100,000 GT hits versus 91,801 for its direct control at K21. Those
+different layouts and read budgets do not prove a V283 CoHere spill result,
+but they are already a negative test of the proposed mechanism. A new arm
+must change the query-to-page representation materially and show its own
+source-only 100k coverage before an object-native format rewrite.
