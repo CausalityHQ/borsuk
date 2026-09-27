@@ -56,13 +56,13 @@ PY
   exit "$code"
 }}
 trap bootstrap_failed ERR
-systemd-run --unit=v283-hard-stop --on-active=2100s /usr/sbin/shutdown -h now
+systemd-run --unit=v283-hard-stop --on-active=1620s /usr/sbin/shutdown -h now
 root=/mnt/v283-dev64
 mkdir -p "$root" && cd "$root"
 aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors
 printf '%s  source.tar.gz\\n' '{archive_sha}' | sha256sum -c -
 mkdir repo && tar -xzf source.tar.gz -C repo
-exec timeout --signal=TERM --kill-after=30s 1800s bash repo/scripts/run_v283_dev64.sh
+exec timeout --signal=TERM --kill-after=30s 1500s bash repo/scripts/run_v283_dev64.sh
 """
     if len(script.encode()) > 16_384:
         raise ValueError("V283 user data exceeds EC2 limit")
@@ -131,7 +131,8 @@ def launch(attempt, *, approved=False, dry_run=False):
         "sq8_sha256": SQ8_SHA, "dataset": "CoHere first100k D768 cosine k100",
         "split": "prior-used development0-63", "method": "unchanged V282 PQ and SQ8 replay on V283 pages",
         "purchase_option": "spot", "spot_quote_usd_per_hour": quote,
-        "wall_cap_seconds": 1800, "compute_cap_usd_estimate": quote * 0.5,
+        "launch_to_terminal_cap_seconds": 1800, "remote_run_cap_seconds": 1500,
+        "compute_cap_usd_estimate": quote * 0.5,
         "interruption": "discard interrupted cell; no automatic restart",
     }, sort_keys=True).encode())
     instance_id = None
@@ -152,7 +153,7 @@ def launch(attempt, *, approved=False, dry_run=False):
         }, sort_keys=True).encode())
         print(json.dumps({"instance_id": instance_id, "prefix": prefix,
                           "archive_sha256": archive_sha}), flush=True)
-        raw = read_marker(s3, ec2, prefix + "/terminal.json", instance_id, 2100)
+        raw = read_marker(s3, ec2, prefix + "/terminal.json", instance_id, 1800)
         terminate_confirmed(ec2, instance_id)
         terminal = json.loads(raw)
         if (terminal.get("schema") != TERMINAL_SCHEMA

@@ -81,7 +81,9 @@ and `f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355`.
 No local retry is planned. A single c7i.8xlarge Spot development cell is
 prepared as a conditional compute-only exception: same frozen V283 physical
 layout, V115 PQ rule, V282 planner/scorer, and dev0–63 gate; 30-minute
-hard measurement limit, quoted compute <=$0.40, terminal artifact hashes,
+launch-to-terminal limit 30 minutes, remote-run TERM at 25 minutes,
+hard shutdown after 27 minutes of user data, quoted compute <=$0.40,
+terminal artifact hashes,
 original-launcher closeout and EC2 termination. It must not launch until the
 operator answers the explicit compute request. A non-paid remote host can run
 the same cell instead. Neither path permits a full panel or vendor claim.
