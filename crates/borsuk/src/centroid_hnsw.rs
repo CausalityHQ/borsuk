@@ -726,6 +726,136 @@ pub(crate) fn build_reachable_hnsw_adjacency_batched_diverse(
     repair_reachable_hnsw_adjacency(built, m0)
 }
 
+/// Protect short reverse paths into rows that the diverse prune left hard to
+/// reach. Existing degree and the cycle backbone are preserved.
+pub(crate) fn build_reachable_hnsw_adjacency_batched_diverse_reverse(
+    vectors: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    workers: usize,
+) -> Option<CentroidHnswAdjacency> {
+    let built = build_reachable_hnsw_adjacency_batched_diverse(
+        vectors,
+        m,
+        m0,
+        ef_construction,
+        ef_search,
+        workers,
+    )?;
+    protect_reverse_incoming(built, vectors, m0, 16)
+}
+
+fn protect_reverse_incoming(
+    mut built: CentroidHnswAdjacency,
+    vectors: &[Vec<f32>],
+    m0: usize,
+    target_degree: usize,
+) -> Option<CentroidHnswAdjacency> {
+    let rows = vectors.len();
+    let mut indegree = vec![0_usize; rows];
+    for tower in &built.neighbours {
+        for &target in tower.last()? {
+            indegree[target as usize] += 1;
+        }
+    }
+    let mut targets = (0..rows)
+        .filter(|&row| indegree[row] < target_degree)
+        .collect::<Vec<_>>();
+    targets.sort_unstable_by_key(|&row| (indegree[row], row));
+    let mut protected = vec![Vec::<u32>::new(); rows];
+    for target in targets {
+        if indegree[target] >= target_degree {
+            continue;
+        }
+        let mut near = built.neighbours[target]
+            .last()?
+            .iter()
+            .take(m0)
+            .map(|&source| Candidate {
+                distance: squared_distance(&vectors[target], &vectors[source as usize]),
+                node: source,
+            })
+            .collect::<Vec<_>>();
+        near.sort_unstable();
+        for source in near.into_iter().take(target_degree) {
+            if indegree[target] >= target_degree {
+                break;
+            }
+            let source = source.node as usize;
+            let base = built.neighbours[source].last_mut()?;
+            if protected[source].len() >= target_degree {
+                continue;
+            }
+            if base.contains(&(target as u32)) {
+                protected[source].push(target as u32);
+                continue;
+            }
+            let victim = reverse_backfill_victim(
+                source,
+                base,
+                vectors,
+                &indegree,
+                &protected[source],
+                target_degree,
+            );
+            let Some(victim) = victim else { continue };
+            indegree[base[victim] as usize] -= 1;
+            base[victim] = target as u32;
+            indegree[target] += 1;
+            protected[source].push(target as u32);
+        }
+    }
+    if indegree.iter().any(|&degree| degree < 4)
+        || reachable_base_count(&built.neighbours, built.entry) != rows
+    {
+        return None;
+    }
+    Some(built)
+}
+
+fn reverse_backfill_victim(
+    source: usize,
+    base: &[u32],
+    vectors: &[Vec<f32>],
+    indegree: &[usize],
+    protected: &[u32],
+    target_degree: usize,
+) -> Option<usize> {
+    let mut ranked = base
+        .iter()
+        .enumerate()
+        .map(|(slot, &node)| {
+            (
+                Candidate {
+                    distance: squared_distance(&vectors[source], &vectors[node as usize]),
+                    node,
+                },
+                slot,
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    let mut kept = Vec::new();
+    let mut victim = None;
+    for (candidate, slot) in ranked {
+        let dominated = kept.iter().any(|&prior: &u32| {
+            1.44 * squared_distance(&vectors[prior as usize], &vectors[candidate.node as usize])
+                <= candidate.distance
+        });
+        if !dominated {
+            kept.push(candidate.node);
+        } else if candidate.node as usize != (source + 1) % vectors.len()
+            && !protected.contains(&candidate.node)
+            && indegree[candidate.node as usize] > target_degree
+        {
+            victim = Some(slot);
+        }
+    }
+    victim
+}
+
 fn repair_reachable_hnsw_adjacency(
     mut built: CentroidHnswAdjacency,
     m0: usize,
@@ -1324,6 +1454,34 @@ mod tests {
         assert_eq!(one.neighbours, four.neighbours);
         assert_eq!(
             reachable_base_count(&four.neighbours, four.entry),
+            data.len()
+        );
+    }
+
+    #[test]
+    fn reverse_repair_preserves_degree_and_reachability() {
+        let data = grid(257, 8);
+        let baseline =
+            build_reachable_hnsw_adjacency_batched_diverse(&data, 8, 16, 32, 32, 4).unwrap();
+        let degrees = baseline
+            .neighbours
+            .iter()
+            .map(|tower| tower.last().unwrap().len())
+            .collect::<Vec<_>>();
+        let original = baseline.neighbours.clone();
+        let repaired = protect_reverse_incoming(baseline, &data, 16, 8).unwrap();
+        assert_ne!(repaired.neighbours, original);
+        let mut indegree = vec![0; data.len()];
+        for (tower, original) in repaired.neighbours.iter().zip(degrees) {
+            let base = tower.last().unwrap();
+            assert_eq!(base.len(), original);
+            for &node in base {
+                indegree[node as usize] += 1;
+            }
+        }
+        assert!(indegree.iter().all(|&count| count >= 4));
+        assert_eq!(
+            reachable_base_count(&repaired.neighbours, repaired.entry),
             data.len()
         );
     }
