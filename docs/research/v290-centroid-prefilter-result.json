@@ -1,0 +1,1 @@
+{"advance":true,"candidate_pages":159,"dataset":"CoHere first100k D768 cosine k100","mean_candidate_gt_hits":99.8125,"p05_candidate_gt_hits":99,"queries":64,"schema":"borsuk-v290-centroid-prefilter-v1","split":"development0-63"}
