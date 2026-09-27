@@ -1002,10 +1002,14 @@ test("integer ids use compact binary encoding", async () => {
   });
 
   assert.deepEqual(await index.add([[0, 0]], { ids: [300] }), [300]);
-  assert.deepEqual(
-    (await index.searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]),
-    [[0xac, 0x02]],
-  );
+  const found = (await index.searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]);
+  if (found.length === 0) {
+    const report = await index.searchWithReport([0, 0], { k: 1 });
+    const exact = await index.searchIdBytes([0, 0], { k: 1, mode: "exact" });
+    const vector = await index.getVector(300);
+    assert.fail(JSON.stringify({ report, exact: exact.map((value) => [...value]), vector }));
+  }
+  assert.deepEqual(found, [[0xac, 0x02]]);
   assert.deepEqual(await index.getVector(300), [0, 0]);
   assert.deepEqual(await (await open(uri)).getVector(300), [0, 0]);
 
