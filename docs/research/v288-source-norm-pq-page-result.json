@@ -1,0 +1,1 @@
+{"advance":false,"dataset":"CoHere first100k D768 cosine k100","max_gets":32,"max_planned_bytes":16773120,"mean_fetched_gt_hits":95.34375,"norm_bytes_per_row":2,"p05_fetched_gt_hits":87,"queries":64,"schema":"borsuk-v288-source-norm-pq-page-v1","split":"development0-63"}

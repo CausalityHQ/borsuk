@@ -31,3 +31,24 @@ promote 1M, service latency, or a vendor claim.
 Historical stored-source-norm **two-bit final scoring** lost quality on a
 different ReLAION roster. That result is a warning, not this PQ64 page-order
 measurement. No training, cloud job, full panel, or parameter sweep.
+
+## Completed local decision (2026-09-27 UTC)
+
+**KILL source-norm PQ64 page ranking.** The sole frozen run from `c6304279`
+completed exit 0 in 3.88 seconds with 368,496 KiB peak process RSS. Its
+[result](v288-source-norm-pq-page-result.json) has SHA-256
+`b4f6f165bfb5492a2dbd007a26439ede4dc59802f8b58da837ab16ca45dfa2fa`.
+
+| CoHere first100k D768 cosine k100, development0–63 | Fetched GT100 mean | p05 hits | Max GET | Max planned bytes |
+| --- | ---: | ---: | ---: | ---: |
+| V287 PQ64 reconstructed-norm cosine control | 98.390625 | 93 | 32 | 16,773,120 |
+| V288 PQ64 with source binary16 norm | 95.343750 | 87 | 32 | 16,773,120 |
+| Frozen necessary gate | >=98.900000 | >=96 | <=32 | <=16,777,216 |
+
+The source-norm substitution loses 3.046875 fetched GT hits/query against the
+same-code V287 cosine control. Source norms do not correct this PQ64 page
+ordering error. No sublinear router, SQ8 returned replay, validation panel or
+paid run is promoted. These are fetched-page coverage numbers, not returned
+recall or HTTP latency. The next design needs more row geometry or a different
+physical-page representation, with a new source-only necessary check before
+any cloud work. The BORSUK EC2 active-instance query returned `[]` at closeout.
