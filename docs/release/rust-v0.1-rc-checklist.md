@@ -44,10 +44,11 @@ does not provide HTTP authentication or tenant isolation.
   A registry `.crate` is blocked by unpublished workspace dependencies and is
   outside this first cut.
 - [ ] Required CI gates pass on the exact release commit. `cargo fmt --all
-  -- --check` passes at the V281 launch revision; the repository-wide Ruff
-  format check reported 743 files before the new V281 scripts were formatted,
-  so broad Python drift remains. CI has not been verified green on a release
-  commit.
+  -- --check` passes at `69aa4ab6`. The Python package, examples, and release
+  policy checkers pass pinned Ruff format/lint locally. Historical campaign
+  scripts have 740 format and 451 lint failures in the broad check; CI now
+  scopes Ruff to maintained package/release code and leaves campaign scripts
+  to their focused tests. CI has not been verified green on a release commit.
 - [x] Benchmark claims remain tied to their source revisions and scopes:
   V271 fresh CoHere1M frontier and ANN control, V272 10M no-go, and V280
   ReLAION1M HTTP serving pass. A matched vendor win remains unverified.
