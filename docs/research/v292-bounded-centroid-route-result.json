@@ -1,0 +1,1 @@
+{"advance":true,"all_candidate_counts_159":true,"dataset":"CoHere first100k D768 cosine k100","max_unit_evaluations":1400,"mean_candidate_gt_hits":99.578125,"offline_route_wall_us":{"p50":25979,"p90":33063,"p95":33545,"p99":33685},"p05_candidate_gt_hits":98,"queries":64,"schema":"borsuk-v292-centroid-route-v1","split":"development0-63"}
