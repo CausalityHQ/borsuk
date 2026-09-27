@@ -589,8 +589,7 @@ fn build_hnsw_adjacency_batched(
     let mut top_level = levels[entry as usize];
     let mut inserted = 1;
     while inserted < order.len() {
-        let batch_rows =
-            (inserted / 32).clamp(1, ef_construction.saturating_mul(8).min(1024).max(1));
+        let batch_rows = (inserted / 32).clamp(1, ef_construction.saturating_mul(8).max(1));
         let end = inserted.saturating_add(batch_rows).min(order.len());
         let plans = pool.install(|| {
             visits
