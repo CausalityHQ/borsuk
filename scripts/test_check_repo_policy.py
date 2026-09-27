@@ -712,15 +712,15 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
         ci_text = (
             "python-package:\n"
             "  name: Python package (${{ matrix.os }}, py${{ matrix.python-version }})\n"
-            "  os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]\n"
+            "  os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]\n"
             '  python-version: ["3.12", "3.13", "3.14"]\n'
             "node-package:\n"
             "  name: TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})\n"
-            "  os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]\n"
+            "  os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]\n"
             '  node-version: ["22", "24"]\n'
         )
         publish_text = (
-            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]\n"
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]\n"
             'python-version: ["3.12", "3.13", "3.14"]\n'
             'node-version: "24"\n'
             "borsuk-*cp312-*.whl\n"
@@ -730,12 +730,10 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "borsuk-*manylinux*aarch64.whl\n"
             "borsuk-*macosx*x86_64.whl\n"
             "borsuk-*macosx*arm64.whl\n"
-            "borsuk-*win_amd64.whl\n"
             "index.linux-x64-gnu.node\n"
             "index.linux-arm64-gnu.node\n"
             "index.darwin-arm64.node\n"
             "index.darwin-x64.node\n"
-            "index.win32-x64-msvc.node\n"
         )
         package_text = '"engines": {\n  "node": ">=22 <27"\n}\n'
         pyproject_text = (

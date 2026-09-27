@@ -5,7 +5,7 @@ maturin. The package imports a compiled extension module and does not shell out
 to the `borsuk` CLI for runtime search, indexing, compaction, or storage I/O.
 
 Supported Python versions are 3.12, 3.13, and 3.14 on Linux x64, Linux arm64,
-Windows x64, macOS arm64, and macOS Intel runners. The package metadata
+macOS arm64, and macOS Intel runners. The package metadata
 requires Python 3.12 or newer.
 
 ## Install From Source

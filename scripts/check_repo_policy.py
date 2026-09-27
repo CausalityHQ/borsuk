@@ -116,8 +116,8 @@ def assert_package_platform_coverage(
             "TypeScript package CI matrix must show OS and Node version coverage",
         ),
         (
-            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
-            "package CI matrix must cover Linux x64, Linux arm64, macOS arm64, macOS Intel, and Windows x64",
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]",
+            "package CI matrix must cover Linux x64, Linux arm64, macOS arm64, and macOS Intel",
         ),
         (
             'python-version: ["3.12", "3.13", "3.14"]',
@@ -133,8 +133,8 @@ def assert_package_platform_coverage(
 
     publish_requirements = [
         (
-            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
-            "publish matrix must build Linux x64, Linux arm64, macOS arm64, macOS Intel, and Windows x64 artifacts",
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]",
+            "publish matrix must build Linux x64, Linux arm64, macOS arm64, and macOS Intel artifacts",
         ),
         (
             'python-version: ["3.12", "3.13", "3.14"]',
@@ -167,7 +167,6 @@ def assert_package_platform_coverage(
             "borsuk-*macosx*arm64.whl",
             "publish workflow must assert macOS arm64 wheels",
         ),
-        ("borsuk-*win_amd64.whl", "publish workflow must assert Windows x64 wheels"),
         (
             "Assert native artifact coverage",
             "publish workflow must assert Node native coverage",
@@ -187,10 +186,6 @@ def assert_package_platform_coverage(
         (
             "index.darwin-x64.node",
             "publish workflow must assert macOS Intel Node native artifact",
-        ),
-        (
-            "index.win32-x64-msvc.node",
-            "publish workflow must assert Windows x64 Node native artifact",
         ),
     ]
     for needle, reason in publish_requirements:
@@ -1154,7 +1149,7 @@ def main() -> None:
             "python-package:",
             "TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})",
             "Python package (${{ matrix.os }}, py${{ matrix.python-version }})",
-            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]",
             'python-version: ["3.12", "3.13", "3.14"]',
             'node-version: ["22", "24", "26"]',
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
@@ -1193,7 +1188,7 @@ def main() -> None:
             "python -m unittest discover -s scripts -p 'test_*.py'",
             "npm audit --audit-level=high",
             "needs: [release-gate, msrv-gate]",
-            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]",
             'python-version: ["3.12", "3.13", "3.14"]',
             'node-version: "24"',
             "npm test",
@@ -2127,7 +2122,7 @@ def main() -> None:
             "add_vectors_with_ids",
             "Python 3.12, 3.13, and 3.14",
             "Node 22, 24, and 26",
-            "Linux x64, Linux arm64, Windows x64, macOS arm64, and macOS Intel",
+            "Linux x64, Linux arm64, macOS arm64, and macOS Intel",
             "cargo package --locked -p borsuk --allow-dirty",
             "uvx maturin build --locked --out dist",
             'uv run --with "./$wheel" python -m unittest discover python/tests',
@@ -2135,7 +2130,7 @@ def main() -> None:
         "python/README.md": [
             "Supported Python versions are 3.12, 3.13, and 3.14",
             "Linux x64, Linux arm64,",
-            "Windows x64, macOS arm64, and macOS Intel",
+            "macOS arm64, and macOS Intel",
             "uvx maturin develop --locked",
             "target_segment_max_vectors",
             "stale or corrupt cached active metadata tables",
@@ -3086,7 +3081,6 @@ def main() -> None:
         "borsuk-*manylinux*aarch64.whl",
         "borsuk-*macosx*x86_64.whl",
         "borsuk-*macosx*arm64.whl",
-        "borsuk-*win_amd64.whl",
         "npm-native:",
         "needs: npm-native",
         "node-native-${{ matrix.os }}",
@@ -3099,7 +3093,6 @@ def main() -> None:
         "index.linux-arm64-gnu.node",
         "index.darwin-arm64.node",
         "index.darwin-x64.node",
-        "index.win32-x64-msvc.node",
         "test -f index.cjs",
         "test -f native.d.ts",
         "npm pack --dry-run --json",

@@ -159,7 +159,7 @@ BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover 
 ```
 
 CI runs that matrix on Python 3.12, 3.13, and 3.14 across Linux x64, Linux
-arm64, Windows x64, macOS arm64, and macOS Intel.
+arm64, macOS arm64, and macOS Intel.
 
 The TypeScript package is built and tested from the native N-API bridge:
 
@@ -168,7 +168,7 @@ The TypeScript package is built and tested from the native N-API bridge:
 ```
 
 CI runs the npm matrix on Node 22, 24, and 26 across Linux x64, Linux arm64,
-Windows x64, macOS arm64, and macOS Intel.
+macOS arm64, and macOS Intel.
 
 ## Storage format
 

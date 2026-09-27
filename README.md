@@ -479,9 +479,10 @@ always a consistent index, never a half-written one. Details:
 
 CI builds and tests the Python package on Python 3.12, 3.13, and 3.14, and the
 TypeScript/Node package on Node 22, 24, and 26. Every build runs across
-`Linux x64, Linux arm64, Windows x64, macOS arm64, and macOS Intel`. BORSUK is
+`Linux x64, Linux arm64, macOS arm64, and macOS Intel`. BORSUK is
 young software under active development; pin a specific build and confirm it
 against its benchmark artifacts before you depend on it.
+Windows packages are outside this release candidate.
 
 ## Development
 

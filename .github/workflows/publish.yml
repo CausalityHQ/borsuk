@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]
         python-version: ["3.12", "3.13", "3.14"]
     permissions:
       contents: read
@@ -160,7 +160,6 @@ jobs:
           compgen -G "python/dist/borsuk-*manylinux*aarch64.whl" >/dev/null
           compgen -G "python/dist/borsuk-*macosx*x86_64.whl" >/dev/null
           compgen -G "python/dist/borsuk-*macosx*arm64.whl" >/dev/null
-          compgen -G "python/dist/borsuk-*win_amd64.whl" >/dev/null
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -173,7 +172,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel]
     permissions:
       contents: read
     steps:
@@ -240,7 +239,6 @@ jobs:
           test -f index.linux-arm64-gnu.node
           test -f index.darwin-arm64.node
           test -f index.darwin-x64.node
-          test -f index.win32-x64-msvc.node
       - name: Test package
         working-directory: packages/borsuk
         run: npm test

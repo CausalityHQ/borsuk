@@ -3,6 +3,8 @@
 Status: in progress, 2026-09-26 UTC. This is a Rust crate cut. The Python and
 TypeScript packages retain their existing APIs and make no claim to expose the
 cached dual graph until an independent parity gate passes.
+This cut builds packages for Linux x64/arm64 and macOS x64/arm64; Windows is
+outside the release candidate while historical Unix-only modules remain.
 
 ## Contract
 
