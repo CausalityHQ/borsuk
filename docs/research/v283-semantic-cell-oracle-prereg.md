@@ -52,3 +52,20 @@ selection, SQ8 recall, latency, or any vendor comparison. The next
 discriminating check is an actual source-only PQ-primary replay on development
 queries with this frozen layout and unchanged V282 policy; no full panel or
 cloud gate has been launched.
+
+## Frozen next development replay
+
+The completed V282 a0002 CoHere ordinals0–63 graph control has mean
+R@100 96.25%, p05 92, and mean fetched GT100 97.046875; paired flat mean
+R@100 is 96.046875%. Build the source-only V115 PQ router and V282 routing
+metadata from the already sealed V283 CoHere layout, without changing their
+training, seeds, query parameters, SQ8 scorer, or 32-GET/16 MiB limits.
+Replay **only** CoHere development ordinals0–63 and their sealed GT100.
+KILL this layout before any ReLAION or full-panel build if graph mean
+R@100 is below 97.25% (less than a one-point gain over the same-query V282
+control), p05 is below 92, or any query breaches either physical cap.
+Report PQ-shortlist, fetched, and returned GT100 hits so the first failing
+layer is visible. A pass is only permission for development0–255 on both
+datasets; it cannot certify the 98%/p05 95 full gate, HTTP latency, or vendor
+superiority. Local execution only, <=4 GiB process RSS and <=15 minutes;
+no cloud instance or replacement run.
