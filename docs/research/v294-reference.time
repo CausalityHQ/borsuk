@@ -1,0 +1,23 @@
+	Command being timed: "timeout 120s env OPENBLAS_NUM_THREADS=4 uv run --no-project --with numpy==2.3.3 --with pyarrow==24.0.0 python -m scripts.v294_export_two_bit_source --raw .borsuk-scratch/v283/cohere-vectors.raw --layout .borsuk-scratch/v283/cohere-layout/layout.npy --output .borsuk-scratch/v283/v294-reference"
+	User time (seconds): 5.36
+	System time (seconds): 0.71
+	Percent of CPU this job got: 76%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:07.97
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 544952
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 727
+	Minor (reclaiming a frame) page faults: 356653
+	Voluntary context switches: 2287
+	Involuntary context switches: 39
+	Swaps: 0
+	File system inputs: 791248
+	File system outputs: 42184
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
