@@ -64,3 +64,11 @@ but the 0.171875-hit margin above the mean gate makes bit-exact Rust scoring
 parity the next required check. The local 14.21 s is whole-process offline
 work, including encoding 100k source rows and 64 queries; it is not serving
 latency, QPS or a vendor comparison. No validation or 1M promotion yet.
+
+For the near-gate parity check, the same deterministic source script now
+emits the selected physical page sets and per-query hits as a separate JSONL
+receipt. Its aggregate output must remain byte-identical to the sealed
+`113a5523...` result. Rust will authenticate the generation and SQ8 object,
+verify every selected page payload, and use the production `rank_returned_ranges`
+arithmetic on precisely those page sets; any per-query mismatch stops promotion.
+This replays the scorer, not a new query cohort or route parameter.

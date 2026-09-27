@@ -76,6 +76,7 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
     page_of = np.empty(100_000, dtype=np.int32)
     page_of[order] = np.arange(100_000) // 256
     candidate_hits, fetched_hits, returned_hits, get_counts, byte_counts, scored_rows = [], [], [], [], [], []
+    plans = []
     for ordinal, (query, neighbors) in enumerate(zip(q, gt)):
         distances = center_norms - 2 * (centers @ query)
         page_distances = np.minimum.reduceat(distances, np.arange(0, 3125, 8))
@@ -111,6 +112,9 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
         sq8_scores = fetched["norm"] - 2*(fetched["code"].astype(np.float32) @ weights + shift)
         best = fetched["id"][np.lexsort((fetched["id"], sq8_scores))[:100]]
         returned_hits.append(int(np.isin(best, neighbors).sum()))
+        plans.append({"query_ordinal": ordinal, "pages": sorted(cover),
+                      "fetched_gt_hits": fetched_hits[-1],
+                      "returned_gt_hits": returned_hits[-1]})
     p05 = lambda hits: sorted(hits)[math.ceil(.05 * 64)-1]
     return {"schema": "borsuk-v291-two-stage-development-v1",
             "dataset": "CoHere first100k D768 cosine k100", "split": "development0-63",
@@ -122,17 +126,21 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
             "max_coded_rows_scored": max(scored_rows),
             "advance": sum(fetched_hits)/64 >= 98.9 and p05(fetched_hits) >= 96 and
             sum(returned_hits)/64 >= 98 and p05(returned_hits) >= 95 and
-            max(get_counts) <= 32 and max(byte_counts) <= 16_777_216}
+            max(get_counts) <= 32 and max(byte_counts) <= 16_777_216}, plans
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("raw", "archive", "root-sha", "layout", "sq8", "requests", "truth", "output"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--plans-output", type=Path)
     args = parser.parse_args()
-    result = evaluate(args.raw, args.archive, args.root_sha, args.layout, args.sq8,
-                      args.requests, args.truth)
+    result, plans = evaluate(args.raw, args.archive, args.root_sha, args.layout,
+                             args.sq8, args.requests, args.truth)
     args.output.write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
+    if args.plans_output is not None:
+        args.plans_output.write_text("".join(json.dumps(p, sort_keys=True, separators=(",", ":")) + "\n"
+                                            for p in plans))
     print(json.dumps(result, sort_keys=True))
 
 
