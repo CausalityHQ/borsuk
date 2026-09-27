@@ -13,6 +13,7 @@ use borsuk::{
     resident_graph_build::build_graph_generation,
     resident_graph_generation::ResidentGraphGeneration,
     resident_graph_store::{hydrate_graph_generation, read_graph_head},
+    resident_vector_graph::GraphSearchWorkspace,
 };
 use object_store::parse_url_opts;
 use serde_json::json;
@@ -74,15 +75,41 @@ fn search(
     expected: usize,
     raw_path: &Path,
     hydration: serde_json::Value,
+    stress: bool,
 ) -> Result<(), Box<dyn Error>> {
     let panel = queries(query_path, expected)?;
-    let mut worker = generation.searcher()?;
-    worker.search(&panel[0], 100)?;
+    let mut worker = if stress {
+        None
+    } else {
+        Some(generation.searcher()?)
+    };
+    let view = if stress {
+        Some(generation.cosine_view()?)
+    } else {
+        None
+    };
+    let bound = view
+        .as_ref()
+        .map(|view| generation.bind(view))
+        .transpose()?;
+    let mut workspace = if stress {
+        Some(GraphSearchWorkspace::new(generation.rows())?)
+    } else {
+        None
+    };
+    let mut run = |query: &[f32]| {
+        if let (Some(bound), Some(workspace)) = (&bound, &mut workspace) {
+            generation.search_dual_graph(bound, query, 100, 256, 256, 128, workspace)
+        } else {
+            worker.as_mut().unwrap().search(query, 100)
+        }
+    };
+    run(&panel[0])?;
     let mut output = BufWriter::new(File::create(raw_path)?);
     let started = Instant::now();
     for (ordinal, query) in panel.iter().enumerate() {
         let query_started = Instant::now();
-        let (ids, visits) = worker.search(query, 100)?;
+        let (ids, visits) = run(query)?;
         let latency_ns = query_started.elapsed().as_nanos() as u64;
         serde_json::to_writer(
             &mut output,
@@ -96,6 +123,7 @@ fn search(
         json!({"root_sha256":generation.root_sha256(),"generation":generation.generation(),
             "rows":generation.rows(),"dimensions":generation.dimensions(),
             "queries":expected,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,
+            "mode":if stress {"diagnostic-stress"} else {"default"},
             "hydration":hydration})
     );
     Ok(())
@@ -112,14 +140,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("{}",json!({"root_sha256":sha,"rows":rows,
                 "build_ms":started.elapsed().as_secs_f64()*1000.0}));
         }
-        Some("local") if args.len() == 7 => {
+        Some("local" | "local_stress") if args.len() == 7 => {
             let root = fs::read(Path::new(&args[2]).join("root.json"))?;
             let cap = resident_cap(&root)?;
             let generation = ResidentGraphGeneration::open_local_authenticated(
                 &root, &args[3], Path::new(&args[2]), cap, 1,
             )?;
             search(generation, Path::new(&args[4]), args[5].parse()?,
-                Path::new(&args[6]), json!({"object_gets":0,"response_bytes":0}))?;
+                Path::new(&args[6]), json!({"object_gets":0,"response_bytes":0}),
+                args[1] == "local_stress")?;
         }
         Some("s3") if args.len() == 8 => {
             let (store, prefix) = parse_url_opts(&Url::parse(&args[2])?,
@@ -133,9 +162,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             search(generation, Path::new(&args[5]), args[6].parse()?,
                 Path::new(&args[7]), json!({"object_gets":stats.object_gets,
                     "response_bytes":stats.response_bytes,
-                    "elapsed_ms":started.elapsed().as_secs_f64()*1000.0}))?;
+                    "elapsed_ms":started.elapsed().as_secs_f64()*1000.0}), false)?;
         }
-        _ => return Err("usage: resident_graph_frontier build RAW ROWS DIR | local DIR TRUSTED_SHA QUERIES COUNT RAW_OUT | s3 URI TRUSTED_SHA CACHE QUERIES COUNT RAW_OUT".into()),
+        _ => return Err("usage: resident_graph_frontier build RAW ROWS DIR | local|local_stress DIR TRUSTED_SHA QUERIES COUNT RAW_OUT | s3 URI TRUSTED_SHA CACHE QUERIES COUNT RAW_OUT".into()),
     }
     Ok(())
 }

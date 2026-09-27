@@ -144,8 +144,8 @@ pub fn build_graph_generation(
     mapping.get_ref().sync_all()?;
     let workers = std::thread::available_parallelism()
         .map_or(1, |count| count.get())
-        .min(8);
-    let graph = ResidentVectorGraph::build_batched_diverse(data, &plane, 32, 64, 128, workers)?;
+        .min(32);
+    let graph = ResidentVectorGraph::build_batched_diverse(data, &plane, 32, 64, 256, workers)?;
     let structure = graph.structural_stats();
     if structure.reachable != rows || structure.below_four_indegree != 0 {
         return Err(ResidentGraphBuildError::Invalid("graph reachability"));
