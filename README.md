@@ -5,8 +5,8 @@
 > `resident_graph_store`, and `resident_graph_generation` modules. Run
 > `bash scripts/smoke_resident_graph_rc.sh` for a create → publish → cold open
 > → search → warm process reopen demo. The older `BorsukIndex`, Python and
-> TypeScript APIs still use the graph-free path; their results are not the
-> measured V269 cached graph result. See the
+> TypeScript APIs still use the graph-free path; their results do not use the
+> graph generation measured in [V280](docs/research/v280-relaion-baseline-http-1m-closeout.md). See the
 > [release checklist](docs/release/rust-v0.1-rc-checklist.md).
 
 **Vector search that lives in your bucket.**
@@ -99,10 +99,12 @@ The Rust release-candidate path creates an immutable generation from unique
 anchor for local open or object-store publication. `ResidentGraphGeneration`
 opens a pinned generation with a resident-byte and worker cap; each
 `searcher()` lease reuses its PQ view and graph workspace. Search accepts
-`1..=100` results, with current quality and latency evidence only for CoHere
-first1M D768 cosine `k=100` and the V269 research builder. The new generic
-Rust builder uses the same source-only PQ64/FP16 graph format but a distinct
-deterministic centroid initialization, so it needs fresh recall qualification.
+`1..=100` results; current evidence at `k=100`, D768 cosine includes fresh
+CoHere first1M [V271](docs/research/v271-rust-rc-fresh-frontier-closeout.md)
+and ReLAION-1M authenticated HTTP
+[V280](docs/research/v280-relaion-baseline-http-1m-closeout.md). CoHere10M
+[V272](docs/research/v272-rust-rc-10m-scale-closeout.md) missed its frozen
+recall gate. These results do not establish a matched vendor win.
 The object-store account and conditional head are trusted; cached blobs and
 roots are authenticated against the pinned head. This library does not supply
 an HTTP authentication layer or tenant isolation.
