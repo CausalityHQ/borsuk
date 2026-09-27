@@ -1,8 +1,12 @@
 //! Conditional S3 page-range fetch with generation-bound SHA-256 verification.
 
 use crate::sq8_page_authority::{PageAuthority, PageError};
+use crate::{
+    exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError},
+    returned_sq8::{ReturnedRange, rank_returned_ranges},
+};
 use bytes::{Bytes, BytesMut};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path};
 
@@ -10,7 +14,31 @@ use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path:
 pub enum RangeFetchError {
     Store(object_store::Error),
     Page(PageError),
+    Score(Sq8ScoreError),
     UnexpectedMetadata,
+}
+
+/// Submitted object-store reads and bytes that passed authentication.
+/// Failed responses may have transferred bytes that are not counted here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sq8ReadStats {
+    pub submitted_gets: usize,
+    pub verified_bytes: usize,
+    pub failed_gets: usize,
+}
+
+/// A bounded remote SQ8 query; no source-vector plane is loaded or retained.
+#[derive(Debug)]
+pub struct RankedSq8 {
+    pub candidates: Vec<ScoredNominee>,
+    pub stats: Sq8ReadStats,
+}
+
+/// A query failure retains its physical charge for error reporting.
+#[derive(Debug)]
+pub struct RankedSq8Failure {
+    pub error: RangeFetchError,
+    pub stats: Sq8ReadStats,
 }
 
 /// A returned range whose ETag, offsets, length and page digests passed.
@@ -68,6 +96,147 @@ impl OneAttemptS3 {
         )
         .await
     }
+
+    /// Fetch only caller-selected pages from a separately authenticated
+    /// generation. The total byte and GET caps are checked before any request.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rank_verified_sq8_pages(
+        &self,
+        location: &Path,
+        authority: &PageAuthority,
+        ranges: &[(usize, usize)],
+        etag: &str,
+        query: &[f32],
+        low: &[f32],
+        step: &[f32],
+        top_k: usize,
+        max_gets: usize,
+        max_bytes: usize,
+        max_parallel: usize,
+    ) -> Result<RankedSq8, RankedSq8Failure> {
+        rank_verified_sq8_pages_inner(
+            &self.store,
+            location,
+            authority,
+            ranges,
+            etag,
+            query,
+            low,
+            step,
+            top_k,
+            max_gets,
+            max_bytes,
+            max_parallel,
+        )
+        .await
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn rank_verified_sq8_pages_inner(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+) -> Result<RankedSq8, RankedSq8Failure> {
+    let fail = |error| RankedSq8Failure {
+        error,
+        stats: Sq8ReadStats::default(),
+    };
+    if ranges.is_empty()
+        || ranges.len() > max_gets
+        || max_parallel == 0
+        || etag.is_empty()
+    {
+        return Err(fail(RangeFetchError::UnexpectedMetadata));
+    }
+    if top_k == 0 || top_k > authority.rows() {
+        return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidGeometry)));
+    }
+    if query.len() != authority.dimensions()
+        || low.len() != authority.dimensions()
+        || step.len() != authority.dimensions()
+        || query.iter().chain(low).any(|value| !value.is_finite())
+        || step.iter().any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidQuery)));
+    }
+    let mut planned_bytes = 0usize;
+    let mut previous_last = None;
+    for &(first, last) in ranges {
+        if first > last || previous_last.is_some_and(|previous| first <= previous) {
+            return Err(fail(RangeFetchError::UnexpectedMetadata));
+        }
+        let interval = authority
+            .byte_range(first, last)
+            .map_err(|error| fail(RangeFetchError::Page(error)))?;
+        planned_bytes = planned_bytes
+            .checked_add(interval.end - interval.start)
+            .ok_or_else(|| fail(RangeFetchError::UnexpectedMetadata))?;
+        if planned_bytes > max_bytes {
+            return Err(fail(RangeFetchError::UnexpectedMetadata));
+        }
+        previous_last = Some(last);
+    }
+    let outcomes = stream::iter(ranges.iter().map(|&(first, last)| async move {
+        fetch_verified_pages_inner(store, location, authority, first, last, etag, max_bytes).await
+    }))
+    .buffered(max_parallel)
+    .collect::<Vec<_>>()
+    .await;
+    let mut stats = Sq8ReadStats {
+        submitted_gets: ranges.len(),
+        ..Sq8ReadStats::default()
+    };
+    let mut verified = Vec::with_capacity(ranges.len());
+    let mut first_error = None;
+    for outcome in outcomes {
+        match outcome {
+            Ok(value) => {
+                stats.verified_bytes += value.bytes.len();
+                verified.push(value);
+            }
+            Err(error) => {
+                stats.failed_gets += 1;
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(RankedSq8Failure { error, stats });
+    }
+    let returned = verified
+        .iter()
+        .map(|range| ReturnedRange {
+            start: range.start,
+            bytes: &range.bytes,
+        })
+        .collect::<Vec<_>>();
+    let candidates = rank_returned_ranges(
+        Sq8Geometry {
+            rows: authority.rows(),
+            dimensions: authority.dimensions(),
+        },
+        &returned,
+        query,
+        low,
+        step,
+        top_k,
+        max_bytes,
+    )
+    .map_err(|error| RankedSq8Failure {
+        error: RangeFetchError::Score(error),
+        stats,
+    })?;
+    Ok(RankedSq8 { candidates, stats })
 }
 
 /// Fetch one inclusive S3 byte range through `object_store`'s HTTP client.
@@ -375,5 +544,95 @@ mod tests {
             fetch_verified_pages_inner(&store, &location, &authority, 1, 1, &etag, 17 * 13).await,
             Err(RangeFetchError::Store(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn bounded_query_reads_only_verified_pages_and_charges_failures() {
+        let store = InMemory::new();
+        let location = Path::from("sq8.bin");
+        let mut object = Vec::new();
+        for id in 0_i64..273 {
+            object.extend_from_slice(&id.to_le_bytes());
+            object.extend_from_slice(&(id as f32).to_le_bytes());
+            object.push(0);
+        }
+        store
+            .put(&location, PutPayload::from(object.clone()))
+            .await
+            .unwrap();
+        let etag = store.head(&location).await.unwrap().e_tag.unwrap();
+        let sidecar = object
+            .chunks(256 * 13)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":1,
+            "rows":273, "dimensions":1, "page_rows":256,
+            "object_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+        }))
+        .unwrap();
+        let authority = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap();
+        async fn run(
+            store: &InMemory,
+            location: &Path,
+            authority: &PageAuthority,
+            etag: &str,
+            ranges: &[(usize, usize)],
+            bytes: usize,
+        ) -> Result<RankedSq8, RankedSq8Failure> {
+            rank_verified_sq8_pages_inner(
+                store,
+                location,
+                authority,
+                ranges,
+                etag,
+                &[1.0],
+                &[0.0],
+                &[1.0],
+                1,
+                2,
+                bytes,
+                2,
+            )
+            .await
+        }
+        let ranked = run(&store, &location, &authority, &etag, &[(1, 1)], 17 * 13)
+            .await
+            .unwrap();
+        assert_eq!(ranked.candidates[0].id, 256);
+        assert_eq!(ranked.stats.submitted_gets, 1);
+        assert_eq!(ranked.stats.verified_bytes, 17 * 13);
+        assert_eq!(ranked.stats.failed_gets, 0);
+        let over_budget = run(&store, &location, &authority, &etag, &[(0, 1)], 17 * 13)
+            .await
+            .unwrap_err();
+        assert_eq!(over_budget.stats.submitted_gets, 0);
+        let overlapping = run(
+            &store,
+            &location,
+            &authority,
+            &etag,
+            &[(1, 1), (1, 1)],
+            object.len(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(overlapping.stats.submitted_gets, 0);
+        store
+            .put(&location, PutPayload::from(vec![8u8; object.len()]))
+            .await
+            .unwrap();
+        let failed = run(&store, &location, &authority, &etag, &[(1, 1)], 17 * 13)
+            .await
+            .unwrap_err();
+        assert_eq!(failed.stats.submitted_gets, 1);
+        assert_eq!(failed.stats.failed_gets, 1);
+        assert_eq!(failed.stats.verified_bytes, 0);
     }
 }
