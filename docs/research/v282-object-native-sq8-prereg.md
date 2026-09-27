@@ -124,3 +124,46 @@ serve HTTP or qualify latency. The next implementation step is a 100k
 artifact and local query falsifier, then the cold HTTP gate. Lean can prove arithmetic caps and
 generation-binding invariants under explicit assumptions; recall, latency,
 RSS and vendor superiority require measured samples.
+
+## Paired replay contract and 100M envelope
+
+`v282_build_routing` hashes the local SQ8 body against the source-only router
+before deriving centroids and graph; `v282_seal_generation.py` binds that
+build, the page digest authority, object SHA and ETag to one root manifest.
+`v282_local_falsifier` checks the trusted root digest and SQ8 body, then
+replays the same 1,000 query/GT100 panel through graph and flat discovery. Its
+local SQ8 reads are authenticated by page SHA-256 and count **planned**
+GETs/bytes; route/rank CPU and RSS are diagnostic, not HTTP/S3 measurements.
+The per-query receipt records GT100 hits in the PQ shortlist, GT100 hits in
+the fetched ranges, and GT100 hits returned after scanning those ranges. This
+separates nomination, page coverage, and quantized scoring losses. There is no
+local index inside a fetched range, so local-index loss is zero by construction
+in this candidate; a later compressed leaf index requires its own paired
+measurement. `v282_summarize_falsifier.py` applies the frozen split and pass
+criteria above. A gate failure is a redesign decision, not an invitation to
+increase PQ regions or graph expansion on the same panel.
+
+Before 100M promotion, the provisional single-process admission envelope is
+64 GiB including two pinned routing generations, up to eight active queries,
+32 GETs and 16 MiB of fetched SQ8 per query. The admitted query-buffer term
+alone is at least `8 × 3 × 16 MiB = 384 MiB` in the current reader model.
+The Opus review's 184 resident bytes/row is an **estimate**, so two 100M
+generations project to 36.8 GB before page metadata, allocators and scratch;
+the 64 GiB cap is a falsifiable engineering ceiling, not a measured RSS or an
+optimal memory point. At 100M require no vector-plane hydration, one parallel
+range wave, p90/p95 client latency below 150/200 ms at matched recall, and
+lower total dollars per matched successful query than **each** competitor.
+These are targets, not
+claims. Evaluate at least two admitted router-memory points on the same
+fresh panel before selecting a production default. If the measured
+recall/latency/cost Pareto curve needs more than 64 GiB, raise or reject the
+ceiling explicitly instead of silently lowering recall. The 100k replay and
+1M cold HTTP gate may kill this V282 route well before that scale gate.
+
+The completed Fable consultation `7129fbdf56494d7f` proposed fetching the
+highest-mass PQ candidate cells and merging unfetched candidates by a
+per-query calibrated PQ score. Its V239 coverage premise uses a different
+resident graph and the bridge has no measured quality or 100M memory bound;
+it is retained as a conditional redesign idea only if V282 page discovery
+fails. V139's unbudgeted centroid threshold, V146's full flat scan at 1M,
+and V149/V150's weak page-plan capture remain killed as product routes.
