@@ -88,6 +88,9 @@ name = "benchmark_report"
 name = "resident_graph_frontier"
 
 [[example]]
+name = "resident_graph_rc"
+
+[[example]]
 name = "v246_publish_graph_s3"
 
 [[bench]]
