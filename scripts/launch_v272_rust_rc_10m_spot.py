@@ -243,7 +243,7 @@ def launch(attempt):
             ):
                 raise ValueError("generation or decision differs")
             head = json.loads(get(s3, prefix + "/generation/head.json"))
-            root = get(s3, prefix + f"/generation/roots/{root_sha}.json")
+            root = get(s3, prefix + f"/generation/roots%2F{root_sha}.json")
             if head["root_sha256"] != root_sha or sha(root) != root_sha:
                 raise ValueError("published root readback differs")
         result = {
