@@ -113,6 +113,17 @@ The object-store account and conditional head are trusted; cached blobs and
 roots are authenticated against the pinned head. This library does not supply
 an HTTP authentication layer or tenant isolation.
 
+The experimental on-demand Rust reader can open an immutable generation from
+object storage with `ObjectNativeGeneration::open_remote(store, metadata_prefix,
+trusted_root_sha256, limits, scratch_parent)`. It streams only fixed routing
+metadata into caller-selected scratch space, verifies the root and section
+hashes, and removes the temporary files after opening. `search` then fetches
+generation-pinned SQ8 page ranges through `OneAttemptS3` under the configured
+query, GET, byte, and concurrency limits. The caller must obtain the trusted
+root digest through its authorized publication path; this reader does not yet
+provide a create, mutation, or compaction API, and V282/V283 did not pass the
+two-dataset quality gate.
+
 ```bash
 cargo run --locked -p borsuk --example resident_graph_rc -- create /tmp/borsuk-graph
 cargo run --locked -p borsuk --example resident_graph_rc -- search /tmp/borsuk-graph

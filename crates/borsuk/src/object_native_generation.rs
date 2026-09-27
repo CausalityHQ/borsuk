@@ -5,9 +5,12 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
+use futures_util::StreamExt;
 use object_store::path::Path as ObjectPath;
+use object_store::{ObjectStore, ObjectStoreExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::budgeted_page_rank::{
@@ -23,10 +26,24 @@ use crate::unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError};
 use crate::unit_centroid_pages::{UnitCentroidError, UnitCentroidPages};
 
 const MAX_MANIFEST: usize = 64 * 1024;
+const METADATA_FILES: [&str; 11] = [
+    "manifest.json",
+    "page_manifest.json",
+    "page_digests.bin",
+    "centroids.bin",
+    "graph.bin",
+    "router/manifest.json",
+    "router/summaries.bin",
+    "router/books.bin",
+    "router/codes.bin",
+    "router/low.bin",
+    "router/step.bin",
+];
 
 #[derive(Debug)]
 pub enum ObjectNativeOpenError {
     Io(std::io::Error),
+    Store(object_store::Error),
     Invalid(&'static str),
     HashMismatch(&'static str),
     Router(RouterArtifactError),
@@ -148,6 +165,82 @@ fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, ObjectNativeOpenError> 
 }
 
 impl ObjectNativeGeneration {
+    /// Download only routing metadata under an authorized, immutable prefix.
+    /// The caller supplies a trusted root digest and scratch space; source
+    /// vectors and the SQ8 object are never downloaded by this method.
+    pub async fn open_remote(
+        store: &dyn ObjectStore,
+        prefix: &ObjectPath,
+        trusted_sha256: &str,
+        limits: ObjectNativeLimits,
+        scratch_parent: &Path,
+    ) -> Result<Self, ObjectNativeOpenError> {
+        if !is_hash(trusted_sha256) || limits.max_memory_bytes == 0 {
+            return Err(ObjectNativeOpenError::Invalid(
+                "trusted digest or memory cap",
+            ));
+        }
+        let scratch = tempfile::tempdir_in(scratch_parent).map_err(ObjectNativeOpenError::Io)?;
+        let mut total = 0_u64;
+        for name in METADATA_FILES {
+            let fetched = store
+                .get(&prefix.clone().join(name))
+                .await
+                .map_err(ObjectNativeOpenError::Store)?;
+            let limit =
+                limits
+                    .max_memory_bytes
+                    .saturating_sub(total)
+                    .min(if name == "manifest.json" {
+                        MAX_MANIFEST as u64
+                    } else {
+                        u64::MAX
+                    });
+            if fetched.meta.size == 0 || fetched.meta.size > limit {
+                return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+            }
+            let local = scratch.path().join(name);
+            if let Some(parent) = local.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(ObjectNativeOpenError::Io)?;
+            }
+            let mut output = tokio::fs::File::create(&local)
+                .await
+                .map_err(ObjectNativeOpenError::Io)?;
+            let mut count = 0_u64;
+            let mut digest = Sha256::new();
+            let expected = fetched.meta.size;
+            let mut stream = fetched.into_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(ObjectNativeOpenError::Store)?;
+                count = count
+                    .checked_add(chunk.len() as u64)
+                    .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
+                if count > limit || count > expected {
+                    return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+                }
+                digest.update(&chunk);
+                output
+                    .write_all(&chunk)
+                    .await
+                    .map_err(ObjectNativeOpenError::Io)?;
+            }
+            if count != expected {
+                return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+            }
+            output.flush().await.map_err(ObjectNativeOpenError::Io)?;
+            drop(output);
+            if name == "manifest.json" && format!("{:x}", digest.finalize()) != trusted_sha256 {
+                return Err(ObjectNativeOpenError::HashMismatch("generation manifest"));
+            }
+            total = total
+                .checked_add(count)
+                .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
+        }
+        Self::open(scratch.path(), trusted_sha256, limits)
+    }
+
     fn primary_rows(
         &self,
         query: &[f32],
@@ -545,10 +638,11 @@ impl ObjectNativeGeneration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn opens_bound_metadata_without_vector_plane_and_rejects_changes() {
+    #[tokio::test]
+    async fn opens_bound_metadata_without_vector_plane_and_rejects_changes() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -645,6 +739,39 @@ mod tests {
         assert_eq!(opened.router().router.rows(), 256);
         assert_eq!(opened.pages().object_sha256(), sq8_hash);
         assert_eq!(opened.graph().node_count(), 8);
+        let store = InMemory::new();
+        let prefix = ObjectPath::from("tenant/g1/metadata");
+        for name in METADATA_FILES {
+            store
+                .put(
+                    &prefix.clone().join(name),
+                    PutPayload::from(fs::read(root.join(name)).unwrap()),
+                )
+                .await
+                .unwrap();
+        }
+        let remote =
+            ObjectNativeGeneration::open_remote(&store, &prefix, &sha256(&manifest), limits, &root)
+                .await
+                .unwrap();
+        assert_eq!(remote.pages().object_sha256(), sq8_hash);
+        assert!(matches!(
+            ObjectNativeGeneration::open_remote(&store, &prefix, &"f".repeat(64), limits, &root)
+                .await,
+            Err(ObjectNativeOpenError::HashMismatch("generation manifest"))
+        ));
+        store
+            .put(
+                &prefix.clone().join("router/books.bin"),
+                PutPayload::from(vec![0xff; 64 * 256 * 4]),
+            )
+            .await
+            .unwrap();
+        assert!(
+            ObjectNativeGeneration::open_remote(&store, &prefix, &sha256(&manifest), limits, &root)
+                .await
+                .is_err()
+        );
         let plan = opened.plan_pages(&[0.0; 64], 1, 128, 100, 4).unwrap();
         assert_eq!(plan.ranges, vec![0..sq8.len()]);
         assert_eq!(
@@ -654,7 +781,10 @@ mod tests {
                 .ranges,
             plan.ranges,
         );
-        assert_eq!(opened.object_key().as_ref(), format!("tenant/g1/objects/{sq8_hash}"));
+        assert_eq!(
+            opened.object_key().as_ref(),
+            format!("tenant/g1/objects/{sq8_hash}")
+        );
         assert!(matches!(
             ObjectNativeGeneration::open(&root, &"f".repeat(64), limits),
             Err(ObjectNativeOpenError::HashMismatch("generation manifest"))
@@ -671,8 +801,7 @@ mod tests {
             Err(ObjectNativeOpenError::Invalid("memory cap"))
         ));
         let mut unsafe_root: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
-        unsafe_root["sq8_object_key"] =
-            serde_json::json!(format!("tenant/../objects/{sq8_hash}"));
+        unsafe_root["sq8_object_key"] = serde_json::json!(format!("tenant/../objects/{sq8_hash}"));
         let unsafe_bytes = serde_json::to_vec(&unsafe_root).unwrap();
         fs::write(root.join("manifest.json"), &unsafe_bytes).unwrap();
         assert!(matches!(

@@ -62,6 +62,10 @@ does not provide HTTP authentication or tenant isolation.
   generation-pinned on-demand object reads and explicit total memory admission.
   Preserve per-query GET/byte/error accounting. Qualify candidate coverage and
   physical read cost together at 100k before one frozen 1M cold HTTP gate.
+  `ObjectNativeGeneration::open_remote` now streams fixed metadata objects to
+  caller-selected scratch space and reuses the authenticated local opener;
+  this only closes remote metadata bootstrap, not the failed quality gate or
+  missing create/mutation/GC path.
 
 V270 `a0001` was launched before the release-cut directive, then deliberately
 stopped at 2026-09-26 UTC without a terminal measurement. Spot instance
