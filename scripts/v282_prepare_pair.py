@@ -35,9 +35,10 @@ def vectors_from_input(path, kind):
         if path.stat().st_size != ROWS * DIMS * 4:
             raise ValueError("raw source geometry differs")
         vectors = np.fromfile(path, dtype="<f4").reshape(ROWS, DIMS)
+        source_ids = np.arange(ROWS, dtype="<u8")
     else:
         source = pq.ParquetFile(path)
-        blocks = []
+        blocks, id_blocks = [], []
         remaining = ROWS
         for batch in source.iter_batches(batch_size=8192, columns=["feature_row_id", "embedding"]):
             table = pa.Table.from_batches([batch])
@@ -47,8 +48,7 @@ def vectors_from_input(path, kind):
                 raise ValueError("Parquet source geometry differs")
             count = min(remaining, table.num_rows)
             ids = table["feature_row_id"].combine_chunks().to_numpy(zero_copy_only=False)[:count]
-            if not np.array_equal(ids, np.arange(ROWS - remaining, ROWS - remaining + count)):
-                raise ValueError("Parquet source IDs differ")
+            id_blocks.append(np.asarray(ids, dtype="<u8"))
             values = table["embedding"].combine_chunks().values.to_numpy(zero_copy_only=False)
             blocks.append(np.asarray(values, np.float32).reshape(table.num_rows, DIMS)[:count])
             remaining -= count
@@ -57,18 +57,22 @@ def vectors_from_input(path, kind):
         if remaining:
             raise ValueError("Parquet source shorter than 100k")
         vectors = np.concatenate(blocks)
+        source_ids = np.concatenate(id_blocks)
+        if np.unique(source_ids).size != ROWS:
+            raise ValueError("Parquet source IDs differ")
     norms = np.linalg.norm(vectors, axis=1)
     if not np.isfinite(vectors).all() or not (norms > 0).all():
         raise ValueError("source vectors invalid")
-    return np.ascontiguousarray(vectors / norms[:, None], dtype=np.float32)
+    return np.ascontiguousarray(vectors / norms[:, None], dtype=np.float32), source_ids
 
 
 def source(input_path, input_sha, kind, output):
     if output.exists() or digest(input_path) != input_sha:
         raise ValueError("source identity or output differs")
-    vectors = vectors_from_input(input_path, kind)
+    vectors, source_ids = vectors_from_input(input_path, kind)
     with tempfile.TemporaryDirectory(prefix=output.name + ".tmp-", dir=output.parent) as temporary:
         pending = Path(temporary)
+        source_ids.tofile(pending / "original_ids.u64")
         ids = pa.array(np.arange(ROWS, dtype=np.int64))
         data = pa.FixedSizeListArray.from_arrays(pa.array(vectors.ravel()), DIMS)
         path = pending / "source.parquet"
@@ -79,6 +83,7 @@ def source(input_path, input_sha, kind, output):
             "rows": ROWS, "dimensions": DIMS, "source_bytes": path.stat().st_size,
             "source_sha256": digest(path), "query_or_truth_used": False,
             "input_sha256": input_sha, "input_kind": kind,
+            "original_id_map_sha256": digest(pending / "original_ids.u64"),
         }
         (pending / "provenance.json").write_text(
             json.dumps(provenance, sort_keys=True, separators=(",", ":")) + "\n"

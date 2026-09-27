@@ -58,17 +58,17 @@ cd repo
 cd "$root"
 mkdir -p relaion/evidence cohere/evidence
 phase=inputs
-aws s3 cp "s3://$BORSUK_V282_BUCKET/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet" relaion/input.parquet --only-show-errors
-printf '%s  relaion/input.parquet\n' '2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86' | sha256sum -c -
-aws s3 cp "s3://$BORSUK_V282_BUCKET/research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl" relaion/requests.jsonl --only-show-errors
-printf '%s  relaion/requests.jsonl\n' 'c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9' | sha256sum -c -
+aws s3 cp "s3://$BORSUK_V282_BUCKET/research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet" relaion/input.parquet --only-show-errors
+printf '%s  relaion/input.parquet\n' 'a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d' | sha256sum -c -
+aws s3 cp "s3://$BORSUK_V282_BUCKET/research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl" relaion/requests.jsonl --only-show-errors
+printf '%s  relaion/requests.jsonl\n' 'b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0' | sha256sum -c -
 aws s3 cp "s3://$BORSUK_V282_BUCKET/research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw" cohere/input.raw --only-show-errors
 printf '%s  cohere/input.raw\n' '0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e' | sha256sum -c -
 aws s3 cp "s3://$BORSUK_V282_BUCKET/research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl" cohere/requests.jsonl --only-show-errors
 printf '%s  cohere/requests.jsonl\n' '86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812' | sha256sum -c -
 for dataset in relaion cohere; do
   phase="${dataset}-source"
-  if [ "$dataset" = relaion ]; then kind=parquet; input_sha=2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86; input="$dataset/input.parquet"; requests_sha=c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9; else kind=raw; input_sha=0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e; input="$dataset/input.raw"; requests_sha=86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812; fi
+  if [ "$dataset" = relaion ]; then kind=parquet; input_sha=a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d; input="$dataset/input.parquet"; requests_sha=b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0; else kind=raw; input_sha=0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e; input="$dataset/input.raw"; requests_sha=86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812; fi
   /usr/bin/time -v -o "$dataset/evidence/source.time" .venv/bin/python -m scripts.v282_prepare_pair source --input "$input" --input-sha "$input_sha" --kind "$kind" --output "$dataset/source" >"$dataset/evidence/source.json"
   source_sha=$(.venv/bin/python -c "import json;print(json.load(open('$dataset/evidence/source.json'))['source_sha256'])")
   provenance_sha=$(.venv/bin/python -c "import json;print(json.load(open('$dataset/evidence/source.json'))['provenance_sha256'])")
@@ -96,6 +96,7 @@ PY
   .venv/bin/python -m scripts.v282_seal_generation --router "$dataset/router" --pages "$dataset/pages" --routing "$dataset/routing" --etag "$etag" --output "$dataset/generation" >"$dataset/evidence/root.sha256"
   cp "$dataset/generation/manifest.json" "$dataset/evidence/generation-manifest.json"
   cp "$dataset/source/provenance.json" "$dataset/evidence/provenance.json"
+  cp "$dataset/source/original_ids.u64" "$dataset/evidence/original_ids.u64"
   cp "$dataset/layout/manifest.json" "$dataset/evidence/layout-manifest.json"
   cp "$dataset/router/manifest.json" "$dataset/evidence/router-manifest.json"
   cp "$dataset/pages/manifest.json" "$dataset/evidence/page-manifest.json"

@@ -130,6 +130,15 @@ RSS and vendor superiority require measured samples.
 `v282_build_routing` hashes the local SQ8 body against the source-only router
 before deriving centroids and graph; `v282_seal_generation.py` binds that
 build, the page digest authority, object SHA and ETag to one root manifest.
+The ReLAION-100k source is the V85 sealed corpus
+`a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d`
+and uses the V114 1,000-query request panel
+`b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0`,
+matching the historical V239 corpus/query cohort. Its random stable source
+IDs are preserved in `original_ids.u64`; the new source-only V120/V115 builder
+receives ordinal IDs 0–99,999, and exact GT is recomputed against those same
+vectors. Historical V239 hit counts remain context until ID and truth mapping
+are checked; the graph and flat V282 arms share the same new GT.
 `v282_local_falsifier` checks the trusted root digest and SQ8 body, then
 replays the same 1,000 query/GT100 panel through graph and flat discovery. Its
 local SQ8 reads are authenticated by page SHA-256 and count **planned**
