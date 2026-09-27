@@ -36,7 +36,7 @@ def rust_sq8_scores(fetched, query, low, step):
     return fetched["norm"] - np.float32(2) * (inner + shift)
 
 
-def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
+def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth, candidates_path=None):
     assert [sha(p.read_bytes()) for p in (raw, archive, root_sha, layout, sq8_path, requests, truth)] == [
         RAW_SHA, ARCHIVE_SHA, ROOT_SHA_FILE_SHA, LAYOUT_SHA, SQ8_SHA, REQUESTS_SHA, TRUTH_SHA]
     with tarfile.open(archive, "r:gz") as source:
@@ -87,14 +87,24 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
     q_rot = rotate_rows(q.astype(np.float64), rotation_seed=SEED).astype(np.float32)
     m_rot = rotate_rows(mean[None, :].astype(np.float64), rotation_seed=SEED)[0].astype(np.float32)
     candidate_count = math.ceil(8 * math.sqrt(391))
+    routed = None
+    if candidates_path is not None:
+        assert sha(candidates_path.read_bytes()) == "c24e53f8e740ad569331c774f46ef3161873e3a765d20a345290af50a1b974d0"
+        routed = [json.loads(line) for line in candidates_path.read_text().splitlines()]
+        assert len(routed) == 64 and [r["query_ordinal"] for r in routed] == list(range(64))
     page_of = np.empty(100_000, dtype=np.int32)
     page_of[order] = np.arange(100_000) // 256
     candidate_hits, fetched_hits, returned_hits, get_counts, byte_counts, scored_rows = [], [], [], [], [], []
     plans = []
     for ordinal, (query, neighbors) in enumerate(zip(q, gt)):
-        distances = center_norms - 2 * (centers @ query)
-        page_distances = np.minimum.reduceat(distances, np.arange(0, 3125, 8))
-        candidates = np.lexsort((np.arange(391), page_distances))[:candidate_count]
+        if routed is None:
+            distances = center_norms - 2 * (centers @ query)
+            page_distances = np.minimum.reduceat(distances, np.arange(0, 3125, 8))
+            candidates = np.lexsort((np.arange(391), page_distances))[:candidate_count]
+        else:
+            candidates = np.asarray(routed[ordinal]["pages"], dtype=np.int64)
+            assert len(candidates) == candidate_count and np.unique(candidates).size == candidate_count
+            assert (candidates >= 0).all() and (candidates < 391).all()
         candidate_hits.append(int(np.isin(page_of[neighbors], candidates).sum()))
         lengths = [min(256, 100_000-p*256) for p in candidates]
         starts = np.cumsum([0]+lengths[:-1])

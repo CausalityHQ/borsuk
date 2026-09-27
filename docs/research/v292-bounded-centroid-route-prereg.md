@@ -39,17 +39,17 @@ route or promote full resident vectors as the default.
 ## Completed development precursor (2026-09-27 UTC)
 
 **GO to the unchanged two-bit/SQ8 development replay, no cloud.** The frozen
-`fec3842d` debug Rust executable completed exit0 in10.98 s with102,800 KiB
+`fec3842d` debug Rust executable completed exit 0 in 10.98 s with 102,800 KiB
 peak process RSS. Its [result](v292-bounded-centroid-route-result.json) SHA is
 `5c14ee60fb9e01fc618e56e691b6bbf6be3b1a7dbfb4599d079c27c6fc197c40`;
 [raw candidate samples](v292-candidates.jsonl) SHA is
 `c24e53f8e740ad569331c774f46ef3161873e3a765d20a345290af50a1b974d0`.
-All64 CoHere first100k D768 cosine k100 development queries returned exactly
-159 candidate pages, at most1,400 centroid evaluations. Mean candidate
-GT100 is99.578125/p05 98, versus flat V290's99.8125/p05 99. The bounded
-precursor loses0.234375 mean hits to flat but passes98.9/p05 96. Planner-only
-wall p50/p90/p95/p99 are25.979/33.063/33.545/33.685 ms from the same64
+All 64 CoHere first100k D768 cosine k100 development queries returned exactly
+159 candidate pages, at most 1,400 centroid evaluations. Mean candidate
+GT100 is 99.578125/p05 98, versus flat V290's 99.8125/p05 99. The bounded
+precursor loses 0.234375 mean hits to flat but passes 98.9/p05 96. Planner-only
+wall p50/p90/p95/p99 are 25.979/33.063/33.545/33.685 ms from the same 64
 debug-build samples; they are neither service latency nor a scale result.
 The next single gate retains these exact candidate sets and V291's two-bit
-score, final physical planner and production-f32 SQ8 rank; returned98%/
-p05 95 remains required before any paired validation or1M gate.
+score, final physical planner and production-f32 SQ8 rank; returned 98%/
+p05 95 remains required before any paired validation or 1M gate.
