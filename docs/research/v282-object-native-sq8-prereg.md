@@ -41,6 +41,11 @@ scratch. A 1M pass does not qualify 100M latency. The later 10M/100M gate
 must measure whether this routing method remains viable under a declared RAM
 budget and change the router if it does not.
 
+Build the physical SQ8 order with the existing corpus-only V120 layout rule,
+`ceil(8192 × (rows / 1,000,000)^(1/3))` clusters, capped at `rows`, and
+V115's source-only PQ64 training with two summaries per 256-row page.
+This uses no query or truth data and applies unchanged to both datasets.
+
 V239 already falsified a naive PQ-graph candidate-to-page mapping: its
 quality-passing 1,024 candidate prefix touched 147 distinct 256-row SQ8
 pages at p95, at least 29,352,960 bytes/query on ReLAION-100k. V240's
@@ -49,19 +54,37 @@ as a measured page scheduling method, while the changed primary seeds require
 new quality evidence; simply issuing one
 range GET for each graph candidate is excluded.
 
+Prior centroid arms constrain the control: V139's unbudgeted distance
+threshold exceeded 16 MiB on 364/1,000 ReLAION-1M validation queries;
+V146's flat centroid scorer plus planner was 11.072 ms p95 on that used
+1M split and scales linearly with rows; V149's physical-page hierarchy
+captured only 77.096% of the D96 V140 page plan. V150's original semantic
+graph captured 73.355% of that plan, but postterminal fetched-range truth
+coverage was 99,523/100,000 versus V140's 99,738/100,000 on the used D96
+cohort. Exact plan capture alone is therefore too blunt to decide returned
+quality. The paired flat control below isolates page discovery; it does not
+repeat those failed threshold, hierarchy or full-scan arms as product routes.
+
 ## Gates
 
 1. **100k falsifier.** Build the preregistered PQ-primary route from corpus rows
    on ReLAION-100k and CoHere first100k, D768 cosine, k100. Seal build and
    query-independent layout before reading the existing 1,000-query panels.
-   Report development0–255 and validation256–999 separately, with exact
-   GT100 hits, p05 hits/query, planned page containment, GETs and bytes per
-   query. Compare the same-corpus resident graph quality controls and the
-   V239 page lower bound. Advance only if both datasets retain at least 98%
-   mean recall@100 and p05 at least 95 while respecting a 32 GET and
-   16,777,216-byte hard per-query plan cap. Used panels make this a falsifier,
-   never publication evidence. A failure requires a changed representation or
-   physical plan, not a threshold tuned to one dataset.
+   Pair the unchanged V282 cached sparse graph plan with one flat-centroid
+   diagnostic using identical PQ primaries, SQ8 scorer, 32-GET/16,777,216-byte
+   caps and raw queries. The flat arm is a page-discovery oracle, not a 100M
+   serving candidate: V146 already measured 11.072 ms p95 for flat score plus
+   planning on ReLAION-1M validation and rejected its linear scan. Report
+   development0–255 and validation256–999 separately, with exact GT100 hits,
+   p05 hits/query, planned page containment, GETs and bytes per query, planner
+   time and RSS. Compare the same-corpus resident graph quality controls and
+   the V239 page lower bound as context. Advance V282 only if both datasets
+   retain at least 98% mean recall@100 and p05 at least 95, with no more than
+   0.5 percentage point loss against the paired flat arm and both physical
+   caps. If flat passes but V282 fails, change page discovery (balanced
+   semantic cells are the next candidate); if both fail, change the PQ
+   primary/layout representation before another page-graph attempt. Used
+   panels make this a falsifier, never publication evidence.
 2. **One 1M cold HTTP gate.** Freeze the winning 100k method and schema, then
    run CoHere first1M D768 cosine k100 with source-disjoint train query
    ordinals 1,001,000–1,001,999 and newly computed exact truth. Freeze their

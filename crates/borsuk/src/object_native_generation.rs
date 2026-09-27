@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
 use crate::budgeted_page_rank::{
-    BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse,
+    BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages, choose_budgeted_pages_sparse,
 };
 use crate::pq64_nominee::Pq64Error;
 use crate::pq64_router_artifact::{RouterArtifactError, SourceRouterArtifact, load_source_router};
@@ -133,6 +133,29 @@ fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, ObjectNativeOpenError> 
 }
 
 impl ObjectNativeGeneration {
+    fn primary_rows(
+        &self,
+        query: &[f32],
+        regions: usize,
+        shortlist: usize,
+        primary_count: usize,
+    ) -> Result<Vec<usize>, ObjectNativePlanError> {
+        if regions > self.max_router_regions
+            || shortlist > self.max_router_shortlist
+            || primary_count == 0
+            || primary_count > shortlist
+        {
+            return Err(ObjectNativePlanError::Router(Pq64Error::InvalidRequest));
+        }
+        let mut nominees = self
+            .router
+            .router
+            .nominate(query, regions, shortlist)
+            .map_err(ObjectNativePlanError::Router)?;
+        nominees.truncate(primary_count);
+        Ok(nominees)
+    }
+
     /// Open local routing metadata only. `trusted_sha256` must come from an
     /// authorized generation pointer, outside this API's trust boundary.
     pub fn open(
@@ -355,19 +378,7 @@ impl ObjectNativeGeneration {
         primary_count: usize,
         beta: usize,
     ) -> Result<BudgetedPagePlan, ObjectNativePlanError> {
-        if regions > self.max_router_regions
-            || shortlist > self.max_router_shortlist
-            || primary_count == 0
-            || primary_count > shortlist
-        {
-            return Err(ObjectNativePlanError::Router(Pq64Error::InvalidRequest));
-        }
-        let nominees = self
-            .router
-            .router
-            .nominate(query, regions, shortlist)
-            .map_err(ObjectNativePlanError::Router)?;
-        let primary = &nominees[..primary_count];
+        let primary = self.primary_rows(query, regions, shortlist, primary_count)?;
         let primary_pages = primary
             .iter()
             .map(|row| row / self.pages.page_rows())
@@ -395,7 +406,34 @@ impl ObjectNativeGeneration {
             .map_err(ObjectNativePlanError::Centroid)?;
         choose_budgeted_pages_sparse(
             &scored,
-            primary,
+            &primary,
+            self.pages.rows(),
+            self.pages.dimensions(),
+            beta,
+            self.max_query_gets,
+            self.max_query_bytes,
+        )
+        .map_err(ObjectNativePlanError::Budget)
+    }
+
+    /// Flat centroid quality/I/O diagnostic with the same PQ primary seeds.
+    /// This scans every page and is not the scalable serving route.
+    pub fn plan_pages_flat_control(
+        &self,
+        query: &[f32],
+        regions: usize,
+        shortlist: usize,
+        primary_count: usize,
+        beta: usize,
+    ) -> Result<BudgetedPagePlan, ObjectNativePlanError> {
+        let primary = self.primary_rows(query, regions, shortlist, primary_count)?;
+        let scores = self
+            .centroids
+            .score_pages(query)
+            .map_err(ObjectNativePlanError::Centroid)?;
+        choose_budgeted_pages(
+            &scores,
+            &primary,
             self.pages.rows(),
             self.pages.dimensions(),
             beta,
@@ -594,6 +632,13 @@ mod tests {
         assert_eq!(opened.graph().node_count(), 8);
         let plan = opened.plan_pages(&[0.0; 64], 1, 128, 100, 4).unwrap();
         assert_eq!(plan.ranges, vec![0..sq8.len()]);
+        assert_eq!(
+            opened
+                .plan_pages_flat_control(&[0.0; 64], 1, 128, 100, 4)
+                .unwrap()
+                .ranges,
+            plan.ranges,
+        );
         assert_eq!(opened.object_key().as_ref(), format!("objects/{sq8_hash}"));
         assert!(matches!(
             ObjectNativeGeneration::open(&root, &"f".repeat(64), limits),
