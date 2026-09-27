@@ -6,6 +6,7 @@ readme = "../../README.md"
 keywords = ["ann", "similarity-search", "vector-search", "s3", "parquet"]
 categories = ["algorithms", "database-implementations", "science"]
 edition.workspace = true
+autoexamples = false
 license-file = "../../LICENSE"
 repository.workspace = true
 homepage.workspace = true
@@ -65,6 +66,29 @@ tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true
+
+# Historical campaign examples are preserved in their source archives. Keep the
+# current package's examples limited to supported API and smoke paths.
+[[example]]
+name = "local_index"
+
+[[example]]
+name = "docs_ladder"
+
+[[example]]
+name = "s3_index"
+
+[[example]]
+name = "hybrid_retrieval_bench"
+
+[[example]]
+name = "benchmark_report"
+
+[[example]]
+name = "resident_graph_frontier"
+
+[[example]]
+name = "v246_publish_graph_s3"
 
 [[bench]]
 name = "local_search"
