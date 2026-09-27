@@ -1,12 +1,16 @@
 # BORSUK
 
-> **Rust v0.1 release candidate in progress.** The authenticated cached dual
+> **Research Rust graph route; no object-native release yet.** The authenticated cached dual
 > graph is available through the Rust `resident_graph_build`,
 > `resident_graph_store`, and `resident_graph_generation` modules. Run
 > `bash scripts/smoke_resident_graph_rc.sh` for a create → publish → cold open
 > → search → warm process reopen demo. The older `BorsukIndex`, Python and
 > TypeScript APIs still use the graph-free path; their results do not use the
-> graph generation measured in [V280](docs/research/v280-relaion-baseline-http-1m-closeout.md). See the
+> graph generation measured in [V280](docs/research/v280-relaion-baseline-http-1m-closeout.md).
+> V280 fetched 1.88 GB before serving and used 2.06 GB peak RSS for 1M
+> vectors; its 62 ms client p95 describes resident search, not cold S3 search.
+> The production serving route is being redesigned for bounded-memory,
+> authenticated on-demand object reads. See the
 > [release checklist](docs/release/rust-v0.1-rc-checklist.md).
 
 **Vector search that lives in your bucket.**
@@ -28,7 +32,7 @@ database cluster. The process still uses real CPU and bounded working memory.
 Legacy v7 AWS traces remain in research as historical evidence; v8 rows are
 promoted only after fresh source recreation and repetition.
 
-- 🪣 **The index is the bucket or directory.** The Rust release-candidate route
+- 🪣 **The index is the bucket or directory.** The experimental Rust graph route
   uses an authenticated immutable FP16 graph, PQ64 codes, and a conditional
   object-store head. The legacy `BorsukIndex` route uses Parquet and Arrow IPC
   and remains graph-free by default.
@@ -94,7 +98,7 @@ flowchart LR
 
 ## Quick start
 
-The Rust release-candidate path creates an immutable generation from unique
+The experimental Rust graph path creates an immutable generation from unique
 `u64` IDs and finite nonzero F32 vectors. Its `root.json` SHA-256 is the trust
 anchor for local open or object-store publication. `ResidentGraphGeneration`
 opens a pinned generation with a resident-byte and worker cap; each

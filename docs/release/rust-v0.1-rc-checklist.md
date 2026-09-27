@@ -1,6 +1,10 @@
 # Rust v0.1 immutable graph release candidate
 
-Status: in progress, 2026-09-26 UTC. This is a Rust crate cut. The Python and
+Status: resident route retained as research evidence; object-native release gate open,
+2026-09-27 UTC. The full-vector hydration and 2.06 GB peak RSS measured on
+ReLAION-1M in V280 are outside the intended product serving contract. The
+checked items below verify the resident implementation only and do not
+authorize its publication as the object-native v0.1 default. The Python and
 TypeScript packages retain their existing APIs and make no claim to expose the
 cached dual graph until an independent parity gate passes.
 This cut builds packages for Linux x64/arm64 and macOS x64/arm64; Windows is
@@ -54,6 +58,10 @@ does not provide HTTP authentication or tenant isolation.
 - [x] Benchmark claims remain tied to their source revisions and scopes:
   V271 fresh CoHere1M frontier and ANN control, V272 10M no-go, and V280
   ReLAION1M HTTP serving pass. A matched vendor win remains unverified.
+- [ ] Replace full-plane hydration in the product route with authenticated,
+  generation-pinned on-demand object reads and explicit total memory admission.
+  Preserve per-query GET/byte/error accounting. Qualify candidate coverage and
+  physical read cost together at 100k before one frozen 1M cold HTTP gate.
 
 V270 `a0001` was launched before the release-cut directive, then deliberately
 stopped at 2026-09-26 UTC without a terminal measurement. Spot instance
