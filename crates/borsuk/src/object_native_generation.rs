@@ -74,7 +74,8 @@ struct Manifest {
     sq8_etag: String,
 }
 
-/// Limits loading overlap as well as simultaneous query response buffers.
+/// Admission estimate for loading overlap and concurrent query buffers.
+/// Measure cgroup RSS separately; allocator and transport overhead can differ.
 #[derive(Clone, Copy)]
 pub struct ObjectNativeLimits {
     pub max_memory_bytes: u64,
