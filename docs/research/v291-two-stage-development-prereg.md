@@ -39,3 +39,28 @@ thresholds remain unchanged. The correction loads `low`/`step` from sections
 whose hashes are bound by the authenticated V283 router manifest, exactly as
 the Rust scorer does, before one replacement local replay. The first command
 took 14.43 s/874,832 KiB RSS, exit 0; its flaw is semantic, not a crash.
+
+## Corrected local development decision (2026-09-27 UTC)
+
+**GO to exact Rust SQ8 replay and bounded first-stage work gate, not cloud.**
+The single corrected `106e2488` replay completed exit 0 in 14.21 s with
+879,576 KiB peak process RSS. Its [result](v291-two-stage-development-result.json)
+SHA-256 is
+`113a5523c7b382047003758f144ceed10f4a526e2c32b432cceb2d7e4d169c7b`.
+
+| CoHere first100k D768 cosine k100, development0–63 | Mean GT100 hits | p05 hits | Max GET | Max planned bytes |
+| --- | ---: | ---: | ---: | ---: |
+| V290 159-page centroid candidates | 99.812500 | 99 | — | — |
+| V291 two-bit selected SQ8 pages | 99.765625 | 99 | 32 | 16,773,120 |
+| V291 SQ8 returned | **98.171875** | **96** | 32 | 16,773,120 |
+| Frozen fetched / returned gates | >=98.9 / >=98.0 | >=96 / >=95 | <=32 | <=16,777,216 |
+| Paired V283 flat returned control | 96.703125 | 93 | 32 | 16,773,120 |
+
+At most 40,704 two-bit row codes were scored for a query; the first-stage
+centroid pass still scanned all 3,125 unit means. The code plane is 200
+bytes/row and remains a high-memory candidate, with no measured 100M cost.
+The NumPy SQ8 scorer follows the authenticated `low`/`step` and stored norm,
+but the 0.171875-hit margin above the mean gate makes bit-exact Rust scoring
+parity the next required check. The local 14.21 s is whole-process offline
+work, including encoding 100k source rows and 64 queries; it is not serving
+latency, QPS or a vendor comparison. No validation or 1M promotion yet.
