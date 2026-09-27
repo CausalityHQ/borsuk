@@ -7,6 +7,7 @@ finish() {
   code=$?
   trap - EXIT TERM
   set +e
+  exec >/dev/null 2>&1
   cd "$root"
   token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
   instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)

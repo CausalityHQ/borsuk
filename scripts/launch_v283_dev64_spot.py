@@ -163,6 +163,9 @@ def launch(attempt, *, approved=False, dry_run=False):
                 or terminal.get("instance_id") != instance_id
                 or terminal.get("status") not in {"complete", "failed"}):
             raise ValueError("V283 terminal identity differs")
+        if terminal["status"] == "complete" and (terminal.get("phase") != "complete"
+                                                  or terminal.get("exit_code") != 0):
+            raise ValueError("V283 complete terminal state differs")
         replay(s3, prefix, terminal)
         decision = json.loads(get(s3, prefix + "/artifacts/summary.json")) if terminal["status"] == "complete" else None
         if decision is not None and (decision["schema"] != "borsuk-v283-dev64-summary-v1"
