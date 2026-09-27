@@ -51,8 +51,11 @@ latency delta. V269 CoHere first1M HTTP and direct S3 Vectors V263 are
 different dataset/panel or cache/transport conditions. No authenticated
 matched Turbopuffer result exists.
 
-The next single gate is a frozen CoHere10M quality/resource and serving
-scale test of the production baseline with memory sized to the graph,
-vectors and worker count, followed by mutation/restart/failure API checks.
-The earlier V272 10M in-process result is historical context from a
-different source revision, not a same-revision V280 scale measurement.
+The next single gate is a frozen CoHere10M quality/resource transfer of the
+bounded extra reverse-edge option, with memory sized to the graph, vectors
+and worker count. V276/V277 100k and V278 1M supported that method on
+CoHere; V279 rejected it as a generic default on ReLAION. V272 already
+showed the baseline misses its 10M quality gate, so merely repeating it
+would not answer a new question. An authenticated HTTP scale run follows
+only if the 10M quality/resource transfer passes. Mutation/restart/failure
+API checks remain release work, and none of these gates imply a vendor win.
