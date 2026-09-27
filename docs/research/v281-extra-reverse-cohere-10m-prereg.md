@@ -1,5 +1,18 @@
 # V281 bounded reverse-edge CoHere10M transfer gate
 
+## Superseded route and safe closeout (2026-09-27 UTC)
+
+The operator stopped the original a0002 resident-route extension because its
+10M candidate could not change the object-native page-read/default decision.
+SSM verified the exact build timeout PID on `i-0f914c8e30f9bbdeb` and sent
+TERM to that wrapper; the run shell's EXIT trap uploaded available artifacts
+and terminal exit 143 in phase `build`. The original launcher replayed their
+hashes, published closeout, and terminated EC2. Terminal SHA-256
+`c3dc0e2538816a681a7be3e4be3e12bdd74d7e975a1e43d7b7dab4374b81c55a`;
+estimated On-Demand compute through terminal $17.870944. There is **no V281
+candidate build or quality result**. Prefix:
+`s3://borsuk-bench-453182569524-euc1/research/v281-extra-reverse-10m/9789438c356bd582126b2c984ae67ef2e5c11779/runs/a0002/`.
+
 Status: preregistered before any V281 source archive or Spot reservation.
 This is one build of the already fixed V276 bounded reverse-edge method,
 followed by authenticated library search. V276/V277 100k and V278 fresh 1M
