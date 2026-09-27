@@ -82,7 +82,13 @@ jobs:
       - name: Build test binaries with bounded compiler concurrency
         run: bash scripts/check_rust_test_build.sh
       - name: Test
-        run: cargo test --locked --workspace --all-targets
+        run: |
+          if ! cargo test --locked --workspace --all-targets > rust-test.log 2>&1; then
+            tail -n 120 rust-test.log
+            failures="$(rg '^test .* FAILED|^---- .* stdout ----|^failures:|^error:' rust-test.log | tail -n 25 | tr '\n' ' ' | cut -c1-2400 || true)"
+            echo "::error::$failures $(tail -n 10 rust-test.log | tr '\n' ' ' | cut -c1-500)"
+            exit 1
+          fi
       - name: Run Rust local example
         run: cargo run --locked -p borsuk --example local_index
       - name: Run Rust docs ladder example
