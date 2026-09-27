@@ -726,6 +726,72 @@ pub(crate) fn build_reachable_hnsw_adjacency_batched_diverse(
     repair_reachable_hnsw_adjacency(built, m0)
 }
 
+/// Spend a bounded number of extra base edges to expose low in-degree rows
+/// from their own nearby neighbours. The original graph remains a subgraph.
+pub(crate) fn build_reachable_hnsw_adjacency_batched_diverse_reverse_extra(
+    vectors: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    workers: usize,
+) -> Option<CentroidHnswAdjacency> {
+    let mut built = build_reachable_hnsw_adjacency_batched_diverse(
+        vectors,
+        m,
+        m0,
+        ef_construction,
+        ef_search,
+        workers,
+    )?;
+    let rows = vectors.len();
+    let mut indegree = vec![0_usize; rows];
+    for tower in &built.neighbours {
+        for &target in tower.last()? {
+            indegree[target as usize] += 1;
+        }
+    }
+    let mut targets = (0..rows)
+        .filter(|&row| indegree[row] < 16)
+        .collect::<Vec<_>>();
+    targets.sort_unstable_by_key(|&row| (indegree[row], row));
+    let mut extra = vec![0_u8; rows];
+    for target in targets {
+        if indegree[target] >= 16 {
+            continue;
+        }
+        let mut near = built.neighbours[target]
+            .last()?
+            .iter()
+            .take(m0)
+            .map(|&source| Candidate {
+                distance: squared_distance(&vectors[target], &vectors[source as usize]),
+                node: source,
+            })
+            .collect::<Vec<_>>();
+        near.sort_unstable();
+        for source in near.into_iter().take(16) {
+            if indegree[target] >= 16 {
+                break;
+            }
+            let source = source.node as usize;
+            let base = built.neighbours[source].last_mut()?;
+            if extra[source] >= 16 || base.len() >= 96 || base.contains(&(target as u32)) {
+                continue;
+            }
+            base.push(target as u32);
+            extra[source] += 1;
+            indegree[target] += 1;
+        }
+    }
+    if indegree.iter().any(|&degree| degree < 4)
+        || reachable_base_count(&built.neighbours, built.entry) != rows
+    {
+        return None;
+    }
+    Some(built)
+}
+
 fn repair_reachable_hnsw_adjacency(
     mut built: CentroidHnswAdjacency,
     m0: usize,
@@ -1324,6 +1390,29 @@ mod tests {
         assert_eq!(one.neighbours, four.neighbours);
         assert_eq!(
             reachable_base_count(&four.neighbours, four.entry),
+            data.len()
+        );
+    }
+
+    #[test]
+    fn bounded_reverse_extra_preserves_original_edges() {
+        let data = grid(257, 8);
+        let baseline =
+            build_reachable_hnsw_adjacency_batched_diverse(&data, 8, 16, 32, 32, 4).unwrap();
+        let candidate =
+            build_reachable_hnsw_adjacency_batched_diverse_reverse_extra(&data, 8, 16, 32, 32, 4)
+                .unwrap();
+        let mut added = 0;
+        for (old, new) in baseline.neighbours.iter().zip(&candidate.neighbours) {
+            let old_base = old.last().unwrap();
+            let new_base = new.last().unwrap();
+            added += new_base.len() - old_base.len();
+            assert!(new_base.len() <= old_base.len() + 16);
+            assert!(old_base.iter().all(|edge| new_base.contains(edge)));
+        }
+        assert!(added > 0);
+        assert_eq!(
+            reachable_base_count(&candidate.neighbours, candidate.entry),
             data.len()
         );
     }
