@@ -36,12 +36,13 @@ fn p05(hits: &[usize]) -> usize {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 8 {
+    if args.len() != 8 && args.len() != 9 {
         return Err(
-            "usage: v291_rust_sq8_parity ROOT ROOT_SHA SQ8 REQUESTS GT_U32 PLANS_JSONL OUTPUT"
+            "usage: v291_rust_sq8_parity ROOT ROOT_SHA SQ8 REQUESTS GT_U32 PLANS_JSONL OUTPUT [PLANS_SHA]"
                 .into(),
         );
     }
+    let plans_hash = args.get(8).map_or(PLANS_SHA, String::as_str);
     let generation = ObjectNativeGeneration::open(
         Path::new(&args[1]),
         &args[2],
@@ -63,7 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sq8 = checked(&args[3], generation.pages().object_sha256())?;
     let requests = checked(&args[4], REQUESTS_SHA)?;
     let truth = checked(&args[5], TRUTH_SHA)?;
-    let plans = checked(&args[6], PLANS_SHA)?;
+    let plans = checked(&args[6], plans_hash)?;
     if sq8.len() != 78_000_000 || truth.len() != 25_600 {
         return Err(invalid("SQ8 or truth geometry").into());
     }
@@ -179,7 +180,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let result = json!({
         "schema":"borsuk-v291-rust-sq8-parity-v1",
         "dataset":"CoHere first100k D768 cosine k100", "split":"development0-63",
-        "queries":64, "plans_sha256":PLANS_SHA,
+        "queries":64, "plans_sha256":plans_hash,
         "mean_fetched_gt_hits":fetched_hits.iter().sum::<usize>() as f64 / 64.0,
         "p05_fetched_gt_hits":p05(&fetched_hits),
         "mean_returned_gt_hits":returned_hits.iter().sum::<usize>() as f64 / 64.0,

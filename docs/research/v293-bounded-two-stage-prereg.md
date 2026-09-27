@@ -21,3 +21,17 @@ whether bounded page discovery, final selection or SQ8 ranking is the first
 causal loss; no paid or scale run. Reuse V291's verified Rust arithmetic
 relation; near-gate new plans require an exact Rust score replay. These are
 local quality/planned-I/O data, not HTTP service latency or vendor claims.
+
+## Near-gate scorer replay
+
+The frozen `bbdae616` local combined screen completed exit 0 in 37.27 s
+with 861,224 KiB peak process RSS. Its result SHA is
+`f9fc36ce0c1a8b13aa9c03d568c41436a27545f6d0df65930a21fd40778c91c0`;
+selected physical plan receipt SHA is
+`00190ff7ed017b2150d1415f36077be774c0e59075ec0eb0e691f81511ae3aa4`.
+Fetched GT100 mean/p05 is 99.546875/98; returned is 98.015625/96, within
+32 GET/16,773,120 bytes. The margin is one returned GT hit across64 queries.
+Do not promote until the existing authenticated Rust SQ8 replayer agrees
+on these exact page sets and returned counts. It now accepts a caller-pinned
+plan digest so the same scorer can check this receipt without a copied binary.
+No score, route, query or threshold changes are permitted by that adaptation.
