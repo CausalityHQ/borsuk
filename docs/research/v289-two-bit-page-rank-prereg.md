@@ -32,3 +32,26 @@ sublinear Rust route design and same-query returned-SQ8 test, then the
 unchanged paired ReLAION+CoHere 100k validation gate. A fail forbids a code
 plane build, cloud run or 1M claim. Report build and query wall/RSS as offline
 diagnostics only, never HTTP latency/QPS. No parameter sweep or new paid job.
+
+## Completed development decision (2026-09-27 UTC)
+
+**GO to one bounded, sublinear route screen; no serving or scale promotion.**
+The preregistered `b4f22f59` source-only run completed exit 0 in 7.75 s with
+538,780 KiB peak process RSS. Its [result](v289-two-bit-page-rank-result.json)
+SHA-256 is
+`24af97e0da0b27a6bb33371b57a969b899c4b062a025bd6374c84196bf94a9e6`.
+
+| CoHere first100k D768 cosine k100, development0–63 | Fetched GT100 mean | p05 hits | Max GET | Max planned bytes |
+| --- | ---: | ---: | ---: | ---: |
+| V287 resident PQ64 global page score | 98.390625 | 93 | 32 | 16,773,120 |
+| V289 resident rotated two-bit global page score | **99.953125** | **100** | 32 | 16,773,120 |
+| Frozen necessary gate | >=98.900000 | >=96 | <=32 | <=16,777,216 |
+
+The score is query-to-page nomination with SQ8 data bytes *planned*, not
+returned recall or an actual S3 GET. An independent eight-row arithmetic
+check compared the closed-form score against explicit rotated-vector cosine;
+maximum absolute error was `5.55e-16`. The code plane is 200 bytes/row and
+all 100,000 records are scored for every query here. Neither the 7.75 s
+whole-process diagnostic time nor its RSS predicts service latency or 100M
+memory. The next gate must bound row-code scoring work sharply while keeping
+coverage, then test returned SQ8 on development only. No cloud job yet.

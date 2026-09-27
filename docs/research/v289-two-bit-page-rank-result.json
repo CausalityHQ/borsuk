@@ -1,0 +1,1 @@
+{"advance":true,"code_bytes_per_row":200,"dataset":"CoHere first100k D768 cosine k100","max_gets":32,"max_planned_bytes":16773120,"mean_fetched_gt_hits":99.953125,"p05_fetched_gt_hits":100,"queries":64,"schema":"borsuk-v289-two-bit-page-rank-v1","split":"development0-63"}
