@@ -2138,23 +2138,23 @@ mod tests {
             &validation,
         )
         .unwrap();
-        assert!(audit_v41_holdout_query_role(&prior, &vec![query(0, 31)]).is_ok());
-        assert!(audit_v41_holdout_query_role(&prior, &vec![development[0].clone()]).is_err());
-        assert!(audit_v41_holdout_query_role(&prior, &vec![validation[0].clone()]).is_err());
+        assert!(audit_v41_holdout_query_role(&prior, &[query(0, 31)]).is_ok());
+        assert!(audit_v41_holdout_query_role(&prior, &[development[0].clone()]).is_err());
+        assert!(audit_v41_holdout_query_role(&prior, &[validation[0].clone()]).is_err());
         let wrong_predecessor = audit_v41_query_roles(
             "development-query",
             &development,
             "holdout-query",
-            &vec![query(0, 41)],
+            &[query(0, 41)],
         )
         .unwrap();
-        assert!(audit_v41_holdout_query_role(&wrong_predecessor, &vec![query(0, 51)]).is_err());
+        assert!(audit_v41_holdout_query_role(&wrong_predecessor, &[query(0, 51)]).is_err());
         assert!(
             audit_v41_query_roles(
                 "validation-query",
                 &validation,
                 "holdout-query",
-                &vec![validation[0].clone()],
+                &[validation[0].clone()],
             )
             .is_err()
         );
@@ -2163,7 +2163,7 @@ mod tests {
                 "development-query",
                 &development,
                 "holdout-query",
-                &vec![query(0, 31)],
+                &[query(0, 31)],
             )
             .is_ok()
         );
@@ -2172,7 +2172,7 @@ mod tests {
                 "development-query",
                 &development,
                 "holdout-query",
-                &vec![development[0].clone()],
+                &[development[0].clone()],
             )
             .is_err()
         );
