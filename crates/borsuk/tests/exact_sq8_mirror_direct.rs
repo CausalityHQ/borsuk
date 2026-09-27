@@ -2,6 +2,8 @@
 mod exact_sq8_mirror;
 #[path = "../src/exact_sq8_nominee.rs"]
 mod exact_sq8_nominee;
+#[path = "../src/sq8_page_authority.rs"]
+mod sq8_page_authority;
 
 use exact_sq8_mirror::{ExactSq8Mirror, MirrorManifest, Placement};
 use exact_sq8_nominee::Sq8Geometry;
