@@ -22,6 +22,20 @@ SQ8_SHA = "301696df05ca03122951b66ad8a9bedb5d5f1e675c6fc66f6019abbce3fcda58"
 SEED = 20260923
 
 
+def rust_sq8_scores(fetched, query, low, step):
+    """Match score_nominees' sequential f32 rounding, including shift."""
+    shift = np.float32(0)
+    qnorm = np.float32(0)
+    weights = query * step
+    inner = np.zeros(len(fetched), dtype=np.float32)
+    for coordinate in range(768):
+        shift = np.float32(shift + np.float32(query[coordinate] * low[coordinate]))
+        qnorm = np.float32(qnorm + np.float32(query[coordinate] * query[coordinate]))
+        inner += fetched["code"][:, coordinate].astype(np.float32) * weights[coordinate]
+    shift = np.float32(shift - np.float32(qnorm / np.float32(2)))
+    return fetched["norm"] - np.float32(2) * (inner + shift)
+
+
 def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
     assert [sha(p.read_bytes()) for p in (raw, archive, root_sha, layout, sq8_path, requests, truth)] == [
         RAW_SHA, ARCHIVE_SHA, ROOT_SHA_FILE_SHA, LAYOUT_SHA, SQ8_SHA, REQUESTS_SHA, TRUTH_SHA]
@@ -107,9 +121,7 @@ def evaluate(raw, archive, root_sha, layout, sq8_path, requests, truth):
         byte_counts.append(sum(min(256, 100_000-256*p)*780 for p in cover))
         physical = np.concatenate([np.arange(p*256, min((p+1)*256, 100_000)) for p in sorted(cover)])
         fetched = sq8[physical]
-        weights = query*step
-        shift = float(query @ low) - float(query @ query)/2
-        sq8_scores = fetched["norm"] - 2*(fetched["code"].astype(np.float32) @ weights + shift)
+        sq8_scores = rust_sq8_scores(fetched, query, low, step)
         best = fetched["id"][np.lexsort((fetched["id"], sq8_scores))[:100]]
         returned_hits.append(int(np.isin(best, neighbors).sum()))
         plans.append({"query_ordinal": ordinal, "pages": sorted(cover),

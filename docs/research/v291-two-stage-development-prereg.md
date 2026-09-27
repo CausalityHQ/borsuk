@@ -72,3 +72,12 @@ receipt. Its aggregate output must remain byte-identical to the sealed
 verify every selected page payload, and use the production `rank_returned_ranges`
 arithmetic on precisely those page sets; any per-query mismatch stops promotion.
 This replays the scorer, not a new query cohort or route parameter.
+
+The first complete exact Rust replay from `0c0c56f9` passed page-coverage
+parity on all 64 queries and returned mean 98.1875/p05 96. Its only returned
+count difference was ordinal18 (Rust99, NumPy98). The NumPy scorer used a
+BLAS dot product and reduction for shift while Rust accumulates float32
+products in coordinate order. The source diagnostic is therefore corrected
+to the production sequential-f32 arithmetic before one parity replay; no
+candidate/fetched page or threshold changes. The earlier NumPy result stays
+immutable as its recorded arithmetic, not an exact production score.
