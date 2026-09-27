@@ -1656,6 +1656,7 @@ pub(crate) fn rank_v26_pq4_fast_candidates(
     Ok(ranked)
 }
 
+#[cfg(any(target_arch = "aarch64", test))]
 pub(crate) fn rank_v26_pq4_fast_candidates_parallel(
     index: &V26Pq4FastIndex,
     query: &[f32; 96],
@@ -1744,6 +1745,16 @@ pub(crate) fn rank_v26_pq4_fast_candidates_parallel(
         return Err(invalid("V26 PQ4 ranked inventory differs"));
     }
     Ok(ranked)
+}
+
+#[cfg(all(not(target_arch = "aarch64"), not(test)))]
+pub(crate) fn rank_v26_pq4_fast_candidates_parallel(
+    _index: &V26Pq4FastIndex,
+    _query: &[f32; 96],
+    _ranked_row_limit: usize,
+    _backend: V26Pq4Backend,
+) -> Result<Vec<V26Pq4RankedRow>> {
+    Err(invalid("V26 PQ4 fused backend unavailable"))
 }
 
 #[cfg(test)]
