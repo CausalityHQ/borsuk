@@ -61,7 +61,7 @@ export PYTHONPATH="$root/repo" OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_
 phase=inputs
 source_key="$BORSUK_V273_V261_PREFIX/artifacts/vectors.raw"
 aws s3api get-object --bucket "$BORSUK_V273_BUCKET" --key "$source_key" --range bytes=0-307199999 vectors.raw >/dev/null
-printf '%s  vectors.raw\n' 'd638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753' | sha256sum -c - >vectors.raw.sha256
+printf '%s  vectors.raw\n' '0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e' | sha256sum -c - >vectors.raw.sha256
 aws s3api get-object --bucket "$BORSUK_V273_BUCKET" --key "$source_key" --range bytes=307200000-310271999 fresh_queries.raw >/dev/null
 printf '%s  fresh_queries.raw\n' '10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0' | sha256sum -c - >fresh_queries.raw.sha256
 aws s3 cp "s3://$BORSUK_V273_BUCKET/$BORSUK_V273_V271_PREFIX/terminal.json" baseline-terminal.json --only-show-errors

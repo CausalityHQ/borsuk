@@ -11,7 +11,8 @@ from pathlib import Path
 import numpy as np
 
 DIMS = 768
-SOURCE_SHA = "d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753"
+SOURCE_RAW_SHA = "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+SOURCE_IDENTITY_SHA = "d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753"
 QUERY_SHA = "10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0"
 
 
@@ -20,6 +21,20 @@ def digest(path):
     with Path(path).open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             value.update(block)
+    return value.hexdigest()
+
+
+def source_identity(path):
+    value = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for row_id in range(100_000):
+            vector = source.read(DIMS * 4)
+            if len(vector) != DIMS * 4:
+                raise ValueError("source truncated")
+            value.update(row_id.to_bytes(8, "little"))
+            value.update(vector)
+        if source.read(1):
+            raise ValueError("source has trailing bytes")
     return value.hexdigest()
 
 
@@ -35,7 +50,9 @@ def unit(values):
 def prepare(source, queries, truth):
     import faiss
 
-    if digest(source) != SOURCE_SHA or digest(queries) != QUERY_SHA:
+    if (digest(source) != SOURCE_RAW_SHA
+            or source_identity(source) != SOURCE_IDENTITY_SHA
+            or digest(queries) != QUERY_SHA):
         raise ValueError("source or fresh query SHA differs")
     rows = np.memmap(source, dtype="<f4", mode="r", shape=(100_000, DIMS))
     panel = np.memmap(queries, dtype="<f4", mode="r", shape=(1_000, DIMS))
@@ -93,7 +110,8 @@ def compare(baseline, candidate, truth, output):
               "dataset": "CoHere-large-10M train first100k D768 cosine",
               "split": "excluded train rows100000-100999", "k": 100,
               "queries": 1_000, "mode": "diagnostic-stress",
-              "query_sha256": QUERY_SHA, "source_sha256": SOURCE_SHA}
+              "query_sha256": QUERY_SHA, "source_raw_sha256": SOURCE_RAW_SHA,
+              "source_identity_sha256": SOURCE_IDENTITY_SHA}
     Path(output).write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
     print(json.dumps(result, sort_keys=True))
 

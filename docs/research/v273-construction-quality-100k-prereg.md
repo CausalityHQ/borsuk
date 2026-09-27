@@ -19,7 +19,9 @@ the number of graph objects. No construction or search parameter sweep.
 Corpus: CoHere-large-10M canonical train rows 0–99,999, D768 cosine, from
 V261's sealed `vectors.raw` (3,072,000,000 bytes, SHA-256
 `6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005`).
-The first 100k rows must reproduce source SHA-256
+The first 100k raw FP32 bytes must have SHA-256
+`0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e`;
+their ID-plus-vector identity must reproduce source SHA-256
 `d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753`
 in V271's authenticated 100k root
 `440beefd321dfeeae25ba6277a2e2f1f938c389a0c4a9007177f4bacc4b1d6e3`.
@@ -52,3 +54,8 @@ open/search and graph reachability. Failure rejects this construction change.
 A pass permits one frozen 1M fresh-query gate; it does not establish 10M
 quality, HTTP product latency, or vendor superiority. No 10M build follows
 directly from this 100k result.
+
+Attempt `a0001` stopped at input authentication before compile or measurement:
+it compared the raw-vector SHA with the ID-plus-vector identity. The terminal
+and closeout are immutable. Attempt `a0002` uses both correct checks above;
+the panel, candidate, widths and decision rule are unchanged.
