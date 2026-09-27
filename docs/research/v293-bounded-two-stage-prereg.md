@@ -30,8 +30,35 @@ with 861,224 KiB peak process RSS. Its result SHA is
 selected physical plan receipt SHA is
 `00190ff7ed017b2150d1415f36077be774c0e59075ec0eb0e691f81511ae3aa4`.
 Fetched GT100 mean/p05 is 99.546875/98; returned is 98.015625/96, within
-32 GET/16,773,120 bytes. The margin is one returned GT hit across64 queries.
+32 GET/16,773,120 bytes. The margin is one returned GT hit across 64 queries.
 Do not promote until the existing authenticated Rust SQ8 replayer agrees
 on these exact page sets and returned counts. It now accepts a caller-pinned
 plan digest so the same scorer can check this receipt without a copied binary.
 No score, route, query or threshold changes are permitted by that adaptation.
+
+## Exact development closeout
+
+**GO to one self-contained Rust route increment and paired 100k validation;
+no cloud or scale promotion.** The authenticated Rust scorer replay from
+`fee34096` completed exit 0 in 110.55 s with 102,152 KiB peak process RSS.
+Its [result](v293-rust-sq8-result.json) SHA is
+`9f701982c5eeffae1d150c3a7a0a680a2b1f6905629f2adc94fb9752e17d7956`.
+It matched every fetched and returned GT count on all 64 sealed
+[physical plans](v293-plans.jsonl), with no per-query differences.
+The [combined result](v293-bounded-two-stage-result.json) retains source
+SHA `f9fc36ce0c1a8b13aa9c03d568c41436a27545f6d0df65930a21fd40778c91c0`.
+
+| CoHere first100k D768 cosine k100, development0–63 | Candidate GT100 | Fetched GT100 | Exact SQ8 R@100 | Returned p05 |
+| --- | ---: | ---: | ---: | ---: |
+| V291 flat precursor | 99.812500 | 99.765625 | 98.187500% | 96 |
+| V293 bounded centroid graph | 99.578125 | 99.546875 | **98.015625%** | **96** |
+
+Both use <=32 GET and 16,773,120 planned bytes. V293 uses <=1,400 resident
+centroid evaluations and <=40,704 two-bit row scores. The development pass
+has a one-hit mean margin; no validation generalization is established.
+Debug Rust replay wall time is a verification cost, not serving latency.
+Freeze this route instead of adding another architecture arm. The next code
+increment must provide the deterministic two-bit source encoder and bounded
+query scorer in Rust, then reproduce this page/quality relation on the frozen
+development split before the unchanged paired ReLAION/CoHere validation gate.
+Only a paired validation pass can authorize one cold 1M HTTP run.
