@@ -2,6 +2,7 @@
 
 import math
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,14 +60,7 @@ class GroupProxyTests(unittest.TestCase):
             missing = str(Path(temporary) / "missing")
             Path(missing).write_bytes(b"")
             command = [
-                "uv",
-                "run",
-                "--offline",
-                "--python",
-                "3.12",
-                "--with-requirements",
-                "scripts/requirements-format-bench.txt",
-                "python",
+                sys.executable,
                 str(driver),
             ]
             from scripts.run_v33_group_proxy import EXPECTED_DIGESTS
