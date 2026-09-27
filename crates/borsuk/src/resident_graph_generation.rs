@@ -655,7 +655,6 @@ mod tests {
             assert_eq!(warm.object_gets, 0);
             head
         });
-        drop(bound);
         drop(view);
         let pinned = Arc::new(loaded);
         let collection_head = tokio::runtime::Runtime::new().unwrap().block_on(async {

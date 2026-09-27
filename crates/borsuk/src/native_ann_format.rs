@@ -1135,7 +1135,7 @@ mod tests {
         nonfinite: bool,
         reordered: bool,
     ) -> Vec<u8> {
-        let mut rows = vec![(0_u32, 0_u8), (0, 1), (1, 0), (1, 1)];
+        let mut rows = [(0_u32, 0_u8), (0, 1), (1, 0), (1, 1)];
         if reordered {
             rows.swap(1, 2);
         }

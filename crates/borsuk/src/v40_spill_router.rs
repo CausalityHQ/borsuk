@@ -5037,6 +5037,7 @@ mod tests {
         assert!(encode_v40_packed_spill_summary_arrow(&malformed).is_err());
     }
 
+    #[allow(clippy::type_complexity)]
     fn direct_evaluation_fixture() -> (
         V40EvaluationSpec,
         Vec<(u64, u32, Option<u32>)>,
@@ -5678,7 +5679,8 @@ mod tests {
         let (frontier, summary) = v40_worst_case_preflight_fixture().unwrap();
         for masses in summary
             .masses_q24
-            .chunks_exact(super::V40_MAXIMUM_ALTERNATES_PER_POSTING)
+            .as_chunks::<{ super::V40_MAXIMUM_ALTERNATES_PER_POSTING }>()
+            .0
         {
             assert!(masses[..13].iter().all(|mass| *mass == 1_639));
             assert!(masses[13..].iter().all(|mass| *mass == 1_638));
