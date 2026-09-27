@@ -123,7 +123,7 @@ use crate::{
     native_ann_build::{
         NativeBuildConfig, NativeBuildRow, build_native_bounded_delta_generation,
         build_native_bounded_generation, build_native_delta_generation,
-        stage_native_bounded_generation, stage_native_generation,
+        stage_native_bounded_generation, stage_native_generation, supports_bounded_build,
     },
     native_ann_read::{
         NativeAnnSnapshot, NativeBoundedAnnSnapshot, NativeRowState, load_native_ann_snapshot,
@@ -4490,6 +4490,7 @@ impl BorsukIndex {
     ///
     /// Use full compaction instead when reclustering the exact-vector sidecars
     /// is worth a larger build working set in exchange for fewer rerank GETs.
+    /// Collections outside the PQ64 metric/dimension contract retain segment search.
     pub fn finish_bulk_load(&mut self) -> Result<()> {
         if v20_progress_enabled() {
             let current_key =
@@ -4523,7 +4524,14 @@ impl BorsukIndex {
             );
         }
         let summaries = self.active_segment_summaries()?;
-        self.publish_native_ann_from_summaries(&summaries)
+        if supports_bounded_build(
+            &self.manifest.config.metric,
+            self.manifest.config.dimensions,
+        ) {
+            self.publish_native_ann_from_summaries(&summaries)
+        } else {
+            Ok(())
+        }
     }
 
     /// Reject the retired post-create logical-cell catalog replacement path.
@@ -18486,7 +18494,12 @@ impl BorsukIndex {
             manifest.segments_are_global_delta = !manifest.segments.is_empty();
         }
 
-        if options.max_segments.is_none() {
+        if options.max_segments.is_none()
+            && supports_bounded_build(
+                &self.manifest.config.metric,
+                self.manifest.config.dimensions,
+            )
+        {
             let mut global_ann_summaries = match lexical_active_summaries.as_ref() {
                 Some(summaries) => summaries.clone(),
                 None => self.active_segment_summaries()?,

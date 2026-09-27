@@ -30,6 +30,10 @@ const BOUNDED_SUMMARY_BLOCKS: usize = 2;
 const BOUNDED_MAX_OUTPUT_PAGES: u32 = 32;
 const BOUNDED_MAX_QUERY_BODY_BYTES: u64 = 16 * 1024 * 1024;
 
+pub(crate) fn supports_bounded_build(metric: &VectorMetric, dimensions: usize) -> bool {
+    matches!(metric, VectorMetric::SquaredEuclidean) && dimensions >= BOUNDED_PQ_WIDTH
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeBuildRow {
     pub(crate) id: Vec<u8>,
@@ -885,8 +889,7 @@ pub(crate) fn build_native_bounded_generation<'a>(
         .map_err(|_| invalid("native bounded ANN dimensions exceed usize"))?;
     if config.generation == 0
         || config.source_identity.is_empty()
-        || config.metric != VectorMetric::SquaredEuclidean
-        || dimensions < BOUNDED_PQ_WIDTH
+        || !supports_bounded_build(&config.metric, dimensions)
         || rows.is_empty()
         || rows
             .iter()
