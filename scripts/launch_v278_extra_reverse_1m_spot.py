@@ -187,7 +187,7 @@ def launch(attempt):
             if len(body) != identity["bytes"] or sha(body) != identity["sha256"]:
                 raise ValueError("decision identity differs")
             decision = json.loads(body)
-            if decision.get("decision") not in {"go_1m", "reject_candidate", "inconclusive"}:
+            if decision.get("decision") not in {"go_cross_dataset_1m", "reject_candidate", "inconclusive"}:
                 raise ValueError("decision code differs")
         result = {"schema": SCHEMA + "-closeout", "source_commit": commit,
                   "source_archive_sha256": archive_sha, "instance_id": instance_id,
