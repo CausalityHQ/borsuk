@@ -22,3 +22,20 @@ must change descriptor information, not widen this used panel or tune page
 count. One local run only, <=2 minutes and <=2 GiB peak process RSS; no
 cloud job or full panel. Numerical results close to the gate require exact
 Rust scorer replay before promotion.
+
+## Completed development decision (2026-09-27 UTC)
+
+**KILL cosine scoring of the existing f16 unit means.** The frozen
+`0ef1e021` script completed exit 0 in 0.57 s with 59,436 KiB peak process
+RSS. The [result](v286-cosine-centroid-dev64-result.json) SHA-256 is
+`7dce58171803d67fd2f2491d9f28d18f7cae6c529073723fbfb8cf2c2d5b456e`.
+On CoHere first100k D768 cosine k100 development0–63, it fetched **96.78125
+GT100 mean/p05 89**, at most 31 GETs and 16,773,120 planned bytes. It misses
+the 98.7/p05 95 gate by 1.91875 mean hits and 6 p05 hits, and is below V284's
+Euclidean unit-mean result of 97.0625/p05 92. This is far from the gate, so
+no exact Rust scorer replay is warranted. The mismatch between query metric
+and centroid distance was not the root cause. The unit means themselves do
+not retain enough query-neighbor geometry for this physical layout and budget;
+the next candidate must encode more within-page detail rather than tune the
+same mean scores or page count. This short fetched-coverage diagnostic is not
+returned recall or live S3 performance. No full panel or paid run follows.

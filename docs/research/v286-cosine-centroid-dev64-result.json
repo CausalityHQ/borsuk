@@ -1,0 +1,1 @@
+{"advance_to_rust":false,"dataset":"CoHere first100k D768 cosine k100","max_gets":31,"max_planned_bytes":16773120,"mean_fetched_gt_hits":96.78125,"p05_fetched_gt_hits":89,"queries":64,"schema":"borsuk-v286-cosine-centroid-dev64-v1","split":"development0-63"}
