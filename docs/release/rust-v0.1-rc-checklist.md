@@ -43,8 +43,11 @@ does not provide HTTP authentication or tenant isolation.
   all local path dependencies; create/open/search runs from a clean extraction.
   A registry `.crate` is blocked by unpublished workspace dependencies and is
   outside this first cut.
-- [ ] Required CI gates pass on the exact release commit. The current broad
-  Rust formatting drift is a known gate blocker; fix it before the cut.
+- [ ] Required CI gates pass on the exact release commit. `cargo fmt --all
+  -- --check` passes at the V281 launch revision; the repository-wide Ruff
+  format check reported 743 files before the new V281 scripts were formatted,
+  so broad Python drift remains. CI has not been verified green on a release
+  commit.
 - [x] Benchmark claims remain tied to their source revisions and scopes:
   V271 fresh CoHere1M frontier and ANN control, V272 10M no-go, and V280
   ReLAION1M HTTP serving pass. A matched vendor win remains unverified.
