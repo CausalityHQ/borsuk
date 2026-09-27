@@ -81,3 +81,33 @@ products in coordinate order. The source diagnostic is therefore corrected
 to the production sequential-f32 arithmetic before one parity replay; no
 candidate/fetched page or threshold changes. The earlier NumPy result stays
 immutable as its recorded arithmetic, not an exact production score.
+
+## Exact score closeout
+
+**The development quality/I/O gate passes with the production Rust scorer.**
+The authenticated debug Rust replay completed exit 0 in 109.84 s with
+102,216 KiB peak process RSS. Its [result](v291-rust-sq8-replay-result.json)
+SHA-256 is `6e0e8eecd6c616dbf4fe76b5ae3653f44d51f9fba94855bc8de87b1842a84318`.
+It verified all selected page hashes and all 64 fetched-hit counts. The
+single returned count difference from BLAS is query18: Rust99 versus BLAS98.
+
+The sequential-f32 Python replay from `a911e39a` completed exit 0 in 35.41 s
+with 876,204 KiB peak process RSS. Its [exact-score result](v291-exact-score-result.json)
+SHA-256 is `3fed8fb0db99881e83608470cc895be1904b89f340467ad2922637a1e7ac3678`.
+[The validator](../../scripts/validate_v291_exact_sq8_parity.py) authenticated
+both [original BLAS plans](v291-blas-plans.jsonl) and
+[exact-score plans](v291-exact-plans.jsonl), verified that every selected physical
+page set was unchanged, and matched all 64 exact-score counts to the recorded
+Rust scorer result. Mean returned GT100 is **98.1875**, p05 **96**, fetched
+mean **99.765625**, p05 **99**, within 32 GET/16,773,120 planned bytes. The
+parity blocker is resolved without tuning the route or using new queries.
+Neither debug Rust wall time nor Python offline time is a serving measurement.
+
+The current first stage still flat-scans 3,125 source-unit centroids, and the
+200-byte row plane scores at most 40,704 resident codes per query. The next
+single gate is a bounded hierarchical first-stage search paired with this
+unchanged exact-score route. Only that and the unchanged two-dataset 100k
+validation can authorize cold1M HTTP. Code and SQ8 source scales are explicit:
+the two-bit plane encodes original raw CoHere rows for cosine nomination;
+SQ8 encodes normalized rows, with coefficients bound by its own generation.
+No 100M memory/latency projection or vendor win is claimed.
