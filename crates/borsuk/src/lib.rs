@@ -80,6 +80,7 @@ pub mod pq64_router_artifact;
 mod quantizer_sidecar;
 mod record;
 pub mod relaid_generation_authority;
+pub mod rotated_two_bit;
 pub mod relaxed_priced_interval;
 pub mod resident_fp16_tier;
 pub mod resident_graph_build;

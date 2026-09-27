@@ -67,6 +67,13 @@ does not provide HTTP authentication or tenant isolation.
   this only closes remote metadata bootstrap, not the failed quality gate or
   missing create/mutation/GC path.
 
+The source-only `rotated_two_bit` Rust module now provides the candidate
+encoder and a query lookup scorer with explicit scratch admission. Its tests
+pin the qualified D768 Python encoding and cover padded tails and malformed
+inputs. V293's bounded centroid route passes only CoHere development0–63;
+the new codec still needs frozen whole-route parity, paired validation and
+generation publication/maintenance integration before release.
+
 V270 `a0001` was launched before the release-cut directive, then deliberately
 stopped at 2026-09-26 UTC without a terminal measurement. Spot instance
 `i-03c2d9018d7224bcb` is terminated. Its S3 reservation remains historical
