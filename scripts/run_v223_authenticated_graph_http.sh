@@ -6,6 +6,7 @@ mkdir -p "$root" && cd "$root"
 role=$BORSUK_V223_ROLE
 bucket=$BORSUK_V223_BUCKET
 prefix=$BORSUK_V223_PREFIX
+v280_prefix=research/v279-relaion-transfer-1m/8206cbc9a7d0949146b2a8739f4964725871a913/runs/a0001/artifacts
 phase=bootstrap
 worker_started_epoch=$(date +%s)
 server_pid=
@@ -73,6 +74,7 @@ print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-terminal-v1',
     'collection_uri':os.environ.get('BORSUK_V223_COLLECTION_URI',''),
     'generation_uri':os.environ.get('BORSUK_V223_GENERATION_URI',''),
     'cohere_dual':os.environ.get('BORSUK_V223_COHERE_DUAL','')=='1',
+    'v280':os.environ.get('BORSUK_V223_V280','')=='1',
     'instance_id':identity['instanceId'],'instance_type':identity['instanceType'],
     'region':identity['region'],'availability_zone':identity['availabilityZone'],
     'server_instance_id':os.environ.get('BORSUK_V223_SERVER_ID',''),
@@ -116,7 +118,10 @@ download() {
 }
 
 phase=inputs
-if [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
+if [ "${BORSUK_V223_V280:-}" = 1 ]; then
+  download generation.json "$v280_prefix/baseline/root.json" \
+    691 bdc994e1f58c817ebfd95c7ddaa3aca37fe182f7dc73a569a61ad39a73ec2565
+elif [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
   cp repo/docs/research/v262-cohere-1m-generation.json generation.json
 elif [ -n "${BORSUK_V223_GENERATION_URI:-}" ]; then
   cp repo/docs/research/v246-relaion-1m-generation.json generation.json
@@ -124,7 +129,9 @@ else
   cp repo/docs/research/v223-relaion-1m-generation.json generation.json
 fi
 printf '%s  generation.json\n' "$BORSUK_V223_ROOT_SHA" | sha256sum -c -
-if [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
+if [ "${BORSUK_V223_V280:-}" = 1 ]; then
+  : # V280 uses authenticated binary cosine queries and truth below.
+elif [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
   download prep.json \
     research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/artifacts/prep.json \
     857 2644a754bb3750f3fa7d4a9d8962651f351bf5cffbba11e28cb486762c15ad95
@@ -135,7 +142,17 @@ else
 fi
 if [ "$role" = server ]; then
   if [ -z "${BORSUK_V223_COLLECTION_URI:-}" ]; then
-  if [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
+  if [ "${BORSUK_V223_V280:-}" = 1 ]; then
+    for spec in \
+      'graph.bin 267213494 b5dd6d7bbc1ad94ed1854b6d3e5af9f5413ca57de73f70f8c19a86cf62ce19ce' \
+      'map.u32 4000000 02e21fa3c89fa7d7b61826918a8bd35d3127827b4ef3f3ee47ade5e64e3c2a80' \
+      'plane.bin 1544000064 de30973133c05edc196d0a55f0604f3ed11f3cff6038d71feebffe45effe0994' \
+      'books.bin 786432 ef0a17db299d197b57fe1733e834a9b715969d938b8ea039052016161b2d8b1f' \
+      'codes.bin 64000000 fce652ded46780145d163b6c68609104c7dfc05b047064f4bf7b0f86d8b48b46'; do
+      read -r name bytes sha <<<"$spec"
+      download "$name" "$v280_prefix/baseline/$name" "$bytes" "$sha"
+    done
+  elif [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
     for spec in \
       'graph.bin 268128138 dff17235c4b674848d52ae11260445f97fd399039e18119f922aaa82d77309a2' \
       'map.u32 4000000 02e21fa3c89fa7d7b61826918a8bd35d3127827b4ef3f3ee47ade5e64e3c2a80' \
@@ -197,7 +214,9 @@ if [ "$role" = server ]; then
     "$CARGO_TARGET_DIR/release/examples/v246_publish_graph_s3" \
       "$BORSUK_V223_GENERATION_URI" generation.json . "$BORSUK_V223_ROOT_SHA" >publish.json
     mode=generation-s3
-    [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ] && mode=generation-s3-dual
+    if [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ] || [ "${BORSUK_V223_V280:-}" = 1 ]; then
+      mode=generation-s3-dual
+    fi
     server_args=("$mode" "$BORSUK_V223_GENERATION_URI" cache 3221225472 0.0.0.0:8080)
   elif [ -n "${BORSUK_V223_COLLECTION_URI:-}" ]; then
     server_args=(collection "$BORSUK_V223_COLLECTION_URI" cache 3221225472 0.0.0.0:8080)
@@ -219,7 +238,8 @@ if [ "$role" = server ]; then
 import json,os
 v=json.load(open('hydrate.json'))
 assert v['base_root_sha256']==os.environ['BORSUK_V223_ROOT_SHA']
-expected=1880914634 if os.environ.get('BORSUK_V223_COHERE_DUAL')=='1' else 1879696738
+expected=(1879999990 if os.environ.get('BORSUK_V223_V280')=='1' else
+          1880914634 if os.environ.get('BORSUK_V223_COHERE_DUAL')=='1' else 1879696738)
 assert v['graph_blob_gets']==5 and v['graph_response_bytes']==expected
 PY
   elif [ -n "${BORSUK_V223_COLLECTION_URI:-}" ]; then
@@ -254,6 +274,7 @@ print(json.dumps({'schema':'borsuk-v223-authenticated-graph-http-ready-v1',
     'collection_uri':os.environ.get('BORSUK_V223_COLLECTION_URI',''),
     'generation_uri':os.environ.get('BORSUK_V223_GENERATION_URI',''),
     'cohere_dual':os.environ.get('BORSUK_V223_COHERE_DUAL','')=='1',
+    'v280':os.environ.get('BORSUK_V223_V280','')=='1',
     'mutation_sha256':os.environ.get('BORSUK_V223_COLLECTION_SHA',''),
     'source_commit':os.environ['BORSUK_V223_SOURCE_COMMIT']},sort_keys=True))
 PY
@@ -285,7 +306,10 @@ PY
   wait "$server_pid" || true
   server_pid=
 else
-  if [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
+  if [ "${BORSUK_V223_V280:-}" = 1 ]; then
+    download queries.f32 "$v280_prefix/queries.f32" \
+      3072000 82fe696c1d765d27b9f8f6c5277a998a4ebbf2bd6d6f89533ad3a5445105525a
+  elif [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
     download requests.jsonl \
       research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/artifacts/requests.jsonl \
       15369495 86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812
@@ -306,10 +330,15 @@ else
   for pass in first repeat; do
     label=first_pass
     [ "$pass" = repeat ] && label=immediate_repeat
+    bench_args=(--host "$BORSUK_V223_SERVER_IP" --port 8080 --pass-label "$label" \
+                --raw "$pass.raw.jsonl" --summary "$pass.summary.json")
+    if [ "${BORSUK_V223_V280:-}" = 1 ]; then
+      bench_args+=(--queries-f32 queries.f32)
+    else
+      bench_args+=(--prep prep.json --requests requests.jsonl)
+    fi
     /usr/bin/time -v -o "$pass.time" python3.12 -m scripts.v220_bench_graph_http \
-      --host "$BORSUK_V223_SERVER_IP" --port 8080 --pass-label "$label" \
-      --prep prep.json --requests requests.jsonl --raw "$pass.raw.jsonl" \
-      --summary "$pass.summary.json"
+      "${bench_args[@]}"
   done
   for pass in first repeat; do
     aws s3api put-object --bucket "$bucket" --key "$prefix/client/sealed/$pass.raw.jsonl" \
@@ -328,7 +357,12 @@ else
       1167275 e14e53a2601e0b6f0fe64bdf227b9c4a2431e7db21d93cd4db3acd1967dbf30c
   fi
   phase=truth
-  if [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
+  if [ "${BORSUK_V223_V280:-}" = 1 ]; then
+    download v279-raw.jsonl "$v280_prefix/baseline.default.raw.jsonl" \
+      749808 291c10bcea15003959d556fdb7827522a498c166f3ea3a9dca30480ecc733d41
+    download truth.u32 "$v280_prefix/truth.u32" \
+      400000 23180f9b7e7727f478672d919e08e7bc17bdb75a76c9308d69dbc44c41bc1db7
+  elif [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
     download v261-raw.jsonl \
       research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/artifacts/raw.jsonl \
       911035 d8566803b49197ae454d8ecc3775adc8bd4e9a48629885db546a043b9ae94246
@@ -344,7 +378,7 @@ else
       research/v219-reachable-graph-1m/008ab6fbc50e6293e0599a33993c619702109bd9/runs/a0002/artifacts/raw.jsonl \
       4239096 ccc29dd912248c6bc86c49bdcd86bfc3cd28534d37e05690102425df2c3bcab9
   fi
-  if [ "${BORSUK_V223_COHERE_DUAL:-}" != 1 ]; then
+  if [ "${BORSUK_V223_COHERE_DUAL:-}" != 1 ] && [ "${BORSUK_V223_V280:-}" != 1 ]; then
     download v198-raw.jsonl \
       research/v198-real-query-resident-fp16/fdc51a358be350678d9f6f279a2be95a57709c02/runs/a0001/artifacts/out/raw.jsonl \
       3230820 2b18321435642de3fad4df02b84abcc046fb6c9b17808e72d6a50eea54a9ec98
@@ -352,7 +386,11 @@ else
   for pass in first repeat; do
     scorer=scripts.v222_score_external_graph_http
     [ -n "${BORSUK_V223_MUTATION_STRIDE:-}" ] && scorer=scripts.v230_score_mutation_graph_http
-    if [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
+    if [ "${BORSUK_V223_V280:-}" = 1 ]; then
+      python3.12 -m scripts.v280_http --raw "$pass.raw.jsonl" \
+        --reference v279-raw.jsonl --summary "$pass.summary.json" \
+        --truth truth.u32 --output "$pass.quality.json"
+    elif [ "${BORSUK_V223_COHERE_DUAL:-}" = 1 ]; then
       python3.12 -m scripts.v262_score_cohere_dual_http --raw "$pass.raw.jsonl" \
         --reference v261-raw.jsonl --summary "$pass.summary.json" \
         --truth truth.u32 --output "$pass.quality.json"

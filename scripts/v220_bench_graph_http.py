@@ -7,6 +7,7 @@ import hashlib
 import http.client
 import json
 import math
+import struct
 import time
 from pathlib import Path
 
@@ -27,25 +28,43 @@ def percentile(values: list[int], percent: int) -> int:
     return ordered[math.ceil(len(ordered) * percent / 100) - 1]
 
 
+def load_f32_queries(path: Path, count: int) -> list[list[float]]:
+    data = path.read_bytes()
+    if len(data) != count * 768 * 4:
+        raise ValueError("query geometry differs")
+    queries = [list(row) for row in struct.iter_unpack("<768f", data)]
+    if any(not all(map(math.isfinite, row)) or not any(row) for row in queries):
+        raise ValueError("invalid query")
+    return queries
+
+
 def run(args: argparse.Namespace) -> None:
-    prep = json.loads(args.prep.read_text())
-    cohere = prep["schema"] == "borsuk-v248-source-preparation-v1"
-    valid_requests = (prep.get("requests_sha256") == digest(args.requests)
-                      if not cohere else
-                      prep.get("dataset_id") == "cohere-large-10m-768"
-                      and prep.get("rows") == 1_000_000
-                      and digest(args.requests) ==
-                      "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812")
-    if (prep["schema"] not in ("borsuk-v217-graph-1m-preparation-v1",
-                               "borsuk-v248-source-preparation-v1")
-            or not valid_requests):
-        raise ValueError("V219 request panel identity differs")
-    requests = [json.loads(line) for line in args.requests.read_text().splitlines()]
-    if (len(requests) != COUNT or any(
-            row["query_ordinal"] != index or len(row["query"]) != 768
-            or not all(math.isfinite(value) for value in row["query"])
-            for index, row in enumerate(requests))):
-        raise ValueError("V219 request panel geometry differs")
+    queries_f32 = getattr(args, "queries_f32", None)
+    v280 = queries_f32 is not None
+    if v280:
+        if digest(queries_f32) != "82fe696c1d765d27b9f8f6c5277a998a4ebbf2bd6d6f89533ad3a5445105525a":
+            raise ValueError("V279 normalized query panel differs")
+        requests = [{"query": row} for row in load_f32_queries(queries_f32, COUNT)]
+        cohere = False
+    else:
+        prep = json.loads(args.prep.read_text())
+        cohere = prep["schema"] == "borsuk-v248-source-preparation-v1"
+        valid_requests = (prep.get("requests_sha256") == digest(args.requests)
+                          if not cohere else
+                          prep.get("dataset_id") == "cohere-large-10m-768"
+                          and prep.get("rows") == 1_000_000
+                          and digest(args.requests) ==
+                          "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812")
+        if (prep["schema"] not in ("borsuk-v217-graph-1m-preparation-v1",
+                                   "borsuk-v248-source-preparation-v1")
+                or not valid_requests):
+            raise ValueError("V219 request panel identity differs")
+        requests = [json.loads(line) for line in args.requests.read_text().splitlines()]
+        if (len(requests) != COUNT or any(
+                row["query_ordinal"] != index or len(row["query"]) != 768
+                or not all(math.isfinite(value) for value in row["query"])
+                for index, row in enumerate(requests))):
+            raise ValueError("V219 request panel geometry differs")
     def worker(offset: int) -> list[dict]:
         connection = http.client.HTTPConnection(args.host, args.port, timeout=30)
         rows = []
@@ -90,10 +109,11 @@ def run(args: argparse.Namespace) -> None:
             output.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
     latencies = [row["whole_ns"] for row in rows]
     args.summary.write_text(json.dumps({
-        "schema": ("borsuk-v262-cohere-dual-http-client-1m-v1" if cohere else
+        "schema": ("borsuk-v280-relaion-http-client-1m-v1" if v280 else
+                   "borsuk-v262-cohere-dual-http-client-1m-v1" if cohere else
                    "borsuk-v220-graph-http-1m-v1" if args.host in {"127.0.0.1", "localhost"}
                    else "borsuk-v222-graph-http-client-1m-v1"),
-        "requests_sha256": digest(args.requests),
+        "requests_sha256": digest(queries_f32 if v280 else args.requests),
         "raw_sha256": digest(args.raw), "queries": COUNT, "concurrency": WORKERS,
         "transport": ("persistent HTTP/1.1 loopback" if args.host in {"127.0.0.1", "localhost"}
                       else "persistent HTTP/1.1 VPC peer"),
@@ -117,6 +137,9 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--pass-label", choices=("single_pass", "first_pass", "immediate_repeat"),
                         default="single_pass")
-    for name in ("prep", "requests", "raw", "summary"):
-        parser.add_argument("--" + name, type=Path, required=True)
-    run(parser.parse_args())
+    for name in ("prep", "requests", "queries-f32", "raw", "summary"):
+        parser.add_argument("--" + name, type=Path, required=name in ("raw", "summary"))
+    args = parser.parse_args()
+    if (args.queries_f32 is None) != (args.prep is not None and args.requests is not None):
+        parser.error("supply --queries-f32 or both --prep and --requests")
+    run(args)

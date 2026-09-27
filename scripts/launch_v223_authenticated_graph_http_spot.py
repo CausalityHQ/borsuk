@@ -45,7 +45,7 @@ def bootstrap(role: str, commit: str, archive_sha: str, archive_key: str,
               mutation_stride: int = 0, delta_encoding: str = "",
               collection_uri: str = "", collection_sha: str = "",
               root_sha: str = ROOT_SHA, generation_uri: str = "",
-              cohere_dual: bool = False) -> str:
+              cohere_dual: bool = False, v280: bool = False) -> str:
     if role not in ARTIFACTS:
         raise ValueError("unknown V223 role")
     script = f"""#!/bin/bash
@@ -70,6 +70,7 @@ export BORSUK_V223_COLLECTION_URI='{collection_uri}'
 export BORSUK_V223_COLLECTION_SHA='{collection_sha}'
 export BORSUK_V223_GENERATION_URI='{generation_uri}'
 export BORSUK_V223_COHERE_DUAL='{'1' if cohere_dual else ''}'
+export BORSUK_V223_V280='{'1' if v280 else ''}'
 exec bash repo/scripts/run_v223_authenticated_graph_http.sh
 """
     if len(script.encode()) > 16_384:
@@ -116,7 +117,7 @@ def terminal(s3, role: str, prefix: str, raw: bytes, instance_id: str,
              commit: str, archive_sha: str, mutation_stride: int = 0,
              delta_encoding: str = "", collection_uri: str = "",
              root_sha: str = ROOT_SHA, generation_uri: str = "",
-             cohere_dual: bool = False) -> dict:
+             cohere_dual: bool = False, v280: bool = False) -> dict:
     value = json.loads(raw)
     artifacts = set(ARTIFACTS[role])
     if role == "server" and mutation_stride:
@@ -136,6 +137,7 @@ def terminal(s3, role: str, prefix: str, raw: bytes, instance_id: str,
             or value.get("collection_uri", "") != collection_uri
             or value.get("generation_uri", "") != generation_uri
             or value.get("cohere_dual", False) != cohere_dual
+            or value.get("v280", False) != v280
             or not set(value.get("artifacts", {})).issubset(artifacts)
             or (value["status"] == "complete" and (
                 value.get("exit_code") != 0 or set(value["artifacts"]) != artifacts))):
