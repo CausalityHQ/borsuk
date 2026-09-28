@@ -12,7 +12,7 @@ use crate::{
 };
 use object_store::{path::Path as ObjectPath, ObjectStore};
 use serde::Deserialize;
-use std::{fs, path::Path};
+use std::{borrow::Cow, fs, path::Path};
 use tokio::sync::Semaphore;
 
 /// Generation identity, admission, planning or authenticated range-read failure.
@@ -326,14 +326,28 @@ impl TwoBitGeneration {
             slots: Semaphore::new(limits.max_active_queries),
         })
     }
-    fn plan_inner(&self, query: &[f32]) -> Result<BudgetedPagePlan> {
+    fn plan_inner<'a>(&self, query: &'a [f32]) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>)> {
         let prepared = self
             .plane
             .prepare_query(query, self.limits.max_query_scratch_bytes)
             .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
+        // The codec already validated finite, nonzero input. Normalize after its
+        // temporary preparation buffer is released, within the same scratch cap.
+        let norm_squared = query.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
+        let normalized = if (norm_squared - 1.0).abs() <= 1e-6 {
+            Cow::Borrowed(query)
+        } else {
+            let norm = norm_squared.sqrt();
+            Cow::Owned(
+                query
+                    .iter()
+                    .map(|&x| (f64::from(x) / norm) as f32)
+                    .collect(),
+            )
+        };
         let seed = self
             .graph
-            .search(&self.centroids, query, 1, 128)
+            .search(&self.centroids, normalized.as_ref(), 1, 128)
             .map_err(TwoBitGenerationError::Graph)?;
         let seed_page = seed
             .units
@@ -346,7 +360,13 @@ impl TwoBitGeneration {
         if count > 1 {
             let found = self
                 .graph
-                .search_pages_seeded(&self.centroids, query, &[seed_page], count - 1, 1272)
+                .search_pages_seeded(
+                    &self.centroids,
+                    normalized.as_ref(),
+                    &[seed_page],
+                    count - 1,
+                    1272,
+                )
                 .map_err(TwoBitGenerationError::Graph)?;
             candidates.extend(found.pages.iter().map(|&(p, _)| p));
         }
@@ -382,6 +402,7 @@ impl TwoBitGeneration {
             self.limits.max_query_gets,
             self.limits.max_query_bytes,
         )
+        .map(|plan| (plan, normalized))
         .map_err(TwoBitGenerationError::Budget)
     }
     /// Frozen V296 nomination and physical admission, under a shared query slot.
@@ -391,7 +412,7 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        self.plan_inner(query)
+        self.plan_inner(query).map(|(plan, _)| plan)
     }
     /// Plan, fetch authenticated conditional ranges in one bounded wave, and rank.
     /// Reader errors retain physical request/byte/error accounting.
@@ -409,7 +430,7 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        let plan = self.plan_inner(query)?;
+        let (plan, normalized) = self.plan_inner(query)?;
         let page_bytes = 256 * (self.pages.dimensions() + 12);
         let ranges = plan
             .ranges
@@ -422,7 +443,7 @@ impl TwoBitGeneration {
                 &self.pages,
                 &ranges,
                 &self.manifest.sq8_etag,
-                query,
+                normalized.as_ref(),
                 &self.manifest.low,
                 &self.manifest.step,
                 top_k,

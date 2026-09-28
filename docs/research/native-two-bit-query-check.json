@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-two-bit-query-boundary-check-v1",
+  "baseline_commit": "7a0c33f2",
+  "source_files": {
+    "crates/borsuk/src/two_bit_generation.rs": "913e0310b0921b1c398cb2669638eb2341f44b25c2f4e57c39b7324857503fe0",
+    "crates/borsuk/tests/two_bit_generation.rs": "175cd3e1de9c701e046a5b3ecb03a99c3d2299e986aa0aadbd1b6308d31e2089"
+  },
+  "test": {
+    "command": "CARGO_BUILD_JOBS=1 cargo test -p borsuk --test two_bit_generation",
+    "original_session": 46530,
+    "exit_code": 0,
+    "tests_passed": 1,
+    "red_failure": "Graph(InvalidQuery) for finite scaled query",
+    "red_session_receipt": "lost at context rollover; completed failure log retained"
+  },
+  "replay": {
+    "original_session": 66903,
+    "exit_code": 0,
+    "dataset": "CoHere first100k D768 cosine",
+    "split": "development 0\u201363",
+    "root_sha256": "b2420db4aab045979d191b68ab9b61b149b01b6d84782a0cbac0be8779224219",
+    "requests_sha256": "1de0122f73d1b72e54498640b9701ce6d156b513629596447580c85fac302ba4",
+    "old_plans_sha256": "9dca4524e80b2f4f303d0e310e56ec08aba59d285781ee03d04f09be2149b564",
+    "plans_sha256": "d54c8a5ce36bb263ba91dbfb1c83a7a813d05cd4824ad6f805520bc02cb31fe3",
+    "queries": 64,
+    "changed_plan_records": 58,
+    "elapsed_seconds": 14.73,
+    "peak_rss_kib": 37720,
+    "swaps": 0,
+    "s3_reads": 0,
+    "parity_gate": "FAIL"
+  },
+  "causal_finding": "V296 harness and prior API fed raw unnormalized query vectors to Euclidean centroid routing and SQ8 scoring against normalized corpus. Historical quality applies to that arithmetic only; normalization is a method correction requiring fresh frozen development/validation qualification.",
+  "decision": "GO for shared cosine input correctness fix; HOLD inherited V296 quality and qualification. No scale run.",
+  "limits": [
+    "Offline debug verification only; no serving timing or new recall measurement",
+    "Full paired quality, cold HTTP, mutation/GC and vendor gates remain open",
+    "Independent review remains deferred; no paid run or duplicate consultation"
+  ]
+}

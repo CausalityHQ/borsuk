@@ -133,6 +133,12 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     };
     let generation = TwoBitGeneration::open(root, &hash(&manifest), limits).unwrap();
     let first = generation.plan(&[0.5, 0.25]).await.unwrap();
+    for query in [[5e29, 2.5e29], [5e-31, 2.5e-31]] {
+        assert_eq!(first.ranges, generation.plan(&query).await.unwrap().ranges);
+    }
+    assert!(generation.plan(&[0., 0.]).await.is_err());
+    assert!(generation.plan(&[f32::NAN, 1.]).await.is_err());
+    assert!(generation.plan(&[1.]).await.is_err());
     assert_eq!(first.planned_bytes, 7168);
     assert_eq!(first.ranges.len(), 1);
     let reloaded = TwoBitGeneration::open(root, &hash(&manifest), limits).unwrap();

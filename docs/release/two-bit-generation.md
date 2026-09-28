@@ -36,6 +36,13 @@ Creation must bind calibration and centroids from the same immutable SQ8 build.
 Do not manufacture a root from untrusted metadata and call its computed digest
 trusted. Wrong bindings, corruption and admission failures reject the generation.
 
+Queries use cosine geometry: finite nonzero inputs are normalized with a f64
+norm before centroid routing and final SQ8 scoring. Inputs whose squared norm
+is within1e-6 of one retain their original f32 values to preserve the frozen
+normalized workload. Two-bit nomination retains its existing cosine scoring.
+Zero, nonfinite and wrong-width queries fail before routing. Normalization
+reuses admitted preparation scratch; it does not increase the payload cap.
+
 The graph uses the frozen V296 one-unit/128-evaluation seed, then158 additional
 pages/1272 evaluations. Up to159 candidate pages are scored with the Rust
 reconstructed-cosine two-bit codec; the existing budgeted planner selects and
@@ -197,3 +204,16 @@ open/plan and zero-norm failure without a root. The same check retains publicati
 remote reload and stale-writer cases. This closes manual metadata/root assembly;
 raw-source semantic layout fitting and SQ8 encoding, full paired quality, cold
 HTTP, mutation and compaction/GC still require implementation/qualification.
+
+## Cosine input correction
+
+The query boundary now normalizes raw queries before graph routing and SQ8
+scoring. The focused integration check passes for extreme finite scales and
+invalid inputs. A replay of the original64 CoHere development requests changed
+58 physical plans: those requests are unnormalized, and the frozen V296 harness
+also fed raw queries to Euclidean graph/SQ8 stages against a normalized corpus.
+Historical V296 quality remains evidence for its original arithmetic; it does
+not qualify the corrected serving path. Fresh paired development and validation
+are required before scale or release. The replay took14.73seconds/37,720KiB
+peak RSS in debug mode, with zero S3 reads; these are not service measurements.
+See `docs/research/native-two-bit-query-check.json` and preserved raw plans.
