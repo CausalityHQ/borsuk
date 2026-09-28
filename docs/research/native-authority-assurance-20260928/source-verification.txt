@@ -1,0 +1,1 @@
+Archive e8b8815adb09686c8e2a85c72db137e380a7f1a0892f5a381c5f455fcdbfa39e: SHA256 verified; crates/borsuk/src/index.rs equals working source before next edits.

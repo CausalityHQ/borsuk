@@ -51448,12 +51448,12 @@ fn v20_large_stable_planes_require_a_retained_cache() {
 }
 
 #[test]
-fn native_ann_build_cutover_publishes_one_generic_dense_authority() {
+fn native_bounded_build_cutover_publishes_one_generic_dense_authority() {
     let directory = tempfile::tempdir().unwrap();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: directory.path().to_string_lossy().into_owned(),
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -51466,7 +51466,7 @@ fn native_ann_build_cutover_publishes_one_generic_dense_authority() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32 / 17.0; 16],
+                        vec![row as f32 / 17.0; 64],
                     )
                 })
                 .collect(),
@@ -51477,7 +51477,7 @@ fn native_ann_build_cutover_publishes_one_generic_dense_authority() {
 
     let native = index
         .manifest
-        .native_ann_ref
+        .native_bounded_ann_ref
         .as_ref()
         .expect("bulk-load finalization must publish the native authority");
     assert_eq!(native.router.physical_rows, 520);
@@ -51487,12 +51487,12 @@ fn native_ann_build_cutover_publishes_one_generic_dense_authority() {
 }
 
 #[test]
-fn native_ann_build_cutover_uses_collection_snapshot_as_sole_visibility_authority() {
+fn native_bounded_build_cutover_uses_collection_snapshot_as_sole_visibility_authority() {
     let directory = tempfile::tempdir().unwrap();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: directory.path().to_string_lossy().into_owned(),
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -51502,14 +51502,14 @@ fn native_ann_build_cutover_uses_collection_snapshot_as_sole_visibility_authorit
     index
         .add(
             (0..256)
-                .map(|row| VectorRecord::new(row.to_string(), vec![row as f32; 16]))
+                .map(|row| VectorRecord::new(row.to_string(), vec![row as f32; 64]))
                 .collect(),
         )
         .unwrap();
 
     index.finish_bulk_load().unwrap();
 
-    assert!(index.manifest.native_ann_ref.is_some());
+    assert!(index.manifest.native_bounded_ann_ref.is_some());
     assert!(
         index
             .storage
@@ -51521,13 +51521,13 @@ fn native_ann_build_cutover_uses_collection_snapshot_as_sole_visibility_authorit
 }
 
 #[test]
-fn native_ann_build_cutover_reopens_and_serves_the_native_snapshot() {
+fn native_bounded_build_cutover_reopens_and_serves_the_native_snapshot() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: uri.clone(),
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -51540,7 +51540,7 @@ fn native_ann_build_cutover_reopens_and_serves_the_native_snapshot() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32 / 17.0; 16],
+                        vec![row as f32 / 17.0; 64],
                     )
                 })
                 .collect(),
@@ -51552,7 +51552,7 @@ fn native_ann_build_cutover_reopens_and_serves_the_native_snapshot() {
     let index = BorsukIndex::open(&uri).unwrap();
     let report = index
         .search_with_report(
-            &[0.0; 16],
+            &[0.0; 64],
             SearchOptions::approx(10, LeafMode::PqScan)
                 .with_max_segments(8)
                 .with_max_candidates_per_segment(512),
@@ -51563,7 +51563,7 @@ fn native_ann_build_cutover_reopens_and_serves_the_native_snapshot() {
         report.hits[0].id.as_bytes(),
         [b"tenant/".as_slice(), &0_u64.to_be_bytes()].concat()
     );
-    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
     assert!(report.bytes_read > 0);
     assert!(report.requests.gets > 0);
 }
@@ -51857,13 +51857,13 @@ fn native_bounded_compaction_rebuilds_delta_into_one_deterministic_base() {
 }
 
 #[test]
-fn native_ann_flush_publishes_query_visible_delta_generation() {
+fn native_bounded_flush_publishes_query_visible_delta_generation() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: uri.clone(),
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -51876,27 +51876,32 @@ fn native_ann_flush_publishes_query_visible_delta_generation() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32 / 17.0; 16],
+                        vec![row as f32 / 17.0; 64],
                     )
                 })
                 .collect(),
         )
         .unwrap();
     index.finish_bulk_load().unwrap();
-    let base_generation = index.manifest.native_ann_ref.as_ref().unwrap().generation;
+    let base_generation = index
+        .manifest
+        .native_bounded_ann_ref
+        .as_ref()
+        .unwrap()
+        .generation;
 
     let fresh_id = b"\0fresh-binary-id".to_vec();
     index
         .add(vec![VectorRecord::new_bytes(
             fresh_id.clone(),
-            vec![-1.0; 16],
+            vec![-1.0; 64],
         )])
         .unwrap();
     index.flush().unwrap();
 
     let delta_authority = index
         .manifest
-        .native_ann_ref
+        .native_bounded_ann_ref
         .as_ref()
         .expect("flush must preserve and advance native authority");
     assert_eq!(delta_authority.generation, base_generation + 1);
@@ -51906,7 +51911,7 @@ fn native_ann_flush_publishes_query_visible_delta_generation() {
     let index = BorsukIndex::open(&uri).unwrap();
     let report = index
         .search_with_report(
-            &[-1.0; 16],
+            &[-1.0; 64],
             SearchOptions::approx(10, LeafMode::PqScan)
                 .with_max_segments(8)
                 .with_max_candidates_per_segment(512),
@@ -51914,17 +51919,17 @@ fn native_ann_flush_publishes_query_visible_delta_generation() {
         .unwrap();
 
     assert_eq!(report.hits[0].id.as_bytes(), fresh_id);
-    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
 }
 
 #[test]
-fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
+fn native_bounded_pending_write_search_keeps_committed_snapshot_neighbors() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri,
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -51937,7 +51942,7 @@ fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32; 16],
+                        vec![row as f32; 64],
                     )
                 })
                 .collect(),
@@ -51949,7 +51954,7 @@ fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
     index
         .add(vec![VectorRecord::new_bytes(
             committed_id.clone(),
-            vec![-1.0; 16],
+            vec![-1.0; 64],
         )])
         .unwrap();
     index.flush().unwrap();
@@ -51958,13 +51963,13 @@ fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
     index
         .add(vec![VectorRecord::new_bytes(
             pending_id.clone(),
-            vec![-2.0; 16],
+            vec![-2.0; 64],
         )])
         .unwrap();
 
     let report = index
         .search_with_report(
-            &[-2.0; 16],
+            &[-2.0; 64],
             SearchOptions::approx(10, LeafMode::PqScan)
                 .with_max_segments(8)
                 .with_max_candidates_per_segment(512),
@@ -51976,7 +51981,7 @@ fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
         .map(|hit| hit.id.as_bytes())
         .collect::<Vec<_>>();
 
-    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
     assert_eq!(ids.first().copied(), Some(pending_id.as_slice()));
     assert!(ids.contains(&committed_id.as_slice()));
     assert!(
@@ -51990,13 +51995,13 @@ fn native_ann_pending_write_search_keeps_committed_snapshot_neighbors() {
 }
 
 #[test]
-fn native_ann_flush_publishes_query_visible_tombstone() {
+fn native_bounded_flush_publishes_query_visible_tombstone() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: uri.clone(),
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -52010,7 +52015,7 @@ fn native_ann_flush_publishes_query_visible_tombstone() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32 / 17.0; 16],
+                        vec![row as f32 / 17.0; 64],
                     )
                 })
                 .collect(),
@@ -52021,7 +52026,12 @@ fn native_ann_flush_publishes_query_visible_tombstone() {
     index.delete([removed_id.clone()]).unwrap();
     index.flush().unwrap();
     assert_eq!(
-        index.manifest.native_ann_ref.as_ref().unwrap().generation,
+        index
+            .manifest
+            .native_bounded_ann_ref
+            .as_ref()
+            .unwrap()
+            .generation,
         2
     );
     drop(index);
@@ -52029,7 +52039,7 @@ fn native_ann_flush_publishes_query_visible_tombstone() {
     let index = BorsukIndex::open(&uri).unwrap();
     let report = index
         .search_with_report(
-            &[0.0; 16],
+            &[0.0; 64],
             SearchOptions::approx(10, LeafMode::PqScan)
                 .with_max_segments(8)
                 .with_max_candidates_per_segment(512),
@@ -52042,17 +52052,17 @@ fn native_ann_flush_publishes_query_visible_tombstone() {
             .iter()
             .all(|hit| hit.id.as_bytes() != removed_id)
     );
-    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
 }
 
 #[test]
-fn native_ann_pending_delete_search_suppresses_committed_snapshot_row() {
+fn native_bounded_pending_delete_search_suppresses_committed_snapshot_row() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri,
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -52066,7 +52076,7 @@ fn native_ann_pending_delete_search_suppresses_committed_snapshot_row() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32; 16],
+                        vec![row as f32; 64],
                     )
                 })
                 .collect(),
@@ -52078,14 +52088,14 @@ fn native_ann_pending_delete_search_suppresses_committed_snapshot_row() {
 
     let report = index
         .search_with_report(
-            &[0.0; 16],
+            &[0.0; 64],
             SearchOptions::approx(10, LeafMode::PqScan)
                 .with_max_segments(8)
                 .with_max_candidates_per_segment(512),
         )
         .unwrap();
 
-    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
     assert!(
         report
             .hits
@@ -52095,13 +52105,13 @@ fn native_ann_pending_delete_search_suppresses_committed_snapshot_row() {
 }
 
 #[test]
-fn native_ann_multiple_delta_generations_apply_latest_wins() {
+fn native_bounded_multiple_delta_generations_apply_latest_wins() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: uri.clone(),
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -52115,7 +52125,7 @@ fn native_ann_multiple_delta_generations_apply_latest_wins() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32 / 17.0; 16],
+                        vec![row as f32 / 17.0; 64],
                     )
                 })
                 .collect(),
@@ -52128,12 +52138,12 @@ fn native_ann_multiple_delta_generations_apply_latest_wins() {
     index
         .upsert(vec![VectorRecord::new_bytes(
             revived_id.clone(),
-            vec![0.0; 16],
+            vec![0.0; 64],
         )])
         .unwrap();
     index.flush().unwrap();
 
-    let native = index.manifest.native_ann_ref.as_ref().unwrap();
+    let native = index.manifest.native_bounded_ann_ref.as_ref().unwrap();
     assert_eq!(native.generation, 3);
     assert_eq!(native.delta_runs.len(), 2);
     drop(index);
@@ -52141,7 +52151,7 @@ fn native_ann_multiple_delta_generations_apply_latest_wins() {
     let index = BorsukIndex::open(&uri).unwrap();
     let report = index
         .search_with_report(
-            &[0.0; 16],
+            &[0.0; 64],
             SearchOptions::approx(10, LeafMode::PqScan)
                 .with_max_segments(8)
                 .with_max_candidates_per_segment(512),
@@ -52149,17 +52159,17 @@ fn native_ann_multiple_delta_generations_apply_latest_wins() {
         .unwrap();
 
     assert_eq!(report.hits[0].id.as_bytes(), revived_id);
-    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
 }
 
 #[test]
-fn native_ann_compaction_rebuilds_one_deterministic_base_generation() {
+fn native_bounded_compaction_rebuilds_one_deterministic_base_generation() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: uri.clone(),
         metric: VectorMetric::SquaredEuclidean,
-        dimensions: 16,
+        dimensions: 64,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
@@ -52172,7 +52182,7 @@ fn native_ann_compaction_rebuilds_one_deterministic_base_generation() {
                 .map(|row| {
                     VectorRecord::new_bytes(
                         [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                        vec![row as f32 / 17.0; 16],
+                        vec![row as f32 / 17.0; 64],
                     )
                 })
                 .collect(),
@@ -52183,7 +52193,7 @@ fn native_ann_compaction_rebuilds_one_deterministic_base_generation() {
     index
         .add(vec![VectorRecord::new_bytes(
             fresh_id.clone(),
-            vec![0.0; 16],
+            vec![0.0; 64],
         )])
         .unwrap();
     index.flush().unwrap();
@@ -52195,7 +52205,7 @@ fn native_ann_compaction_rebuilds_one_deterministic_base_generation() {
         })
         .unwrap();
     assert!(report.compacted);
-    let native = index.manifest.native_ann_ref.as_ref().unwrap();
+    let native = index.manifest.native_bounded_ann_ref.as_ref().unwrap();
     assert_eq!(native.generation, 3);
     assert_eq!(native.router.physical_rows, 521);
     assert!(native.delta_runs.is_empty());
@@ -52204,25 +52214,67 @@ fn native_ann_compaction_rebuilds_one_deterministic_base_generation() {
     let index = BorsukIndex::open(&uri).unwrap();
     let report = index
         .search_with_report(
-            &[0.0; 16],
+            &[0.0; 64],
             SearchOptions::approx(10, LeafMode::PqScan)
                 .with_max_segments(8)
                 .with_max_candidates_per_segment(512),
         )
         .unwrap();
     assert_eq!(report.hits[0].id.as_bytes(), fresh_id);
-    assert_eq!(report.leaf_mode, "native-hierarchical-delta");
+    assert_eq!(report.leaf_mode, "native-bounded-sq8");
 }
 
 #[test]
-fn native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equivalent() {
-    fn exercise(run_count: usize) -> (Vec<(Vec<u8>, u32)>, Vec<(Vec<u8>, u32)>) {
+fn native_bounded_one_ten_and_one_hundred_flushes_preserve_identity_with_bounded_maintenance() {
+    fn checked_hits(index: &BorsukIndex, report: &SearchReport) -> Vec<Vec<u8>> {
+        let authority = index.manifest.native_bounded_ann_ref.as_ref().unwrap();
+        // Each run and rebuilt base has its own SQ8 scale. Check the decoded
+        // distance against the exact oracle rather than requiring identical bits.
+        let epsilon = std::iter::once(&authority.sq8)
+            .chain(authority.delta_runs.iter().map(|run| &run.sq8))
+            .map(|sq8| {
+                0.5 * sq8
+                    .step
+                    .iter()
+                    .map(|step| f64::from(*step).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+            })
+            .fold(0.0_f64, f64::max);
+        let ids = report
+            .hits
+            .iter()
+            .map(|hit| {
+                let id = hit.id.as_bytes();
+                assert_eq!(&id[..7], b"tenant/");
+                let row = u64::from_be_bytes(id[7..].try_into().unwrap());
+                assert!(row < 100);
+                let exact = 64.0 * (99.0 - row as f64).powi(2);
+                let distance = f64::from(hit.distance);
+                let bound = 2.0 * exact.sqrt() * epsilon + epsilon.powi(2);
+                assert!(distance.is_finite() && distance >= 0.0);
+                assert!(
+                    (distance - exact).abs() <= bound + 1e-3 * exact.max(1.0),
+                    "row {row}: distance {distance}, exact {exact}, quantization bound {bound}"
+                );
+                id.to_vec()
+            })
+            .collect::<Vec<_>>();
+        let expected = (90_u64..100)
+            .rev()
+            .map(|row| [b"tenant/".as_slice(), &row.to_be_bytes()].concat())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected);
+        ids
+    }
+
+    fn exercise(run_count: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: uri.clone(),
             metric: VectorMetric::SquaredEuclidean,
-            dimensions: 16,
+            dimensions: 64,
             segment_max_vectors: 128,
             ram_budget_bytes: None,
             text: false,
@@ -52235,7 +52287,7 @@ fn native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equiva
                     .map(|row| {
                         VectorRecord::new_bytes(
                             [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                            vec![row as f32 / 17.0; 16],
+                            vec![row as f32 / 17.0; 64],
                         )
                     })
                     .collect(),
@@ -52252,24 +52304,64 @@ fn native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equiva
                         .map(|row| {
                             VectorRecord::new_bytes(
                                 [b"tenant/".as_slice(), &(row as u64).to_be_bytes()].concat(),
-                                vec![-(row as f32 + 1.0); 16],
+                                vec![-(row as f32 + 1.0); 64],
                             )
                         })
                         .collect(),
                 )
                 .unwrap();
-            index.flush().unwrap();
+            let authority_before = index.manifest.native_bounded_ann_ref.clone();
+            let puts_before = index.storage.request_counts().puts;
+            match index.flush() {
+                Ok(()) => {}
+                Err(error @ BorsukError::GlobalDeltaCapacityExceeded { .. }) => {
+                    assert_eq!(
+                        index.manifest.segments.len(),
+                        MAX_GLOBAL_DELTA_SEGMENTS,
+                        "{error}"
+                    );
+                    assert_eq!(
+                        index.storage.request_counts().puts,
+                        puts_before,
+                        "capacity rejection must precede artifact writes"
+                    );
+                    assert_eq!(index.manifest.native_bounded_ann_ref, authority_before);
+                    assert!(!index.cell_wal_snapshot.is_empty());
+                    let report = index
+                        .compact(CompactionOptions {
+                            max_segments: None,
+                            ..CompactionOptions::default()
+                        })
+                        .unwrap();
+                    assert!(report.compacted);
+                    assert!(index.cell_wal_snapshot.is_empty());
+                }
+                Err(error) => panic!("unexpected flush failure: {error}"),
+            }
+            assert!(index.manifest.segments.len() <= MAX_GLOBAL_DELTA_SEGMENTS);
+            assert!(
+                index
+                    .manifest
+                    .native_bounded_ann_ref
+                    .as_ref()
+                    .unwrap()
+                    .delta_runs
+                    .len()
+                    <= MAX_GLOBAL_DELTA_SEGMENTS
+            );
         }
-        assert_eq!(
-            index
-                .manifest
-                .native_ann_ref
-                .as_ref()
-                .unwrap()
-                .delta_runs
-                .len(),
-            run_count
-        );
+        if run_count <= MAX_GLOBAL_DELTA_SEGMENTS {
+            assert_eq!(
+                index
+                    .manifest
+                    .native_bounded_ann_ref
+                    .as_ref()
+                    .unwrap()
+                    .delta_runs
+                    .len(),
+                run_count
+            );
+        }
         drop(index);
 
         let mut index = BorsukIndex::open(&uri).unwrap();
@@ -52277,14 +52369,10 @@ fn native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equiva
             .with_max_segments(8)
             .with_max_candidates_per_segment(512);
         let before = index
-            .search_with_report(&[-100.0; 16], options.clone())
+            .search_with_report(&[-100.0; 64], options.clone())
             .unwrap();
-        assert_eq!(before.leaf_mode, "native-hierarchical-delta");
-        let before_hits = before
-            .hits
-            .iter()
-            .map(|hit| (hit.id.as_bytes().to_vec(), hit.distance.to_bits()))
-            .collect::<Vec<_>>();
+        assert_eq!(before.leaf_mode, "native-bounded-sq8");
+        let before_hits = checked_hits(&index, &before);
 
         index
             .compact(CompactionOptions {
@@ -52295,7 +52383,7 @@ fn native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equiva
         assert!(
             index
                 .manifest
-                .native_ann_ref
+                .native_bounded_ann_ref
                 .as_ref()
                 .unwrap()
                 .delta_runs
@@ -52304,13 +52392,9 @@ fn native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equiva
         drop(index);
 
         let index = BorsukIndex::open(&uri).unwrap();
-        let after = index.search_with_report(&[-100.0; 16], options).unwrap();
-        assert_eq!(after.leaf_mode, "native-hierarchical-delta");
-        let after_hits = after
-            .hits
-            .iter()
-            .map(|hit| (hit.id.as_bytes().to_vec(), hit.distance.to_bits()))
-            .collect::<Vec<_>>();
+        let after = index.search_with_report(&[-100.0; 64], options).unwrap();
+        assert_eq!(after.leaf_mode, "native-bounded-sq8");
+        let after_hits = checked_hits(&index, &after);
         (before_hits, after_hits)
     }
 
