@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+  "source_archive_sha256": "74f7da142c033941f131f60c3085e8810a74b91db8b2db72822f1b5a0e1ce480",
+  "source_dirty": true,
+  "attempt": "a0002",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.4xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.3618",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "One red-only delayed DELETE regression; expected test101 exact recovery assertion; no full gate or benchmark",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}

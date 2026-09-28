@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0de2dd4c3fee2f6d1",
+  "prefix": "research/native-library-check/gc-review-green/5432e9053b7d8c8c1b09b96162232fc10522193e1a35a30119c446b8ef31d65e/a0002",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "5432e9053b7d8c8c1b09b96162232fc10522193e1a35a30119c446b8ef31d65e",
+  "source_base_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77"
+}

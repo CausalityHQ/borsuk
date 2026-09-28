@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+  "source_archive_sha256": "70e256db5570269ee5dec7d759f195270d58f7ca3d586edc0b751c6743dc7fd7",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.4xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.3618",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "Regression red only; expected assertion failure for reviewed GC admission and validation fence bug; no green or S3 smoke",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "red_source_archive_sha256": "84852209b9bbe1570bc1e6e6be945f0e3ab90e21c1034d384f7dbe373e4a0498",
+  "red_timeout_seconds": 300,
+  "s3_versioning_observed": "Disabled"
+}

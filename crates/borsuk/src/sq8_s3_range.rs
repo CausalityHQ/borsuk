@@ -542,6 +542,7 @@ mod tests {
             .unwrap();
         let root = temp.path().join("generation");
         let root_sha = TwoBitGenerationBuilder {
+            base_epoch: 0,
             source: TwoBitSource {
                 raw: &raw_path,
                 raw_sha256: &hash(&raw),
@@ -705,6 +706,7 @@ mod tests {
         .unwrap();
         let other_root = temp.path().join("other-generation");
         let other_sha = TwoBitGenerationBuilder {
+            base_epoch: 0,
             source: TwoBitSource {
                 raw: &raw_path,
                 raw_sha256: &hash(&raw),

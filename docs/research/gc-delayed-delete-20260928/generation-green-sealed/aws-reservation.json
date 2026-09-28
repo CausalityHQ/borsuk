@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "a4027d8ecf088e336dd77a80918ba33161438704",
+  "source_archive_sha256": "1f370ccd3e65ef09f66a9c99e96466a737f8b9e955a22c957e299d85e4e17c07",
+  "source_dirty": true,
+  "attempt": "a0012",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.2128",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "Generation/owner epoch green: delayed DELETE, application IDs/fence/GC, generation, HTTP, live S3 smoke; no full gate or benchmark",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}

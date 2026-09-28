@@ -18,6 +18,7 @@ struct Config {
     rows: usize,
     dimensions: usize,
     generation: u64,
+    base_epoch: u64,
     low: Vec<f32>,
     step: Vec<f32>,
     sq8_object_key: String,
@@ -40,6 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let input = config(Path::new(&args[1]), &args[2])?;
     let builder = TwoBitGenerationBuilder {
+        base_epoch: input.base_epoch,
         source: TwoBitSource {
             raw: &input.raw,
             raw_sha256: &input.raw_sha256,
@@ -64,7 +66,7 @@ mod tests {
     fn config_rejects_wrong_hash_oversize_and_unknown_fields() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("config.json");
-        let valid = br#"{"raw":"raw","raw_sha256":"a","sq8":"sq8","sq8_sha256":"b","rows":1,"dimensions":2,"generation":1,"low":[0,0],"step":[1,1],"sq8_object_key":"key","sq8_etag":"etag"}"#;
+        let valid = br#"{"raw":"raw","raw_sha256":"a","sq8":"sq8","sq8_sha256":"b","rows":1,"dimensions":2,"generation":1,"base_epoch":0,"low":[0,0],"step":[1,1],"sq8_object_key":"key","sq8_etag":"etag"}"#;
         std::fs::write(&file, valid).unwrap();
         let sha = format!("{:x}", Sha256::digest(valid));
         assert!(config(&file, &sha).is_ok());

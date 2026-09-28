@@ -12,8 +12,8 @@ use object_store::{ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion, 
 use sha2::{Digest, Sha256};
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-const MAGIC: &[u8; 8] = b"BTMUT001";
-const HEADER: usize = 92;
+const MAGIC: &[u8; 8] = b"BTMUT002";
+const HEADER: usize = 100;
 type Result<T> = std::result::Result<T, TwoBitStoreError>;
 fn bad(message: &'static str) -> TwoBitStoreError {
     TwoBitStoreError::Invalid(message)
@@ -181,7 +181,7 @@ impl TwoBitMutationSnapshot {
     }
 }
 
-fn admit(limits: TwoBitMutationLimits, input_bytes: usize) -> Result<()> {
+pub(crate) fn admit(limits: TwoBitMutationLimits, input_bytes: usize) -> Result<()> {
     // Twelve body caps cover simultaneously retained old/new rows (including
     // Vec headers and ID rosters), serialization, put/read copies and merge refs.
     let modeled = limits
@@ -196,7 +196,7 @@ fn admit(limits: TwoBitMutationLimits, input_bytes: usize) -> Result<()> {
     Ok(())
 }
 
-fn decode(
+pub(crate) fn decode(
     bytes: &[u8],
     digest: &str,
     base: &TwoBitHead,
@@ -217,6 +217,7 @@ fn decode(
         || u32::from_le_bytes(bytes[72..76].try_into().unwrap()) as usize != dimensions
         || u64::from_le_bytes(bytes[76..84].try_into().unwrap()) != revision
         || revision == 0
+        || u64::from_le_bytes(bytes[92..100].try_into().unwrap()) == 0
     {
         return Err(bad("mutation authenticated header"));
     }
@@ -517,6 +518,9 @@ async fn publish_mutation_state(
     bytes.extend_from_slice(&(dimensions as u32).to_le_bytes());
     bytes.extend_from_slice(&revision.to_le_bytes());
     bytes.extend_from_slice(&(selected.len() as u64).to_le_bytes());
+    // A retried GC can release its fence while an earlier DELETE is still in flight.
+    // Never reuse that orphan key in a later control epoch.
+    bytes.extend_from_slice(&control.epoch.to_le_bytes());
     for row in selected {
         bytes.extend_from_slice(&row.id.to_le_bytes());
         bytes.push(u8::from(row.vector.is_some()));

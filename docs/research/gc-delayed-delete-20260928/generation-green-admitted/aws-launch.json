@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-080b64779d3050434",
+  "prefix": "research/native-library-check/gc-delayed-delete/e87306a174920336a93a70a7243b3fe9ab276af9c769fac27543756e7d8e59dc/a0011",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "e87306a174920336a93a70a7243b3fe9ab276af9c769fac27543756e7d8e59dc",
+  "source_base_commit": "a4027d8ecf088e336dd77a80918ba33161438704"
+}

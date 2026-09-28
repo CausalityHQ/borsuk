@@ -68,10 +68,11 @@ pub(crate) struct EmptyRoot {
     pub(crate) schema: String,
     pub(crate) generation: u64,
     pub(crate) dimensions: usize,
+    pub(crate) base_epoch: u64,
 }
 impl EmptyRoot {
     pub(crate) fn valid(&self) -> bool {
-        self.schema == "borsuk-two-bit-empty-generation-v1"
+        self.schema == "borsuk-two-bit-empty-generation-v2"
             && self.generation > 0
             && self.dimensions > 0
             && u32::try_from(self.dimensions).is_ok()
@@ -86,6 +87,7 @@ enum Root {
 /// Opaque conditional token bound to this index prefix and authenticated root.
 #[derive(Debug)]
 pub struct TwoBitHead {
+    epoch: u64,
     dimensions: usize,
     empty: bool,
     generation: u64,
@@ -94,6 +96,11 @@ pub struct TwoBitHead {
     pub(crate) version: UpdateVersion,
 }
 impl TwoBitHead {
+    /// Control epoch observed with this head; prepare replacements after sealing.
+    /// A reclamation fence invalidates preparations from this epoch.
+    pub fn control_epoch(&self) -> u64 {
+        self.epoch
+    }
     pub(crate) fn index_prefix(&self) -> &ObjectPath {
         &self.prefix
     }
@@ -252,7 +259,7 @@ async fn head_from_control(
             (root.dimensions, true)
         }
         Root::Populated(manifest)
-            if manifest.schema == "borsuk-two-bit-generation-v2"
+            if manifest.schema == "borsuk-two-bit-generation-v3"
                 && manifest.generation == head.generation
                 && !manifest.low.is_empty()
                 && manifest.low.len() == manifest.step.len()
@@ -264,6 +271,7 @@ async fn head_from_control(
         _ => return Err(TwoBitStoreError::Invalid("head generation")),
     };
     Ok(TwoBitHead {
+        epoch: head.epoch,
         dimensions,
         empty,
         generation: head.generation,
@@ -272,6 +280,49 @@ async fn head_from_control(
         version,
     })
 }
+// Maintenance keys include the owning epoch in their physical namespace. A claim
+// cannot relabel an old key after GC: the key itself must match the captured epoch.
+async fn validate_owned_object(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    key: &str,
+    epoch: u64,
+) -> Result<()> {
+    let namespace = format!("{}/maintenance/", prefix.as_ref());
+    let Some(relative) = key.strip_prefix(&namespace) else {
+        if key.contains("/maintenance/") {
+            return Err(TwoBitStoreError::Invalid("foreign maintenance owner"));
+        }
+        // Other immutable application-owned objects are outside this GC's ownership.
+        return Ok(());
+    };
+    let (owner, object) = relative
+        .split_once('/')
+        .ok_or(TwoBitStoreError::Invalid("maintenance owner key"))?;
+    if owner.len() != 48
+        || !owner.bytes().all(|c| c.is_ascii_hexdigit())
+        || owner[..16] != format!("{epoch:016x}")
+        || !object.strip_prefix("objects/").is_some_and(valid_sha256)
+    {
+        return Err(TwoBitStoreError::Invalid("maintenance owner epoch"));
+    }
+    let (bytes, _) = small_object(
+        store,
+        &ObjectPath::from(format!("{namespace}{owner}/claim.json")),
+        4096,
+    )
+    .await?;
+    let claim: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| TwoBitStoreError::Invalid("maintenance claim schema"))?;
+    if claim["schema"] != "borsuk-two-bit-compaction-job-v2"
+        || claim["index_prefix"].as_str() != Some(prefix.as_ref())
+        || claim["base_epoch"].as_u64() != Some(epoch)
+    {
+        return Err(TwoBitStoreError::Invalid("maintenance claim epoch"));
+    }
+    Ok(())
+}
+
 /// Validate prepared local metadata, stream/hash it to an immutable root prefix,
 /// then CAS the head. SQ8 must already exist at its immutable approved key/ETag.
 /// Replacement requires the previous mutation head to be sealed first. The caller
@@ -313,6 +364,25 @@ pub async fn publish_two_bit_generation(
         .is_some_and(|h| manifest.generation <= h.generation || manifest.low.len() != h.dimensions)
     {
         return Err(TwoBitStoreError::Invalid("generation order"));
+    }
+    let base_epoch = authority.as_ref().map_or(0, |(control, _)| control.epoch);
+    if manifest.base_epoch != base_epoch {
+        return Err(TwoBitStoreError::Invalid(
+            "prepared generation epoch changed",
+        ));
+    }
+    validate_owned_object(store, prefix, &manifest.sq8_object_key, base_epoch).await?;
+    if manifest
+        .canonical
+        .object_key
+        .rsplit_once("/objects/")
+        .map(|(owner, _)| owner)
+        != manifest
+            .sq8_object_key
+            .rsplit_once("/objects/")
+            .map(|(owner, _)| owner)
+    {
+        validate_owned_object(store, prefix, &manifest.canonical.object_key, base_epoch).await?;
     }
     let plane: SourcePlaneReceipt = serde_json::from_slice(&read(
         "plane/manifest.json",
@@ -431,6 +501,7 @@ async fn publish_head(
     control.mutation = None;
     let version = commit_control(store, prefix, &control, version).await?;
     Ok(TwoBitHead {
+        epoch: control.epoch,
         dimensions,
         empty,
         generation,
@@ -452,10 +523,11 @@ pub async fn publish_empty_two_bit_generation(
     expected: Option<&TwoBitHead>,
 ) -> Result<TwoBitHead> {
     let bad = TwoBitStoreError::Invalid;
-    let root = EmptyRoot {
-        schema: "borsuk-two-bit-empty-generation-v1".into(),
+    let mut root = EmptyRoot {
+        schema: "borsuk-two-bit-empty-generation-v2".into(),
         generation,
         dimensions,
+        base_epoch: 0,
     };
     if !root.valid()
         || expected.is_some_and(|h| {
@@ -469,6 +541,7 @@ pub async fn publish_empty_two_bit_generation(
     } else {
         None
     };
+    root.base_epoch = authority.as_ref().map_or(0, |(control, _)| control.epoch);
     let bytes = serde_json::to_vec(&root).map_err(|_| bad("empty root schema"))?;
     use sha2::{Digest, Sha256};
     let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -511,6 +584,35 @@ pub struct TwoBitWriteFence {
     version: UpdateVersion,
 }
 impl TwoBitWriteFence {
+    pub(crate) async fn validate_mutations(
+        &self,
+        store: &dyn ObjectStore,
+        limits: crate::two_bit_mutations::TwoBitMutationLimits,
+    ) -> Result<()> {
+        crate::two_bit_mutations::admit(limits, 0)?;
+        if let Some(state) = &self.control.mutation {
+            let (bytes, _) = small_object(
+                store,
+                &self
+                    .head
+                    .metadata_prefix()
+                    .join("mutations")
+                    .join(state.sha256.as_str()),
+                limits.max_snapshot_bytes as u64,
+            )
+            .await?;
+            drop(crate::two_bit_mutations::decode(
+                &bytes,
+                &state.sha256,
+                &self.head,
+                self.head.dimensions(),
+                state.revision,
+                self.version.clone(),
+                limits,
+            )?);
+        }
+        Ok(())
+    }
     /// Stable identity for this interrupted/recovered fence.
     pub fn id(&self) -> &str {
         self.control.fence.as_deref().unwrap()
@@ -544,6 +646,7 @@ pub async fn begin_two_bit_write_fence(
         commit_control(store, prefix, &control, Some(version)).await?
     };
     head.version = version.clone();
+    head.epoch = control.epoch;
     Ok(TwoBitWriteFence {
         control,
         head,

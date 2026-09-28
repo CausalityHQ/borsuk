@@ -90,8 +90,8 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v2",
-        "generation":1,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v3",
+        "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
         "sq8_object_sha256":sq8_sha,"sq8_object_key":format!("tenant/g1/objects/{sq8_sha}"),
@@ -100,6 +100,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let generated = tempfile::tempdir().unwrap();
     let generated_root = generated.path().join("generation");
     let builder = TwoBitGenerationBuilder {
+        base_epoch: 0,
         source: TwoBitSource {
             raw: &raw_path,
             raw_sha256: &hash(&raw),
@@ -277,7 +278,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         fs::write(publication.path().join("page_manifest.json"), &page_bytes).unwrap();
         prepared["generation"] = generation_id.into();
         prepared["page_manifest_sha256"] = hash(&page_bytes).into();
-        let bytes = serde_json::to_vec(&prepared).unwrap();
+        let mut bytes = serde_json::to_vec(&prepared).unwrap();
         fs::write(publication.path().join("manifest.json"), &bytes).unwrap();
         if generation_id == 2 {
             assert!(
@@ -310,6 +311,14 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
             .unwrap();
             assert!(empty.is_sealed());
             assert!(empty.rows().is_empty());
+            prepared["base_epoch"] = read_two_bit_head(&published_store, &index_prefix)
+                .await
+                .unwrap()
+                .unwrap()
+                .control_epoch()
+                .into();
+            bytes = serde_json::to_vec(&prepared).unwrap();
+            fs::write(publication.path().join("manifest.json"), &bytes).unwrap();
             assert!(
                 borsuk::two_bit_mutations::apply_two_bit_mutations(
                     &published_store,
@@ -532,6 +541,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let tiny_sha = hash(&sq8[..14]);
     let tiny_root = tiny.path().join("generation");
     let tiny_builder = TwoBitGenerationBuilder {
+        base_epoch: 0,
         source: TwoBitSource {
             raw: &tiny_raw,
             raw_sha256: &hash(&raw[..8]),
@@ -558,6 +568,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let zero_sha = hash(&zero_norm);
     let bad_output = tiny.path().join("zero-norm-generation");
     let bad_builder = TwoBitGenerationBuilder {
+        base_epoch: 0,
         source: TwoBitSource {
             sq8_sha256: &zero_sha,
             ..tiny_builder.source

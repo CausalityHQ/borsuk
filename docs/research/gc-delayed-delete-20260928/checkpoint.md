@@ -1,0 +1,13 @@
+# Continuation checkpoint after verified epoch-GC increment
+
+Native full goal active, no budget. Workspace /home/rb/worktrees/borsuk-prod-ready-v9, branch devbox/prod-ready-v9; delivery is direct origin/main, no PR/force push. Fixture slice a4027d8ecf088e336dd77a80918ba33161438704 was pushed with5 passing checks. Epoch-GC library slice and all preserved evidence are committed with this checkpoint; check gitHEAD/originmain for current delivered revision.
+
+Operator Ask operator-immediate-1790599542963968292-808897 already successfully replied exactly once. Never repeat that reply.
+
+No active correctness worker or review. Final a0012 i-068fb272479c5d0d7/native session76066 completed0 and terminated;14 tests pass. Frozen source1f370ccd3e65ef09f66a9c99e96466a737f8b9e955a22c957e299d85e4e17c07;13 Rust files exactly match authenticated archive. Evidence generation-green-sealed/, source-parity.json and delivery.md. Scoped active-worker filters empty. Prior failures, reservations and terminated closeouts preserved; never rerun them or claim they passed.
+
+Protocol review cb888918e2944f6e and implementation review6387b158c14946c9 both completed underOpus5.5. Implementation found noCritical/Important within same-host/same-directory/captured-sealed-epoch/immutable-input contract; reviewer omissions independently traced, full static limits recorded. Original broad dual critique0122d55c38b34216 also complete; no duplicate or cooldown override.
+
+BTMUT002 snapshot header100 binds epoch; populatedrootv3 and emptyrootv2 bind prepared epoch; maintenanceowner48hex =16 epoch+32UUID. Jobv2 binds epoch/index; changed epoch resets scratch/rebuilds fresh keys. No permanent retirement records/compatibility reader. Three delayed-delete cases and admission/current-data/signed-ID/CAS/HTTP/S3 checks pass. All latest affected Rust sources unchanged since archived gate except documentation.
+
+NEXT: reconcile52 original full-library failures, mainly retired-default fixture expectations, preserving meaningful security/corruption/admission coverage using current-contract or explicit diagnostics. Full gate previously1630 pass/57 fail/6 ignored;5 individually fixed, no final full-gate claim. No local Cargo or DGX; correctness builds only bounded causality Spot, one job per gate, collect terminal and terminate. Narrow failing layers first; one final full assurance after all52 repaired. Then review one distinct source-only routing arm after prior failures/Fable reconciliation; preregister paired100k budget and scale only winners. Freeze production defaults/revision only after architecture qualification. No current matched vendor/performance win; prior measurements remain immutable historical evidence. No operator decision needed now.

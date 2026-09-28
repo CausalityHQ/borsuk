@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-092cef977a48f6382",
+  "prefix": "research/native-library-check/gc-review-red/ee8364f6597458833ed0193930bdf27bc1c8768c469249cafec9722f4bfe9980/a0002",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "ee8364f6597458833ed0193930bdf27bc1c8768c469249cafec9722f4bfe9980",
+  "source_base_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77"
+}

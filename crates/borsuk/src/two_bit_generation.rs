@@ -71,6 +71,7 @@ pub struct TwoBitGenerationLimits {
 pub(crate) struct Manifest {
     pub(crate) schema: String,
     pub(crate) generation: u64,
+    pub(crate) base_epoch: u64,
     pub(crate) plane_manifest_sha256: String,
     pub(crate) page_manifest_sha256: String,
     pub(crate) centroids_sha256: String,
@@ -187,7 +188,7 @@ impl TwoBitGeneration {
         .map_err(TwoBitGenerationError::Plane)?;
         let manifest: Manifest = serde_json::from_slice(&body).map_err(|_| bad("root schema"))?;
         let key = manifest.sq8_object_key.split('/').collect::<Vec<_>>();
-        if manifest.schema != "borsuk-two-bit-generation-v2"
+        if manifest.schema != "borsuk-two-bit-generation-v3"
             || manifest.generation == 0
             || manifest.graph_resident_bytes == 0
             || manifest.sq8_etag.is_empty()

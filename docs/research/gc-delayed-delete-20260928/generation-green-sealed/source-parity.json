@@ -1,0 +1,70 @@
+{
+  "source_archive_sha256": "1f370ccd3e65ef09f66a9c99e96466a737f8b9e955a22c957e299d85e4e17c07",
+  "files": [
+    {
+      "path": "crates/borsuk/src/bin/build_two_bit_generation.rs",
+      "sha256": "57278ee5663a9a8aef0042c0e39eab2dd9f9c2df1f551e5ebf19e7b9fda97706",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/canonical_source.rs",
+      "sha256": "3c95bb4aeed854c3e18eb2285f8525e1196e6700b8656ae40f93ac9cde57ee04",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/lib.rs",
+      "sha256": "dbaf5d54a65b36ed592e344eda8daf2708751a32653268ba73316e9cbffcae57",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/sq8_s3_range.rs",
+      "sha256": "8c06eb7e78ac6830edbfd4b4ef88f610d6074169a46994f80d469cb5e602c10e",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_build.rs",
+      "sha256": "1625cf6265b08443507d3ec71a6c1f99ef87ce8467b302e8fbd54345a2a3ee93",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_compaction.rs",
+      "sha256": "563e6166981c9cf8303eb645eecffbe84f1c27bcf62d264c7360aeaa01d9d096",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_generation.rs",
+      "sha256": "4cbdfeac964cf1560f3038106dd2cba074fc1a077afbe530b16e895e8c0babfa",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_mutations.rs",
+      "sha256": "b8a43b8bbb12f3f5edf8ac04d8382a8cf1a75949dc4f22a78b39d60fd45a6553",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_store.rs",
+      "sha256": "2a02131226b453c9bf54000c51d50161881e26cc2a7bb379d6bad05306d4a284",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_application_ids.rs",
+      "sha256": "d3dcf8d47a4faceeec67a2ea1f86a25cef682069c463311ffac69fc2dd273b84",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_generation.rs",
+      "sha256": "09d72e976bd38d1f22427660678f3e264402c8ce5a6b9cbcaef0e9cd0fc31505",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_gc.rs",
+      "sha256": "1bbd1c38763968682044be540e971efd9d4aaf969b8654f508dc583b2af62f75",
+      "matches_frozen_source": true
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_gc_delayed_delete.rs",
+      "sha256": "ff83fe39bb9f1dd80e86532ee451a5fac940a389877fab9d20cf7bc3ed053b5c",
+      "matches_frozen_source": true
+    }
+  ]
+}

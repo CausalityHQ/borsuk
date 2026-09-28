@@ -80,8 +80,6 @@ pub mod pq64_router_artifact;
 mod quantizer_sidecar;
 mod record;
 pub mod relaid_generation_authority;
-pub mod rotated_two_bit;
-pub mod two_bit_source;
 pub mod relaxed_priced_interval;
 pub mod resident_fp16_tier;
 pub mod resident_graph_build;
@@ -94,6 +92,7 @@ pub mod resident_nominee_generation;
 pub mod resident_vector_graph;
 pub mod returned_sq8;
 mod rotated_product_quantizer;
+pub mod rotated_two_bit;
 #[allow(
     dead_code,
     reason = "pure row-bundle construction is wired only at the Task 4 atomic format switch"
@@ -114,6 +113,7 @@ mod storage_trace;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
 mod turboquant;
+pub mod two_bit_source;
 pub mod unconstrained_priced_interval;
 pub mod unit_centroid_graph;
 pub mod unit_centroid_pages;
@@ -933,3 +933,6 @@ pub mod two_bit_index;
 
 /// Callable in-process canonical/delta compaction with restart recovery.
 pub mod two_bit_compaction;
+
+/// Bounded callable single-host garbage collection under a durable write fence.
+pub mod two_bit_gc;

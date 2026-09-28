@@ -19,6 +19,8 @@ type Result<T> = std::result::Result<T, TwoBitGenerationError>;
 pub struct TwoBitGenerationBuilder<'a> {
     /// Raw ordinal source and physically ordered SQ8 identities/geometry.
     pub source: TwoBitSource<'a>,
+    /// Captured sealed control epoch; zero only for initial publication.
+    pub base_epoch: u64,
     /// Positive generation ID.
     pub generation: u64,
     /// Approved SQ8 coordinate offsets (same encoding as the supplied body).
@@ -200,8 +202,8 @@ impl TwoBitGenerationBuilder<'_> {
         write_new(&output.join("page_manifest.json"), &page_manifest)?;
         let plane_body =
             fs::read(output.join("plane/manifest.json")).map_err(TwoBitGenerationError::Io)?;
-        let body=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v2",
-            "generation":self.generation,"plane_manifest_sha256":hash(&plane_body),
+        let body=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v3",
+            "generation":self.generation,"base_epoch":self.base_epoch,"plane_manifest_sha256":hash(&plane_body),
             "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":centroid_sha,
             "graph_sha256":graph_sha,
             "graph_resident_bytes":graph_resident,"sq8_object_sha256":self.source.sq8_sha256,

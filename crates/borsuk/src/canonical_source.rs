@@ -242,7 +242,7 @@ async fn recover_canonical(
         }
         let manifest: Manifest =
             serde_json::from_slice(&root).map_err(|_| bad("canonical root schema"))?;
-        if manifest.schema != "borsuk-two-bit-generation-v2"
+        if manifest.schema != "borsuk-two-bit-generation-v3"
             || manifest.generation != base.generation()
             || !manifest.canonical.valid()
             || manifest.canonical.dimensions != base.dimensions()

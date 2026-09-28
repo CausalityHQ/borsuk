@@ -57,6 +57,7 @@ struct Job {
     index_prefix: String,
     base_root_sha256: String,
     base_generation: u64,
+    base_epoch: u64,
     dimensions: usize,
     mutation_sha256: String,
     mutation_revision: u64,
@@ -165,6 +166,16 @@ fn verified_input(
     )?;
     Ok((input, digest))
 }
+fn prepared_manifest(directory: &Path, ready: &Ready) -> Result<Manifest> {
+    let path = directory.join("manifest.json");
+    let length = fs::metadata(&path)?.len();
+    if length == 0 || length > 65536 {
+        return Err(bad("compaction root length"));
+    }
+    let root =
+        read_authenticated(&path, length as usize, &ready.target_root_sha256).map_err(plane)?;
+    serde_json::from_slice(&root).map_err(|_| bad("compaction root schema"))
+}
 fn disk_bound(rows: usize, dimensions: usize) -> Result<u64> {
     let codec = RotatedTwoBitCodec::padded_dimensions(dimensions)
         .map_err(|e| plane(SourceBuildError::Codec(e)))?
@@ -196,6 +207,13 @@ fn disk_bound(rows: usize, dimensions: usize) -> Result<u64> {
 // Destructive GC must acquire this same file exclusively before remote I/O.
 // Advisory locks do not coordinate other hosts or uncoordinated low-level APIs.
 pub(crate) fn shared_lifecycle(prefix: &ObjectPath, directory: &Path) -> Result<File> {
+    lifecycle_lock(prefix, directory, false)
+}
+pub(crate) fn lifecycle_lock(
+    prefix: &ObjectPath,
+    directory: &Path,
+    exclusive: bool,
+) -> Result<File> {
     fs::create_dir_all(directory)?;
     let open_lock = |name: &str| -> Result<File> {
         Ok(OpenOptions::new()
@@ -219,9 +237,15 @@ pub(crate) fn shared_lifecycle(prefix: &ObjectPath, directory: &Path) -> Result<
         write_json(&identity, &prefix.as_ref())?;
     }
     let lifetime = open_lock("lifecycle.lock")?;
-    lifetime
-        .try_lock_shared()
-        .map_err(|_| bad("reclamation in progress"))?;
+    if exclusive {
+        lifetime
+            .try_lock()
+            .map_err(|_| bad("readers or maintenance still active"))?;
+    } else {
+        lifetime
+            .try_lock_shared()
+            .map_err(|_| bad("reclamation in progress"))?;
+    }
     drop(binding);
     Ok(lifetime)
 }
@@ -279,7 +303,7 @@ async fn compact_owned(
     }
     let namespace = format!("{}/maintenance", prefix.as_ref());
     if !valid_object_key(
-        &format!("{namespace}/objects/{}", "0".repeat(64)),
+        &format!("{namespace}/{}/objects/{}", "0".repeat(48), "0".repeat(64)),
         &"0".repeat(64),
     ) {
         return Err(bad("compaction object namespace"));
@@ -308,7 +332,7 @@ async fn compact_owned(
             return Err(bad("unmanaged compaction path"));
         }
         let (job, _): (Job, _) = read_json(&entry.path().join("job.json"))?;
-        if job.schema != "borsuk-two-bit-compaction-job-v1"
+        if job.schema != "borsuk-two-bit-compaction-job-v2"
             || job.index_prefix != prefix.as_ref()
             || job.base_root_sha256 != name
             || job.base_generation >= base.generation()
@@ -329,11 +353,14 @@ async fn compact_owned(
     drop(latest);
     let job_dir = directory.join(base.root_sha256());
     fs::create_dir_all(&job_dir)?;
+    let (authority, _) =
+        crate::two_bit_mutations::require_sealed_two_bit_mutations(store, &base).await?;
     let job = Job {
-        schema: "borsuk-two-bit-compaction-job-v1".into(),
+        schema: "borsuk-two-bit-compaction-job-v2".into(),
         index_prefix: prefix.as_ref().into(),
         base_root_sha256: base.root_sha256().into(),
         base_generation: base.generation(),
+        base_epoch: authority.epoch,
         dimensions: base.dimensions(),
         mutation_sha256: sealed.sha256().into(),
         mutation_revision: sealed.revision(),
@@ -341,9 +368,19 @@ async fn compact_owned(
     let job_path = job_dir.join("job.json");
     let job_bytes = serde_json::to_vec(&job).map_err(|_| bad("compaction job"))?;
     if job_path.exists() {
-        let (_, bytes): (Job, _) = read_json(&job_path)?;
+        let (mut previous, bytes): (Job, _) = read_json(&job_path)?;
         if bytes != job_bytes {
-            return Err(bad("compaction job changed"));
+            let old_epoch = previous.base_epoch;
+            previous.base_epoch = job.base_epoch;
+            if old_epoch >= job.base_epoch
+                || serde_json::to_vec(&previous).map_err(|_| bad("compaction job"))? != job_bytes
+            {
+                return Err(bad("compaction job changed"));
+            }
+            // GC advanced the authority. Old prepared keys may have a pending DELETE.
+            fs::remove_dir_all(&job_dir)?;
+            fs::create_dir_all(&job_dir)?;
+            write_json(&job_path, &job)?;
         }
     } else {
         write_json(&job_path, &job)?;
@@ -351,7 +388,7 @@ async fn compact_owned(
     let input_dir = job_dir.join("input");
     let generation_dir = job_dir.join("generation");
     let ready_path = job_dir.join("ready.json");
-    let ready = if ready_path.exists() {
+    let recovered_ready = if ready_path.exists() {
         let (ready, _): (Ready, _) = read_json(&ready_path)?;
         if ready.schema != "borsuk-two-bit-compaction-ready-v1"
             || ready.job_sha256 != hash(&job_bytes)
@@ -366,6 +403,45 @@ async fn compact_owned(
         if input.rows != ready.rows {
             return Err(bad("compaction ready rows"));
         }
+        if ready.rows > 0 {
+            let root = prepared_manifest(&generation_dir, &ready)?;
+            let staged = async {
+                store
+                    .head(&ObjectPath::from(root.sq8_object_key.clone()))
+                    .await?;
+                let (owner, _) = root
+                    .sq8_object_key
+                    .rsplit_once("/objects/")
+                    .ok_or(bad("compaction namespace"))?;
+                let (claim, _) = crate::two_bit_store::small_object(
+                    store,
+                    &ObjectPath::from(format!("{owner}/claim.json")),
+                    4096,
+                )
+                .await?;
+                if claim.as_slice() != job_bytes.as_slice() {
+                    return Err(bad("compaction namespace claim"));
+                }
+                Ok::<(), TwoBitStoreError>(())
+            }
+            .await;
+            match staged {
+                Ok(()) => Some(ready),
+                Err(TwoBitStoreError::Store(object_store::Error::NotFound { .. })) => {
+                    // Missing prepared artifacts require a rebuild. GC epoch changes
+                    // already discard the whole job before this existence check.
+                    fs::remove_file(&ready_path)?;
+                    None
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            Some(ready)
+        }
+    } else {
+        None
+    };
+    let ready = if let Some(ready) = recovered_ready {
         ready
     } else {
         for path in [&input_dir, &generation_dir] {
@@ -387,9 +463,10 @@ async fn compact_owned(
         let target = if input.rows == 0 {
             hash(
                 &serde_json::to_vec(&EmptyRoot {
-                    schema: "borsuk-two-bit-empty-generation-v1".into(),
+                    schema: "borsuk-two-bit-empty-generation-v2".into(),
                     generation: target_generation,
                     dimensions: base.dimensions(),
+                    base_epoch: job.base_epoch,
                 })
                 .map_err(|_| bad("empty root"))?,
             )
@@ -439,7 +516,11 @@ async fn compact_owned(
                 build_budget,
             )
             .map_err(plane)?;
-            let owner = ObjectPath::from(format!("{namespace}/{}", uuid::Uuid::new_v4().simple()));
+            let owner = ObjectPath::from(format!(
+                "{namespace}/{:016x}{}",
+                job.base_epoch,
+                uuid::Uuid::new_v4().simple()
+            ));
             // Claim once so a namespace collision never overwrites a pinned blob.
             store
                 .put_opts(
@@ -479,6 +560,7 @@ async fn compact_owned(
                 .e_tag
                 .ok_or(bad("compaction SQ8 ETag"))?;
             let root = TwoBitGenerationBuilder {
+                base_epoch: job.base_epoch,
                 source: TwoBitSource {
                     raw: &raw,
                     raw_sha256: &input.raw_sha256,
@@ -509,9 +591,10 @@ async fn compact_owned(
     let published = if ready.rows == 0 {
         let expected = hash(
             &serde_json::to_vec(&EmptyRoot {
-                schema: "borsuk-two-bit-empty-generation-v1".into(),
+                schema: "borsuk-two-bit-empty-generation-v2".into(),
                 generation: target_generation,
                 dimensions: base.dimensions(),
+                base_epoch: job.base_epoch,
             })
             .map_err(|_| bad("empty root"))?,
         );
@@ -527,18 +610,7 @@ async fn compact_owned(
         )
         .await?
     } else {
-        let length = fs::metadata(generation_dir.join("manifest.json"))?.len();
-        if length == 0 || length > 65536 {
-            return Err(bad("compaction root length"));
-        }
-        let root = read_authenticated(
-            &generation_dir.join("manifest.json"),
-            length as usize,
-            &ready.target_root_sha256,
-        )
-        .map_err(plane)?;
-        let root: Manifest =
-            serde_json::from_slice(&root).map_err(|_| bad("compaction root schema"))?;
+        let root = prepared_manifest(&generation_dir, &ready)?;
         if root.generation != target_generation
             || root.canonical.rows != ready.rows
             || root.canonical.dimensions != base.dimensions()

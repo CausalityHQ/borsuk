@@ -1,0 +1,371 @@
+failures:
+
+---- format::tests::manifest_from_parquet_rejects_invalid_config_dimensions stdout ----
+
+thread 'format::tests::manifest_from_parquet_rejects_invalid_config_dimensions' (44605) panicked at crates/borsuk/src/format.rs:11375:10:
+called `Result::unwrap()` on an `Err` value: InvalidArgumentError("number of columns(26) must match number of fields(27) in schema")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- format::tests::manifest_from_parquet_rejects_invalid_segment_max_vectors stdout ----
+
+thread 'format::tests::manifest_from_parquet_rejects_invalid_segment_max_vectors' (44606) panicked at crates/borsuk/src/format.rs:11375:10:
+called `Result::unwrap()` on an `Err` value: InvalidArgumentError("number of columns(26) must match number of fields(27) in schema")
+
+---- index::native_ann_build_cutover_uses_collection_snapshot_as_sole_visibility_authority stdout ----
+
+thread 'index::native_ann_build_cutover_uses_collection_snapshot_as_sole_visibility_authority' (44900) panicked at crates/borsuk/src/index.rs:51508:5:
+assertion failed: index.manifest.native_ann_ref.is_some()
+
+---- index::native_ann_build_cutover_publishes_one_generic_dense_authority stdout ----
+
+thread 'index::native_ann_build_cutover_publishes_one_generic_dense_authority' (44896) panicked at crates/borsuk/src/index.rs:51478:10:
+bulk-load finalization must publish the native authority
+
+---- index::native_ann_flush_publishes_query_visible_delta_generation stdout ----
+
+thread 'index::native_ann_flush_publishes_query_visible_delta_generation' (44905) panicked at crates/borsuk/src/index.rs:51882:66:
+called `Option::unwrap()` on a `None` value
+
+---- index::native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equivalent stdout ----
+
+thread 'index::native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equivalent' (44912) panicked at crates/borsuk/src/index.rs:52264:18:
+called `Option::unwrap()` on a `None` value
+
+---- index::native_ann_pending_delete_search_suppresses_committed_snapshot_row stdout ----
+
+thread 'index::native_ann_pending_delete_search_suppresses_committed_snapshot_row' (44919) panicked at crates/borsuk/src/index.rs:52084:5:
+assertion `left == right` failed
+  left: "pq-scan"
+ right: "native-hierarchical-delta"
+
+---- index::native_ann_flush_publishes_query_visible_tombstone stdout ----
+
+thread 'index::native_ann_flush_publishes_query_visible_tombstone' (44910) panicked at crates/borsuk/src/index.rs:52020:48:
+called `Option::unwrap()` on a `None` value
+
+---- index::native_ann_pending_write_search_keeps_committed_snapshot_neighbors stdout ----
+
+thread 'index::native_ann_pending_write_search_keeps_committed_snapshot_neighbors' (44928) panicked at crates/borsuk/src/index.rs:51975:5:
+assertion `left == right` failed
+  left: "pq-scan"
+ right: "native-hierarchical-delta"
+
+---- index::native_ann_build_cutover_reopens_and_serves_the_native_snapshot stdout ----
+
+thread 'index::native_ann_build_cutover_reopens_and_serves_the_native_snapshot' (44897) panicked at crates/borsuk/src/index.rs:51562:5:
+assertion `left == right` failed
+  left: "pq-scan"
+ right: "native-hierarchical-delta"
+
+---- index::native_ann_multiple_delta_generations_apply_latest_wins stdout ----
+
+thread 'index::native_ann_multiple_delta_generations_apply_latest_wins' (44911) panicked at crates/borsuk/src/index.rs:52132:57:
+called `Option::unwrap()` on a `None` value
+
+---- index::native_ann_compaction_rebuilds_one_deterministic_base_generation stdout ----
+
+thread 'index::native_ann_compaction_rebuilds_one_deterministic_base_generation' (44904) panicked at crates/borsuk/src/index.rs:52194:57:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::finish_bulk_load_prepares_the_replacement_cell_card_code_planes stdout ----
+
+thread 'index::tests::finish_bulk_load_prepares_the_replacement_cell_card_code_planes' (45034) panicked at crates/borsuk/src/index.rs:44462:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::finish_bulk_load_preserves_a_refreshed_external_writer_mutation_overlay stdout ----
+
+thread 'index::tests::finish_bulk_load_preserves_a_refreshed_external_writer_mutation_overlay' (45035) panicked at crates/borsuk/src/index.rs:45369:9:
+flush must prepare the externally-authored mutation overlay
+
+---- index::tests::finish_bulk_load_rekeys_mutation_authority_for_the_rebuilt_global_epoch stdout ----
+
+thread 'index::tests::finish_bulk_load_rekeys_mutation_authority_for_the_rebuilt_global_epoch' (45036) panicked at crates/borsuk/src/index.rs:45300:9:
+assertion failed: index.resident_global_mutations_for_current_snapshot().is_some()
+
+---- index::tests::global_pq_artifact_is_stable_across_transaction_iteration_order stdout ----
+
+thread 'index::tests::global_pq_artifact_is_stable_across_transaction_iteration_order' (45074) panicked at crates/borsuk/src/index.rs:44017:78:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::full_compaction_rekeys_the_covered_mutation_overlay_before_quantizer_republish stdout ----
+
+thread 'index::tests::full_compaction_rekeys_the_covered_mutation_overlay_before_quantizer_republish' (45042) panicked at crates/borsuk/src/index.rs:45224:9:
+the pre-compaction overlay must be complete
+
+---- index::tests::prepare_serving_metadata_preloads_fitting_cell_card_code_planes stdout ----
+
+thread 'index::tests::prepare_serving_metadata_preloads_fitting_cell_card_code_planes' (45175) panicked at crates/borsuk/src/index.rs:44302:9:
+SearchReport { hits: [SearchHit { id: "prepared-plane-37", distance: 0.0, metadata: None }, SearchHit { id: "prepared-plane-48", distance: 0.025405971, metadata: None }, SearchHit { id: "prepared-plane-52", distance: 0.1373551, metadata: None }, SearchHit { id: "prepared-plane-7", distance: 0.13736811, metadata: None }, SearchHit { id: "prepared-plane-63", distance: 0.13790743, metadata: None }, SearchHit { id: "prepared-plane-41", distance: 0.13848095, metadata: None }, SearchHit { id: "prepared-plane-30", distance: 0.1403026, metadata: None }, SearchHit { id: "prepared-plane-14", distance: 0.14096, metadata: None }, SearchHit { id: "prepared-plane-19", distance: 0.14235288, metadata: None }, SearchHit { id: "prepared-plane-18", distance: 0.14405936, metadata: None }], leaf_mode: "srht-pq-scan", termination_reason: Complete, recall_guarantee: BudgetComplete, segments_total: 1, segments_searched: 1, segments_skipped: 0, routing_page_indexes_read: 0, routing_pages_read: 0, bytes_read: 16491, prefetched_bytes_unused: 0, graph_bytes_read: 0, decoded_cache_hits: 0, decoded_cache_bytes_read: 0, object_cache_hits: 0, object_cache_misses: 1, disk_cache_bytes_read: 2912, backing_bytes_read: 13579, disk_cache_reads: 2, backing_reads: 16, cache_repairs: 0, records_considered: 64, records_scored: 64, graph_candidates_added: 0, global_graph_chunks_searched: 0, global_scan_chunks_searched: 0, global_identity_rows_resolved: 0, global_exact_vectors_fetched: 0, global_leaf_directory_reads: 0, global_leaf_directory_bytes: 0, global_leaf_code_pages_read: 0, global_leaf_code_requests: 0, global_leaf_code_bytes: 0, global_leaf_pages_read: 0, global_leaf_exact_requests: 0, global_leaf_exact_cells: 0, global_leaf_exact_cards: 0, global_leaf_deepest_winning_card_rank: 0, global_leaf_exact_groups: 0, global_leaf_exact_selected_bytes: 0, global_leaf_exact_speculative_bytes: 0, global_leaf_page_bytes: 0, global_leaf_exact_scores: 0, global_leaf_continuations: 0, global_leaf_waves: 0, global_base_approximate_us: 0, global_base_head_admission_us: 0, global_base_head_fetch_us: 0, global_base_head_read_attempts: 0, global_base_head_read_successes: 0, global_base_head_read_response_bytes: 0, global_base_head_read_us_sum: 0, global_base_head_read_us_max: 0, global_base_head_read_queue_us_sum: 0, global_base_head_read_queue_us_max: 0, global_base_head_reads_over_20ms: 0, global_base_head_reads_over_30ms: 0, global_base_head_reads_over_50ms: 0, global_base_head_reads_over_100ms: 0, global_base_head_decode_admission_us: 0, global_base_head_decode_us: 0, global_base_exact_admission_us: 0, global_base_exact_fetch_us: 0, global_base_exact_read_attempts: 0, global_base_exact_read_successes: 0, global_base_exact_read_response_bytes: 0, global_base_exact_read_queue_us_sum: 0, global_base_exact_read_queue_us_max: 0, global_base_exact_read_us_max: 0, global_base_exact_read_us_sum: 0, global_base_exact_reads_over_20ms: 0, global_base_exact_reads_over_30ms: 0, global_base_exact_reads_over_50ms: 0, global_base_exact_reads_over_100ms: 0, global_base_exact_cpu_us: 0, global_base_exact_rerank_us: 0, resident_bytes_estimate: 3316, prepared_positioned_bytes: 1007, collection_resident_bytes: 4323, retained_bytes: 49308, retained_capacity_bytes: 25165824, retained_peak_bytes: 49308, transient_bytes: 0, transient_capacity_bytes: 16777216, transient_peak_bytes: 20992, elapsed_ms: 7, requests: RequestCounts { gets: 16, puts: 0, deletes: 0, heads: 0, lists: 0 }, rows_evaluated: 0, rows_passed_filter: 0, segments_pruned_by_filter: 0, wal_cells_examined: 0, wal_lanes_examined: 0, wal_runs_examined: 0, wal_records_examined: 0, wal_snapshot_retries: 0 }
+
+---- index::tests::resident_global_v12_overflow_cannot_bypass_ram_admission stdout ----
+
+thread 'index::tests::resident_global_v12_overflow_cannot_bypass_ram_admission' (45210) panicked at crates/borsuk/src/index.rs:47187:56:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v12_binds_all_codebook_reference_fields stdout ----
+
+thread 'index::tests::resident_global_v12_binds_all_codebook_reference_fields' (45208) panicked at crates/borsuk/src/index.rs:47137:60:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_self_query_uses_v14_with_catalog_routing stdout ----
+
+thread 'index::tests::resident_global_self_query_uses_v14_with_catalog_routing' (45207) panicked at crates/borsuk/src/index.rs:46548:71:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::public_resident_v12_deadline_is_resampled_after_live_wal_result_merge stdout ----
+
+thread 'index::tests::public_resident_v12_deadline_is_resampled_after_live_wal_result_merge' (45183) panicked at crates/borsuk/src/index.rs:37067:9:
+assertion `left == right` failed
+  left: "srht-pq-scan"
+ right: "bounded-cell-card-v20"
+
+---- index::tests::refresh_releases_prepared_cell_card_planes_from_the_previous_generation stdout ----
+
+thread 'index::tests::refresh_releases_prepared_cell_card_planes_from_the_previous_generation' (45199) panicked at crates/borsuk/src/index.rs:44577:9:
+assertion failed: reader.read_runtime.prepared_cell_card_code_planes.lock().unwrap().is_some()
+
+---- index::tests::resident_global_v12_transactional_preload_rejects_false_known_size_when_cached stdout ----
+
+thread 'index::tests::resident_global_v12_transactional_preload_rejects_false_known_size_when_cached' (45216) panicked at crates/borsuk/src/index.rs:47057:57:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v14_base_routes_and_exact_scores_without_v13_leaf_objects stdout ----
+
+thread 'index::tests::resident_global_v14_base_routes_and_exact_scores_without_v13_leaf_objects' (45219) panicked at crates/borsuk/src/index.rs:43900:14:
+bulk-load finish must publish V14 cell cards
+
+---- index::tests::resident_global_mutation_rekey_reuses_the_existing_memory_reservation stdout ----
+
+thread 'index::tests::resident_global_mutation_rekey_reuses_the_existing_memory_reservation' (45206) panicked at crates/borsuk/src/index.rs:45458:14:
+flush must retain the bounded mutation view
+
+---- index::tests::resident_global_v12_stats_are_exact stdout ----
+
+thread 'index::tests::resident_global_v12_stats_are_exact' (45215) panicked at crates/borsuk/src/index.rs:46590:74:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v12_warm_cache_cannot_substitute_missing_durable_paths stdout ----
+
+thread 'index::tests::resident_global_v12_warm_cache_cannot_substitute_missing_durable_paths' (45217) panicked at crates/borsuk/src/index.rs:46824:78:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v14_applies_positioned_delete_overlay_without_segment_reads stdout ----
+
+thread 'index::tests::resident_global_v14_applies_positioned_delete_overlay_without_segment_reads' (45218) panicked at crates/borsuk/src/index.rs:44815:14:
+called `Result::unwrap()` on an `Err` value: ObjectStoreNotFound { path: "vectors/23/23ddda8004e46635433c749e77e85f2753de0dcc0b2296ad16f0cb4bcda45f29.arrow", source: NotFound { path: "/tmp/.tmplUiHIw/vectors/23/23ddda8004e46635433c749e77e85f2753de0dcc0b2296ad16f0cb4bcda45f29.arrow", source: Os { code: 2, kind: NotFound, message: "No such file or directory" } } }
+
+---- index::tests::resident_global_v12_refresh_rejects_deleted_backing_object_when_cached_without_swapping stdout ----
+
+thread 'index::tests::resident_global_v12_refresh_rejects_deleted_backing_object_when_cached_without_swapping' (45212) panicked at crates/borsuk/src/index.rs:46849:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v14_rejects_corrupt_codebook_root_and_card_group_objects stdout ----
+
+thread 'index::tests::resident_global_v14_rejects_corrupt_codebook_root_and_card_group_objects' (45222) panicked at crates/borsuk/src/index.rs:46635:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v14_binds_loaded_root_counters stdout ----
+
+thread 'index::tests::resident_global_v14_binds_loaded_root_counters' (45220) panicked at crates/borsuk/src/index.rs:47092:60:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v20_backpressures_before_foreground_flush_rebuilds_the_corpus stdout ----
+
+thread 'index::tests::resident_global_v20_backpressures_before_foreground_flush_rebuilds_the_corpus' (45224) panicked at crates/borsuk/src/index.rs:45587:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v20_keeps_a_bounded_online_flush_overlay stdout ----
+
+thread 'index::tests::resident_global_v20_keeps_a_bounded_online_flush_overlay' (45232) panicked at crates/borsuk/src/index.rs:44848:14:
+bulk load must publish the immutable global base
+
+---- index::tests::resident_global_v20_base_routes_and_exact_scores_without_segment_payloads stdout ----
+
+thread 'index::tests::resident_global_v20_base_routes_and_exact_scores_without_segment_payloads' (45225) panicked at crates/borsuk/src/index.rs:45779:9:
+version=2 leaf=PqScanOnly active=1 resident=1
+
+---- index::tests::resident_global_v20_reports_one_based_deepest_winning_card_rank stdout ----
+
+thread 'index::tests::resident_global_v20_reports_one_based_deepest_winning_card_rank' (45234) panicked at crates/borsuk/src/index.rs:44210:9:
+assertion `left == right` failed: SearchReport { hits: [SearchHit { id: "winning-card-rank-137", distance: 0.0, metadata: None }, SearchHit { id: "winning-card-rank-195", distance: 2.828427, metadata: None }, SearchHit { id: "winning-card-rank-79", distance: 2.828427, metadata: None }, SearchHit { id: "winning-card-rank-21", distance: 5.656854, metadata: None }, SearchHit { id: "winning-card-rank-253", distance: 5.656854, metadata: None }, SearchHit { id: "winning-card-rank-54", distance: 8.485281, metadata: None }, SearchHit { id: "winning-card-rank-112", distance: 11.313708, metadata: None }, SearchHit { id: "winning-card-rank-170", distance: 14.142136, metadata: None }, SearchHit { id: "winning-card-rank-228", distance: 16.970562, metadata: None }, SearchHit { id: "winning-card-rank-29", distance: 19.79899, metadata: None }], leaf_mode: "srht-pq-scan", termination_reason: Complete, recall_guarantee: Degraded, segments_total: 1, segments_searched: 1, segments_skipped: 0, routing_page_indexes_read: 1, routing_pages_read: 1, bytes_read: 70758, prefetched_bytes_unused: 0, graph_bytes_read: 0, decoded_cache_hits: 0, decoded_cache_bytes_read: 0, object_cache_hits: 0, object_cache_misses: 3, disk_cache_bytes_read: 0, backing_bytes_read: 70758, disk_cache_reads: 0, backing_reads: 56, cache_repairs: 0, records_considered: 256, records_scored: 128, graph_candidates_added: 0, global_graph_chunks_searched: 0, global_scan_chunks_searched: 0, global_identity_rows_resolved: 0, global_exact_vectors_fetched: 0, global_leaf_directory_reads: 0, global_leaf_directory_bytes: 0, global_leaf_code_pages_read: 0, global_leaf_code_requests: 0, global_leaf_code_bytes: 0, global_leaf_pages_read: 0, global_leaf_exact_requests: 0, global_leaf_exact_cells: 0, global_leaf_exact_cards: 0, global_leaf_deepest_winning_card_rank: 0, global_leaf_exact_groups: 0, global_leaf_exact_selected_bytes: 0, global_leaf_exact_speculative_bytes: 0, global_leaf_page_bytes: 0, global_leaf_exact_scores: 0, global_leaf_continuations: 0, global_leaf_waves: 0, global_base_approximate_us: 0, global_base_head_admission_us: 0, global_base_head_fetch_us: 0, global_base_head_read_attempts: 0, global_base_head_read_successes: 0, global_base_head_read_response_bytes: 0, global_base_head_read_us_sum: 0, global_base_head_read_us_max: 0, global_base_head_read_queue_us_sum: 0, global_base_head_read_queue_us_max: 0, global_base_head_reads_over_20ms: 0, global_base_head_reads_over_30ms: 0, global_base_head_reads_over_50ms: 0, global_base_head_reads_over_100ms: 0, global_base_head_decode_admission_us: 0, global_base_head_decode_us: 0, global_base_exact_admission_us: 0, global_base_exact_fetch_us: 0, global_base_exact_read_attempts: 0, global_base_exact_read_successes: 0, global_base_exact_read_response_bytes: 0, global_base_exact_read_queue_us_sum: 0, global_base_exact_read_queue_us_max: 0, global_base_exact_read_us_max: 0, global_base_exact_read_us_sum: 0, global_base_exact_reads_over_20ms: 0, global_base_exact_reads_over_30ms: 0, global_base_exact_reads_over_50ms: 0, global_base_exact_reads_over_100ms: 0, global_base_exact_cpu_us: 0, global_base_exact_rerank_us: 0, resident_bytes_estimate: 3316, prepared_positioned_bytes: 1007, collection_resident_bytes: 4323, retained_bytes: 121622, retained_capacity_bytes: 201326592, retained_peak_bytes: 121622, transient_bytes: 0, transient_capacity_bytes: 134217728, transient_peak_bytes: 83968, elapsed_ms: 16, requests: RequestCounts { gets: 56, puts: 0, deletes: 0, heads: 0, lists: 0 }, rows_evaluated: 0, rows_passed_filter: 0, segments_pruned_by_filter: 0, wal_cells_examined: 0, wal_lanes_examined: 0, wal_runs_examined: 0, wal_records_examined: 0, wal_snapshot_retries: 0 }
+  left: "srht-pq-scan"
+ right: "bounded-cell-card-v20"
+
+---- index::tests::resident_global_v20_dispatch_accepts_only_qualified_page_budgets stdout ----
+
+thread 'index::tests::resident_global_v20_dispatch_accepts_only_qualified_page_budgets' (45227) panicked at crates/borsuk/src/index.rs:47275:13:
+assertion `left == right` failed: qualified page budget 4 did not dispatch V12
+  left: "srht-pq-scan"
+ right: "bounded-cell-card-v20"
+
+---- index::tests::retained_manifest_gc_walk_validates_catalog_codebook_without_building_router stdout ----
+
+thread 'index::tests::retained_manifest_gc_walk_validates_catalog_codebook_without_building_router' (45241) panicked at crates/borsuk/src/index.rs:37413:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_v12_deadline_stops_before_descriptor_and_root_setup stdout ----
+
+thread 'index::tests::resident_v12_deadline_stops_before_descriptor_and_root_setup' (45240) panicked at crates/borsuk/src/index.rs:36994:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v12_continues_after_finding_k_live_rows stdout ----
+
+thread 'index::tests::resident_global_v12_continues_after_finding_k_live_rows' (45209) panicked at crates/borsuk/src/index.rs:47587:9:
+assertion `left == right` failed
+  left: "srht-pq-scan"
+ right: "bounded-cell-card-v20"
+
+---- index::tests::resident_global_v20_reuses_stable_code_planes_after_disk_cache_reset stdout ----
+
+thread 'index::tests::resident_global_v20_reuses_stable_code_planes_after_disk_cache_reset' (45236) panicked at crates/borsuk/src/index.rs:44153:9:
+SearchReport { hits: [SearchHit { id: "stable-plane-37", distance: 0.0, metadata: None }, SearchHit { id: "stable-plane-43", distance: 0.018502394, metadata: None }, SearchHit { id: "stable-plane-31", distance: 0.022807864, metadata: None }, SearchHit { id: "stable-plane-44", distance: 0.123422764, metadata: None }, SearchHit { id: "stable-plane-38", distance: 0.13382249, metadata: None }, SearchHit { id: "stable-plane-18", distance: 0.13406155, metadata: None }, SearchHit { id: "stable-plane-32", distance: 0.13465494, metadata: None }, SearchHit { id: "stable-plane-12", distance: 0.14819594, metadata: None }, SearchHit { id: "stable-plane-63", distance: 0.15784283, metadata: None }, SearchHit { id: "stable-plane-21", distance: 0.15831254, metadata: None }], leaf_mode: "srht-pq-scan", termination_reason: Complete, recall_guarantee: BudgetComplete, segments_total: 1, segments_searched: 1, segments_skipped: 0, routing_page_indexes_read: 1, routing_pages_read: 0, bytes_read: 9958, prefetched_bytes_unused: 0, graph_bytes_read: 0, decoded_cache_hits: 0, decoded_cache_bytes_read: 0, object_cache_hits: 0, object_cache_misses: 2, disk_cache_bytes_read: 0, backing_bytes_read: 9958, disk_cache_reads: 0, backing_reads: 1, cache_repairs: 0, records_considered: 64, records_scored: 64, graph_candidates_added: 0, global_graph_chunks_searched: 0, global_scan_chunks_searched: 0, global_identity_rows_resolved: 0, global_exact_vectors_fetched: 0, global_leaf_directory_reads: 0, global_leaf_directory_bytes: 0, global_leaf_code_pages_read: 0, global_leaf_code_requests: 0, global_leaf_code_bytes: 0, global_leaf_pages_read: 0, global_leaf_exact_requests: 0, global_leaf_exact_cells: 0, global_leaf_exact_cards: 0, global_leaf_deepest_winning_card_rank: 0, global_leaf_exact_groups: 0, global_leaf_exact_selected_bytes: 0, global_leaf_exact_speculative_bytes: 0, global_leaf_page_bytes: 0, global_leaf_exact_scores: 0, global_leaf_continuations: 0, global_leaf_waves: 0, global_base_approximate_us: 0, global_base_head_admission_us: 0, global_base_head_fetch_us: 0, global_base_head_read_attempts: 0, global_base_head_read_successes: 0, global_base_head_read_response_bytes: 0, global_base_head_read_us_sum: 0, global_base_head_read_us_max: 0, global_base_head_read_queue_us_sum: 0, global_base_head_read_queue_us_max: 0, global_base_head_reads_over_20ms: 0, global_base_head_reads_over_30ms: 0, global_base_head_reads_over_50ms: 0, global_base_head_reads_over_100ms: 0, global_base_head_decode_admission_us: 0, global_base_head_decode_us: 0, global_base_exact_admission_us: 0, global_base_exact_fetch_us: 0, global_base_exact_read_attempts: 0, global_base_exact_read_successes: 0, global_base_exact_read_response_bytes: 0, global_base_exact_read_queue_us_sum: 0, global_base_exact_read_queue_us_max: 0, global_base_exact_read_us_max: 0, global_base_exact_read_us_sum: 0, global_base_exact_reads_over_20ms: 0, global_base_exact_reads_over_30ms: 0, global_base_exact_reads_over_50ms: 0, global_base_exact_reads_over_100ms: 0, global_base_exact_cpu_us: 0, global_base_exact_rerank_us: 0, resident_bytes_estimate: 3316, prepared_positioned_bytes: 1007, collection_resident_bytes: 4323, retained_bytes: 49134, retained_capacity_bytes: 25165824, retained_peak_bytes: 49134, transient_bytes: 0, transient_capacity_bytes: 16777216, transient_peak_bytes: 20992, elapsed_ms: 7, requests: RequestCounts { gets: 1, puts: 0, deletes: 0, heads: 0, lists: 0 }, rows_evaluated: 0, rows_passed_filter: 0, segments_pruned_by_filter: 0, wal_cells_examined: 0, wal_lanes_examined: 0, wal_runs_examined: 0, wal_records_examined: 0, wal_snapshot_retries: 0 }
+
+---- index::tests::v21_feasibility_diagnostic_rejects_corrupt_exact_authority_without_writing stdout ----
+
+thread 'index::tests::v21_feasibility_diagnostic_rejects_corrupt_exact_authority_without_writing' (45270) panicked at crates/borsuk/src/index.rs:46463:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::v20_searches_release_head_admission_before_exact_admission stdout ----
+
+thread 'index::tests::v20_searches_release_head_admission_before_exact_admission' (45268) panicked at crates/borsuk/src/index.rs:36112:13:
+assertion `left == right` failed
+  left: "srht-pq-scan"
+ right: "bounded-cell-card-v20"
+
+---- index::tests::v21_feasibility_diagnostic_is_authenticated_ordered_and_read_only stdout ----
+
+thread 'index::tests::v21_feasibility_diagnostic_is_authenticated_ordered_and_read_only' (45269) panicked at crates/borsuk/src/index.rs:45903:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::unchanged_refresh_reuses_authenticated_payload_but_cold_open_rescrubs_after_loss stdout ----
+
+thread 'index::tests::unchanged_refresh_reuses_authenticated_payload_but_cold_open_rescrubs_after_loss' (45267) panicked at crates/borsuk/src/index.rs:46927:18:
+the positioned tombstone must prepare a resident V12 overlay
+
+---- index::tests::resident_global_v20_scores_the_bounded_row_wave_after_mvcc_suppression stdout ----
+
+thread 'index::tests::resident_global_v20_scores_the_bounded_row_wave_after_mvcc_suppression' (45238) panicked at crates/borsuk/src/index.rs:47674:9:
+open must prepare the resident MVCC overlay after positioned tombstones
+
+---- index::tests::v22_stage_l_diagnostic_authenticates_exact_prefixes_and_is_read_only stdout ----
+
+thread 'index::tests::v22_stage_l_diagnostic_authenticates_exact_prefixes_and_is_read_only' (45271) panicked at crates/borsuk/src/index.rs:46046:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::resident_global_v20_reuses_card_code_slices_without_full_plane_promotion stdout ----
+
+thread 'index::tests::resident_global_v20_reuses_card_code_slices_without_full_plane_promotion' (45235) panicked at crates/borsuk/src/index.rs:44711:9:
+SearchReport { hits: [SearchHit { id: "card-cache-11870", distance: 0.0, metadata: None }, SearchHit { id: "card-cache-15963", distance: 0.0, metadata: None }, SearchHit { id: "card-cache-10907", distance: 2.828427, metadata: None }, SearchHit { id: "card-cache-12833", distance: 2.828427, metadata: None }, SearchHit { id: "card-cache-15000", distance: 2.828427, metadata: None }, SearchHit { id: "card-cache-13796", distance: 5.656854, metadata: None }, SearchHit { id: "card-cache-14037", distance: 5.656854, metadata: None }, SearchHit { id: "card-cache-1517", distance: 5.656854, metadata: None }, SearchHit { id: "card-cache-1758", distance: 5.656854, metadata: None }, SearchHit { id: "card-cache-10666", distance: 8.485281, metadata: None }], leaf_mode: "srht-pq-scan", termination_reason: Complete, recall_guarantee: Degraded, segments_total: 4, segments_searched: 4, segments_skipped: 0, routing_page_indexes_read: 1, routing_pages_read: 1, bytes_read: 2086747, prefetched_bytes_unused: 0, graph_bytes_read: 0, decoded_cache_hits: 0, decoded_cache_bytes_read: 0, object_cache_hits: 0, object_cache_misses: 6, disk_cache_bytes_read: 443676, backing_bytes_read: 1643071, disk_cache_reads: 8, backing_reads: 3094, cache_repairs: 0, records_considered: 16384, records_scored: 512, graph_candidates_added: 0, global_graph_chunks_searched: 0, global_scan_chunks_searched: 0, global_identity_rows_resolved: 0, global_exact_vectors_fetched: 0, global_leaf_directory_reads: 0, global_leaf_directory_bytes: 0, global_leaf_code_pages_read: 0, global_leaf_code_requests: 0, global_leaf_code_bytes: 0, global_leaf_pages_read: 0, global_leaf_exact_requests: 0, global_leaf_exact_cells: 0, global_leaf_exact_cards: 0, global_leaf_deepest_winning_card_rank: 0, global_leaf_exact_groups: 0, global_leaf_exact_selected_bytes: 0, global_leaf_exact_speculative_bytes: 0, global_leaf_page_bytes: 0, global_leaf_exact_scores: 0, global_leaf_continuations: 0, global_leaf_waves: 0, global_base_approximate_us: 0, global_base_head_admission_us: 0, global_base_head_fetch_us: 0, global_base_head_read_attempts: 0, global_base_head_read_successes: 0, global_base_head_read_response_bytes: 0, global_base_head_read_us_sum: 0, global_base_head_read_us_max: 0, global_base_head_read_queue_us_sum: 0, global_base_head_read_queue_us_max: 0, global_base_head_reads_over_20ms: 0, global_base_head_reads_over_30ms: 0, global_base_head_reads_over_50ms: 0, global_base_head_reads_over_100ms: 0, global_base_head_decode_admission_us: 0, global_base_head_decode_us: 0, global_base_exact_admission_us: 0, global_base_exact_fetch_us: 0, global_base_exact_read_attempts: 0, global_base_exact_read_successes: 0, global_base_exact_read_response_bytes: 0, global_base_exact_read_queue_us_sum: 0, global_base_exact_read_queue_us_max: 0, global_base_exact_read_us_max: 0, global_base_exact_read_us_sum: 0, global_base_exact_reads_over_20ms: 0, global_base_exact_reads_over_30ms: 0, global_base_exact_reads_over_50ms: 0, global_base_exact_reads_over_100ms: 0, global_base_exact_cpu_us: 0, global_base_exact_rerank_us: 0, resident_bytes_estimate: 3316, prepared_positioned_bytes: 1007, collection_resident_bytes: 4323, retained_bytes: 5391792, retained_capacity_bytes: 25165824, retained_peak_bytes: 5391792, transient_bytes: 0, transient_capacity_bytes: 16777216, transient_peak_bytes: 5373952, elapsed_ms: 214, requests: RequestCounts { gets: 3094, puts: 0, deletes: 0, heads: 0, lists: 0 }, rows_evaluated: 0, rows_passed_filter: 0, segments_pruned_by_filter: 0, wal_cells_examined: 0, wal_lanes_examined: 0, wal_runs_examined: 0, wal_records_examined: 0, wal_snapshot_retries: 0 }
+
+---- index::tests::resident_global_v20_bounds_lossless_rerank_independently_of_io_width stdout ----
+
+thread 'index::tests::resident_global_v20_bounds_lossless_rerank_independently_of_io_width' (45226) panicked at crates/borsuk/src/index.rs:47390:9:
+assertion `left == right` failed
+  left: "srht-pq-scan"
+ right: "bounded-cell-card-v20"
+
+---- manifest::global_pq_layout_tests::offline_v20_base_has_one_codebook_root_and_no_v13_authority stdout ----
+
+thread 'manifest::global_pq_layout_tests::offline_v20_base_has_one_codebook_root_and_no_v13_authority' (45334) panicked at crates/borsuk/src/manifest.rs:454:14:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::maintenance_compacts_full_global_delta_before_draining_wal_tail stdout ----
+
+thread 'index::tests::maintenance_compacts_full_global_delta_before_draining_wal_tail' (45145) panicked at crates/borsuk/src/index.rs:45741:9:
+MaintenanceReport { active_instances: 1, instance_rank: 0, materialized: true, materialization_deferred: false, incremental: false, compacted: true, garbage_collected: false, purged: false, leases_contended: 0 }
+
+---- manifest::global_pq_layout_tests::resident_estimate_overflow_is_conservative stdout ----
+
+thread 'manifest::global_pq_layout_tests::resident_estimate_overflow_is_conservative' (45335) panicked at crates/borsuk/src/manifest.rs:485:77:
+called `Option::unwrap()` on a `None` value
+
+---- index::tests::v23_d1_diagnostic_replays_one_immutable_generation stdout ----
+
+thread 'index::tests::v23_d1_diagnostic_replays_one_immutable_generation' (45272) panicked at crates/borsuk/src/index.rs:46269:14:
+called `Result::unwrap()` on an `Err` value: InvalidStorage("V23 D1 requires a pinned V20 cell-card generation")
+
+---- index::tests::paged_manifest_publication_reuses_unchanged_leaf_pages stdout ----
+
+thread 'index::tests::paged_manifest_publication_reuses_unchanged_leaf_pages' (45159) panicked at crates/borsuk/src/index.rs:39247:14:
+called `Result::unwrap()` on an `Err` value: InvalidStorage("manifest global segment delta has no pinned ANN base")
+
+---- v36_funnel_geometry::tests::v36_resident_posting_diagnostic_trains_authenticated_runs_but_assigns_globally stdout ----
+
+thread 'v36_funnel_geometry::tests::v36_resident_posting_diagnostic_trains_authenticated_runs_but_assigns_globally' (46900) panicked at crates/borsuk/src/v36_funnel_geometry.rs:10796:9:
+assertion `left == right` failed
+  left: [2, 2]
+ right: [1, 3]
+
+---- v37_relation_router::tests::v37_relation_local_build_rejects_worker_and_backend_authority_drift stdout ----
+
+thread 'v37_relation_router::tests::v37_relation_local_build_rejects_worker_and_backend_authority_drift' (46986) panicked at crates/borsuk/src/v37_relation_router.rs:4988:9:
+assertion failed: validate_v37_local_build_authority(&request, &wrong_backend).is_err()
+
+---- native_ann_build::tests::native_bounded_build_is_query_blind_deterministic_and_reopens_sq8 stdout ----
+
+thread 'native_ann_build::tests::native_bounded_build_is_query_blind_deterministic_and_reopens_sq8' (45425) panicked at crates/borsuk/src/native_ann_build.rs:1533:9:
+assertion failed: outcome.physical_gets <= 1
+
+
+failures:
+    format::tests::manifest_from_parquet_rejects_invalid_config_dimensions
+    format::tests::manifest_from_parquet_rejects_invalid_segment_max_vectors
+    index::native_ann_build_cutover_publishes_one_generic_dense_authority
+    index::native_ann_build_cutover_reopens_and_serves_the_native_snapshot
+    index::native_ann_build_cutover_uses_collection_snapshot_as_sole_visibility_authority
+    index::native_ann_compaction_rebuilds_one_deterministic_base_generation
+    index::native_ann_flush_publishes_query_visible_delta_generation
+    index::native_ann_flush_publishes_query_visible_tombstone
+    index::native_ann_multiple_delta_generations_apply_latest_wins
+    index::native_ann_one_ten_and_one_hundred_delta_runs_are_query_and_compaction_equivalent
+    index::native_ann_pending_delete_search_suppresses_committed_snapshot_row
+    index::native_ann_pending_write_search_keeps_committed_snapshot_neighbors
+    index::tests::finish_bulk_load_prepares_the_replacement_cell_card_code_planes
+    index::tests::finish_bulk_load_preserves_a_refreshed_external_writer_mutation_overlay
+    index::tests::finish_bulk_load_rekeys_mutation_authority_for_the_rebuilt_global_epoch
+    index::tests::full_compaction_rekeys_the_covered_mutation_overlay_before_quantizer_republish
+    index::tests::global_pq_artifact_is_stable_across_transaction_iteration_order
+    index::tests::maintenance_compacts_full_global_delta_before_draining_wal_tail
+    index::tests::paged_manifest_publication_reuses_unchanged_leaf_pages
+    index::tests::prepare_serving_metadata_preloads_fitting_cell_card_code_planes
+    index::tests::public_resident_v12_deadline_is_resampled_after_live_wal_result_merge
+    index::tests::refresh_releases_prepared_cell_card_planes_from_the_previous_generation
+    index::tests::resident_global_mutation_rekey_reuses_the_existing_memory_reservation
+    index::tests::resident_global_self_query_uses_v14_with_catalog_routing
+    index::tests::resident_global_v12_binds_all_codebook_reference_fields
+    index::tests::resident_global_v12_continues_after_finding_k_live_rows
+    index::tests::resident_global_v12_overflow_cannot_bypass_ram_admission
+    index::tests::resident_global_v12_refresh_rejects_deleted_backing_object_when_cached_without_swapping
+    index::tests::resident_global_v12_stats_are_exact
+    index::tests::resident_global_v12_transactional_preload_rejects_false_known_size_when_cached
+    index::tests::resident_global_v12_warm_cache_cannot_substitute_missing_durable_paths
+    index::tests::resident_global_v14_applies_positioned_delete_overlay_without_segment_reads
+    index::tests::resident_global_v14_base_routes_and_exact_scores_without_v13_leaf_objects
+    index::tests::resident_global_v14_binds_loaded_root_counters
+    index::tests::resident_global_v14_rejects_corrupt_codebook_root_and_card_group_objects
+    index::tests::resident_global_v20_backpressures_before_foreground_flush_rebuilds_the_corpus
+    index::tests::resident_global_v20_base_routes_and_exact_scores_without_segment_payloads
+    index::tests::resident_global_v20_bounds_lossless_rerank_independently_of_io_width
+    index::tests::resident_global_v20_dispatch_accepts_only_qualified_page_budgets
+    index::tests::resident_global_v20_keeps_a_bounded_online_flush_overlay
+    index::tests::resident_global_v20_reports_one_based_deepest_winning_card_rank
+    index::tests::resident_global_v20_reuses_card_code_slices_without_full_plane_promotion
+    index::tests::resident_global_v20_reuses_stable_code_planes_after_disk_cache_reset
+    index::tests::resident_global_v20_scores_the_bounded_row_wave_after_mvcc_suppression
+    index::tests::resident_v12_deadline_stops_before_descriptor_and_root_setup
+    index::tests::retained_manifest_gc_walk_validates_catalog_codebook_without_building_router
+    index::tests::unchanged_refresh_reuses_authenticated_payload_but_cold_open_rescrubs_after_loss
+    index::tests::v20_searches_release_head_admission_before_exact_admission
+    index::tests::v21_feasibility_diagnostic_is_authenticated_ordered_and_read_only
+    index::tests::v21_feasibility_diagnostic_rejects_corrupt_exact_authority_without_writing
+    index::tests::v22_stage_l_diagnostic_authenticates_exact_prefixes_and_is_read_only
+    index::tests::v23_d1_diagnostic_replays_one_immutable_generation
+    manifest::global_pq_layout_tests::offline_v20_base_has_one_codebook_root_and_no_v13_authority
+    manifest::global_pq_layout_tests::resident_estimate_overflow_is_conservative
+    native_ann_build::tests::native_bounded_build_is_query_blind_deterministic_and_reopens_sq8
+    v36_funnel_geometry::tests::v36_resident_posting_diagnostic_trains_authenticated_runs_but_assigns_globally
+    v37_relation_router::tests::v37_relation_local_build_rejects_worker_and_backend_authority_drift
+
+test result: FAILED. 1630 passed; 57 failed; 6 ignored; 0 measured; 0 filtered out; finished in 98.29s
+
+error: test failed, to rerun pass `-p borsuk --lib`

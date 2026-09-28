@@ -1,0 +1,11 @@
+{
+  "source_archive_sha256": "5432e9053b7d8c8c1b09b96162232fc10522193e1a35a30119c446b8ef31d65e",
+  "verified_files": {
+    "crates/borsuk/src/lib.rs": "dbaf5d54a65b36ed592e344eda8daf2708751a32653268ba73316e9cbffcae57",
+    "crates/borsuk/src/two_bit_gc.rs": "a188ee309226ed366f0430cb8a4b1640c12c56cbc90ee95428d3e34f76e0548c",
+    "crates/borsuk/src/two_bit_compaction.rs": "ffc4c1fd21a69972776b8f48b9cd322365a33a821488c3442e481a5053d720e7",
+    "crates/borsuk/src/two_bit_store.rs": "8eb9fee74815d01a9e809082476fde3783870cd94d120b557b6c0c80b4566abd",
+    "crates/borsuk/src/two_bit_mutations.rs": "c60365e640e9c065ac555aa4039693409883f84a90c8582ce1578ea06a03a0d1",
+    "crates/borsuk/tests/two_bit_application_ids.rs": "5dccaf78cf35355f7a7a10fb3475e62f8b7a31c3bfe6d9b0fdd1ec3cc929911a"
+  }
+}
