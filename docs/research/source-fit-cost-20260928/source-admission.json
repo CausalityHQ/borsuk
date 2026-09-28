@@ -1,0 +1,43 @@
+{
+  "status": "source-arithmetic-only-not-RSS-or-timing",
+  "ranked_row_size_bytes_assumed": 24,
+  "hierarchical_training_fanout": 32,
+  "hierarchical_training_iterations": 12,
+  "hierarchical_depth": "not proven logarithmic for skewed proportional quotas",
+  "assignment": "HNSW nearest traversal has no fixed work bound; measured costs do not establish worst-case100M feasibility",
+  "models": [
+    {
+      "rows": 100000,
+      "dimensions": 768,
+      "hierarchical_cells": 98,
+      "hierarchical_samples": 6272,
+      "hierarchical_admission_bytes": 64453632,
+      "flat_cells": 391,
+      "flat_samples": 25024,
+      "flat_admission_bytes": 88628608,
+      "normalized_source_bytes": 307200000
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 768,
+      "hierarchical_cells": 977,
+      "hierarchical_samples": 62528,
+      "hierarchical_admission_bytes": 639611904,
+      "flat_cells": 3907,
+      "flat_samples": 250048,
+      "flat_admission_bytes": 861357952,
+      "normalized_source_bytes": 3072000000
+    },
+    {
+      "rows": 100000000,
+      "dimensions": 768,
+      "hierarchical_cells": 97657,
+      "hierarchical_samples": 6250048,
+      "hierarchical_admission_bytes": 63900806144,
+      "flat_cells": 390625,
+      "flat_samples": 25000000,
+      "flat_admission_bytes": 85852699264,
+      "normalized_source_bytes": 307200000000
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-source-fit-cost-spot-v1",
+  "source_base_commit": "bc5c87ad3fa8636fc15ec303c466632fcf521f92",
+  "source_archive_sha256": "9075006cab1b455a4b491069ee4f9aa3d4187f34876da5098d74a411843b2de8",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "wall_seconds": 3600,
+  "test_timeout_seconds": 1800,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.204800",
+  "spot_quote_timestamp": "2026-09-28T11:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.35,
+  "availability_zone": "eu-central-1a",
+  "scope": "Existing ReLAION 100k/1M source fitting CPU/RSS falsifier; no query/truth/quality/default selection",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}
