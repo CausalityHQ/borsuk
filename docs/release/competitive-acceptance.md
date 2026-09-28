@@ -70,8 +70,12 @@ The exact nearest32-row summary arm also failed:92.4375%,p05 79,
 <=13 ranges/15164760B. Both squared-distance nomination arms are KILL before
 SQ8/ReLAION/graph/format/cloud. Unit normalization then recovered only0.625pp:93.0625%,p05 80,
 <=13 ranges/15449460B, also KILL. Stop centroid-minimum variants. Reused completed Fable spill review and
-reconciled V38/V39: next source-only epsilon-closure copy-amplification admission
-(max3 copies/rho<=2), before any query/format/cloud. New dual critique was
+reconciled V38/V39: the source-only epsilon0.15/max3 copy admission then KILLed its rho<=2
+budget after56576 source rows:156577 copies plus43424 compulsory remaining
+copies proves final rho>=2.00001. No full rho or query quality measured.
+[Copy-cost negative gate](../research/spill-copy-admission-20260928/decision.md).
+No new format/cloud from this candidate; independent ID/mutation/recovery
+library work remains available while a material redesign gets reviewed. New dual critique was
 cooldown-rejected before launch; no override or duplicate review.
 [Spill reconciliation and next decision](../research/unit-prototype-nomination-20260928/spill-reconciliation.md).
 No GET/beam increase or prototype sweep.
