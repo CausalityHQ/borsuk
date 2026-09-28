@@ -995,6 +995,184 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     );
     assert!(std::fs::read(empty_dir.join("ids.i64")).unwrap().is_empty());
 
+    let empty_lost_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        store.clone(),
+        1,
+        |op, path| op == common::StoreOperation::Put && path.as_ref().ends_with("/head.json"),
+    );
+    let empty_generation = borsuk::two_bit_store::publish_empty_two_bit_generation(
+        &empty_lost_ack,
+        &empty_prefix,
+        2,
+        2,
+        Some(&empty_head),
+    )
+    .await
+    .unwrap();
+    assert!(empty_generation.is_empty());
+    let reread_empty = read_two_bit_head(store.as_ref(), &empty_prefix)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reread_empty.root_sha256(), empty_generation.root_sha256());
+    assert!(reread_empty.is_empty());
+    let index = borsuk::two_bit_index::TwoBitIndex::open_remote(
+        store.as_ref(),
+        reread_empty,
+        limits,
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    let hits = index.search(&reader, &[1., 0.], 100, None).await.unwrap();
+    assert!(hits.candidates.is_empty());
+    assert_eq!(hits.stats.submitted_gets, 0);
+    let empty_root_key = index.head().metadata_prefix().join("manifest.json");
+    let original_empty_root = store
+        .get(&empty_root_key)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let mut bad_empty_root = original_empty_root.to_vec();
+    *bad_empty_root.last_mut().unwrap() ^= 1;
+    store
+        .put(&empty_root_key, PutPayload::from(bad_empty_root))
+        .await
+        .unwrap();
+    assert!(
+        read_two_bit_head(store.as_ref(), &empty_prefix)
+            .await
+            .is_err()
+    );
+    store
+        .put(&empty_root_key, PutPayload::from(original_empty_root))
+        .await
+        .unwrap();
+    let pending = apply_two_bit_mutations(
+        store.as_ref(),
+        index.head(),
+        2,
+        None,
+        &[
+            TwoBitMutation {
+                id: i64::MIN,
+                vector: Some(vec![0., 3.]),
+            },
+            TwoBitMutation {
+                id: i64::MAX,
+                vector: Some(vec![3., 0.]),
+            },
+        ],
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    let pinned_limits = borsuk::two_bit_generation::TwoBitGenerationLimits {
+        already_pinned_bytes: pending.resident_payload_bytes() as u64,
+        ..limits
+    };
+    let index = borsuk::two_bit_index::TwoBitIndex::open_remote(
+        store.as_ref(),
+        read_two_bit_head(store.as_ref(), &empty_prefix)
+            .await
+            .unwrap()
+            .unwrap(),
+        pinned_limits,
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    let hits = index
+        .search(&reader, &[4., 0.], usize::MAX, Some(&pending))
+        .await
+        .unwrap();
+    assert_eq!(
+        hits.candidates.iter().map(|h| h.id).collect::<Vec<_>>(),
+        [i64::MAX, i64::MIN]
+    );
+    assert_eq!(hits.stats.submitted_gets, 0);
+    for query in [&[][..], &[0., 0.], &[f32::NAN, 0.]] {
+        assert!(
+            index
+                .search(&reader, query, 100, Some(&pending))
+                .await
+                .is_err()
+        );
+    }
+    assert!(index.search(&reader, &[1., 0.], 0, None).await.is_err());
+    assert!(
+        index
+            .search(&reader, &[1., 0.], 100, Some(&sealed_other))
+            .await
+            .is_err()
+    );
+    let uncharged = borsuk::two_bit_index::TwoBitIndex::open_remote(
+        store.as_ref(),
+        read_two_bit_head(store.as_ref(), &empty_prefix)
+            .await
+            .unwrap()
+            .unwrap(),
+        limits,
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        uncharged
+            .search(&reader, &[1., 0.], 100, Some(&pending))
+            .await
+            .is_err()
+    );
+    assert!(
+        borsuk::two_bit_store::publish_empty_two_bit_generation(
+            store.as_ref(),
+            &empty_prefix,
+            3,
+            3,
+            Some(index.head())
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        borsuk::two_bit_store::publish_empty_two_bit_generation(
+            store.as_ref(),
+            &empty_prefix,
+            2,
+            3,
+            Some(index.head())
+        )
+        .await
+        .is_err()
+    ); // unsealed puts
+    let sealed_pending = borsuk::two_bit_mutations::seal_two_bit_mutations(
+        store.as_ref(),
+        index.head(),
+        Some(&pending),
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    let from_empty_dir = temp.path().join("from-empty-compaction");
+    let from_empty = borsuk::canonical_source::prepare_two_bit_compaction(
+        store.as_ref(),
+        index.head(),
+        &sealed_pending,
+        &from_empty_dir,
+        compact_caps,
+    )
+    .await
+    .unwrap();
+    assert_eq!(from_empty.rows, 2);
+    assert_eq!(from_empty.recovery.submitted_gets, 1);
+    assert_eq!(from_empty.recovery.source_response_bytes, 0);
+    assert_eq!(
+        std::fs::read(from_empty_dir.join("ids.i64")).unwrap(),
+        [i64::MIN.to_le_bytes(), i64::MAX.to_le_bytes()].concat()
+    );
+
     // Use only the existing native APIs to rebuild and publish this merged corpus.
     let merged_order = (0..prepared.rows as u64).collect::<Vec<_>>();
     let merged_sq8 = temp.path().join("compacted.sq8");

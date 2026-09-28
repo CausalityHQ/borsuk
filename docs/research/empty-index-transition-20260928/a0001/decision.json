@@ -1,0 +1,7 @@
+{
+  "decision": "RETRY_TEST_LAYER_ONLY",
+  "cause": "Cargo reused old red library because tar-preserved green mtimes predated red compilation. Frozen green files match expected source hashes; tests failed missing new symbols, not product runtime.",
+  "fix": "Native cargo clean -p borsuk after archive replacement; reuse same green archive and dependency cache within new bounded original worker.",
+  "original_state": "terminated",
+  "original_exit": 101
+}

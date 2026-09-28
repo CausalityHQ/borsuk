@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "3bc23eda9cd6425835bec28458154c98ef9c9e11",
+  "source_archive_sha256": "b8a0c51f7e80d2894330b8721fa44b111fedd2ac6c15a5ec251434436fefc367",
+  "source_dirty": true,
+  "attempt": "a0002",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.4xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.3618",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "Frozen missing-API red then integration tests2 and affected HTTP tests4; no benchmark",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "red_source_archive_sha256": "e822ea13108264ced144b1fb75ca8858211004ea0bc1b8539d6b8a41a1b04da3",
+  "red_timeout_seconds": 300
+}

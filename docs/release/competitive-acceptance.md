@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
 | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
 | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
 |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; irreversible mutation-head CAS fence guards replacement; bounded canonical/delta preparation and nonempty native handoff pass; crash-resumable orchestrator, empty serving and GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; irreversible mutation-head CAS fence guards replacement; bounded canonical/delta preparation and nonempty native handoff pass; typed empty serving and unified logical index search pass focused checks; crash-resumable orchestrator and GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
 | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
 | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
 
@@ -137,3 +137,12 @@ returns zero rows; empty serving still lacks a generation representation. Next
 single implementation is callable crash-resumable compaction orchestration;
 reader-safe GC remains required. No competitor or scale axis closes.
 [Canonical/delta merge receipts](../research/compaction-source-merge-20260928/decision.md).
+
+Empty bases now have a typed immutable root and `TwoBitIndex` logical search API,
+with no sentinel/source/graph objects. Frozen Causality Spot red/green passes2
+focused fixtures +4 affected HTTP tests after fixing Cargo package cache
+invalidation; both original workers terminated. All-deleted->empty serving,
+pending-put resurrection/search and two-row preparation pass. Full callable
+crash-resumable compaction and empty->populated orchestration remain next;
+reader-safe GC still required. No quality/scale/vendor axis closes.
+[Empty transition and index API receipts](../research/empty-index-transition-20260928/decision.md).

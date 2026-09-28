@@ -124,6 +124,14 @@ pub struct TwoBitMutationSearchResult {
     pub mutation_sha256: String,
 }
 impl TwoBitGeneration {
+    /// Physical row count of this immutable nonempty base.
+    pub fn rows(&self) -> usize {
+        self.pages.rows()
+    }
+    pub(crate) fn modeled_memory_bytes(&self) -> u64 {
+        self.modeled_memory_bytes
+    }
+
     /// Stream only generation metadata from an authorized immutable prefix,
     /// then reuse authenticated local open. No SQ8/source-vector GET is issued.
     /// Scratch is removed on success/failure/cancellation. The caller configures

@@ -574,6 +574,57 @@ compactor must own that orchestration and failure/reload path.
 An absent completion manifest means unpublished scratch. A failure after a
 manifest rename or directory sync has an uncertain durability outcome; reverify
 receipt/file hashes before reuse. An all-deleted source returns zero rows and
-empty files; the current generation builder rejects zero rows, so empty serving
-and complete crash-resumable compaction/GC remain OPEN. No sentinel rows or
+empty files; the current generation builder rejects zero rows, so use the typed empty publisher and logical index API below for empty serving.
+Complete crash-resumable compaction/GC remains OPEN. No sentinel rows or
 silently dropped acknowledged mutations.
+
+
+## One logical index API, including empty bases
+
+`two_bit_index::TwoBitIndex::open_remote(store, head, limits, scratch_parent)`
+consumes an authenticated `TwoBitHead`. Populated bases use the existing bounded
+metadata loader; empty bases authenticate one small root and load no plane,
+graph, SQ8 or source-vector object. `index.head()` supplies the pinned identity
+for mutation recovery/publication.
+
+```rust,ignore
+let head = read_two_bit_head(store, &prefix).await?.expect("published index");
+let snapshot = read_two_bit_mutations(store, &head, head.dimensions(), mutation_caps).await?;
+let snapshot_bytes = snapshot.as_ref().map_or(0, |m| m.resident_payload_bytes() as u64);
+let limits = TwoBitGenerationLimits {
+    already_pinned_bytes: other_pins + snapshot_bytes, ..limits
+};
+let index = borsuk::two_bit_index::TwoBitIndex::open_remote(
+    store, head, limits, scratch_parent,
+).await?;
+let result = index.search(&reader, &query, k, snapshot.as_ref()).await?;
+```
+
+Search returns up to k signed logical IDs and physical base-query statistics.
+`None` explicitly selects the immutable base without a delta; callers must
+recover/pass the desired snapshot for incremental visibility. This is a pinned
+snapshot API, not an implicit latest-read transaction. Without a snapshot,
+revision is0 and mutation digest is empty. All snapshots must bind the index
+namespace, root and dimensions and be charged in `already_pinned_bytes`.
+The shared query slot spans base planning/retrieval and pending scoring.
+Additional logical top-k conversion/merge payload is admitted for every active
+query; oversized k clamps to possible candidates. Empty base queries score
+only pending puts and issue **zero base GETs**. Metadata recovery/open calls
+remain lifecycle I/O. Invalid query, namespace, pin charge or memory admission
+fails before retrieval. SQ8 base scores remain approximate; pending FP32 puts
+use normalized squared-L2. This API does not establish full-corpus ANN quality.
+
+`publish_empty_two_bit_generation(store, prefix, dimensions, generation, expected)`
+creates `borsuk-two-bit-empty-generation-v1`: only schema, generation and positive
+dimensions. No sentinel rows or empty graph files are stored. Same-dimension
+replacement must increase generation and requires the old mutation seal.
+Root create is conditional; index head CAS remains last with authenticated
+lost-ack readback. As with the low-level populated publisher, the caller must
+prove the retired corpus is all deleted. Canonical recovery/preparation from
+an empty root authenticates one root GET and emits no source-object GET; new
+pending puts supply the replacement source. Nonempty format v2 is unchanged.
+
+This resolves empty **serving/publication**, including resurrection by pending
+puts. Native empty->nonempty rebuild uses the existing SQ8 and generation
+builders. Automatic/callable crash-resumable compaction and reader-safe GC remain
+OPEN. No vendor/100M/latency claim follows from functional small-corpus checks.

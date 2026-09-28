@@ -1,0 +1,792 @@
+diff --git a/crates/borsuk/src/canonical_source.rs b/crates/borsuk/src/canonical_source.rs
+index 9d242b21..5746b709 100644
+--- a/crates/borsuk/src/canonical_source.rs
++++ b/crates/borsuk/src/canonical_source.rs
+@@ -6,7 +6,7 @@ use crate::{
+     two_bit_generation::Manifest,
+     two_bit_mutations::TwoBitMutationSnapshot,
+     two_bit_source::{SourceBuildError, TwoBitSource},
+-    two_bit_store::{TwoBitHead, TwoBitStoreError, small_object},
++    two_bit_store::{EmptyRoot, TwoBitHead, TwoBitStoreError, small_object},
+ };
+ use futures_util::StreamExt;
+ use object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath};
+@@ -204,7 +204,7 @@ async fn recover_canonical(
+     let mut stats = CanonicalRecoveryStats::default();
+     let result = async {
+         let bad = TwoBitStoreError::Invalid;
+-        if output.exists() || max_source_bytes == 0 || max_buffer_bytes == 0 {
++        if output.exists() || (max_source_bytes == 0 && !base.is_empty()) || max_buffer_bytes == 0 {
+             return Err(bad("canonical recovery admission"));
+         }
+         stats.submitted_gets += 1;
+@@ -214,6 +214,32 @@ async fn recover_canonical(
+         if format!("{:x}", Sha256::digest(&root)) != base.root_sha256() {
+             return Err(bad("canonical root identity"));
+         }
++        if base.is_empty() {
++            let empty: EmptyRoot =
++                serde_json::from_slice(&root).map_err(|_| bad("empty source root schema"))?;
++            if !empty.valid()
++                || empty.generation != base.generation()
++                || empty.dimensions != base.dimensions()
++            {
++                return Err(bad("empty source root binding"));
++            }
++            let parent = output
++                .parent()
++                .filter(|p| !p.as_os_str().is_empty())
++                .unwrap_or(Path::new("."));
++            let temporary = tempfile::NamedTempFile::new_in(parent)?;
++            temporary.as_file().sync_all()?;
++            temporary
++                .persist_noclobber(output)
++                .map_err(|e| TwoBitStoreError::Io(e.error))?;
++            return Ok(CanonicalSource {
++                rows: 0,
++                dimensions: empty.dimensions,
++                bytes: 0,
++                sha256: format!("{:x}", Sha256::digest([])),
++                object_key: String::new(),
++            });
++        }
+         let manifest: Manifest =
+             serde_json::from_slice(&root).map_err(|_| bad("canonical root schema"))?;
+         if manifest.schema != "borsuk-two-bit-generation-v2"
+diff --git a/crates/borsuk/src/lib.rs b/crates/borsuk/src/lib.rs
+index 4c82a2e6..d0d3f116 100644
+--- a/crates/borsuk/src/lib.rs
++++ b/crates/borsuk/src/lib.rs
+@@ -927,3 +927,6 @@ pub mod two_bit_build;
+ 
+ /// Bounded normalized-source SQ8 creation in an approved physical order.
+ pub mod sq8_source;
++
++/// Logical-ID search for populated or genuinely empty immutable bases.
++pub mod two_bit_index;
+diff --git a/crates/borsuk/src/sq8_s3_range.rs b/crates/borsuk/src/sq8_s3_range.rs
+index 60af81e4..589fde2d 100644
+--- a/crates/borsuk/src/sq8_s3_range.rs
++++ b/crates/borsuk/src/sq8_s3_range.rs
+@@ -617,6 +617,36 @@ mod tests {
+             assert!(request.contains("range: bytes=0-27\r\n"));
+             assert!(request.contains(&format!("if-match: {}\r\n", etag.to_ascii_lowercase())));
+             assert!(request.contains("authorization: aws4-hmac-sha256 "));
++            drop(captured);
++            let logical = crate::two_bit_index::TwoBitIndex::open_remote(
++                &store,
++                read_two_bit_head(&store, &prefix).await.unwrap().unwrap(),
++                limits,
++                temp.path(),
++            )
++            .await
++            .unwrap();
++            let (reader, stop, requests, server) = http_fixture(http_response(
++                "206 Partial Content",
++                Some("bytes 0-27/28"),
++                &etag,
++                28,
++                &sq8,
++            ));
++            let logical = tokio::time::timeout(
++                Duration::from_secs(5),
++                logical.search(&reader, &query, usize::MAX, None),
++            )
++            .await
++            .unwrap()
++            .unwrap();
++            stop.store(true, Ordering::Relaxed);
++            server.join().unwrap();
++            assert_eq!(logical.candidates.len(), 2);
++            assert_eq!(logical.candidates[0].id, 1);
++            assert_eq!(logical.stats.submitted_gets, 1);
++            assert_eq!(logical.stats.verified_bytes, 28);
++            assert_eq!(requests.lock().unwrap().len(), 1);
+         }
+         let generation = TwoBitGeneration::open_remote(
+             &store,
+@@ -794,6 +824,33 @@ mod tests {
+             3,
+             "one GET per query, none for admission failure"
+         );
++        let logical = crate::two_bit_index::TwoBitIndex::open_remote(
++            &store,
++            read_two_bit_head(&store, &prefix).await.unwrap().unwrap(),
++            TwoBitGenerationLimits {
++                already_pinned_bytes: 4 * recovered.resident_payload_bytes() as u64,
++                ..limits
++            },
++            temp.path(),
++        )
++        .await
++        .unwrap();
++        let (reader, stop, requests, server) = http_fixture(http_response(
++            "206 Partial Content",
++            Some("bytes 0-27/28"),
++            &etag,
++            28,
++            &sq8,
++        ));
++        let wrapped = logical
++            .search(&reader, &[2., 1.], usize::MAX, Some(&recovered))
++            .await
++            .unwrap();
++        stop.store(true, Ordering::Relaxed);
++        server.join().unwrap();
++        assert_eq!(wrapped.candidates, hits.candidates);
++        assert_eq!(wrapped.stats.submitted_gets, 1);
++        assert_eq!(requests.lock().unwrap().len(), 1);
+         let mut corrupted = sq8.clone();
+         corrupted[12] ^= 1;
+         for response in [
+diff --git a/crates/borsuk/src/two_bit_generation.rs b/crates/borsuk/src/two_bit_generation.rs
+index 5213caaa..1c2e6c85 100644
+--- a/crates/borsuk/src/two_bit_generation.rs
++++ b/crates/borsuk/src/two_bit_generation.rs
+@@ -124,6 +124,14 @@ pub struct TwoBitMutationSearchResult {
+     pub mutation_sha256: String,
+ }
+ impl TwoBitGeneration {
++    /// Physical row count of this immutable nonempty base.
++    pub fn rows(&self) -> usize {
++        self.pages.rows()
++    }
++    pub(crate) fn modeled_memory_bytes(&self) -> u64 {
++        self.modeled_memory_bytes
++    }
++
+     /// Stream only generation metadata from an authorized immutable prefix,
+     /// then reuse authenticated local open. No SQ8/source-vector GET is issued.
+     /// Scratch is removed on success/failure/cancellation. The caller configures
+diff --git a/crates/borsuk/src/two_bit_store.rs b/crates/borsuk/src/two_bit_store.rs
+index ed6e14e2..acf6520f 100644
+--- a/crates/borsuk/src/two_bit_store.rs
++++ b/crates/borsuk/src/two_bit_store.rs
+@@ -43,10 +43,32 @@ struct HeadBody {
+     generation: u64,
+     root_sha256: String,
+ }
++#[derive(Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub(crate) struct EmptyRoot {
++    pub(crate) schema: String,
++    pub(crate) generation: u64,
++    pub(crate) dimensions: usize,
++}
++impl EmptyRoot {
++    pub(crate) fn valid(&self) -> bool {
++        self.schema == "borsuk-two-bit-empty-generation-v1"
++            && self.generation > 0
++            && self.dimensions > 0
++            && u32::try_from(self.dimensions).is_ok()
++    }
++}
++#[derive(Deserialize)]
++#[serde(untagged)]
++enum Root {
++    Empty(EmptyRoot),
++    Populated(Manifest),
++}
+ /// Opaque conditional token bound to this index prefix and authenticated root.
+ #[derive(Debug)]
+ pub struct TwoBitHead {
+     dimensions: usize,
++    empty: bool,
+     generation: u64,
+     root_sha256: String,
+     prefix: ObjectPath,
+@@ -57,6 +79,10 @@ impl TwoBitHead {
+     pub fn dimensions(&self) -> usize {
+         self.dimensions
+     }
++    /// True when the authenticated base contains no rows or vector objects.
++    pub fn is_empty(&self) -> bool {
++        self.empty
++    }
+     /// Monotonically published generation ID.
+     pub fn generation(&self) -> u64 {
+         self.generation
+@@ -131,19 +157,27 @@ pub async fn read_two_bit_head(
+     if format!("{:x}", Sha256::digest(&root)) != head.root_sha256 {
+         return Err(TwoBitStoreError::Invalid("root identity"));
+     }
+-    let manifest: Manifest =
++    let root: Root =
+         serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
+-    if manifest.schema != "borsuk-two-bit-generation-v2"
+-        || manifest.generation != head.generation
+-        || manifest.low.is_empty()
+-        || manifest.low.len() != manifest.step.len()
+-        || !manifest.canonical.valid()
+-        || manifest.canonical.dimensions != manifest.low.len()
+-    {
+-        return Err(TwoBitStoreError::Invalid("head generation"));
+-    }
++    let (dimensions, empty) = match root {
++        Root::Empty(root) if root.valid() && root.generation == head.generation => {
++            (root.dimensions, true)
++        }
++        Root::Populated(manifest)
++            if manifest.schema == "borsuk-two-bit-generation-v2"
++                && manifest.generation == head.generation
++                && !manifest.low.is_empty()
++                && manifest.low.len() == manifest.step.len()
++                && manifest.canonical.valid()
++                && manifest.canonical.dimensions == manifest.low.len() =>
++        {
++            (manifest.low.len(), false)
++        }
++        _ => return Err(TwoBitStoreError::Invalid("head generation")),
++    };
+     Ok(Some(TwoBitHead {
+-        dimensions: manifest.low.len(),
++        dimensions,
++        empty,
+         generation: head.generation,
+         root_sha256: head.root_sha256,
+         prefix: prefix.clone(),
+@@ -185,7 +219,9 @@ pub async fn publish_two_bit_generation(
+     let root = read("manifest.json", trusted_root_sha256)?;
+     let manifest: Manifest =
+         serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
+-    if expected.is_some_and(|h| manifest.generation <= h.generation) {
++    if expected
++        .is_some_and(|h| manifest.generation <= h.generation || manifest.low.len() != h.dimensions)
++    {
+         return Err(TwoBitStoreError::Invalid("generation order"));
+     }
+     let plane: SourcePlaneReceipt = serde_json::from_slice(&read(
+@@ -255,10 +291,36 @@ pub async fn publish_two_bit_generation(
+         )
+         .await?;
+     }
++    publish_head(
++        store,
++        prefix,
++        manifest.generation,
++        trusted_root_sha256,
++        manifest.low.len(),
++        false,
++        expected,
++    )
++    .await
++}
++
++async fn publish_head(
++    store: &dyn ObjectStore,
++    prefix: &ObjectPath,
++    generation: u64,
++    root_sha256: &str,
++    dimensions: usize,
++    empty: bool,
++    expected: Option<&TwoBitHead>,
++) -> Result<TwoBitHead> {
++    if expected.is_some_and(|h| {
++        h.prefix != *prefix || h.generation >= generation || h.dimensions != dimensions
++    }) {
++        return Err(TwoBitStoreError::Invalid("head namespace/order/dimensions"));
++    }
+     let body = serde_json::to_vec(&HeadBody {
+         schema: "borsuk-two-bit-head-v1".into(),
+-        generation: manifest.generation,
+-        root_sha256: trusted_root_sha256.to_owned(),
++        generation,
++        root_sha256: root_sha256.to_owned(),
+     })
+     .map_err(|_| TwoBitStoreError::Invalid("head serialization"))?;
+     let mode = expected.map_or(PutMode::Create, |h| PutMode::Update(h.version.clone()));
+@@ -277,19 +339,84 @@ pub async fn publish_two_bit_generation(
+         Err(error) => {
+             // A committed CAS can lose its acknowledgement; authenticate readback.
+             if let Ok(Some(head)) = read_two_bit_head(store, prefix).await {
+-                if head.generation == manifest.generation && head.root_sha256 == trusted_root_sha256
+-                {
++                if head.generation == generation && head.root_sha256 == root_sha256 {
+                     return Ok(head);
+                 }
+             }
+             return Err(error.into());
+         }
+     };
++    let version = UpdateVersion::from(result);
++    if version.e_tag.is_none() && version.version.is_none() {
++        return Err(TwoBitStoreError::Invalid("head conditional token"));
++    }
+     Ok(TwoBitHead {
+-        dimensions: manifest.low.len(),
+-        generation: manifest.generation,
+-        root_sha256: trusted_root_sha256.to_owned(),
++        dimensions,
++        empty,
++        generation,
++        root_sha256: root_sha256.to_owned(),
+         prefix: prefix.clone(),
+-        version: UpdateVersion::from(result),
++        version,
+     })
+ }
++
++/// Publish a real empty base, with no SQ8/canonical/graph objects or sentinel rows.
++/// Initial create or monotonic same-dimension replacement. Replacement requires
++/// the previous mutation seal; caller must only use this for an all-deleted state.
++/// This low-level publisher cannot prove corpus equivalence. ACLs authorize it.
++pub async fn publish_empty_two_bit_generation(
++    store: &dyn ObjectStore,
++    prefix: &ObjectPath,
++    dimensions: usize,
++    generation: u64,
++    expected: Option<&TwoBitHead>,
++) -> Result<TwoBitHead> {
++    let bad = TwoBitStoreError::Invalid;
++    let root = EmptyRoot {
++        schema: "borsuk-two-bit-empty-generation-v1".into(),
++        generation,
++        dimensions,
++    };
++    if !root.valid()
++        || expected.is_some_and(|h| {
++            h.prefix != *prefix || h.generation >= generation || h.dimensions != dimensions
++        })
++    {
++        return Err(bad("empty generation namespace/order/dimensions"));
++    }
++    if let Some(previous) = expected {
++        crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?;
++    }
++    let bytes = serde_json::to_vec(&root).map_err(|_| bad("empty root schema"))?;
++    use sha2::{Digest, Sha256};
++    let digest = format!("{:x}", Sha256::digest(&bytes));
++    let location = prefix
++        .clone()
++        .join("generations")
++        .join(digest.as_str())
++        .join("manifest.json");
++    match store
++        .put_opts(
++            &location,
++            PutPayload::from(bytes.clone()),
++            PutOptions {
++                mode: PutMode::Create,
++                ..Default::default()
++            },
++        )
++        .await
++    {
++        Ok(_) => {}
++        Err(object_store::Error::AlreadyExists { .. }) => {
++            let (old, _) = small_object(store, &location, 1024).await?;
++            if old != bytes {
++                return Err(bad("empty root immutable collision"));
++            }
++        }
++        Err(error) => return Err(error.into()),
++    }
++    publish_head(
++        store, prefix, generation, &digest, dimensions, true, expected,
++    )
++    .await
++}
+diff --git a/crates/borsuk/tests/two_bit_application_ids.rs b/crates/borsuk/tests/two_bit_application_ids.rs
+index d6b0e037..1fdc249a 100644
+--- a/crates/borsuk/tests/two_bit_application_ids.rs
++++ b/crates/borsuk/tests/two_bit_application_ids.rs
+@@ -995,6 +995,184 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking()
+     );
+     assert!(std::fs::read(empty_dir.join("ids.i64")).unwrap().is_empty());
+ 
++    let empty_lost_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
++        store.clone(),
++        1,
++        |op, path| op == common::StoreOperation::Put && path.as_ref().ends_with("/head.json"),
++    );
++    let empty_generation = borsuk::two_bit_store::publish_empty_two_bit_generation(
++        &empty_lost_ack,
++        &empty_prefix,
++        2,
++        2,
++        Some(&empty_head),
++    )
++    .await
++    .unwrap();
++    assert!(empty_generation.is_empty());
++    let reread_empty = read_two_bit_head(store.as_ref(), &empty_prefix)
++        .await
++        .unwrap()
++        .unwrap();
++    assert_eq!(reread_empty.root_sha256(), empty_generation.root_sha256());
++    assert!(reread_empty.is_empty());
++    let index = borsuk::two_bit_index::TwoBitIndex::open_remote(
++        store.as_ref(),
++        reread_empty,
++        limits,
++        temp.path(),
++    )
++    .await
++    .unwrap();
++    let hits = index.search(&reader, &[1., 0.], 100, None).await.unwrap();
++    assert!(hits.candidates.is_empty());
++    assert_eq!(hits.stats.submitted_gets, 0);
++    let empty_root_key = index.head().metadata_prefix().join("manifest.json");
++    let original_empty_root = store
++        .get(&empty_root_key)
++        .await
++        .unwrap()
++        .bytes()
++        .await
++        .unwrap();
++    let mut bad_empty_root = original_empty_root.to_vec();
++    *bad_empty_root.last_mut().unwrap() ^= 1;
++    store
++        .put(&empty_root_key, PutPayload::from(bad_empty_root))
++        .await
++        .unwrap();
++    assert!(
++        read_two_bit_head(store.as_ref(), &empty_prefix)
++            .await
++            .is_err()
++    );
++    store
++        .put(&empty_root_key, PutPayload::from(original_empty_root))
++        .await
++        .unwrap();
++    let pending = apply_two_bit_mutations(
++        store.as_ref(),
++        index.head(),
++        2,
++        None,
++        &[
++            TwoBitMutation {
++                id: i64::MIN,
++                vector: Some(vec![0., 3.]),
++            },
++            TwoBitMutation {
++                id: i64::MAX,
++                vector: Some(vec![3., 0.]),
++            },
++        ],
++        mutation_limits,
++    )
++    .await
++    .unwrap();
++    let pinned_limits = borsuk::two_bit_generation::TwoBitGenerationLimits {
++        already_pinned_bytes: pending.resident_payload_bytes() as u64,
++        ..limits
++    };
++    let index = borsuk::two_bit_index::TwoBitIndex::open_remote(
++        store.as_ref(),
++        read_two_bit_head(store.as_ref(), &empty_prefix)
++            .await
++            .unwrap()
++            .unwrap(),
++        pinned_limits,
++        temp.path(),
++    )
++    .await
++    .unwrap();
++    let hits = index
++        .search(&reader, &[4., 0.], usize::MAX, Some(&pending))
++        .await
++        .unwrap();
++    assert_eq!(
++        hits.candidates.iter().map(|h| h.id).collect::<Vec<_>>(),
++        [i64::MAX, i64::MIN]
++    );
++    assert_eq!(hits.stats.submitted_gets, 0);
++    for query in [&[][..], &[0., 0.], &[f32::NAN, 0.]] {
++        assert!(
++            index
++                .search(&reader, query, 100, Some(&pending))
++                .await
++                .is_err()
++        );
++    }
++    assert!(index.search(&reader, &[1., 0.], 0, None).await.is_err());
++    assert!(
++        index
++            .search(&reader, &[1., 0.], 100, Some(&sealed_other))
++            .await
++            .is_err()
++    );
++    let uncharged = borsuk::two_bit_index::TwoBitIndex::open_remote(
++        store.as_ref(),
++        read_two_bit_head(store.as_ref(), &empty_prefix)
++            .await
++            .unwrap()
++            .unwrap(),
++        limits,
++        temp.path(),
++    )
++    .await
++    .unwrap();
++    assert!(
++        uncharged
++            .search(&reader, &[1., 0.], 100, Some(&pending))
++            .await
++            .is_err()
++    );
++    assert!(
++        borsuk::two_bit_store::publish_empty_two_bit_generation(
++            store.as_ref(),
++            &empty_prefix,
++            3,
++            3,
++            Some(index.head())
++        )
++        .await
++        .is_err()
++    );
++    assert!(
++        borsuk::two_bit_store::publish_empty_two_bit_generation(
++            store.as_ref(),
++            &empty_prefix,
++            2,
++            3,
++            Some(index.head())
++        )
++        .await
++        .is_err()
++    ); // unsealed puts
++    let sealed_pending = borsuk::two_bit_mutations::seal_two_bit_mutations(
++        store.as_ref(),
++        index.head(),
++        Some(&pending),
++        mutation_limits,
++    )
++    .await
++    .unwrap();
++    let from_empty_dir = temp.path().join("from-empty-compaction");
++    let from_empty = borsuk::canonical_source::prepare_two_bit_compaction(
++        store.as_ref(),
++        index.head(),
++        &sealed_pending,
++        &from_empty_dir,
++        compact_caps,
++    )
++    .await
++    .unwrap();
++    assert_eq!(from_empty.rows, 2);
++    assert_eq!(from_empty.recovery.submitted_gets, 1);
++    assert_eq!(from_empty.recovery.source_response_bytes, 0);
++    assert_eq!(
++        std::fs::read(from_empty_dir.join("ids.i64")).unwrap(),
++        [i64::MIN.to_le_bytes(), i64::MAX.to_le_bytes()].concat()
++    );
++
+     // Use only the existing native APIs to rebuild and publish this merged corpus.
+     let merged_order = (0..prepared.rows as u64).collect::<Vec<_>>();
+     let merged_sq8 = temp.path().join("compacted.sq8");
+diff --git a/crates/borsuk/src/two_bit_index.rs b/crates/borsuk/src/two_bit_index.rs
+new file mode 100644
+index 00000000..38dac566
+--- /dev/null
++++ b/crates/borsuk/src/two_bit_index.rs
+@@ -0,0 +1,209 @@
++//! One logical-ID search API for populated and truly empty immutable bases.
++use crate::{
++    budgeted_page_rank::BudgetedPagePlan,
++    sq8_s3_range::{OneAttemptS3, Sq8ReadStats},
++    two_bit_generation::{
++        TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits, TwoBitMutationSearchResult,
++    },
++    two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
++    two_bit_store::{EmptyRoot, TwoBitHead, TwoBitStoreError, small_object},
++};
++use object_store::ObjectStore;
++use sha2::{Digest, Sha256};
++use std::path::Path;
++use tokio::sync::Semaphore;
++
++/// Pinned immutable base; vectors remain object-native. Pending deltas are
++/// caller-owned authenticated snapshots, charged with all other retained pins.
++pub struct TwoBitIndex {
++    head: TwoBitHead,
++    base: Option<TwoBitGeneration>,
++    limits: TwoBitGenerationLimits,
++    modeled_bytes: u64,
++    slots: Semaphore,
++}
++impl TwoBitIndex {
++    /// Open populated routing metadata or one small empty root, without vector
++    /// hydration. The head must come from the same authorized store/prefix.
++    pub async fn open_remote(
++        store: &dyn ObjectStore,
++        head: TwoBitHead,
++        limits: TwoBitGenerationLimits,
++        scratch_parent: &Path,
++    ) -> Result<Self, TwoBitStoreError> {
++        let bad = TwoBitStoreError::Invalid;
++        if limits.max_active_queries == 0
++            || limits.max_query_bytes == 0
++            || limits.max_query_gets == 0
++            || limits.max_parallel_gets == 0
++            || limits.max_query_scratch_bytes == 0
++        {
++            return Err(bad("index admission"));
++        }
++        let fixed = (head.metadata_prefix().as_ref().len() as u64)
++            .checked_mul(2)
++            .and_then(|n| n.checked_add(4096))
++            .ok_or(bad("index memory"))?;
++        let (base, modeled_bytes) = if head.is_empty() {
++            let query_bytes = (head.dimensions() as u64)
++                .checked_mul(16)
++                .and_then(|n| n.checked_add(limits.max_query_scratch_bytes as u64))
++                .and_then(|n| n.checked_add(4096))
++                .and_then(|n| n.checked_mul(limits.max_active_queries as u64))
++                .ok_or(bad("empty query memory"))?;
++            let modeled = fixed
++                .checked_add(131072)
++                .and_then(|n| n.checked_add(query_bytes))
++                .and_then(|n| n.checked_add(limits.already_pinned_bytes))
++                .ok_or(bad("empty index memory"))?;
++            if modeled > limits.max_memory_bytes {
++                return Err(bad("empty index memory"));
++            }
++            let (bytes, _) =
++                small_object(store, &head.metadata_prefix().join("manifest.json"), 1024).await?;
++            if format!("{:x}", Sha256::digest(&bytes)) != head.root_sha256() {
++                return Err(bad("empty root identity"));
++            }
++            let root: EmptyRoot =
++                serde_json::from_slice(&bytes).map_err(|_| bad("empty root schema"))?;
++            if !root.valid()
++                || root.generation != head.generation()
++                || root.dimensions != head.dimensions()
++            {
++                return Err(bad("empty root binding"));
++            }
++            (None, modeled)
++        } else {
++            // Charge wrapper/head payload before the existing loader allocates.
++            let loader_limits = TwoBitGenerationLimits {
++                already_pinned_bytes: limits
++                    .already_pinned_bytes
++                    .checked_add(fixed)
++                    .ok_or(bad("index memory"))?,
++                ..limits
++            };
++            let base = TwoBitGeneration::open_remote(
++                store,
++                &head.metadata_prefix(),
++                head.root_sha256(),
++                loader_limits,
++                scratch_parent,
++            )
++            .await?;
++            let modeled = base.modeled_memory_bytes();
++            (Some(base), modeled)
++        };
++        Ok(Self {
++            head,
++            base,
++            limits,
++            modeled_bytes,
++            slots: Semaphore::new(limits.max_active_queries),
++        })
++    }
++
++    /// Pinned identity and conditional token for mutation recovery/publication.
++    pub fn head(&self) -> &TwoBitHead {
++        &self.head
++    }
++
++    /// Up to k logical IDs, including a truly empty result. The same query slot
++    /// spans nomination, I/O and pending scoring. No base GET on an empty root.
++    /// Snapshot namespace/root/dimensions must match this index; charge all pins.
++    pub async fn search(
++        &self,
++        reader: &OneAttemptS3,
++        query: &[f32],
++        top_k: usize,
++        mutations: Option<&TwoBitMutationSnapshot>,
++    ) -> Result<TwoBitMutationSearchResult, TwoBitGenerationError> {
++        let bad = TwoBitGenerationError::Invalid;
++        if top_k == 0
++            || query.len() != self.head.dimensions()
++            || query
++                .len()
++                .checked_mul(4)
++                .is_none_or(|n| n > self.limits.max_query_scratch_bytes)
++            || mutations.is_some_and(|m| {
++                !m.binds_head(&self.head)
++                    || m.resident_payload_bytes() as u64 > self.limits.already_pinned_bytes
++            })
++        {
++            return Err(bad("index query/binding/admission"));
++        }
++        let fetched = self.base.as_ref().map_or(0, |b| {
++            b.rows()
++                .min(self.limits.max_query_bytes / (self.head.dimensions() + 12))
++        });
++        let capacity = top_k.min(
++            fetched
++                .checked_add(mutations.map_or(0, |m| m.put_rows()))
++                .ok_or(bad("index query memory"))?,
++        );
++        let modeled = (capacity as u64)
++            .checked_mul(32)
++            .and_then(|n| n.checked_add(4096))
++            .and_then(|n| n.checked_mul(self.limits.max_active_queries as u64))
++            .and_then(|n| n.checked_add(self.modeled_bytes))
++            .ok_or(bad("index query memory"))?;
++        if modeled > self.limits.max_memory_bytes {
++            return Err(bad("index query memory"));
++        }
++        let _slot = self
++            .slots
++            .acquire()
++            .await
++            .map_err(|_| bad("index query admission"))?;
++        if let Some(base) = &self.base {
++            if let Some(mutations) = mutations {
++                return base
++                    .search_with_mutations(reader, query, top_k, mutations)
++                    .await;
++            }
++            let result = base
++                .search_excluding(reader, query, top_k.min(base.rows()), &[])
++                .await?;
++            return Ok(TwoBitMutationSearchResult {
++                plan: result.plan,
++                candidates: result
++                    .ranked
++                    .candidates
++                    .into_iter()
++                    .map(|h| TwoBitMutationHit {
++                        id: h.id,
++                        score: h.score,
++                    })
++                    .collect(),
++                stats: result.ranked.stats,
++                mutation_rows_scanned: 0,
++                mutation_put_rows_scored: 0,
++                mutation_revision: 0,
++                mutation_sha256: String::new(),
++            });
++        }
++        let candidates = if let Some(mutations) = mutations {
++            mutations
++                .rank_with_base(&[], query, top_k)
++                .map_err(|_| bad("empty mutation scoring"))?
++        } else {
++            crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
++            Vec::new()
++        };
++        Ok(TwoBitMutationSearchResult {
++            plan: BudgetedPagePlan {
++                selected_pages: Vec::new(),
++                ranges: Vec::new(),
++                planned_bytes: 0,
++                primary_pages_retained: 0,
++                target_pages: 0,
++                target_shortfall: 0,
++            },
++            candidates,
++            stats: Sq8ReadStats::default(),
++            mutation_rows_scanned: mutations.map_or(0, |m| m.rows().len()),
++            mutation_put_rows_scored: mutations.map_or(0, |m| m.put_rows()),
++            mutation_revision: mutations.map_or(0, |m| m.revision()),
++            mutation_sha256: mutations.map_or_else(String::new, |m| m.sha256().to_owned()),
++        })
++    }
++}

@@ -1,0 +1,16 @@
+{
+  "status": "focused_pass",
+  "source_base_commit": "3bc23eda",
+  "source_archive_sha256": "b8a0c51f7e80d2894330b8721fa44b111fedd2ac6c15a5ec251434436fefc367",
+  "red_expected_exit": 101,
+  "terminal_sha256": "b6080457cb18e5d882ba8c0f4be0847a826d79bb67416459d74050a5dcf01743",
+  "instance_id": "i-09a12cd03b38ea17f",
+  "tests": {
+    "integration": 2,
+    "affected_http": 4
+  },
+  "ec2_state": "terminated",
+  "scope": "Functional empty transition, bounded logical query and source preparation; no ANN/100M/vendor qualification",
+  "prior_attempt": "a0001/decision.json",
+  "review": "Existing cooldown rejection; no duplicate/override"
+}

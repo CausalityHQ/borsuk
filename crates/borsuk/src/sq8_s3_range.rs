@@ -617,6 +617,36 @@ mod tests {
             assert!(request.contains("range: bytes=0-27\r\n"));
             assert!(request.contains(&format!("if-match: {}\r\n", etag.to_ascii_lowercase())));
             assert!(request.contains("authorization: aws4-hmac-sha256 "));
+            drop(captured);
+            let logical = crate::two_bit_index::TwoBitIndex::open_remote(
+                &store,
+                read_two_bit_head(&store, &prefix).await.unwrap().unwrap(),
+                limits,
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            let (reader, stop, requests, server) = http_fixture(http_response(
+                "206 Partial Content",
+                Some("bytes 0-27/28"),
+                &etag,
+                28,
+                &sq8,
+            ));
+            let logical = tokio::time::timeout(
+                Duration::from_secs(5),
+                logical.search(&reader, &query, usize::MAX, None),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            assert_eq!(logical.candidates.len(), 2);
+            assert_eq!(logical.candidates[0].id, 1);
+            assert_eq!(logical.stats.submitted_gets, 1);
+            assert_eq!(logical.stats.verified_bytes, 28);
+            assert_eq!(requests.lock().unwrap().len(), 1);
         }
         let generation = TwoBitGeneration::open_remote(
             &store,
@@ -794,6 +824,33 @@ mod tests {
             3,
             "one GET per query, none for admission failure"
         );
+        let logical = crate::two_bit_index::TwoBitIndex::open_remote(
+            &store,
+            read_two_bit_head(&store, &prefix).await.unwrap().unwrap(),
+            TwoBitGenerationLimits {
+                already_pinned_bytes: 4 * recovered.resident_payload_bytes() as u64,
+                ..limits
+            },
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let (reader, stop, requests, server) = http_fixture(http_response(
+            "206 Partial Content",
+            Some("bytes 0-27/28"),
+            &etag,
+            28,
+            &sq8,
+        ));
+        let wrapped = logical
+            .search(&reader, &[2., 1.], usize::MAX, Some(&recovered))
+            .await
+            .unwrap();
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert_eq!(wrapped.candidates, hits.candidates);
+        assert_eq!(wrapped.stats.submitted_gets, 1);
+        assert_eq!(requests.lock().unwrap().len(), 1);
         let mut corrupted = sq8.clone();
         corrupted[12] ^= 1;
         for response in [

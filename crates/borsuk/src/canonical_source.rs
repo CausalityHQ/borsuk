@@ -6,7 +6,7 @@ use crate::{
     two_bit_generation::Manifest,
     two_bit_mutations::TwoBitMutationSnapshot,
     two_bit_source::{SourceBuildError, TwoBitSource},
-    two_bit_store::{TwoBitHead, TwoBitStoreError, small_object},
+    two_bit_store::{EmptyRoot, TwoBitHead, TwoBitStoreError, small_object},
 };
 use futures_util::StreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath};
@@ -204,7 +204,7 @@ async fn recover_canonical(
     let mut stats = CanonicalRecoveryStats::default();
     let result = async {
         let bad = TwoBitStoreError::Invalid;
-        if output.exists() || max_source_bytes == 0 || max_buffer_bytes == 0 {
+        if output.exists() || (max_source_bytes == 0 && !base.is_empty()) || max_buffer_bytes == 0 {
             return Err(bad("canonical recovery admission"));
         }
         stats.submitted_gets += 1;
@@ -213,6 +213,32 @@ async fn recover_canonical(
         stats.root_response_bytes = root.len() as u64;
         if format!("{:x}", Sha256::digest(&root)) != base.root_sha256() {
             return Err(bad("canonical root identity"));
+        }
+        if base.is_empty() {
+            let empty: EmptyRoot =
+                serde_json::from_slice(&root).map_err(|_| bad("empty source root schema"))?;
+            if !empty.valid()
+                || empty.generation != base.generation()
+                || empty.dimensions != base.dimensions()
+            {
+                return Err(bad("empty source root binding"));
+            }
+            let parent = output
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            let temporary = tempfile::NamedTempFile::new_in(parent)?;
+            temporary.as_file().sync_all()?;
+            temporary
+                .persist_noclobber(output)
+                .map_err(|e| TwoBitStoreError::Io(e.error))?;
+            return Ok(CanonicalSource {
+                rows: 0,
+                dimensions: empty.dimensions,
+                bytes: 0,
+                sha256: format!("{:x}", Sha256::digest([])),
+                object_key: String::new(),
+            });
         }
         let manifest: Manifest =
             serde_json::from_slice(&root).map_err(|_| bad("canonical root schema"))?;

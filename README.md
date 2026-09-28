@@ -124,9 +124,11 @@ metadata into caller-selected scratch space, verifies the root and section
 hashes, and removes the temporary files after opening. `search` then fetches
 generation-pinned SQ8 page ranges through `OneAttemptS3` under the configured
 query, GET, byte, and concurrency limits. The caller must obtain the trusted
-root digest through its authorized publication path; this reader does not yet
-provide a create, mutation, or compaction API, and V282/V283 did not pass the
-two-dataset quality gate.
+root digest through its authorized publication path. The newer `TwoBitIndex`
+Rust path provides authenticated construction/publication, mutation snapshots and
+logical search; complete callable compaction/GC remains unfinished. Neither path
+has passed the required matched comparison against both vendors; V282/V283 also
+failed their two-dataset quality gate.
 
 ```bash
 cargo run --locked -p borsuk --example resident_graph_rc -- create /tmp/borsuk-graph
@@ -541,3 +543,14 @@ the most recent fiscal year; larger production users need a commercial license.
 The Change Date is 2030-07-02 and the Change License is MIT. Individuals retain
 the personal noncommercial, research, development, evaluation, and testing uses
 listed in [LICENSE](LICENSE).
+
+
+### Object-native Rust development API
+
+`borsuk::two_bit_index::TwoBitIndex` provides pinned logical-ID search for
+populated and genuinely empty immutable bases, with bounded pending upserts and
+deletes. Vectors stay in object storage; query reads fetch authenticated pages.
+It is a development API: current full-corpus recall, vendor comparisons,100M
+qualification and complete compaction/GC remain unresolved release gates.
+See [generation, mutation and empty-index API](docs/release/two-bit-generation.md)
+and [required comparison against both vendors](docs/release/competitive-acceptance.md).

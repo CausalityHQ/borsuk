@@ -1,0 +1,7 @@
+# Empty base and one logical index API
+
+An all-deleted sealed base must have a real empty replacement before callable compaction can safely retire it. Add a typed empty immutable root (only schema/generation/dimensions), authenticate it in the existing head reader, and reuse shared CAS/lost-ack head publication. No dummy rows or graph files. Keep the existing nonempty format unchanged; this is a distinct empty kind, not a legacy reader.
+
+Expose TwoBitIndex::open_remote and logical-ID search for both kinds. Nonempty delegates to the existing bounded loader/range reader; empty reads one root, holds the same query slot/memory policy and scores bounded pending puts with zero base GETs. Empty canonical/delta preparation emits puts directly, making empty->nonempty rebuild possible. The wrapper validates snapshot namespace/root/dimensions and charges extra top-k conversion buffers. Tests transition nonempty all-delete->empty, recover/open/search empty, append normalized puts and prepare/rebuild native nonempty, keep retired reads usable, reject unsealed publication and wrong/malformed roots/query/budget/namespace. Callable crash-resumable compaction/reader-safe GC still follows.
+
+One causality AWS Spot check, red and green archives frozen before launch on the SAME worker/build cache, then affected HTTP layer.30min cap,4 build workers, no benchmark/Spark/duplicate campaign. Old jobs are terminal. Full vendor/100M/cost gates remain unresolved.

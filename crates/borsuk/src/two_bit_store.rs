@@ -43,10 +43,32 @@ struct HeadBody {
     generation: u64,
     root_sha256: String,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EmptyRoot {
+    pub(crate) schema: String,
+    pub(crate) generation: u64,
+    pub(crate) dimensions: usize,
+}
+impl EmptyRoot {
+    pub(crate) fn valid(&self) -> bool {
+        self.schema == "borsuk-two-bit-empty-generation-v1"
+            && self.generation > 0
+            && self.dimensions > 0
+            && u32::try_from(self.dimensions).is_ok()
+    }
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Root {
+    Empty(EmptyRoot),
+    Populated(Manifest),
+}
 /// Opaque conditional token bound to this index prefix and authenticated root.
 #[derive(Debug)]
 pub struct TwoBitHead {
     dimensions: usize,
+    empty: bool,
     generation: u64,
     root_sha256: String,
     prefix: ObjectPath,
@@ -56,6 +78,10 @@ impl TwoBitHead {
     /// Dimensions declared by the authenticated generation root.
     pub fn dimensions(&self) -> usize {
         self.dimensions
+    }
+    /// True when the authenticated base contains no rows or vector objects.
+    pub fn is_empty(&self) -> bool {
+        self.empty
     }
     /// Monotonically published generation ID.
     pub fn generation(&self) -> u64 {
@@ -131,19 +157,27 @@ pub async fn read_two_bit_head(
     if format!("{:x}", Sha256::digest(&root)) != head.root_sha256 {
         return Err(TwoBitStoreError::Invalid("root identity"));
     }
-    let manifest: Manifest =
+    let root: Root =
         serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
-    if manifest.schema != "borsuk-two-bit-generation-v2"
-        || manifest.generation != head.generation
-        || manifest.low.is_empty()
-        || manifest.low.len() != manifest.step.len()
-        || !manifest.canonical.valid()
-        || manifest.canonical.dimensions != manifest.low.len()
-    {
-        return Err(TwoBitStoreError::Invalid("head generation"));
-    }
+    let (dimensions, empty) = match root {
+        Root::Empty(root) if root.valid() && root.generation == head.generation => {
+            (root.dimensions, true)
+        }
+        Root::Populated(manifest)
+            if manifest.schema == "borsuk-two-bit-generation-v2"
+                && manifest.generation == head.generation
+                && !manifest.low.is_empty()
+                && manifest.low.len() == manifest.step.len()
+                && manifest.canonical.valid()
+                && manifest.canonical.dimensions == manifest.low.len() =>
+        {
+            (manifest.low.len(), false)
+        }
+        _ => return Err(TwoBitStoreError::Invalid("head generation")),
+    };
     Ok(Some(TwoBitHead {
-        dimensions: manifest.low.len(),
+        dimensions,
+        empty,
         generation: head.generation,
         root_sha256: head.root_sha256,
         prefix: prefix.clone(),
@@ -185,7 +219,9 @@ pub async fn publish_two_bit_generation(
     let root = read("manifest.json", trusted_root_sha256)?;
     let manifest: Manifest =
         serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
-    if expected.is_some_and(|h| manifest.generation <= h.generation) {
+    if expected
+        .is_some_and(|h| manifest.generation <= h.generation || manifest.low.len() != h.dimensions)
+    {
         return Err(TwoBitStoreError::Invalid("generation order"));
     }
     let plane: SourcePlaneReceipt = serde_json::from_slice(&read(
@@ -255,10 +291,36 @@ pub async fn publish_two_bit_generation(
         )
         .await?;
     }
+    publish_head(
+        store,
+        prefix,
+        manifest.generation,
+        trusted_root_sha256,
+        manifest.low.len(),
+        false,
+        expected,
+    )
+    .await
+}
+
+async fn publish_head(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    generation: u64,
+    root_sha256: &str,
+    dimensions: usize,
+    empty: bool,
+    expected: Option<&TwoBitHead>,
+) -> Result<TwoBitHead> {
+    if expected.is_some_and(|h| {
+        h.prefix != *prefix || h.generation >= generation || h.dimensions != dimensions
+    }) {
+        return Err(TwoBitStoreError::Invalid("head namespace/order/dimensions"));
+    }
     let body = serde_json::to_vec(&HeadBody {
         schema: "borsuk-two-bit-head-v1".into(),
-        generation: manifest.generation,
-        root_sha256: trusted_root_sha256.to_owned(),
+        generation,
+        root_sha256: root_sha256.to_owned(),
     })
     .map_err(|_| TwoBitStoreError::Invalid("head serialization"))?;
     let mode = expected.map_or(PutMode::Create, |h| PutMode::Update(h.version.clone()));
@@ -277,19 +339,84 @@ pub async fn publish_two_bit_generation(
         Err(error) => {
             // A committed CAS can lose its acknowledgement; authenticate readback.
             if let Ok(Some(head)) = read_two_bit_head(store, prefix).await {
-                if head.generation == manifest.generation && head.root_sha256 == trusted_root_sha256
-                {
+                if head.generation == generation && head.root_sha256 == root_sha256 {
                     return Ok(head);
                 }
             }
             return Err(error.into());
         }
     };
+    let version = UpdateVersion::from(result);
+    if version.e_tag.is_none() && version.version.is_none() {
+        return Err(TwoBitStoreError::Invalid("head conditional token"));
+    }
     Ok(TwoBitHead {
-        dimensions: manifest.low.len(),
-        generation: manifest.generation,
-        root_sha256: trusted_root_sha256.to_owned(),
+        dimensions,
+        empty,
+        generation,
+        root_sha256: root_sha256.to_owned(),
         prefix: prefix.clone(),
-        version: UpdateVersion::from(result),
+        version,
     })
+}
+
+/// Publish a real empty base, with no SQ8/canonical/graph objects or sentinel rows.
+/// Initial create or monotonic same-dimension replacement. Replacement requires
+/// the previous mutation seal; caller must only use this for an all-deleted state.
+/// This low-level publisher cannot prove corpus equivalence. ACLs authorize it.
+pub async fn publish_empty_two_bit_generation(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    dimensions: usize,
+    generation: u64,
+    expected: Option<&TwoBitHead>,
+) -> Result<TwoBitHead> {
+    let bad = TwoBitStoreError::Invalid;
+    let root = EmptyRoot {
+        schema: "borsuk-two-bit-empty-generation-v1".into(),
+        generation,
+        dimensions,
+    };
+    if !root.valid()
+        || expected.is_some_and(|h| {
+            h.prefix != *prefix || h.generation >= generation || h.dimensions != dimensions
+        })
+    {
+        return Err(bad("empty generation namespace/order/dimensions"));
+    }
+    if let Some(previous) = expected {
+        crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?;
+    }
+    let bytes = serde_json::to_vec(&root).map_err(|_| bad("empty root schema"))?;
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let location = prefix
+        .clone()
+        .join("generations")
+        .join(digest.as_str())
+        .join("manifest.json");
+    match store
+        .put_opts(
+            &location,
+            PutPayload::from(bytes.clone()),
+            PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(_) => {}
+        Err(object_store::Error::AlreadyExists { .. }) => {
+            let (old, _) = small_object(store, &location, 1024).await?;
+            if old != bytes {
+                return Err(bad("empty root immutable collision"));
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    publish_head(
+        store, prefix, generation, &digest, dimensions, true, expected,
+    )
+    .await
 }
