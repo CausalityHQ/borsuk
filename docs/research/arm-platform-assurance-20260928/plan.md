@@ -1,0 +1,9 @@
+# ARM correctness gate before ARM research
+
+Base349d00c9, library unchanged from e6c2e97. Full2683/0/26 assurance is x86, where portable PQ4 exercised SSSE3 and two V26 fixtures exercised unavailable-backend rejection. The actual NEON and retained positive branches remain unverified in current code. Current source fitting compiles ARM but does not execute these tests. Close this concrete platform risk once, without repeating the full suite.
+
+One Causality c7g.2xlarge ARM Spot worker, eu-central-1, observed/maxquote<=0.30/hour,1800s worker/1500s test cap, four Cargo jobs and configured library CPU threads4. Estimated compute ceiling0.20 including controller headroom, excludingEBS/S3.80GiB encrypted disposable scratch, automatic terminal shutdown, controller termination verification. Shared check flock/stable reservation prevents duplicate work. Discard an interrupted cell; no automatic replacement. Observe terminal markers and infrastructure only until closed.
+
+Run existing borsuk-pq4 and borsuk-fma library checks (actual backend versus scalar), centroid_hnsw and unit_centroid_graph mechanics, then exactly the two V26 quality/serving backend-contract fixture tests. These use synthetic test inputs, not any development/validation query panel or product benchmark. Require every named filter actually executes and all pass, confirm aarch64/NEON hardware, verify frozen source/archive and closed artifact hashes, and independently confirm termination. No library behavior, graph default, metric, format or test is changed.
+
+Reuse the established bounded runner/collector already reviewed and closed on x86, with the verified ARM image/subnet/actual-AZ quote from the source-cost cell. No quality experiment, architecture-review cooldown override, performance comparison or vendor claim follows. Default dual architecture critique remains held until18:16:42UTC eligibility; this correctness gate is independent.
