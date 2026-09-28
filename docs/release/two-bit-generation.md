@@ -217,3 +217,9 @@ not qualify the corrected serving path. Fresh paired development and validation
 are required before scale or release. The replay took14.73seconds/37,720KiB
 peak RSS in debug mode, with zero S3 reads; these are not service measurements.
 See `docs/research/native-two-bit-query-check.json` and preserved raw plans.
+
+The corrected CoHere development0–63 screen subsequently passed: mean R@100
+99.00%, p05 97; paired flat SQ8 99.234375%/98, deficit0.234375pp. Maximum
+32GET/16,773,120bytes. This is development-only offline evidence. Full paired
+validation and serving qualification remain open; see the corrected-method
+receipt/decision in `docs/research/native-cosine-development-*`.

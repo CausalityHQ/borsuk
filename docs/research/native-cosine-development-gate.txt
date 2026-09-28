@@ -1,0 +1,7 @@
+Hypothesis: correcting query normalization retains >=98 mean R@100, p05>=95,
+<=0.5pp deficit to full SQ8 flat on frozen CoHere development0–63.
+No layout/candidate/GET/byte changes. Existing API plans only; no new routing run.
+Score complete immutable SQ8 as paired control and selected rows as candidate.
+Bound <=32GET/16,773,120bytes. Fail -> hold scale and identify coverage/scoring loss.
+Pass -> paired ReLAION/CoHere qualification still required. No vendor claim.
+Execution cap120seconds; one CPU/BLAS thread, <400MiB expected RSS; no cloud $.

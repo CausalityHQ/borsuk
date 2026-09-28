@@ -1,0 +1,23 @@
+	Command being timed: "timeout 120s env OPENBLAS_NUM_THREADS=1 uv run --offline --no-project --with numpy==2.3.3 --with pyarrow==24.0.0 python -m scripts.native_two_bit_cosine_development"
+	User time (seconds): 11.00
+	System time (seconds): 0.09
+	Percent of CPU this job got: 91%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:12.18
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 179912
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 710
+	Minor (reclaiming a frame) page faults: 34593
+	Voluntary context switches: 1864
+	Involuntary context switches: 76
+	Swaps: 0
+	File system inputs: 345744
+	File system outputs: 232
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

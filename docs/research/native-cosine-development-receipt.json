@@ -1,0 +1,25 @@
+{
+  "schema": "borsuk-cosine-development-receipt-v1",
+  "baseline_commit": "cb303455",
+  "original_session": 72953,
+  "exit_code": 0,
+  "command": "timeout 120s env OPENBLAS_NUM_THREADS=1 uv run --offline --no-project --with numpy==2.3.3 --with pyarrow==24.0.0 python -m scripts.native_two_bit_cosine_development",
+  "identities": {
+    "scripts/native_two_bit_cosine_development.py": "25228a59f75e7e0cf4201bfbf5b327a918fd82d8e18ba9a3887dcd11a9e6fb04",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916",
+    "docs/research/native-cosine-development-gate.txt": "a9c529d7b658d4fab967760257ae2fac04e63b172d64ada7c0386cc59637c81f",
+    "docs/research/native-two-bit-query-development-plans.jsonl": "d54c8a5ce36bb263ba91dbfb1c83a7a813d05cd4824ad6f805520bc02cb31fe3",
+    "docs/research/native-cosine-development-score.json": "9e87d2384a336a01ae9b8fbf434cfbe8382056af0c8cae08385772fbb991dc9f"
+  },
+  "elapsed_seconds": 12.18,
+  "peak_rss_kib": 179912,
+  "swaps": 0,
+  "s3_reads": 0,
+  "decision": "GO to corrected-method paired qualification preparation; no scale or vendor claim",
+  "limits": [
+    "CoHere first100k D768 cosine k100 development0\u201363 only; not validation",
+    "Source nomination candidates not recorded by API demo; loss decomposed only at fetch and SQ8 layers",
+    "Sequential-f32 Python scoring reuses established Rust arithmetic mirror; no live S3 serving test",
+    "Full paired ReLAION/CoHere validation, cold HTTP, lifecycle and vendor gates remain"
+  ]
+}
