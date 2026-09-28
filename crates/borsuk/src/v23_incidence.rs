@@ -5005,8 +5005,7 @@ mod tests {
 
     #[test]
     fn v23_incidence_manifest_registered_training_fixture_is_exact() {
-        let bytes =
-            include_bytes!("../../../scripts/fixtures/v23_incidence_training_manifest.json");
+        let bytes = include_bytes!("../tests/fixtures/v23_incidence_training_manifest.json");
         let manifest: V23IncidenceManifest = serde_json::from_slice(bytes).unwrap();
         assert_eq!(
             canonical_v23_incidence_manifest_bytes(&manifest).unwrap(),

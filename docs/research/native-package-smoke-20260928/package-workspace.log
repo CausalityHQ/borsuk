@@ -1,0 +1,23 @@
+warning: manifest has no description, license or license-file
+  |
+  = note: see https://doc.rust-lang.org/cargo/reference/manifest.html#package-metadata for more info
+   Packaging borsuk-fma v0.1.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk-fma)
+    Packaged 5 files, 33.3KiB (7.0KiB compressed)
+warning: manifest has no description, license or license-file
+  |
+  = note: see https://doc.rust-lang.org/cargo/reference/manifest.html#package-metadata for more info
+   Packaging borsuk-pq4 v0.1.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk-pq4)
+    Packaged 12 files, 139.6KiB (30.8KiB compressed)
+   Packaging borsuk-v25 v0.0.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk-v25)
+    Packaged 7 files, 115.9KiB (24.9KiB compressed)
+   Packaging borsuk-v41 v0.0.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk-v41)
+    Packaged 6 files, 94.6KiB (20.1KiB compressed)
+   Packaging borsuk v0.1.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk)
+error: failed to prepare local package for uploading
+
+Caused by:
+  no matching package named `borsuk-v25` found
+  location searched: crates.io index
+  required by package `borsuk v0.1.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk)`
+  note: offline mode (via `--offline`) can sometimes cause surprising resolution failures
+  help: if this error is too confusing you may wish to retry without `--offline`

@@ -1,0 +1,9 @@
+# Package smoke: repair GO, release HOLD
+
+The original single Spark job (local session 19818) exited 0. Both existing immutable-fixture tests passed individually (one test each); the existing package metadata integration test passed (one test). Compilation emitted existing documentation warnings. No full suite, benchmark, cloud instance or registry publication was started.
+
+Cargo package file listing includes both fixtures and the native source-builder example. Copied fixture SHA-256 values and byte equality to historical originals are in `inclusion.json`. Historical script fixtures remain unchanged. Metadata assertions now use resolved Cargo package variables and the effective license path; documentation checks accept workspace inheritance or a normalized package manifest. These tests ran in the source workspace, not an extracted core package.
+
+Matching dependency versions repair Cargo's first packaging error. Workspace offline no-verify packaging creates auxiliary archives but core packaging stops at private borsuk-v25 resolution. Both v25 and v41 are explicitly unpublished research crates. The offline failure does not establish whether any package exists on the public registry. The core archive was not produced or verified; v0.1 is not ready to publish.
+
+Next single release gate: remove the production crate's mandatory dependency on private research-only v25/v41 paths, while preserving immutable historical diagnostics, then repeat package creation and extracted-package smoke. Do not silently publish internal crates or claim installation success from a file list. Native semantic construction, incremental lifecycle, frozen cold HTTP and matched vendor gates remain separate unfinished product requirements. Quality, latency and vendor evidence did not change in this packaging slice.

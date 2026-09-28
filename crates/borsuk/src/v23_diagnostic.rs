@@ -9037,8 +9037,7 @@ mod tests {
 
         let value = serde_json::to_value(&page).unwrap();
         let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../../../scripts/fixtures/v23_page_ref.json"))
-                .unwrap();
+            serde_json::from_str(include_str!("../tests/fixtures/v23_page_ref.json")).unwrap();
         assert_eq!(value, fixture);
         let decoded: V23PageRef = serde_json::from_value(fixture).unwrap();
         assert_eq!(decoded, page);

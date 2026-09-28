@@ -1,0 +1,7 @@
+error: failed to verify manifest at `/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/Cargo.toml`
+
+Caused by:
+  all dependencies must have a version requirement specified when packaging.
+  dependency `borsuk-fma` does not specify a version
+  Note: The packaged dependency will use the version from crates.io,
+  the `path` specification will be removed from the dependency declaration.

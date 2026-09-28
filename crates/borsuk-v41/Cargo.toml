@@ -9,7 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-borsuk-fma = { path = "../borsuk-fma" }
+borsuk-fma = { version = "0.1.0", path = "../borsuk-fma" }
 libm = "0.2.15"
 rand_chacha = "0.9"
 rand_core = "0.9"

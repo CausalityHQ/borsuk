@@ -51,10 +51,10 @@ tracing = { version = "0.1", optional = true }
 url = "2.5"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wide = "0.7"
-borsuk-fma = { path = "../borsuk-fma" }
-borsuk-pq4 = { path = "../borsuk-pq4" }
-borsuk-v25 = { path = "../borsuk-v25" }
-borsuk-v41 = { path = "../borsuk-v41" }
+borsuk-fma = { version = "0.1.0", path = "../borsuk-fma" }
+borsuk-pq4 = { version = "0.1.0", path = "../borsuk-pq4" }
+borsuk-v25 = { version = "0.0.0", path = "../borsuk-v25" }
+borsuk-v41 = { version = "0.0.0", path = "../borsuk-v41" }
 zstd = "0.13"
 
 [dev-dependencies]

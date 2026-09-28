@@ -1,0 +1,21 @@
+{
+  "scope": "package inclusion and immutable fixture identity; not package compilation or release qualification",
+  "fixtures": [
+    {
+      "name": "v23_page_ref.json",
+      "sha256": "41181195b7dd996223ee6fd5c76703e8b0e8c2034ba045c74fcf72b131e0f106",
+      "historical_bytes_identical": true,
+      "package_list_included": true
+    },
+    {
+      "name": "v23_incidence_training_manifest.json",
+      "sha256": "17194043a39ca0976f455efed383573d757b146e0c06662860e60b2d9b073147",
+      "historical_bytes_identical": true,
+      "package_list_included": true
+    }
+  ],
+  "core_archive": "BLOCKED",
+  "core_blocker": "Offline workspace packaging stages borsuk-fma and borsuk-pq4 but fails resolving borsuk-v25 0.0.0. borsuk-v25 and borsuk-v41 are publish=false. No assertion about public registry availability was made.",
+  "local_builds": 0,
+  "new_cloud_jobs": 0
+}
