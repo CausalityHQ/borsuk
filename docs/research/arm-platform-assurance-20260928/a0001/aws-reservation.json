@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-arm-platform-check-v1",
+  "source_base_commit": "89cccfa6b037c4cbbf4592c072f4c3c5c2cdd71b",
+  "source_archive_sha256": "a576b9465f2fb51ea94b903b898c01015f7eab55a76cfefa56d9e6db90032745",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.204800",
+  "spot_quote_timestamp": "2026-09-28T11:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.2,
+  "scope": "ARM actual backend parity, centroid graph mechanics, and two retained V26 positive fixtures; no query panels or quality/default gate",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

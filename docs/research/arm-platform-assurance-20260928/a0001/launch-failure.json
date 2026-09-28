@@ -1,0 +1,10 @@
+{
+  "status": "capacity-rejected-no-instance",
+  "aws_error": "InsufficientInstanceCapacity",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "spot": true,
+  "ec2_instances_by_unique_tag_verified": [],
+  "measurement_started": false,
+  "automatic_replacement": false
+}

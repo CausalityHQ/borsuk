@@ -6,16 +6,20 @@ from botocore.exceptions import ClientError
 sys.path.insert(0, str(Path.cwd()))
 from scripts import launch_v174_relaid_bind_compile_spot as runner
 from scripts.launch_v157_primary_feasibility_spot import BUCKET, REGION, PROFILE_ARN, SUBNET, SECURITY_GROUP, missing, put_if_absent
-SUBNET = 'subnet-034528fbd6977848f'
+ATTEMPT = sys.argv[1] if len(sys.argv) > 1 else 'a0001'
+if len(ATTEMPT) != 5 or ATTEMPT[0] != 'a' or not ATTEMPT[1:].isdigit(): raise ValueError('attempt must be aNNNN')
+SUBNET = sys.argv[2] if len(sys.argv) > 2 else 'subnet-034528fbd6977848f'
+if SUBNET not in ('subnet-034528fbd6977848f','subnet-0a12dbed0ca6fac25','subnet-00243d923761c047c'): raise ValueError('unregistered subnet')
 TAG = 'borsuk-arm-platform-check'
 SCHEMA = 'borsuk-arm-platform-check-v1'
-OUT = Path('docs/research/arm-platform-assurance-20260928')
+ROOT_OUT = Path('docs/research/arm-platform-assurance-20260928')
+OUT = ROOT_OUT / ATTEMPT
 OUT.mkdir(parents=True,exist_ok=True)
 lock = open('/tmp/borsuk-native-callable-gc-check.lock', 'a+')
 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 base = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
 files = subprocess.check_output(['git','ls-files'],text=True).splitlines()
-files += [str(OUT/'plan.md'), str(OUT/'aws-check.py')]
+files += [str(ROOT_OUT/'plan.md'), str(ROOT_OUT/'aws-check.py')]
 buf=io.BytesIO()
 with tarfile.open(fileobj=buf,mode='w:gz') as tar:
     for name in sorted(set(files)):
@@ -23,7 +27,7 @@ with tarfile.open(fileobj=buf,mode='w:gz') as tar:
         if path.is_file(): tar.add(path,arcname=name,recursive=False)
 archive=buf.getvalue(); sha=hashlib.sha256(archive).hexdigest()
 archive_key=f'research/native-library-check/sources/{sha}.tar.gz'
-prefix='research/native-library-check/arm-platform/20260928/a0001'
+prefix='research/native-library-check/arm-platform/20260928/'+ATTEMPT
 session=boto3.Session(profile_name='causality',region_name=REGION)
 ec2,s3=session.client('ec2'),session.client('s3')
 if not missing(s3,prefix+'/reservation.json') or not missing(s3,prefix+'/terminal.json'):
@@ -40,7 +44,7 @@ quote=ec2.describe_spot_price_history(InstanceTypes=['c7g.2xlarge'],ProductDescr
 quote_rate=float(quote['SpotPrice'])
 if quote_rate>0.30: raise RuntimeError('Spot quote exceeds preregistered cap')
 reservation={'schema':SCHEMA,'source_base_commit':base,'source_archive_sha256':sha,
-    'source_dirty':True,'attempt':'a0001','profile':'causality','region':REGION,
+    'source_dirty':True,'attempt':ATTEMPT,'profile':'causality','region':REGION,
     'instance_type':'c7g.2xlarge','availability_zone':az,'wall_seconds':1800,'test_timeout_seconds':1500,
     'cargo_jobs':4,'spot_price_observed_usd_per_hour':quote['SpotPrice'],'spot_quote_timestamp':quote['Timestamp'].isoformat(),'spot_max_usd_per_hour':'0.30',
     'cost_cap_compute_usd':0.20,'scope':'ARM actual backend parity, centroid graph mechanics, and two retained V26 positive fixtures; no query panels or quality/default gate',
@@ -65,14 +69,14 @@ except Exception:
 (OUT/'aws-user-data.sh').write_text(body)
 (OUT/'aws-reservation.json').write_text(json.dumps(reservation,indent=2)+'\n')
 put_if_absent(prefix+'/reservation.json',json.dumps(reservation,sort_keys=True).encode())
-receipt=ec2.run_instances(ClientToken='arm-platform-a0001-'+sha[:35], ImageId=reservation['image'],
+receipt=ec2.run_instances(ClientToken='arm-platform-'+ATTEMPT+'-'+sha[:35], ImageId=reservation['image'],
     InstanceType=reservation['instance_type'],MinCount=1,MaxCount=1,
     IamInstanceProfile={'Arn':PROFILE_ARN},
     NetworkInterfaces=[{'AssociatePublicIpAddress':True,'DeviceIndex':0,'Groups':[SECURITY_GROUP],'SubnetId':SUBNET}],
     InstanceMarketOptions={'MarketType':'spot','SpotOptions':{'InstanceInterruptionBehavior':'terminate','SpotInstanceType':'one-time','MaxPrice':'0.30'}},
     InstanceInitiatedShutdownBehavior='terminate',
     BlockDeviceMappings=[{'DeviceName':'/dev/xvda','Ebs':{'DeleteOnTermination':True,'Encrypted':True,'VolumeSize':80,'VolumeType':'gp3'}}],
-    TagSpecifications=[{'ResourceType':'instance','Tags':[{'Key':'Name','Value':TAG},{'Key':'BorsukAttempt','Value':'a0001'}]}],UserData=body)
+    TagSpecifications=[{'ResourceType':'instance','Tags':[{'Key':'Name','Value':TAG},{'Key':'BorsukAttempt','Value':ATTEMPT}]}],UserData=body)
 instance=receipt['Instances'][0]['InstanceId']
 started=time.monotonic()
 launch={'instance_id':instance,'prefix':prefix,'bucket':BUCKET,'source_archive_sha256':sha,'source_base_commit':base}
