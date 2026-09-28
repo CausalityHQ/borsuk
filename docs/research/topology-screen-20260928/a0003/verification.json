@@ -1,0 +1,47 @@
+{
+  "instance_id": "i-0a46e7e4929ea6ce0",
+  "state": "terminated",
+  "source_archive_sha256": "08d1d06fdff7f62bbb7adc5a37fff1b1947c5865e1e5199e07ac356de6681557",
+  "terminal_sha256": "c3a57ae052d72ab846c0d62e820a5e9674e2f2a8e057e16ff5da6498451e0d69",
+  "source_files_matched": 400,
+  "locally_verified_artifacts": 103,
+  "artifact_count": 117,
+  "convergence_rows": [
+    {
+      "dataset": "relaion",
+      "baseline": {
+        "candidate_hits": 6372,
+        "fetched_hits": 6372,
+        "returned_hits": 6346,
+        "flat_hits": 6369
+      },
+      "candidate": {
+        "candidate_hits": 6390,
+        "fetched_hits": 6390,
+        "returned_hits": 6362,
+        "flat_hits": 6369
+      },
+      "returned_delta_pp": 0.25,
+      "cause": "none",
+      "decision": "GO"
+    },
+    {
+      "dataset": "cohere",
+      "baseline": {
+        "candidate_hits": 6387,
+        "fetched_hits": 6385,
+        "returned_hits": 6342,
+        "flat_hits": 6351
+      },
+      "candidate": {
+        "candidate_hits": 6386,
+        "fetched_hits": 6384,
+        "returned_hits": 6341,
+        "flat_hits": 6351
+      },
+      "returned_delta_pp": -0.015625,
+      "cause": "discovery",
+      "decision": "KILL"
+    }
+  ]
+}

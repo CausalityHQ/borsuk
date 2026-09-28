@@ -1,0 +1,81 @@
+{
+  "schema": "borsuk-topology-mechanism-screen-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "items": [
+    {
+      "name": "relaion",
+      "inputs": {
+        "source": {
+          "key": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d",
+          "bytes": 145121661
+        },
+        "requests": {
+          "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+          "bytes": 17714558
+        },
+        "truth": {
+          "key": "research/validation-loss-diagnostic/20260928/a0001/artifacts/diagnostic/truth.u32",
+          "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e",
+          "bytes": 400000
+        }
+      },
+      "raw_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2",
+      "normalized_sha256": "4b9605bdebc2329339b153c15d1500a9d54467c410e3e8defcfeea365e669123",
+      "order_sha256": "fbeb4a14093c449ae4acf212155979a50fb16b50e864172dfc1dc1ddffbbc5d1",
+      "sq8_sha256": "1375696a51ac52fc3216e35456e441c370805feb0632a58ab197b17099a8de6f",
+      "historical_root_sha256": "b8f2ec97c0ad9633d1f3bc672b90ff88e32cb80b0d6ecbeb12f2ddbf74a48ff2",
+      "historical_plans_sha256": "789300785215a649a6f16a9ca56da23246444aee33501aba2551ace3d6f3637b",
+      "historical_score_file": "docs/research/native-pipeline-quality-20260928/relaion/development-score.json",
+      "historical_score_sha256": "c7fb31345107195efe1bbe82a0f49a6aeaef58cd9386a6a60e327592899f03b2",
+      "historical_builder_file": "docs/research/native-pipeline-quality-20260928/relaion/builder.json",
+      "historical_builder_sha256": "a1b4122a3a388a58d804da1686e737a2d3a3f41816d1bf9880eb4059937eb8b3"
+    },
+    {
+      "name": "cohere",
+      "inputs": {
+        "source": {
+          "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e",
+          "bytes": 307200000
+        },
+        "requests": {
+          "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+          "bytes": 15369495
+        },
+        "truth": {
+          "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/truth.u32",
+          "sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+          "bytes": 400000
+        }
+      },
+      "raw_sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e",
+      "normalized_sha256": "270ed2889d11312f15246d6d98a0c7621fb38e714791e7c5f11b408de9a5552b",
+      "order_sha256": "fdf00dc981eb5efe6ef2543b74650494f6d93f8bc3b1c0b2d2f4c3c464929534",
+      "sq8_sha256": "71ed1c4d5400f623d165269889d4c9727ae67031819e64ad522876ae3c83caa6",
+      "historical_root_sha256": "7b02d4810002c02c842b2fcad454ebe9dd3d4fc5c889ddf6d046fb5a1f2cc7df",
+      "historical_plans_sha256": "e767707411dd092eb928809822478fe8e23f44ccf52e5fe916522ac20de837d9",
+      "historical_score_file": "docs/research/native-pipeline-quality-20260928/cohere/development-score.json",
+      "historical_score_sha256": "1ec96cd7644b9bd06d9091cacb86a6e64cd505d6d35f3a1abba76160cca99cd5",
+      "historical_builder_file": "docs/research/native-pipeline-quality-20260928/cohere/builder.json",
+      "historical_builder_sha256": "08d4bc9948fc931b5c0165e8b09fd583e5262fdbe4ba40b02f6c3658ae7347c7"
+    }
+  ],
+  "rows": 100000,
+  "dimensions": 768,
+  "first": 0,
+  "count": 64,
+  "k": 100,
+  "metric": "cosine",
+  "numpy_version": "2.3.3",
+  "pyarrow_version": "24.0.0",
+  "source_payload_bytes": 268435456,
+  "phase_timeout_seconds": 300,
+  "scoring_once_per_query": true,
+  "source_scorer_hashes": {
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  }
+}

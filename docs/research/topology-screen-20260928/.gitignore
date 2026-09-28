@@ -1,0 +1,2 @@
+# Large payload evidence remains in S3, bound by aws-terminal.json SHA/lengths.
+*.bin.gz

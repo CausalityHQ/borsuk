@@ -6,13 +6,36 @@ PAGE_BYTES = 256 * 780
 OBJECT_BYTES = 100000 * 780
 
 
-def historical_control_fingerprint(body):
+def _unique_fields(pairs):
+    result=dict(pairs)
+    if len(result)!=len(pairs): raise ValueError('duplicate JSON key')
+    return result
+
+
+def historical_control_fingerprint(body, plane_body=None, order_sha256=None):
     if len(body) > 65536:
         raise ValueError('root cap')
     text = body.decode('utf-8')
-    root = json.loads(text)
+    root = json.loads(text,object_pairs_hook=_unique_fields)
     if not isinstance(root, dict) or root.get('schema') != 'borsuk-two-bit-generation-v3' or type(root.get('base_epoch')) is not int or root['base_epoch'] != 0 or not isinstance(root.get('canonical'), dict):
         raise ValueError('current initial v3 root required')
+    plane_sha=None
+    if 'plane_manifest_sha256' in root:
+        if plane_body is None or len(plane_body)>65536 or hashlib.sha256(plane_body).hexdigest()!=root['plane_manifest_sha256']:
+            raise ValueError('authenticated current plane required')
+        plane=json.loads(plane_body,object_pairs_hook=_unique_fields)
+        keys=['schema','rows','dimensions','seed','record_bytes','source_sha256','sq8_sha256','source_order_sha256','mean_sha256','records_sha256','query_or_truth_used']
+        if not isinstance(plane,dict) or set(plane)!=set(keys) or plane['schema']!='borsuk-two-bit-plane-v2' or plane['source_order_sha256']!=order_sha256 or plane['query_or_truth_used'] is not False:
+            raise ValueError('current order-bound plane required')
+        if any(type(plane[k]) is not int for k in ['rows','dimensions','seed','record_bytes']) or (plane['rows'],plane['dimensions'],plane['seed'],plane['record_bytes'])!=(100000,768,20260923,200):
+            raise ValueError('plane fingerprint geometry')
+        if any(not isinstance(plane[k],str) or len(plane[k])!=64 or any(c not in '0123456789abcdef' for c in plane[k]) for k in keys if k.endswith('_sha256')):
+            raise ValueError('plane fingerprint hashes')
+        archive_plane={k:plane[k] for k in keys if k!='source_order_sha256'}
+        archive_plane['schema']='borsuk-two-bit-plane-v1'
+        plane_sha=hashlib.sha256((json.dumps(archive_plane,separators=(',',':'))+'\n').encode()).hexdigest()
+    elif plane_body is not None:
+        raise ValueError('unexpected plane witness')
     # Use stdlib JSON decoding to retain each raw value token. This computes an
     # archive fingerprint only; no legacy artifact is written or loaded.
     decoder, fields, pos = json.JSONDecoder(), {}, 1
@@ -41,6 +64,8 @@ def historical_control_fingerprint(body):
         raise ValueError('root suffix')
     del fields['canonical'], fields['base_epoch']
     fields['schema'] = json.dumps('borsuk-two-bit-generation-v1')
+    if plane_sha is not None:
+        fields['plane_manifest_sha256']=json.dumps(plane_sha)
     projected = '{' + ','.join(json.dumps(key) + ':' + fields[key] for key in sorted(fields)) + '}'
     return hashlib.sha256(projected.encode()).hexdigest()
 

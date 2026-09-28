@@ -34,6 +34,23 @@ def root_check():
     rejects(lambda: validate_root_pair(control,control))
 
 
+def plane_format_check():
+    plane=dict(schema='borsuk-two-bit-plane-v2',rows=100000,dimensions=768,seed=20260923,record_bytes=200,
+        source_sha256='a'*64,sq8_sha256='b'*64,source_order_sha256='c'*64,mean_sha256='d'*64,records_sha256='e'*64,query_or_truth_used=False)
+    plane_body=(json.dumps(plane,separators=(',',':'))+'\n').encode()
+    old_plane=dict(plane);del old_plane['source_order_sha256'];old_plane['schema']='borsuk-two-bit-plane-v1'
+    old_plane_sha=hashlib.sha256((json.dumps(old_plane,separators=(',',':'))+'\n').encode()).hexdigest()
+    root=dict(base_epoch=0,canonical=dict(rows=100000,dimensions=768),graph_sha256='f'*64,
+        plane_manifest_sha256=hashlib.sha256(plane_body).hexdigest(),schema='borsuk-two-bit-generation-v3')
+    body=json.dumps(root,sort_keys=True,separators=(',',':')).encode()
+    old_root=dict(root);del old_root['base_epoch'];del old_root['canonical'];old_root.update(schema='borsuk-two-bit-generation-v1',plane_manifest_sha256=old_plane_sha)
+    assert historical_control_fingerprint(body,plane_body,'c'*64)==hashlib.sha256(json.dumps(old_root,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    rejects(lambda: historical_control_fingerprint(body,plane_body,'f'*64))
+    rejects(lambda: historical_control_fingerprint(body,plane_body.replace(b'"rows":100000',b'"rows":99999'),'c'*64))
+    rejects(lambda: historical_control_fingerprint(body,plane_body.replace(b'plane-v2',b'plane-v1'),'c'*64))
+    rejects(lambda: historical_control_fingerprint(body))
+
+
 ROOTS = dict(control='a'*64,candidate='b'*64)
 def roster():
     return [dict(query_ordinal=i,arm=arm,root_sha256=ROOTS[arm])
@@ -125,7 +142,7 @@ def review_regressions():
 
 
 if __name__ == '__main__':
-    checks = [fingerprint_check,root_check,roster_check,stages_check,gate_check,failure_check]
+    checks = [fingerprint_check,root_check,roster_check,stages_check,gate_check,failure_check,plane_format_check]
     failures = 0
     for check in checks:
         try:
@@ -134,4 +151,4 @@ if __name__ == '__main__':
             failures+=1;print(check.__name__+': '+str(error))
     assert failures == 0, f'{failures} topology controller checks not implemented'
     review_regressions()
-    print('six topology controller checks passed')
+    print('seven topology controller checks passed')

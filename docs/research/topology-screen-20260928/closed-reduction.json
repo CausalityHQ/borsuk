@@ -1,0 +1,328 @@
+{
+  "decision": "KILL",
+  "rows": [
+    {
+      "dataset": "relaion",
+      "scope": {
+        "rows": 100000,
+        "dimensions": 768,
+        "metric": "cosine",
+        "k": 100,
+        "split": "consumed development queries0-63"
+      },
+      "decision": "GO",
+      "stage_totals": {
+        "control": {
+          "seed": 3042,
+          "walk": 6366,
+          "visited": 6366,
+          "candidate": 6372,
+          "nominated": 6372,
+          "physical": 6372,
+          "returned": 6346,
+          "flat": 6369
+        },
+        "candidate": {
+          "seed": 3749,
+          "walk": 6385,
+          "visited": 6385,
+          "candidate": 6390,
+          "nominated": 6390,
+          "physical": 6390,
+          "returned": 6362,
+          "flat": 6369
+        }
+      },
+      "gained_lost": {
+        "seed": {
+          "gained": 1045,
+          "lost": 338
+        },
+        "walk": {
+          "gained": 33,
+          "lost": 14
+        },
+        "visited": {
+          "gained": 33,
+          "lost": 14
+        },
+        "candidate": {
+          "gained": 20,
+          "lost": 2
+        },
+        "nominated": {
+          "gained": 20,
+          "lost": 2
+        },
+        "physical": {
+          "gained": 20,
+          "lost": 2
+        },
+        "returned": {
+          "gained": 21,
+          "lost": 5
+        },
+        "flat": {
+          "gained": 0,
+          "lost": 0
+        }
+      },
+      "returned_delta_pp": 0.25,
+      "exploratory_planning_only_ms": {
+        "candidate": {
+          "all64": {
+            "route_process_cpu_ns": {
+              "p50": 7.9793855,
+              "p90": 8.0315975,
+              "p95": 8.05557095,
+              "p99": 8.07557784
+            },
+            "route_wall_ns": {
+              "p50": 7.9787665,
+              "p90": 8.0307896,
+              "p95": 8.0544328,
+              "p99": 8.08012266
+            }
+          },
+          "ordinal1-63": {
+            "route_process_cpu_ns": {
+              "p50": 7.97853,
+              "p90": 8.030488,
+              "p95": 8.0486121,
+              "p99": 8.060060700000001
+            },
+            "route_wall_ns": {
+              "p50": 7.977798,
+              "p90": 8.02995,
+              "p95": 8.0475118,
+              "p99": 8.06242644
+            }
+          }
+        },
+        "control": {
+          "all64": {
+            "route_process_cpu_ns": {
+              "p50": 8.0233865,
+              "p90": 8.0858473,
+              "p95": 8.09609615,
+              "p99": 8.12729422
+            },
+            "route_wall_ns": {
+              "p50": 8.0223715,
+              "p90": 8.0845471,
+              "p95": 8.09518435,
+              "p99": 8.12826551
+            }
+          },
+          "ordinal1-63": {
+            "route_process_cpu_ns": {
+              "p50": 8.022027,
+              "p90": 8.082448,
+              "p95": 8.089824700000001,
+              "p99": 8.1027585
+            },
+            "route_wall_ns": {
+              "p50": 8.020846,
+              "p90": 8.081015599999999,
+              "p95": 8.088650999999999,
+              "p99": 8.10171936
+            }
+          }
+        }
+      },
+      "logical_resource_maxima": {
+        "control": {
+          "gets": 32,
+          "bytes": 16773120
+        },
+        "candidate": {
+          "gets": 32,
+          "bytes": 16773120
+        }
+      },
+      "graph_source_only_build": {
+        "candidate": {
+          "build_process_cpu_ns": 4076021156,
+          "build_wall_ns": 4076004442,
+          "graph_bytes": 426398,
+          "graph_resident_bytes": 568600,
+          "graph_sha256": "bbb4f66900daa5a5bc5440579630c36fbbce2a566caa328db94bfb7501f27340"
+        },
+        "centroids_sha256": "16a4ee5f77d03999dc79cc9c1203e3206ddf5d02a508195ae599fa9f7a0244cd",
+        "control": {
+          "build_process_cpu_ns": 682888920,
+          "build_wall_ns": 682880768,
+          "graph_bytes": 426398,
+          "graph_resident_bytes": 568600,
+          "graph_sha256": "876526c890de03850740f5776ce9d011b48419ffa652a79ed343465d933ceee5"
+        },
+        "control_root_sha256": "4726f2bd986815d1e46f8c1fa3564738d40f139fac04369a3b72357cff4cbde9",
+        "dimensions": 768,
+        "rows": 100000,
+        "schema": "borsuk-topology-only-build-v1"
+      }
+    },
+    {
+      "dataset": "cohere",
+      "scope": {
+        "rows": 100000,
+        "dimensions": 768,
+        "metric": "cosine",
+        "k": 100,
+        "split": "consumed development queries0-63"
+      },
+      "decision": "KILL",
+      "stage_totals": {
+        "control": {
+          "seed": 1985,
+          "walk": 5847,
+          "visited": 5847,
+          "candidate": 6387,
+          "nominated": 6385,
+          "physical": 6385,
+          "returned": 6342,
+          "flat": 6351
+        },
+        "candidate": {
+          "seed": 2341,
+          "walk": 6386,
+          "visited": 6386,
+          "candidate": 6386,
+          "nominated": 6384,
+          "physical": 6384,
+          "returned": 6341,
+          "flat": 6351
+        }
+      },
+      "gained_lost": {
+        "seed": {
+          "gained": 879,
+          "lost": 523
+        },
+        "walk": {
+          "gained": 547,
+          "lost": 8
+        },
+        "visited": {
+          "gained": 547,
+          "lost": 8
+        },
+        "candidate": {
+          "gained": 8,
+          "lost": 9
+        },
+        "nominated": {
+          "gained": 8,
+          "lost": 9
+        },
+        "physical": {
+          "gained": 8,
+          "lost": 9
+        },
+        "returned": {
+          "gained": 11,
+          "lost": 12
+        },
+        "flat": {
+          "gained": 0,
+          "lost": 0
+        }
+      },
+      "returned_delta_pp": -0.015625,
+      "exploratory_planning_only_ms": {
+        "candidate": {
+          "all64": {
+            "route_process_cpu_ns": {
+              "p50": 7.999252,
+              "p90": 8.070845,
+              "p95": 8.0970494,
+              "p99": 8.14042033
+            },
+            "route_wall_ns": {
+              "p50": 7.99768,
+              "p90": 8.069662,
+              "p95": 8.0959334,
+              "p99": 8.139213699999999
+            }
+          },
+          "ordinal1-63": {
+            "route_process_cpu_ns": {
+              "p50": 7.996314,
+              "p90": 8.070914,
+              "p95": 8.097639599999999,
+              "p99": 8.14067142
+            },
+            "route_wall_ns": {
+              "p50": 7.994579,
+              "p90": 8.0697,
+              "p95": 8.0965156,
+              "p99": 8.1394678
+            }
+          }
+        },
+        "control": {
+          "all64": {
+            "route_process_cpu_ns": {
+              "p50": 8.062509,
+              "p90": 8.351666400000001,
+              "p95": 8.366653900000001,
+              "p99": 8.39562176
+            },
+            "route_wall_ns": {
+              "p50": 8.0610185,
+              "p90": 8.3505149,
+              "p95": 8.3655099,
+              "p99": 8.39675211
+            }
+          },
+          "ordinal1-63": {
+            "route_process_cpu_ns": {
+              "p50": 8.062326,
+              "p90": 8.3504696,
+              "p95": 8.3600124,
+              "p99": 8.38409226
+            },
+            "route_wall_ns": {
+              "p50": 8.060853,
+              "p90": 8.349033,
+              "p95": 8.3591472,
+              "p99": 8.3830526
+            }
+          }
+        }
+      },
+      "logical_resource_maxima": {
+        "control": {
+          "gets": 32,
+          "bytes": 16773120
+        },
+        "candidate": {
+          "gets": 32,
+          "bytes": 16773120
+        }
+      },
+      "graph_source_only_build": {
+        "candidate": {
+          "build_process_cpu_ns": 4377434471,
+          "build_wall_ns": 4377395666,
+          "graph_bytes": 426398,
+          "graph_resident_bytes": 568600,
+          "graph_sha256": "c5eb6004be968adf6d99a6a22d5545f63f4df052c9942e88fb11101599d99635"
+        },
+        "centroids_sha256": "a6a2d98b6942bcd5f55763a1b2214d1230d9d05fdd49348ef5938436fd1323ac",
+        "control": {
+          "build_process_cpu_ns": 656739767,
+          "build_wall_ns": 656732629,
+          "graph_bytes": 426398,
+          "graph_resident_bytes": 568600,
+          "graph_sha256": "93c490f93d4a30dfada6d4141d50106755918b0d3cb2dc4e6df35ec6a30ff851"
+        },
+        "control_root_sha256": "8b7d079a2caa64dcf06e7259e9385d1769b60b6e89844e923d7ab2b80695697a",
+        "dimensions": 768,
+        "rows": 100000,
+        "schema": "borsuk-topology-only-build-v1"
+      }
+    }
+  ],
+  "source": "a0003 closed immutable artifacts; set/count reduction only, no ANN query or scoring"
+}

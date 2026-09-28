@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-plane-fingerprint-red-check-v1",
+  "source_base_commit": "3cf3b515bc9cfffa73e61911d1bf4e7f83f6fefb",
+  "source_archive_sha256": "09b70dbf44254adaa6a5b5034c3e465560bb4becbbea479b434cd36e9f9fb2ff",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 300,
+  "test_timeout_seconds": 90,
+  "cargo_jobs": 0,
+  "spot_price_observed_usd_per_hour": "0.180000",
+  "spot_quote_timestamp": "2026-09-28T14:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.04,
+  "cost_allowance_ebs_s3_usd": 0.02,
+  "scope": "Expected one plane-metadata fingerprint stub failure; stdlib synthetic only, no compiler or corpus",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

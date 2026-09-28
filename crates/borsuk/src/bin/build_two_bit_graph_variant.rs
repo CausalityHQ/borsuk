@@ -32,6 +32,39 @@ fn cpu_ns() -> Result<u64, Box<dyn Error>> {
         i128::from(t.tv_sec) * 1_000_000_000 + i128::from(t.tv_nsec),
     )?)
 }
+fn graph_root_body(
+    body: &[u8],
+    manifest: &serde_json::Value,
+    graph_sha: &str,
+    resident: usize,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    // Preserve authenticated numeric tokens: parsing/re-emitting f64 can change their bits.
+    let mut text = std::str::from_utf8(body)?.to_owned();
+    for (before, after) in [
+        (
+            format!(
+                "\"graph_sha256\":\"{}\"",
+                manifest["graph_sha256"].as_str().ok_or("graph hash")?
+            ),
+            format!("\"graph_sha256\":\"{graph_sha}\""),
+        ),
+        (
+            format!(
+                "\"graph_resident_bytes\":{},",
+                manifest["graph_resident_bytes"]
+                    .as_u64()
+                    .ok_or("graph resident bytes")?
+            ),
+            format!("\"graph_resident_bytes\":{resident},"),
+        ),
+    ] {
+        if text.matches(&before).count() != 1 {
+            return Err("canonical graph field token required exactly once".into());
+        }
+        text = text.replacen(&before, &after, 1);
+    }
+    Ok(text.into_bytes())
+}
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() != 4 {
@@ -46,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if hash(&body) != args[2] {
         return Err("root identity".into());
     }
-    let mut manifest: serde_json::Value = serde_json::from_slice(&body)?;
+    let manifest: serde_json::Value = serde_json::from_slice(&body)?;
     let rows = manifest["canonical"]["rows"]
         .as_u64()
         .ok_or("row geometry")?;
@@ -119,9 +152,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "candidate":{"graph_sha256":hash(&diverse_blob),"graph_bytes":diverse_blob.len(),
             "graph_resident_bytes":resident,"node_layer_degrees":diverse_degrees,
             "build_wall_ns":diverse_wall,"build_process_cpu_ns":diverse_cpu}});
-    manifest["graph_sha256"] = hash(&diverse_blob).into();
-    manifest["graph_resident_bytes"] = resident.into();
-    let new_body = serde_json::to_vec(&manifest)?;
+    let new_body = graph_root_body(&body, &manifest, &hash(&diverse_blob), resident)?;
     let parent = out
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -158,4 +189,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         serde_json::json!({"root_sha256":root_sha,"build":stats})
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_root_preserves_unrelated_numeric_tokens() {
+        let body = br#"{"graph_resident_bytes":12,"graph_sha256":"old","low":[-0.11186065524816513],"step":[0.0009437487460672855]}"#;
+        let manifest = serde_json::from_slice(body).unwrap();
+        let expected = br#"{"graph_resident_bytes":34,"graph_sha256":"new","low":[-0.11186065524816513],"step":[0.0009437487460672855]}"#;
+        assert_eq!(
+            graph_root_body(body, &manifest, "new", 34).unwrap(),
+            expected
+        );
+        assert!(graph_root_body(b"{}", &manifest, "new", 34).is_err());
+        let duplicate = [body.as_slice(), body.as_slice()].concat();
+        assert!(graph_root_body(&duplicate, &manifest, "new", 34).is_err());
+    }
 }

@@ -1,0 +1,21 @@
+{
+  "status": "invalid-topology-pair",
+  "scientific_verdict": null,
+  "source_files_matched": 400,
+  "locally_verified_artifacts": 48,
+  "terminal_sha256": "0b3acc01d9cf3ce3a19f4ff9bb7a0fe6f6679a8dd98d8abb85837e28bb90a440",
+  "preflight_native_control_calls": 64,
+  "full_sq8_kernel_calls": 64,
+  "candidate_query_calls": 0,
+  "unrelated_float_values_changed": {
+    "low": 239,
+    "step": 70
+  },
+  "control_plan_sha256": "789300785215a649a6f16a9ca56da23246444aee33501aba2551ace3d6f3637b",
+  "totals": {
+    "fetched_hits": 6372,
+    "returned_hits": 6346,
+    "flat_hits": 6369
+  },
+  "state": "terminated"
+}

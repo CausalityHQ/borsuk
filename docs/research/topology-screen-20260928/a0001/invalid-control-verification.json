@@ -1,0 +1,10 @@
+{
+  "instance_id": "i-0e526b4926baa8db0",
+  "state": "terminated",
+  "local_artifacts_verified": 30,
+  "artifact_count": 34,
+  "query_calls": 0,
+  "scientific_outcome": null,
+  "cause": "plane-v2 metadata fingerprint omitted; plane payloads unchanged",
+  "terminal_sha256": "66a20d0bb14608287e2914665ea94e32084408e7293f54963c9c2fd4397648c1"
+}

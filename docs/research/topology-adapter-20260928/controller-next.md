@@ -1,5 +1,10 @@
 # Corpus controller: remaining executable prerequisites
 
+**Closed2026-09-28:** these prerequisites were implemented and verified in
+[the mechanism screen](../topology-screen-20260928/decision.md). ReLAION dev64
+GO, CoHere dev64 KILL; the global diverse-graph arm is ended. The numbered
+protocol below remains the original frozen specification, not a pending launch.
+
 No corpus launch from this file. Continue the existing conditional mechanism decision and exact integer gates; do not open a replacement architecture consultation or change production defaults.
 
 1. Keep scripts/native_two_bit_cosine_development.py byte-identical at ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d, and its imported sequential f32 kernel scripts/v291_two_stage_development.py at2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916. Reuse normalize/rust_sq8_scores and the identical lexsort(score, signed-ID) tie rule. The new wrapper exposes exact GT identity sets at seed/walk/visited-union/candidate/nominated/physical/returned/flat stages; visited and candidate sets are not assumed nested.
