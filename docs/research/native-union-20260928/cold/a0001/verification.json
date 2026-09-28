@@ -1,0 +1,75 @@
+{
+  "instance_id": "i-054754088b5f77ee2",
+  "state": "terminated",
+  "source_archive_sha256": "76465d7227c5a8f8b8b1c6ade9b897e633fa208d16cd79db990c11377837f5a2",
+  "terminal_sha256": "c419d609f2a7f50e90c08fd4e2d6eeb502ffb8f31d0a14768903c51c03ceac1e",
+  "native_files_matched": 392,
+  "source_files_matched": 395,
+  "artifacts_verified": 60,
+  "qualification": false,
+  "valid_measurement": true,
+  "rows": [
+    {
+      "dataset": "relaion",
+      "split": "consumed development0-63",
+      "returned_hits": [
+        6346,
+        6363
+      ],
+      "arm_median_complete_call_ms": {
+        "control": {
+          "p50": 103.30525750000001,
+          "p90": 106.7283616,
+          "p95": 107.559806125,
+          "p99": 155.63618949499983
+        },
+        "candidate": {
+          "p50": 105.0020395,
+          "p90": 108.48839515,
+          "p95": 109.70841317499999,
+          "p99": 119.80230434499998
+        }
+      },
+      "arm_median_serial_qps": {
+        "control": 9.458278059842442,
+        "candidate": 9.419019329363884
+      },
+      "decision": "GO native development envelope only"
+    },
+    {
+      "dataset": "cohere",
+      "split": "consumed development0-63",
+      "returned_hits": [
+        6342,
+        6347
+      ],
+      "arm_median_complete_call_ms": {
+        "control": {
+          "p50": 102.7080525,
+          "p90": 105.2597428,
+          "p95": 107.101865475,
+          "p99": 145.13099193499988
+        },
+        "candidate": {
+          "p50": 104.50879749999999,
+          "p90": 106.60559699999999,
+          "p95": 107.81376462499999,
+          "p99": 117.05730264499996
+        }
+      },
+      "arm_median_serial_qps": {
+        "control": 9.572112384649014,
+        "candidate": 9.504853640903328
+      },
+      "decision": "GO native development envelope only"
+    }
+  ],
+  "cgroup": {
+    "cpu.stat": "usage_usec 120476530\nuser_usec 107610007\nsystem_usec 12866523\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "memory.peak": "2114830336\n",
+    "memory.swap.peak": "0\n"
+  },
+  "decision": "GO native development envelope only",
+  "native_search_calls": 512
+}

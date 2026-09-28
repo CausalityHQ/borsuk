@@ -1,4 +1,14 @@
-# Native v4 integration: correctness GO, performance qualification outstanding
+# Native v4 integration: native cold development GO, qualification outstanding
+
+**Current checkpoint:** [closed cold decision](cold-decision.md) supersedes the
+pre-cold status below. Both datasets reproduce their union quality gains through
+real native S3 calls; candidate is slightly slower than matched v4 nearest control.
+Verified current p90/p95 R108.488395/109.708413ms, C106.605597/107.813765ms;
+serial observed QPS R9.419019,C9.504854. Both first100k,D768,cosine,k100,consumed
+dev0–63. All60artifacts/512searches verified; original Spot instance terminated.
+Next: matched ReLAION744 validation, then CoHere if it survives. No vendor/scale
+or fresh sealed qualification; old744 result is a different frozen layout, not
+a matched v4 control. Remaining sections preserve the integration checkpoint.
 
 The verified discovery-union mechanism is now the callable Rust generation path.
 A strict v4 root authenticates nearest and diversity graph bodies/resident charges;
