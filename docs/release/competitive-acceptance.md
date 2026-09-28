@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
 | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
 | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
 |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; coordinated compaction/GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; coordinated compaction/GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
 | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
 | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
 
@@ -100,11 +100,13 @@ recovery and compaction remain OPEN.
 The range reader now applies borrowed mutation exclusions before top-k and
 retains page authentication/physical charges. Durable snapshot CAS/recovery now
 passes focused functional checks. Root-bound upsert/deletion query merge and
-recover/search parity now pass real local HTTP checks; canonical source binding
-and coordinated compaction remain the next implementation gates.
+recover/search parity now pass real local HTTP checks. Mandatory v2 canonical
+source publication/recovery now supplies the durable compaction input; atomic
+base/delta handoff and GC remain the next implementation gates.
 [Visibility primitive](../research/mutation-visibility-20260928/decision.md).
 [Durable snapshot receipts](../research/durable-mutation-snapshot-20260928/decision.md).
 [Mutation query receipts](../research/mutation-search-20260928/decision.md).
+[Canonical source binding](../research/canonical-source-binding-20260928/decision.md).
 
 Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
 [discovery diagnostic](../research/nomination-trace-20260928/decision.md),

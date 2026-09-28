@@ -133,10 +133,12 @@ pub async fn read_two_bit_head(
     }
     let manifest: Manifest =
         serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
-    if manifest.schema != "borsuk-two-bit-generation-v1"
+    if manifest.schema != "borsuk-two-bit-generation-v2"
         || manifest.generation != head.generation
         || manifest.low.is_empty()
         || manifest.low.len() != manifest.step.len()
+        || !manifest.canonical.valid()
+        || manifest.canonical.dimensions != manifest.low.len()
     {
         return Err(TwoBitStoreError::Invalid("head generation"));
     }
@@ -222,6 +224,17 @@ pub async fn publish_two_bit_generation(
     )
     .map_err(|_| TwoBitStoreError::Invalid("upload budget"))?;
     let metadata_prefix = prefix.clone().join("generations").join(trusted_root_sha256);
+    upload_authenticated_file(
+        store,
+        &ObjectPath::from(manifest.canonical.object_key.clone()),
+        &local.join("canonical.bin"),
+        &Artifact {
+            bytes: manifest.canonical.bytes,
+            sha256: manifest.canonical.sha256.clone(),
+        },
+        budget,
+    )
+    .await?;
     for (name, digest) in METADATA_FILES.iter().zip(digests) {
         let artifact = Artifact {
             bytes: fs::metadata(local.join(name))?.len(),

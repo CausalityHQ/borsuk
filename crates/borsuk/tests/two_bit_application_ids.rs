@@ -151,6 +151,22 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     };
     let root = temp.path().join("generation");
     let root_sha = builder.build_with_order(&order, &root, 4_000_000).unwrap();
+    let generation_root: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v2");
+    let canonical_body = std::fs::read(root.join("canonical.bin")).unwrap();
+    assert_eq!(canonical_body.len(), 512 * 16);
+    for (physical, &ordinal) in order.iter().enumerate() {
+        let row = &canonical_body[physical * 16..(physical + 1) * 16];
+        assert_eq!(
+            i64::from_le_bytes(row[..8].try_into().unwrap()),
+            ids[ordinal as usize]
+        );
+        assert_eq!(
+            &row[8..],
+            &body[ordinal as usize * 8..(ordinal as usize + 1) * 8]
+        );
+    }
     let limits = TwoBitGenerationLimits {
         max_memory_bytes: 4_000_000,
         max_active_queries: 1,
@@ -186,6 +202,21 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     ));
     let plan = local.plan(&[1., 0.]).await.unwrap();
     let prefix = ObjectPath::from("tenant/application-index");
+    let mut bad_local_source = canonical_body.clone();
+    bad_local_source[8] ^= 1;
+    std::fs::write(root.join("canonical.bin"), &bad_local_source).unwrap();
+    assert!(
+        publish_two_bit_generation(store.as_ref(), &prefix, &root, &root_sha, limits, None)
+            .await
+            .is_err()
+    );
+    assert!(
+        read_two_bit_head(store.as_ref(), &prefix)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    std::fs::write(root.join("canonical.bin"), &canonical_body).unwrap();
     let head = publish_two_bit_generation(store.as_ref(), &prefix, &root, &root_sha, limits, None)
         .await
         .unwrap();
@@ -197,6 +228,83 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             .root_sha256(),
         root_sha
     );
+    let recovered_source = temp.path().join("recovered-canonical");
+    let source_stats = borsuk::canonical_source::recover_two_bit_source(
+        store.as_ref(),
+        &head,
+        &recovered_source,
+        10000,
+        131072,
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(&recovered_source).unwrap(), canonical_body);
+    assert_eq!(source_stats.submitted_gets, 2);
+    assert_eq!(
+        source_stats.source_response_bytes,
+        canonical_body.len() as u64
+    );
+    assert!(
+        borsuk::canonical_source::recover_two_bit_source(
+            store.as_ref(),
+            &head,
+            &recovered_source,
+            10000,
+            131072
+        )
+        .await
+        .is_err()
+    );
+    let rejected_source = temp.path().join("rejected-canonical");
+    let cap_error = borsuk::canonical_source::recover_two_bit_source(
+        store.as_ref(),
+        &head,
+        &rejected_source,
+        1,
+        131072,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(cap_error.stats.submitted_gets, 1);
+    assert!(!rejected_source.exists());
+    let chunk_error = borsuk::canonical_source::recover_two_bit_source(
+        store.as_ref(),
+        &head,
+        &rejected_source,
+        10000,
+        1,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(chunk_error.stats.submitted_gets, 2);
+    assert!(!rejected_source.exists());
+    let canonical_key =
+        ObjectPath::from(generation_root["canonical"]["object_key"].as_str().unwrap());
+    let mut corrupted = canonical_body.clone();
+    corrupted[8] ^= 1;
+    store
+        .put(&canonical_key, PutPayload::from(corrupted))
+        .await
+        .unwrap();
+    let failure = borsuk::canonical_source::recover_two_bit_source(
+        store.as_ref(),
+        &head,
+        &rejected_source,
+        10000,
+        131072,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.stats.submitted_gets, 2);
+    assert_eq!(
+        failure.stats.source_response_bytes,
+        canonical_body.len() as u64
+    );
+    assert!(!rejected_source.exists());
+    store
+        .put(&canonical_key, PutPayload::from(canonical_body.clone()))
+        .await
+        .unwrap();
     use borsuk::two_bit_mutations::{
         TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
     };
@@ -522,8 +630,10 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         .await
         .is_err()
     );
+    let (metadata_store, metadata_ops) =
+        common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
     let remote = TwoBitGeneration::open_remote(
-        store.as_ref(),
+        &metadata_store,
         &head.metadata_prefix(),
         &root_sha,
         limits,
@@ -531,6 +641,15 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     )
     .await
     .unwrap();
+    assert_eq!(
+        metadata_ops.count_matching(|op, _| op == common::StoreOperation::Get),
+        8
+    );
+    assert_eq!(
+        metadata_ops.count_matching(|op, path| op == common::StoreOperation::Get
+            && (path == canonical_key.as_ref() || path == key.as_ref())),
+        0
+    );
     assert_eq!(remote.plan(&[1., 0.]).await.unwrap().ranges, plan.ranges);
     let ranges = plan
         .ranges

@@ -6,7 +6,7 @@ use borsuk::{
     unit_centroid_graph::UnitCentroidGraph,
     unit_centroid_pages::UnitCentroidPages,
 };
-use object_store::{memory::InMemory, path::Path as ObjectPath, ObjectStoreExt, PutPayload};
+use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path as ObjectPath};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Cursor};
 fn hash(b: &[u8]) -> String {
@@ -77,12 +77,25 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     ] {
         fs::write(root.join(name), b).unwrap();
     }
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v1",
+    let canonical = (0..512_i64)
+        .flat_map(|id| {
+            let mut b = id.to_le_bytes().to_vec();
+            let norm = (0.5_f64 * 0.5 + 0.25_f64 * 0.25).sqrt();
+            for v in [0.5_f64, 0.25] {
+                b.extend_from_slice(&((v / norm) as f32).to_le_bytes());
+            }
+            b
+        })
+        .collect::<Vec<_>>();
+    fs::write(root.join("canonical.bin"), &canonical).unwrap();
+    let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
+        "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v2",
         "generation":1,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
         "sq8_object_sha256":sq8_sha,"sq8_object_key":format!("tenant/g1/objects/{sq8_sha}"),
-        "sq8_etag":"etag-1","low":[0.,0.],"step":[1_f32/255.,1_f32/255.]})).unwrap();
+        "sq8_etag":"etag-1","low":[0.,0.],"step":[1_f32/255.,1_f32/255.],"canonical":canonical_descriptor})).unwrap();
     fs::write(root.join("manifest.json"), &manifest).unwrap();
     let generated = tempfile::tempdir().unwrap();
     let generated_root = generated.path().join("generation");
@@ -107,6 +120,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     assert_eq!(built_sha, hash(&manifest));
     for name in [
         "manifest.json",
+        "canonical.bin",
         "page_manifest.json",
         "page_digests.bin",
         "centroids.bin",
@@ -131,6 +145,30 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         max_query_scratch_bytes: 8192,
         already_pinned_bytes: 0,
     };
+    let mut legacy: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    legacy["schema"] = "borsuk-two-bit-generation-v1".into();
+    let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+    fs::write(root.join("manifest.json"), &legacy_bytes).unwrap();
+    assert!(TwoBitGeneration::open(root, &hash(&legacy_bytes), limits).is_err());
+    fs::write(root.join("manifest.json"), &manifest).unwrap();
+    for case in 0..3 {
+        let mut malformed: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        match case {
+            0 => malformed["canonical"]["rows"] = 513.into(),
+            1 => {
+                malformed["canonical"]["dimensions"] = 3.into();
+                malformed["canonical"]["bytes"] = 10240.into();
+            }
+            _ => {
+                malformed["canonical"]["sha256"] = "x".into();
+                malformed["canonical"]["object_key"] = "tenant/g1/objects/x".into();
+            }
+        }
+        let malformed_bytes = serde_json::to_vec(&malformed).unwrap();
+        fs::write(root.join("manifest.json"), &malformed_bytes).unwrap();
+        assert!(TwoBitGeneration::open(root, &hash(&malformed_bytes), limits).is_err());
+    }
+    fs::write(root.join("manifest.json"), &manifest).unwrap();
     let generation = TwoBitGeneration::open(root, &hash(&manifest), limits).unwrap();
     let first = generation.plan(&[0.5, 0.25]).await.unwrap();
     let (diagnostic, ranking) = generation.diagnostic_plan(&[0.5, 0.25]).await.unwrap();
@@ -154,6 +192,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let publication = tempfile::tempdir().unwrap();
     for name in [
         "manifest.json",
+        "canonical.bin",
         "page_manifest.json",
         "page_digests.bin",
         "centroids.bin",
@@ -177,10 +216,12 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     prepared["sq8_etag"] = source_put.e_tag.unwrap().into();
     let prepared_bytes = serde_json::to_vec(&prepared).unwrap();
     fs::write(publication.path().join("manifest.json"), &prepared_bytes).unwrap();
-    assert!(read_two_bit_head(&published_store, &index_prefix)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        read_two_bit_head(&published_store, &index_prefix)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let publish_limits = TwoBitGenerationLimits {
         max_memory_bytes: 32_000_000,
         ..limits
@@ -200,13 +241,15 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         pinned.metadata_prefix().to_string(),
         format!("tenant/index/generations/{}", pinned.root_sha256())
     );
-    assert!(published_store
-        .head(&ObjectPath::from(format!(
-            "{}/plane/records.bin",
-            pinned.metadata_prefix()
-        )))
-        .await
-        .is_ok());
+    assert!(
+        published_store
+            .head(&ObjectPath::from(format!(
+                "{}/plane/records.bin",
+                pinned.metadata_prefix()
+            )))
+            .await
+            .is_ok()
+    );
 
     let head = read_two_bit_head(&published_store, &index_prefix)
         .await
@@ -277,16 +320,18 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
             .as_deref(),
         prepared["sq8_etag"].as_str()
     );
-    assert!(publish_two_bit_generation(
-        &published_store,
-        &ObjectPath::from("another/index"),
-        publication.path(),
-        &hash(&fs::read(publication.path().join("manifest.json")).unwrap()),
-        publish_limits,
-        Some(&pinned)
-    )
-    .await
-    .is_err());
+    assert!(
+        publish_two_bit_generation(
+            &published_store,
+            &ObjectPath::from("another/index"),
+            publication.path(),
+            &hash(&fs::read(publication.path().join("manifest.json")).unwrap()),
+            publish_limits,
+            Some(&pinned)
+        )
+        .await
+        .is_err()
+    );
     let current = read_two_bit_head(&published_store, &index_prefix)
         .await
         .unwrap()
@@ -295,16 +340,18 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let mut bad = fs::read(&records_path).unwrap();
     bad[0] ^= 1;
     fs::write(&records_path, bad).unwrap();
-    assert!(publish_two_bit_generation(
-        &published_store,
-        &index_prefix,
-        publication.path(),
-        &hash(&fs::read(publication.path().join("manifest.json")).unwrap()),
-        publish_limits,
-        Some(&current)
-    )
-    .await
-    .is_err());
+    assert!(
+        publish_two_bit_generation(
+            &published_store,
+            &index_prefix,
+            publication.path(),
+            &hash(&fs::read(publication.path().join("manifest.json")).unwrap()),
+            publish_limits,
+            Some(&current)
+        )
+        .await
+        .is_err()
+    );
     assert_eq!(
         read_two_bit_head(&published_store, &index_prefix)
             .await
@@ -319,6 +366,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let prefix = ObjectPath::from("tenant/g1/metadata");
     for name in [
         "manifest.json",
+        "canonical.bin",
         "page_manifest.json",
         "page_digests.bin",
         "centroids.bin",
@@ -345,27 +393,25 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         remote.plan(&[0.5, 0.25]).await.unwrap().ranges
     );
     assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
-    assert!(TwoBitGeneration::open_remote(
-        &store,
-        &prefix,
-        &"0".repeat(64),
-        limits,
-        scratch.path()
-    )
-    .await
-    .is_err());
-    assert!(TwoBitGeneration::open_remote(
-        &store,
-        &prefix,
-        &hash(&manifest),
-        TwoBitGenerationLimits {
-            max_memory_bytes: 1,
-            ..limits
-        },
-        scratch.path()
-    )
-    .await
-    .is_err());
+    assert!(
+        TwoBitGeneration::open_remote(&store, &prefix, &"0".repeat(64), limits, scratch.path())
+            .await
+            .is_err()
+    );
+    assert!(
+        TwoBitGeneration::open_remote(
+            &store,
+            &prefix,
+            &hash(&manifest),
+            TwoBitGenerationLimits {
+                max_memory_bytes: 1,
+                ..limits
+            },
+            scratch.path()
+        )
+        .await
+        .is_err()
+    );
     store
         .put(
             &ObjectPath::from(format!("{prefix}/plane/records.bin")),
@@ -373,40 +419,34 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         )
         .await
         .unwrap();
-    assert!(TwoBitGeneration::open_remote(
-        &store,
-        &prefix,
-        &hash(&manifest),
-        limits,
-        scratch.path()
-    )
-    .await
-    .is_err());
+    assert!(
+        TwoBitGeneration::open_remote(&store, &prefix, &hash(&manifest), limits, scratch.path())
+            .await
+            .is_err()
+    );
     store
         .delete(&ObjectPath::from(format!("{prefix}/plane/records.bin")))
         .await
         .unwrap();
-    assert!(TwoBitGeneration::open_remote(
-        &store,
-        &prefix,
-        &hash(&manifest),
-        limits,
-        scratch.path()
-    )
-    .await
-    .is_err());
+    assert!(
+        TwoBitGeneration::open_remote(&store, &prefix, &hash(&manifest), limits, scratch.path())
+            .await
+            .is_err()
+    );
     assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
 
     assert!(TwoBitGeneration::open(root, &"0".repeat(64), limits).is_err());
-    assert!(TwoBitGeneration::open(
-        root,
-        &hash(&manifest),
-        TwoBitGenerationLimits {
-            max_memory_bytes: 1,
-            ..limits
-        }
-    )
-    .is_err());
+    assert!(
+        TwoBitGeneration::open(
+            root,
+            &hash(&manifest),
+            TwoBitGenerationLimits {
+                max_memory_bytes: 1,
+                ..limits
+            }
+        )
+        .is_err()
+    );
     for field in ["generation", "sq8_object_sha256"] {
         let mut wrong: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
         if field == "generation" {

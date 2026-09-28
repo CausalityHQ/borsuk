@@ -1,6 +1,7 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
 use crate::{
     budgeted_page_rank::{BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse},
+    canonical_source::CanonicalSource,
     object_native_generation::{
         ObjectNativeOpenError, ObjectNativeSearchResult, stage_generation_metadata,
     },
@@ -78,6 +79,7 @@ pub(crate) struct Manifest {
     pub(crate) sq8_object_sha256: String,
     pub(crate) sq8_object_key: String,
     pub(crate) sq8_etag: String,
+    pub(crate) canonical: CanonicalSource,
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
@@ -177,7 +179,7 @@ impl TwoBitGeneration {
         .map_err(TwoBitGenerationError::Plane)?;
         let manifest: Manifest = serde_json::from_slice(&body).map_err(|_| bad("root schema"))?;
         let key = manifest.sq8_object_key.split('/').collect::<Vec<_>>();
-        if manifest.schema != "borsuk-two-bit-generation-v1"
+        if manifest.schema != "borsuk-two-bit-generation-v2"
             || manifest.generation == 0
             || manifest.graph_resident_bytes == 0
             || manifest.sq8_etag.is_empty()
@@ -197,6 +199,7 @@ impl TwoBitGeneration {
             || manifest.low.len() != manifest.step.len()
             || manifest.low.iter().any(|v| !v.is_finite())
             || manifest.step.iter().any(|v| !v.is_finite() || *v <= 0.)
+            || !manifest.canonical.valid()
         {
             return Err(bad("root identity"));
         }
@@ -246,6 +249,8 @@ impl TwoBitGeneration {
             .checked_mul(padded.div_ceil(4) + 8)
             .ok_or(bad("record size"))?;
         if geometry.dimensions != manifest.low.len()
+            || geometry.dimensions != manifest.canonical.dimensions
+            || geometry.rows != manifest.canonical.rows
             || admitted_size("plane/mean.bin")? != expected_mean
             || admitted_size("plane/records.bin")? != expected_records
         {

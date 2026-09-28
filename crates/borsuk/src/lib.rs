@@ -919,6 +919,9 @@ pub mod two_bit_store;
 /// Bounded, generation-pinned conditional mutation publication and recovery.
 pub mod two_bit_mutations;
 
+/// Durable normalized canonical source and bounded maintenance recovery.
+pub mod canonical_source;
+
 /// Source-only construction of authenticated generation metadata.
 pub mod two_bit_build;
 

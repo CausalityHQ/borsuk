@@ -22,16 +22,17 @@ let result = generation.search(&s3_reader, query, 100).await?;
 // result.plan: physical ranges/bytes; result.ranked: hits and read stats.
 ```
 
-A trusted `borsuk-two-bit-generation-v1` root manifest binds generation ID,
+A trusted `borsuk-two-bit-generation-v2` root manifest binds generation ID,
 `plane/manifest.json`, page manifest, centroids, graph, graph resident size,
-SQ8 object SHA/key/ETag, and SQ8 low/step calibration. Its digest must come
+SQ8 object SHA/key/ETag, SQ8 low/step calibration, and a canonical normalized
+FP32 source descriptor (geometry/length/SHA/approved key). Its digest must come
 from the application's authenticated publication authority. All child paths
 are fixed. Unknown/incompatible schemas fail; no legacy fallback is attempted.
 The completed source-plane manifest is described in `two-bit-source-builder.md`.
 
-The root is currently assembled from source-only preparation artifacts; a public
-end-to-end create/publish API is still pending. Remote metadata bootstrap is
-available through `TwoBitGeneration::open_remote`.
+The public source writer, `TwoBitGenerationBuilder`, conditional publisher and
+`TwoBitGeneration::open_remote` provide native construction/publication/reload.
+Their qualification and lifecycle gates remain open.
 Creation must bind calibration and centroids from the same immutable SQ8 build.
 Do not manufacture a root from untrusted metadata and call its computed digest
 trusted. Wrong bindings, corruption and admission failures reject the generation.
@@ -146,7 +147,7 @@ let generation = TwoBitGeneration::open_remote(
 The application must authorize this store/prefix and head writers. Use a
 conditional-put-capable store. The opaque token is bound to the index prefix;
 use it with the same store that issued it. New IDs must exceed the expected
-head's generation. All fixed metadata files are streamed, length/SHA checked
+head's generation. The canonical source and all fixed metadata files are streamed, length/SHA checked
 before multipart completion, under `generations/ROOT_SHA/`. The head changes
 last via create-or-CAS. A lost head-write acknowledgement is reconciled against
 authenticated readback. Failed staging or stale publication can leave unreachable
@@ -162,8 +163,9 @@ resident metadata before upload. Multipart read/copy buffers are admitted
 against remaining payload allowance; transport and allocator overhead still
 require measurement. Caller-owned preparation files must stay immutable.
 
-This completes **prepared-generation publication**, not raw-source layout/SQ8
-creation, incremental mutations, compaction/GC or cold HTTP qualification. The
+This function publishes a prepared generation; the sections below cover source
+construction and incremental mutations. Compaction/GC and cold HTTP qualification
+remain open. The
 candidate has no legacy head fallback. Canonical nested object keys are used;
 slash-containing strings are split into path segments rather than passed as
 one encoded `Path::join` segment.
@@ -306,8 +308,9 @@ bitset/buffers before allocating. Keep the source immutable throughout both
 passes. Output uses create-new and sync; failed writes may leave an unpublished
 partial body, which must be discarded. Only a successful receipt authorizes
 further construction. Runtime/allocator and OS page cache are outside the payload
-budget. Source ordering is still caller-supplied; native semantic layout fitting
-and arbitrary application IDs remain incomplete.
+budget. Source ordering is supplied or fitted separately. Signed-i64 application IDs
+use the explicit-order API below; complete nomination and lifecycle qualification
+remain open.
 
 Code rounding uses f32 ties-to-even; reconstructed squared norms accumulate
 sequential f32. The independent NumPy fixture covers negative minima, rounding
@@ -461,7 +464,46 @@ and result buffers retained beyond completed queries require separate admission.
 
 Focused local HTTP mutation/recovery checks prove functional visibility and
 one GET per fixture query. They do not measure ANN quality, AWS latency/QPS,
-100M RSS, costs or vendor superiority. Generation compaction still needs a
-durable canonical source binding and an atomic base/delta handoff: the current
-root records only the original source hash, not an owned recoverable source
-object. Reconstructing that source from SQ8 would introduce quantization drift.
+100M RSS, costs or vendor superiority. Generation v2 now owns a durable canonical source binding. Compaction still needs
+an atomic base/delta handoff and GC; decoded SQ8 is not its canonical source.
+
+## Canonical source for maintenance
+
+Every v2 build streams `canonical.bin`: physical-order signed-i64 ID followed by
+`dimensions` normalized little-endian FP32 coordinates per row. The descriptor
+binds rows/dimensions, length, SHA and a content-addressed key in the approved SQ8
+object namespace. Source-plane permutation/ID checks precede construction;
+canonical construction rechecks the complete SQ8 and raw input digests. Inputs
+must remain immutable throughout. The shared normalization preserves already-unit
+FP32 rows, avoiding repeated SQ8 reconstruction/quantization during maintenance.
+
+Publication uploads this file through the existing streamed length/hash-checked
+multipart uploader before committing the head. `open`, `open_remote`, `plan` and
+all search methods **do not fetch or hydrate canonical rows**. The eight query
+metadata objects are unchanged. Source storage/build upload is lifecycle cost,
+not free cache or query I/O; it adds `(8 + 4D) * N` durable bytes before replication,
+retired generations, mutation snapshots and other index artifacts.
+
+Explicit maintenance recovery:
+
+```rust,ignore
+let stats = borsuk::canonical_source::recover_two_bit_source(
+    store, &head, new_local_source_path, max_source_disk_bytes, max_source_chunk_bytes,
+).await?;
+```
+
+It authenticates the pinned root, checks descriptor/disk admission, then streams
+one source GET to owned temporary disk. Length/SHA must pass before no-clobber
+rename. Existing output rejects; authentication/cap/transport failures do not
+expose a partial source. The helper holds a bounded source chunk plus root metadata
+(up to128KiB payload), not the full source in RAM. Caller transport buffers and
+oversized chunks are outside that payload model; oversized delivered chunks fail
+rather than silently exceeding the declared source buffer. Query cache budgets
+and maintenance concurrency/disk budgets must be admitted separately.
+
+Success and `CanonicalRecoveryFailure` retain submitted SDK GET calls and delivered
+root/source bytes. SDK retry attempts and wire bytes are not inferred from these
+counters; configure/measure transport separately. V1 generations now reject,
+with no migration/legacy reader. Historical v1 benchmark artifacts are unchanged
+and do not qualify this revision. Canonical storage and maintenance cost, atomic
+compaction/recovery/GC and matched wins over both vendors remain release gates.

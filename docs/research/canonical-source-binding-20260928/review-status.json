@@ -1,0 +1,7 @@
+{
+  "status": "not_launched",
+  "tool": "devbox-cross.critique_start",
+  "reason": "dual critique cooldown active: 1 launch per agent per rolling 6 hours; provide force_reason to override",
+  "override_used": false,
+  "scope": "canonical source binding and minimal safe compaction handoff"
+}

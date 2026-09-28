@@ -1,5 +1,6 @@
-//! Assemble generation metadata from caller-owned immutable source/SQ8 snapshots.
+//! Assemble a generation and canonical source from immutable source/SQ8 snapshots.
 use crate::{
+    canonical_source::write_canonical_source,
     object_native_generation::valid_object_key,
     resident_vector_graph::HashingReader,
     two_bit_generation::{Manifest, TwoBitGenerationError},
@@ -135,6 +136,13 @@ impl TwoBitGenerationBuilder<'_> {
                 .build(&output.join("plane"), max_build_payload_bytes),
         }
         .map_err(TwoBitGenerationError::Plane)?;
+        let canonical = write_canonical_source(
+            &self.source,
+            order,
+            &output.join("canonical.bin"),
+            self.sq8_object_key,
+        )
+        .map_err(TwoBitGenerationError::Plane)?;
         let mut sq8 = BufReader::with_capacity(
             65536,
             HashingReader {
@@ -192,12 +200,13 @@ impl TwoBitGenerationBuilder<'_> {
         write_new(&output.join("page_manifest.json"), &page_manifest)?;
         let plane_body =
             fs::read(output.join("plane/manifest.json")).map_err(TwoBitGenerationError::Io)?;
-        let body=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v1",
+        let body=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v2",
             "generation":self.generation,"plane_manifest_sha256":hash(&plane_body),
             "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":centroid_sha,
             "graph_sha256":graph_sha,
             "graph_resident_bytes":graph_resident,"sq8_object_sha256":self.source.sq8_sha256,
-            "sq8_object_key":self.sq8_object_key,"sq8_etag":self.sq8_etag,"low":self.low,"step":self.step}))
+            "sq8_object_key":self.sq8_object_key,"sq8_etag":self.sq8_etag,"low":self.low,"step":self.step,
+            "canonical":canonical}))
             .map_err(|_|bad("root encoding"))?;
         if body.len() > 65536 {
             return Err(bad("root manifest cap"));

@@ -1,0 +1,27 @@
+{
+  "base": "824b61f1",
+  "host": "spark-2751 / aarch64",
+  "jobs": [
+    {
+      "log": "canonical-source-fixed.log",
+      "raw_sha256": "8701315437b72b7b4dafb5b04276735189ac581c3a06f371e826e7fe76b9d0fe",
+      "exit": 0
+    },
+    {
+      "log": "canonical-source-green.log",
+      "raw_sha256": "7e76e9acf6d7d6f90f477de2bdb3077183afda39450836d0106170002cb4e518",
+      "exit": 101
+    },
+    {
+      "log": "canonical-source-http.log",
+      "raw_sha256": "5d86157d5512bf31c9e0c7137016699c4198146d81dd9280b89bbbcfcfdd0a18",
+      "exit": 0
+    },
+    {
+      "log": "canonical-source-red.log",
+      "raw_sha256": "7025531bfe0476ad958452feb7771f4a52d59aa2ec8f705473c0155e7b93a6d9",
+      "exit": 101
+    }
+  ],
+  "final_gate": "Expanded source/publication/recovery fixtures2 exit0; local HTTP mutation/error tests4 exit0. Final source parity; only builder module doc comment changed after tests. Initial green attempt failed missing ObjectStoreExt import, fixed at that layer. Native dual critique rejected cooldown before launch; no override. No paid measurement."
+}
