@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-topology-trace-green-check-v1",
+  "source_base_commit": "e4438da7ada9f0c5ba64f431258266ec1e6b687a",
+  "source_archive_sha256": "1480ec3a8100485cbdf2598074bbd6e5641b87e1d68aa0cd962446d2f57b6123",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.212800",
+  "spot_quote_timestamp": "2026-09-28T13:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.2,
+  "scope": "Focused trace parity/admission fixture followed by full workspace all-target assurance; no quality panels",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}

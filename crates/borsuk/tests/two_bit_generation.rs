@@ -172,9 +172,61 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("manifest.json"), &manifest).unwrap();
     let generation = TwoBitGeneration::open(root, &hash(&manifest), limits).unwrap();
     let first = generation.plan(&[0.5, 0.25]).await.unwrap();
-    let (diagnostic, ranking) = generation.diagnostic_plan(&[0.5, 0.25]).await.unwrap();
+    let (diagnostic, trace) = generation.diagnostic_plan(&[0.5, 0.25]).await.unwrap();
     assert_eq!(diagnostic, first);
-    assert_eq!(ranking, vec![0, 1]);
+    assert_eq!(trace.ranked_candidate_pages, vec![0, 1]);
+    assert!(trace.ranked_candidate_pages.contains(&trace.seed_page));
+    assert_eq!(trace.primary_page, trace.ranked_candidate_pages[0]);
+    assert!(!trace.seed_work_exhausted && !trace.walk_work_exhausted);
+    assert!(diagnostic.selected_pages.contains(&trace.primary_page));
+    for (units, cap) in [
+        (&trace.seed_evaluated_units, 128),
+        (&trace.walk_evaluated_units, 1272),
+    ] {
+        assert!(!units.is_empty() && units.len() <= cap);
+        assert!(units.iter().all(|&unit| unit < 16));
+        assert_eq!(
+            units.iter().collect::<std::collections::HashSet<_>>().len(),
+            units.len()
+        );
+    }
+
+    // Exactly admits this D2 codec (one packed byte), leaving no trace budget.
+    let tight = TwoBitGeneration::open(
+        root,
+        &hash(&manifest),
+        TwoBitGenerationLimits {
+            max_query_scratch_bytes: (256 + 2) * std::mem::size_of::<f64>(),
+            ..limits
+        },
+    )
+    .unwrap();
+    assert_eq!(tight.plan(&[0.5, 0.25]).await.unwrap(), first);
+    assert!(matches!(
+        tight.diagnostic_plan(&[0.5, 0.25]).await,
+        Err(borsuk::two_bit_generation::TwoBitGenerationError::Plane(
+            borsuk::two_bit_source::SourceBuildError::Codec(
+                borsuk::rotated_two_bit::TwoBitError::MemoryBudget
+            )
+        ))
+    ));
+    let under_trace = TwoBitGeneration::open(
+        root,
+        &hash(&manifest),
+        TwoBitGenerationLimits {
+            max_query_scratch_bytes: borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(
+                512,
+            ) - 1,
+            ..limits
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        under_trace.diagnostic_plan(&[0.5, 0.25]).await,
+        Err(borsuk::two_bit_generation::TwoBitGenerationError::Invalid(
+            "diagnostic scratch"
+        ))
+    ));
 
     for query in [[5e29, 2.5e29], [5e-31, 2.5e-31]] {
         assert_eq!(first.ranges, generation.plan(&query).await.unwrap().ranges);

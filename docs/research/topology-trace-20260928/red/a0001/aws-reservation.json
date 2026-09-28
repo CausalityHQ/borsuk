@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-topology-trace-red-check-v1",
+  "source_base_commit": "e4438da7ada9f0c5ba64f431258266ec1e6b687a",
+  "source_archive_sha256": "12139d67044c7ce151213c5405667815eed7fecbc3ba10cf7da00cf4e95fb1b0",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.180000",
+  "spot_quote_timestamp": "2026-09-28T14:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.2,
+  "scope": "Expected red panic in named generation fixture; no query panels",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

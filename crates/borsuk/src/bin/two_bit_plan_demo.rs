@@ -1,5 +1,5 @@
 //! Offline API plan replay for frozen quality splits; not a service benchmark.
-use borsuk::two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits};
+use borsuk::two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace};
 use sha2::{Digest, Sha256};
 use std::{error::Error, fs, io::Write, path::Path};
 #[tokio::main]
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             max_parallel_gets: 32,
             max_query_scratch_bytes: 400_000
                 + if trace {
-                    159 * std::mem::size_of::<usize>()
+                    TwoBitPlanTrace::scratch_bytes(usize::MAX)
                 } else {
                     0
                 },
@@ -66,16 +66,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (ordinal, line) in lines.iter().enumerate().skip(first).take(count) {
         let request: serde_json::Value = serde_json::from_str(line)?;
         let query: Vec<f32> = serde_json::from_value(request["query"].clone())?;
-        let (plan, ranking) = if trace {
+        let (plan, diagnostic) = if trace {
             generation.diagnostic_plan(&query).await?
         } else {
-            (generation.plan(&query).await?, Vec::new())
+            (generation.plan(&query).await?, Default::default())
         };
         let mut record = serde_json::json!({"query_ordinal":ordinal,
             "ranges":plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
             "planned_bytes":plan.planned_bytes});
         if trace {
-            record["ranked_candidate_pages"] = serde_json::json!(ranking);
+            record["ranked_candidate_pages"] = serde_json::json!(diagnostic.ranked_candidate_pages);
+            record["seed_page"] = diagnostic.seed_page.into();
+            record["primary_page"] = diagnostic.primary_page.into();
+            record["seed_evaluated_units"] = serde_json::json!(diagnostic.seed_evaluated_units);
+            record["walk_evaluated_units"] = serde_json::json!(diagnostic.walk_evaluated_units);
+            record["seed_work_exhausted"] = diagnostic.seed_work_exhausted.into();
+            record["walk_work_exhausted"] = diagnostic.walk_work_exhausted.into();
             record["selected_pages"] = serde_json::json!(plan.selected_pages);
         }
         writeln!(output, "{record}")?;

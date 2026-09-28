@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0d8d9518641d2872d",
+  "prefix": "research/native-library-check/topology-trace/20260928/green-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "1480ec3a8100485cbdf2598074bbd6e5641b87e1d68aa0cd962446d2f57b6123",
+  "source_base_commit": "e4438da7ada9f0c5ba64f431258266ec1e6b687a"
+}

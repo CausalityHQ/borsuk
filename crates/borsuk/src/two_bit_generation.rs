@@ -124,6 +124,36 @@ pub struct TwoBitMutationSearchResult {
     /// Pinned authenticated mutation-body identity.
     pub mutation_sha256: String,
 }
+
+/// Offline discovery trace; its retained payload is caller-owned after planning.
+#[doc(hidden)]
+#[derive(Debug, Default, serde::Serialize)]
+pub struct TwoBitPlanTrace {
+    /// Two-bit max-row nomination order.
+    pub ranked_candidate_pages: Vec<usize>,
+    /// Page containing the best centroid from the initial search.
+    pub seed_page: usize,
+    /// First two-bit-ranked page, required by physical admission.
+    pub primary_page: usize,
+    /// Unique unit IDs scored by the initial search.
+    pub seed_evaluated_units: Vec<usize>,
+    /// Unique unit IDs scored by the page-diverse walk.
+    pub walk_evaluated_units: Vec<usize>,
+    /// Initial search exhausted its fixed evaluation allowance.
+    pub seed_work_exhausted: bool,
+    /// Page walk exhausted its fixed evaluation allowance.
+    pub walk_work_exhausted: bool,
+}
+impl TwoBitPlanTrace {
+    /// Conservative retained record/ID payload, excluding allocator overhead.
+    /// Uses authenticated row geometry; caller charges payload after slot release.
+    pub fn scratch_bytes(rows: usize) -> usize {
+        let units = rows.div_ceil(32);
+        std::mem::size_of::<Self>()
+            + (rows.div_ceil(256).min(159) + units.min(128) + units.min(1272))
+                * std::mem::size_of::<usize>()
+    }
+}
 impl TwoBitGeneration {
     /// Physical row count of this immutable nonempty base.
     pub fn rows(&self) -> usize {
@@ -372,11 +402,11 @@ impl TwoBitGeneration {
     fn plan_inner<'a>(
         &self,
         query: &'a [f32],
-        ranking: Option<&mut Vec<usize>>,
+        mut trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>)> {
         let count = self.pages.rows().div_ceil(256).min(159);
-        let trace_bytes = if ranking.is_some() {
-            count * std::mem::size_of::<usize>()
+        let trace_bytes = if trace.is_some() {
+            TwoBitPlanTrace::scratch_bytes(self.pages.rows())
         } else {
             0
         };
@@ -403,6 +433,11 @@ impl TwoBitGeneration {
             .ok_or(TwoBitGenerationError::Invalid("no seed"))?
             .0
             / 8;
+        if let Some(trace) = trace.as_deref_mut() {
+            trace.seed_page = seed_page;
+            trace.seed_work_exhausted = seed.work_exhausted;
+            trace.seed_evaluated_units = seed.evaluated_units;
+        }
         let mut candidates = vec![seed_page];
         if count > 1 {
             let found = self
@@ -416,6 +451,10 @@ impl TwoBitGeneration {
                 )
                 .map_err(TwoBitGenerationError::Graph)?;
             candidates.extend(found.pages.iter().map(|&(p, _)| p));
+            if let Some(trace) = trace.as_deref_mut() {
+                trace.walk_work_exhausted = found.work_exhausted;
+                trace.walk_evaluated_units = found.evaluated_units;
+            }
         }
         candidates.sort_unstable();
         if candidates.len() != count || candidates.windows(2).any(|p| p[0] >= p[1]) {
@@ -434,8 +473,9 @@ impl TwoBitGeneration {
             ranked.push((page, score));
         }
         ranked.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
-        if let Some(ranking) = ranking {
-            ranking.extend(ranked.iter().map(|&(page, _)| page));
+        if let Some(trace) = trace {
+            trace.primary_page = ranked[0].0;
+            trace.ranked_candidate_pages = ranked.iter().map(|&(page, _)| page).collect();
         }
         let primary = [ranked[0].0 * 256];
         let order = ranked
@@ -456,18 +496,21 @@ impl TwoBitGeneration {
         .map_err(TwoBitGenerationError::Budget)
     }
     /// Offline physical plan and candidate pages in nomination order.
-    /// Reserves at most159 page IDs from query scratch; uses normal admission.
+    /// Charges bounded retained trace payload from scratch; uses normal admission.
     /// Returned trace payload belongs to the caller after slot release.
     #[doc(hidden)]
-    pub async fn diagnostic_plan(&self, query: &[f32]) -> Result<(BudgetedPagePlan, Vec<usize>)> {
+    pub async fn diagnostic_plan(
+        &self,
+        query: &[f32],
+    ) -> Result<(BudgetedPagePlan, TwoBitPlanTrace)> {
         let _permit = self
             .slots
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        let mut ranking = Vec::with_capacity(self.pages.rows().div_ceil(256).min(159));
-        let (plan, _) = self.plan_inner(query, Some(&mut ranking))?;
-        Ok((plan, ranking))
+        let mut trace = TwoBitPlanTrace::default();
+        let (plan, _) = self.plan_inner(query, Some(&mut trace))?;
+        Ok((plan, trace))
     }
     /// Frozen V296 nomination and physical admission, under a shared query slot.
     pub async fn plan(&self, query: &[f32]) -> Result<BudgetedPagePlan> {

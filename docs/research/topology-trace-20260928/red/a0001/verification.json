@@ -1,0 +1,12 @@
+{
+  "instance_id": "i-07ff3917aa43ee9e9",
+  "state": "terminated",
+  "source_archive_sha256": "12139d67044c7ce151213c5405667815eed7fecbc3ba10cf7da00cf4e95fb1b0",
+  "terminal_sha256": "8bbb648311198a6690d1ef053db2bcadb962036686d3a83238defc98766cac75",
+  "artifact_count": 4,
+  "source_files_matched": 389,
+  "source_files_changed": [
+    "crates/borsuk/src/bin/two_bit_plan_demo.rs"
+  ],
+  "test_summaries": []
+}
