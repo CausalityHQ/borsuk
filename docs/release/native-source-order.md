@@ -1,5 +1,10 @@
 # Native semantic source order (candidate)
 
+**Not approved for cloud/scale/release promotion.** Complete native preparation
+failed the frozen ReLAION100k paired quality gate: 98.851% returned R@100 versus
+99.569% native SQ8 flat (0.718pp deficit; limit0.5pp). See the
+[terminal decision](../research/native-pipeline-quality-20260928/decision.md).
+
 ```rust
 use borsuk::source_order::fit_source_order;
 
@@ -42,6 +47,6 @@ cargo run -p borsuk --example build_sq8_source -- \
 
 The new output is synced and installed without replacement; its JSON receipt
 names the recipe and order SHA. An installation/sync error may leave an
-unpublished artifact; discard it on error. The next quality gate is the
-predeclared CoHere100k development0–63 page-oracle falsifier, before full paired
-validation or cloud serving promotion.
+unpublished artifact; discard it on error. The development page oracle passed, but did not predict the paired validation
+failure. A distinct source-only layout decision and development falsifier are
+required before another promotion gate.

@@ -51,3 +51,8 @@ normalized, order, SQ8 and root identities and reused them; it exited0 with a
 KILL decision. No preparation was duplicated. The failed logs/phase times are
 preserved under `pre-plan-failure`; the correction changed no source algorithm
 or benchmark threshold. This is a method failure, not a harness crash.
+
+The requested default dual critique was rejected by the native six-hour cooldown.
+No review job was started and no override was used. This holds the reviewed
+layout redesign; independent ID/lifecycle implementation remains available, so
+the native goal stays active.
