@@ -156,7 +156,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let root_sha = builder.build_with_order(&order, &root, 4_000_000).unwrap();
     let generation_root: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v3");
+    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v4");
     let canonical_body = std::fs::read(root.join("canonical.bin")).unwrap();
     assert_eq!(canonical_body.len(), 512 * 16);
     for (physical, &ordinal) in order.iter().enumerate() {
@@ -707,7 +707,12 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     .unwrap();
     assert_eq!(
         metadata_ops.count_matching(|op, _| op == common::StoreOperation::Get),
-        8
+        9
+    );
+    assert_eq!(
+        metadata_ops.count_matching(|op, path| op == common::StoreOperation::Get
+            && path == head.metadata_prefix().join("diverse_graph.bin").as_ref()),
+        1
     );
     assert_eq!(
         metadata_ops.count_matching(|op, path| op == common::StoreOperation::Get

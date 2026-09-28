@@ -1,0 +1,10 @@
+{
+  "native_files_matched": 392,
+  "artifact_count": 5,
+  "state": "terminated",
+  "exit_code": 101,
+  "source_archive_sha256": "2b5732b3e420bb846282097a7e5d853b20b4c7c636ad22dd205c5458008dbbad",
+  "cause": "obsolete test expected8 metadata objects; authenticated v4 adds ninth",
+  "full_gate_executed": false,
+  "release_binaries_built": false
+}

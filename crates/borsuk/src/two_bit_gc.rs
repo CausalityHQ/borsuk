@@ -111,7 +111,7 @@ async fn keep_set(
         }
         let manifest: Manifest =
             serde_json::from_slice(&bytes).map_err(|_| bad("GC root schema"))?;
-        if manifest.schema != "borsuk-two-bit-generation-v3"
+        if manifest.schema != crate::two_bit_generation::SCHEMA
             || manifest.generation != head.generation()
             || !manifest.canonical.valid()
             || manifest.canonical.dimensions != head.dimensions()

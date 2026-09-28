@@ -77,6 +77,8 @@ pub(crate) struct Manifest {
     pub(crate) centroids_sha256: String,
     pub(crate) graph_sha256: String,
     pub(crate) graph_resident_bytes: usize,
+    pub(crate) diverse_graph_sha256: String,
+    pub(crate) diverse_graph_resident_bytes: usize,
     pub(crate) sq8_object_sha256: String,
     pub(crate) sq8_object_key: String,
     pub(crate) sq8_etag: String,
@@ -84,12 +86,14 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const METADATA_FILES: [&str; 8] = [
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v4";
+pub(crate) const METADATA_FILES: [&str; 9] = [
     "manifest.json",
     "page_manifest.json",
     "page_digests.bin",
     "centroids.bin",
     "graph.bin",
+    "diverse_graph.bin",
     "plane/manifest.json",
     "plane/mean.bin",
     "plane/records.bin",
@@ -101,7 +105,7 @@ pub struct TwoBitGeneration {
     plane: TwoBitPlane,
     pages: PageAuthority,
     centroids: UnitCentroidPages,
-    graph: UnitCentroidGraph,
+    graphs: [UnitCentroidGraph; 2],
     manifest: Manifest,
     limits: TwoBitGenerationLimits,
     slots: Semaphore,
@@ -125,32 +129,39 @@ pub struct TwoBitMutationSearchResult {
     pub mutation_sha256: String,
 }
 
-/// Offline discovery trace; its retained payload is caller-owned after planning.
+/// One bounded source graph discovery, in nearest/diversity order.
+#[doc(hidden)]
+#[derive(Debug, Default, serde::Serialize)]
+pub struct TwoBitDiscoveryTrace {
+    /// Page of the initial best centroid.
+    pub seed_page: usize,
+    /// Distinct unit IDs evaluated by this graph's128-budget seed search.
+    pub seed_evaluated_units: Vec<usize>,
+    /// Distinct unit IDs evaluated by this graph's1272-budget page walk.
+    pub walk_evaluated_units: Vec<usize>,
+    /// Seed search exhausted its fixed allowance.
+    pub seed_work_exhausted: bool,
+    /// Page walk exhausted its fixed allowance.
+    pub walk_work_exhausted: bool,
+}
+/// Offline union trace; retained payload is caller-owned after planning.
 #[doc(hidden)]
 #[derive(Debug, Default, serde::Serialize)]
 pub struct TwoBitPlanTrace {
-    /// Two-bit max-row nomination order.
+    /// Source two-bit max-row nomination order of up to318 union pages.
     pub ranked_candidate_pages: Vec<usize>,
-    /// Page containing the best centroid from the initial search.
-    pub seed_page: usize,
-    /// First two-bit-ranked page, required by physical admission.
+    /// First ranked page, required by physical admission.
     pub primary_page: usize,
-    /// Unique unit IDs scored by the initial search.
-    pub seed_evaluated_units: Vec<usize>,
-    /// Unique unit IDs scored by the page-diverse walk.
-    pub walk_evaluated_units: Vec<usize>,
-    /// Initial search exhausted its fixed evaluation allowance.
-    pub seed_work_exhausted: bool,
-    /// Page walk exhausted its fixed evaluation allowance.
-    pub walk_work_exhausted: bool,
+    /// Nearest then diversity discovery; identical graph identities run once.
+    pub discoveries: Vec<TwoBitDiscoveryTrace>,
 }
 impl TwoBitPlanTrace {
-    /// Conservative retained record/ID payload, excluding allocator overhead.
-    /// Uses authenticated row geometry; caller charges payload after slot release.
+    /// Conservative retained ID/record payload excluding allocator overhead.
     pub fn scratch_bytes(rows: usize) -> usize {
         let units = rows.div_ceil(32);
         std::mem::size_of::<Self>()
-            + (rows.div_ceil(256).min(159) + units.min(128) + units.min(1272))
+            + 2 * std::mem::size_of::<TwoBitDiscoveryTrace>()
+            + 2 * (rows.div_ceil(256).min(159) + units.min(128) + units.min(1272))
                 * std::mem::size_of::<usize>()
     }
 }
@@ -218,9 +229,10 @@ impl TwoBitGeneration {
         .map_err(TwoBitGenerationError::Plane)?;
         let manifest: Manifest = serde_json::from_slice(&body).map_err(|_| bad("root schema"))?;
         let key = manifest.sq8_object_key.split('/').collect::<Vec<_>>();
-        if manifest.schema != "borsuk-two-bit-generation-v3"
+        if manifest.schema != SCHEMA
             || manifest.generation == 0
             || manifest.graph_resident_bytes == 0
+            || manifest.diverse_graph_resident_bytes == 0
             || manifest.sq8_etag.is_empty()
             || manifest.sq8_etag.chars().any(char::is_control)
             || key.len() < 2
@@ -250,6 +262,7 @@ impl TwoBitGeneration {
             "page_digests.bin",
             "centroids.bin",
             "graph.bin",
+            "diverse_graph.bin",
         ];
         let mut disk = manifest_size;
         let mut sizes = Vec::with_capacity(files.len());
@@ -296,7 +309,8 @@ impl TwoBitGeneration {
             return Err(bad("plane file geometry"));
         }
         // Three copies cover reads/decoding, plus graph towers. Per-query 1MiB
-        // covers the capped 1400 graph evaluations and 159-page planner vectors.
+        // covers one sequential1400-evaluation walk plus two retained traces
+        // and at most318 union-page planner vectors.
         let planner_bytes = (limits.max_query_scratch_bytes as u64)
             .checked_add(1024 * 1024)
             .ok_or(bad("query memory"))?;
@@ -320,6 +334,7 @@ impl TwoBitGeneration {
             .and_then(|n| n.checked_add(codec_memory))
             .and_then(|n| n.checked_add(131072))
             .and_then(|n| n.checked_add(manifest.graph_resident_bytes as u64))
+            .and_then(|n| n.checked_add(manifest.diverse_graph_resident_bytes as u64))
             .and_then(|n| n.checked_add(query_memory))
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
             .ok_or(bad("memory overflow"))?;
@@ -359,20 +374,32 @@ impl TwoBitGeneration {
         let centroid_blob = read("centroids.bin", &manifest.centroids_sha256)?;
         let centroids =
             UnitCentroidPages::decode(&centroid_blob).map_err(TwoBitGenerationError::Centroid)?;
-        let graph_blob = read("graph.bin", &manifest.graph_sha256)?;
-        if UnitCentroidGraph::preflight_resident_bytes(&graph_blob, &centroids)
-            .map_err(TwoBitGenerationError::Graph)?
-            != manifest.graph_resident_bytes
-        {
-            return Err(bad("graph memory declaration"));
+        let mut graphs = Vec::with_capacity(2);
+        for (name, digest, resident) in [
+            (
+                "graph.bin",
+                manifest.graph_sha256.as_str(),
+                manifest.graph_resident_bytes,
+            ),
+            (
+                "diverse_graph.bin",
+                manifest.diverse_graph_sha256.as_str(),
+                manifest.diverse_graph_resident_bytes,
+            ),
+        ] {
+            let blob = read(name, digest)?;
+            if UnitCentroidGraph::preflight_resident_bytes(&blob, &centroids)
+                .map_err(TwoBitGenerationError::Graph)?
+                != resident
+            {
+                return Err(bad("graph memory declaration"));
+            }
+            graphs.push(
+                UnitCentroidGraph::decode_bounded(&blob, &centroid_blob, &centroids, resident)
+                    .map_err(TwoBitGenerationError::Graph)?,
+            );
         }
-        let graph = UnitCentroidGraph::decode_bounded(
-            &graph_blob,
-            &centroid_blob,
-            &centroids,
-            manifest.graph_resident_bytes,
-        )
-        .map_err(TwoBitGenerationError::Graph)?;
+        let graphs: [UnitCentroidGraph; 2] = graphs.try_into().map_err(|_| bad("graph roster"))?;
         let receipt = plane.receipt();
         if pages.generation() != manifest.generation
             || pages.object_sha256() != manifest.sq8_object_sha256
@@ -393,7 +420,7 @@ impl TwoBitGeneration {
             plane,
             pages,
             centroids,
-            graph,
+            graphs,
             manifest,
             limits,
             slots: Semaphore::new(limits.max_active_queries),
@@ -423,44 +450,59 @@ impl TwoBitGeneration {
         // temporary preparation buffer is released, within the same scratch cap.
         let normalized =
             crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
-        let seed = self
-            .graph
-            .search(&self.centroids, normalized.as_ref(), 1, 128)
-            .map_err(TwoBitGenerationError::Graph)?;
-        let seed_page = seed
-            .units
-            .first()
-            .ok_or(TwoBitGenerationError::Invalid("no seed"))?
-            .0
-            / 8;
-        if let Some(trace) = trace.as_deref_mut() {
-            trace.seed_page = seed_page;
-            trace.seed_work_exhausted = seed.work_exhausted;
-            trace.seed_evaluated_units = seed.evaluated_units;
-        }
-        let mut candidates = vec![seed_page];
-        if count > 1 {
-            let found = self
-                .graph
-                .search_pages_seeded(
-                    &self.centroids,
-                    normalized.as_ref(),
-                    &[seed_page],
-                    count - 1,
-                    1272,
-                )
+        let mut candidates = Vec::with_capacity(2 * count);
+        let graph_count = if self.manifest.graph_sha256 == self.manifest.diverse_graph_sha256 {
+            1
+        } else {
+            2
+        };
+        for graph in &self.graphs[..graph_count] {
+            let seed = graph
+                .search(&self.centroids, normalized.as_ref(), 1, 128)
                 .map_err(TwoBitGenerationError::Graph)?;
-            candidates.extend(found.pages.iter().map(|&(p, _)| p));
+            let seed_page = seed
+                .units
+                .first()
+                .ok_or(TwoBitGenerationError::Invalid("no seed"))?
+                .0
+                / 8;
+            let mut found_pages = vec![seed_page];
+            let mut walk_evaluated_units = Vec::new();
+            let mut walk_work_exhausted = false;
+            if count > 1 {
+                let found = graph
+                    .search_pages_seeded(
+                        &self.centroids,
+                        normalized.as_ref(),
+                        &[seed_page],
+                        count - 1,
+                        1272,
+                    )
+                    .map_err(TwoBitGenerationError::Graph)?;
+                found_pages.extend(found.pages.iter().map(|&(p, _)| p));
+                if trace.is_some() {
+                    walk_evaluated_units = found.evaluated_units;
+                    walk_work_exhausted = found.work_exhausted;
+                }
+            }
+            found_pages.sort_unstable();
+            if found_pages.len() != count || found_pages.windows(2).any(|p| p[0] >= p[1]) {
+                return Err(TwoBitGenerationError::Invalid("candidate geometry"));
+            }
+            candidates.extend(found_pages);
             if let Some(trace) = trace.as_deref_mut() {
-                trace.walk_work_exhausted = found.work_exhausted;
-                trace.walk_evaluated_units = found.evaluated_units;
+                trace.discoveries.push(TwoBitDiscoveryTrace {
+                    seed_page,
+                    seed_evaluated_units: seed.evaluated_units,
+                    seed_work_exhausted: seed.work_exhausted,
+                    walk_evaluated_units,
+                    walk_work_exhausted,
+                });
             }
         }
         candidates.sort_unstable();
-        if candidates.len() != count || candidates.windows(2).any(|p| p[0] >= p[1]) {
-            return Err(TwoBitGenerationError::Invalid("candidate geometry"));
-        }
-        let mut ranked = Vec::with_capacity(count);
+        candidates.dedup();
+        let mut ranked = Vec::with_capacity(candidates.len());
         for page in candidates {
             let mut score = f64::NEG_INFINITY;
             for row in page * 256..((page + 1) * 256).min(self.pages.rows()) {
@@ -512,7 +554,7 @@ impl TwoBitGeneration {
         let (plan, _) = self.plan_inner(query, Some(&mut trace))?;
         Ok((plan, trace))
     }
-    /// Frozen V296 nomination and physical admission, under a shared query slot.
+    /// Shared-source two-graph discovery union, nomination and physical admission.
     pub async fn plan(&self, query: &[f32]) -> Result<BudgetedPagePlan> {
         let _permit = self
             .slots

@@ -163,6 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "page_manifest.json",
         "page_digests.bin",
         "centroids.bin",
+        "diverse_graph.bin",
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",

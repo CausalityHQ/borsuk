@@ -1,0 +1,10 @@
+{
+  "native_files_matched": 392,
+  "artifact_count": 5,
+  "state": "terminated",
+  "exit_code": 101,
+  "source_archive_sha256": "98c5fa02789078f593cc0b728d86f17f40aa256230f5e413feac37ae3e5dd25a",
+  "cause": "canonical source recovery still required v3 after v4 integration",
+  "full_gate_executed": false,
+  "release_binaries_built": false
+}

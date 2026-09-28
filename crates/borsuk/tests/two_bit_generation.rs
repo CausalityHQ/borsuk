@@ -59,6 +59,12 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         .encode()
         .unwrap();
     let graph_resident = UnitCentroidGraph::preflight_resident_bytes(&graph, &centers).unwrap();
+    let diverse_graph = UnitCentroidGraph::build_diverse(&centers, &centroid)
+        .unwrap()
+        .encode()
+        .unwrap();
+    let diverse_graph_resident =
+        UnitCentroidGraph::preflight_resident_bytes(&diverse_graph, &centers).unwrap();
     let sidecar = sq8
         .chunks(256 * 14)
         .flat_map(|b| Sha256::digest(b).to_vec())
@@ -72,6 +78,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     for (name, b) in [
         ("centroids.bin", &centroid),
         ("graph.bin", &graph),
+        ("diverse_graph.bin", &diverse_graph),
         ("page_digests.bin", &sidecar),
         ("page_manifest.json", &page_manifest),
     ] {
@@ -90,10 +97,11 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v3",
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v4",
         "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
+        "diverse_graph_sha256":hash(&diverse_graph),"diverse_graph_resident_bytes":diverse_graph_resident,
         "sq8_object_sha256":sq8_sha,"sq8_object_key":format!("tenant/g1/objects/{sq8_sha}"),
         "sq8_etag":"etag-1","low":[0.,0.],"step":[1_f32/255.,1_f32/255.],"canonical":canonical_descriptor})).unwrap();
     fs::write(root.join("manifest.json"), &manifest).unwrap();
@@ -126,6 +134,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "page_digests.bin",
         "centroids.bin",
         "graph.bin",
+        "diverse_graph.bin",
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
@@ -175,13 +184,17 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let (diagnostic, trace) = generation.diagnostic_plan(&[0.5, 0.25]).await.unwrap();
     assert_eq!(diagnostic, first);
     assert_eq!(trace.ranked_candidate_pages, vec![0, 1]);
-    assert!(trace.ranked_candidate_pages.contains(&trace.seed_page));
+    assert!(
+        trace
+            .ranked_candidate_pages
+            .contains(&trace.discoveries[0].seed_page)
+    );
     assert_eq!(trace.primary_page, trace.ranked_candidate_pages[0]);
-    assert!(!trace.seed_work_exhausted && !trace.walk_work_exhausted);
+    assert!(!trace.discoveries[0].seed_work_exhausted && !trace.discoveries[0].walk_work_exhausted);
     assert!(diagnostic.selected_pages.contains(&trace.primary_page));
     for (units, cap) in [
-        (&trace.seed_evaluated_units, 128),
-        (&trace.walk_evaluated_units, 1272),
+        (&trace.discoveries[0].seed_evaluated_units, 128),
+        (&trace.discoveries[0].walk_evaluated_units, 1272),
     ] {
         assert!(!units.is_empty() && units.len() <= cap);
         assert!(units.iter().all(|&unit| unit < 16));
@@ -283,12 +296,8 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
             "planned_bytes",
             "ranked_candidate_pages",
             "selected_pages",
-            "seed_page",
+            "discoveries",
             "primary_page",
-            "seed_evaluated_units",
-            "walk_evaluated_units",
-            "seed_work_exhausted",
-            "walk_work_exhausted",
         ] {
             assert_eq!(pair[0][key], pair[1][key], "{key}");
         }
@@ -360,6 +369,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "page_digests.bin",
         "centroids.bin",
         "graph.bin",
+        "diverse_graph.bin",
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
@@ -593,6 +603,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "page_digests.bin",
         "centroids.bin",
         "graph.bin",
+        "diverse_graph.bin",
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
@@ -685,6 +696,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     for name in [
         "centroids.bin",
         "graph.bin",
+        "diverse_graph.bin",
         "page_digests.bin",
         "plane/records.bin",
     ] {
@@ -786,6 +798,7 @@ fn graph_variant_adapter_preserves_components_and_rejects_untrusted_roots() {
         "page_digests.bin",
         "centroids.bin",
         "graph.bin",
+        "diverse_graph.bin",
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",

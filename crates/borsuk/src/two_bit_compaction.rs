@@ -188,7 +188,8 @@ fn disk_bound(rows: usize, dimensions: usize) -> Result<u64> {
         .and_then(|n| n.checked_add(codec))
         .ok_or(bad("compaction disk geometry"))?;
     // Same conservative graph workspace upper bound used by the native builder;
-    // also dominates serialized graph/centroids. Include page hashes and metadata.
+    // also dominates BOTH serialized graphs (each<=64layers/M16/M032)
+    // and centroids. Include page hashes and metadata.
     let graph = dimensions
         .checked_mul(32)
         .and_then(|n| n.checked_add(16384))

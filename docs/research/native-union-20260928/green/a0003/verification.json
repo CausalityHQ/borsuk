@@ -1,0 +1,43 @@
+{
+  "instance_id": "i-01e21487b92b8018d",
+  "state": "terminated",
+  "source_archive_sha256": "975b050eaa36f17de7b9502e8849f8349f366f1a46a56ce4386ddbaaca39bc97",
+  "terminal_sha256": "e9049db8260e186f2fd218dc79a3d60d7b2521fe7281cfa0afc5a7d3da312746",
+  "source_files_matched": 394,
+  "native_files_matched": 392,
+  "artifacts_verified": 9,
+  "full_assurance": {
+    "passed": 2689,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 148
+  },
+  "focused_summary": [
+    [
+      3,
+      0,
+      1
+    ],
+    [
+      4,
+      0,
+      0
+    ],
+    [
+      2,
+      0,
+      0
+    ]
+  ],
+  "binaries": {
+    "build_two_bit_generation": {
+      "bytes": 1248520,
+      "sha256": "42ccc8088754dd52b0bd4eddee5460eb0fa89e65fcced5b056ea7b14a22f0a9d"
+    },
+    "two_bit_plan_demo": {
+      "bytes": 11392232,
+      "sha256": "dfc3690943e938a4c46a3e1a3be226a55321baeae2291da9542cdf3206c24a55"
+    }
+  },
+  "qualification": false
+}

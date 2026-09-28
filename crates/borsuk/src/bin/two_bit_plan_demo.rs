@@ -4,7 +4,7 @@ use borsuk::{
     sq8_s3_range::OneAttemptS3,
     two_bit_store::{publish_two_bit_generation, read_two_bit_head},
 };
-use object_store::{aws::AmazonS3Builder, path::Path as ObjectPath, RetryConfig};
+use object_store::{RetryConfig, aws::AmazonS3Builder, path::Path as ObjectPath};
 use sha2::{Digest, Sha256};
 use std::{error::Error, fs, io::Write, path::Path, time::Instant};
 #[tokio::main]
@@ -221,12 +221,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if trace {
                 record["ranked_candidate_pages"] =
                     serde_json::json!(diagnostic.ranked_candidate_pages);
-                record["seed_page"] = diagnostic.seed_page.into();
                 record["primary_page"] = diagnostic.primary_page.into();
-                record["seed_evaluated_units"] = serde_json::json!(diagnostic.seed_evaluated_units);
-                record["walk_evaluated_units"] = serde_json::json!(diagnostic.walk_evaluated_units);
-                record["seed_work_exhausted"] = diagnostic.seed_work_exhausted.into();
-                record["walk_work_exhausted"] = diagnostic.walk_work_exhausted.into();
+                record["discoveries"] = serde_json::json!(diagnostic.discoveries);
                 record["selected_pages"] = serde_json::json!(plan.selected_pages);
             }
             if paired {

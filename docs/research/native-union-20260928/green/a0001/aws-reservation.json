@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-native-union-green-v1",
+  "source_base_commit": "897cb2587c744b6aa348fcc46841907c796e13db",
+  "source_archive_sha256": "98c5fa02789078f593cc0b728d86f17f40aa256230f5e413feac37ae3e5dd25a",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 3600,
+  "test_timeout_seconds": 3300,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.179900",
+  "spot_quote_timestamp": "2026-09-28T22:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.3,
+  "cost_allowance_ebs_s3_usd": 0.1,
+  "scope": "Native union focused build/generation/lifecycle tests, full workspace assurance once, release callable binaries; no corpus/performance",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

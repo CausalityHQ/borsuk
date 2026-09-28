@@ -259,7 +259,7 @@ async fn head_from_control(
             (root.dimensions, true)
         }
         Root::Populated(manifest)
-            if manifest.schema == "borsuk-two-bit-generation-v3"
+            if manifest.schema == crate::two_bit_generation::SCHEMA
                 && manifest.generation == head.generation
                 && !manifest.low.is_empty()
                 && manifest.low.len() == manifest.step.len()
@@ -415,6 +415,7 @@ pub async fn publish_two_bit_generation(
             .ok_or(TwoBitStoreError::Invalid("page digest"))?,
         &manifest.centroids_sha256,
         &manifest.graph_sha256,
+        &manifest.diverse_graph_sha256,
         &manifest.plane_manifest_sha256,
         &plane.mean_sha256,
         &plane.records_sha256,
