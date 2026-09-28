@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/run.py", line 5, in <module>
+    from scripts.native_two_bit_cosine_development import score_panel
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_two_bit_cosine_development.py", line 9, in <module>
+    from scripts.v291_two_stage_development import rust_sq8_scores
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/v291_two_stage_development.py", line 11, in <module>
+    from scripts.native_rotated_two_bit_codes import (
+        BATCH_ROWS, PACKED_BYTES, _fit_records, decode_levels, rotate_rows,
+    )
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_rotated_two_bit_codes.py", line 16, in <module>
+    from scripts.native_geometric_layout_screen import ArtifactIdentity, MembershipRow
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_geometric_layout_screen.py", line 20, in <module>
+    import pyarrow as pa
+ModuleNotFoundError: No module named 'pyarrow'
