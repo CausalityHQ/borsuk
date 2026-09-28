@@ -1,0 +1,2 @@
+index::tests::explicit_diagnostic_compaction_rekeys_the_covered_mutation_overlay_before_quantizer_republish
+index::tests::resident_global_v20_keeps_a_bounded_online_flush_overlay

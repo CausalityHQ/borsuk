@@ -1,0 +1,26 @@
+{
+  "id": "497cb16cb6b5447b",
+  "provider": "fable",
+  "model": "claude-fable-5-1",
+  "fallbacks": [
+    {
+      "provider": "fable",
+      "model": "claude-fable-5-1"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6-sol"
+    }
+  ],
+  "status": "running",
+  "started_at": 1790606216,
+  "deadline_at": 1790608016,
+  "budget_usd": 6,
+  "timeout_seconds": 1800,
+  "prompt_sha256": "77bf3fb674f220556c87b2b60b75db9327cb9b9937beacb4cc7a738fb1adcdf2",
+  "evidence_commit": "83cc6cdbc8f2b6f69185751a83bb764bec76cda1"
+}

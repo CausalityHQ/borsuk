@@ -36078,6 +36078,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         let resident_bytes = index.collection_resident_bytes_estimate();
         index.read_runtime = CollectionReadRuntime::new(
             &OpenOptions::default(),
@@ -36180,6 +36181,7 @@ mod tests {
             .unwrap();
         index.finish_bulk_load().unwrap();
         index.prepare_global_diagnostic_for_tests().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         (directory, index)
     }
 
@@ -36208,6 +36210,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index.prepare_global_diagnostic_for_tests().unwrap();
         (directory, cache, index)
     }
@@ -36981,6 +36984,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index.resident_global_codebooks.clear();
         index.resident_global_leaf_runs.clear();
         let requests_before = index.storage.request_counts();
@@ -37048,6 +37052,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index.manifest.wal_config = WalConfig {
             enabled: true,
             flush_threshold_runs: usize::MAX,
@@ -44134,6 +44139,7 @@ mod tests {
             )
             .unwrap();
         builder.finish_bulk_load().unwrap();
+        builder.prepare_global_diagnostic_for_tests().unwrap();
         drop(builder);
 
         let index = BorsukIndex::open_with_options(
@@ -44203,6 +44209,7 @@ mod tests {
             )
             .unwrap();
         builder.finish_bulk_load().unwrap();
+        builder.prepare_global_diagnostic_for_tests().unwrap();
         drop(builder);
 
         let report = BorsukIndex::open(&uri)
@@ -44263,6 +44270,7 @@ mod tests {
             )
             .unwrap();
         builder.finish_bulk_load().unwrap();
+        builder.prepare_global_diagnostic_for_tests().unwrap();
         assert!(builder.read_runtime.retained_pool.is_some());
         assert!(
             builder
@@ -44417,7 +44425,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_bulk_load_prepares_the_replacement_cell_card_code_planes() {
+    fn explicit_diagnostic_rebuild_prepares_the_replacement_cell_card_code_planes() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut builder = BorsukIndex::create(IndexConfig {
@@ -44451,6 +44459,7 @@ mod tests {
             )
             .unwrap();
         builder.finish_bulk_load().unwrap();
+        builder.prepare_global_diagnostic_for_tests().unwrap();
         drop(builder);
 
         let mut index = BorsukIndex::open_with_options(
@@ -44506,6 +44515,7 @@ mod tests {
                 .is_some()
         );
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
         assert_ne!(reference.root_checksum(), old_root);
@@ -44571,6 +44581,7 @@ mod tests {
             )
             .unwrap();
         builder.finish_bulk_load().unwrap();
+        builder.prepare_global_diagnostic_for_tests().unwrap();
         drop(builder);
 
         let mut reader = BorsukIndex::open_with_options(
@@ -44697,6 +44708,7 @@ mod tests {
             )
             .unwrap();
         builder.finish_bulk_load().unwrap();
+        builder.prepare_global_diagnostic_for_tests().unwrap();
         drop(builder);
 
         let index = BorsukIndex::open_with_options(
@@ -44810,6 +44822,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index.delete(["v14-mvcc-0"]).unwrap();
         drop(index);
         std::fs::remove_dir_all(dir.path().join("vectors")).unwrap();
@@ -44849,6 +44862,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         let base_root = index
             .manifest
             .global_cell_card_ann_ref
@@ -45030,11 +45044,12 @@ mod tests {
             })
             .unwrap();
         assert!(index.cell_wal_snapshot.is_empty());
-        let rebuilt = index
-            .manifest
-            .global_cell_card_ann_ref
-            .as_ref()
-            .expect("a full compaction must publish a fresh V14 authority");
+        assert!(index.manifest.global_cell_card_ann_ref.is_none());
+        index.prepare_global_diagnostic_for_tests().unwrap();
+        let rebuilt =
+            index.manifest.global_cell_card_ann_ref.as_ref().expect(
+                "explicit diagnostic rebuild after compaction must publish a fresh authority",
+            );
         assert!(!index.manifest.segments_are_global_delta);
         assert_eq!(
             rebuilt.source_segments() as usize,
@@ -45178,7 +45193,8 @@ mod tests {
     }
 
     #[test]
-    fn full_compaction_rekeys_the_covered_mutation_overlay_before_quantizer_republish() {
+    fn explicit_diagnostic_compaction_rekeys_the_covered_mutation_overlay_before_quantizer_republish()
+     {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create_with_wal(
@@ -45210,6 +45226,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index
             .upsert(vec![VectorRecord::new(
                 "covered-compaction-0",
@@ -45251,6 +45268,8 @@ mod tests {
             index.manifest.version >= version_before_compaction + 2,
             "the fixture must exercise compaction publication plus quantizer metadata republish"
         );
+        assert!(index.manifest.global_cell_card_ann_ref.is_none());
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         assert!(
             index
@@ -45271,7 +45290,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_bulk_load_rekeys_mutation_authority_for_the_rebuilt_global_epoch() {
+    fn explicit_diagnostic_rebuild_rekeys_mutation_authority_for_the_rebuilt_global_epoch() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -45297,6 +45316,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index
             .upsert(vec![VectorRecord::new(
                 "rekey-global-mutation-0",
@@ -45312,6 +45332,7 @@ mod tests {
         );
 
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         assert!(!index.manifest.segments_are_global_delta);
         assert!(index.manifest.global_cell_card_ann_ref.is_some());
@@ -45344,7 +45365,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_bulk_load_preserves_a_refreshed_external_writer_mutation_overlay() {
+    fn explicit_diagnostic_rebuild_preserves_a_refreshed_external_writer_mutation_overlay() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -45367,6 +45388,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let mut writer = BorsukIndex::open(&uri).unwrap();
         writer
@@ -45400,6 +45422,7 @@ mod tests {
         let used_before = pool.used_bytes();
 
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let after = index
             .resident_global_mutations
@@ -45457,6 +45480,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index.delete(["rekey-pressure-0"]).unwrap();
         index.flush().unwrap();
 
@@ -45588,6 +45612,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         let base_root = index
             .manifest
             .global_cell_card_ann_ref
@@ -45722,6 +45747,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         for row in 0..MAX_GLOBAL_DELTA_SEGMENTS {
             index
@@ -45784,6 +45810,7 @@ mod tests {
             .collect::<Vec<_>>();
         index.add(records).unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         assert!(
             index.manifest.global_cell_card_ann_ref.is_some(),
             "version={} leaf={:?} active={} resident={}",
@@ -46914,6 +46941,7 @@ mod tests {
             )
             .unwrap();
         writer.finish_bulk_load().unwrap();
+        writer.prepare_global_diagnostic_for_tests().unwrap();
         writer
             .upsert_with_report(vec![
                 VectorRecord::new("overlay", vec![0.25; 8])
@@ -47277,6 +47305,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         drop(index);
         let reader = BorsukIndex::open(&uri).unwrap();
 
@@ -47390,6 +47419,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         drop(index);
 
         let reader = BorsukIndex::open(&uri).unwrap();
@@ -47590,6 +47620,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         drop(index);
 
         let report = BorsukIndex::open(&uri)
@@ -47682,6 +47713,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         index.delete([ids[0].as_str()]).unwrap();
         drop(index);
 
