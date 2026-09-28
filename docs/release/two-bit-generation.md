@@ -384,3 +384,47 @@ This is a query-side primitive. Durable snapshot publication/recovery, upsert
 merging and compaction are not implemented by this method and remain release
 requirements. The caller must not infer mutation durability from a borrowed ID
 roster. No benchmark of the historical v1 route qualifies this code revision.
+
+## Durable pending mutations
+
+Use `two_bit_mutations::{read_two_bit_mutations, apply_two_bit_mutations}` with
+an authenticated `TwoBitHead`, its `dimensions()`, and `TwoBitMutationLimits`.
+Recover `Option<TwoBitMutationSnapshot>`, then apply a sorted unique batch of
+`TwoBitMutation { id, vector }`: `None` deletes, `Some(vector)` upserts a finite
+nonzero vector and uses the existing cosine normalization. The complete latest
+pending state is persisted under that immutable base root. Deleted IDs remain
+as tombstones until a future compaction incorporates them; they are not dropped.
+
+```rust,ignore
+let recovered = read_two_bit_mutations(store, &head, head.dimensions(), caps).await?;
+let updated = apply_two_bit_mutations(
+    store, &head, head.dimensions(), recovered.as_ref(), &sorted_updates, caps,
+).await?;
+// On restart, recover with the same authenticated base head and caps.
+// Charge updated.resident_payload_bytes() alongside other retained pins.
+```
+
+Snapshots use binary `BTMUT001`: root SHA, dimensions, revision, row count, then
+signed ID, operation and normalized FP32 put coordinates. Objects are stored at
+`generations/<base-root>/mutations/<snapshot-sha>` with conditional create;
+`mutation-head.json` is conditionally created/updated last. An opaque recovered
+CAS token serializes writers. A stale CAS error requires rereading/reapplying the
+batch; a committed write with a lost acknowledgement is accepted only after
+exact authenticated revision/digest readback. Store ACLs authorize writers.
+Hashes reject altered bytes and malformed or wrong-base/dimension snapshots.
+
+`max_snapshot_bytes` bounds serialized latest state. The conservative helper
+payload model charges twelve serialized-body caps, eight times input row/vector
+capacity and path payload, and 4096 metadata bytes. It includes simultaneous
+old/new state and transport body copies; concurrent publishers, separately
+retained snapshots and allocator/runtime/transport overhead need additional
+process admission. Cap failure leaves the existing head intact. There is no
+unbounded log or full base hydration. Each batch rewrites the bounded delta;
+this write amplification must be measured in lifecycle cost.
+
+This persistence primitive does not yet merge new puts into search results or
+compact/GC snapshots. Exclusion alone would hide a replaced row without returning
+its replacement. Do not present that composition as complete mutation search.
+Keep writes pinned to their base: changing the index head without incorporating
+its mutations can lose visibility. Coordinated base replacement, upsert ranking,
+compaction and safe old-object reclamation remain release gates.

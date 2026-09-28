@@ -916,6 +916,9 @@ pub mod two_bit_generation;
 /// Conditional publication of prepared object-native generations.
 pub mod two_bit_store;
 
+/// Bounded, generation-pinned conditional mutation publication and recovery.
+pub mod two_bit_mutations;
+
 /// Source-only construction of authenticated generation metadata.
 pub mod two_bit_build;
 

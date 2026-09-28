@@ -1,3 +1,5 @@
+mod common;
+
 use borsuk::{
     exact_sq8_nominee::Sq8Geometry,
     returned_sq8::{ReturnedRange, rank_returned_ranges},
@@ -132,7 +134,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let old_body = serde_json::to_vec(&old).unwrap();
     std::fs::write(plane_path.join("manifest.json"), &old_body).unwrap();
     assert!(TwoBitPlane::open(&plane_path, &hash(&old_body), &encoding.sha256, 1_000_000).is_err());
-    let store = InMemory::new();
+    let store = std::sync::Arc::new(InMemory::new());
     let key = ObjectPath::from(format!("tenant/app/objects/{}", encoding.sha256));
     let put = store
         .put(&key, PutPayload::from(sq8_body.clone()))
@@ -184,19 +186,344 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     ));
     let plan = local.plan(&[1., 0.]).await.unwrap();
     let prefix = ObjectPath::from("tenant/application-index");
-    let head = publish_two_bit_generation(&store, &prefix, &root, &root_sha, limits, None)
+    let head = publish_two_bit_generation(store.as_ref(), &prefix, &root, &root_sha, limits, None)
         .await
         .unwrap();
     assert_eq!(
-        read_two_bit_head(&store, &prefix)
+        read_two_bit_head(store.as_ref(), &prefix)
             .await
             .unwrap()
             .unwrap()
             .root_sha256(),
         root_sha
     );
+    use borsuk::two_bit_mutations::{
+        TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
+    };
+    let mutation_limits = TwoBitMutationLimits {
+        max_snapshot_bytes: 16384,
+        max_memory_bytes: 1_000_000,
+    };
+    assert!(
+        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let first = apply_two_bit_mutations(
+        store.as_ref(),
+        &head,
+        2,
+        None,
+        &[
+            TwoBitMutation {
+                id: i64::MIN,
+                vector: None,
+            },
+            TwoBitMutation {
+                id: 7,
+                vector: Some(vec![3., 4.]),
+            },
+        ],
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.revision(), 1);
+    assert_eq!(first.excluded_ids(), &[i64::MIN, 7]);
+    let recovered = read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.sha256(), first.sha256());
+    assert_eq!(recovered.rows(), first.rows());
+    let other = publish_two_bit_generation(
+        store.as_ref(),
+        &ObjectPath::from("tenant/other-index"),
+        &root,
+        &root_sha,
+        limits,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &other,
+            2,
+            Some(&first),
+            &[TwoBitMutation {
+                id: 7,
+                vector: None
+            },],
+            mutation_limits
+        )
+        .await
+        .is_err()
+    );
+    let lost_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        store.clone(),
+        1,
+        |op, path| {
+            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
+        },
+    );
+    let acknowledged = apply_two_bit_mutations(
+        &lost_ack,
+        &other,
+        2,
+        None,
+        &[TwoBitMutation {
+            id: 7,
+            vector: Some(vec![1., 0.]),
+        }],
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert_eq!(acknowledged.revision(), 1);
+    let before_commit =
+        common::FaultInjectingObjectStore::fail_nth_matching(store.clone(), 1, true, |op, path| {
+            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
+        });
+    assert!(
+        apply_two_bit_mutations(
+            &before_commit,
+            &other,
+            2,
+            Some(&acknowledged),
+            &[TwoBitMutation {
+                id: 7,
+                vector: None
+            },],
+            mutation_limits
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        read_two_bit_mutations(store.as_ref(), &other, 2, mutation_limits)
+            .await
+            .unwrap()
+            .unwrap()
+            .sha256(),
+        acknowledged.sha256()
+    );
+    let second = apply_two_bit_mutations(
+        store.as_ref(),
+        &head,
+        2,
+        Some(&recovered),
+        &[
+            TwoBitMutation {
+                id: 7,
+                vector: None,
+            },
+            TwoBitMutation {
+                id: i64::MAX,
+                vector: Some(vec![1., 0.]),
+            },
+        ],
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.revision(), 2);
+    assert_eq!(second.excluded_ids(), &[i64::MIN, 7, i64::MAX]);
+    assert!(second.rows()[1].vector.is_none());
+    assert!(
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &head,
+            2,
+            Some(&first),
+            &[TwoBitMutation {
+                id: 20,
+                vector: None
+            },],
+            mutation_limits
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        read_two_bit_mutations(store.as_ref(), &head, 3, mutation_limits)
+            .await
+            .is_err()
+    );
+    for invalid in [vec![0., 0.], vec![f32::NAN, 1.], vec![1.]] {
+        assert!(
+            apply_two_bit_mutations(
+                store.as_ref(),
+                &head,
+                2,
+                Some(&second),
+                &[TwoBitMutation {
+                    id: 1,
+                    vector: Some(invalid)
+                },],
+                mutation_limits
+            )
+            .await
+            .is_err()
+        );
+    }
+    assert!(
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &head,
+            2,
+            Some(&second),
+            &[
+                TwoBitMutation {
+                    id: 1,
+                    vector: None
+                },
+                TwoBitMutation {
+                    id: 1,
+                    vector: None
+                },
+            ],
+            mutation_limits
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &head,
+            2,
+            Some(&second),
+            &[TwoBitMutation {
+                id: 1,
+                vector: None
+            },],
+            TwoBitMutationLimits {
+                max_snapshot_bytes: 100,
+                ..mutation_limits
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+            .await
+            .unwrap()
+            .unwrap()
+            .sha256(),
+        second.sha256()
+    );
+    let snapshot_key = head
+        .metadata_prefix()
+        .join("mutations")
+        .join(second.sha256());
+    let original_snapshot = store
+        .get(&snapshot_key)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let mut corrupt_snapshot = original_snapshot.to_vec();
+    *corrupt_snapshot.last_mut().unwrap() ^= 1;
+    store
+        .put(&snapshot_key, PutPayload::from(corrupt_snapshot))
+        .await
+        .unwrap();
+    assert!(
+        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+            .await
+            .is_err()
+    );
+    store
+        .put(&snapshot_key, PutPayload::from(original_snapshot))
+        .await
+        .unwrap();
+    let mutation_head_key = head.metadata_prefix().join("mutation-head.json");
+    let original_head = store
+        .get(&mutation_head_key)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let original_snapshot = store
+        .get(&snapshot_key)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    // Hash each malformed body correctly: parser/binding checks must still fail.
+    for case in 0..7 {
+        let mut malformed = original_snapshot.to_vec();
+        match case {
+            0 => malformed[100] = 2,  // unknown operation
+            1 => malformed[8] = b'x', // wrong base root
+            2 => malformed[72..76].copy_from_slice(&3u32.to_le_bytes()),
+            3 => malformed[76..84].copy_from_slice(&3u64.to_le_bytes()),
+            4 => malformed[101..109].copy_from_slice(&i64::MIN.to_le_bytes()), // duplicate ID
+            5 => {
+                let len = malformed.len();
+                malformed[len - 8..].fill(0);
+            } // zero put
+            _ => malformed.push(0),                                            // trailing data
+        }
+        let digest = hash(&malformed);
+        store
+            .put(
+                &head
+                    .metadata_prefix()
+                    .join("mutations")
+                    .join(digest.as_str()),
+                PutPayload::from(malformed),
+            )
+            .await
+            .unwrap();
+        let mut forged_head: serde_json::Value = serde_json::from_slice(&original_head).unwrap();
+        forged_head["sha256"] = digest.into();
+        store
+            .put(
+                &mutation_head_key,
+                PutPayload::from(serde_json::to_vec(&forged_head).unwrap()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+                .await
+                .is_err(),
+            "malformed case {case}"
+        );
+    }
+    store
+        .put(&mutation_head_key, PutPayload::from(original_head))
+        .await
+        .unwrap();
+    let restored = read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.sha256(), second.sha256());
+    assert!(restored.resident_payload_bytes() <= mutation_limits.max_memory_bytes);
+    assert!(
+        read_two_bit_mutations(
+            store.as_ref(),
+            &head,
+            2,
+            TwoBitMutationLimits {
+                max_memory_bytes: 1,
+                ..mutation_limits
+            }
+        )
+        .await
+        .is_err()
+    );
     let remote = TwoBitGeneration::open_remote(
-        &store,
+        store.as_ref(),
         &head.metadata_prefix(),
         &root_sha,
         limits,

@@ -1,0 +1,540 @@
+diff --git a/crates/borsuk/src/lib.rs b/crates/borsuk/src/lib.rs
+index 78a5edeb..32e3aac9 100644
+--- a/crates/borsuk/src/lib.rs
++++ b/crates/borsuk/src/lib.rs
+@@ -916,6 +916,9 @@ pub mod two_bit_generation;
+ /// Conditional publication of prepared object-native generations.
+ pub mod two_bit_store;
+ 
++/// Bounded, generation-pinned conditional mutation publication and recovery.
++pub mod two_bit_mutations;
++
+ /// Source-only construction of authenticated generation metadata.
+ pub mod two_bit_build;
+ 
+diff --git a/crates/borsuk/src/two_bit_store.rs b/crates/borsuk/src/two_bit_store.rs
+index 62c8605f..f5e6e00b 100644
+--- a/crates/borsuk/src/two_bit_store.rs
++++ b/crates/borsuk/src/two_bit_store.rs
+@@ -1,17 +1,17 @@
+ //! Prepared two-bit generations: immutable metadata, conditional head last.
+ use crate::{
+     object_native_generation::metadata_location,
+-    resident_graph_generation::{valid_sha256, Artifact},
+-    resident_graph_store::{upload_authenticated_file, ResidentGraphStoreError},
++    resident_graph_generation::{Artifact, valid_sha256},
++    resident_graph_store::{ResidentGraphStoreError, upload_authenticated_file},
+     two_bit_generation::{
+-        Manifest, TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits, METADATA_FILES,
++        METADATA_FILES, Manifest, TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits,
+     },
+-    two_bit_source::{read_authenticated, SourcePlaneReceipt},
++    two_bit_source::{SourcePlaneReceipt, read_authenticated},
+ };
+ use futures_util::StreamExt;
+ use object_store::{
+-    path::Path as ObjectPath, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload,
+-    UpdateVersion,
++    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion,
++    path::Path as ObjectPath,
+ };
+ use serde::{Deserialize, Serialize};
+ use std::{fs, path::Path};
+@@ -46,12 +46,17 @@ struct HeadBody {
+ /// Opaque conditional token bound to this index prefix and authenticated root.
+ #[derive(Debug)]
+ pub struct TwoBitHead {
++    dimensions: usize,
+     generation: u64,
+     root_sha256: String,
+     prefix: ObjectPath,
+     version: UpdateVersion,
+ }
+ impl TwoBitHead {
++    /// Dimensions declared by the authenticated generation root.
++    pub fn dimensions(&self) -> usize {
++        self.dimensions
++    }
+     /// Monotonically published generation ID.
+     pub fn generation(&self) -> u64 {
+         self.generation
+@@ -68,7 +73,7 @@ impl TwoBitHead {
+             .join(self.root_sha256.as_str())
+     }
+ }
+-async fn small_object(
++pub(crate) async fn small_object(
+     store: &dyn ObjectStore,
+     path: &ObjectPath,
+     cap: u64,
+@@ -128,10 +133,15 @@ pub async fn read_two_bit_head(
+     }
+     let manifest: Manifest =
+         serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
+-    if manifest.schema != "borsuk-two-bit-generation-v1" || manifest.generation != head.generation {
++    if manifest.schema != "borsuk-two-bit-generation-v1"
++        || manifest.generation != head.generation
++        || manifest.low.is_empty()
++        || manifest.low.len() != manifest.step.len()
++    {
+         return Err(TwoBitStoreError::Invalid("head generation"));
+     }
+     Ok(Some(TwoBitHead {
++        dimensions: manifest.low.len(),
+         generation: head.generation,
+         root_sha256: head.root_sha256,
+         prefix: prefix.clone(),
+@@ -257,6 +267,7 @@ pub async fn publish_two_bit_generation(
+         }
+     };
+     Ok(TwoBitHead {
++        dimensions: manifest.low.len(),
+         generation: manifest.generation,
+         root_sha256: trusted_root_sha256.to_owned(),
+         prefix: prefix.clone(),
+diff --git a/crates/borsuk/tests/two_bit_application_ids.rs b/crates/borsuk/tests/two_bit_application_ids.rs
+index 95c57825..11462b2b 100644
+--- a/crates/borsuk/tests/two_bit_application_ids.rs
++++ b/crates/borsuk/tests/two_bit_application_ids.rs
+@@ -1,3 +1,5 @@
++mod common;
++
+ use borsuk::{
+     exact_sq8_nominee::Sq8Geometry,
+     returned_sq8::{ReturnedRange, rank_returned_ranges},
+@@ -132,7 +134,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking()
+     let old_body = serde_json::to_vec(&old).unwrap();
+     std::fs::write(plane_path.join("manifest.json"), &old_body).unwrap();
+     assert!(TwoBitPlane::open(&plane_path, &hash(&old_body), &encoding.sha256, 1_000_000).is_err());
+-    let store = InMemory::new();
++    let store = std::sync::Arc::new(InMemory::new());
+     let key = ObjectPath::from(format!("tenant/app/objects/{}", encoding.sha256));
+     let put = store
+         .put(&key, PutPayload::from(sq8_body.clone()))
+@@ -184,19 +186,344 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking()
+     ));
+     let plan = local.plan(&[1., 0.]).await.unwrap();
+     let prefix = ObjectPath::from("tenant/application-index");
+-    let head = publish_two_bit_generation(&store, &prefix, &root, &root_sha, limits, None)
++    let head = publish_two_bit_generation(store.as_ref(), &prefix, &root, &root_sha, limits, None)
+         .await
+         .unwrap();
+     assert_eq!(
+-        read_two_bit_head(&store, &prefix)
++        read_two_bit_head(store.as_ref(), &prefix)
+             .await
+             .unwrap()
+             .unwrap()
+             .root_sha256(),
+         root_sha
+     );
++    use borsuk::two_bit_mutations::{
++        TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
++    };
++    let mutation_limits = TwoBitMutationLimits {
++        max_snapshot_bytes: 16384,
++        max_memory_bytes: 1_000_000,
++    };
++    assert!(
++        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
++            .await
++            .unwrap()
++            .is_none()
++    );
++    let first = apply_two_bit_mutations(
++        store.as_ref(),
++        &head,
++        2,
++        None,
++        &[
++            TwoBitMutation {
++                id: i64::MIN,
++                vector: None,
++            },
++            TwoBitMutation {
++                id: 7,
++                vector: Some(vec![3., 4.]),
++            },
++        ],
++        mutation_limits,
++    )
++    .await
++    .unwrap();
++    assert_eq!(first.revision(), 1);
++    assert_eq!(first.excluded_ids(), &[i64::MIN, 7]);
++    let recovered = read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
++        .await
++        .unwrap()
++        .unwrap();
++    assert_eq!(recovered.sha256(), first.sha256());
++    assert_eq!(recovered.rows(), first.rows());
++    let other = publish_two_bit_generation(
++        store.as_ref(),
++        &ObjectPath::from("tenant/other-index"),
++        &root,
++        &root_sha,
++        limits,
++        None,
++    )
++    .await
++    .unwrap();
++    assert!(
++        apply_two_bit_mutations(
++            store.as_ref(),
++            &other,
++            2,
++            Some(&first),
++            &[TwoBitMutation {
++                id: 7,
++                vector: None
++            },],
++            mutation_limits
++        )
++        .await
++        .is_err()
++    );
++    let lost_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
++        store.clone(),
++        1,
++        |op, path| {
++            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
++        },
++    );
++    let acknowledged = apply_two_bit_mutations(
++        &lost_ack,
++        &other,
++        2,
++        None,
++        &[TwoBitMutation {
++            id: 7,
++            vector: Some(vec![1., 0.]),
++        }],
++        mutation_limits,
++    )
++    .await
++    .unwrap();
++    assert_eq!(acknowledged.revision(), 1);
++    let before_commit =
++        common::FaultInjectingObjectStore::fail_nth_matching(store.clone(), 1, true, |op, path| {
++            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
++        });
++    assert!(
++        apply_two_bit_mutations(
++            &before_commit,
++            &other,
++            2,
++            Some(&acknowledged),
++            &[TwoBitMutation {
++                id: 7,
++                vector: None
++            },],
++            mutation_limits
++        )
++        .await
++        .is_err()
++    );
++    assert_eq!(
++        read_two_bit_mutations(store.as_ref(), &other, 2, mutation_limits)
++            .await
++            .unwrap()
++            .unwrap()
++            .sha256(),
++        acknowledged.sha256()
++    );
++    let second = apply_two_bit_mutations(
++        store.as_ref(),
++        &head,
++        2,
++        Some(&recovered),
++        &[
++            TwoBitMutation {
++                id: 7,
++                vector: None,
++            },
++            TwoBitMutation {
++                id: i64::MAX,
++                vector: Some(vec![1., 0.]),
++            },
++        ],
++        mutation_limits,
++    )
++    .await
++    .unwrap();
++    assert_eq!(second.revision(), 2);
++    assert_eq!(second.excluded_ids(), &[i64::MIN, 7, i64::MAX]);
++    assert!(second.rows()[1].vector.is_none());
++    assert!(
++        apply_two_bit_mutations(
++            store.as_ref(),
++            &head,
++            2,
++            Some(&first),
++            &[TwoBitMutation {
++                id: 20,
++                vector: None
++            },],
++            mutation_limits
++        )
++        .await
++        .is_err()
++    );
++    assert!(
++        read_two_bit_mutations(store.as_ref(), &head, 3, mutation_limits)
++            .await
++            .is_err()
++    );
++    for invalid in [vec![0., 0.], vec![f32::NAN, 1.], vec![1.]] {
++        assert!(
++            apply_two_bit_mutations(
++                store.as_ref(),
++                &head,
++                2,
++                Some(&second),
++                &[TwoBitMutation {
++                    id: 1,
++                    vector: Some(invalid)
++                },],
++                mutation_limits
++            )
++            .await
++            .is_err()
++        );
++    }
++    assert!(
++        apply_two_bit_mutations(
++            store.as_ref(),
++            &head,
++            2,
++            Some(&second),
++            &[
++                TwoBitMutation {
++                    id: 1,
++                    vector: None
++                },
++                TwoBitMutation {
++                    id: 1,
++                    vector: None
++                },
++            ],
++            mutation_limits
++        )
++        .await
++        .is_err()
++    );
++    assert!(
++        apply_two_bit_mutations(
++            store.as_ref(),
++            &head,
++            2,
++            Some(&second),
++            &[TwoBitMutation {
++                id: 1,
++                vector: None
++            },],
++            TwoBitMutationLimits {
++                max_snapshot_bytes: 100,
++                ..mutation_limits
++            }
++        )
++        .await
++        .is_err()
++    );
++    assert_eq!(
++        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
++            .await
++            .unwrap()
++            .unwrap()
++            .sha256(),
++        second.sha256()
++    );
++    let snapshot_key = head
++        .metadata_prefix()
++        .join("mutations")
++        .join(second.sha256());
++    let original_snapshot = store
++        .get(&snapshot_key)
++        .await
++        .unwrap()
++        .bytes()
++        .await
++        .unwrap();
++    let mut corrupt_snapshot = original_snapshot.to_vec();
++    *corrupt_snapshot.last_mut().unwrap() ^= 1;
++    store
++        .put(&snapshot_key, PutPayload::from(corrupt_snapshot))
++        .await
++        .unwrap();
++    assert!(
++        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
++            .await
++            .is_err()
++    );
++    store
++        .put(&snapshot_key, PutPayload::from(original_snapshot))
++        .await
++        .unwrap();
++    let mutation_head_key = head.metadata_prefix().join("mutation-head.json");
++    let original_head = store
++        .get(&mutation_head_key)
++        .await
++        .unwrap()
++        .bytes()
++        .await
++        .unwrap();
++    let original_snapshot = store
++        .get(&snapshot_key)
++        .await
++        .unwrap()
++        .bytes()
++        .await
++        .unwrap();
++    // Hash each malformed body correctly: parser/binding checks must still fail.
++    for case in 0..7 {
++        let mut malformed = original_snapshot.to_vec();
++        match case {
++            0 => malformed[100] = 2,  // unknown operation
++            1 => malformed[8] = b'x', // wrong base root
++            2 => malformed[72..76].copy_from_slice(&3u32.to_le_bytes()),
++            3 => malformed[76..84].copy_from_slice(&3u64.to_le_bytes()),
++            4 => malformed[101..109].copy_from_slice(&i64::MIN.to_le_bytes()), // duplicate ID
++            5 => {
++                let len = malformed.len();
++                malformed[len - 8..].fill(0);
++            } // zero put
++            _ => malformed.push(0),                                            // trailing data
++        }
++        let digest = hash(&malformed);
++        store
++            .put(
++                &head
++                    .metadata_prefix()
++                    .join("mutations")
++                    .join(digest.as_str()),
++                PutPayload::from(malformed),
++            )
++            .await
++            .unwrap();
++        let mut forged_head: serde_json::Value = serde_json::from_slice(&original_head).unwrap();
++        forged_head["sha256"] = digest.into();
++        store
++            .put(
++                &mutation_head_key,
++                PutPayload::from(serde_json::to_vec(&forged_head).unwrap()),
++            )
++            .await
++            .unwrap();
++        assert!(
++            read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
++                .await
++                .is_err(),
++            "malformed case {case}"
++        );
++    }
++    store
++        .put(&mutation_head_key, PutPayload::from(original_head))
++        .await
++        .unwrap();
++    let restored = read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
++        .await
++        .unwrap()
++        .unwrap();
++    assert_eq!(restored.sha256(), second.sha256());
++    assert!(restored.resident_payload_bytes() <= mutation_limits.max_memory_bytes);
++    assert!(
++        read_two_bit_mutations(
++            store.as_ref(),
++            &head,
++            2,
++            TwoBitMutationLimits {
++                max_memory_bytes: 1,
++                ..mutation_limits
++            }
++        )
++        .await
++        .is_err()
++    );
+     let remote = TwoBitGeneration::open_remote(
+-        &store,
++        store.as_ref(),
+         &head.metadata_prefix(),
+         &root_sha,
+         limits,
+diff --git a/docs/release/competitive-acceptance.md b/docs/release/competitive-acceptance.md
+index 13086dd6..fe5560aa 100644
+--- a/docs/release/competitive-acceptance.md
++++ b/docs/release/competitive-acceptance.md
+@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
+ | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
+ | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
+ |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
+-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; query-side ID exclusion works; durable mutation and compaction path missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
++| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; query-side ID exclusion and authenticated CAS snapshot recovery work; upsert query merging and coordinated compaction/GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+ | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
+ | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
+ 
+@@ -98,9 +98,11 @@ is v2 and rejects v1; historical benchmark artifacts remain unchanged. Mutation,
+ recovery and compaction remain OPEN.
+ [ID API and receipts](../research/application-id-source-20260928/decision.md).
+ The range reader now applies borrowed mutation exclusions before top-k and
+-retains page authentication/physical charges; durable snapshot CAS/recovery and
+-upsert merging remain the next implementation gate.
++retains page authentication/physical charges. Durable snapshot CAS/recovery now
++passes focused functional checks; upsert merging and coordinated compaction
++remain the next implementation gates.
+ [Visibility primitive](../research/mutation-visibility-20260928/decision.md).
++[Durable snapshot receipts](../research/durable-mutation-snapshot-20260928/decision.md).
+ 
+ Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
+ [discovery diagnostic](../research/nomination-trace-20260928/decision.md),
+diff --git a/docs/release/two-bit-generation.md b/docs/release/two-bit-generation.md
+index be1f4993..afedfb4d 100644
+--- a/docs/release/two-bit-generation.md
++++ b/docs/release/two-bit-generation.md
+@@ -384,3 +384,47 @@ This is a query-side primitive. Durable snapshot publication/recovery, upsert
+ merging and compaction are not implemented by this method and remain release
+ requirements. The caller must not infer mutation durability from a borrowed ID
+ roster. No benchmark of the historical v1 route qualifies this code revision.
++
++## Durable pending mutations
++
++Use `two_bit_mutations::{read_two_bit_mutations, apply_two_bit_mutations}` with
++an authenticated `TwoBitHead`, its `dimensions()`, and `TwoBitMutationLimits`.
++Recover `Option<TwoBitMutationSnapshot>`, then apply a sorted unique batch of
++`TwoBitMutation { id, vector }`: `None` deletes, `Some(vector)` upserts a finite
++nonzero vector and uses the existing cosine normalization. The complete latest
++pending state is persisted under that immutable base root. Deleted IDs remain
++as tombstones until a future compaction incorporates them; they are not dropped.
++
++```rust,ignore
++let recovered = read_two_bit_mutations(store, &head, head.dimensions(), caps).await?;
++let updated = apply_two_bit_mutations(
++    store, &head, head.dimensions(), recovered.as_ref(), &sorted_updates, caps,
++).await?;
++// On restart, recover with the same authenticated base head and caps.
++// Charge updated.resident_payload_bytes() alongside other retained pins.
++```
++
++Snapshots use binary `BTMUT001`: root SHA, dimensions, revision, row count, then
++signed ID, operation and normalized FP32 put coordinates. Objects are stored at
++`generations/<base-root>/mutations/<snapshot-sha>` with conditional create;
++`mutation-head.json` is conditionally created/updated last. An opaque recovered
++CAS token serializes writers. A stale CAS error requires rereading/reapplying the
++batch; a committed write with a lost acknowledgement is accepted only after
++exact authenticated revision/digest readback. Store ACLs authorize writers.
++Hashes reject altered bytes and malformed or wrong-base/dimension snapshots.
++
++`max_snapshot_bytes` bounds serialized latest state. The conservative helper
++payload model charges twelve serialized-body caps, eight times input row/vector
++capacity and path payload, and 4096 metadata bytes. It includes simultaneous
++old/new state and transport body copies; concurrent publishers, separately
++retained snapshots and allocator/runtime/transport overhead need additional
++process admission. Cap failure leaves the existing head intact. There is no
++unbounded log or full base hydration. Each batch rewrites the bounded delta;
++this write amplification must be measured in lifecycle cost.
++
++This persistence primitive does not yet merge new puts into search results or
++compact/GC snapshots. Exclusion alone would hide a replaced row without returning
++its replacement. Do not present that composition as complete mutation search.
++Keep writes pinned to their base: changing the index head without incorporating
++its mutations can lose visibility. Coordinated base replacement, upsert ranking,
++compaction and safe old-object reclamation remain release gates.

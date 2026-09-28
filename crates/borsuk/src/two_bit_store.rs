@@ -1,17 +1,17 @@
 //! Prepared two-bit generations: immutable metadata, conditional head last.
 use crate::{
     object_native_generation::metadata_location,
-    resident_graph_generation::{valid_sha256, Artifact},
-    resident_graph_store::{upload_authenticated_file, ResidentGraphStoreError},
+    resident_graph_generation::{Artifact, valid_sha256},
+    resident_graph_store::{ResidentGraphStoreError, upload_authenticated_file},
     two_bit_generation::{
-        Manifest, TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits, METADATA_FILES,
+        METADATA_FILES, Manifest, TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits,
     },
-    two_bit_source::{read_authenticated, SourcePlaneReceipt},
+    two_bit_source::{SourcePlaneReceipt, read_authenticated},
 };
 use futures_util::StreamExt;
 use object_store::{
-    path::Path as ObjectPath, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload,
-    UpdateVersion,
+    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion,
+    path::Path as ObjectPath,
 };
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
@@ -46,12 +46,17 @@ struct HeadBody {
 /// Opaque conditional token bound to this index prefix and authenticated root.
 #[derive(Debug)]
 pub struct TwoBitHead {
+    dimensions: usize,
     generation: u64,
     root_sha256: String,
     prefix: ObjectPath,
     version: UpdateVersion,
 }
 impl TwoBitHead {
+    /// Dimensions declared by the authenticated generation root.
+    pub fn dimensions(&self) -> usize {
+        self.dimensions
+    }
     /// Monotonically published generation ID.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -68,7 +73,7 @@ impl TwoBitHead {
             .join(self.root_sha256.as_str())
     }
 }
-async fn small_object(
+pub(crate) async fn small_object(
     store: &dyn ObjectStore,
     path: &ObjectPath,
     cap: u64,
@@ -128,10 +133,15 @@ pub async fn read_two_bit_head(
     }
     let manifest: Manifest =
         serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
-    if manifest.schema != "borsuk-two-bit-generation-v1" || manifest.generation != head.generation {
+    if manifest.schema != "borsuk-two-bit-generation-v1"
+        || manifest.generation != head.generation
+        || manifest.low.is_empty()
+        || manifest.low.len() != manifest.step.len()
+    {
         return Err(TwoBitStoreError::Invalid("head generation"));
     }
     Ok(Some(TwoBitHead {
+        dimensions: manifest.low.len(),
         generation: head.generation,
         root_sha256: head.root_sha256,
         prefix: prefix.clone(),
@@ -257,6 +267,7 @@ pub async fn publish_two_bit_generation(
         }
     };
     Ok(TwoBitHead {
+        dimensions: manifest.low.len(),
         generation: manifest.generation,
         root_sha256: trusted_root_sha256.to_owned(),
         prefix: prefix.clone(),

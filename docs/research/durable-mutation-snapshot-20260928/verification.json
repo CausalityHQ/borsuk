@@ -1,0 +1,22 @@
+{
+  "base": "91112778",
+  "host": "spark-2751 / aarch64",
+  "jobs": [
+    {
+      "log": "durable-mutation-faults.log",
+      "raw_sha256": "8cb645964ddbafc202670023367fe8706b3cc20f37bd2158f0c11c3f07f7d8b2",
+      "exit": 0
+    },
+    {
+      "log": "durable-mutation-green.log",
+      "raw_sha256": "765427e4cad7caee20305a694798d74af78a92ee5868013aff364c89693ef5c7",
+      "exit": 0
+    },
+    {
+      "log": "durable-mutation-red.log",
+      "raw_sha256": "327b93b7d67e79d5a6139f3b39d497d6fa90df7a22a8288ac300951dff5a7fc2",
+      "exit": 101
+    }
+  ],
+  "final_gate": "Expanded integration: lost acknowledgement, pre-CAS failure, stale token, namespace/caps, malformed authenticated body and recovery; exit0. Prior generation regression exit0; final mutation-only changes do not alter its path. Exact final source parity verified. No paid measurement or registry publication."
+}
