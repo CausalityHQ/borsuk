@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-relaion-corrected-cosine-validation-screen-receipt-v1",
+  "source_commit": "4f7c7dd1",
+  "plan_original_session": 33104,
+  "plan_exit_code": 0,
+  "score_original_session": 79299,
+  "score_exit_code": 0,
+  "plan_sha256": "379949bbea78438974e991755ec61104d70c32282a1dce1f7d799bb63df67182",
+  "score_sha256": "be24a037ddd5813d89e288e3a050594062a3e6907c590f8b23f0c16ca0c64ed8",
+  "plan_elapsed_seconds": 10.97,
+  "plan_peak_rss_kib": 50900,
+  "score_elapsed_seconds": 9.35,
+  "score_peak_rss_kib": 197820,
+  "swaps": 0,
+  "s3_reads": 0,
+  "qualification": false,
+  "decision": "GO to unchanged full744-query validation only; hold release/scale/vendor claims"
+}

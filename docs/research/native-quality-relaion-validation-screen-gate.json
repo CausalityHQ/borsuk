@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-relaion-corrected-cosine-validation-screen-gate-v1",
+  "source_baseline": "4f7c7dd1",
+  "config_sha256": "12ae43e092292a6a174688cf6b8b620f343dd2ac4d173cc8a9c08f8eadee231b",
+  "source_files": {
+    "scripts/native_two_bit_quality.py": "e26db498afc7edaa7767c281abb50d5d9c2b0c93769236d8a6730891b8ea2fb4",
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  },
+  "min_mean_recall": 98,
+  "min_p05": 95,
+  "max_paired_flat_deficit_pp": 0.5,
+  "max_gets": 32,
+  "max_bytes": 16773120,
+  "plan_seconds_cap": 120,
+  "score_seconds_cap": 120,
+  "threads": 1,
+  "qualification": false,
+  "decision": "Early screen failure kills advance; pass allows full744-query validation at unchanged method/thresholds",
+  "s3_reads": 0,
+  "cloud_instances_launched": 0
+}

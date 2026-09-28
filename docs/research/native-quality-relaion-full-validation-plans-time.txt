@@ -1,0 +1,23 @@
+	Command being timed: "timeout --signal=TERM 360s rust-repo/target/debug/two_bit_plan_demo generation c4c2a37be1fd2065980f2e23f21b167384786a3f2317e848ca6f8a04cbec0506 requests.jsonl b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0 full-validation-plans.jsonl 256 744"
+	User time (seconds): 98.31
+	System time (seconds): 0.13
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:38.48
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 51060
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 13564
+	Voluntary context switches: 99
+	Involuntary context switches: 1117
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 856
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

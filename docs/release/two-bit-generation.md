@@ -253,3 +253,13 @@ underlying builder. It does not fit layout/SQ8, read queries/GT, upload data or
 authorize the computed root as a serving authority. Use a real immutable SQ8
 ETag before remote publication; the offline harness placeholder is never a
 production object identity.
+
+## Frozen paired100k offline quality
+
+The corrected library nomination/physical plans now pass full validation256–999
+on both datasets (744 queries each): CoHere99.131720%/p05 98 versus paired
+SQ8 flat99.315860%/98; ReLAION99.162634%/97 versus99.568548%/99. Both
+meet98mean/p05 95/0.5pp deficit/32GET/16MiB. This freezes the candidate
+for product integration. Final scoring uses the established sequential-f32
+Python mirror; live Rust/S3 serving, raw-source creation, mutations/GC, package/CI,
+1M/scale and vendor gates remain open. See paired quality decision/receipts.

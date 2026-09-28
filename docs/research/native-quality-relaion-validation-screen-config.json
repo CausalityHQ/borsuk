@@ -1,0 +1,13 @@
+{
+  "dataset": "ReLAION first100k",
+  "root": "/home/riomus/borsuk-native-relaion-20260928-a0001/generation",
+  "root_sha256": "c4c2a37be1fd2065980f2e23f21b167384786a3f2317e848ca6f8a04cbec0506",
+  "requests": "/home/riomus/borsuk-native-relaion-20260928-a0001/requests.jsonl",
+  "requests_sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+  "truth": "/home/riomus/borsuk-native-relaion-20260928-a0001/truth.u32",
+  "truth_sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e",
+  "sq8": "/home/riomus/borsuk-native-relaion-20260928-a0001/layout/sq8.bin",
+  "sq8_sha256": "f4eabd998ebd8af4df027b168bc8c546bdc16456cc47f58fcc24cba47ffd4707",
+  "first": 256,
+  "count": 64
+}
