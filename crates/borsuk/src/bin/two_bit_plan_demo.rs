@@ -5,13 +5,14 @@ use std::{error::Error, fs, io::Write, path::Path};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 6 && args.len() != 8 {
+    let trace = args.len() == 9 && args[8] == "--trace";
+    if args.len() != 6 && args.len() != 8 && !trace {
         return Err(
-            "usage: two_bit_plan_demo ROOT ROOT_SHA REQUESTS REQUESTS_SHA OUTPUT [FIRST COUNT]"
+            "usage: two_bit_plan_demo ROOT ROOT_SHA REQUESTS REQUESTS_SHA OUTPUT [FIRST COUNT [--trace]]"
                 .into(),
         );
     }
-    let (first, count) = if args.len() == 8 {
+    let (first, count) = if args.len() >= 8 {
         let split = (args[6].parse::<usize>()?, args[7].parse::<usize>()?);
         if !matches!(split, (0, 64) | (256, 64) | (256, 744)) {
             return Err("unsupported frozen split".into());
@@ -29,7 +30,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             max_query_bytes: 84 * 256 * 780,
             max_query_gets: 32,
             max_parallel_gets: 32,
-            max_query_scratch_bytes: 400_000,
+            max_query_scratch_bytes: 400_000
+                + if trace {
+                    159 * std::mem::size_of::<usize>()
+                } else {
+                    0
+                },
             already_pinned_bytes: 0,
         },
     )?;
@@ -60,14 +66,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (ordinal, line) in lines.iter().enumerate().skip(first).take(count) {
         let request: serde_json::Value = serde_json::from_str(line)?;
         let query: Vec<f32> = serde_json::from_value(request["query"].clone())?;
-        let plan = generation.plan(&query).await?;
-        writeln!(
-            output,
-            "{}",
-            serde_json::json!({"query_ordinal":ordinal,
+        let (plan, ranking) = if trace {
+            generation.diagnostic_plan(&query).await?
+        } else {
+            (generation.plan(&query).await?, Vec::new())
+        };
+        let mut record = serde_json::json!({"query_ordinal":ordinal,
             "ranges":plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
-            "planned_bytes":plan.planned_bytes})
-        )?;
+            "planned_bytes":plan.planned_bytes});
+        if trace {
+            record["ranked_candidate_pages"] = serde_json::json!(ranking);
+            record["selected_pages"] = serde_json::json!(plan.selected_pages);
+        }
+        writeln!(output, "{record}")?;
     }
     output.sync_all()?;
     Ok(())

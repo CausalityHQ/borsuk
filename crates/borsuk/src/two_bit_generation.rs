@@ -1,16 +1,16 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
 use crate::{
-    budgeted_page_rank::{choose_budgeted_pages_sparse, BudgetedPageError, BudgetedPagePlan},
+    budgeted_page_rank::{BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse},
     object_native_generation::{
-        stage_generation_metadata, ObjectNativeOpenError, ObjectNativeSearchResult,
+        ObjectNativeOpenError, ObjectNativeSearchResult, stage_generation_metadata,
     },
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{OneAttemptS3, RankedSq8Failure},
-    two_bit_source::{read_authenticated, SourceBuildError, SourcePlaneReceipt, TwoBitPlane},
+    two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
     unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError},
     unit_centroid_pages::{UnitCentroidError, UnitCentroidPages},
 };
-use object_store::{path::Path as ObjectPath, ObjectStore};
+use object_store::{ObjectStore, path::Path as ObjectPath};
 use serde::Deserialize;
 use std::{borrow::Cow, fs, path::Path};
 use tokio::sync::Semaphore;
@@ -326,10 +326,25 @@ impl TwoBitGeneration {
             slots: Semaphore::new(limits.max_active_queries),
         })
     }
-    fn plan_inner<'a>(&self, query: &'a [f32]) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>)> {
+    fn plan_inner<'a>(
+        &self,
+        query: &'a [f32],
+        ranking: Option<&mut Vec<usize>>,
+    ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>)> {
+        let count = self.pages.rows().div_ceil(256).min(159);
+        let trace_bytes = if ranking.is_some() {
+            count * std::mem::size_of::<usize>()
+        } else {
+            0
+        };
+        let scratch = self
+            .limits
+            .max_query_scratch_bytes
+            .checked_sub(trace_bytes)
+            .ok_or(TwoBitGenerationError::Invalid("diagnostic scratch"))?;
         let prepared = self
             .plane
-            .prepare_query(query, self.limits.max_query_scratch_bytes)
+            .prepare_query(query, scratch)
             .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
         // The codec already validated finite, nonzero input. Normalize after its
         // temporary preparation buffer is released, within the same scratch cap.
@@ -345,7 +360,6 @@ impl TwoBitGeneration {
             .ok_or(TwoBitGenerationError::Invalid("no seed"))?
             .0
             / 8;
-        let count = self.pages.rows().div_ceil(256).min(159);
         let mut candidates = vec![seed_page];
         if count > 1 {
             let found = self
@@ -377,6 +391,9 @@ impl TwoBitGeneration {
             ranked.push((page, score));
         }
         ranked.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
+        if let Some(ranking) = ranking {
+            ranking.extend(ranked.iter().map(|&(page, _)| page));
+        }
         let primary = [ranked[0].0 * 256];
         let order = ranked
             .iter()
@@ -395,6 +412,20 @@ impl TwoBitGeneration {
         .map(|plan| (plan, normalized))
         .map_err(TwoBitGenerationError::Budget)
     }
+    /// Offline physical plan and candidate pages in nomination order.
+    /// Reserves at most159 page IDs from query scratch; uses normal admission.
+    /// Returned trace payload belongs to the caller after slot release.
+    #[doc(hidden)]
+    pub async fn diagnostic_plan(&self, query: &[f32]) -> Result<(BudgetedPagePlan, Vec<usize>)> {
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        let mut ranking = Vec::with_capacity(self.pages.rows().div_ceil(256).min(159));
+        let (plan, _) = self.plan_inner(query, Some(&mut ranking))?;
+        Ok((plan, ranking))
+    }
     /// Frozen V296 nomination and physical admission, under a shared query slot.
     pub async fn plan(&self, query: &[f32]) -> Result<BudgetedPagePlan> {
         let _permit = self
@@ -402,7 +433,7 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        self.plan_inner(query).map(|(plan, _)| plan)
+        self.plan_inner(query, None).map(|(plan, _)| plan)
     }
     /// Plan, fetch authenticated conditional ranges in one bounded wave, and rank.
     /// Reader errors retain physical request/byte/error accounting.
@@ -420,7 +451,7 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        let (plan, normalized) = self.plan_inner(query)?;
+        let (plan, normalized) = self.plan_inner(query, None)?;
         let page_bytes = 256 * (self.pages.dimensions() + 12);
         let ranges = plan
             .ranges
