@@ -1,0 +1,27 @@
+{
+  "results": [
+    {
+      "dataset": "cohere",
+      "split": "development0-63 (previously used)",
+      "rows": 100000,
+      "dimensions": 768,
+      "k": 100,
+      "metric": "cosine",
+      "source_sha256": "270ed2889d11312f15246d6d98a0c7621fb38e714791e7c5f11b408de9a5552b",
+      "order_sha256": "57613395bc54810e6bf3cd778b129752aeca78d664b17f26801a39bef09dd2f0",
+      "requests_sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+      "truth_sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+      "mean_fetched_percent": 91.78125,
+      "p05_fetched_percent": 77,
+      "max_gets": 13,
+      "max_bytes": 14713140,
+      "actual_s3_and_latency_unmeasured": true,
+      "first_failing_layer": "exact extent-mean nomination coverage",
+      "sq8_scoring_skipped": true,
+      "decision": "KILL_NOMINATION_GEOMETRY"
+    }
+  ],
+  "advance": false,
+  "diagnostic_only": true,
+  "source_revision": "78a3d4c4"
+}

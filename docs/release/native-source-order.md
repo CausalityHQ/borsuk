@@ -83,3 +83,8 @@ These are not achieved recall. Existing generation queries do not use or
 authenticate this extent metadata; nomination, returned SQ8 quality, cold HTTP,
 100M resources and both vendor comparisons remain unqualified. See
 [exact gate and next decision](../research/hierarchical-source-layout-20260928/decision.md).
+
+Single-mean extent query nomination subsequently failed the CoHere development
+check (91.78125% fetched, p05 77). The fitter's containment result is unchanged;
+its single-mean serving route is killed before SQ8/cloud. See the
+[negative decision](../research/extent-centroid-nomination-20260928/decision.md).

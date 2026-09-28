@@ -64,9 +64,11 @@ Latest implementation: source-authenticated hierarchical fitting with capped
 1024-row semantic extents and explicit versioned CLI receipt. CoHere/ReLAION
 first100k development0–63 GT-aware byte-feasible21-extent containment witnesses
 reach99.78125%/99.53125%, both p05 99. These are diagnostic bounds, not achieved
-recall or vendor wins. Next single gate is source-only extent-centroid
-nomination plus returned SQ8 quality against paired flat on development;
-kill geometry before root-format/HTTP/scale work if its reference fails.
+recall or vendor wins. Exact single-mean extent nomination then failed: CoHere development0–63
+fetched91.78125%,p05 77 with<=13 ranges/14713140B. KILL before SQ8/ReLAION.
+Next single decision: check existing32-row summaries within each new extent
+instead of one mean, at unchanged21-extent byte cap, before graph/format work.
+[Exact negative gate](../research/extent-centroid-nomination-20260928/decision.md).
 No matched vendor gate is closed. [Exact decision](../research/hierarchical-source-layout-20260928/decision.md).
 
 Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
