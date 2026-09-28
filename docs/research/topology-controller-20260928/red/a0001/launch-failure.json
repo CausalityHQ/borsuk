@@ -1,0 +1,6 @@
+{
+  "status": "API-rejected-before-launch",
+  "error": "Client token must be less than or equal to64characters",
+  "live_tag_instances": [],
+  "measurement": false
+}

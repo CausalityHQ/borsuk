@@ -1,0 +1,10 @@
+{
+  "instance_id": "i-052a3059e19c13675",
+  "state": "terminated",
+  "source_archive_sha256": "656b077154f742d512d1271198cedb6cc81d85136fa2baf40fd1391283db104e",
+  "terminal_sha256": "5d58a6e7e165740f91a7f173db7ae555cefa6f07c136af391ddb2686ca467577",
+  "artifact_count": 4,
+  "source_files_matched": 395,
+  "source_files_changed": [],
+  "test_summaries": []
+}

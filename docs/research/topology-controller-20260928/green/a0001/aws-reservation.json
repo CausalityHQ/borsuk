@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-topology-controller-green-check-v1",
+  "source_base_commit": "346aa524e69001b61751671fcee826af20fb10af",
+  "source_archive_sha256": "87d1747663886e3999ed5e0cd9a227d58f73ac30e30e1c68f1adb732a2a4aa01",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 300,
+  "test_timeout_seconds": 90,
+  "cargo_jobs": 0,
+  "spot_price_observed_usd_per_hour": "0.180000",
+  "spot_quote_timestamp": "2026-09-28T14:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.04,
+  "cost_allowance_ebs_s3_usd": 0.02,
+  "scope": "Six implemented controller checks; stdlib synthetic metadata only, no compiler or corpus",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

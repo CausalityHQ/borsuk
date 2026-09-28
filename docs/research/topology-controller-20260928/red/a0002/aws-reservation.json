@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-topology-controller-red-check-v1",
+  "source_base_commit": "346aa524e69001b61751671fcee826af20fb10af",
+  "source_archive_sha256": "8e35a451b79a5a5425b835135b99a7402fb807e858eec109913536f414700192",
+  "source_dirty": true,
+  "attempt": "a0002",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 300,
+  "test_timeout_seconds": 90,
+  "cargo_jobs": 0,
+  "spot_price_observed_usd_per_hour": "0.180000",
+  "spot_quote_timestamp": "2026-09-28T14:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.04,
+  "cost_allowance_ebs_s3_usd": 0.02,
+  "scope": "Expected six controller stub failures; stdlib synthetic metadata only, no compiler or corpus",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

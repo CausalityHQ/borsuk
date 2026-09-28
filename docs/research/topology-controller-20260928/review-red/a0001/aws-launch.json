@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-052a3059e19c13675",
+  "prefix": "research/native-library-check/topology-controller/20260928/review-red-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "656b077154f742d512d1271198cedb6cc81d85136fa2baf40fd1391283db104e",
+  "source_base_commit": "346aa524e69001b61751671fcee826af20fb10af"
+}

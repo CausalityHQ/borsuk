@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-05e6edff63f314571",
+  "prefix": "research/native-library-check/topology-controller/20260928/green-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "87d1747663886e3999ed5e0cd9a227d58f73ac30e30e1c68f1adb732a2a4aa01",
+  "source_base_commit": "346aa524e69001b61751671fcee826af20fb10af"
+}
