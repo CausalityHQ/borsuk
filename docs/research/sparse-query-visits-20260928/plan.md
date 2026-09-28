@@ -1,0 +1,9 @@
+# Sparse query visits for reused hierarchical assignment
+
+Current construction already reuses EpochVisits (`65684cc9` source lineage). Do not reimplement it or treat V149's older source warning as current state. Current CentroidHnsw/CatalogRouter query wrapper still creates a full-node EpochVisits on each search, then throws it away. Reusing the existing hierarchical Lloyd trainer for streaming source assignment would repeat that O(cell_count) initialization for every raw row.
+
+Minimal code increment: construction retains its reusable epochs. Factor its unchanged beam-search loop over a mark callback; query searches use a sparse HashSet and construction uses existing marks. Query initial reserve is min(node_count, ef*DEFAULT_M0), independent of corpus size at fixed beam/degree. Dynamic visits may grow to all traversed nodes; no fixed-work guarantee, throughput improvement or100M qualification follows. No dataset/vector-count policy knee or new API/format/dependency.
+
+One test: at1M nodes/ef64 initial capacity must be<=4096; on deterministic duplicated vectors, compare query results (node and exact f32 distance bits) to old epoch search across3 queries and widths1/8/64. Observe red then run affected centroid graph tests on existing Spark, not local Cargo or a full suite. Ordinary query result parity, unchanged construction, epoch wrap coverage and existing router tests are the gates. All original handles/exits/logs preserved, no overlapping build or paid run.
+
+This is a prerequisite for bounded streaming hierarchical fitting, not another ANN route or vendor experiment. Reuse train_logical_cell_centroids rather than invent another Lloyd implementation; that trainer alone is not the new layout or a100M qualified build. Native flat source fitter and both vendor release gates remain open.

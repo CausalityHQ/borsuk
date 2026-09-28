@@ -17,7 +17,11 @@
 //! deterministic — node levels come from a splitmix hash of the node index, not
 //! an RNG — so the same centroids always yield the same graph.
 
-use std::{collections::BinaryHeap, mem::size_of, sync::Arc};
+use std::{
+    collections::{BinaryHeap, HashSet},
+    mem::size_of,
+    sync::Arc,
+};
 
 use rayon::prelude::*;
 
@@ -117,6 +121,10 @@ pub(crate) struct CentroidHnswAdjacency {
 struct EpochVisits {
     marks: Vec<u32>,
     epoch: u32,
+}
+
+fn query_visits(node_count: usize, ef: usize) -> HashSet<usize> {
+    HashSet::with_capacity(ef.saturating_mul(DEFAULT_M0).min(node_count))
 }
 
 impl EpochVisits {
@@ -1192,8 +1200,10 @@ impl CentroidHnsw {
         neighbours: &[Vec<Vec<u32>>],
         vectors: &[Vec<f32>],
     ) -> Vec<Candidate> {
-        let mut visits = EpochVisits::new(vectors.len());
-        Self::search_layer_with_visits(query, entries, layer, ef, neighbours, vectors, &mut visits)
+        let mut visits = query_visits(vectors.len(), ef);
+        Self::search_layer_with_marks(query, entries, layer, ef, neighbours, vectors, |node| {
+            visits.insert(node)
+        })
     }
 
     fn search_layer_with_visits(
@@ -1206,6 +1216,20 @@ impl CentroidHnsw {
         visits: &mut EpochVisits,
     ) -> Vec<Candidate> {
         visits.next_search();
+        Self::search_layer_with_marks(query, entries, layer, ef, neighbours, vectors, |node| {
+            visits.mark(node)
+        })
+    }
+
+    fn search_layer_with_marks(
+        query: &[f32],
+        entries: &[u32],
+        layer: usize,
+        ef: usize,
+        neighbours: &[Vec<Vec<u32>>],
+        vectors: &[Vec<f32>],
+        mut mark: impl FnMut(usize) -> bool,
+    ) -> Vec<Candidate> {
         // `candidates` is a min-heap (via Reverse) of nodes to expand; `results`
         // is a max-heap holding the ef best found so far.
         let mut candidates: BinaryHeap<std::cmp::Reverse<Candidate>> = BinaryHeap::new();
@@ -1220,7 +1244,7 @@ impl CentroidHnsw {
                 distance,
                 node: entry,
             });
-            visits.mark(entry as usize);
+            mark(entry as usize);
         }
         while let Some(std::cmp::Reverse(candidate)) = candidates.pop() {
             let worst = results.peek().map_or(f32::INFINITY, |c| c.distance);
@@ -1228,7 +1252,7 @@ impl CentroidHnsw {
                 break;
             }
             for &neighbour in Self::layer_neighbours(neighbours, candidate.node, layer) {
-                if !visits.mark(neighbour as usize) {
+                if !mark(neighbour as usize) {
                     continue;
                 }
                 let distance = squared_distance(query, &vectors[neighbour as usize]);
@@ -1359,6 +1383,50 @@ impl CentroidHnsw {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_scratch_is_sparse_and_preserves_epoch_search_results() {
+        let visits = query_visits(1_000_000, 64);
+        assert!(visits.is_empty());
+        assert!(visits.capacity() <= 2 * 64 * DEFAULT_M0);
+        let vectors: Vec<Vec<f32>> = (0..128)
+            .map(|row| {
+                let value = (row / 2) as f32;
+                vec![value, value.sin(), value.cos()]
+            })
+            .collect();
+        let graph = CentroidHnsw::build(&vectors).unwrap();
+        let mut epochs = EpochVisits::new(vectors.len());
+        for query in [[0., 0., 1.], [17., 1., 0.], [63., 0., 0.]] {
+            for ef in [1, 8, 64] {
+                let old = CentroidHnsw::search_layer_with_visits(
+                    &query,
+                    &[graph.entry],
+                    0,
+                    ef,
+                    &graph.neighbours,
+                    &vectors,
+                    &mut epochs,
+                );
+                let new = CentroidHnsw::search_layer(
+                    &query,
+                    &[graph.entry],
+                    0,
+                    ef,
+                    &graph.neighbours,
+                    &vectors,
+                );
+                assert_eq!(
+                    old.iter()
+                        .map(|c| (c.node, c.distance.to_bits()))
+                        .collect::<Vec<_>>(),
+                    new.iter()
+                        .map(|c| (c.node, c.distance.to_bits()))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
     use std::sync::Arc;
 
     #[test]

@@ -50,3 +50,19 @@ names the recipe and order SHA. An installation/sync error may leave an
 unpublished artifact; discard it on error. The development page oracle passed, but did not predict the paired validation
 failure. A distinct source-only layout decision and development falsifier are
 required before another promotion gate.
+
+## Hierarchical fitting prerequisite
+
+The crate already exports `train_logical_cell_centroids`, a deterministic
+hierarchical Lloyd trainer with proportional sample leaf quotas. It should be
+reused for the next layout rather than reimplementing Lloyd updates. It does
+not itself stream/authenticate raw source or guarantee balanced full-corpus
+extents. The current `fit_source_order` remains the failed flat candidate.
+
+The shared centroid assignment search now uses sparse per-query visited marks
+instead of initializing a cell-count-sized epoch array for every query.
+Construction still reuses its existing epoch array. Initial query reserve is
+`min(cell_count, ef * 32)` slots; actual visits can grow to the traversed node
+count, so this is not a worst-case constant-memory/search-work guarantee or a
+measured latency gain. This closes one prerequisite for streaming assignment;
+it does not qualify hierarchical layout quality,100M resources or vendor wins.
