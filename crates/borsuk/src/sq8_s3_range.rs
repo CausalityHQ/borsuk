@@ -3,12 +3,12 @@
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use crate::{
     exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError},
-    returned_sq8::{ReturnedRange, rank_returned_ranges},
+    returned_sq8::{rank_returned_ranges, ReturnedRange},
 };
 use bytes::{Bytes, BytesMut};
-use futures_util::{StreamExt, stream};
+use futures_util::{stream, StreamExt};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
-use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path};
+use object_store::{path::Path, GetOptions, GetResultPayload, ObjectStore, RetryConfig};
 
 #[derive(Debug)]
 pub enum RangeFetchError {
@@ -304,13 +304,13 @@ async fn fetch_verified_pages_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
+    use object_store::{memory::InMemory, ObjectStoreExt, PutPayload};
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -356,10 +356,14 @@ mod tests {
         response
     }
 
-    async fn request_fixture_once(
-        authority: &PageAuthority,
+    fn http_fixture(
         response: Vec<u8>,
-    ) -> (Result<VerifiedRange, RangeFetchError>, Vec<String>) {
+    ) -> (
+        OneAttemptS3,
+        Arc<AtomicBool>,
+        Arc<Mutex<Vec<String>>>,
+        thread::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -407,6 +411,14 @@ mod tests {
             .build()
             .unwrap();
         let reader = OneAttemptS3 { store };
+        (reader, stop, requests, server)
+    }
+
+    async fn request_fixture_once(
+        authority: &PageAuthority,
+        response: Vec<u8>,
+    ) -> (Result<VerifiedRange, RangeFetchError>, Vec<String>) {
+        let (reader, stop, requests, server) = http_fixture(response);
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             reader.fetch_verified_pages(
@@ -424,6 +436,175 @@ mod tests {
         server.join().unwrap();
         let captured = requests.lock().unwrap().clone();
         (result, captured)
+    }
+
+    #[tokio::test]
+    async fn generation_publish_reload_and_http_search_fail_closed() {
+        use crate::{
+            two_bit_build::TwoBitGenerationBuilder,
+            two_bit_generation::{TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits},
+            two_bit_source::TwoBitSource,
+            two_bit_store::{publish_two_bit_generation, read_two_bit_head},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let raw = [1_f32, 0., 0.9, 0.4358899]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let step = [1_f32 / 255.; 2];
+        let mut sq8 = Vec::new();
+        for (id, codes) in [(0_i64, [255_u8, 0]), (1, [230, 111])] {
+            let decoded = codes.map(|code| f32::from(code) * step[0]);
+            let norm = decoded[0] * decoded[0] + decoded[1] * decoded[1];
+            sq8.extend_from_slice(&id.to_le_bytes());
+            sq8.extend_from_slice(&norm.to_le_bytes());
+            sq8.extend_from_slice(&codes);
+        }
+        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        std::fs::write(&raw_path, &raw).unwrap();
+        std::fs::write(&sq8_path, &sq8).unwrap();
+        let store = InMemory::new();
+        let key = format!("fixture/objects/{}", hash(&sq8));
+        store
+            .put(&Path::from(key.clone()), PutPayload::from(sq8.clone()))
+            .await
+            .unwrap();
+        let etag = store
+            .head(&Path::from(key.clone()))
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        let root = temp.path().join("generation");
+        let root_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &hash(&sq8),
+                rows: 2,
+                dimensions: 2,
+            },
+            generation: 1,
+            low: &[0.; 2],
+            step: &step,
+            sq8_object_key: &key,
+            sq8_etag: &etag,
+        }
+        .build(&root, 2_000_000)
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 4_000_000,
+            max_active_queries: 2,
+            max_query_bytes: 28,
+            max_query_gets: 1,
+            max_parallel_gets: 1,
+            max_query_scratch_bytes: 8192,
+            already_pinned_bytes: 0,
+        };
+        let prefix = Path::from("index");
+        let published = publish_two_bit_generation(&store, &prefix, &root, &root_sha, limits, None)
+            .await
+            .unwrap();
+        let head = read_two_bit_head(&store, &prefix).await.unwrap().unwrap();
+        assert_eq!(head.root_sha256(), published.root_sha256());
+        for query in [[2., 1.], [5e29, 2.5e29], [5e-31, 2.5e-31]] {
+            let generation = TwoBitGeneration::open_remote(
+                &store,
+                &head.metadata_prefix(),
+                head.root_sha256(),
+                limits,
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            let response = http_response(
+                "206 Partial Content",
+                Some("bytes 0-27/28"),
+                &etag,
+                28,
+                &sq8,
+            );
+            let (reader, stop, requests, server) = http_fixture(response);
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                generation.search(&reader, &query, 1),
+            )
+            .await
+            .unwrap();
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            let result = result.unwrap();
+            assert_eq!(result.ranked.candidates[0].id, 1);
+            assert_eq!(result.plan.planned_bytes, 28);
+            assert_eq!(
+                result.ranked.stats,
+                Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: 28,
+                    failed_gets: 0
+                }
+            );
+            let captured = requests.lock().unwrap();
+            assert_eq!(captured.len(), 1);
+            let request = captured[0].to_ascii_lowercase();
+            assert!(request.starts_with(&format!("get /fixture/{key} ")));
+            assert!(request.contains("range: bytes=0-27\r\n"));
+            assert!(request.contains(&format!("if-match: {}\r\n", etag.to_ascii_lowercase())));
+            assert!(request.contains("authorization: aws4-hmac-sha256 "));
+        }
+        let generation = TwoBitGeneration::open_remote(
+            &store,
+            &head.metadata_prefix(),
+            head.root_sha256(),
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let mut corrupted = sq8.clone();
+        corrupted[12] ^= 1;
+        for response in [
+            http_response(
+                "206 Partial Content",
+                Some("bytes 0-27/28"),
+                &etag,
+                28,
+                &corrupted,
+            ),
+            http_response(
+                "206 Partial Content",
+                Some("bytes 0-27/28"),
+                "changed",
+                28,
+                &sq8,
+            ),
+            http_response("412 Precondition Failed", None, "changed", 0, &[]),
+        ] {
+            let (reader, stop, requests, server) = http_fixture(response);
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                generation.search(&reader, &[2., 1.], 1),
+            )
+            .await
+            .unwrap();
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            let Err(TwoBitGenerationError::Read(failure)) = result else {
+                panic!("bad data was not rejected with physical accounting");
+            };
+            assert_eq!(
+                failure.stats,
+                Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: 0,
+                    failed_gets: 1
+                }
+            );
+            assert_eq!(requests.lock().unwrap().len(), 1, "hidden retry");
+        }
     }
 
     #[tokio::test]

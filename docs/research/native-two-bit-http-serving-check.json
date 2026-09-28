@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-two-bit-http-serving-check-v1",
+  "baseline_commit": "ecb8ec24",
+  "source_sha256": "459f2f66838ad15dcc749191ba4aac4cd6e3c39e70ce1e792bbc3d7056e45f71",
+  "host": "spark-2751",
+  "failed_original_session": 48657,
+  "failed_exit_code": 101,
+  "failed_cause": "Rust-only bundle omitted two existing include fixtures; added verified frozen scripts/fixtures, no code fix",
+  "focused_original_session": 95133,
+  "focused_exit_code": 0,
+  "module_original_session": 10626,
+  "module_exit_code": 0,
+  "tests_passed": 4,
+  "full_module_log_sha256": "34582ec206bb9be5f57505efe7441a9b194c041d359c9ec49c01397ab3666e52",
+  "checks": [
+    "public builder and conditional InMemory publication/head read",
+    "metadata-only remote reopen before each search",
+    "actual signed HTTP Range and If-Match request",
+    "expected ID1 at normal, huge and tiny finite query magnitudes",
+    "one submitted GET and28 verified bytes on each success",
+    "corruption/changed ETag/HTTP412 reject with one failed GET and no verified bytes",
+    "existing malformed/truncated/500/short-tail/range accounting checks pass"
+  ],
+  "limits": [
+    "Two-row D2 synthetic fixture, not dataset recall or serving performance",
+    "HMAC signing framing is checked; server does not validate real AWS credentials/IAM",
+    "Failure-response wire bytes remain outside verified-byte stats",
+    "Raw-vector/SQ8 creation, mutations/GC, live cloud, packaging/CI and scale/vendor gates remain"
+  ],
+  "decision": "GO for actual frozen-format Rust serving integration; retain algorithm/format and paired100k evidence"
+}

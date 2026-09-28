@@ -263,3 +263,17 @@ meet98mean/p05 95/0.5pp deficit/32GET/16MiB. This freezes the candidate
 for product integration. Final scoring uses the established sequential-f32
 Python mirror; live Rust/S3 serving, raw-source creation, mutations/GC, package/CI,
 1M/scale and vendor gates remain open. See paired quality decision/receipts.
+
+## Actual Rust range-serving integration
+
+The four focused range-reader tests pass on Spark. A new two-row D2 fixture
+builds/publishes/reads head/reopens through the public API, then searches over
+signed conditional HTTP ranges. Expected ranking survives normal/huge/tiny
+finite query magnitude; successful queries charge one submitted GET and28
+verified bytes. Corrupt bytes, changed ETag and HTTP412 fail with one charged
+failed GET and no hidden retry. Existing wrong-range/truncated/500/tail checks
+also pass. Metadata publication uses conditional InMemory storage; this is
+synthetic protocol integration, not real AWS IAM or benchmark qualification.
+Failed-response wire bytes are not covered by verified-byte stats.
+The Rust test bundle must include scripts/fixtures, referenced by existing
+library tests. See native-two-bit-http-serving-check.json and its source receipt.
