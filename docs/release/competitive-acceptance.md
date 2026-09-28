@@ -55,15 +55,19 @@ D768 cosine k100 development0–63, returned recall fell99.156250%→99.062500%;
 fetched coverage fell99.562500%→99.484375%. Removed its experimental APIs and
 quarantined the binary. No CoHere/validation/scale run followed.
 
-Next implementation decision: change the discovery **signal**, using the
-existing compressed row/page scoring to navigate semantic page boundaries,
-rather than another centroid-frontier schedule or increased work cap. Reuse
-current authenticated metadata and physical-budget planner. First establish a
-bounded-work source-only development falsifier against the unchanged route;
-freeze its mechanism and stop thresholds before any run. Keep one causal
-change. Do not promote the rejected native source fitter or assume100M
-building/scoring costs. Only a surviving paired quality gate permits one
-cold1M HTTP gate; matched vendor and100M+/lifecycle gates remain mandatory.
+The subsequent compressed-score page-discovery falsifier is also KILL:
+ReLAION development0–63 returned95.656250%, p05 87, discovered/fetched
+95.968750%; same caps and paired flat99.515625%. Experimental code removed;
+no CoHere or scale run. [Exact terminal evidence](../research/page-score-discovery-20260928/decision.md).
+
+Next implementation decision: stop traversal variants and address source-only
+physical layout plus flat native fitting cost. Specify balanced hierarchical
+fitting with bounded stream/sample memory, reconcile prior hierarchy/spill
+failures, and first use a cheap development physical-page oracle. One causal
+change and frozen stop thresholds are required before execution. No quality or
+100M inference follows from an optimistic GT oracle. Only a surviving paired
+quality gate permits one cold1M HTTP gate; matched vendor and100M+/lifecycle
+gates remain mandatory.
 
 Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
 [discovery diagnostic](../research/nomination-trace-20260928/decision.md),
