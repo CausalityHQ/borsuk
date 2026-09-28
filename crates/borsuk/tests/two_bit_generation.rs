@@ -1,3 +1,4 @@
+use borsuk::two_bit_store::{publish_two_bit_generation, read_two_bit_head};
 use borsuk::{
     two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits},
     two_bit_source::TwoBitSource,
@@ -101,6 +102,169 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         reloaded.plan(&[0.5, 0.25]).await.unwrap().ranges
     );
     assert!(!root.join("router").exists());
+    let publication = tempfile::tempdir().unwrap();
+    for name in [
+        "manifest.json",
+        "page_manifest.json",
+        "page_digests.bin",
+        "centroids.bin",
+        "graph.bin",
+        "plane/manifest.json",
+        "plane/mean.bin",
+        "plane/records.bin",
+    ] {
+        let target = publication.path().join(name);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::copy(root.join(name), target).unwrap();
+    }
+    let published_store = InMemory::new();
+    let index_prefix = ObjectPath::from("tenant/index");
+    let source_key = ObjectPath::from(format!("tenant/g1/objects/{sq8_sha}"));
+    let source_put = published_store
+        .put(&source_key, PutPayload::from(sq8.clone()))
+        .await
+        .unwrap();
+    let mut prepared: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    prepared["sq8_etag"] = source_put.e_tag.unwrap().into();
+    let prepared_bytes = serde_json::to_vec(&prepared).unwrap();
+    fs::write(publication.path().join("manifest.json"), &prepared_bytes).unwrap();
+    assert!(read_two_bit_head(&published_store, &index_prefix)
+        .await
+        .unwrap()
+        .is_none());
+    let publish_limits = TwoBitGenerationLimits {
+        max_memory_bytes: 32_000_000,
+        ..limits
+    };
+    let pinned = publish_two_bit_generation(
+        &published_store,
+        &index_prefix,
+        publication.path(),
+        &hash(&prepared_bytes),
+        publish_limits,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(pinned.generation(), 1);
+    assert_eq!(
+        pinned.metadata_prefix().to_string(),
+        format!("tenant/index/generations/{}", pinned.root_sha256())
+    );
+    assert!(published_store
+        .head(&ObjectPath::from(format!(
+            "{}/plane/records.bin",
+            pinned.metadata_prefix()
+        )))
+        .await
+        .is_ok());
+
+    let head = read_two_bit_head(&published_store, &index_prefix)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pinned.root_sha256(), head.root_sha256());
+    let live = TwoBitGeneration::open_remote(
+        &published_store,
+        &head.metadata_prefix(),
+        head.root_sha256(),
+        limits,
+        publication.path(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.ranges, live.plan(&[0.5, 0.25]).await.unwrap().ranges);
+    for generation_id in [2, 3] {
+        let mut page: serde_json::Value = serde_json::from_slice(&page_manifest).unwrap();
+        page["generation"] = generation_id.into();
+        let page_bytes = serde_json::to_vec(&page).unwrap();
+        fs::write(publication.path().join("page_manifest.json"), &page_bytes).unwrap();
+        prepared["generation"] = generation_id.into();
+        prepared["page_manifest_sha256"] = hash(&page_bytes).into();
+        let bytes = serde_json::to_vec(&prepared).unwrap();
+        fs::write(publication.path().join("manifest.json"), &bytes).unwrap();
+        let result = publish_two_bit_generation(
+            &published_store,
+            &index_prefix,
+            publication.path(),
+            &hash(&bytes),
+            publish_limits,
+            Some(&pinned),
+        )
+        .await;
+        if generation_id == 2 {
+            assert_eq!(result.unwrap().generation(), 2);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+    assert_eq!(
+        read_two_bit_head(&published_store, &index_prefix)
+            .await
+            .unwrap()
+            .unwrap()
+            .generation(),
+        2
+    );
+    let old_pinned = TwoBitGeneration::open_remote(
+        &published_store,
+        &pinned.metadata_prefix(),
+        pinned.root_sha256(),
+        limits,
+        publication.path(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        first.ranges,
+        old_pinned.plan(&[0.5, 0.25]).await.unwrap().ranges
+    );
+    assert_eq!(
+        published_store
+            .head(&source_key)
+            .await
+            .unwrap()
+            .e_tag
+            .as_deref(),
+        prepared["sq8_etag"].as_str()
+    );
+    assert!(publish_two_bit_generation(
+        &published_store,
+        &ObjectPath::from("another/index"),
+        publication.path(),
+        &hash(&fs::read(publication.path().join("manifest.json")).unwrap()),
+        publish_limits,
+        Some(&pinned)
+    )
+    .await
+    .is_err());
+    let current = read_two_bit_head(&published_store, &index_prefix)
+        .await
+        .unwrap()
+        .unwrap();
+    let records_path = publication.path().join("plane/records.bin");
+    let mut bad = fs::read(&records_path).unwrap();
+    bad[0] ^= 1;
+    fs::write(&records_path, bad).unwrap();
+    assert!(publish_two_bit_generation(
+        &published_store,
+        &index_prefix,
+        publication.path(),
+        &hash(&fs::read(publication.path().join("manifest.json")).unwrap()),
+        publish_limits,
+        Some(&current)
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        read_two_bit_head(&published_store, &index_prefix)
+            .await
+            .unwrap()
+            .unwrap()
+            .root_sha256(),
+        current.root_sha256()
+    );
+
     // Only metadata exists remotely: an SQ8 payload GET would fail this open.
     let store = InMemory::new();
     let prefix = ObjectPath::from("tenant/g1/metadata");
@@ -116,7 +280,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     ] {
         store
             .put(
-                &prefix.clone().join(name),
+                &ObjectPath::from(format!("{prefix}/{name}")),
                 PutPayload::from(fs::read(root.join(name)).unwrap()),
             )
             .await
@@ -155,7 +319,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     .is_err());
     store
         .put(
-            &prefix.clone().join("plane/records.bin"),
+            &ObjectPath::from(format!("{prefix}/plane/records.bin")),
             PutPayload::from(vec![0; 4608]),
         )
         .await
@@ -170,7 +334,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     .await
     .is_err());
     store
-        .delete(&prefix.clone().join("plane/records.bin"))
+        .delete(&ObjectPath::from(format!("{prefix}/plane/records.bin")))
         .await
         .unwrap();
     assert!(TwoBitGeneration::open_remote(

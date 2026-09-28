@@ -107,3 +107,50 @@ local/remote range equality, cleanup on success/failure, wrong-root, corrupt or
 missing code metadata and insufficient cap. This is functional API evidence,
 not an S3 benchmark. Source/test receipts are `native-two-bit-remote-check.json`
 and `native-two-bit-remote-test.txt` in `docs/research`.
+
+## Publish and reload a prepared generation
+
+```rust
+use borsuk::two_bit_store::{publish_two_bit_generation, read_two_bit_head};
+
+let expected = read_two_bit_head(&store, &index_prefix).await?;
+let pinned = publish_two_bit_generation(
+    &store, &index_prefix, prepared_metadata_dir, trusted_prepared_root_sha256,
+    limits, expected.as_ref(),
+).await?;
+let generation = TwoBitGeneration::open_remote(
+    &store, &pinned.metadata_prefix(), pinned.root_sha256(), limits, scratch_parent,
+).await?;
+```
+
+The application must authorize this store/prefix and head writers. Use a
+conditional-put-capable store. The opaque token is bound to the index prefix;
+use it with the same store that issued it. New IDs must exceed the expected
+head's generation. All fixed metadata files are streamed, length/SHA checked
+before multipart completion, under `generations/ROOT_SHA/`. The head changes
+last via create-or-CAS. A lost head-write acknowledgement is reconciled against
+authenticated readback. Failed staging or stale publication can leave unreachable
+metadata; in-process GC is still a release requirement. Root digests authorize
+content identity; store/application policy authorizes writers.
+
+SQ8 must already exist at the immutable key/ETag in the trusted prepared root.
+Publication checks its HEAD length and ETag and never rewrites/downloads it;
+this is not a whole-object rehash. The caller's authenticated immutable SQ8
+upload is a construction prerequisite. Query page hashes still fail closed on
+corrupt data. Metadata validation uses the serving opener and releases its
+resident metadata before upload. Multipart read/copy buffers are admitted
+against remaining payload allowance; transport and allocator overhead still
+require measurement. Caller-owned preparation files must stay immutable.
+
+This completes **prepared-generation publication**, not raw-source layout/SQ8
+creation, incremental mutations, compaction/GC or cold HTTP qualification. The
+candidate has no legacy head fallback. Canonical nested object keys are used;
+slash-containing strings are split into path segments rather than passed as
+one encoded `Path::join` segment.
+
+Publication functional checks pass in the synthetic InMemory fixture: initial
+head/reload, generation2 advancement, stale writer and namespace rejection,
+invalid metadata leaving the head unchanged, old pinned-root reload and SQ8
+ETag preservation. See `docs/research/native-two-bit-publication-check.json`.
+Lost-ack reconciliation has not been fault-injected; live S3/CAS/error/cost
+qualification remains required. No new recall or performance claim follows.

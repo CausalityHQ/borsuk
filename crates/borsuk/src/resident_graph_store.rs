@@ -9,8 +9,8 @@ use std::{
 use bytes::Bytes;
 use futures_util::StreamExt;
 use object_store::{
-    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion,
-    path::Path as ObjectPath,
+    path::Path as ObjectPath, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload,
+    UpdateVersion,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,8 +19,8 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::resident_graph_generation::{
-    Artifact, MAX_ROOT_BYTES, ResidentGraphGeneration, ResidentGraphGenerationError, Root,
-    parse_authenticated_root, preflight_root, valid_sha256,
+    parse_authenticated_root, preflight_root, valid_sha256, Artifact, ResidentGraphGeneration,
+    ResidentGraphGenerationError, Root, MAX_ROOT_BYTES,
 };
 
 const HEAD_SCHEMA: &str = "borsuk-resident-graph-head-v1";
@@ -287,18 +287,42 @@ async fn upload_artifact(
     name: &str,
     artifact: &Artifact,
 ) -> Result<(), ResidentGraphStoreError> {
-    let mut file = tokio::fs::File::open(directory.join(name)).await?;
+    upload_authenticated_file(
+        store,
+        &blob_path(prefix, &artifact.sha256),
+        &directory.join(name),
+        artifact,
+        usize::MAX,
+    )
+    .await
+}
+
+/// Stream a file to a caller-selected immutable key; complete only after SHA/length validation.
+pub(crate) async fn upload_authenticated_file(
+    store: &dyn ObjectStore,
+    location: &ObjectPath,
+    path: &Path,
+    artifact: &Artifact,
+    max_buffer_bytes: usize,
+) -> Result<(), ResidentGraphStoreError> {
+    let mut file = tokio::fs::File::open(path).await?;
     if file.metadata().await?.len() != artifact.bytes {
         return Err(ResidentGraphStoreError::Invalid("artifact length"));
     }
     let part_bytes = multipart_part_bytes(artifact.bytes)?;
-    let mut upload = store
-        .put_multipart(&blob_path(prefix, &artifact.sha256))
-        .await?;
+    let mut upload = store.put_multipart(location).await?;
     let mut digest = Sha256::new();
     let mut received = 0_u64;
     // S3 allows at most 10,000 parts; leave room for a short final part.
-    let mut buffer = vec![0_u8; part_bytes];
+    let buffer_bytes = part_bytes.min(usize::try_from(artifact.bytes).unwrap_or(usize::MAX));
+    if buffer_bytes
+        .checked_mul(2)
+        .is_none_or(|n| n > max_buffer_bytes)
+    {
+        let _ = upload.abort().await;
+        return Err(ResidentGraphStoreError::Invalid("upload memory budget"));
+    }
+    let mut buffer = vec![0_u8; buffer_bytes];
     let result = async {
         loop {
             let mut filled = 0;

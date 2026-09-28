@@ -164,6 +164,12 @@ fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, ObjectNativeOpenError> 
     Ok(bytes)
 }
 
+/// Fixed relative metadata names may contain directory separators.
+pub(crate) fn metadata_location(prefix: &ObjectPath, name: &str) -> ObjectPath {
+    name.split('/')
+        .fold(prefix.clone(), |path, segment| path.join(segment))
+}
+
 /// Stream a fixed metadata set to owned scratch; authenticate the root first.
 /// Child identities and decoded memory are checked by the generation opener.
 pub(crate) async fn stage_generation_metadata(
@@ -183,7 +189,7 @@ pub(crate) async fn stage_generation_metadata(
     let mut total = 0_u64;
     for &name in names {
         let fetched = store
-            .get(&prefix.clone().join(name))
+            .get(&metadata_location(prefix, name))
             .await
             .map_err(ObjectNativeOpenError::Store)?;
         let limit = max_bytes
@@ -766,7 +772,7 @@ mod tests {
         for name in METADATA_FILES {
             store
                 .put(
-                    &prefix.clone().join(name),
+                    &metadata_location(&prefix, name),
                     PutPayload::from(fs::read(root.join(name)).unwrap()),
                 )
                 .await
@@ -784,7 +790,7 @@ mod tests {
         ));
         store
             .put(
-                &prefix.clone().join("router/books.bin"),
+                &metadata_location(&prefix, "router/books.bin"),
                 PutPayload::from(vec![0xff; 64 * 256 * 4]),
             )
             .await

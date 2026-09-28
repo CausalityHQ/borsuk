@@ -1,0 +1,36 @@
+{
+  "schema": "borsuk-two-bit-publication-check-v1",
+  "baseline_commit": "c8b27992",
+  "source_files": {
+    "crates/borsuk/src/two_bit_store.rs": "82dfc68dae5837eb2bb2175d35d1efd295c2c3cbacec20ef68faff11caa73182",
+    "crates/borsuk/src/two_bit_generation.rs": "5e92b5aae936ecb3fce5d3cd76fcd20e55c524c2ab24154342ebc7fee02fb4b1",
+    "crates/borsuk/src/object_native_generation.rs": "a83e9ef0e371bd05972aac1c78856a025908f742aa1657c87a66c793de8a492f",
+    "crates/borsuk/src/resident_graph_store.rs": "d4e06594e77171bc6d182a20fe763533387772a2c48718a7d82f9be00c4c4d49",
+    "crates/borsuk/tests/two_bit_generation.rs": "ec487d6b61d08ecb789698b89419bbb1b7db36c90aefbd3982cbce517689a265"
+  },
+  "command": "CARGO_BUILD_JOBS=1 cargo test -p borsuk --test two_bit_generation",
+  "original_session": 99568,
+  "exit_code": 0,
+  "tests_passed": 1,
+  "test_seconds": 0.04,
+  "log_sha256": "cf62769ec969b85ff3522ff8089b123d05bb02571d5d6dba45e86e298bc27f0e",
+  "checks": [
+    "prepared generation publish/head authenticated read/remote reload",
+    "canonical hierarchical object keys",
+    "generation2 advancement and generation1 stale-writer rejection",
+    "opaque token namespace mismatch refusal",
+    "invalid metadata leaves prior head unchanged",
+    "previous pinned root still reloads/plans after head advancement",
+    "SQ8 ETag unchanged by publication",
+    "prior remote/local/corruption/memory cases preserved"
+  ],
+  "decision": "GO for prepared-generation publication integration; retain frozen routing/scoring",
+  "causal_fix": "Initial integration failed because slash-containing Path::join arguments encoded separators and produced inconsistent root locations; generation/metadata paths now join individual segments, and fixtures use canonical nested keys. This corrects intended paths, not codec/layout arithmetic.",
+  "limits": [
+    "InMemory synthetic functional check, not live S3/HTTP or quality/performance evidence",
+    "SQ8 must be independently uploaded immutably; publication checks HEAD/ETag/length, not full payload digest",
+    "Lost-ack reconciliation follows existing publisher pattern but was not fault-injected here",
+    "Full paired quality, raw-source creation, mutation, compaction/GC, package/full assurance, vendor/scale gates remain",
+    "Independent review remains deferred by existing cooldown; no duplicate paid consultation or job"
+  ]
+}

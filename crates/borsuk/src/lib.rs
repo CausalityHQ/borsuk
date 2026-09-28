@@ -918,3 +918,6 @@ mod configuration_tests {
 
 /// Authenticated on-demand SQ8 generation using two-bit nomination.
 pub mod two_bit_generation;
+
+/// Conditional publication of prepared object-native generations.
+pub mod two_bit_store;

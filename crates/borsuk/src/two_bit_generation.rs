@@ -66,20 +66,30 @@ pub struct TwoBitGenerationLimits {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Manifest {
-    schema: String,
-    generation: u64,
-    plane_manifest_sha256: String,
-    page_manifest_sha256: String,
-    centroids_sha256: String,
-    graph_sha256: String,
-    graph_resident_bytes: usize,
-    sq8_object_sha256: String,
-    sq8_object_key: String,
-    sq8_etag: String,
-    low: Vec<f32>,
-    step: Vec<f32>,
+pub(crate) struct Manifest {
+    pub(crate) schema: String,
+    pub(crate) generation: u64,
+    pub(crate) plane_manifest_sha256: String,
+    pub(crate) page_manifest_sha256: String,
+    pub(crate) centroids_sha256: String,
+    pub(crate) graph_sha256: String,
+    pub(crate) graph_resident_bytes: usize,
+    pub(crate) sq8_object_sha256: String,
+    pub(crate) sq8_object_key: String,
+    pub(crate) sq8_etag: String,
+    pub(crate) low: Vec<f32>,
+    pub(crate) step: Vec<f32>,
 }
+pub(crate) const METADATA_FILES: [&str; 8] = [
+    "manifest.json",
+    "page_manifest.json",
+    "page_digests.bin",
+    "centroids.bin",
+    "graph.bin",
+    "plane/manifest.json",
+    "plane/mean.bin",
+    "plane/records.bin",
+];
 /// Immutable metadata; SQ8 rows are fetched conditionally and never cached here.
 pub struct TwoBitGeneration {
     plane: TwoBitPlane,
@@ -109,16 +119,7 @@ impl TwoBitGeneration {
             limits
                 .max_memory_bytes
                 .saturating_sub(limits.already_pinned_bytes),
-            &[
-                "manifest.json",
-                "page_manifest.json",
-                "page_digests.bin",
-                "centroids.bin",
-                "graph.bin",
-                "plane/manifest.json",
-                "plane/mean.bin",
-                "plane/records.bin",
-            ],
+            &METADATA_FILES,
             scratch_parent,
         )
         .await

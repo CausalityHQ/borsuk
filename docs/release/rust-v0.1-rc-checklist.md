@@ -87,8 +87,11 @@ integration remains open.
   create/publish/open/search and wrong/corrupt-generation tests pass.
   `TwoBitGeneration` now binds the local root and exposes semaphore-admitted
   plan/search with no PQ/vector hydration; focused open/reload/binding/corruption
-  tests and64-query exact development plan parity pass. Public create/publication,
-  remote bootstrap has metadata-only InMemory open/plan/failure coverage;
+  tests and64-query exact development plan parity pass. Prepared-generation
+  publication now stages verified metadata and CASes an opaque namespace-bound
+  head last, with reload/stale-writer checks; raw-source create and compaction
+  publication integration remain open.
+  Remote bootstrap has metadata-only InMemory open/plan/failure coverage;
   actual cold transport qualification remains open.
 - [ ] Incremental insert/update/delete survive reload, preserve application
   IDs, and honor the committed values/tombstones of each pinned generation.
