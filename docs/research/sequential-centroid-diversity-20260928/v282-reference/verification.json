@@ -1,0 +1,29 @@
+{
+  "status": "verified-closed-V282-subset",
+  "terminal_sha256": "23cf19cdc03c5ce2df116b3eeb70e57c57f9aeaf84ea95ab110dbe598f78b3bc",
+  "artifacts_verified": 10,
+  "source_commit": "e74d75acb40647f606b498023b11dec26701e4aa",
+  "source_archive_sha256": "3facfaf935a3e4921466281e79afe15f8cc945e30870a97806f814845972998d",
+  "source_script_sha256": "e41b7b1598f72737d28a9fd225ec63940905ae0ca913101b8a8b156841697176",
+  "native_scorer_sha256": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+  "native_scorer_matches_historical_2db5": true,
+  "common_requests_and_truth_identities_verified": [
+    {
+      "name": "relaion",
+      "requests_sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+      "truth_sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e"
+    },
+    {
+      "name": "cohere",
+      "requests_sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+      "truth_sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8"
+    }
+  ],
+  "queries_reexecuted": 0,
+  "reference_split": [
+    0,
+    64
+  ],
+  "flat_role": "bounded centroid-routing control, not exhaustive SQ8",
+  "performance_status": "historical different architecture/hardware, no speed claim"
+}
