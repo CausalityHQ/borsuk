@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-frozen-quality-runner-check-v1",
+  "source_commit": "0d8cb7dc",
+  "build_original_session": 21779,
+  "build_exit_code": 0,
+  "parity_original_session": 26675,
+  "parity_exit_code": 0,
+  "checks": [
+    "unsupported split rejects before output",
+    "wrong request digest rejects before output",
+    "64/64 frozen validation physical plans and bytes unchanged; original256\u2013319 ordinals preserved"
+  ],
+  "source_files": {
+    "crates/borsuk/src/bin/two_bit_plan_demo.rs": "1b0bb80f86eea52d5278ff1b2e3e8214677994aee54b11f1b49ad491a8533798",
+    "scripts/native_two_bit_cosine_development.py": "38d5d1a8ca68cb289edf83b2dff65f468225e0d7490f38f29881086d3aae6502"
+  },
+  "new_parity_plans_sha256": "d0822490604450a56105110d45c15d0b5b6d912f707d3fc443b267c223ba7174",
+  "qualification": false,
+  "decision": "GO to preregistered CoHere full744-query offline quality gate, not paired/vendor/serving qualification"
+}

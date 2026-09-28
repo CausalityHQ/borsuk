@@ -1,13 +1,25 @@
-//! Offline API demonstration and frozen development plan replay; not a service benchmark.
+//! Offline API plan replay for frozen quality splits; not a service benchmark.
 use borsuk::two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits};
 use sha2::{Digest, Sha256};
 use std::{error::Error, fs, io::Write, path::Path};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 6 {
-        return Err("usage: two_bit_plan_demo ROOT ROOT_SHA REQUESTS REQUESTS_SHA OUTPUT".into());
+    if args.len() != 6 && args.len() != 8 {
+        return Err(
+            "usage: two_bit_plan_demo ROOT ROOT_SHA REQUESTS REQUESTS_SHA OUTPUT [FIRST COUNT]"
+                .into(),
+        );
     }
+    let (first, count) = if args.len() == 8 {
+        let split = (args[6].parse::<usize>()?, args[7].parse::<usize>()?);
+        if !matches!(split, (0, 64) | (256, 64) | (256, 744)) {
+            return Err("unsupported frozen split".into());
+        }
+        split
+    } else {
+        (0, 64)
+    };
     let generation = TwoBitGeneration::open(
         Path::new(&args[1]),
         &args[2],
@@ -25,20 +37,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if input_size > 64 * 1024 * 1024 {
         return Err("demo request file cap".into());
     }
-    // Caller-owned immutable development requests; this is an offline demo.
+    // Caller-owned immutable frozen requests; this is an offline demo.
     let requests = fs::read(&args[3])?;
     if requests.len() as u64 != input_size || format!("{:x}", Sha256::digest(&requests)) != args[4]
     {
         return Err("request identity".into());
     }
+    let lines = std::str::from_utf8(&requests)?.lines().collect::<Vec<_>>();
+    if lines.len() > 1000 || first + count > lines.len() {
+        return Err("request roster size".into());
+    }
+    for (ordinal, line) in lines.iter().enumerate() {
+        let request: serde_json::Value = serde_json::from_str(line)?;
+        if request["query_ordinal"].as_u64() != Some(ordinal as u64) {
+            return Err("request ordinal".into());
+        }
+    }
     let mut output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&args[5])?;
-    for (ordinal, line) in std::str::from_utf8(&requests)?.lines().enumerate() {
-        if ordinal >= 64 {
-            return Err("demo limited to 64 development queries".into());
-        }
+    for (ordinal, line) in lines.iter().enumerate().skip(first).take(count) {
         let request: serde_json::Value = serde_json::from_str(line)?;
         let query: Vec<f32> = serde_json::from_value(request["query"].clone())?;
         let plan = generation.plan(&query).await?;

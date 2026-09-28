@@ -68,8 +68,10 @@ cargo run -p borsuk --bin two_bit_plan_demo -- \
   ROOT ROOT_SHA DEVELOPMENT_REQUESTS REQUESTS_SHA NEW_OUTPUT
 ```
 
-The demo accepts at most64 development requests and uses the frozen D768 byte,
-GET and scratch limits. It cannot certify recall, service latency or vendor
+The runner accepts at most1000 authenticated sequentially numbered requests
+and uses the frozen D768 byte, GET and scratch limits. Its default is
+development0–63; optional FIRST COUNT accepts only0 64,256 64 or256 744.
+Output preserves original query ordinals. It cannot certify recall, service latency or vendor
 superiority. Complete paired validation and cold HTTP come next once the
 intended remote execution target is available. Insert/update/delete, publication,
 restart recovery beyond immutable reopen, and in-process compaction/GC remain
