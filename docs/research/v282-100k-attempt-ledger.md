@@ -33,7 +33,7 @@ new Spot attempt only after source commit and dry run; do not restart a0001.
 **KILL V282 for scale/HTTP.** Source `e74d75acb40647f606b498023b11dec26701e4aa`,
 archive SHA-256 `3facfaf935a3e4921466281e79afe15f8cc945e30870a97806f814845972998d`,
 Spot instance `i-06c4c766fcf79f221`, terminal SHA-256
-`23cf19cdc03c5ce2df116b3eeb70e57f9aeaf84ea95ab110dbe598f78b3bc`,
+`23cf19cdc03c5ce2df116b3eeb70e57c57f9aeaf84ea95ab110dbe598f78b3bc`,
 closeout SHA-256 `76697fa1aa5b8a3fb1aeac82364683874e628b692cf57c351613a5a44908354a`.
 Terminal status `complete`, exit 0; original launcher replayed all 42 artifact
 sizes/digests, published closeout, and terminated EC2. Estimated Spot compute
@@ -68,3 +68,5 @@ Graph traversal is not the causal fix. Local planner/rank CPU and ~106 MB
 process RSS are diagnostic only; this run has **no live S3 latency or vendor
 comparison**. Next: one preregistered source-only semantic-cell page oracle,
 then router replay only if its necessary coverage bound passes. No V282 1M/10M run.
+
+Digest transcription corrected2026-09-28: the terminal reference omitted `c57`. Its64-character SHA was independently checked against the original S3 terminal and the unchanged closeout SHA recorded above. Historical artifacts and decisions are unchanged.

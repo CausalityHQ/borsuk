@@ -1,0 +1,41 @@
+{
+  "dataset": "ReLAION first100k D768 cosine k100",
+  "scope": "Historical failed-layout reproduction and consumed validation diagnosis; no new arm, tuning or qualification",
+  "historical_code_commit": "2db5b8ff192cd310bb67edca47d4915c15087c17",
+  "raw_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2",
+  "normalized_sha256": "4b9605bdebc2329339b153c15d1500a9d54467c410e3e8defcfeea365e669123",
+  "order_sha256": "fbeb4a14093c449ae4acf212155979a50fb16b50e864172dfc1dc1ddffbbc5d1",
+  "sq8_sha256": "1375696a51ac52fc3216e35456e441c370805feb0632a58ab197b17099a8de6f",
+  "root_sha256": "b8f2ec97c0ad9633d1f3bc672b90ff88e32cb80b0d6ecbeb12f2ddbf74a48ff2",
+  "truth_sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e",
+  "requests_sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+  "input_parquet_sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d",
+  "v282_source_parquet_sha256": "efefaab5221333f23b21b3928914463cd89ef51c804ac1f3512c23c550918b58",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "input_parquet_key": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+  "requests_key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+  "v282_terminal_sha256": "23cf19cdc03c5ce2df116b3eeb70e57c57f9aeaf84ea95ab110dbe598f78b3bc",
+  "v282_closeout_sha256": "76697fa1aa5b8a3fb1aeac82364683874e628b692cf57c351613a5a44908354a",
+  "source_receipt_sha256": "789ef7cd28a0796689c0b2b979ee55edea7525491c4b4c7d54cb94d2449d5334",
+  "splits": [
+    {
+      "first": 0,
+      "count": 64,
+      "score_file": "development-score.json",
+      "score_sha256": "c7fb31345107195efe1bbe82a0f49a6aeaef58cd9386a6a60e327592899f03b2"
+    },
+    {
+      "first": 256,
+      "count": 744,
+      "score_file": "validation-score.json",
+      "score_sha256": "bf2013fa9d6c0baa3739d8d5d78dcfa5322e6b7bf3b83c6aaa721cd79baf461f"
+    }
+  ],
+  "max_planned_gets": 32,
+  "max_planned_bytes": 16773120,
+  "numpy_version": "2.3.3",
+  "pyarrow_version": "24.0.0",
+  "threads": 4,
+  "build_payload_bytes": 268435456,
+  "historical_open_memory_bytes": 1073741824
+}

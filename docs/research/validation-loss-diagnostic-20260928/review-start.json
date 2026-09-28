@@ -1,0 +1,51 @@
+{
+  "id": "254891a6c1f845a7",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "fallbacks": [
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6-sol"
+    }
+  ],
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "running",
+  "runner_started": false,
+  "started_at": 1790612461,
+  "timeout_seconds": 300,
+  "deadline_at": 1790612761,
+  "budget_usd": 1,
+  "prompt_preview": "Read-only review of a bounded historical diagnostic harness in /home/rb/worktrees/borsuk-prod-ready-v9, HEADb39c657b. Read docs/superpowers/plans/2026-09-28-validation-loss-diagnostic.md and all files in docs/research/validation-loss-diagnostic-20260928 (probe.py, red-check.py, aws-check.py, config.json). No edits, Cargo/tests/benchmarks, DGX/Spark access, paid jobs, contacts or reviews of unrelated architecture. This is a whole-harness methodology/engineering check of unchanged historical code, not a new arm or an attempt to bypass the prior hard-design dual-review cooldown. Current production full workspace passed2682/0/26ignored. Need missing ReLAION100k D768 cosine k100 consumed744-query loss decomposition before next routing decision. New harness reconstructs historical 2db5b8ff from registered Parquet (AWS only), requires exact raw/normalized/order/SQ8/root b8f2ec identities, then fetches requests, recomputes registered V282truth, requires400kBtruth SHA, replays trace API and requires exact original planSHA/developmenttrace parity/fetched counts vs closed score JSON. Stops on mismatch before interpreting or tuning; no new scoring/default/scale win. Merged ranges can fetch gap pages, so separate candidate vs nominated vs physically fetched GT, gap bonus, old returned/flat counts. Test toy GTpages[0,1,1,2], candidates[0,1,2], nominees[0,2], physical[0,1,2] =>(4,2,4) counters; rejects invalid subset/duplicates. Red then green self-check executed onlyAWS. One c7i.2xlarge Spot40min cap4threads, compile1200/replay900s,4GiB process AS,compute$.30cap excl EBS/S3; immutable reservation includes both archives/config before launch, shutdown and artifact/hash/EC2 closeout, no auto retry. Three stopped historical instances untouched; no active jobs now. Find concrete defects in reproduction assumptions, provenance, row/page membership, range/byte accounting, budget/lifecycle or shell template. Verify historical functions if necessary. Give concise findings; do not propose an alternative architecture. Note truncated61-character V282ledger terminalSHA corrected using originalS3closeout andterminal, artifacts unchanged.",
+  "prompt_sha256": "c4c48f1a7b14f335f28338cedbf7ed4a5feb21a24dbf4b85e4d4dae99fe59298",
+  "prompt_bytes": 2338,
+  "fingerprint": "377f71d596e7e99ab686568ce9a3e94f2bcb9e4a5ebb041b18968b4628d0c2f0",
+  "evidence": {
+    "git_commit": "b39c657bfa75bcfcd591514b7b9947c6822ad35a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "01be8da36fbf22c459a007224c994e2e28aa939a89e88d71eedcdd91d4717d27",
+    "worktree_sha256": "4061165edaa624c38c121af849c63155328b88ac7b1d8e65e27d8e3a078db506",
+    "worktree_evidence_truncated": false,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 1,
+      "actor": "operator",
+      "note": "Operator-directed Opus 5.5 architecture refinement: beat both competitors; self-contained incremental library; evidence-led memory tradeoff and staged object-native gates.",
+      "created_at": 1790540483,
+      "updated_at": 1790540483
+    }
+  },
+  "previous_fingerprint": "a1ba853bc214dba90e3aebe8720b89ce09d74530465c21a9f388ffd44b4802e2",
+  "reused": false,
+  "systemd_unit": "devbox-consult-254891a6c1f845a7.service",
+  "pid": 7837,
+  "next": "Continue independent work, then call consult_wait or consult_status with this id."
+}
