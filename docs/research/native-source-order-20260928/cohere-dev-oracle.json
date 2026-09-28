@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-v283-page-oracle-v1",
+  "queries": 64,
+  "split": "CoHere first100k development ordinals0-63",
+  "layout_sha256": "3bbb8d03431f220bad7d7b7c91c3335e85940af571e071acd3dd64c89c6b7222",
+  "truth_sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+  "max_gets": 32,
+  "max_bytes": 16777216,
+  "max_pages": 84,
+  "mean_fetched_gt_hits_upper_bound": 100.0,
+  "p05_fetched_gt_hits_upper_bound": 100,
+  "advance_to_router": true,
+  "source_only_order_receipt": {
+    "order_sha256": "60cfc0bfdb8d2e73531d2c120299bb9864f80f6fdb56b85f020224b1a1bdb4c0",
+    "query_or_truth_used": false,
+    "recipe": "borsuk-semantic-order-chacha8-f32-v1",
+    "rows": 100000
+  },
+  "scope": "GT-aware optimistic upper bound on development0-63 only; not a serving route, recall or latency result"
+}
