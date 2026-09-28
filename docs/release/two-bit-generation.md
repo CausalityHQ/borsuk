@@ -318,3 +318,35 @@ It emits calibration/body identity JSON after successful sync; callers feed
 those values to the generation builder. This supplies an executable native SQ8
 creation path. Native ordering/normalization and lifecycle/package gates remain
 open; the paired replay does not prove a new cloud root or service performance.
+
+## Native source normalization
+
+`borsuk::sq8_source::normalize_source(raw, raw_sha, rows, dimensions, output,
+max_payload_bytes)` accepts immutable raw LE f32 source, streams one row at a
+time through the same f64 cosine normalization used by query planning, and
+returns the normalized body SHA. Unit vectors within squared-norm tolerance1e-6
+keep their original bytes. Zero/nonfinite inputs fail. Admission is
+`16*dimensions +135168` payload bytes, independent of row count; runtime and
+OS cache require separate accounting. Source shape/hash are checked before a
+synced temporary file is installed without overwrite. On error discard any
+unpublished output; an installation/parent-sync failure can leave output present.
+
+```sh
+cargo run --locked -p borsuk --example build_sq8_source -- normalize \
+  RAW RAW_SHA ROWS DIMENSIONS MAX_PAYLOAD_BYTES NEW_NORMALIZED_SOURCE
+```
+
+Pass that output and SHA to the SQ8 writer with the approved physical order.
+The source/SQ8 builder and signed-HTTP fixture now start from non-unit raw rows
+and normalize/encode/build/publish/reopen/search through public Rust APIs.
+Native semantic ordering is still missing. Its requested dual review was held
+by Devbox's six-hour cooldown; no override or duplicate consultation was started.
+General raw normalization follows the shared Rust f64 policy and is not claimed
+to be byte-identical to the historical Python f32 preprocessing.
+
+The two source tests and four HTTP range tests pass on Spark. The extra
+`two_bit_generation::tests` filter matched zero and contributes no evidence.
+The runnable normalization example preserves all approved normalized f32 bytes
+(SHA/307,200,000B) on both first100k D768 cohorts, independently rehashed after
+terminal. Existing paired quality evidence therefore remains applicable to
+those unchanged source bytes. See native-normalized-source-receipt.json.

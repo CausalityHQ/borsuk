@@ -1,0 +1,13 @@
+warning: missing documentation for a function
+   --> crates/borsuk/src/v41_learned_router.rs:202:1
+    |
+202 | pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<Vec<u8>> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `borsuk` (lib test) generated 320 warnings (run `cargo fix --lib -p borsuk --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/borsuk-ac8d9299f12ae198)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1697 filtered out; finished in 0.00s

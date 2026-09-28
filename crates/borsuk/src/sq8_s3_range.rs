@@ -447,7 +447,7 @@ mod tests {
             two_bit_store::{publish_two_bit_generation, read_two_bit_head},
         };
         let temp = tempfile::tempdir().unwrap();
-        let raw = [1_f32, 0., 0.9, 0.4358899]
+        let raw = [2_f32, 0., 1.8, 0.8717798]
             .into_iter()
             .flat_map(f32::to_le_bytes)
             .collect::<Vec<_>>();
@@ -455,9 +455,19 @@ mod tests {
         let raw_path = temp.path().join("raw");
         let sq8_path = temp.path().join("sq8");
         std::fs::write(&raw_path, &raw).unwrap();
-        let encoded = crate::sq8_source::build_sq8_source(
+        let normalized_path = temp.path().join("normalized");
+        let normalized_sha = crate::sq8_source::normalize_source(
             &raw_path,
             &hash(&raw),
+            2,
+            2,
+            &normalized_path,
+            200000,
+        )
+        .unwrap();
+        let encoded = crate::sq8_source::build_sq8_source(
+            &normalized_path,
+            &normalized_sha,
             2,
             &[0, 1],
             &sq8_path,

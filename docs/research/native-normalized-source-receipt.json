@@ -1,0 +1,53 @@
+{
+  "schema": "borsuk-native-normalized-source-receipt-v1",
+  "baseline_commit": "f6689d38e56e53ebe50b3b05c017d97eea68954f",
+  "host": "spark-2751",
+  "source_files": {
+    "crates/borsuk/src/sq8_source.rs": "15c6989ad2fa6d3ee7cba878cedfb0039f432a405efa281dd15887bee1f6866f",
+    "crates/borsuk/src/two_bit_generation.rs": "a93ebd02ef53b9b26bccef2a450e30e5f10abeb403184b99437d9f2f057dc387",
+    "crates/borsuk/src/sq8_s3_range.rs": "492e167ab566b6a2b0cbf589947d9ab622e441572e01e415a9e4f13ba7cfc9c9",
+    "crates/borsuk/examples/build_sq8_source.rs": "cfd645c1fac2b3acd3e16955e906be5a94a00cb3f08796a5e93420a2acd9363b"
+  },
+  "logs_sha256": {
+    "normalize-source-green.log": "1a58972d892cffed135126d8bc6bb2896d5cd74f9e3cd849aa01a7663e3f6136",
+    "normalize-source-generation.log": "89b3ccd73def00ae726a6f61183159300e8f4ffd6cc7ee2aabbc74775d696cf5",
+    "normalize-source-red.log": "2a9b11f461ae535622432bf8affd29e6971b453f6d0d3d65bc07fe68622e1f6a",
+    "normalize-source-http.log": "dfe9b5fccaa38a4f5ac83a39947e7e3b158041599f5cc56a6f7962fd8fc9306d"
+  },
+  "build_stderr_sha256": "214fd8b2a86d402a8f0e69fcc7e18362d86028600e4a1817bb0243426d8291f8",
+  "original_sessions": [
+    {
+      "id": 78385,
+      "exit_code": 101,
+      "role": "red placeholder normalizer"
+    },
+    {
+      "id": 73793,
+      "exit_code": 0,
+      "role": "2source+4HTTP tests; extra generation filter matched0 and is not counted"
+    },
+    {
+      "id": 25174,
+      "exit_code": 0,
+      "role": "normalization example build"
+    },
+    {
+      "id": 74581,
+      "exit_code": 0,
+      "role": "both100k normalization compatibility runs"
+    }
+  ],
+  "real_tests_passed": 6,
+  "decision": "GO for authenticated bounded native source normalization and raw-source-to-search synthetic API integration",
+  "source_layout_review": "critique_start rejected by six-hour cooldown; no override/job started",
+  "s3_data_reads": 0,
+  "cloud_launches": 0,
+  "qualification": false,
+  "limits": [
+    "Source-layout fitting and arbitrary-ID incremental maintenance/GC remain incomplete",
+    "Both100k checks preserve already-normalized source bytes; raw-corpus Python f32 parity not claimed",
+    "Actual Rust HTTP fixture is2rowD2, uses InMemory metadata/signing framing, not live IAM/performance",
+    "No full suite/package/CI/live1M/vendor/scale proof",
+    "Payload model excludes allocator/runtime/OS cache; installation sync failure may leave unpublished output"
+  ]
+}

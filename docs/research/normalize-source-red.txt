@@ -1,0 +1,24 @@
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `borsuk` (lib test) generated 320 warnings (run `cargo fix --lib -p borsuk --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 53.30s
+     Running unittests src/lib.rs (target/debug/deps/borsuk-ac8d9299f12ae198)
+
+running 1 test
+test sq8_source::tests::normalization_authentication_scale_and_no_overwrite ... FAILED
+
+failures:
+
+---- sq8_source::tests::normalization_authentication_scale_and_no_overwrite stdout ----
+
+thread 'sq8_source::tests::normalization_authentication_scale_and_no_overwrite' (829725) panicked at crates/borsuk/src/sq8_source.rs:187:85:
+called `Result::unwrap()` on an `Err` value: Invalid("not implemented")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sq8_source::tests::normalization_authentication_scale_and_no_overwrite
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1696 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p borsuk --lib`

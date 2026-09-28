@@ -1,5 +1,5 @@
 //! Create SQ8 with the public Rust API from sealed source/order snapshots.
-use borsuk::sq8_source::build_sq8_source;
+use borsuk::sq8_source::{build_sq8_source, normalize_source};
 use sha2::{Digest, Sha256};
 use std::{
     error::Error,
@@ -11,7 +11,22 @@ use std::{
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() != 8 {
-        return Err("usage: build_sq8_source SOURCE SOURCE_SHA DIMENSIONS ORDER_LE_U64 ORDER_SHA MAX_PAYLOAD_BYTES NEW_OUTPUT".into());
+        return Err("usage: build_sq8_source SOURCE SOURCE_SHA DIMENSIONS ORDER_LE_U64 ORDER_SHA MAX_PAYLOAD_BYTES NEW_OUTPUT (or normalize SOURCE SOURCE_SHA ROWS DIMENSIONS MAX_PAYLOAD_BYTES NEW_OUTPUT)".into());
+    }
+    if args[1] == "normalize" {
+        let sha = normalize_source(
+            Path::new(&args[2]),
+            &args[3],
+            args[4].parse()?,
+            args[5].parse()?,
+            Path::new(&args[7]),
+            args[6].parse()?,
+        )?;
+        println!(
+            "{}",
+            serde_json::json!({"normalized_sha256":sha,"query_or_truth_used":false})
+        );
+        return Ok(());
     }
     let cap: usize = args[6].parse()?;
     let file = File::open(&args[4])?;

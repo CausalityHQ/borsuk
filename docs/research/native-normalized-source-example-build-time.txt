@@ -1,0 +1,24 @@
+Full build stderr preserved by receipt SHA; final process timing follows.
+	Command being timed: "timeout 1200 cargo build --locked -p borsuk --example build_sq8_source"
+	User time (seconds): 51.38
+	System time (seconds): 15.97
+	Percent of CPU this job got: 117%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:57.28
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3974828
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 9589
+	Minor (reclaiming a frame) page faults: 3052110
+	Voluntary context switches: 24959
+	Involuntary context switches: 564
+	Swaps: 0
+	File system inputs: 4155160
+	File system outputs: 5575520
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

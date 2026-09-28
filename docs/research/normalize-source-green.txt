@@ -1,0 +1,13 @@
+    |
+202 | pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<Vec<u8>> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `borsuk` (lib test) generated 320 warnings (run `cargo fix --lib -p borsuk --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 45.95s
+     Running unittests src/lib.rs (target/debug/deps/borsuk-ac8d9299f12ae198)
+
+running 2 tests
+test sq8_source::tests::normalization_authentication_scale_and_no_overwrite ... ok
+test sq8_source::tests::source_encoding_order_identity_and_admission ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1695 filtered out; finished in 0.06s

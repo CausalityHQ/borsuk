@@ -333,18 +333,8 @@ impl TwoBitGeneration {
             .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
         // The codec already validated finite, nonzero input. Normalize after its
         // temporary preparation buffer is released, within the same scratch cap.
-        let norm_squared = query.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
-        let normalized = if (norm_squared - 1.0).abs() <= 1e-6 {
-            Cow::Borrowed(query)
-        } else {
-            let norm = norm_squared.sqrt();
-            Cow::Owned(
-                query
-                    .iter()
-                    .map(|&x| (f64::from(x) / norm) as f32)
-                    .collect(),
-            )
-        };
+        let normalized =
+            crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
         let seed = self
             .graph
             .search(&self.centroids, normalized.as_ref(), 1, 128)

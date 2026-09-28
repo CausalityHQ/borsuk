@@ -2,6 +2,7 @@
 use crate::two_bit_source::SourceBuildError;
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::Path,
@@ -16,6 +17,97 @@ pub struct Sq8SourceReceipt {
     pub step: Vec<f32>,
     /// SHA256 of the completed SQ8 body.
     pub sha256: String,
+}
+
+pub(crate) fn cosine_vector(vector: &[f32]) -> Result<Cow<'_, [f32]>, SourceBuildError> {
+    let squared = vector.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
+    if !squared.is_finite() || squared <= 0. {
+        return Err(SourceBuildError::Invalid("cosine vector norm"));
+    }
+    Ok(if (squared - 1.).abs() <= 1e-6 {
+        Cow::Borrowed(vector)
+    } else {
+        let norm = squared.sqrt();
+        Cow::Owned(
+            vector
+                .iter()
+                .map(|&x| (f64::from(x) / norm) as f32)
+                .collect(),
+        )
+    })
+}
+
+/// Stream raw little-endian f32 source to a new cosine-normalized file.
+/// Returns its SHA only after source authentication and output sync/install.
+/// Source must remain immutable; payload admission excludes OS/runtime overhead.
+/// An installation/sync error may leave unpublished output; discard on error.
+pub fn normalize_source(
+    source: &Path,
+    source_sha256: &str,
+    rows: usize,
+    dimensions: usize,
+    output: &Path,
+    max_payload_bytes: usize,
+) -> Result<String, SourceBuildError> {
+    let bad = SourceBuildError::Invalid;
+    let width = dimensions.checked_mul(4).ok_or(bad("source geometry"))?;
+    let length = rows.checked_mul(width).ok_or(bad("source geometry"))?;
+    let payload = dimensions
+        .checked_mul(16)
+        .and_then(|n| n.checked_add(135168))
+        .ok_or(bad("normalization memory geometry"))?;
+    if rows == 0
+        || dimensions == 0
+        || payload > max_payload_bytes
+        || output.exists()
+        || source_sha256.len() != 64
+        || !source_sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(bad("normalization inputs or memory budget"));
+    }
+    let input = File::open(source)?;
+    if input.metadata()?.len() != length as u64 {
+        return Err(bad("source length"));
+    }
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let mut input = BufReader::with_capacity(65536, input);
+    let mut row = vec![0_u8; width];
+    let mut values = vec![0_f32; dimensions];
+    let mut source_digest = Sha256::new();
+    let mut normalized_digest = Sha256::new();
+    {
+        let mut writer = BufWriter::with_capacity(65536, temporary.as_file_mut());
+        for _ in 0..rows {
+            input.read_exact(&mut row)?;
+            source_digest.update(&row);
+            for (value, bytes) in values.iter_mut().zip(row.chunks_exact(4)) {
+                *value = f32::from_le_bytes(bytes.try_into().unwrap());
+            }
+            let normalized = cosine_vector(&values)?;
+            for (bytes, value) in row.chunks_exact_mut(4).zip(normalized.iter()) {
+                bytes.copy_from_slice(&value.to_le_bytes());
+            }
+            writer.write_all(&row)?;
+            normalized_digest.update(&row);
+        }
+        if input.read(&mut [0])? != 0 || format!("{:x}", source_digest.finalize()) != source_sha256
+        {
+            return Err(bad("source identity or length changed"));
+        }
+        writer.flush()?;
+    }
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist_noclobber(output)
+        .map_err(|e| SourceBuildError::Io(e.error))?;
+    File::open(parent)?.sync_all()?;
+    Ok(format!("{:x}", normalized_digest.finalize()))
 }
 
 /// Write existing ordinal-ID SQ8 records; never overwrite output.
@@ -146,6 +238,50 @@ pub fn build_sq8_source(
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+    #[test]
+    fn normalization_authentication_scale_and_no_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("raw");
+        let output = dir.path().join("unit");
+        let values = [2_f32, 1., 5e29, 2.5e29, 5e-31, 2.5e-31, 1., 0.];
+        let bytes = values
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        std::fs::write(&source, &bytes).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        assert!(normalize_source(&source, &sha, 4, 2, &output, 0).is_err());
+        assert!(normalize_source(&source, &"0".repeat(64), 4, 2, &output, 200000).is_err());
+        assert!(!output.exists());
+        let normalized_sha = normalize_source(&source, &sha, 4, 2, &output, 200000).unwrap();
+        let body = std::fs::read(&output).unwrap();
+        let values = body
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let expected = [(2_f64 / 5_f64.sqrt()) as f32, (1_f64 / 5_f64.sqrt()) as f32];
+        for row in values[..6].chunks_exact(2) {
+            for (a, b) in row.iter().zip(expected) {
+                assert!((*a - b).abs() <= 1e-7);
+            }
+        }
+        assert_eq!(&values[6..], &[1., 0.]);
+        assert_eq!(normalized_sha, format!("{:x}", Sha256::digest(&body)));
+        assert!(normalize_source(&source, &sha, 4, 2, &output, 200000).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), body);
+        for bad in [[0_f32, 0.], [f32::NAN, 1.], [f32::INFINITY, 1.]] {
+            let body = bad
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>();
+            std::fs::write(&source, &body).unwrap();
+            let sha = format!("{:x}", Sha256::digest(&body));
+            let rejected = dir.path().join("rejected");
+            assert!(normalize_source(&source, &sha, 1, 2, &rejected, 200000).is_err());
+            assert!(!rejected.exists());
+        }
+    }
+
     #[test]
     fn source_encoding_order_identity_and_admission() {
         let dir = tempfile::tempdir().unwrap();
