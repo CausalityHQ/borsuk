@@ -1,0 +1,48 @@
+{
+  "schema": "borsuk-native-two-bit-generation-closeout-v1",
+  "baseline_commit": "ab21aed3",
+  "source_files": {
+    "crates/borsuk/src/two_bit_generation.rs": "8115d1722b0babcc60e91e7e9541eeea160b9d5675c99a44a870ff3edf5c0e66",
+    "crates/borsuk/src/two_bit_source.rs": "d3115b6f42a4c525959f9b4091079499c4d9e90f7d1cb6a768d5a4bfe3e493fe",
+    "crates/borsuk/src/bin/two_bit_plan_demo.rs": "0e99809d757e9b591edc345f66b1a2dfc26296e77c0ca4ac14d48287ba07946c",
+    "crates/borsuk/tests/two_bit_generation.rs": "8000f79e67d1127922555289b397c69d1dc412e555fb61d9729527dde0dd821b"
+  },
+  "test": {
+    "original_session": 93925,
+    "command": "CARGO_BUILD_JOBS=1 cargo test -p borsuk --test two_bit_generation",
+    "exit_code": 0,
+    "tests_passed": 1,
+    "test_seconds": 0.03,
+    "build_seconds": 169,
+    "log_sha256": "9c3cdd2bbd6610faf1ac1f4e9f7797aa1aac2848ae5493dd2fcb6b340c567eaa"
+  },
+  "replay": {
+    "original_session": 94812,
+    "exit_code": 0,
+    "dataset": "CoHere first100k",
+    "split": "development ordinals0-63",
+    "rows": 100000,
+    "dimensions": 768,
+    "k_reference": 100,
+    "root_sha256": "b2420db4aab045979d191b68ab9b61b149b01b6d84782a0cbac0be8779224219",
+    "requests_sha256": "1de0122f73d1b72e54498640b9701ce6d156b513629596447580c85fac302ba4",
+    "baseline_plans_sha256": "ad26d463454dd500a8c715ee975448dfbb595864d7aae34574d8b891e53e8500",
+    "new_plans_sha256": "9dca4524e80b2f4f303d0e310e56ec08aba59d285781ee03d04f09be2149b564",
+    "exact_page_get_byte_parity_queries": 64,
+    "elapsed_seconds": 14.65,
+    "gnu_time_peak_rss_kib": 37796,
+    "swaps": 0,
+    "s3_reads": 0
+  },
+  "decision": "GO for library integration only; preserve frozen method; no qualification/paid scale gate",
+  "open_requirements": [
+    "full paired ReLAION+CoHere validation",
+    "remote metadata bootstrap and public create/publication API",
+    "cold HTTP/search transport qualification",
+    "mutation and in-process compaction/GC",
+    "RSS/concurrency/generation-swap and failed-response-wire-byte accounting",
+    "matched vendor and scale/lifecycle gates"
+  ],
+  "review": "independent dual review remains deferred by prior cooldown; no replacement launched",
+  "admission_review": "Modeled file lengths are fixed before reads; authenticated source-plane geometry must agree with mean/record lengths before admission, so a changing file cannot undercharge codec metadata."
+}

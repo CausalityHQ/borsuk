@@ -263,7 +263,11 @@ pub struct TwoBitPlane {
 }
 
 // Exact allocation and an extra-byte probe bound concurrent file growth as well.
-fn read_authenticated(path: &Path, size: usize, digest: &str) -> Result<Vec<u8>, SourceBuildError> {
+pub(crate) fn read_authenticated(
+    path: &Path,
+    size: usize,
+    digest: &str,
+) -> Result<Vec<u8>, SourceBuildError> {
     let mut file = File::open(path)?;
     if file.metadata()?.len() != size as u64 {
         return Err(SourceBuildError::Invalid("artifact length"));

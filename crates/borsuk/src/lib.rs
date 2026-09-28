@@ -915,3 +915,6 @@ mod configuration_tests {
         }
     }
 }
+
+/// Authenticated on-demand SQ8 generation using two-bit nomination.
+pub mod two_bit_generation;

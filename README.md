@@ -10,7 +10,11 @@
 > V280 fetched 1.88 GB before serving and used 2.06 GB peak RSS for 1M
 > vectors; its 62 ms client p95 describes resident search, not cold S3 search.
 > The production serving route is being redesigned for bounded-memory,
-> authenticated on-demand object reads. See the
+> authenticated on-demand object reads. The Rust
+> [`TwoBitGeneration`](docs/release/two-bit-generation.md) candidate now binds
+> two-bit nomination, a centroid graph and conditional SQ8 ranges under one root;
+> its development plan replay is verified, while full paired/HTTP/lifecycle
+> qualification remains open. See the
 > [release checklist](docs/release/rust-v0.1-rc-checklist.md).
 
 **Vector search that lives in your bucket.**

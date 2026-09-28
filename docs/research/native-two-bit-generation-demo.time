@@ -1,0 +1,23 @@
+	Command being timed: "timeout 90s /data/target/agents/borsuk-prod-ready-v9/debug/two_bit_plan_demo .borsuk-scratch/v283/native-two-bit-generation b2420db4aab045979d191b68ab9b61b149b01b6d84782a0cbac0be8779224219 .borsuk-scratch/v283/cohere-dev64-requests.jsonl 1de0122f73d1b72e54498640b9701ce6d156b513629596447580c85fac302ba4 .borsuk-scratch/v283/native-two-bit-generation-final-plans.jsonl"
+	User time (seconds): 14.60
+	System time (seconds): 0.02
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:14.65
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 37796
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 9375
+	Voluntary context switches: 12
+	Involuntary context switches: 148
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 80
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
