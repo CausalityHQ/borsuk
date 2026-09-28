@@ -1,0 +1,43 @@
+{
+  "schema": "borsuk-cosine-validation-screen-receipt-v1",
+  "source_commit": "415803a4",
+  "source_files": {
+    "scripts/native_two_bit_cosine_development.py": "8bf53017aabb7461bb747a02950db9645be19c3e1767a65bfdebb1ad38d997c8",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916",
+    "docs/research/native-cosine-validation-gate.json": "2024f86d3b82b8f6cda710b3608eb3679f74536435af95015fdc23a08084bead"
+  },
+  "inputs": {
+    "root_sha256": "b2420db4aab045979d191b68ab9b61b149b01b6d84782a0cbac0be8779224219",
+    "requests_sha256": "dd2c5b1d6205c527bb73bd3ba3732fe1e121df0f04eed8f3738f4beb0c145d82",
+    "truth_sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+    "sq8_sha256": "301696df05ca03122951b66ad8a9bedb5d5f1e675c6fc66f6019abbce3fcda58"
+  },
+  "plans": {
+    "original_session": 90521,
+    "exit_code": 0,
+    "sha256": "a29b058a66e1ca3fba9c27351ce8a03ae20f7f9ad4a524ab988b24c5248ab2eb",
+    "elapsed_seconds": 14.77,
+    "peak_rss_kib": 37804
+  },
+  "score": {
+    "original_session": 51612,
+    "exit_code": 0,
+    "sha256": "7b8d3cce8b54aebdb98341d7ae5980e5774d8ca71d1c1929c377679c24b02e1a",
+    "elapsed_seconds": 11.24,
+    "peak_rss_kib": 180024
+  },
+  "swaps": 0,
+  "s3_reads": 0,
+  "qualification": false,
+  "decision": "GO to full corrected-method paired validation; hold scale and release",
+  "blockers": [
+    "ReLAION layout/source/GT preparation requires intended remote target/access",
+    "Full744-query two-dataset quality and end-to-end S3/HTTP gates not proven"
+  ],
+  "limits": [
+    "Validation256\u2013319 is only a64-query early screen",
+    "Demo emits local0\u201363 ordinals; scorer verifies source256\u2013319 mapping",
+    "Scoring uses established sequential-f32 Python mirror, not live service execution",
+    "No nomination-vs-selection decomposition is available in API plan output"
+  ]
+}

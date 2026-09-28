@@ -223,3 +223,8 @@ The corrected CoHere development0–63 screen subsequently passed: mean R@100
 32GET/16,773,120bytes. This is development-only offline evidence. Full paired
 validation and serving qualification remain open; see the corrected-method
 receipt/decision in `docs/research/native-cosine-development-*`.
+
+The corrected CoHere validation256–319 short screen also passed: returned
+99.015625%/p05 98 against paired full SQ8 99.21875%/98, deficit0.203125pp;
+32GET/16,773,120bytes maximum. This does not qualify the full744-query split
+or the ReLAION dataset. Receipts: `docs/research/native-cosine-validation-*`.
