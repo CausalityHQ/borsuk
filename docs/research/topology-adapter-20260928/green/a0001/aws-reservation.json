@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-topology-adapter-green-check-v1",
+  "source_base_commit": "72e803a2a7c583b6be02ea1251f9c991269e107c",
+  "source_archive_sha256": "9e626bc95702276eabbe2f86f6431af5ebd9b889d8e4ed92a25380b11f2fe360",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.212800",
+  "spot_quote_timestamp": "2026-09-28T13:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.2,
+  "scope": "Focused adapter/paired synthetic fixtures then full workspace all-target assurance; no corpus quality panels",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}

@@ -1,0 +1,21 @@
+{
+  "instance_id": "i-0d670a0f46778dae1",
+  "state": "terminated",
+  "source_archive_sha256": "9e626bc95702276eabbe2f86f6431af5ebd9b889d8e4ed92a25380b11f2fe360",
+  "terminal_sha256": "84c52b24209e6297b01076faeef700a60e8375a441f87d2bdac869413b4693bd",
+  "artifact_count": 4,
+  "source_files_matched": 391,
+  "source_files_changed": [],
+  "focused": {
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0
+  },
+  "full_workspace": {
+    "passed": 2684,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 147
+  },
+  "test_summary_count": 148
+}

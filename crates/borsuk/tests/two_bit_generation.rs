@@ -228,6 +228,116 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         ))
     ));
 
+    let requests = root.join("paired-requests.jsonl");
+    let request_bytes = (0..64)
+        .map(|ordinal| {
+            format!(
+                "{}\n",
+                serde_json::json!({"query_ordinal":ordinal,"query":[0.5,0.25]})
+            )
+        })
+        .collect::<String>();
+    fs::write(&requests, &request_bytes).unwrap();
+    let paired_output = root.join("paired-plans.jsonl");
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_two_bit_plan_demo"))
+        .args([
+            root.to_str().unwrap(),
+            &hash(&manifest),
+            requests.to_str().unwrap(),
+            &hash(request_bytes.as_bytes()),
+            paired_output.to_str().unwrap(),
+            "0",
+            "64",
+            "--trace",
+            "--paired",
+            root.to_str().unwrap(),
+            &hash(&manifest),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        command.status.success(),
+        "paired replay missing: {}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    let records = fs::read_to_string(&paired_output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 128);
+    for (ordinal, pair) in records.chunks_exact(2).enumerate() {
+        let arms = if ordinal % 2 == 0 {
+            ["control", "candidate"]
+        } else {
+            ["candidate", "control"]
+        };
+        for (record, arm) in pair.iter().zip(arms) {
+            assert_eq!(record["query_ordinal"], ordinal);
+            assert_eq!(record["arm"], arm);
+            assert!(record["route_wall_ns"].as_u64().is_some());
+            assert!(record["route_process_cpu_ns"].as_u64().is_some());
+        }
+        for key in [
+            "ranges",
+            "planned_bytes",
+            "ranked_candidate_pages",
+            "selected_pages",
+            "seed_page",
+            "primary_page",
+            "seed_evaluated_units",
+            "walk_evaluated_units",
+            "seed_work_exhausted",
+            "walk_work_exhausted",
+        ] {
+            assert_eq!(pair[0][key], pair[1][key], "{key}");
+        }
+    }
+
+    let ordinary_output = root.join("ordinary-plans.jsonl");
+    let ordinary = std::process::Command::new(env!("CARGO_BIN_EXE_two_bit_plan_demo"))
+        .args([
+            root.to_str().unwrap(),
+            &hash(&manifest),
+            requests.to_str().unwrap(),
+            &hash(request_bytes.as_bytes()),
+            ordinary_output.to_str().unwrap(),
+            "0",
+            "64",
+        ])
+        .output()
+        .unwrap();
+    assert!(ordinary.status.success());
+    let ordinary_records = fs::read_to_string(&ordinary_output).unwrap();
+    assert_eq!(ordinary_records.lines().count(), 64);
+    for (ordinal, line) in ordinary_records.lines().enumerate() {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(record.as_object().unwrap().len(), 3);
+        for key in ["query_ordinal", "ranges", "planned_bytes"] {
+            assert_eq!(record[key], records[ordinal * 2][key]);
+        }
+    }
+    let forbidden = root.join("forbidden-validation.jsonl");
+    let rejected = std::process::Command::new(env!("CARGO_BIN_EXE_two_bit_plan_demo"))
+        .args([
+            root.to_str().unwrap(),
+            &hash(&manifest),
+            requests.to_str().unwrap(),
+            &hash(request_bytes.as_bytes()),
+            forbidden.to_str().unwrap(),
+            "256",
+            "64",
+            "--trace",
+            "--paired",
+            root.to_str().unwrap(),
+            &hash(&manifest),
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("paired replay restricted"));
+    assert!(!forbidden.exists());
+
     for query in [[5e29, 2.5e29], [5e-31, 2.5e-31]] {
         assert_eq!(first.ranges, generation.plan(&query).await.unwrap().ranges);
     }
@@ -629,4 +739,134 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     };
     assert!(bad_builder.build(&bad_output, 2_000_000).is_err());
     assert!(!bad_output.join("manifest.json").exists());
+}
+
+#[test]
+fn graph_variant_adapter_preserves_components_and_rejects_untrusted_roots() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("control");
+    let raw_path = temp.path().join("raw.f32");
+    let sq8_path = temp.path().join("sq8.bin");
+    let mut raw = Vec::new();
+    let mut sq8 = Vec::new();
+    for id in 0..8224_i64 {
+        let unit = id as usize / 32;
+        let code = (0..8)
+            .map(|d| ((unit * 37 + d * 71 + unit * d * 13) % 251 + 1) as u8)
+            .collect::<Vec<_>>();
+        let values = code.iter().map(|&c| c as f32 / 255.0).collect::<Vec<_>>();
+        raw.extend(values.iter().flat_map(|v| v.to_le_bytes()));
+        sq8.extend(id.to_le_bytes());
+        sq8.extend(values.iter().map(|&v| v * v).sum::<f32>().to_le_bytes());
+        sq8.extend(code);
+    }
+    fs::write(&raw_path, &raw).unwrap();
+    fs::write(&sq8_path, &sq8).unwrap();
+    let sha = TwoBitGenerationBuilder {
+        base_epoch: 0,
+        source: TwoBitSource {
+            raw: &raw_path,
+            raw_sha256: &hash(&raw),
+            sq8: &sq8_path,
+            sq8_sha256: &hash(&sq8),
+            rows: 8224,
+            dimensions: 8,
+        },
+        generation: 1,
+        low: &[0.; 8],
+        step: &[1.0 / 255.0; 8],
+        sq8_object_key: &format!("fixture/objects/{}", hash(&sq8)),
+        sq8_etag: "fixture-etag",
+    }
+    .build(&root, 64_000_000)
+    .unwrap();
+    let names = [
+        "manifest.json",
+        "page_manifest.json",
+        "page_digests.bin",
+        "centroids.bin",
+        "graph.bin",
+        "plane/manifest.json",
+        "plane/mean.bin",
+        "plane/records.bin",
+    ];
+    let before = names.map(|name| fs::read(root.join(name)).unwrap());
+    let candidate = temp.path().join("candidate");
+    let invoke = |trusted: &str, output: &std::path::Path| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_build_two_bit_graph_variant"))
+            .args([root.to_str().unwrap(), trusted, output.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    let result = invoke(&sha, &candidate);
+    assert!(
+        result.status.success(),
+        "graph adapter missing: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["build"]["rows"], 8224);
+    let control_degrees = report["build"]["control"]["node_layer_degrees"]
+        .as_array()
+        .unwrap();
+    let candidate_degrees = report["build"]["candidate"]["node_layer_degrees"]
+        .as_array()
+        .unwrap();
+    assert_eq!(control_degrees.len(), 257);
+    assert_eq!(candidate_degrees.len(), 257);
+    for (control, candidate) in control_degrees.iter().zip(candidate_degrees) {
+        assert_eq!(
+            control.as_array().unwrap().len(),
+            candidate.as_array().unwrap().len()
+        );
+        for layers in [control, candidate] {
+            let layers = layers.as_array().unwrap();
+            assert!(!layers.is_empty() && layers.len() <= 17);
+            for (index, degree) in layers.iter().enumerate() {
+                assert!(
+                    degree.as_u64().unwrap() <= if index + 1 == layers.len() { 32 } else { 16 }
+                );
+            }
+        }
+    }
+    let control_manifest: serde_json::Value = serde_json::from_slice(&before[0]).unwrap();
+    let candidate_bytes = fs::read(candidate.join("manifest.json")).unwrap();
+    let mut candidate_manifest: serde_json::Value =
+        serde_json::from_slice(&candidate_bytes).unwrap();
+    assert_ne!(
+        candidate_manifest["graph_sha256"],
+        control_manifest["graph_sha256"]
+    );
+    for field in ["graph_sha256", "graph_resident_bytes"] {
+        candidate_manifest[field] = control_manifest[field].clone();
+    }
+    assert_eq!(candidate_manifest, control_manifest);
+    for (name, bytes) in names.into_iter().zip(&before) {
+        assert_eq!(fs::read(root.join(name)).unwrap(), *bytes);
+        if name != "manifest.json" && name != "graph.bin" {
+            assert_eq!(fs::read(candidate.join(name)).unwrap(), *bytes);
+        }
+    }
+    TwoBitGeneration::open(
+        &candidate,
+        &hash(&candidate_bytes),
+        TwoBitGenerationLimits {
+            max_memory_bytes: 64_000_000,
+            max_active_queries: 1,
+            max_query_bytes: 1_048_576,
+            max_query_gets: 32,
+            max_parallel_gets: 32,
+            max_query_scratch_bytes: 16_384,
+            already_pinned_bytes: 0,
+        },
+    )
+    .unwrap();
+    assert!(!invoke(&sha, &candidate).status.success());
+    let wrong = temp.path().join("wrong-root");
+    assert!(!invoke(&"0".repeat(64), &wrong).status.success());
+    assert!(!wrong.exists());
+    fs::write(root.join("centroids.bin"), b"corrupt").unwrap();
+    let corrupt = temp.path().join("corrupt-root");
+    assert!(!invoke(&sha, &corrupt).status.success());
+    assert!(!corrupt.exists());
 }

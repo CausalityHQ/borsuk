@@ -224,6 +224,16 @@ impl UnitCentroidGraph {
         self.neighbours.len()
     }
 
+    /// Offline structural diagnostic: degree of each stored layer per node,
+    /// in the artifact's top-layer-first order. Caller owns the returned payload.
+    #[doc(hidden)]
+    pub fn diagnostic_node_degrees(&self) -> Vec<Vec<usize>> {
+        self.neighbours
+            .iter()
+            .map(|tower| tower.iter().map(Vec::len).collect())
+            .collect()
+    }
+
     /// Structural resident bytes of the decoded adjacency. This scans the
     /// serialized graph without allocating adjacency vectors. It excludes
     /// allocator overhead, the encoded blob and other generation planes.
@@ -925,9 +935,11 @@ mod tests {
             .unwrap();
         assert!(old.evaluated_scores.is_empty());
         assert_eq!(old.evaluated_units, full.evaluated_units);
-        assert!(loaded
-            .search_pages_seeded(&scorer, &[2.1], &[0], 1, 1)
-            .is_err());
+        assert!(
+            loaded
+                .search_pages_seeded(&scorer, &[2.1], &[0], 1, 1)
+                .is_err()
+        );
     }
 
     #[test]

@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-topology-adapter-red-check-v1",
+  "source_base_commit": "72e803a2a7c583b6be02ea1251f9c991269e107c",
+  "source_archive_sha256": "1f6687109c852fad0f8fb170a65e4c2dd2ad3883680250a7df130c6d6f01a704",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.212800",
+  "spot_quote_timestamp": "2026-09-28T13:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.2,
+  "scope": "Expected red failures: graph root adapter stub and unsupported paired replay; synthetic fixture only",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}

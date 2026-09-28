@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0d670a0f46778dae1",
+  "prefix": "research/native-library-check/topology-adapter/20260928/green-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "9e626bc95702276eabbe2f86f6431af5ebd9b889d8e4ed92a25380b11f2fe360",
+  "source_base_commit": "72e803a2a7c583b6be02ea1251f9c991269e107c"
+}
