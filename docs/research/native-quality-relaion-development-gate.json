@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-relaion-corrected-cosine-development-gate-v1",
+  "source_baseline": "de1e0175",
+  "config_sha256": "ca5d643bbc48de734809d380716a149bfb492379763b2bb7f520647ab00893eb",
+  "source_files": {
+    "scripts/native_two_bit_quality.py": "e26db498afc7edaa7767c281abb50d5d9c2b0c93769236d8a6730891b8ea2fb4",
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  },
+  "min_mean_recall": 98,
+  "min_p05": 95,
+  "max_paired_flat_deficit_pp": 0.5,
+  "max_gets": 32,
+  "max_bytes": 16773120,
+  "plan_seconds_cap": 120,
+  "score_seconds_cap": 120,
+  "threads": 1,
+  "qualification": false,
+  "decision": "Fail kills advance and decomposes fetch vs SQ8 loss; pass allows frozen validation preparation only. No parameter tuning/scale.",
+  "s3_reads": 0,
+  "cloud_instances_launched": 0
+}

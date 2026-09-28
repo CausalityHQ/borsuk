@@ -1,0 +1,13 @@
+{
+  "dataset": "CoHere first100k",
+  "root": ".borsuk-scratch/v283/native-two-bit-generation",
+  "root_sha256": "b2420db4aab045979d191b68ab9b61b149b01b6d84782a0cbac0be8779224219",
+  "requests": ".borsuk-scratch/v283/cohere-requests.jsonl",
+  "requests_sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+  "truth": ".borsuk-scratch/v283/cohere-truth.u32",
+  "truth_sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+  "sq8": ".borsuk-scratch/v283/cohere-layout/sq8.bin",
+  "sq8_sha256": "301696df05ca03122951b66ad8a9bedb5d5f1e675c6fc66f6019abbce3fcda58",
+  "first": 0,
+  "count": 64
+}

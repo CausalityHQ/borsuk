@@ -1,0 +1,39 @@
+{
+  "schema": "borsuk-generic-quality-development-receipt-v1",
+  "source_baseline": "de1e0175",
+  "source_files": {
+    "scripts/native_two_bit_quality.py": "e26db498afc7edaa7767c281abb50d5d9c2b0c93769236d8a6730891b8ea2fb4",
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/test_native_two_bit_quality.py": "21814b3b6791547a9f669036f9f878699db77057c121ef34c778daa72891ce44",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  },
+  "cohere_parity": {
+    "original_session": 98295,
+    "exit_code": 0,
+    "queries": 64,
+    "metrics_and_samples_exactly_equal": true,
+    "output_sha256": "de26e699ef47401beb1f12530d84fee0a7ee60ba39908596c8866fa41953810b"
+  },
+  "relaion": {
+    "plan_original_session": 96580,
+    "plan_exit_code": 0,
+    "score_original_session": 32334,
+    "score_exit_code": 0,
+    "plan_sha256": "ed8abe4b412df78d6b5549c703967eabccecff4cbd09443e55863bc2cd4d8805",
+    "score_sha256": "b38f3650995731c2ff041c4dfb6cbae7e128b4e2705b72fd702bd9363abf6279",
+    "plan_elapsed_seconds": 10.67,
+    "plan_peak_rss_kib": 51188,
+    "score_elapsed_seconds": 7.38,
+    "score_peak_rss_kib": 225872
+  },
+  "checks": [
+    "config digest failure before data reads",
+    "unsupported split rejection before data reads",
+    "CoHere64 all samples/metrics exact arithmetic parity",
+    "ReLAION development gate passes unchanged thresholds"
+  ],
+  "s3_reads": 0,
+  "swaps": 0,
+  "qualification": false,
+  "decision": "GO to frozen ReLAION validation; hold paired qualification, release, scale and vendor claim"
+}

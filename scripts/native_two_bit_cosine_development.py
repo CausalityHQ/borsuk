@@ -25,6 +25,35 @@ def normalize(query):
         [float(x) / math.sqrt(norm2) for x in query], dtype=np.float32)
 
 
+def score_panel(requests, plans, truth, sq8, low, step, first, count, *, local_ordinals=False):
+    samples = []
+    for i, (request, plan) in enumerate(zip(requests, plans)):
+        assert request['query_ordinal'] == i + first
+        assert plan['query_ordinal'] == (i if local_ordinals else i + first)
+        query = normalize(request['query'])
+        assert query.shape == (768,)
+        ranges = plan['ranges']
+        assert 0 < len(ranges) <= 32
+        assert all(0 <= start < end <= 78000000 and start % 780 == end % 780 == 0 for start, end in ranges)
+        assert all(ranges[j][1] < ranges[j+1][0] for j in range(len(ranges)-1))
+        size = sum(end-start for start, end in ranges)
+        assert size == plan['planned_bytes'] <= 16773120
+        physical = np.concatenate([np.arange(start//780, end//780) for start, end in ranges])
+        scores = rust_sq8_scores(sq8, query, low, step)
+        assert np.isfinite(scores).all()
+        hits = lambda ids: int(np.isin(ids, truth[i + first]).sum())
+        fetched = sq8[physical]
+        returned = fetched['id'][np.lexsort((fetched['id'], scores[physical]))[:100]]
+        flat = sq8['id'][np.lexsort((sq8['id'], scores))[:100]]
+        samples.append(dict(query_ordinal=i + first, fetched_hits=hits(fetched['id']),
+            returned_hits=hits(returned), flat_hits=hits(flat), gets=len(ranges), bytes=size))
+    metrics = {f'{stat}_{key}': reducer([s[key] for s in samples])
+        for stat, reducer in [('mean', lambda xs: sum(xs)/count), ('p05', lambda xs: sorted(xs)[math.ceil(.05 * count)-1])]
+        for key in ['fetched_hits', 'returned_hits', 'flat_hits']}
+    passes = metrics['mean_returned_hits'] >= 98 and metrics['p05_returned_hits'] >= 95 and metrics['mean_flat_hits']-metrics['mean_returned_hits'] <= .5
+    return metrics, samples, passes
+
+
 def run(validation_plan_sha=None, full_validation_plan_sha=None):
     root = Path('.borsuk-scratch/v283')
     manifest = json.loads(checked(root / 'native-two-bit-generation/manifest.json',
@@ -65,31 +94,8 @@ def run(validation_plan_sha=None, full_validation_plan_sha=None):
     assert sq8.shape == (100000,) and np.array_equal(np.sort(sq8['id']), np.arange(100000))
     assert len(plans) == len(requests) == count
     low, step = (np.asarray(manifest[k], dtype=np.float32) for k in ('low', 'step'))
-    samples = []
-    for i, (request, plan) in enumerate(zip(requests, plans)):
-        assert request['query_ordinal'] == i + first
-        assert plan['query_ordinal'] == (i + first if full_validation_plan_sha else i)
-        query = normalize(request['query'])
-        assert query.shape == (768,)
-        ranges = plan['ranges']
-        assert 0 < len(ranges) <= 32
-        assert all(0 <= start < end <= 78000000 and start % 780 == end % 780 == 0 for start, end in ranges)
-        assert all(ranges[j][1] < ranges[j+1][0] for j in range(len(ranges)-1))
-        size = sum(end-start for start, end in ranges)
-        assert size == plan['planned_bytes'] <= 16773120
-        physical = np.concatenate([np.arange(start//780, end//780) for start, end in ranges])
-        scores = rust_sq8_scores(sq8, query, low, step)
-        assert np.isfinite(scores).all()
-        hits = lambda ids: int(np.isin(ids, truth[i + first]).sum())
-        fetched = sq8[physical]
-        returned = fetched['id'][np.lexsort((fetched['id'], scores[physical]))[:100]]
-        flat = sq8['id'][np.lexsort((sq8['id'], scores))[:100]]
-        samples.append(dict(query_ordinal=i + first, fetched_hits=hits(fetched['id']),
-            returned_hits=hits(returned), flat_hits=hits(flat), gets=len(ranges), bytes=size))
-    metrics = {f'{stat}_{key}': reducer([s[key] for s in samples])
-        for stat, reducer in [('mean', lambda xs: sum(xs)/count), ('p05', lambda xs: sorted(xs)[math.ceil(.05 * count)-1])]
-        for key in ['fetched_hits', 'returned_hits', 'flat_hits']}
-    passes = metrics['mean_returned_hits'] >= 98 and metrics['p05_returned_hits'] >= 95 and metrics['mean_flat_hits']-metrics['mean_returned_hits'] <= .5
+    metrics, samples, passes = score_panel(requests, plans, truth, sq8, low, step,
+        first, count, local_ordinals=not full_validation_plan_sha)
     result = dict(schema='borsuk-cosine-correction-screen-v1', dataset='CoHere first100k',
         dimensions=768, metric='cosine', k=100, split='validation256–999' if full_validation_plan_sha else ('validation256–319' if validation_plan_sha else 'development0–63'), queries=count,
         metrics=metrics, max_gets=max(s['gets'] for s in samples), max_bytes=max(s['bytes'] for s in samples),
