@@ -277,3 +277,29 @@ synthetic protocol integration, not real AWS IAM or benchmark qualification.
 Failed-response wire bytes are not covered by verified-byte stats.
 The Rust test bundle must include scripts/fixtures, referenced by existing
 library tests. See native-two-bit-http-serving-check.json and its source receipt.
+
+## Native SQ8 preparation
+
+`borsuk::sq8_source::build_sq8_source(source, source_sha256, dimensions,
+order, output, max_payload_bytes)` writes the existing SQ8 body from immutable
+normalized little-endian f32 rows and an approved complete ordinal permutation.
+It derives source-only min/max calibration and returns `low`, `step` and the
+body SHA for `TwoBitGenerationBuilder`. Upload that body first and pass its
+strong ETag to the generation builder/publication path. No query/truth input is
+accepted. The actual HTTP integration test now uses this writer before building,
+publishing, reopening and searching the generation.
+
+The writer reads one source row at a time, checks the trusted source digest and
+unit norms, validates the permutation, and admits caller-owned order plus
+bitset/buffers before allocating. Keep the source immutable throughout both
+passes. Output uses create-new and sync; failed writes may leave an unpublished
+partial body, which must be discarded. Only a successful receipt authorizes
+further construction. Runtime/allocator and OS page cache are outside the payload
+budget. Source ordering is still caller-supplied; native semantic layout fitting
+and arbitrary application IDs remain incomplete.
+
+Code rounding uses f32 ties-to-even; reconstructed squared norms accumulate
+sequential f32. The independent NumPy fixture covers negative minima, rounding
+ties and constant coordinates, but does not establish complete dataset byte or
+recall parity. Existing paired100k benchmark bodies and qualification remain
+immutable; this new writer is not yet the qualified production creation default.

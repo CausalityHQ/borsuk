@@ -1,0 +1,28 @@
+warning: missing documentation for a function
+   --> crates/borsuk/src/v41_learned_router.rs:202:1
+    |
+202 | pub fn run_v41_burned_diagnostic(request: V41BurnedDiagnosticRequest) -> Result<Vec<u8>> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `borsuk` (lib test) generated 320 warnings (run `cargo fix --lib -p borsuk --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized] target(s) in 50.67s
+     Running unittests src/lib.rs (target/debug/deps/borsuk-ac8d9299f12ae198)
+
+running 1 test
+test sq8_source::tests::source_encoding_order_identity_and_admission ... FAILED
+
+failures:
+
+---- sq8_source::tests::source_encoding_order_identity_and_admission stdout ----
+
+thread 'sq8_source::tests::source_encoding_order_identity_and_admission' (812903) panicked at crates/borsuk/src/sq8_source.rs:47:84:
+called `Result::unwrap()` on an `Err` value: Invalid("not implemented")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sq8_source::tests::source_encoding_order_identity_and_admission
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1695 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p borsuk --lib`

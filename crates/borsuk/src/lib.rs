@@ -924,3 +924,6 @@ pub mod two_bit_store;
 
 /// Source-only construction of authenticated generation metadata.
 pub mod two_bit_build;
+
+/// Bounded normalized-source SQ8 creation in an approved physical order.
+pub mod sq8_source;

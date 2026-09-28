@@ -451,20 +451,20 @@ mod tests {
             .into_iter()
             .flat_map(f32::to_le_bytes)
             .collect::<Vec<_>>();
-        let step = [1_f32 / 255.; 2];
-        let mut sq8 = Vec::new();
-        for (id, codes) in [(0_i64, [255_u8, 0]), (1, [230, 111])] {
-            let decoded = codes.map(|code| f32::from(code) * step[0]);
-            let norm = decoded[0] * decoded[0] + decoded[1] * decoded[1];
-            sq8.extend_from_slice(&id.to_le_bytes());
-            sq8.extend_from_slice(&norm.to_le_bytes());
-            sq8.extend_from_slice(&codes);
-        }
         let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
         let raw_path = temp.path().join("raw");
         let sq8_path = temp.path().join("sq8");
         std::fs::write(&raw_path, &raw).unwrap();
-        std::fs::write(&sq8_path, &sq8).unwrap();
+        let encoded = crate::sq8_source::build_sq8_source(
+            &raw_path,
+            &hash(&raw),
+            2,
+            &[0, 1],
+            &sq8_path,
+            200000,
+        )
+        .unwrap();
+        let sq8 = std::fs::read(&sq8_path).unwrap();
         let store = InMemory::new();
         let key = format!("fixture/objects/{}", hash(&sq8));
         store
@@ -488,8 +488,8 @@ mod tests {
                 dimensions: 2,
             },
             generation: 1,
-            low: &[0.; 2],
-            step: &step,
+            low: &encoded.low,
+            step: &encoded.step,
             sq8_object_key: &key,
             sq8_etag: &etag,
         }

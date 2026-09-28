@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-native-sq8-source-check-v1",
+  "baseline_commit": "6f328d5a22d72fa436ca0395f41355fe83f5f244",
+  "host": "spark-2751",
+  "source_sha256": "878200fb5a1965013dbfe7e89301b6f5953d20483a815ef78965ca68ad115c19",
+  "serving_source_sha256": "902963bed5a97f578e5f37a933251d5f25bfa1f853720c5377bda07bae278ece",
+  "sessions": [
+    {
+      "id": 31579,
+      "exit": 101,
+      "role": "red placeholder rejected valid encoding"
+    },
+    {
+      "id": 8790,
+      "exit": 0,
+      "role": "green source boundary"
+    },
+    {
+      "id": 31046,
+      "exit": 0,
+      "role": "final reference and serving tests"
+    }
+  ],
+  "tests_passed": 5,
+  "log_sha256": {
+    "sq8-source-green.log": "2f29c5444a39c9ce8fccc7505f0e4c91db944dd70792e9789c637773ef5f3ef4",
+    "sq8-source-red.log": "725ee21d0fee33896aa9cdb6a3d7b8065a1599c403c41a6dc19c25101e5c63ea",
+    "sq8-source-reference.log": "26df2239230f913ec95f50c1f4e204b9b21f353099aa7f1d69a8967a0691dd7d",
+    "sq8-source-serving.log": "cfc79cf9fb4eee50854b56b0ff5952b7f2304dcb9b15d5a26885e1cfa9e5f915"
+  },
+  "reference": "NumPy 2.3.3 rint/einsum on Spark: D4 signed unit basis plus zero coordinate, tie code128 and normbits3f800081",
+  "decision": "GO for native source-only SQ8 API and synthetic create/publish/reopen/search integration",
+  "limits": [
+    "Caller supplies approved semantic order and normalized immutable source",
+    "Sequential f32 norm may differ from NumPy SIMD; dataset byte/recall parity not yet qualified",
+    "Ordinal IDs only; mutations/GC/native semantic fit/real IAM/cloud performance/package/vendor/scale incomplete",
+    "Payload cap excludes allocator/runtime/OS page cache; failed writes may leave unpublished scratch",
+    "No full suite or new paid run; frozen benchmark artifacts unchanged"
+  ]
+}
