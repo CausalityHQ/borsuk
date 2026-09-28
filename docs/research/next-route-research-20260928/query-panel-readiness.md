@@ -1,0 +1,7 @@
+# Fresh query panel readiness
+
+Static repository evidence: scripts/v248_score_cohere_graph.py:34–53 authenticates CoHere testSHA5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e, exact3,073,101bytes and exactly1000D768f32rows, then emits all1000requests. V282 a0002 measured development0–255 and validation256–999 using requestSHA86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812. ReLAION V114 likewise binds a1000-query file; V282 consumed that whole panel with requestSHAb2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0.
+
+Thus neither64–255 nor a renamed split of these files is fresh. Current panels remain valid for explicitly disclosed development/diagnosis; confirmation requires a new independently authenticated query source and exact GT over the frozen corpus. Availability and distribution of such a new source have not been established. Held-out corpus embeddings would constitute a different query cohort and must be named/disclosed rather than called the original official test distribution.
+
+No new query source, quality run, fit, query perturbation, paid worker or operator approval was requested or launched for this check. Settle and seal query identity before winner confirmation; do not retroactively choose a holdout after seeing its outcomes.

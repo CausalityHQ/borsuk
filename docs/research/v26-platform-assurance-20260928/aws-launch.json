@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0128209956ceb8d2e",
+  "prefix": "research/native-library-check/v26-platform-assurance/cf329c81b6518d7997b3c1dd7832a08bd0b06dfa0358941c64707c496684a685/a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "cf329c81b6518d7997b3c1dd7832a08bd0b06dfa0358941c64707c496684a685",
+  "source_base_commit": "1643c471f43a192a62481a671263105561442fac"
+}

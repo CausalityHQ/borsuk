@@ -10453,7 +10453,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq4_quality_runner_authenticates_full_inputs_and_writes_128_samples() {
+    fn v26_pq4_quality_runner_authenticates_full_inputs_and_obeys_backend_contract() {
         // Break caught: the frontier truncates before authenticating all queries/truth, rebuilds
         // PQ, opens page bodies, or writes a result not bound to its typed Parquet evidence.
         let row_count = 8_193_u64;
@@ -10499,7 +10499,22 @@ mod tests {
             evidence_output_uri: "s3://v26-output/pq4-quality/evidence.parquet".to_owned(),
         };
 
-        let bytes = run_v26_pq4_quality_frontier(&request).unwrap();
+        let outcome = run_v26_pq4_quality_frontier(&request);
+        let mut drifted = request.clone();
+        drifted.external_queries.identity.digest = "f".repeat(64);
+        drifted.evidence_output_path = temp.path().join("rejected-quality.parquet");
+        assert!(run_v26_pq4_quality_frontier(&drifted).is_err());
+        assert!(!drifted.evidence_output_path.exists());
+
+        if !cfg!(target_arch = "aarch64") {
+            assert_eq!(
+                outcome.unwrap_err().to_string(),
+                "V26 PQ4 fused backend unavailable"
+            );
+            assert!(!evidence_path.exists());
+            return;
+        }
+        let bytes = outcome.unwrap();
         let result: super::V26Pq4QualityResult = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(result.query_count, 32);
         assert_eq!(result.arms.len(), 4);
@@ -10508,16 +10523,10 @@ mod tests {
         assert!(!result.claim_eligible);
         let reader = open_reader(&evidence_path).unwrap();
         assert_eq!(reader.metadata().file_metadata().num_rows(), 128);
-
-        let mut drifted = request.clone();
-        drifted.external_queries.identity.digest = "f".repeat(64);
-        drifted.evidence_output_path = temp.path().join("rejected-quality.parquet");
-        assert!(run_v26_pq4_quality_frontier(&drifted).is_err());
-        assert!(!drifted.evidence_output_path.exists());
     }
 
     #[test]
-    fn v26_pq4_serving_screen_freezes_the_first_passing_depth_and_times_one_arm() {
+    fn v26_pq4_serving_screen_freezes_depth_and_obeys_backend_contract() {
         // Break caught: the serving screen retunes the ranked depth, includes frontier work in
         // its samples, skips fresh-process warmups, or emits latency without exact page authority.
         let row_count = 8_193_u64;
@@ -10614,7 +10623,16 @@ mod tests {
             evidence_output_uri: "s3://v26-output/pq4-serving/latency.parquet".to_owned(),
         };
 
-        let bytes = super::run_v26_pq4_serving_screen(&request).unwrap();
+        let outcome = super::run_v26_pq4_serving_screen(&request);
+        if !cfg!(target_arch = "aarch64") {
+            assert_eq!(
+                outcome.unwrap_err().to_string(),
+                "V26 PQ4 fused backend unavailable"
+            );
+            assert!(!evidence_path.exists());
+            return;
+        }
+        let bytes = outcome.unwrap();
         let result: super::V26Pq4ServingScreenResult = serde_json::from_slice(&bytes).unwrap();
 
         assert_eq!(result.schema, "borsuk-v26-pq4-fast-serving-screen-v1");

@@ -4,7 +4,9 @@ Goal remains active: a self-contained Rust object-native ANN beating BOTH S3 Vec
 
 ## Closed evidence
 
-Callable epoch-fenced compaction/GC is delivered with restart, stale-generation, delayed-delete and live S3 checks. All57 original library failures were repaired in verified slices; latest full gate library1687passed/0failed/6ignored. Physical decoder repairV36:63passed. Latest workspace gate remains red at WAL25passed/4failed; later targets not reached. Current guard repair verified: red27pass2fail, greenWAL29pass. Latest whole gate library1687pass/6ignored and WAL29pass, then borsuk-pq4 backend contract16pass1fail; later targets not reached. Worker and consultation terminated/completed.
+Callable epoch-fenced compaction/GC is delivered with restart, stale-generation, delayed-delete and live S3 checks. All57 original library failures were repaired in verified slices. DecoderV36:63passed. Native bulk finalization guard red27pass/2expectedfailures -> greenWAL29passed; stronger specific-error/no-append/authority assertions pass. PortablePQ4:17passed; FMA:7passed. HistoricalARM-onlyV26 tests now assert unavailable/no-output on x86, retaining original ARM positive assertions.
+
+Latest frozen-source full workspace/all-targets gate passed on Causality x86 Spot:2682passed/0failed/26ignored across146target summaries, excluding the initial focusedV26 87pass repetition. Sourcecf329c81b6518d7997b3c1dd7832a08bd0b06dfa0358941c64707c496684a685, workeri-0128209956ceb8d2e terminated, all terminal artifact/source identities independently verified. ARM positive runner execution remains unmeasured. See ../v26-platform-assurance-20260928/counts.json and decision.md.
 
 ## Latest quality (verified offline, not serving performance)
 
@@ -28,7 +30,6 @@ Plans stayed within32logicalranges and16,773,120bytes/query. Physical GETs/retri
 
 ## Ordered gates
 
-1. Collect original WAL red/green terminal, authenticate artifacts/source, confirm EC2 termination. Expect exactly two guard failures in red and29passes in green; retain any failed evidence.
-2. If green WAL passes, same worker runs one full workspace gate. Fix only the newly failing layer if needed, then final full gate. Commit coherent verified slice and fast-forwardpush origin/main.
-3. Predeclare feasible100M decoded RAM/generation-swap, build and maintenance cost, GET/byte and latency envelope; choose one causal development falsifier with actual SQ8 returned quality and loss decomposition. Research proposals and arithmetic do not substitute for measured RSS or quality.
-4. Only a qualified paired100k winner proceeds to fresh1McoldHTTP,10M/100M and both matched vendor comparisons. Record total lifecycle costs and failure recovery; preserve immutableV282 evidence.
+1. Assurance gate complete; commit the final platform fixture and authenticated full-gate receipt, then verify fast-forward delivery to origin/main.
+2. Predeclare feasible100M decoded RAM/generation-swap, build and maintenance cost, GET/byte and latency envelope; choose one causal development falsifier with actual SQ8 returned quality and loss decomposition. Research proposals and arithmetic do not substitute for measured RSS or quality.
+3. Only a qualified paired100k winner proceeds to fresh1McoldHTTP,10M/100M and both matched vendor comparisons. Record total lifecycle costs and failure recovery; preserve immutableV282 evidence.

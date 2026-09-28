@@ -1,0 +1,900 @@
+{
+  "initial_v26_target": {
+    "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_v26-596688881245c389)",
+    "passed": 87,
+    "failed": 0,
+    "ignored": 0
+  },
+  "full_gate": {
+    "targets": 146,
+    "passed": 2682,
+    "failed": 0,
+    "ignored": 26
+  },
+  "results": [
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_v26-596688881245c389)",
+      "passed": 87,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk-72935dc6ab5b2f1c)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk-72935dc6ab5b2f1c)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk-72935dc6ab5b2f1c)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk-72935dc6ab5b2f1c)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk-72935dc6ab5b2f1c)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk-72935dc6ab5b2f1c)",
+      "passed": 1687,
+      "failed": 0,
+      "ignored": 6
+    },
+    {
+      "target": "Running unittests src/bin/build_two_bit_generation.rs (target/debug/deps/build_two_bit_generation-90243bb2d58721a0)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/build_two_bit_source.rs (target/debug/deps/build_two_bit_source-0fd0e7bbdd50fa00)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/two_bit_plan_demo.rs (target/debug/deps/two_bit_plan_demo-ec2089b861af8aef)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v150_unit_centroid_graph.rs (target/debug/deps/v150_unit_centroid_graph-d7ef21a81058cd23)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v151_page_seeded_graph.rs (target/debug/deps/v151_page_seeded_graph-d2026c09c9d64311)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v152_cached_page_graph.rs (target/debug/deps/v152_cached_page_graph-f61f03a803d4dbc9)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v154_relaion_page_graph.rs (target/debug/deps/v154_relaion_page_graph-f92ae80a3677d5e9)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v196_resident_fp16_preflight.rs (target/debug/deps/v196_resident_fp16_preflight-6bc751643fa9a0a2)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v199_live_s3_resident_fp16.rs (target/debug/deps/v199_live_s3_resident_fp16-fafcfd6a47747983)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v200_uncapped_cover_preflight.rs (target/debug/deps/v200_uncapped_cover_preflight-91b855c83dd42322)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v201_relaxed_cover_preflight.rs (target/debug/deps/v201_relaxed_cover_preflight-d3624498bc4be189)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v202_two_cap_cover_preflight.rs (target/debug/deps/v202_two_cap_cover_preflight-fddc723aac7d1d5d)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v205_dual_certificate_preflight.rs (target/debug/deps/v205_dual_certificate_preflight-7069fb51fb955807)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v209_resident_nominee_1m.rs (target/debug/deps/v209_resident_nominee_1m-9f70f32babacf13d)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v212_rust_resident_100k.rs (target/debug/deps/v212_rust_resident_100k-dcba7479d47a5d27)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v213_resident_graph_100k.rs (target/debug/deps/v213_resident_graph_100k-7da4cd952b3a0aa9)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v214_build_pq_graph_100k.rs (target/debug/deps/v214_build_pq_graph_100k-d1cced163bf7c773)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v214_serve_pq_graph_100k.rs (target/debug/deps/v214_serve_pq_graph_100k-8448ec9c5a268fb3)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v215_serve_pq_cosine_graph_100k.rs (target/debug/deps/v215_serve_pq_cosine_graph_100k-b9389437deb8c694)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v216_heldout_pq_cosine_graph_100k.rs (target/debug/deps/v216_heldout_pq_cosine_graph_100k-a4641a6443fcd1d4)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v217_build_pq_graph_1m.rs (target/debug/deps/v217_build_pq_graph_1m-90f6ffd1d4c2f31b)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v217_serve_pq_graph_1m.rs (target/debug/deps/v217_serve_pq_graph_1m-26d64b674acd5d3e)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v218_build_reachable_graph_100k.rs (target/debug/deps/v218_build_reachable_graph_100k-895784221f5fe0f2)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v218_serve_reachable_graph_100k.rs (target/debug/deps/v218_serve_reachable_graph_100k-4d157de53a969c85)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v219_build_reachable_graph_1m.rs (target/debug/deps/v219_build_reachable_graph_1m-a2b37f0b62a7784b)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v219_serve_reachable_graph_1m.rs (target/debug/deps/v219_serve_reachable_graph_1m-5e7c46bbb814aa1c)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v229_serve_mutation_overlay_100k.rs (target/debug/deps/v229_serve_mutation_overlay_100k-1f52c7087b1c1623)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v239_graph_containment_100k.rs (target/debug/deps/v239_graph_containment_100k-1d4357684783660c)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v248_build_cohere_graph_100k.rs (target/debug/deps/v248_build_cohere_graph_100k-efc19c21bbe2aead)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v248_serve_cohere_graph_100k.rs (target/debug/deps/v248_serve_cohere_graph_100k-1e379ecb5e037f9b)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v282_build_routing.rs (target/debug/deps/v282_build_routing-d24ba487aa82a388)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v282_local_falsifier.rs (target/debug/deps/v282_local_falsifier-970f5a1a7a6c7707)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v287_exact_pq_page.rs (target/debug/deps/v287_exact_pq_page-226e51d51619b083)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v291_rust_sq8_parity.rs (target/debug/deps/v291_rust_sq8_parity-c5469bbf3439d19c)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v292_centroid_route.rs (target/debug/deps/v292_centroid_route-efa8aff38d2add05)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v294_rust_source_parity.rs (target/debug/deps/v294_rust_source_parity-c647f1ca602dc5af)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v295_rust_two_bit_route.rs (target/debug/deps/v295_rust_two_bit_route-5173568441b6a2a2)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v296_two_bit_validation_plans.rs (target/debug/deps/v296_two_bit_validation_plans-4d8da212582bb7f4)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/bm25_search.rs (target/debug/deps/bm25_search-7c1631f53b9535e1)",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/build_config.rs (target/debug/deps/build_config-8f2d8eb6354e542b)",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/cell_wal.rs (target/debug/deps/cell_wal-8359964828ccbff0)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/cold_quantizer.rs (target/debug/deps/cold_quantizer-66e02d5173ce0545)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/concurrency_stress.rs (target/debug/deps/concurrency_stress-ae4cd4712021d7b9)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/consistency.rs (target/debug/deps/consistency-b2f1eb939ab1ad47)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/cosine_pruning.rs (target/debug/deps/cosine_pruning-87fa7ddb41627d06)",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/crash_recovery.rs (target/debug/deps/crash_recovery-ac723f92781cde9a)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/dataset_scaling.rs (target/debug/deps/dataset_scaling-77bc9cf2f8a0bc0c)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/exact_sq8_mirror_direct.rs (target/debug/deps/exact_sq8_mirror_direct-2ae470ccfee23aa2)",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/explain.rs (target/debug/deps/explain-9513b41680639f81)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/fault_injection.rs (target/debug/deps/fault_injection-f93cb5eb6afaea99)",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/feature_matrix.rs (target/debug/deps/feature_matrix-e99d816d8c23ef90)",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/filtering_bench.rs (target/debug/deps/filtering_bench-307114d35c7f8877)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "target": "Running tests/format.rs (target/debug/deps/format-92c15ece369e7275)",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/format_fuzz.rs (target/debug/deps/format_fuzz-0bde9454d3d5751f)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/fp8_vectors.rs (target/debug/deps/fp8_vectors-954659fbc84009d2)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/geo_filter.rs (target/debug/deps/geo_filter-e6735141968cbb6b)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/group_commit.rs (target/debug/deps/group_commit-df39b5fb7cdbe132)",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/hybrid_search.rs (target/debug/deps/hybrid_search-fc4cf86aa28a0e3c)",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/in_memory_preload.rs (target/debug/deps/in_memory_preload-5d013ee43b60b269)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/large_scale.rs (target/debug/deps/large_scale-eb7f995b50a5e56c)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "target": "Running tests/late_interaction_index.rs (target/debug/deps/late_interaction_index-dbcbee640942a228)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/leaf_capability.rs (target/debug/deps/leaf_capability-d4bae2dc3590e694)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/local_index.rs (target/debug/deps/local_index-b98b253ecb46e560)",
+      "passed": 170,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/metric_pruning_bench.rs (target/debug/deps/metric_pruning_bench-2b58cbf338b55b9d)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/metrics.rs (target/debug/deps/metrics-e1603cd58e27723b)",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/mixture_workload_bench.rs (target/debug/deps/mixture_workload_bench-9fb96835973088f4)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/named_vectors.rs (target/debug/deps/named_vectors-3a146fe4e5806a8e)",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/package_metadata.rs (target/debug/deps/package_metadata-9f00fafe656ae12b)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/paged_delete_compaction.rs (target/debug/deps/paged_delete_compaction-04aa982aeee72129)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/performance_smoke.rs (target/debug/deps/performance_smoke-ddf569eba22b14bf)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/physical_layout.rs (target/debug/deps/physical_layout-ac0df8275e7b72e5)",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/positioned_log.rs (target/debug/deps/positioned_log-10f38f8fe3ace55a)",
+      "passed": 36,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/pq4_public_api.rs (target/debug/deps/pq4_public_api-a7e3d8ec63df1cc0)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/production_workload.rs (target/debug/deps/production_workload-7da1023ce3e501cd)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/regex_filter.rs (target/debug/deps/regex_filter-b6ff269645d1017d)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/rerank.rs (target/debug/deps/rerank-423e28ffca2a4495)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/resident_graph_api.rs (target/debug/deps/resident_graph_api-65b37895edfff1b2)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/rotated_two_bit.rs (target/debug/deps/rotated_two_bit-5e81a510185ca227)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/s3_compatible.rs (target/debug/deps/s3_compatible-75c16f93580ca91b)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/s3_soak.rs (target/debug/deps/s3_soak-65170dcf3c329e9f)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/sparse_inverted_bench.rs (target/debug/deps/sparse_inverted_bench-87127438b87711ca)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/sparse_named_shard.rs (target/debug/deps/sparse_named_shard-50ef010883d0ccd8)",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/sparse_named_vectors.rs (target/debug/deps/sparse_named_vectors-5c3d479d4055f2f4)",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/storage_access_trace.rs (target/debug/deps/storage_access_trace-4d8c58f75f3fe44f)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/text_storage.rs (target/debug/deps/text_storage-a5b24d029ecf72b6)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/tracing_smoke.rs (target/debug/deps/tracing_smoke-f436de655d35079f)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/turboquant_ab.rs (target/debug/deps/turboquant_ab-900c07b6ca4df38c)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 6
+    },
+    {
+      "target": "Running tests/two_bit_application_ids.rs (target/debug/deps/two_bit_application_ids-5df7063e2c0ad60c)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running tests/two_bit_gc_delayed_delete.rs (target/debug/deps/two_bit_gc_delayed_delete-a62bd6ab1703ee1c)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/two_bit_generation.rs (target/debug/deps/two_bit_generation-8c64f904b2faeaff)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/two_bit_source.rs (target/debug/deps/two_bit_source-8c612874c72e78a2)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/upsert.rs (target/debug/deps/upsert-f5106c7db8635393)",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v34_rank4.rs (target/debug/deps/v34_rank4-d8cc38bfb3b506e8)",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v35_authority.rs (target/debug/deps/v35_authority-83d2c780cb8628da)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v35_build.rs (target/debug/deps/v35_build-2d208947df7b5b55)",
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v35_delta.rs (target/debug/deps/v35_delta-db2f437dd602dc45)",
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v35_patch.rs (target/debug/deps/v35_patch-b1755d191c19a4a2)",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v35_projection.rs (target/debug/deps/v35_projection-69909ca6d37c59c6)",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v35_remote.rs (target/debug/deps/v35_remote-0e059f995117439f)",
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v35_route.rs (target/debug/deps/v35_route-920b93f1fb030a09)",
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v36_funnel_authority.rs (target/debug/deps/v36_funnel_authority-0d3e00157247f182)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v36_funnel_geometry.rs (target/debug/deps/v36_funnel_geometry-b45956a10bf9a16a)",
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v36_prefix_checkpoint.rs (target/debug/deps/v36_prefix_checkpoint-3b23c1097f5f2afd)",
+      "passed": 29,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v36_prefix_dataset.rs (target/debug/deps/v36_prefix_dataset-794787f812208885)",
+      "passed": 63,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v36_prefix_oracle.rs (target/debug/deps/v36_prefix_oracle-67e3b9bfb8734841)",
+      "passed": 39,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/v36_prefix_screen_authority.rs (target/debug/deps/v36_prefix_screen_authority-3cfdbb6d1e5abdf7)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/vector_encoding.rs (target/debug/deps/vector_encoding-2d41e8efed488248)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/wal.rs (target/debug/deps/wal-ed4bd04a932f310b)",
+      "passed": 29,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/workload_bench.rs (target/debug/deps/workload_bench-074ca150ea87f198)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "Running unittests examples/benchmark_report.rs (target/debug/examples/benchmark_report-77b4bc9c3d8bfaf7)",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/build_sq8_source.rs (target/debug/examples/build_sq8_source-af9e58af4e109d3a)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/docs_ladder.rs (target/debug/examples/docs_ladder-989f9c06fd01d87b)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/hybrid_retrieval_bench.rs (target/debug/examples/hybrid_retrieval_bench-adf3ac866ab1275c)",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/local_index.rs (target/debug/examples/local_index-73e0f8311ab17ec9)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/resident_graph_frontier.rs (target/debug/examples/resident_graph_frontier-11c85513eea61729)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/resident_graph_rc.rs (target/debug/examples/resident_graph_rc-6cd7f40f3179176d)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/s3_index.rs (target/debug/examples/s3_index-9e958fb37e11a626)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v246_publish_graph_s3.rs (target/debug/examples/v246_publish_graph_s3-6b2ff46fa18af6b8)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/main.rs (target/debug/deps/borsuk-86bd62cceab40e8d)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running tests/cli.rs (target/debug/deps/cli-deeece6f007950f1)",
+      "passed": 30,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_fma-c107da562030ceab)",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_node-9656e65b2a27a640)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_pq4-063a9485c5e10ad5)",
+      "passed": 17,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/_borsuk-6426e5ce9110edbf)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_v25-375a1dc132ac7512)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_v26-b2063bed65b6cbd2)",
+      "passed": 87,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_dual_pq_key_preflight.rs (target/debug/examples/v26_dual_pq_key_preflight-b9cd4419fa01ca15)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_page_layout.rs (target/debug/examples/v26_page_layout-6edeacfaedc5032b)",
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_pq16_serving.rs (target/debug/examples/v26_pq16_serving-9865a9ce676c829b)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_pq16_serving_build.rs (target/debug/examples/v26_pq16_serving_build-82c74f4d965cfe2a)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_pq4_fast_build.rs (target/debug/examples/v26_pq4_fast_build-f65f070a3d501775)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_pq4_fast_holdout.rs (target/debug/examples/v26_pq4_fast_holdout-9b666e85b87f2f38)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_pq4_fast_quality.rs (target/debug/examples/v26_pq4_fast_quality-ca3e6e82bb4e928d)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_pq4_fast_serving.rs (target/debug/examples/v26_pq4_fast_serving-b3abbb1dcf860896)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests examples/v26_simhash_preflight.rs (target/debug/examples/v26_simhash_preflight-f5ac787b04130fca)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_v41-0b05ee041c81d935)",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/lib.rs (target/debug/deps/borsuk_v71-3261b220b323a9af)",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/main.rs (target/debug/deps/v71_native_reader-0ffa7c402cc2ceec)",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v74_ingest.rs (target/debug/deps/v74_ingest-e2e2aa11597ed4e2)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "Running unittests src/bin/v85_delta_reader.rs (target/debug/deps/v85_delta_reader-81ffe326a586be2a)",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "terminal_exit": 0,
+  "source_archive_sha256": "cf329c81b6518d7997b3c1dd7832a08bd0b06dfa0358941c64707c496684a685"
+}
