@@ -279,9 +279,9 @@ pub enum Pq4Backend {
 
 /// A detected, safe PQ4 scorer for one 32-row transposed block.
 ///
-/// Construction succeeds only on the AArch64 NEON backend qualified by the
-/// V26 holdout. Keeping construction private prevents callers from invoking
-/// the target-feature function on an unsupported processor.
+/// Construction detects AArch64 NEON or x86 SSSE3 support once. Keeping
+/// construction private prevents callers from invoking the target-feature
+/// function on an unsupported processor.
 #[derive(Debug, Clone, Copy)]
 pub struct Pq4BlockScorer {
     backend: Pq4Backend,

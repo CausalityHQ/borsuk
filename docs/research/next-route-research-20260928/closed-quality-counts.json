@@ -1,0 +1,72 @@
+{
+  "scope": "Post-hoc closed consumed-panel reconciliation; no discovery/selection separation, new quality measurement, fresh validation or serving performance",
+  "baseline": "Paired exhaustive native SQ8 over identical rows",
+  "reports": [
+    {
+      "dataset": "relaion",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "first": 0,
+      "queries": 64,
+      "queries_fetching_all_100_gt": 52,
+      "below_flat_with_all_gt_fetched": 0,
+      "returned_below_equal_above_flat": [
+        10,
+        54,
+        0
+      ],
+      "missing_fetch_hits": 28,
+      "fetched_not_returned_hits": 26,
+      "missing_flat_hits": 31,
+      "net_deficit_hits": 23,
+      "input": "native-pipeline-quality-20260928/relaion/development-score.json",
+      "input_sha256": "c7fb31345107195efe1bbe82a0f49a6aeaef58cd9386a6a60e327592899f03b2"
+    },
+    {
+      "dataset": "cohere",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "first": 0,
+      "queries": 64,
+      "queries_fetching_all_100_gt": 52,
+      "below_flat_with_all_gt_fetched": 0,
+      "returned_below_equal_above_flat": [
+        9,
+        55,
+        0
+      ],
+      "missing_fetch_hits": 15,
+      "fetched_not_returned_hits": 43,
+      "missing_flat_hits": 49,
+      "net_deficit_hits": 9,
+      "input": "native-pipeline-quality-20260928/cohere/development-score.json",
+      "input_sha256": "1ec96cd7644b9bd06d9091cacb86a6e64cd505d6d35f3a1abba76160cca99cd5"
+    },
+    {
+      "dataset": "relaion",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "first": 256,
+      "queries": 744,
+      "queries_fetching_all_100_gt": 623,
+      "below_flat_with_all_gt_fetched": 0,
+      "returned_below_equal_above_flat": [
+        105,
+        638,
+        1
+      ],
+      "missing_fetch_hits": 577,
+      "fetched_not_returned_hits": 278,
+      "missing_flat_hits": 321,
+      "net_deficit_hits": 534,
+      "input": "native-pipeline-quality-20260928/relaion/validation-score.json",
+      "input_sha256": "bf2013fa9d6c0baa3739d8d5d78dcfa5322e6b7bf3b83c6aaa721cd79baf461f"
+    }
+  ]
+}

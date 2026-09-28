@@ -1130,16 +1130,26 @@ fn unique_id_bulk_loaders_commit_concurrently_without_claim_artifacts() {
             Some(native_vector(row as f32))
         );
     }
-    assert!(
-        finalizer
-            .bulk_load_vectors_with_unique_ids_on_source_shard(
-                0,
-                vec![native_vector(9.0)],
-                vec!["9".to_string()],
-            )
-            .is_err(),
-        "a finalized serving index must reject the offline claim-free contract"
+    let authority =
+        serde_json::to_value(finalizer.manifest()).unwrap()["native_bounded_ann_ref"].clone();
+    let append_files = file_count(dir.path(), "positioned-log");
+    let error = finalizer
+        .bulk_load_vectors_with_unique_ids_on_source_shard(
+            0,
+            vec![native_vector(9.0)],
+            vec!["9".to_string()],
+        )
+        .unwrap_err();
+    assert!(matches!(error, borsuk::BorsukError::InvalidStorage(message)
+        if message.contains("unavailable after index finalization")));
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.stats().records, 8);
+    assert_eq!(reopened.get_vector("9").unwrap(), None);
+    assert_eq!(
+        serde_json::to_value(reopened.manifest()).unwrap()["native_bounded_ann_ref"],
+        authority
     );
+    assert_eq!(file_count(dir.path(), "positioned-log"), append_files);
 }
 
 #[test]
@@ -1210,16 +1220,26 @@ fn unique_id_bulk_load_refreshes_and_rejects_a_finalized_collection() {
         serde_json::to_value(finalizer.manifest()).unwrap()["native_bounded_ann_ref"].is_object()
     );
 
-    assert!(
-        stale_writer
-            .bulk_load_vectors_with_unique_ids_on_source_shard(
-                1,
-                vec![native_vector(1.0)],
-                vec!["1".to_string()],
-            )
-            .is_err(),
-        "a handle opened before finalization must not append through stale authority"
+    let authority =
+        serde_json::to_value(finalizer.manifest()).unwrap()["native_bounded_ann_ref"].clone();
+    let append_files = file_count(dir.path(), "positioned-log");
+    let error = stale_writer
+        .bulk_load_vectors_with_unique_ids_on_source_shard(
+            1,
+            vec![native_vector(1.0)],
+            vec!["1".to_string()],
+        )
+        .unwrap_err();
+    assert!(matches!(error, borsuk::BorsukError::InvalidStorage(message)
+        if message.contains("unavailable after index finalization")));
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.stats().records, 1);
+    assert_eq!(reopened.get_vector("1").unwrap(), None);
+    assert_eq!(
+        serde_json::to_value(reopened.manifest()).unwrap()["native_bounded_ann_ref"],
+        authority
     );
+    assert_eq!(file_count(dir.path(), "positioned-log"), append_files);
 }
 
 #[test]

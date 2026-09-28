@@ -1,0 +1,7 @@
+{
+  "availability_zone": "eu-central-1a",
+  "instance_type": "c7i.2xlarge",
+  "spot_price_usd_per_hour": "0.212800",
+  "quote_timestamp": "2026-09-28T13:00:00+00:00",
+  "scope": "Latest AWS Spot quote confirms launcher estimate rate; not an invoice, excludes EBS/S3"
+}

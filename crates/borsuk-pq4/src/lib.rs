@@ -39,7 +39,7 @@ pub enum BorsukError {
 /// Result type for PQ4 operations.
 pub type Result<T> = std::result::Result<T, BorsukError>;
 
-#[cfg(all(test, not(target_arch = "aarch64")))]
+#[cfg(test)]
 pub(crate) use core::rank_candidates;
 #[cfg(test)]
 pub(crate) use core::{
@@ -50,7 +50,6 @@ pub(crate) use core::{
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(target_arch = "aarch64"))]
     use super::rank_candidates;
     use super::{
         Pq4ArtifactIdentity, Pq4BuildConfig, Pq4Builder, Pq4Codebook, Pq4Index, Pq4Manifest,
@@ -822,9 +821,8 @@ mod tests {
         assert!(merge_pq4_shard_matches(vec![unsorted], 2).is_err());
     }
 
-    #[cfg(not(target_arch = "aarch64"))]
     #[test]
-    fn v26_release_contract_pq4_core_production_scan_rejects_unqualified_backend() {
+    fn pq4_core_production_scan_matches_detected_backend_contract() {
         let rows = rows(512);
         let codebook = fit_codebook(&rows).unwrap();
         let codes = rows
@@ -832,7 +830,13 @@ mod tests {
             .map(|row| codebook.encode(row).unwrap())
             .collect::<Vec<_>>();
         let blocks = encode_blocks(&codes).unwrap();
-        let error = rank_candidates(&codebook, &blocks, rows.len(), &rows[0], 512).unwrap_err();
-        assert!(error.to_string().contains("AArch64 NEON"));
+        let ranked = rank_candidates(&codebook, &blocks, rows.len(), &rows[0], 512);
+        match borsuk_fma::Pq4BlockScorer::detect() {
+            Ok(_) => assert_eq!(
+                ranked.unwrap(),
+                rank_candidates_scalar(&codebook, &blocks, rows.len(), &rows[0], 512).unwrap(),
+            ),
+            Err(error) => assert_eq!(ranked.unwrap_err().to_string(), error.to_string()),
+        }
     }
 }
