@@ -74,6 +74,148 @@ struct RankedRow {
     ordinal: u64,
 }
 
+/// Candidate source permutation and contiguous semantic extents.
+/// Extents partition physical positions and contain at most 1024 rows.
+#[derive(Debug, PartialEq)]
+pub struct SemanticSourceLayout {
+    /// Physical position to source ordinal.
+    pub order: Vec<u64>,
+    /// Contiguous physical row ranges; no gaps, overlap or empty extent.
+    pub extents: Vec<std::ops::Range<usize>>,
+}
+
+/// Experimental bounded hierarchical source fitting; requires quality gates.
+pub fn fit_hierarchical_source_layout(
+    source: &Path,
+    source_sha256: &str,
+    rows: usize,
+    dimensions: usize,
+    max_payload_bytes: usize,
+) -> Result<SemanticSourceLayout, SourceBuildError> {
+    let bad = SourceBuildError::Invalid;
+    let cells = rows.div_ceil(1024);
+    let sample_rows = rows.min(cells.checked_mul(64).ok_or(bad("layout geometry"))?);
+    let product = |a: usize, b: usize| a.checked_mul(b).ok_or(bad("layout memory geometry"));
+    let width = product(dimensions, 4)?;
+    let length = product(rows, width)?;
+    let payload = [
+        product(rows, std::mem::size_of::<RankedRow>() + 8)?,
+        product(
+            sample_rows,
+            product(width, 3)?
+                .checked_add(128)
+                .ok_or(bad("layout memory geometry"))?,
+        )?,
+        product(
+            cells,
+            product(width, 5)?
+                .checked_add(8192)
+                .ok_or(bad("layout memory geometry"))?,
+        )?,
+        product(dimensions, 16)?,
+    ]
+    .into_iter()
+    .try_fold(327680_usize, |sum, n| sum.checked_add(n))
+    .ok_or(bad("layout memory geometry"))?;
+    if rows == 0
+        || dimensions == 0
+        || payload > max_payload_bytes
+        || source_sha256.len() != 64
+        || !source_sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(bad("layout inputs or memory budget"));
+    }
+    let file = File::open(source)?;
+    if file.metadata()?.len() != length as u64 {
+        return Err(bad("layout source length"));
+    }
+    let mut input = BufReader::with_capacity(65536, file);
+    let mut selected = sample_indices(rows, sample_rows, 8201);
+    selected.sort_unstable();
+    let mut bytes = vec![0_u8; width];
+    let mut values = vec![0_f32; dimensions];
+    let mut digest = Sha256::new();
+    let mut next = 0;
+    let mut sample = Vec::with_capacity(sample_rows);
+    for row in 0..rows {
+        read_vector(&mut input, &mut bytes, &mut values, &mut digest)?;
+        if selected.get(next) == Some(&row) {
+            sample.push(values.clone());
+            next += 1;
+        }
+    }
+    if input.read(&mut [0])? != 0 || format!("{:x}", digest.finalize()) != source_sha256 {
+        return Err(bad("layout source identity"));
+    }
+    drop(selected);
+    let cells = if sample.iter().all(|row| row == &sample[0]) {
+        1
+    } else {
+        cells
+    };
+    let centroids = crate::logical_cell_catalog::train_logical_cell_centroids(
+        &sample,
+        crate::metric::VectorMetric::SquaredEuclidean,
+        cells,
+        12,
+    )
+    .map_err(|_| bad("hierarchical centroid training"))?;
+    drop(sample);
+    let router = crate::centroid_hnsw::CentroidHnsw::build(&centroids);
+    if cells > 1 && router.is_none() {
+        return Err(bad("hierarchical centroid graph"));
+    }
+    input.seek(SeekFrom::Start(0))?;
+    let mut digest = Sha256::new();
+    let mut ranked = Vec::with_capacity(rows);
+    for row in 0..rows {
+        read_vector(&mut input, &mut bytes, &mut values, &mut digest)?;
+        let cell = if let Some(router) = &router {
+            router
+                .nearest(&values, 1)
+                .first()
+                .copied()
+                .ok_or(bad("no source cell"))? as usize
+        } else {
+            0
+        };
+        let radius = crate::metric::squared_euclidean_simd(&values, &centroids[cell]);
+        if !radius.is_finite() {
+            return Err(bad("source cell radius"));
+        }
+        ranked.push(RankedRow {
+            rank: cell,
+            radius,
+            ordinal: row as u64,
+        });
+    }
+    if input.read(&mut [0])? != 0 || format!("{:x}", digest.finalize()) != source_sha256 {
+        return Err(bad("layout source identity changed"));
+    }
+    ranked.sort_unstable_by(|a, b| {
+        a.rank
+            .cmp(&b.rank)
+            .then(a.radius.total_cmp(&b.radius))
+            .then(a.ordinal.cmp(&b.ordinal))
+    });
+    let mut extents = Vec::new();
+    let mut start = 0;
+    while start < rows {
+        let mut end = start + 1;
+        while end < rows && end - start < 1024 && ranked[end].rank == ranked[start].rank {
+            end += 1;
+        }
+        extents.push(start..end);
+        start = end;
+    }
+    Ok(SemanticSourceLayout {
+        order: ranked.iter().map(|row| row.ordinal).collect(),
+        extents,
+    })
+}
+
 /// Fit the V283-style physical ordinal permutation from sealed unit f32 rows.
 /// Uses ceil(N/256) cells, at most 64 samples/cell, 12 Lloyd iterations,
 /// centroid chaining and stable radius ordering. ChaCha8 and native f32
@@ -247,6 +389,50 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use std::fs;
+
+    #[test]
+    fn hierarchical_source_layout_is_bounded_deterministic_and_authenticated() {
+        for rows in [32_usize, 2048, 8192] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("source.f32");
+            let bytes: Vec<u8> = (0..rows)
+                .flat_map(|row| {
+                    let angle = if rows == 8192 {
+                        row as f32 * 0.03125
+                    } else {
+                        0.
+                    };
+                    [angle.cos(), angle.sin()].map(f32::to_le_bytes).concat()
+                })
+                .collect();
+            fs::write(&source, &bytes).unwrap();
+            let sha = format!("{:x}", Sha256::digest(&bytes));
+            let layout = fit_hierarchical_source_layout(&source, &sha, rows, 2, 16 << 20).unwrap();
+            assert_eq!(
+                layout,
+                fit_hierarchical_source_layout(&source, &sha, rows, 2, 16 << 20).unwrap()
+            );
+            let mut ordinals = layout.order.clone();
+            ordinals.sort_unstable();
+            assert_eq!(ordinals, (0..rows as u64).collect::<Vec<_>>());
+            let mut end = 0;
+            for range in layout.extents {
+                assert_eq!(range.start, end);
+                assert!(range.end > range.start && range.len() <= 1024);
+                end = range.end;
+            }
+            assert_eq!(end, rows);
+            assert!(fit_hierarchical_source_layout(&source, &sha, rows, 2, 0).is_err());
+            assert!(
+                fit_hierarchical_source_layout(&source, &"0".repeat(64), rows, 2, 16 << 20)
+                    .is_err()
+            );
+            assert!(fit_hierarchical_source_layout(&source, &sha, rows + 1, 2, 16 << 20).is_err());
+            assert!(
+                fit_hierarchical_source_layout(&source, &sha, usize::MAX, 2, usize::MAX).is_err()
+            );
+        }
+    }
 
     #[test]
     fn source_only_order_is_stable_authenticated_and_admitted() {

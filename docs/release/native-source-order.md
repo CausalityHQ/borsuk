@@ -66,3 +66,20 @@ Construction still reuses its existing epoch array. Initial query reserve is
 count, so this is not a worst-case constant-memory/search-work guarantee or a
 measured latency gain. This closes one prerequisite for streaming assignment;
 it does not qualify hierarchical layout quality,100M resources or vendor wins.
+
+## Hierarchical extent candidate
+
+`source_order::fit_hierarchical_source_layout` streams the sealed normalized
+source twice, reuses hierarchical training and centroid assignment, and returns
+`SemanticSourceLayout { order, extents }`. Each contiguous extent contains at
+most1024 rows; this is not a full-corpus density-balance guarantee. The explicit
+`build_sq8_source hier-fit` example writes a new sealed order and a JSON receipt
+with recipe `borsuk-hierarchical-extents-chacha8-v1` and extent boundaries.
+The fitter has checked payload admission; allocator/runtime overhead is extra.
+
+The previously used64-query development containment check passed on CoHere and
+ReLAION. GT-aware byte-feasible bounds are99.78125% and99.53125%, both p05 99.
+These are not achieved recall. Existing generation queries do not use or
+authenticate this extent metadata; nomination, returned SQ8 quality, cold HTTP,
+100M resources and both vendor comparisons remain unqualified. See
+[exact gate and next decision](../research/hierarchical-source-layout-20260928/decision.md).

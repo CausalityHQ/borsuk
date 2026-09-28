@@ -60,17 +60,14 @@ ReLAION development0–63 returned95.656250%, p05 87, discovered/fetched
 95.968750%; same caps and paired flat99.515625%. Experimental code removed;
 no CoHere or scale run. [Exact terminal evidence](../research/page-score-discovery-20260928/decision.md).
 
-Next implementation decision: stop traversal variants and address source-only
-physical layout plus flat native fitting cost. Specify balanced hierarchical
-fitting with bounded stream/sample memory and multi-page semantic extents plus
-boundary coverage. The completed32-page oracle gives CoHere97.625% mean/p05 89
-versus ReLAION99.46875%/97; this rules out a single-page-per-GET proposal on that
-CoHere sample, not the existing84-page budget. Reconcile prior hierarchy/spill
-failures, then run a cheap development physical-page oracle for the new layout. One causal
-change and frozen stop thresholds are required before execution. No quality or
-100M inference follows from an optimistic GT oracle. Only a surviving paired
-quality gate permits one cold1M HTTP gate; matched vendor and100M+/lifecycle
-gates remain mandatory.
+Latest implementation: source-authenticated hierarchical fitting with capped
+1024-row semantic extents and explicit versioned CLI receipt. CoHere/ReLAION
+first100k development0–63 GT-aware byte-feasible21-extent containment witnesses
+reach99.78125%/99.53125%, both p05 99. These are diagnostic bounds, not achieved
+recall or vendor wins. Next single gate is source-only extent-centroid
+nomination plus returned SQ8 quality against paired flat on development;
+kill geometry before root-format/HTTP/scale work if its reference fails.
+No matched vendor gate is closed. [Exact decision](../research/hierarchical-source-layout-20260928/decision.md).
 
 Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
 [discovery diagnostic](../research/nomination-trace-20260928/decision.md),

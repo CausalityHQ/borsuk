@@ -11,20 +11,34 @@ use std::{
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() != 8 {
-        return Err("usage: build_sq8_source SOURCE SOURCE_SHA DIMENSIONS ORDER_LE_U64 ORDER_SHA MAX_PAYLOAD_BYTES NEW_OUTPUT (or normalize SOURCE SOURCE_SHA ROWS DIMENSIONS MAX_PAYLOAD_BYTES NEW_OUTPUT; fit has the same arguments as normalize)".into());
+        return Err("usage: build_sq8_source SOURCE SOURCE_SHA DIMENSIONS ORDER_LE_U64 ORDER_SHA MAX_PAYLOAD_BYTES NEW_OUTPUT (or normalize SOURCE SOURCE_SHA ROWS DIMENSIONS MAX_PAYLOAD_BYTES NEW_OUTPUT; fit/hier-fit have the same arguments as normalize)".into());
     }
-    if args[1] == "fit" {
+    if args[1] == "fit" || args[1] == "hier-fit" {
         let output = Path::new(&args[7]);
         if output.exists() {
             return Err("output already exists".into());
         }
-        let order = borsuk::source_order::fit_source_order(
-            Path::new(&args[2]),
-            &args[3],
-            args[4].parse()?,
-            args[5].parse()?,
-            args[6].parse()?,
-        )?;
+        let (order, extents) = if args[1] == "hier-fit" {
+            let layout = borsuk::source_order::fit_hierarchical_source_layout(
+                Path::new(&args[2]),
+                &args[3],
+                args[4].parse()?,
+                args[5].parse()?,
+                args[6].parse()?,
+            )?;
+            (layout.order, Some(layout.extents))
+        } else {
+            (
+                borsuk::source_order::fit_source_order(
+                    Path::new(&args[2]),
+                    &args[3],
+                    args[4].parse()?,
+                    args[5].parse()?,
+                    args[6].parse()?,
+                )?,
+                None,
+            )
+        };
         let parent = output
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -39,11 +53,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         pending.as_file().sync_all()?;
         pending.persist_noclobber(output).map_err(|e| e.error)?;
         File::open(parent)?.sync_all()?;
-        println!(
-            "{}",
-            serde_json::json!({"order_sha256":format!("{:x}",digest.finalize()),
-            "rows":order.len(), "recipe":"borsuk-semantic-order-chacha8-f32-v1", "query_or_truth_used":false})
-        );
+        let mut receipt = serde_json::json!({"order_sha256":format!("{:x}",digest.finalize()),
+            "rows":order.len(), "recipe":"borsuk-semantic-order-chacha8-f32-v1", "query_or_truth_used":false});
+        if let Some(extents) = extents {
+            receipt["recipe"] = "borsuk-hierarchical-extents-chacha8-v1".into();
+            receipt["extent_row_cap"] = 1024.into();
+            receipt["extents"] =
+                serde_json::json!(extents.iter().map(|r| [r.start, r.end]).collect::<Vec<_>>());
+        }
+        println!("{receipt}");
         return Ok(());
     }
     if args[1] == "normalize" {
