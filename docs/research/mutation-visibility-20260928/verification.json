@@ -1,0 +1,37 @@
+{
+  "base": "a79733e5",
+  "host": "spark-2751 / aarch64",
+  "jobs": [
+    {
+      "log": "mutation-visibility-empty-red.log",
+      "raw_sha256": "de1f6b13c7b42576f3a8b4da5623c2e436c79280229b1f8c357ef05a94168e40",
+      "exit": 101
+    },
+    {
+      "log": "mutation-visibility-final-green.log",
+      "raw_sha256": "0c0acaf0abede0f43a018e3d0ba25b20f27fed37b3eb5f21d08f35173521e94e",
+      "exit": 0
+    },
+    {
+      "log": "mutation-visibility-generation.log",
+      "raw_sha256": "0751f92d4da0568eb5dcc226928084bb8a74aedac79af04f721193b45e24c41a",
+      "exit": 0
+    },
+    {
+      "log": "mutation-visibility-green.log",
+      "raw_sha256": "5e96bbefd109f23143559ed0376d64df916c82771d0f6ce1cb9055afcfe64aa5",
+      "exit": 0
+    },
+    {
+      "log": "mutation-visibility-range.log",
+      "raw_sha256": "a8d1eda1692a1d601ee118c2aabd27065cf5640c41af15e3a7f6fe3ab646d65f",
+      "exit": 0
+    },
+    {
+      "log": "mutation-visibility-red.log",
+      "raw_sha256": "e289780f31354b617a3abfb98ddea8b28d4329cc2a0c38c695ddabd06cad9613",
+      "exit": 1
+    }
+  ],
+  "note": "Cargo range and generation tests terminal0 before final core empty-range guard. Exact final std-only production core red101/green0 covers that guard (7 tests). Post-Cargo range-reader change is documentation grammar only. Final source parity verified; no paid measurement."
+}

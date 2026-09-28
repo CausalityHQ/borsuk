@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
 | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
 | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
 |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; mutation and compaction path missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; query-side ID exclusion works; durable mutation and compaction path missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
 | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
 | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
 
@@ -97,6 +97,10 @@ publication, authenticated reload and returned-range scoring. The source plane
 is v2 and rejects v1; historical benchmark artifacts remain unchanged. Mutation,
 recovery and compaction remain OPEN.
 [ID API and receipts](../research/application-id-source-20260928/decision.md).
+The range reader now applies borrowed mutation exclusions before top-k and
+retains page authentication/physical charges; durable snapshot CAS/recovery and
+upsert merging remain the next implementation gate.
+[Visibility primitive](../research/mutation-visibility-20260928/decision.md).
 
 Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
 [discovery diagnostic](../research/nomination-trace-20260928/decision.md),

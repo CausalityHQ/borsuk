@@ -61,7 +61,7 @@ pub struct TwoBitGenerationLimits {
     pub max_parallel_gets: usize,
     /// Codec lookup scratch per query.
     pub max_query_scratch_bytes: usize,
-    /// Payload charged to other pinned generations.
+    /// Payload charged to other pinned generations and immutable mutation snapshots.
     pub already_pinned_bytes: u64,
 }
 #[derive(Deserialize)]
@@ -449,6 +449,41 @@ impl TwoBitGeneration {
         query: &[f32],
         top_k: usize,
     ) -> Result<ObjectNativeSearchResult> {
+        self.search_inner(reader, query, top_k, None).await
+    }
+
+    /// Search with sorted unique logical IDs hidden by a caller-authorized,
+    /// generation-bound mutation snapshot. Include its entire payload in
+    /// `already_pinned_bytes` when opening this generation. Returns up to k
+    /// visible rows; no compensating GET or full base-ID scan is performed.
+    pub async fn search_excluding(
+        &self,
+        reader: &OneAttemptS3,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: &[i64],
+    ) -> Result<ObjectNativeSearchResult> {
+        if excluded_ids.windows(2).any(|ids| ids[0] >= ids[1])
+            || excluded_ids
+                .len()
+                .checked_mul(8)
+                .is_none_or(|bytes| bytes as u64 > self.limits.already_pinned_bytes)
+        {
+            return Err(TwoBitGenerationError::Invalid(
+                "mutation roster or admission",
+            ));
+        }
+        self.search_inner(reader, query, top_k, Some(excluded_ids))
+            .await
+    }
+
+    async fn search_inner(
+        &self,
+        reader: &OneAttemptS3,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+    ) -> Result<ObjectNativeSearchResult> {
         if top_k == 0 || top_k > self.pages.rows() {
             return Err(TwoBitGenerationError::Invalid("top k"));
         }
@@ -465,7 +500,7 @@ impl TwoBitGeneration {
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
         let ranked = reader
-            .rank_verified_sq8_pages(
+            .rank_verified_sq8_pages_excluding(
                 &ObjectPath::from(self.manifest.sq8_object_key.clone()),
                 &self.pages,
                 &ranges,
@@ -477,9 +512,18 @@ impl TwoBitGeneration {
                 self.limits.max_query_gets,
                 self.limits.max_query_bytes,
                 self.limits.max_parallel_gets,
+                excluded_ids.unwrap_or(&[]),
             )
             .await
             .map_err(TwoBitGenerationError::Read)?;
+        if excluded_ids.is_none() && ranked.candidates.len() < top_k {
+            return Err(TwoBitGenerationError::Read(RankedSq8Failure {
+                error: crate::sq8_s3_range::RangeFetchError::Score(
+                    crate::exact_sq8_nominee::Sq8ScoreError::InvalidRoster,
+                ),
+                stats: ranked.stats,
+            }));
+        }
         Ok(ObjectNativeSearchResult { plan, ranked })
     }
 }

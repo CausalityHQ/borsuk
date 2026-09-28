@@ -3,7 +3,7 @@
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use crate::{
     exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError},
-    returned_sq8::{ReturnedRange, rank_returned_ranges},
+    returned_sq8::{ReturnedRange, rank_returned_ranges_excluding},
 };
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream};
@@ -114,6 +114,50 @@ impl OneAttemptS3 {
         max_bytes: usize,
         max_parallel: usize,
     ) -> Result<RankedSq8, RankedSq8Failure> {
+        let ranked = self
+            .rank_verified_sq8_pages_excluding(
+                location,
+                authority,
+                ranges,
+                etag,
+                query,
+                low,
+                step,
+                top_k,
+                max_gets,
+                max_bytes,
+                max_parallel,
+                &[],
+            )
+            .await?;
+        if ranked.candidates.len() < top_k {
+            return Err(RankedSq8Failure {
+                error: RangeFetchError::Score(Sq8ScoreError::InvalidRoster),
+                stats: ranked.stats,
+            });
+        }
+        Ok(ranked)
+    }
+
+    /// Apply a sorted unique logical-ID exclusion roster before top-k. The
+    /// caller authenticates and admits its immutable snapshot separately. Underfill
+    /// is returned explicitly as fewer candidates, without additional GETs.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rank_verified_sq8_pages_excluding(
+        &self,
+        location: &Path,
+        authority: &PageAuthority,
+        ranges: &[(usize, usize)],
+        etag: &str,
+        query: &[f32],
+        low: &[f32],
+        step: &[f32],
+        top_k: usize,
+        max_gets: usize,
+        max_bytes: usize,
+        max_parallel: usize,
+        excluded_ids: &[i64],
+    ) -> Result<RankedSq8, RankedSq8Failure> {
         rank_verified_sq8_pages_inner(
             &self.store,
             location,
@@ -127,6 +171,7 @@ impl OneAttemptS3 {
             max_gets,
             max_bytes,
             max_parallel,
+            excluded_ids,
         )
         .await
     }
@@ -146,11 +191,15 @@ async fn rank_verified_sq8_pages_inner(
     max_gets: usize,
     max_bytes: usize,
     max_parallel: usize,
+    excluded_ids: &[i64],
 ) -> Result<RankedSq8, RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
         stats: Sq8ReadStats::default(),
     };
+    if excluded_ids.windows(2).any(|ids| ids[0] >= ids[1]) {
+        return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidRoster)));
+    }
     if ranges.is_empty() || ranges.len() > max_gets || max_parallel == 0 || etag.is_empty() {
         return Err(fail(RangeFetchError::UnexpectedMetadata));
     }
@@ -216,7 +265,7 @@ async fn rank_verified_sq8_pages_inner(
             bytes: &range.bytes,
         })
         .collect::<Vec<_>>();
-    let candidates = rank_returned_ranges(
+    let candidates = rank_returned_ranges_excluding(
         Sq8Geometry {
             rows: authority.rows(),
             dimensions: authority.dimensions(),
@@ -227,6 +276,7 @@ async fn rank_verified_sq8_pages_inner(
         step,
         top_k,
         max_bytes,
+        excluded_ids,
     )
     .map_err(|error| RankedSq8Failure {
         error: RangeFetchError::Score(error),
@@ -776,6 +826,17 @@ mod tests {
             ranges: &[(usize, usize)],
             bytes: usize,
         ) -> Result<RankedSq8, RankedSq8Failure> {
+            run_excluding(store, location, authority, etag, ranges, bytes, &[]).await
+        }
+        async fn run_excluding(
+            store: &InMemory,
+            location: &Path,
+            authority: &PageAuthority,
+            etag: &str,
+            ranges: &[(usize, usize)],
+            bytes: usize,
+            excluded: &[i64],
+        ) -> Result<RankedSq8, RankedSq8Failure> {
             rank_verified_sq8_pages_inner(
                 store,
                 location,
@@ -789,6 +850,7 @@ mod tests {
                 2,
                 bytes,
                 2,
+                excluded,
             )
             .await
         }
@@ -799,6 +861,45 @@ mod tests {
         assert_eq!(ranked.stats.submitted_gets, 1);
         assert_eq!(ranked.stats.verified_bytes, 17 * 13);
         assert_eq!(ranked.stats.failed_gets, 0);
+        let replaced = run_excluding(
+            &store,
+            &location,
+            &authority,
+            &etag,
+            &[(1, 1)],
+            17 * 13,
+            &[256],
+        )
+        .await
+        .unwrap();
+        assert_eq!(replaced.candidates[0].id, 257);
+        assert_eq!(replaced.stats, ranked.stats);
+        let all_ids = (256..273).collect::<Vec<i64>>();
+        let deleted = run_excluding(
+            &store,
+            &location,
+            &authority,
+            &etag,
+            &[(1, 1)],
+            17 * 13,
+            &all_ids,
+        )
+        .await
+        .unwrap();
+        assert!(deleted.candidates.is_empty());
+        assert_eq!(deleted.stats, ranked.stats);
+        let invalid = run_excluding(
+            &store,
+            &location,
+            &authority,
+            &etag,
+            &[(1, 1)],
+            17 * 13,
+            &[257, 256],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(invalid.stats.submitted_gets, 0);
         let over_budget = run(&store, &location, &authority, &etag, &[(0, 1)], 17 * 13)
             .await
             .unwrap_err();

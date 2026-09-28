@@ -159,6 +159,29 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         already_pinned_bytes: 0,
     };
     let local = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+    // Admission must reject before any S3 request, even with a malformed query.
+    let reader = borsuk::sq8_s3_range::OneAttemptS3::new("unused-fixture", "us-east-1").unwrap();
+    assert!(matches!(
+        local.search_excluding(&reader, &[], 1, &[i64::MIN]).await,
+        Err(borsuk::two_bit_generation::TwoBitGenerationError::Invalid(
+            "mutation roster or admission"
+        ))
+    ));
+    let charged = TwoBitGeneration::open(
+        &root,
+        &root_sha,
+        TwoBitGenerationLimits {
+            already_pinned_bytes: 16,
+            ..limits
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        charged.search_excluding(&reader, &[], 1, &[10, 9]).await,
+        Err(borsuk::two_bit_generation::TwoBitGenerationError::Invalid(
+            "mutation roster or admission"
+        ))
+    ));
     let plan = local.plan(&[1., 0.]).await.unwrap();
     let prefix = ObjectPath::from("tenant/application-index");
     let head = publish_two_bit_generation(&store, &prefix, &root, &root_sha, limits, None)

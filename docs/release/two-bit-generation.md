@@ -361,3 +361,26 @@ The runnable normalization example preserves all approved normalized f32 bytes
 (SHA/307,200,000B) on both first100k D768 cohorts, independently rehashed after
 terminal. Existing paired quality evidence therefore remains applicable to
 those unchanged source bytes. See native-normalized-source-receipt.json.
+
+## Mutation visibility before top-k
+
+`generation.search_excluding(&reader, &query, k, &excluded_ids).await?` hides
+sorted unique signed-i64 logical IDs before selection, for deletes or replacements.
+The roster is borrowed from an immutable snapshot; callers authorize it and bind
+it to this generation. Include the entire snapshot payload in
+`TwoBitGenerationLimits::already_pinned_bytes` at open; the helper rejects a
+roster larger than that charge. Allocator/runtime overhead and caller allocations
+outside declared snapshots remain separately budgeted.
+
+All fetched rows still undergo page and value/duplicate-ID checks, including
+excluded rows. Planning, conditional GETs, byte caps and failure accounting stay
+on the same path. No full-base ID roster or vector plane is hydrated. Results
+contain **up to** k visible rows; an empty result after masking all fetched rows
+is valid. This helper does not perform extra reads to fill k. Report actual
+result counts in quality measurements. The existing `search` remains strict
+about producing k fetched candidates.
+
+This is a query-side primitive. Durable snapshot publication/recovery, upsert
+merging and compaction are not implemented by this method and remain release
+requirements. The caller must not infer mutation durability from a borrowed ID
+roster. No benchmark of the historical v1 route qualifies this code revision.

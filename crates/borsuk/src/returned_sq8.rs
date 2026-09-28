@@ -50,6 +50,32 @@ pub fn rank_returned_ranges(
     top_k: usize,
     max_bytes: usize,
 ) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    let scores =
+        rank_returned_ranges_excluding(geometry, ranges, query, low, step, top_k, max_bytes, &[])?;
+    if scores.len() < top_k {
+        return Err(Sq8ScoreError::InvalidRoster);
+    }
+    Ok(scores)
+}
+
+/// Rank up to `top_k` visible rows. Exclusions are immutable, sorted, unique
+/// logical IDs from a separately authenticated and admitted mutation snapshot.
+/// All fetched rows are still validated, including excluded rows. No refetch
+/// occurs if visibility leaves fewer than k rows; callers must report underfill.
+#[allow(clippy::too_many_arguments)]
+pub fn rank_returned_ranges_excluding(
+    geometry: Sq8Geometry,
+    ranges: &[ReturnedRange<'_>],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_bytes: usize,
+    excluded_ids: &[i64],
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    if ranges.is_empty() || excluded_ids.windows(2).any(|ids| ids[0] >= ids[1]) {
+        return Err(Sq8ScoreError::InvalidRoster);
+    }
     let row_bytes = geometry
         .dimensions
         .checked_add(12)
@@ -100,13 +126,12 @@ pub fn rank_returned_ranges(
             if !ids.insert(score.id) {
                 return Err(Sq8ScoreError::InvalidPlane);
             }
-            score.ordinal += first_row;
-            scores.push(score);
+            if excluded_ids.binary_search(&score.id).is_err() {
+                score.ordinal += first_row;
+                scores.push(score);
+            }
         }
         previous_end = end;
-    }
-    if scores.len() < top_k {
-        return Err(Sq8ScoreError::InvalidRoster);
     }
     scores.sort_by(|left, right| {
         left.score
@@ -114,7 +139,7 @@ pub fn rank_returned_ranges(
             .then(left.id.cmp(&right.id))
     });
     // Release fetched-row capacity before returning caller-owned top-k results.
-    Ok(scores[..top_k].to_vec())
+    Ok(scores[..top_k.min(scores.len())].to_vec())
 }
 
 #[cfg(test)]
@@ -235,6 +260,77 @@ mod tests {
             result.capacity(),
             2,
             "fetched-row scratch must not escape in top-k results"
+        );
+    }
+
+    #[test]
+    fn mutation_visibility_precedes_top_k_and_validates_masked_rows() {
+        let mut bytes = row(i64::MIN, 1.0, 1);
+        bytes.extend_from_slice(&row(10, 2.0, 1));
+        bytes.extend_from_slice(&row(20, 3.0, 1));
+        let geometry = Sq8Geometry {
+            rows: 3,
+            dimensions: 1,
+        };
+        let run = |data: &[u8], excluded: &[i64], k| {
+            rank_returned_ranges_excluding(
+                geometry,
+                &[ReturnedRange {
+                    start: 0,
+                    bytes: data,
+                }],
+                &[0.0],
+                &[0.0],
+                &[1.0],
+                k,
+                data.len(),
+                excluded,
+            )
+        };
+        assert_eq!(
+            run(&bytes, &[i64::MIN], 2)
+                .unwrap()
+                .iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
+            vec![10, 20]
+        );
+        assert_eq!(run(&bytes, &[i64::MIN, 10], 2).unwrap()[0].id, 20);
+        assert!(run(&bytes, &[i64::MIN, 10, 20], 2).unwrap().is_empty());
+        assert_eq!(
+            run(&bytes, &[10, i64::MIN], 1),
+            Err(Sq8ScoreError::InvalidRoster)
+        );
+        assert_eq!(run(&bytes, &[10, 10], 1), Err(Sq8ScoreError::InvalidRoster));
+        let legacy = rank_returned_ranges(
+            geometry,
+            &[ReturnedRange {
+                start: 0,
+                bytes: &bytes,
+            }],
+            &[0.0],
+            &[0.0],
+            &[1.0],
+            2,
+            bytes.len(),
+        )
+        .unwrap();
+        assert_eq!(run(&bytes, &[], 2).unwrap(), legacy);
+        assert_eq!(
+            rank_returned_ranges_excluding(geometry, &[], &[0.0], &[0.0], &[1.0], 1, 39, &[]),
+            Err(Sq8ScoreError::InvalidRoster),
+        );
+        let mut corrupt = bytes.clone();
+        corrupt[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert_eq!(
+            run(&corrupt, &[i64::MIN], 2),
+            Err(Sq8ScoreError::InvalidPlane)
+        );
+        let mut duplicate = bytes.clone();
+        duplicate[13..21].copy_from_slice(&i64::MIN.to_le_bytes());
+        assert_eq!(
+            run(&duplicate, &[i64::MIN], 2),
+            Err(Sq8ScoreError::InvalidPlane)
         );
     }
 
