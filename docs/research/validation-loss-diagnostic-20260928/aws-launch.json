@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0983cf91959a0876c",
+  "prefix": "research/validation-loss-diagnostic/20260928/a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "c3c5854a53b0b00c23b4d818a433be86a4263b6ff99ce116824bcb633e7cda3f",
+  "source_base_commit": "5ca0caf46395650e7c4d8f0c8dd49ba19dd20f28"
+}

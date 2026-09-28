@@ -1,0 +1,88 @@
+{
+  "scope": "Historical failed-layout reproduction and consumed validation diagnosis; no new arm, tuning or qualification",
+  "qualification": false,
+  "terminal_sha256": "f88f2500a3a48c4606eaf344b464bb5acfffcfd55d61343b80c4a35dd5dcc1e9",
+  "historical_root_sha256": "b8f2ec97c0ad9633d1f3bc672b90ff88e32cb80b0d6ecbeb12f2ddbf74a48ff2",
+  "splits": [
+    {
+      "split": "development",
+      "first": 0,
+      "queries": 64,
+      "means": {
+        "candidate_hits": 99.5625,
+        "nominated_hits": 99.5625,
+        "fetched_hits": 99.5625,
+        "returned_hits": 99.15625,
+        "flat_hits": 99.515625,
+        "discovery_loss": 0.4375,
+        "nomination_loss": 0.0,
+        "gap_bonus": 0.0,
+        "candidate_gap_bonus": 0.0,
+        "outside_candidate_gap_bonus": 0.0,
+        "fetched_not_returned": 0.40625,
+        "planned_gets": 25.234375,
+        "planned_bytes": 16753230.0
+      },
+      "totals": {
+        "candidate_hits": 6372,
+        "nominated_hits": 6372,
+        "fetched_hits": 6372,
+        "returned_hits": 6346,
+        "flat_hits": 6369,
+        "discovery_loss": 28,
+        "nomination_loss": 0,
+        "gap_bonus": 0,
+        "candidate_gap_bonus": 0,
+        "outside_candidate_gap_bonus": 0,
+        "fetched_not_returned": 26,
+        "planned_gets": 1615,
+        "planned_bytes": 1072206720
+      },
+      "queries_missing_discovery_gt": 12,
+      "queries_nomination_loss": 0,
+      "queries_gap_bonus": 0,
+      "max_planned_gets": 32,
+      "max_planned_bytes": 16773120
+    },
+    {
+      "split": "validation",
+      "first": 256,
+      "queries": 744,
+      "means": {
+        "candidate_hits": 99.22446236559139,
+        "nominated_hits": 99.22446236559139,
+        "fetched_hits": 99.22446236559139,
+        "returned_hits": 98.8508064516129,
+        "flat_hits": 99.56854838709677,
+        "discovery_loss": 0.7755376344086021,
+        "nomination_loss": 0.0,
+        "gap_bonus": 0.0,
+        "candidate_gap_bonus": 0.0,
+        "outside_candidate_gap_bonus": 0.0,
+        "fetched_not_returned": 0.3736559139784946,
+        "planned_gets": 26.272849462365592,
+        "planned_bytes": 16757721.290322581
+      },
+      "totals": {
+        "candidate_hits": 73823,
+        "nominated_hits": 73823,
+        "fetched_hits": 73823,
+        "returned_hits": 73545,
+        "flat_hits": 74079,
+        "discovery_loss": 577,
+        "nomination_loss": 0,
+        "gap_bonus": 0,
+        "candidate_gap_bonus": 0,
+        "outside_candidate_gap_bonus": 0,
+        "fetched_not_returned": 278,
+        "planned_gets": 19547,
+        "planned_bytes": 12467744640
+      },
+      "queries_missing_discovery_gt": 121,
+      "queries_nomination_loss": 0,
+      "queries_gap_bonus": 0,
+      "max_planned_gets": 32,
+      "max_planned_bytes": 16773120
+    }
+  ]
+}

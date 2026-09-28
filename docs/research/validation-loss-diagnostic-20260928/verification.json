@@ -1,0 +1,18 @@
+{
+  "terminal_status": "complete",
+  "terminal_exit_code": 0,
+  "terminal_sha256": "f88f2500a3a48c4606eaf344b464bb5acfffcfd55d61343b80c4a35dd5dcc1e9",
+  "controller_verified_artifacts": 40,
+  "independently_verified_retained_gzip_artifacts": 29,
+  "independently_verified_source_archives": 2,
+  "current_archive_files_matched": [
+    "aws-check.py",
+    "probe.py",
+    "config.json",
+    "red-check.py"
+  ],
+  "ec2_independent_state": "terminated",
+  "worker": "i-0983cf91959a0876c",
+  "query_execution": "AWS only",
+  "local_verification": "Closed JSON/gzip/source archive identity and count reconciliation only; no local query, test or build"
+}

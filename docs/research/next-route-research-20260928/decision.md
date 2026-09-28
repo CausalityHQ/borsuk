@@ -4,7 +4,7 @@ Fable consultation497cb16cb6b5447b completed exit0 in433seconds. Exact unedited 
 
 ## Independently verified
 
-Closed centroid-discovery SHA256SUMS all match. Reconciliation script checks64/64 reused ReLAION first100k D768 cosine k100 development0–63 queries: selected physical pages are subsets of the159 discovered pages, and candidate GT hits equal fetched GT hits on every query (99.5625% mean). This supports a discovery bottleneck on this development panel; it does not identify the744-query validation deficit. Exhaustive ranking's99.875% came from a DIFFERENT159-page set selected from all391 pages, not a better ranking of the same159 candidates.
+Closed centroid-discovery SHA256SUMS all match. Reconciliation script checks64/64 reused ReLAION first100k D768 cosine k100 development0–63 queries: selected physical pages are subsets of the159 discovered pages, and candidate GT hits equal fetched GT hits on every query (99.5625% mean). This supports a discovery bottleneck on this development panel. The subsequent strict AWS replay in ../validation-loss-diagnostic-20260928/decision.md now verifies the744-query validation layer:577missing discoveryGT hits, zero nominationGT loss, zero physical gapGT gain, exact original source/root/truth/plans. Returned KILL remains unchanged. Exhaustive ranking's99.875% came from a DIFFERENT159-page set selected from all391 pages, not a better ranking of the same159 candidates.
 
 ## Corrections required before any experiment
 
