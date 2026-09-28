@@ -1269,4 +1269,198 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             .unwrap()
             .is_sealed()
     );
+    let maintenance = temp.path().join("callable-maintenance");
+    let options = borsuk::two_bit_compaction::TwoBitCompactionOptions {
+        mutations: mutation_limits,
+        source: borsuk::canonical_source::TwoBitCompactionLimits {
+            max_memory_bytes: 4_000_000,
+            max_disk_bytes: 4_000_000,
+            ..compact_caps
+        },
+        generation: limits,
+    };
+    let (failing_store, retry_ops) =
+        common::FaultInjectingObjectStore::fail_nth_matching(store.clone(), 1, true, |op, path| {
+            op == common::StoreOperation::Put && path.as_ref().ends_with("/head.json")
+        })
+        .with_operation_log();
+    assert!(
+        borsuk::two_bit_compaction::compact_two_bit_index(
+            std::sync::Arc::new(failing_store),
+            &empty_prefix,
+            &maintenance,
+            options,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        read_two_bit_head(store.as_ref(), &empty_prefix)
+            .await
+            .unwrap()
+            .unwrap()
+            .root_sha256(),
+        index.head().root_sha256()
+    );
+    let failed_job = maintenance.join(index.head().root_sha256());
+    assert!(failed_job.join("ready.json").exists());
+    let target_manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(failed_job.join("generation/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    let sq8_key = target_manifest["sq8_object_key"].as_str().unwrap();
+    let sq8_upload_paths = retry_ops
+        .matching_paths(|op, path| op == common::StoreOperation::MultipartPut && path == sq8_key);
+    assert_eq!(sq8_upload_paths.len(), 1);
+    let sq8_etag = store
+        .head(&ObjectPath::from(sq8_upload_paths[0].clone()))
+        .await
+        .unwrap()
+        .e_tag;
+    let saved_ready = std::fs::read(failed_job.join("ready.json")).unwrap();
+    let mut corrupt_ready: serde_json::Value = serde_json::from_slice(&saved_ready).unwrap();
+    corrupt_ready["job_sha256"] = "0".repeat(64).into();
+    std::fs::write(
+        failed_job.join("ready.json"),
+        serde_json::to_vec(&corrupt_ready).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        borsuk::two_bit_compaction::compact_two_bit_index(
+            store.clone(),
+            &empty_prefix,
+            &maintenance,
+            options
+        )
+        .await
+        .is_err()
+    );
+    std::fs::write(failed_job.join("ready.json"), saved_ready).unwrap();
+    let restored_base = borsuk::two_bit_compaction::compact_two_bit_index(
+        store.clone(),
+        &empty_prefix,
+        &maintenance,
+        options,
+    )
+    .await
+    .unwrap();
+    assert!(!restored_base.is_empty());
+    assert_eq!(
+        store
+            .head(&ObjectPath::from(sq8_upload_paths[0].clone()))
+            .await
+            .unwrap()
+            .e_tag,
+        sq8_etag
+    );
+    assert!(!failed_job.exists());
+
+    assert_eq!(restored_base.generation(), 3);
+    let no_work = borsuk::two_bit_compaction::compact_two_bit_index(
+        store.clone(),
+        &empty_prefix,
+        &maintenance,
+        options,
+    )
+    .await
+    .unwrap();
+    assert_eq!(no_work.root_sha256(), restored_base.root_sha256());
+    let live = borsuk::two_bit_index::TwoBitIndex::open_remote(
+        store.as_ref(),
+        read_two_bit_head(store.as_ref(), &empty_prefix)
+            .await
+            .unwrap()
+            .unwrap(),
+        limits,
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    let revived = std::fs::read(maintenance.join("index.json")).unwrap();
+    assert!(!revived.is_empty());
+    assert!(
+        borsuk::two_bit_compaction::compact_two_bit_index(
+            store.clone(),
+            &prefix,
+            &maintenance,
+            options
+        )
+        .await
+        .is_err()
+    );
+    let lock_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(maintenance.join("compaction.lock"))
+        .unwrap();
+    lock_file.try_lock().unwrap();
+    assert!(
+        borsuk::two_bit_compaction::compact_two_bit_index(
+            store.clone(),
+            &empty_prefix,
+            &maintenance,
+            options
+        )
+        .await
+        .is_err()
+    );
+    drop(lock_file);
+    let deleted_again = apply_two_bit_mutations(
+        store.as_ref(),
+        live.head(),
+        2,
+        None,
+        &[
+            TwoBitMutation {
+                id: i64::MIN,
+                vector: None,
+            },
+            TwoBitMutation {
+                id: i64::MAX,
+                vector: None,
+            },
+        ],
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert_eq!(deleted_again.rows().len(), 2);
+    let emptied = borsuk::two_bit_compaction::compact_two_bit_index(
+        store.clone(),
+        &empty_prefix,
+        &maintenance,
+        options,
+    )
+    .await
+    .unwrap();
+    assert!(emptied.is_empty());
+    assert_eq!(emptied.generation(), 4);
+    let empty = borsuk::two_bit_index::TwoBitIndex::open_remote(
+        store.as_ref(),
+        emptied,
+        limits,
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        empty
+            .search(&reader, &[1., 0.], 100, None)
+            .await
+            .unwrap()
+            .candidates
+            .is_empty()
+    );
+    assert!(
+        borsuk::two_bit_mutations::read_two_bit_mutations(
+            store.as_ref(),
+            live.head(),
+            2,
+            mutation_limits
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .is_sealed()
+    );
 }

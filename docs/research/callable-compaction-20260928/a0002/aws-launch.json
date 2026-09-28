@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-071278e86ff40adfb",
+  "prefix": "research/native-library-check/callable-compaction/575cd350efed6c03061b4d1e0c74bc1c14f2ec724c5ba4ee8c98fe4c98e3202a/a0002",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "575cd350efed6c03061b4d1e0c74bc1c14f2ec724c5ba4ee8c98fe4c98e3202a",
+  "source_base_commit": "d06b793feaa3507b5900e71d01f42a59d7822686"
+}

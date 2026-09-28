@@ -930,3 +930,6 @@ pub mod sq8_source;
 
 /// Logical-ID search for populated or genuinely empty immutable bases.
 pub mod two_bit_index;
+
+/// Callable in-process canonical/delta compaction with restart recovery.
+pub mod two_bit_compaction;

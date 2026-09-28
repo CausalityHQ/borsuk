@@ -626,5 +626,58 @@ pending puts supply the replacement source. Nonempty format v2 is unchanged.
 
 This resolves empty **serving/publication**, including resurrection by pending
 puts. Native empty->nonempty rebuild uses the existing SQ8 and generation
-builders. Automatic/callable crash-resumable compaction and reader-safe GC remain
-OPEN. No vendor/100M/latency claim follows from functional small-corpus checks.
+builders. Callable compaction is described below; reader-safe remote GC remains OPEN. No vendor/100M/latency claim follows from functional small-corpus checks.
+
+
+### Callable in-process compaction
+
+`borsuk::two_bit_compaction::compact_two_bit_index` connects the existing seal,
+canonical/delta merge, SQ8/native rebuild and conditional publication. Supply
+an `Arc<dyn ObjectStore>`, index prefix, exclusive maintenance directory and
+`TwoBitCompactionOptions`. The returned authenticated head can be opened through
+`TwoBitIndex`. This is a development API; qualification is separate.
+
+```rust,ignore
+let new_head = borsuk::two_bit_compaction::compact_two_bit_index(
+    store.clone(), &prefix, maintenance_directory,
+    borsuk::two_bit_compaction::TwoBitCompactionOptions {
+        mutations: mutation_caps,
+        source: maintenance_caps,
+        generation: publication_limits,
+    },
+).await?;
+```
+
+Reuse one maintenance directory per index across retries. The directory binds
+its prefix and holds a standard exclusive file lock. Journal/input/root hashes
+reject accidental corruption; local staging is trusted writer state, not a
+security boundary against a malicious local writer. Separate directories or
+independent writers require caller coordination. An owned blocking worker holds
+the lock until completion if its awaiting future is dropped; dropping that
+future does not cancel the operation. Runtime shutdown may wait for that worker.
+
+No mutation head means no work. Otherwise the existing conditional mutation
+seal prevents accepted writes to the retired root. Queries pinned to it still
+work, but failed compaction can leave writes paused until retry succeeds. Resume
+with the same directory and adequate caps. Before its ready record, compaction
+rebuilds partial staging from authenticated input. After ready, it verifies the
+prepared source and target identities and retries publication without rewriting
+SQ8 objects pinned by ETag. Unique conditional namespace claims prevent upload
+collisions. The ordinary authenticated publisher retains its head CAS/lost-ack
+handling. All-deleted output publishes a genuine empty root; new puts rebuild a
+populated base. Concurrent head changes fail safely; re-read the current head
+on the next call.
+
+Caps cover modeled maintenance payload and temporary disk, not process RSS.
+Reserve other live query/generation pins in publication limits and budget
+runtime/allocator/SDK buffers separately. Some build admission checks happen
+after sealing; an insufficient cap can require a larger-budget retry. Recovery
+statistics are not a complete lifecycle bill: instrument the supplied object
+store for all uploads, metadata requests and SDK retries. Store deadlines/retry
+policy belong to that store.
+
+Successful publication removes local staging on a best-effort basis; a later
+call removes recognized obsolete jobs. Remote reader-safe GC is **not** included:
+old roots/objects must remain available to pinned readers. Interrupted attempts
+may leave unreferenced remote objects. Automatic scheduling, safe remote GC,
+100M maintenance cost and matched vendor performance remain release gates.

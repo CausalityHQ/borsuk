@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
 | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
 | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
 |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; irreversible mutation-head CAS fence guards replacement; bounded canonical/delta preparation and nonempty native handoff pass; typed empty serving and unified logical index search pass focused checks; crash-resumable orchestrator and GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; irreversible mutation-head CAS fence guards replacement; bounded canonical/delta preparation and nonempty native handoff pass; typed empty serving and unified logical index search pass focused checks; callable crash-resumable compaction passes focused tests; reader-safe remote GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
 | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
 | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
 
@@ -146,3 +146,11 @@ pending-put resurrection/search and two-row preparation pass. Full callable
 crash-resumable compaction and empty->populated orchestration remain next;
 reader-safe GC still required. No quality/scale/vendor axis closes.
 [Empty transition and index API receipts](../research/empty-index-transition-20260928/decision.md).
+
+
+Callable in-process compaction now passes2 integration and4 existing HTTP-layer
+checks on AWS causality Spot. Failure/retry preserves the pinned SQ8 ETag;
+empty/populated transitions, wrong-prefix/lock/corrupt-ready rejection and local
+staging cleanup are checked. Reader-safe remote GC, full qualification and both
+matched vendor comparisons remain OPEN. No recall/latency measurement is added.
+[Callable compaction receipts](../research/callable-compaction-20260928/decision.md).

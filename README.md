@@ -126,7 +126,7 @@ generation-pinned SQ8 page ranges through `OneAttemptS3` under the configured
 query, GET, byte, and concurrency limits. The caller must obtain the trusted
 root digest through its authorized publication path. The newer `TwoBitIndex`
 Rust path provides authenticated construction/publication, mutation snapshots and
-logical search; complete callable compaction/GC remains unfinished. Neither path
+logical search; callable compaction is available, while reader-safe remote GC remains unfinished. Neither path
 has passed the required matched comparison against both vendors; V282/V283 also
 failed their two-dataset quality gate.
 
@@ -551,6 +551,6 @@ listed in [LICENSE](LICENSE).
 populated and genuinely empty immutable bases, with bounded pending upserts and
 deletes. Vectors stay in object storage; query reads fetch authenticated pages.
 It is a development API: current full-corpus recall, vendor comparisons,100M
-qualification and complete compaction/GC remain unresolved release gates.
+qualification and reader-safe remote GC remain unresolved release gates.
 See [generation, mutation and empty-index API](docs/release/two-bit-generation.md)
 and [required comparison against both vendors](docs/release/competitive-acceptance.md).
