@@ -1,0 +1,1 @@
+{"config_sha256":"48972f8ba55bb6e120c71d6cafee2bdf8ff89f81f1ca0ca8ec31a1b18941f103","dataset":"CoHere first100k","dimensions":768,"first":256,"functional_replay_wall_us":28617798,"k":100,"metric":"cosine","plans_sha256":"09a39f59638f1ec0f83037fc303991c8dbb2f6d006ba83d10deb15181c28d756","queries":64,"rows":100000,"schema":"borsuk-v296-validation-plans-v1"}

@@ -1,0 +1,23 @@
+	Command being timed: "timeout 300s env OPENBLAS_NUM_THREADS=2 uv run --no-project --with numpy==2.3.3 --with pyarrow==24.0.0 python -m scripts.v296_score_validation --config docs/research/v296-cohere-development-config.json --config-sha da33824c8b2b5c0944d370ddb835ec924bb62d8e84f9951b7c192287a3547c2f --sq8 .borsuk-scratch/v283/cohere-layout/sq8.bin --truth .borsuk-scratch/v283/cohere-truth.u32 --truth-sha 06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8 --plans .borsuk-scratch/v283/v296-development-plans.jsonl --plans-sha ad26d463454dd500a8c715ee975448dfbb595864d7aae34574d8b891e53e8500 --output .borsuk-scratch/v283/v296-development-score.json --samples-output .borsuk-scratch/v283/v296-development-samples.jsonl"
+	User time (seconds): 4.20
+	System time (seconds): 0.11
+	Percent of CPU this job got: 61%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06.98
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 237540
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 507
+	Minor (reclaiming a frame) page faults: 50508
+	Voluntary context switches: 1106
+	Involuntary context switches: 641
+	Swaps: 0
+	File system inputs: 265152
+	File system outputs: 3424
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
