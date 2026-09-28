@@ -1,0 +1,23 @@
+	Command being timed: "timeout 300 rust-repo/target/debug/examples/build_sq8_source native-sq8-relaion/normalized.f32 27f292175755394c3ba289053a59a4c96ed73a426f4877b6dbcef427cced5106 768 native-sq8-relaion/order.u64 4cf8315276bcc689f879e9ccf67de3d4ce233b78f110af06f423412caf414924 16777216 native-sq8-relaion/sq8.bin"
+	User time (seconds): 30.43
+	System time (seconds): 0.30
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:30.77
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2852
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 426
+	Voluntary context switches: 35
+	Involuntary context switches: 358
+	Swaps: 0
+	File system inputs: 8
+	File system outputs: 152416
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

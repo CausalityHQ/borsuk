@@ -1,0 +1,60 @@
+{
+  "schema": "borsuk-native-sq8-paired-parity-receipt-v1",
+  "baseline_commit": "366a79e8083cab561d6602a2122ccb2887ee2b83",
+  "host": "spark-2751",
+  "binary_sha256": "d73953678ed49b43adf00b0a24946e2d350dffca32de6bbd71e271f5257b0881",
+  "evidence_archive_sha256": "854ec4430e9822995a5351019f672646b9dacc23a90e718132f86eb6a16ffcb1",
+  "source_files": {
+    "crates/borsuk/src/sq8_source.rs": "878200fb5a1965013dbfe7e89301b6f5953d20483a815ef78965ca68ad115c19",
+    "crates/borsuk/examples/build_sq8_source.rs": "bd998c23d52c94a3d7b680ae9bb591a72f56a0adc2ff812424f030b375d82312",
+    "scripts/native_sq8_source_parity.py": "b9449b87427b0947c6a7ed83c097894685441809da8c8794558105ce36a39d9b",
+    "crates/borsuk/Cargo.toml": "bcf1c7460aae116cbdd166d4e405e20ab3fb50b8fd28089bf0441d4ec3c06d5e"
+  },
+  "original_sessions": [
+    {
+      "id": 91982,
+      "exit_code": 0,
+      "role": "registered native example build"
+    },
+    {
+      "id": 78356,
+      "exit_code": 0,
+      "role": "ReLAION source/order export"
+    },
+    {
+      "id": 55560,
+      "exit_code": 0,
+      "role": "CoHere source/order export"
+    },
+    {
+      "id": 56355,
+      "exit_code": 0,
+      "role": "ReLAION writer and representation gate"
+    },
+    {
+      "id": 58025,
+      "exit_code": 0,
+      "role": "CoHere writer and representation gate"
+    },
+    {
+      "id": 94085,
+      "exit_code": 0,
+      "role": "ReLAION native SQ8 full validation replay"
+    },
+    {
+      "id": 72041,
+      "exit_code": 0,
+      "role": "CoHere native SQ8 full validation replay"
+    }
+  ],
+  "early_failures": [
+    "Example not registered in Cargo: exit101 before build; registered explicit supported example",
+    "Missing PyArrow transitive scorer dependency: exit1 before scoring; reused cached numpy+pyarrow environment"
+  ],
+  "smoke_checks": "Native example wrong order SHA and insufficient cap rejected with no output, original exec exit0; Python py_compile and touched Rust rustfmt/diff checks pass",
+  "full_build_stderr_sha256": "4a78c27ef325ae664cc35c6bc0849881f570491e30a81699495d0218bbf61cc9",
+  "decision": "GO native writer representation and offline paired quality. Native semantic fit/lifecycle and actual authenticated root serving remain incomplete.",
+  "cloud_launches": 0,
+  "s3_data_reads": 0,
+  "qualification": false
+}

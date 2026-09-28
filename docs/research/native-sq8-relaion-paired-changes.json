@@ -1,0 +1,13 @@
+{
+  "changes": [
+    {
+      "query_ordinal": 672,
+      "old_returned_hits": 98,
+      "new_returned_hits": 99,
+      "old_flat_hits": 99,
+      "new_flat_hits": 99
+    }
+  ],
+  "returned_total_delta": 1,
+  "flat_total_delta": 0
+}

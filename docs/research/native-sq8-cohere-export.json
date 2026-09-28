@@ -1,0 +1,9 @@
+{
+  "source_sha256": "f779b8b64722277273d41f684acbb66d82d9613745162af534dac478c1cfed00",
+  "layout_sha256": "303f31ab8a182a0aaa304c4ef551a046be41071ac24e67a793882eb74c5b532e",
+  "normalized_sha256": "57b9bb6297ee0c4c5eb276dec0ddf64c16307a73ca3bbb2e16ce986d24a743b3",
+  "order_sha256": "f8de6c5e1a9d76eb2f069f8064a50e50b9aaec8ee8e25e47d2feb8245cbd942d",
+  "rows": 100000,
+  "dimensions": 768,
+  "query_or_truth_used": false
+}

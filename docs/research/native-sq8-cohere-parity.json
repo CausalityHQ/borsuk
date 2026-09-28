@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-native-sq8-representation-parity-v1",
+  "rows": 100000,
+  "dimensions": 768,
+  "reference_sha256": "301696df05ca03122951b66ad8a9bedb5d5f1e675c6fc66f6019abbce3fcda58",
+  "root_sha256": "b2420db4aab045979d191b68ab9b61b149b01b6d84782a0cbac0be8779224219",
+  "native_sha256": "7c04868ea2cb260b3d1ced141456310a73a1bcd6a76da8311adf4403b22c941d",
+  "differing_codes": 0,
+  "differing_ids": 0,
+  "low_equal": true,
+  "step_equal": true,
+  "differing_norms": 90208,
+  "max_abs_norm_difference": 1.8477439880371094e-06,
+  "mean_abs_norm_difference": 2.982652187347412e-07,
+  "finite_positive_norms": true,
+  "representation_gate_pass": true,
+  "qualification": false,
+  "query_or_truth_used": false
+}

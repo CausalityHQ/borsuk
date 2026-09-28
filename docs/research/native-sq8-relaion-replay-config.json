@@ -1,0 +1,19 @@
+{
+  "dataset": "ReLAION first100k",
+  "first": 256,
+  "count": 744,
+  "root": "/home/riomus/borsuk-native-relaion-20260928-a0001/generation/manifest.json",
+  "root_sha256": "c4c2a37be1fd2065980f2e23f21b167384786a3f2317e848ca6f8a04cbec0506",
+  "requests": "/home/riomus/borsuk-native-relaion-20260928-a0001/requests.jsonl",
+  "requests_sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+  "truth": "/home/riomus/borsuk-native-relaion-20260928-a0001/truth.u32",
+  "truth_sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e",
+  "plans": "/home/riomus/borsuk-native-relaion-20260928-a0001/full-validation-plans.jsonl",
+  "plans_sha256": "e942277d9347e064434ab6ba0a6dfa358ae07d70000e4b0771cab15f268baa39",
+  "native": "/home/riomus/borsuk-native-relaion-20260928-a0001/native-sq8-relaion/sq8.bin",
+  "native_sha256": "eb7bb587a82732acf00ba04d2e466599dd9213ec24591b7c7030eb123a838cf6",
+  "native_receipt": "/home/riomus/borsuk-native-relaion-20260928-a0001/native-sq8-relaion/native.json",
+  "native_receipt_sha256": "ba708903e69b7ed17528cd7a99e260a841fa01be2f73e2613ca0e84212d8f451",
+  "parity": "/home/riomus/borsuk-native-relaion-20260928-a0001/native-sq8-relaion/parity.json",
+  "parity_sha256": "67bf15e16a5eff18cc04449c22d4b76266309c2c1043ec06f1a0d1ceb7192c98"
+}

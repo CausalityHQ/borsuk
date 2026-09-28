@@ -303,3 +303,18 @@ sequential f32. The independent NumPy fixture covers negative minima, rounding
 ties and constant coordinates, but does not establish complete dataset byte or
 recall parity. Existing paired100k benchmark bodies and qualification remain
 immutable; this new writer is not yet the qualified production creation default.
+
+The source writer now passes exact code/ID/calibration parity and the unchanged
+paired100k offline validation gates on the approved frozen order. See
+[native SQ8 decision](../research/native-sq8-paired-parity-decision.md).
+Run the public API example with sealed normalized source and LE u64 order:
+
+```sh
+cargo run --locked -p borsuk --example build_sq8_source -- \
+  SOURCE SOURCE_SHA DIMENSIONS ORDER_LE_U64 ORDER_SHA MAX_PAYLOAD_BYTES NEW_SQ8
+```
+
+It emits calibration/body identity JSON after successful sync; callers feed
+those values to the generation builder. This supplies an executable native SQ8
+creation path. Native ordering/normalization and lifecycle/package gates remain
+open; the paired replay does not prove a new cloud root or service performance.

@@ -1,0 +1,42 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_sq8_source_parity.py", line 135, in <module>
+    result = replay(Path(args.config),args.config_sha,Path(args.output))
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_sq8_source_parity.py", line 84, in replay
+    from scripts.native_two_bit_cosine_development import score_panel
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_two_bit_cosine_development.py", line 9, in <module>
+    from scripts.v291_two_stage_development import rust_sq8_scores
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/v291_two_stage_development.py", line 11, in <module>
+    from scripts.native_rotated_two_bit_codes import (
+        BATCH_ROWS, PACKED_BYTES, _fit_records, decode_levels, rotate_rows,
+    )
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_rotated_two_bit_codes.py", line 16, in <module>
+    from scripts.native_geometric_layout_screen import ArtifactIdentity, MembershipRow
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/quality-repo/scripts/native_geometric_layout_screen.py", line 20, in <module>
+    import pyarrow as pa
+ModuleNotFoundError: No module named 'pyarrow'
+Command exited with non-zero status 1
+	Command being timed: "timeout 600 /snap/bin/uv run --offline --with numpy python -m scripts.native_sq8_source_parity replay --config native-sq8-relaion/replay-config.json --config-sha 31fedba413506dc0e09354d3c1ec244f0ace8e9fc25f784eaa96be8c040b226f --output native-sq8-relaion/replay.json"
+	User time (seconds): 0.10
+	System time (seconds): 0.05
+	Percent of CPU this job got: 91%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.17
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 35256
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 14493
+	Voluntary context switches: 549
+	Involuntary context switches: 2
+	Swaps: 0
+	File system inputs: 752
+	File system outputs: 224
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
