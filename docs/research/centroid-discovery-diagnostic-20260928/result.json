@@ -1,0 +1,401 @@
+{
+  "dataset": "ReLAION first100k",
+  "split": "development0-63",
+  "rows": 100000,
+  "dimensions": 768,
+  "k": 100,
+  "queries": 64,
+  "samples": [
+    {
+      "query_ordinal": 0,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 144
+    },
+    {
+      "query_ordinal": 1,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 144
+    },
+    {
+      "query_ordinal": 2,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 157
+    },
+    {
+      "query_ordinal": 3,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 154
+    },
+    {
+      "query_ordinal": 4,
+      "graph_hits": 97,
+      "flat_centroid_hits": 99,
+      "page_overlap": 145
+    },
+    {
+      "query_ordinal": 5,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 153
+    },
+    {
+      "query_ordinal": 6,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 145
+    },
+    {
+      "query_ordinal": 7,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 150
+    },
+    {
+      "query_ordinal": 8,
+      "graph_hits": 98,
+      "flat_centroid_hits": 98,
+      "page_overlap": 146
+    },
+    {
+      "query_ordinal": 9,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 152
+    },
+    {
+      "query_ordinal": 10,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 143
+    },
+    {
+      "query_ordinal": 11,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 152
+    },
+    {
+      "query_ordinal": 12,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 149
+    },
+    {
+      "query_ordinal": 13,
+      "graph_hits": 89,
+      "flat_centroid_hits": 100,
+      "page_overlap": 148
+    },
+    {
+      "query_ordinal": 14,
+      "graph_hits": 99,
+      "flat_centroid_hits": 99,
+      "page_overlap": 148
+    },
+    {
+      "query_ordinal": 15,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 154
+    },
+    {
+      "query_ordinal": 16,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 149
+    },
+    {
+      "query_ordinal": 17,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 150
+    },
+    {
+      "query_ordinal": 18,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 146
+    },
+    {
+      "query_ordinal": 19,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 137
+    },
+    {
+      "query_ordinal": 20,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 149
+    },
+    {
+      "query_ordinal": 21,
+      "graph_hits": 99,
+      "flat_centroid_hits": 100,
+      "page_overlap": 142
+    },
+    {
+      "query_ordinal": 22,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 143
+    },
+    {
+      "query_ordinal": 23,
+      "graph_hits": 99,
+      "flat_centroid_hits": 99,
+      "page_overlap": 147
+    },
+    {
+      "query_ordinal": 24,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 140
+    },
+    {
+      "query_ordinal": 25,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 154
+    },
+    {
+      "query_ordinal": 26,
+      "graph_hits": 98,
+      "flat_centroid_hits": 100,
+      "page_overlap": 152
+    },
+    {
+      "query_ordinal": 27,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 147
+    },
+    {
+      "query_ordinal": 28,
+      "graph_hits": 99,
+      "flat_centroid_hits": 99,
+      "page_overlap": 155
+    },
+    {
+      "query_ordinal": 29,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 148
+    },
+    {
+      "query_ordinal": 30,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 151
+    },
+    {
+      "query_ordinal": 31,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 154
+    },
+    {
+      "query_ordinal": 32,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 147
+    },
+    {
+      "query_ordinal": 33,
+      "graph_hits": 97,
+      "flat_centroid_hits": 100,
+      "page_overlap": 145
+    },
+    {
+      "query_ordinal": 34,
+      "graph_hits": 99,
+      "flat_centroid_hits": 100,
+      "page_overlap": 149
+    },
+    {
+      "query_ordinal": 35,
+      "graph_hits": 99,
+      "flat_centroid_hits": 99,
+      "page_overlap": 147
+    },
+    {
+      "query_ordinal": 36,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 149
+    },
+    {
+      "query_ordinal": 37,
+      "graph_hits": 99,
+      "flat_centroid_hits": 100,
+      "page_overlap": 156
+    },
+    {
+      "query_ordinal": 38,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 146
+    },
+    {
+      "query_ordinal": 39,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 145
+    },
+    {
+      "query_ordinal": 40,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 146
+    },
+    {
+      "query_ordinal": 41,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 156
+    },
+    {
+      "query_ordinal": 42,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 152
+    },
+    {
+      "query_ordinal": 43,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 150
+    },
+    {
+      "query_ordinal": 44,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 153
+    },
+    {
+      "query_ordinal": 45,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 147
+    },
+    {
+      "query_ordinal": 46,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 145
+    },
+    {
+      "query_ordinal": 47,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 148
+    },
+    {
+      "query_ordinal": 48,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 149
+    },
+    {
+      "query_ordinal": 49,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 144
+    },
+    {
+      "query_ordinal": 50,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 144
+    },
+    {
+      "query_ordinal": 51,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 145
+    },
+    {
+      "query_ordinal": 52,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 151
+    },
+    {
+      "query_ordinal": 53,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 155
+    },
+    {
+      "query_ordinal": 54,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 150
+    },
+    {
+      "query_ordinal": 55,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 148
+    },
+    {
+      "query_ordinal": 56,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 155
+    },
+    {
+      "query_ordinal": 57,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 137
+    },
+    {
+      "query_ordinal": 58,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 151
+    },
+    {
+      "query_ordinal": 59,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 153
+    },
+    {
+      "query_ordinal": 60,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 152
+    },
+    {
+      "query_ordinal": 61,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 148
+    },
+    {
+      "query_ordinal": 62,
+      "graph_hits": 100,
+      "flat_centroid_hits": 99,
+      "page_overlap": 155
+    },
+    {
+      "query_ordinal": 63,
+      "graph_hits": 100,
+      "flat_centroid_hits": 100,
+      "page_overlap": 146
+    }
+  ],
+  "qualification": false,
+  "scope": "Exhaustive nearest-unit centroid page ranking diagnostic, not a new route or latency claim",
+  "means": {
+    "graph_hits": 99.5625,
+    "flat_centroid_hits": 99.875,
+    "page_overlap": 148.625
+  }
+}

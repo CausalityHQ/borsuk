@@ -1,0 +1,5 @@
+# Exhaustive centroid diagnostic
+
+Question: does exact ranking of all current unit centroids recover GT pages absent from bounded graph discovery? Reuse frozen rejected native ReLAION100k layout, development queries0–63 only. Rank391 physical pages by minimum exact squared-f32 distance over their32-row unit centroids; take159 pages, compare GT100 coverage against unchanged159-page graph discovery. Source query normalization matches current tolerance; cumulative-f32 distance preserves sequential accumulation. Authenticate root/centroid/SQ8/request/truth inputs. No GT enters page selection.
+
+One run on existing Spark, no paid instance or build, timeout300s,4GiB virtual cap, one BLAS thread. More flat coverage implicates bounded navigation; equally weak flat coverage implicates the centroid proxy/layout. Either is a diagnostic, never a serving architecture or quality/latency qualification. No relaxed GET/byte threshold or validation-panel rerun. V146 already rejects flat scaling; V149 rejects physical hierarchy; V150's repeated-unit crowding differs from current distinct-page seeded navigation. No repetition of those production arms.

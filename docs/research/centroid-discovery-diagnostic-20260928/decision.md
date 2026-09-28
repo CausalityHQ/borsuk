@@ -1,0 +1,7 @@
+# Bounded traversal misses some centroid-recoverable pages
+
+Verified ReLAION first100k, D768, cosine k100, development0–63 (64 already used queries). Same frozen rejected generation and original Rust plans, parity64/64. Exhaustive nearest-unit centroid top159 page coverage99.875%; existing bounded graph159 page coverage99.5625%; mean candidate overlap148.625 pages. Exhaustive better on7 queries, equal56, worse1. This is candidate GT coverage, not returned recall or latency.
+
+Decision: some missing pages are recoverable by the current centroid representation, supporting a distinct bounded-navigation redesign check before replacing the representation. No full-scan production route, graph parameter sweep or1M promotion. This development diagnostic does not establish the cause of every rejected validation query; the full-panel fitter KILL stands. V146 flat scoring scaling failure still applies. Next candidate must retain bounded work and unchanged nomination/physical caps and demonstrate actual returned quality, then cold HTTP against both vendor baselines.
+
+Original trace+analysis exit0. Inspection found the initial probe checked norm rather than squared norm for the1e-6 normalization tolerance. Corrected to current Rust policy, replayed the analyzer on the same immutable traces without rerunning queries, exit0; all sample/summary fields are identical. Both receipts preserved. No paid jobs, new fit, build or full-panel run.
