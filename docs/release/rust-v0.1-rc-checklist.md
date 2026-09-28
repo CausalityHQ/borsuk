@@ -1,4 +1,11 @@
-# Rust v0.1 immutable graph release candidate
+# Rust v0.1 release candidate
+
+**Minimum release contract:** [competitive acceptance matrix](competitive-acceptance.md).
+Beating both S3 Vectors and Turbopuffer on matched quality, end-to-end
+p90/p95, sustainable throughput and total lifecycle cost is mandatory.
+100M+ bounded-memory incremental operation is also required. Historical
+resident-route checkmarks below do not close these gates.
+
 
 Status: resident route retained as research evidence; object-native release gate open,
 2026-09-27 UTC. The full-vector hydration and 2.06 GB peak RSS measured on
@@ -10,7 +17,7 @@ cached dual graph until an independent parity gate passes.
 This cut builds packages for Linux x64/arm64 and macOS x64/arm64; Windows is
 outside the release candidate while historical Unix-only modules remain.
 
-## Contract
+## Historical resident-route contract (research only)
 
 The release route is one immutable, authenticated FP16 source plane, diverse
 source graph, source-trained PQ64 books/codes and physical row map. Search
