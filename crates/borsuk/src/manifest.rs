@@ -426,7 +426,7 @@ mod global_pq_layout_tests {
     }
 
     #[test]
-    fn offline_v20_base_has_one_codebook_root_and_no_v13_authority() {
+    fn explicit_v20_diagnostic_has_one_codebook_root_and_no_v13_authority() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -446,6 +446,13 @@ mod global_pq_layout_tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        assert!(
+            index
+                .manifest_for_format_tests()
+                .global_cell_card_ann_ref
+                .is_none()
+        );
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let ann = index
             .manifest_for_format_tests()
@@ -479,6 +486,13 @@ mod global_pq_layout_tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        assert!(
+            index
+                .manifest_for_format_tests()
+                .global_cell_card_ann_ref
+                .is_none()
+        );
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let mut manifest = index.manifest_for_format_tests().clone();
         let mut value =

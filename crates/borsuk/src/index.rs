@@ -4167,6 +4167,12 @@ impl BorsukIndex {
     }
 
     #[cfg(test)]
+    pub(crate) fn prepare_global_diagnostic_for_tests(&mut self) -> Result<()> {
+        let summaries = self.active_segment_summaries()?;
+        self.refresh_resident_global_ann_from_summaries(&summaries, 0)
+    }
+
+    #[cfg(test)]
     pub(crate) fn manifest_for_format_tests(&self) -> &Manifest {
         &self.manifest
     }
@@ -39229,12 +39235,10 @@ mod tests {
         let mut routing_summaries = index.active_segment_summaries().unwrap();
         let appended = fake_segment_summary("appended", 0, 2_000);
         routing_summaries.push(appended.clone());
-        manifest.segments = vec![appended];
-        manifest.segments_are_global_delta = true;
+        manifest.segments = routing_summaries.clone();
         manifest.pivots.clear();
         let mut previous_for_publish = previous.clone();
-        previous_for_publish.segments = vec![fake_segment_summary("prior-delta", 0, 1_999)];
-        previous_for_publish.segments_are_global_delta = true;
+        previous_for_publish.segments = routing_summaries[..2_000].to_vec();
         let (_, report) = index
             .storage
             .stage_manifest_with_report_and_routing_summaries(

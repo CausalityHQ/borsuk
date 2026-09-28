@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "8109c2f2bfd33d7a936fd0f75662277299f0d654",
+  "source_archive_sha256": "54337a60fd6ff3fce1a1e49b24e003f090ed2e3214b0e45ca7eec570ce4d9da4",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.2128",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "Four metadata fixture/fail-closed regression checks; no full gate, native S3 repetition or benchmark",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}
