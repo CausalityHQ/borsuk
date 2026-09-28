@@ -36179,6 +36179,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         (directory, index)
     }
 
@@ -36207,6 +36208,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         (directory, cache, index)
     }
 
@@ -43897,6 +43899,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         let reference = index
             .manifest
             .global_cell_card_ann_ref
@@ -44018,6 +44021,7 @@ mod tests {
                     .unwrap();
             }
             index.finish_bulk_load().unwrap();
+            index.prepare_global_diagnostic_for_tests().unwrap();
             let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
             let root_read = index
                 .storage
@@ -45859,6 +45863,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let manifest_before = serde_json::to_vec(&index.manifest).unwrap();
         let objects_before = index
@@ -46016,6 +46021,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let manifest_before = serde_json::to_vec(&index.manifest).unwrap();
         let objects_before = index
@@ -46221,6 +46227,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let manifest_before = serde_json::to_vec(&index.manifest).unwrap();
         let objects_before = index
@@ -46460,6 +46467,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         let root = index
             .resident_global_ann_pins
             .as_ref()
@@ -46549,6 +46557,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
         let global = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
         let codebook = index
             .load_resident_global_codebook(global.codebook())
@@ -46590,6 +46599,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
+        index.prepare_global_diagnostic_for_tests().unwrap();
 
         let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
         reference.validate().unwrap();
@@ -46628,6 +46638,7 @@ mod tests {
                 )
                 .unwrap();
             index.finish_bulk_load().unwrap();
+            index.prepare_global_diagnostic_for_tests().unwrap();
             (dir, index)
         }
 
