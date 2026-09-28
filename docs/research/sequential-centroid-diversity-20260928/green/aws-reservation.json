@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "290c45f5e0dc2883a18fc36b6710aef52e9b34be",
+  "source_archive_sha256": "c3a324f8bf0a4b6c44251a99831dc225cf692b24bdb9d12a66c6a1a54be6a7aa",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.212800",
+  "spot_quote_timestamp": "2026-09-28T13:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.2,
+  "scope": "Sequential diversity mechanics and affected graph tests, then one full workspace assurance; no quality/default/scale gate",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}

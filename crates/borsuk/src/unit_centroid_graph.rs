@@ -6,7 +6,7 @@ use std::mem::size_of;
 
 use sha2::{Digest, Sha256};
 
-use crate::centroid_hnsw::build_hnsw_adjacency;
+use crate::centroid_hnsw::{build_hnsw_adjacency, build_hnsw_adjacency_diverse};
 use crate::unit_centroid_pages::{UnitCentroidError, UnitCentroidPages};
 
 const MAGIC: &[u8; 8] = b"BORSUKG1";
@@ -162,6 +162,23 @@ impl UnitCentroidGraph {
         scorer: &UnitCentroidPages,
         centroid_blob: &[u8],
     ) -> Result<Self, UnitCentroidGraphError> {
+        Self::build_with_diversity(scorer, centroid_blob, false)
+    }
+
+    /// Build deterministic diversity-selected links with the same degree and
+    /// query-work bounds. This topology requires separate quality qualification.
+    pub fn build_diverse(
+        scorer: &UnitCentroidPages,
+        centroid_blob: &[u8],
+    ) -> Result<Self, UnitCentroidGraphError> {
+        Self::build_with_diversity(scorer, centroid_blob, true)
+    }
+
+    fn build_with_diversity(
+        scorer: &UnitCentroidPages,
+        centroid_blob: &[u8],
+        diverse: bool,
+    ) -> Result<Self, UnitCentroidGraphError> {
         if scorer.unit_count() == 0
             || scorer.unit_count() > u32::MAX as usize
             || !matching_scorer_blob(scorer, centroid_blob)
@@ -184,7 +201,12 @@ impl UnitCentroidGraph {
         let centers = (0..scorer.unit_count())
             .map(|unit| scorer.unit_centroid(unit).expect("valid unit").to_vec())
             .collect::<Vec<_>>();
-        let adjacency = build_hnsw_adjacency(&centers, M, M0, EF_CONSTRUCTION, 64)
+        let build = if diverse {
+            build_hnsw_adjacency_diverse
+        } else {
+            build_hnsw_adjacency
+        };
+        let adjacency = build(&centers, M, M0, EF_CONSTRUCTION, 64)
             .ok_or(UnitCentroidGraphError::InvalidGeometry)?;
         let centroid_sha256 = Sha256::digest(centroid_blob).into();
         Ok(Self {
@@ -765,18 +787,22 @@ mod tests {
     #[test]
     fn graph_roundtrip_finds_nearest_unit_with_bounded_work() {
         let (blob, scorer) = centroids();
-        let graph = UnitCentroidGraph::build(&scorer, &blob).unwrap();
-        let persisted = graph.encode().unwrap();
-        let loaded = UnitCentroidGraph::decode(&persisted, &blob, &scorer).unwrap();
-        let found = loaded.search(&scorer, &[2.1], 2, 4).unwrap();
-        assert_eq!(found.units[0].0, 2);
-        assert!(found.unit_evaluations <= 4);
-        assert!(!found.units.is_empty());
-        let mut wrong_blob = blob;
-        wrong_blob[32] ^= 1;
-        assert!(UnitCentroidGraph::decode(&persisted, &wrong_blob, &scorer).is_err());
-        let wrong_scorer = UnitCentroidPages::decode(&wrong_blob).unwrap();
-        assert!(loaded.search(&wrong_scorer, &[2.1], 2, 4).is_err());
+        for graph in [
+            UnitCentroidGraph::build(&scorer, &blob).unwrap(),
+            UnitCentroidGraph::build_diverse(&scorer, &blob).unwrap(),
+        ] {
+            let persisted = graph.encode().unwrap();
+            let loaded = UnitCentroidGraph::decode(&persisted, &blob, &scorer).unwrap();
+            let found = loaded.search(&scorer, &[2.1], 2, 4).unwrap();
+            assert_eq!(found.units[0].0, 2);
+            assert!(found.unit_evaluations <= 4);
+            assert!(!found.units.is_empty());
+            let mut wrong_blob = blob.clone();
+            wrong_blob[32] ^= 1;
+            assert!(UnitCentroidGraph::decode(&persisted, &wrong_blob, &scorer).is_err());
+            let wrong_scorer = UnitCentroidPages::decode(&wrong_blob).unwrap();
+            assert!(loaded.search(&wrong_scorer, &[2.1], 2, 4).is_err());
+        }
     }
 
     #[test]

@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0f4d6452c2915e3a3",
+  "prefix": "research/native-library-check/sequential-centroid-diversity/20260928/green-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "c3a324f8bf0a4b6c44251a99831dc225cf692b24bdb9d12a66c6a1a54be6a7aa",
+  "source_base_commit": "290c45f5e0dc2883a18fc36b6710aef52e9b34be"
+}

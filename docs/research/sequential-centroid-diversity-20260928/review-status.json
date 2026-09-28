@@ -1,0 +1,7 @@
+{
+  "tool": "devbox-cross.critique_start",
+  "status": "cooldown-rejected",
+  "reason": "One launch per agent per rolling six hours; no override or replacement architecture consultation",
+  "quality_launch": "held",
+  "correctness_implementation": "authorized autonomous bounded library work; not a design pass"
+}

@@ -8,6 +8,8 @@ Callable epoch-fenced compaction/GC is delivered with restart, stale-generation,
 
 Latest frozen-source full workspace/all-targets gate passed on Causality x86 Spot:2682passed/0failed/26ignored across146target summaries, excluding the initial focusedV26 87pass repetition. Sourcecf329c81b6518d7997b3c1dd7832a08bd0b06dfa0358941c64707c496684a685, workeri-0128209956ceb8d2e terminated, all terminal artifact/source identities independently verified. ARM positive runner execution remains unmeasured. See ../v26-platform-assurance-20260928/counts.json and decision.md.
 
+Latest increment: optional sequential unit-centroid diversity builder and deterministic V71 concurrency fixture repair, no serving default or quality change. Final Causality x86 fullworkspace2683passed/0failed/26existingignored across146targets; initial focusedV71 7pass excluded. Frozen sourced08c61749637794a46c65cd9d101e1f4d56706ade22ae8a47917665d3e45ba88, workeri-06b3860acc9fb0ec4 terminated;4artifacts plus all3changedRustfiles independently verified. Earlier full gate above is superseded for assurance only. See ../sequential-centroid-diversity-20260928/decision.md. Native architecture critique cadence still holds quality launch; narrow implementation reviews are not its substitute.
+
 ## Latest quality (verified offline, not serving performance)
 
 All corpora are first100k rows, D768 cosine k100; splits are reused/consumed query identities. Baseline is paired exhaustive nativeSQ8 scoring over identical rows. Mean and p05 are recall@100 percent (100 hits =100%).

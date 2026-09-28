@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "290c45f5e0dc2883a18fc36b6710aef52e9b34be",
+  "source_archive_sha256": "d08c61749637794a46c65cd9d101e1f4d56706ade22ae8a47917665d3e45ba88",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.212800",
+  "spot_quote_timestamp": "2026-09-28T13:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.2,
+  "scope": "Repair V71 concurrency fixture layer then final full workspace assurance; graph/source frozen except test fixture; no quality/default/scale gate",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "s3_versioning_observed": "Disabled"
+}

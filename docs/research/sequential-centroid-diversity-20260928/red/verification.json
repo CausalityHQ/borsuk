@@ -1,0 +1,16 @@
+{
+  "worker": "i-0647e97e9c966275f",
+  "state": "terminated",
+  "expected_test_exit": 101,
+  "observed_test_exit": 101,
+  "test_counts": {"passed": 0, "failed": 1},
+  "failure": "not implemented: sequential diversity not implemented",
+  "worker_terminal": {"status": "complete", "exit_code": 0},
+  "independently_verified_artifacts": 4,
+  "source_archive_sha256": "1294151441ec7c17f2955aa19fdb71f134f42f08b85e0e6518f4e5240a2f3d77",
+  "source_file_parity": "centroid_hnsw.rs checked against frozen red archive before implementation",
+  "elapsed_seconds": 192,
+  "estimated_compute_usd": 0.0113,
+  "cost_scope": "observed Spot quote and elapsed; excludes EBS/S3, not invoice",
+  "execution": "AWS Causality Spot; no local tests or queries"
+}

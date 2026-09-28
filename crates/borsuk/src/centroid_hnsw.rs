@@ -406,12 +406,33 @@ fn node_level(index: usize, m: usize) -> usize {
     level
 }
 
+pub(crate) fn build_hnsw_adjacency_diverse(
+    centroids: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+) -> Option<CentroidHnswAdjacency> {
+    build_hnsw_adjacency_with_diversity(centroids, m, m0, ef_construction, ef_search, true)
+}
+
 pub(crate) fn build_hnsw_adjacency(
     centroids: &[Vec<f32>],
     m: usize,
     m0: usize,
     ef_construction: usize,
     ef_search: usize,
+) -> Option<CentroidHnswAdjacency> {
+    build_hnsw_adjacency_with_diversity(centroids, m, m0, ef_construction, ef_search, false)
+}
+
+fn build_hnsw_adjacency_with_diversity(
+    centroids: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    diverse: bool,
 ) -> Option<CentroidHnswAdjacency> {
     if centroids.len() < 2 {
         return None;
@@ -459,23 +480,25 @@ pub(crate) fn build_hnsw_adjacency(
                 centroids,
                 &mut visited,
             );
-            let selected = CentroidHnsw::select_neighbours(&found, width, centroids, false);
+            let selected = CentroidHnsw::select_neighbours(&found, width, centroids, diverse);
             for &neighbour in &selected {
-                CentroidHnsw::connect(
-                    &mut neighbours,
+                CentroidHnsw::connect_row(
+                    &mut neighbours[node],
                     node as u32,
                     neighbour,
                     layer,
                     width,
                     centroids,
+                    diverse,
                 );
-                CentroidHnsw::connect(
-                    &mut neighbours,
+                CentroidHnsw::connect_row(
+                    &mut neighbours[neighbour as usize],
                     neighbour,
                     node as u32,
                     layer,
                     width,
                     centroids,
+                    diverse,
                 );
             }
             if let Some(nearest) = found.first() {
@@ -1317,27 +1340,6 @@ impl CentroidHnsw {
         kept
     }
 
-    /// Add `to` to `from`'s neighbour list on `layer`; when the list overflows
-    /// `width`, retain the nearest neighbours by source distance and node ID.
-    fn connect(
-        neighbours: &mut [Vec<Vec<u32>>],
-        from: u32,
-        to: u32,
-        layer: usize,
-        width: usize,
-        vectors: &[Vec<f32>],
-    ) {
-        Self::connect_row(
-            &mut neighbours[from as usize],
-            from,
-            to,
-            layer,
-            width,
-            vectors,
-            false,
-        );
-    }
-
     fn connect_row(
         tower: &mut Vec<Vec<u32>>,
         from: u32,
@@ -1383,6 +1385,33 @@ impl CentroidHnsw {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequential_diverse_builder_is_deterministic_and_degree_bounded() {
+        let data = grid(257, 8);
+        let plain = build_hnsw_adjacency(&data, 8, 16, 32, 32).unwrap();
+        let diverse = build_hnsw_adjacency_diverse(&data, 8, 16, 32, 32).unwrap();
+        let again = build_hnsw_adjacency_diverse(&data, 8, 16, 32, 32).unwrap();
+        assert_eq!(diverse.entry, plain.entry);
+        assert_eq!(diverse.neighbours, again.neighbours);
+        assert_ne!(diverse.neighbours, plain.neighbours);
+        for (node, tower) in diverse.neighbours.iter().enumerate() {
+            assert_eq!(tower.len(), plain.neighbours[node].len());
+            for (layer, links) in tower.iter().rev().enumerate() {
+                assert!(links.len() <= if layer == 0 { 16 } else { 8 });
+                assert_eq!(
+                    links.len(),
+                    links.iter().copied().collect::<HashSet<_>>().len()
+                );
+                assert!(
+                    links
+                        .iter()
+                        .all(|&next| next < data.len() as u32 && next != node as u32)
+                );
+            }
+        }
+        assert!(build_hnsw_adjacency_diverse(&data[..1], 8, 16, 32, 32).is_none());
+    }
 
     #[test]
     fn query_scratch_is_sparse_and_preserves_epoch_search_results() {

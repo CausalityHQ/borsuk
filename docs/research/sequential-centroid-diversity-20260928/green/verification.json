@@ -1,0 +1,27 @@
+{
+  "terminal_exit": 101,
+  "status": "failed",
+  "independent_artifacts": 4,
+  "source_archive_verified": true,
+  "changed_rust_files_match_frozen_archive": true,
+  "ec2_state": "terminated",
+  "focused_counts": [
+    [
+      14,
+      0,
+      2
+    ],
+    [
+      6,
+      0,
+      0
+    ]
+  ],
+  "workspace_partial_target_summaries": 144,
+  "workspace_partial_counts": [
+    2674,
+    1,
+    26
+  ],
+  "failure": "unchanged V71 synchronous overlap test assumes50ms scheduler overlap; observed peak1 expected2; graph mechanics passed; full gate not passed"
+}

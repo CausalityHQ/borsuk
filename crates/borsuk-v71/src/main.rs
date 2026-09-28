@@ -1226,25 +1226,38 @@ mod tests {
     async fn throughput_jobs_execute_independently_under_the_admission_limit() {
         let active = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
         let jobs = (0..2)
             .map(|_| {
                 let active = Arc::clone(&active);
                 let peak = Arc::clone(&peak);
+                let entered = Arc::clone(&entered);
                 async move {
                     let now = active.fetch_add(1, Ordering::SeqCst) + 1;
                     peak.fetch_max(now, Ordering::SeqCst);
                     // Models the synchronous routing/scoring work inside one
                     // async query future. Independent query tasks must overlap
                     // this work instead of serialising it on the parent task.
-                    std::thread::sleep(Duration::from_millis(50));
+                    // Rendezvous while still inside synchronous work. The
+                    // timeout bounds a broken serial executor; it does not
+                    // require scheduling overlap inside a fixed sleep window.
+                    let (count, ready) = &*entered;
+                    let mut count = count.lock().unwrap();
+                    *count += 1;
+                    ready.notify_all();
+                    let (count, _) = ready
+                        .wait_timeout_while(count, Duration::from_secs(10), |count| *count < 2)
+                        .unwrap();
+                    let overlapped = *count == 2;
+                    drop(count);
                     active.fetch_sub(1, Ordering::SeqCst);
-                    now
+                    overlapped
                 }
             })
             .collect::<Vec<_>>();
 
         let outcomes = run_spawned_bounded(jobs, 2).await;
-        assert!(outcomes.iter().all(Result::is_ok));
+        assert!(outcomes.iter().all(|outcome| matches!(outcome, Ok(true))));
         assert_eq!(peak.load(Ordering::SeqCst), 2);
     }
 
