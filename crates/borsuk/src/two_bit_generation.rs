@@ -232,11 +232,19 @@ impl TwoBitGeneration {
         }
         // Three copies cover reads/decoding, plus graph towers. Per-query 1MiB
         // covers the capped 1400 graph evaluations and 159-page planner vectors.
-        let query_memory = (limits.max_query_bytes as u64)
-            .checked_mul(3)
-            .and_then(|n| n.checked_add(limits.max_query_scratch_bytes as u64))
-            .and_then(|n| n.checked_add(1024 * 1024))
+        let planner_bytes = (limits.max_query_scratch_bytes as u64)
+            .checked_add(1024 * 1024)
             .ok_or(bad("query memory"))?;
+        let query_memory = crate::returned_sq8::query_payload_bytes(
+            crate::exact_sq8_nominee::Sq8Geometry {
+                rows: geometry.rows,
+                dimensions: geometry.dimensions,
+            },
+            limits.max_query_bytes as u64,
+            planner_bytes,
+            limits.max_active_queries as u64,
+        )
+        .map_err(|_| bad("query memory"))?;
         // Mean is 4D bytes. 64 times its admitted length conservatively covers
         // padded codec metadata and its temporary copies, including tiny-N/high-D.
         let codec_memory = (admitted_size("plane/mean.bin")? as u64)
@@ -247,9 +255,7 @@ impl TwoBitGeneration {
             .and_then(|n| n.checked_add(codec_memory))
             .and_then(|n| n.checked_add(131072))
             .and_then(|n| n.checked_add(manifest.graph_resident_bytes as u64))
-            .and_then(|n| {
-                n.checked_add(query_memory.checked_mul(limits.max_active_queries as u64)?)
-            })
+            .and_then(|n| n.checked_add(query_memory))
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
             .ok_or(bad("memory overflow"))?;
         if modeled > limits.max_memory_bytes {

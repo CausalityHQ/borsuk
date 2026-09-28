@@ -1,0 +1,270 @@
+diff --git a/crates/borsuk/src/object_native_generation.rs b/crates/borsuk/src/object_native_generation.rs
+index 3c96fa77..e98c6649 100644
+--- a/crates/borsuk/src/object_native_generation.rs
++++ b/crates/borsuk/src/object_native_generation.rs
+@@ -14,10 +14,10 @@ use tokio::io::AsyncWriteExt;
+ use tokio::sync::Semaphore;
+ 
+ use crate::budgeted_page_rank::{
+-    choose_budgeted_pages, choose_budgeted_pages_sparse, BudgetedPageError, BudgetedPagePlan,
++    BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages, choose_budgeted_pages_sparse,
+ };
+ use crate::pq64_nominee::Pq64Error;
+-use crate::pq64_router_artifact::{load_source_router, RouterArtifactError, SourceRouterArtifact};
++use crate::pq64_router_artifact::{RouterArtifactError, SourceRouterArtifact, load_source_router};
+ use crate::sq8_page_authority::{PageAuthority, PageError};
+ use crate::sq8_s3_range::{
+     OneAttemptS3, RangeFetchError, RankedSq8, RankedSq8Failure, Sq8ReadStats,
+@@ -373,7 +373,7 @@ impl ObjectNativeGeneration {
+             .map_err(ObjectNativeOpenError::Io)?
+             .len();
+         // Three copies allow authenticated reads and decoding. Three query
+-        // buffers cover response collection, transport and scoring scratch.
++        // buffers cover response collection/transport; ranking is charged by row count.
+         // PQ nomination materializes one tuple per selected-region row.
+         // Retiring generations are charged through `already_pinned_bytes`.
+         let router_disk_bytes = ["summaries", "books", "codes", "low", "step"]
+@@ -400,21 +400,23 @@ impl ObjectNativeGeneration {
+             .and_then(|v| v.checked_add(64 * 256 * 4))
+             .ok_or(ObjectNativeOpenError::Invalid("planner memory"))?
+             as u64;
++        let query_memory = crate::returned_sq8::query_payload_bytes(
++            crate::exact_sq8_nominee::Sq8Geometry {
++                rows: manifest.rows,
++                dimensions: manifest.dimensions,
++            },
++            limits.max_query_bytes,
++            planner_bytes,
++            limits.max_active_queries,
++        )
++        .map_err(|_| ObjectNativeOpenError::Invalid("query memory"))?;
+         let modeled = router_disk_bytes
+             .checked_add(sidecar_size)
+             .and_then(|v| v.checked_mul(3))
+             .and_then(|v| v.checked_add(centroid_size.checked_mul(3)?))
+             .and_then(|v| v.checked_add(graph_size))
+             .and_then(|v| v.checked_add(manifest.graph_resident_bytes))
+-            .and_then(|v| {
+-                v.checked_add(
+-                    limits
+-                        .max_active_queries
+-                        .checked_mul(limits.max_query_bytes)?
+-                        .checked_mul(3)?
+-                        .checked_add(planner_bytes)?,
+-                )
+-            })
++            .and_then(|v| v.checked_add(query_memory))
+             .and_then(|v| v.checked_add(limits.already_pinned_bytes))
+             .ok_or(ObjectNativeOpenError::Invalid("memory arithmetic"))?;
+         if modeled > limits.max_memory_bytes {
+@@ -666,7 +668,7 @@ impl ObjectNativeGeneration {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use object_store::{memory::InMemory, ObjectStoreExt, PutPayload};
++    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
+     use std::time::{SystemTime, UNIX_EPOCH};
+ 
+     #[tokio::test]
+@@ -754,7 +756,7 @@ mod tests {
+         .unwrap();
+         fs::write(root.join("manifest.json"), &manifest).unwrap();
+         let limits = ObjectNativeLimits {
+-            max_memory_bytes: 1_000_000,
++            max_memory_bytes: 2_000_000,
+             max_active_queries: 2,
+             max_query_bytes: 32_768,
+             max_query_gets: 2,
+@@ -763,6 +765,18 @@ mod tests {
+             max_router_shortlist: 128,
+             already_pinned_bytes: 0,
+         };
++        // The former response-only cap undercharges two planners plus ranking.
++        assert!(matches!(
++            ObjectNativeGeneration::open(
++                &root,
++                &sha256(&manifest),
++                ObjectNativeLimits {
++                    max_memory_bytes: 1_000_000,
++                    ..limits
++                }
++            ),
++            Err(ObjectNativeOpenError::Invalid("memory cap"))
++        ));
+         let opened = ObjectNativeGeneration::open(&root, &sha256(&manifest), limits).unwrap();
+         assert_eq!(opened.router().router.rows(), 256);
+         assert_eq!(opened.pages().object_sha256(), sq8_hash);
+@@ -795,15 +809,11 @@ mod tests {
+             )
+             .await
+             .unwrap();
+-        assert!(ObjectNativeGeneration::open_remote(
+-            &store,
+-            &prefix,
+-            &sha256(&manifest),
+-            limits,
+-            &root
+-        )
+-        .await
+-        .is_err());
++        assert!(
++            ObjectNativeGeneration::open_remote(&store, &prefix, &sha256(&manifest), limits, &root)
++                .await
++                .is_err()
++        );
+         let plan = opened.plan_pages(&[0.0; 64], 1, 128, 100, 4).unwrap();
+         assert_eq!(plan.ranges, vec![0..sq8.len()]);
+         assert_eq!(
+diff --git a/crates/borsuk/src/returned_sq8.rs b/crates/borsuk/src/returned_sq8.rs
+index a84ecf24..35806f65 100644
+--- a/crates/borsuk/src/returned_sq8.rs
++++ b/crates/borsuk/src/returned_sq8.rs
+@@ -3,6 +3,34 @@
+ use crate::exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError, score_nominees};
+ use std::collections::HashSet;
+ 
++/// Conservative concurrent response, ranking and planner payload admission.
++/// Allocator/runtime/transport overhead must be charged separately.
++pub(crate) fn query_payload_bytes(
++    geometry: Sq8Geometry,
++    max_bytes: u64,
++    planner_bytes: u64,
++    max_active_queries: u64,
++) -> Result<u64, Sq8ScoreError> {
++    let bad = Sq8ScoreError::InvalidGeometry;
++    let row_bytes = geometry.dimensions.checked_add(12).ok_or(bad)? as u64;
++    if geometry.rows == 0 || geometry.dimensions == 0 || max_bytes == 0 || max_active_queries == 0 {
++        return Err(bad);
++    }
++    let rows = (geometry.rows as u64).min(max_bytes / row_bytes);
++    // Four score slots cover Vec growth, local results and sorting; remaining
++    // allowance covers ordinals and three membership/duplicate-ID sets.
++    let ranking = rows
++        .checked_mul(256)
++        .and_then(|n| n.checked_add((geometry.dimensions as u64).checked_mul(4)?))
++        .ok_or(bad)?;
++    max_bytes
++        .checked_mul(3)
++        .and_then(|n| n.checked_add(planner_bytes))
++        .and_then(|n| n.checked_add(ranking))
++        .and_then(|n| n.checked_mul(max_active_queries))
++        .ok_or(bad)
++}
++
+ /// One half-open physical byte range and its already authenticated payload.
+ /// The caller must validate S3 status, byte range, generation, and page hashes.
+ pub struct ReturnedRange<'a> {
+@@ -93,6 +121,74 @@ pub fn rank_returned_ranges(
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn query_admission_accounts_for_narrow_rows_concurrent_planners_and_overflow() {
++        let geometry = Sq8Geometry {
++            rows: 1_000_000,
++            dimensions: 1,
++        };
++        let wire = 13_000_000;
++        let admitted = query_payload_bytes(geometry, wire, 0, 1).unwrap();
++        assert!(
++            admitted
++                >= 3 * wire + geometry.rows as u64 * std::mem::size_of::<ScoredNominee>() as u64
++        );
++        let tiny = query_payload_bytes(
++            Sq8Geometry {
++                rows: 1,
++                dimensions: 1,
++            },
++            wire,
++            0,
++            1,
++        )
++        .unwrap();
++        assert!(admitted > tiny);
++        assert_eq!(
++            query_payload_bytes(geometry, wire, 123, 3).unwrap(),
++            (admitted + 123) * 3
++        );
++        assert!(
++            query_payload_bytes(
++                Sq8Geometry {
++                    rows: 0,
++                    dimensions: 1
++                },
++                wire,
++                0,
++                1
++            )
++            .is_err()
++        );
++        assert!(
++            query_payload_bytes(
++                Sq8Geometry {
++                    rows: 1,
++                    dimensions: 0
++                },
++                wire,
++                0,
++                1
++            )
++            .is_err()
++        );
++        assert!(
++            query_payload_bytes(
++                Sq8Geometry {
++                    rows: 1,
++                    dimensions: usize::MAX
++                },
++                wire,
++                0,
++                1
++            )
++            .is_err()
++        );
++        assert!(query_payload_bytes(geometry, u64::MAX, 0, 1).is_err());
++        assert!(query_payload_bytes(geometry, wire, 0, 0).is_err());
++        assert!(query_payload_bytes(geometry, wire, u64::MAX, 1).is_err());
++    }
++
+     fn row(id: i64, norm: f32, code: u8) -> Vec<u8> {
+         let mut bytes = Vec::new();
+         bytes.extend_from_slice(&id.to_le_bytes());
+diff --git a/crates/borsuk/src/two_bit_generation.rs b/crates/borsuk/src/two_bit_generation.rs
+index ee73179b..287025cb 100644
+--- a/crates/borsuk/src/two_bit_generation.rs
++++ b/crates/borsuk/src/two_bit_generation.rs
+@@ -232,11 +232,19 @@ impl TwoBitGeneration {
+         }
+         // Three copies cover reads/decoding, plus graph towers. Per-query 1MiB
+         // covers the capped 1400 graph evaluations and 159-page planner vectors.
+-        let query_memory = (limits.max_query_bytes as u64)
+-            .checked_mul(3)
+-            .and_then(|n| n.checked_add(limits.max_query_scratch_bytes as u64))
+-            .and_then(|n| n.checked_add(1024 * 1024))
++        let planner_bytes = (limits.max_query_scratch_bytes as u64)
++            .checked_add(1024 * 1024)
+             .ok_or(bad("query memory"))?;
++        let query_memory = crate::returned_sq8::query_payload_bytes(
++            crate::exact_sq8_nominee::Sq8Geometry {
++                rows: geometry.rows,
++                dimensions: geometry.dimensions,
++            },
++            limits.max_query_bytes as u64,
++            planner_bytes,
++            limits.max_active_queries as u64,
++        )
++        .map_err(|_| bad("query memory"))?;
+         // Mean is 4D bytes. 64 times its admitted length conservatively covers
+         // padded codec metadata and its temporary copies, including tiny-N/high-D.
+         let codec_memory = (admitted_size("plane/mean.bin")? as u64)
+@@ -247,9 +255,7 @@ impl TwoBitGeneration {
+             .and_then(|n| n.checked_add(codec_memory))
+             .and_then(|n| n.checked_add(131072))
+             .and_then(|n| n.checked_add(manifest.graph_resident_bytes as u64))
+-            .and_then(|n| {
+-                n.checked_add(query_memory.checked_mul(limits.max_active_queries as u64)?)
+-            })
++            .and_then(|n| n.checked_add(query_memory))
+             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
+             .ok_or(bad("memory overflow"))?;
+         if modeled > limits.max_memory_bytes {

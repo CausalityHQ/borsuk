@@ -3,6 +3,34 @@
 use crate::exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError, score_nominees};
 use std::collections::HashSet;
 
+/// Conservative concurrent response, ranking and planner payload admission.
+/// Allocator/runtime/transport overhead must be charged separately.
+pub(crate) fn query_payload_bytes(
+    geometry: Sq8Geometry,
+    max_bytes: u64,
+    planner_bytes: u64,
+    max_active_queries: u64,
+) -> Result<u64, Sq8ScoreError> {
+    let bad = Sq8ScoreError::InvalidGeometry;
+    let row_bytes = geometry.dimensions.checked_add(12).ok_or(bad)? as u64;
+    if geometry.rows == 0 || geometry.dimensions == 0 || max_bytes == 0 || max_active_queries == 0 {
+        return Err(bad);
+    }
+    let rows = (geometry.rows as u64).min(max_bytes / row_bytes);
+    // Four score slots cover Vec growth, local results and sorting; remaining
+    // allowance covers ordinals and three membership/duplicate-ID sets.
+    let ranking = rows
+        .checked_mul(256)
+        .and_then(|n| n.checked_add((geometry.dimensions as u64).checked_mul(4)?))
+        .ok_or(bad)?;
+    max_bytes
+        .checked_mul(3)
+        .and_then(|n| n.checked_add(planner_bytes))
+        .and_then(|n| n.checked_add(ranking))
+        .and_then(|n| n.checked_mul(max_active_queries))
+        .ok_or(bad)
+}
+
 /// One half-open physical byte range and its already authenticated payload.
 /// The caller must validate S3 status, byte range, generation, and page hashes.
 pub struct ReturnedRange<'a> {
@@ -85,13 +113,81 @@ pub fn rank_returned_ranges(
             .total_cmp(&right.score)
             .then(left.id.cmp(&right.id))
     });
-    scores.truncate(top_k);
-    Ok(scores)
+    // Release fetched-row capacity before returning caller-owned top-k results.
+    Ok(scores[..top_k].to_vec())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_admission_accounts_for_narrow_rows_concurrent_planners_and_overflow() {
+        let geometry = Sq8Geometry {
+            rows: 1_000_000,
+            dimensions: 1,
+        };
+        let wire = 13_000_000;
+        let admitted = query_payload_bytes(geometry, wire, 0, 1).unwrap();
+        assert!(
+            admitted
+                >= 3 * wire + geometry.rows as u64 * std::mem::size_of::<ScoredNominee>() as u64
+        );
+        let tiny = query_payload_bytes(
+            Sq8Geometry {
+                rows: 1,
+                dimensions: 1,
+            },
+            wire,
+            0,
+            1,
+        )
+        .unwrap();
+        assert!(admitted > tiny);
+        assert_eq!(
+            query_payload_bytes(geometry, wire, 123, 3).unwrap(),
+            (admitted + 123) * 3
+        );
+        assert!(
+            query_payload_bytes(
+                Sq8Geometry {
+                    rows: 0,
+                    dimensions: 1
+                },
+                wire,
+                0,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            query_payload_bytes(
+                Sq8Geometry {
+                    rows: 1,
+                    dimensions: 0
+                },
+                wire,
+                0,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            query_payload_bytes(
+                Sq8Geometry {
+                    rows: 1,
+                    dimensions: usize::MAX
+                },
+                wire,
+                0,
+                1
+            )
+            .is_err()
+        );
+        assert!(query_payload_bytes(geometry, u64::MAX, 0, 1).is_err());
+        assert!(query_payload_bytes(geometry, wire, 0, 0).is_err());
+        assert!(query_payload_bytes(geometry, wire, u64::MAX, 1).is_err());
+    }
 
     fn row(id: i64, norm: f32, code: u8) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -134,6 +230,11 @@ mod tests {
                 .map(|entry| (entry.ordinal, entry.id))
                 .collect::<Vec<_>>(),
             vec![(4, 10), (3, 20)]
+        );
+        assert_eq!(
+            result.capacity(),
+            2,
+            "fetched-row scratch must not escape in top-k results"
         );
     }
 

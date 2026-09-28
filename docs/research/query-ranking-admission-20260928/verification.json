@@ -1,0 +1,34 @@
+{
+  "source_parity": true,
+  "original_jobs": {
+    "ranking-admission-red": {
+      "exit": 101,
+      "raw_log_sha256": "1e6f986a9409f95243f46c659e9a4b8f13c1c9ecb013a3392dd96451d1802975"
+    },
+    "ranking-admission-green": {
+      "exit": 0,
+      "raw_log_sha256": "ba47eb21a14197eb31dc051daffd2961a08c3e04f27d7c126ffc9da02c176617"
+    },
+    "ranking-admission-object-native": {
+      "exit": 0,
+      "raw_log_sha256": "011d0140bc31554b146653e90b0daf09529b091051619b6e7267ba7c43f15ef5"
+    },
+    "ranking-admission-two-bit": {
+      "exit": 0,
+      "raw_log_sha256": "135cd62e72989994e11b66f2565cb895280c55cf5b01b6a67035a4a19743f51f"
+    },
+    "ranking-buffer-red": {
+      "exit": 101,
+      "raw_log_sha256": "d5ac1510032dc58ffeba563a4df65281b774be9195d641c56903f1d9586161b9"
+    },
+    "ranking-buffer-green": {
+      "exit": 0,
+      "raw_log_sha256": "390c2c4842e128307e8ce01c2ec82fbf64889b9c1ed7ccbe6ed11bbc5b12a00c"
+    }
+  },
+  "admission_green_tests": 3,
+  "object_native_fixture_tests": 1,
+  "two_bit_integration_tests": 1,
+  "current_std_core_tests": 6,
+  "performance_or_rss_measured": false
+}

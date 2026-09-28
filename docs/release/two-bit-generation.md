@@ -47,7 +47,18 @@ The graph uses the frozen V296 one-unit/128-evaluation seed, then158 additional
 pages/1272 evaluations. Up to159 candidate pages are scored with the Rust
 reconstructed-cosine two-bit codec; the existing budgeted planner selects and
 bridges page ranges. Smaller artifacts use their complete page count. The
-semaphore spans planning through fetch and final SQ8 ranking. Direct `plan`
+admission model also charges ranking workspace by maximum fetched row count
+(min(source rows, byte cap/(D+12))), plus coordinate weights. A conservative
+256B per returned row covers score-vector growth, local/global results,
+ordinal rosters, duplicate/membership sets and sorting. Response, ranking and
+planner/codec allowances are multiplied by configured active queries. The
+older PQ object-native loader uses the same estimator, including one planner
+allowance per concurrent query. This is a checked payload model, not a measured
+RSS guarantee; allocator/runtime/transport overhead requires separate headroom.
+The ranker returns a fresh top-k score buffer; the full fetched-row score
+capacity is dropped before returning to the caller. Retained result objects
+remain caller-owned memory. The semaphore spans planning through fetch and
+final SQ8 ranking. Direct `plan`
 uses the same admission semaphore. CPU planning is synchronous within the async
 call; HTTP scheduling/throughput must be measured before release qualification.
 

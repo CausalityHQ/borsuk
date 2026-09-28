@@ -84,6 +84,14 @@ No GET/beam increase or prototype sweep.
 [Exact negative gate](../research/extent-centroid-nomination-20260928/decision.md).
 No matched vendor gate is closed. [Exact decision](../research/hierarchical-source-layout-20260928/decision.md).
 
+Independent library increment: both object-native loaders now charge returned-row
+ranking workspace and one planner per active query; shared ranker releases
+fetched-score capacity before returning a small top-k buffer. Red/green, loader
+fixtures and exact scoring checks pass. This is a payload-admission correctness
+fix, not measured RSS/latency or a reopened architecture win. Next product gap
+is application-ID/source-ordinal separation before incremental overlays.
+[Code/evidence decision](../research/query-ranking-admission-20260928/decision.md).
+
 Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
 [discovery diagnostic](../research/nomination-trace-20260928/decision.md),
 [centroid diagnostic](../research/centroid-discovery-diagnostic-20260928/decision.md),

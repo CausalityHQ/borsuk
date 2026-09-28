@@ -14,10 +14,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::budgeted_page_rank::{
-    choose_budgeted_pages, choose_budgeted_pages_sparse, BudgetedPageError, BudgetedPagePlan,
+    BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages, choose_budgeted_pages_sparse,
 };
 use crate::pq64_nominee::Pq64Error;
-use crate::pq64_router_artifact::{load_source_router, RouterArtifactError, SourceRouterArtifact};
+use crate::pq64_router_artifact::{RouterArtifactError, SourceRouterArtifact, load_source_router};
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use crate::sq8_s3_range::{
     OneAttemptS3, RangeFetchError, RankedSq8, RankedSq8Failure, Sq8ReadStats,
@@ -373,7 +373,7 @@ impl ObjectNativeGeneration {
             .map_err(ObjectNativeOpenError::Io)?
             .len();
         // Three copies allow authenticated reads and decoding. Three query
-        // buffers cover response collection, transport and scoring scratch.
+        // buffers cover response collection/transport; ranking is charged by row count.
         // PQ nomination materializes one tuple per selected-region row.
         // Retiring generations are charged through `already_pinned_bytes`.
         let router_disk_bytes = ["summaries", "books", "codes", "low", "step"]
@@ -400,21 +400,23 @@ impl ObjectNativeGeneration {
             .and_then(|v| v.checked_add(64 * 256 * 4))
             .ok_or(ObjectNativeOpenError::Invalid("planner memory"))?
             as u64;
+        let query_memory = crate::returned_sq8::query_payload_bytes(
+            crate::exact_sq8_nominee::Sq8Geometry {
+                rows: manifest.rows,
+                dimensions: manifest.dimensions,
+            },
+            limits.max_query_bytes,
+            planner_bytes,
+            limits.max_active_queries,
+        )
+        .map_err(|_| ObjectNativeOpenError::Invalid("query memory"))?;
         let modeled = router_disk_bytes
             .checked_add(sidecar_size)
             .and_then(|v| v.checked_mul(3))
             .and_then(|v| v.checked_add(centroid_size.checked_mul(3)?))
             .and_then(|v| v.checked_add(graph_size))
             .and_then(|v| v.checked_add(manifest.graph_resident_bytes))
-            .and_then(|v| {
-                v.checked_add(
-                    limits
-                        .max_active_queries
-                        .checked_mul(limits.max_query_bytes)?
-                        .checked_mul(3)?
-                        .checked_add(planner_bytes)?,
-                )
-            })
+            .and_then(|v| v.checked_add(query_memory))
             .and_then(|v| v.checked_add(limits.already_pinned_bytes))
             .ok_or(ObjectNativeOpenError::Invalid("memory arithmetic"))?;
         if modeled > limits.max_memory_bytes {
@@ -666,7 +668,7 @@ impl ObjectNativeGeneration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use object_store::{memory::InMemory, ObjectStoreExt, PutPayload};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
@@ -754,7 +756,7 @@ mod tests {
         .unwrap();
         fs::write(root.join("manifest.json"), &manifest).unwrap();
         let limits = ObjectNativeLimits {
-            max_memory_bytes: 1_000_000,
+            max_memory_bytes: 2_000_000,
             max_active_queries: 2,
             max_query_bytes: 32_768,
             max_query_gets: 2,
@@ -763,6 +765,18 @@ mod tests {
             max_router_shortlist: 128,
             already_pinned_bytes: 0,
         };
+        // The former response-only cap undercharges two planners plus ranking.
+        assert!(matches!(
+            ObjectNativeGeneration::open(
+                &root,
+                &sha256(&manifest),
+                ObjectNativeLimits {
+                    max_memory_bytes: 1_000_000,
+                    ..limits
+                }
+            ),
+            Err(ObjectNativeOpenError::Invalid("memory cap"))
+        ));
         let opened = ObjectNativeGeneration::open(&root, &sha256(&manifest), limits).unwrap();
         assert_eq!(opened.router().router.rows(), 256);
         assert_eq!(opened.pages().object_sha256(), sq8_hash);
@@ -795,15 +809,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(ObjectNativeGeneration::open_remote(
-            &store,
-            &prefix,
-            &sha256(&manifest),
-            limits,
-            &root
-        )
-        .await
-        .is_err());
+        assert!(
+            ObjectNativeGeneration::open_remote(&store, &prefix, &sha256(&manifest), limits, &root)
+                .await
+                .is_err()
+        );
         let plan = opened.plan_pages(&[0.0; 64], 1, 128, 100, 4).unwrap();
         assert_eq!(plan.ranges, vec![0..sq8.len()]);
         assert_eq!(
