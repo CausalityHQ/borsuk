@@ -69,8 +69,11 @@ fetched91.78125%,p05 77 with<=13 ranges/14713140B. KILL before SQ8/ReLAION.
 The exact nearest32-row summary arm also failed:92.4375%,p05 79,
 <=13 ranges/15164760B. Both squared-distance nomination arms are KILL before
 SQ8/ReLAION/graph/format/cloud. Unit normalization then recovered only0.625pp:93.0625%,p05 80,
-<=13 ranges/15449460B, also KILL. Stop centroid-minimum variants; choose a
-materially distinct boundary-coverage/compressed-nomination design after review.
+<=13 ranges/15449460B, also KILL. Stop centroid-minimum variants. Reused completed Fable spill review and
+reconciled V38/V39: next source-only epsilon-closure copy-amplification admission
+(max3 copies/rho<=2), before any query/format/cloud. New dual critique was
+cooldown-rejected before launch; no override or duplicate review.
+[Spill reconciliation and next decision](../research/unit-prototype-nomination-20260928/spill-reconciliation.md).
 No GET/beam increase or prototype sweep.
 [Norm-bias isolation](../research/unit-prototype-nomination-20260928/decision.md).
 [Second negative gate](../research/extent-prototype-nomination-20260928/decision.md).
