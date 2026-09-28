@@ -1,6 +1,8 @@
 [package]
 name = "borsuk-pq4"
 version = "0.1.0"
+description = "Four-bit product quantization kernels for BORSUK"
+license-file = "../../LICENSE"
 edition.workspace = true
 repository.workspace = true
 homepage.workspace = true

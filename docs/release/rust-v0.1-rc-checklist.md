@@ -47,8 +47,11 @@ does not provide HTTP authentication or tenant isolation.
   labels the legacy `BorsukIndex` graph-free path and Python/TS scope.
 - [x] A revision-pinned Rust workspace source bundle contains the crate and
   all local path dependencies; create/open/search runs from a clean extraction.
-  A registry `.crate` is blocked by unpublished workspace dependencies and is
-  outside this first cut.
+  The production crate now removes mandatory private V25/V41 diagnostic
+  dependencies. Three `.crate` archives can be created together for BORSUK,
+  FMA and PQ4. Registry publication remains unverified; helper packages must
+  be supplied locally for the current extracted-package smoke. See the
+  [source package instructions](rust-source-packages.md).
 - [ ] Required CI gates pass on the exact release commit. `cargo fmt --all
   -- --check` passes at `69aa4ab6`. The Python package, examples, and release
   policy checkers pass pinned Ruff format/lint locally. Historical campaign

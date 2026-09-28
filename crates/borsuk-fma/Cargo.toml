@@ -1,6 +1,8 @@
 [package]
 name = "borsuk-fma"
 version = "0.1.0"
+description = "Fused multiply-add kernels for BORSUK"
+license-file = "../../LICENSE"
 edition.workspace = true
 repository.workspace = true
 homepage.workspace = true

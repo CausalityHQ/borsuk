@@ -1,0 +1,9 @@
+   Packaging borsuk-fma v0.1.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk-fma)
+    Packaged 6 files, 37.8KiB (8.7KiB compressed)
+   Packaging borsuk-pq4 v0.1.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk-pq4)
+    Packaged 13 files, 144.0KiB (32.6KiB compressed)
+   Packaging borsuk v0.1.0 (/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk)
+warning: package `chacha20 v0.10.1` in Cargo.lock is yanked in registry `crates-io`
+  |
+  = help: consider updating to a version that is not yanked
+    Packaged 341 files, 15.4MiB (2.7MiB compressed)

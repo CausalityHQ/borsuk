@@ -1,0 +1,36 @@
+{
+  "decision": "GO package boundary; HOLD production release",
+  "tests_passed": 7,
+  "example_exit": 0,
+  "source_provenance": {
+    "git": {
+      "sha1": "b4751563877e3d1453e34d502cc6dacb6faa4c69",
+      "dirty": true
+    },
+    "path_in_vcs": "crates/borsuk"
+  },
+  "scope": "extracted archives with local helper patches, selected Rust tests and runnable two-row source CLI; no registry publication or product benchmark",
+  "raw_log_sha256": "2654cc364cabf6e37266b1a4639547047dc7aa242244fbfef4d3f961b2b6b6cd",
+  "resolved_metadata_sha256": "2a95e77bec39eed44d4c4b142e7274e0b1fcc6bf88f757f82b28d8e87af1abc5",
+  "production_local_packages": [
+    {
+      "name": "borsuk",
+      "version": "0.1.0",
+      "manifest_path": "/home/riomus/borsuk-native-relaion-20260928-a0001/package-smoke-a0001/borsuk-0.1.0/Cargo.toml"
+    },
+    {
+      "name": "borsuk-fma",
+      "version": "0.1.0",
+      "manifest_path": "/home/riomus/borsuk-native-relaion-20260928-a0001/package-smoke-a0001/borsuk-fma-0.1.0/Cargo.toml"
+    },
+    {
+      "name": "borsuk-pq4",
+      "version": "0.1.0",
+      "manifest_path": "/home/riomus/borsuk-native-relaion-20260928-a0001/package-smoke-a0001/borsuk-pq4-0.1.0/Cargo.toml"
+    }
+  ],
+  "private_research_packages_in_resolved_graph": false,
+  "new_cloud_jobs": 0,
+  "local_compilation": false,
+  "warnings": "Existing missing-doc warnings; package lock includes yanked chacha20 0.10.1. Locked smoke passes; fresh registry install is unverified. Full formatting gate remains open (preexisting module formatting differences)."
+}

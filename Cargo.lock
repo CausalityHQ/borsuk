@@ -380,8 +380,6 @@ dependencies = [
  "blake3",
  "borsuk-fma",
  "borsuk-pq4",
- "borsuk-v25",
- "borsuk-v41",
  "bytes",
  "chrono",
  "criterion",

@@ -268,11 +268,6 @@ mod v38_boundary_spill;
 )]
 mod v40_spill_router;
 mod v41_forest_probe;
-#[allow(
-    dead_code,
-    reason = "V41 learned router phases are wired incrementally by the committed plan"
-)]
-mod v41_learned_router;
 mod v42_pq4_relaion_probe;
 mod v45_lsh_probe;
 mod v50_exact_original_control;
@@ -577,8 +572,6 @@ pub use v41_forest_probe::{
     V41ForestProbeRequest, V43SharedDictionaryProbeRequest, V44PageKernelProbeRequest,
     run_v41_forest_probe, run_v43_shared_dictionary_probe, run_v44_page_kernel_probe,
 };
-#[doc(hidden)]
-pub use v41_learned_router::{V41BurnedDiagnosticRequest, run_v41_burned_diagnostic};
 #[doc(hidden)]
 pub use v42_pq4_relaion_probe::{V42Pq4RelaionProbeRequest, run_v42_pq4_relaion_probe};
 #[doc(hidden)]

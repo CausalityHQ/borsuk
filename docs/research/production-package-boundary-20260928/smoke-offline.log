@@ -1,0 +1,7 @@
+     Locking 2 packages to latest Rust 1.91 compatible versions
+      Adding borsuk-fma v0.1.0 (/home/riomus/borsuk-native-relaion-20260928-a0001/package-smoke-a0001/borsuk-fma-0.1.0)
+      Adding borsuk-pq4 v0.1.0 (/home/riomus/borsuk-native-relaion-20260928-a0001/package-smoke-a0001/borsuk-pq4-0.1.0)
+error: failed to download `adler2 v2.0.1`
+
+Caused by:
+  attempting to make an HTTP request, but --offline was specified
