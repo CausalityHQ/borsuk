@@ -537,3 +537,43 @@ counters; configure/measure transport separately. V1 generations now reject,
 with no migration/legacy reader. Historical v1 benchmark artifacts are unchanged
 and do not qualify this revision. Canonical storage and maintenance cost, atomic
 compaction/recovery/GC and matched wins over both vendors remain release gates.
+
+
+## Prepare bounded compaction input
+
+Use `canonical_source::prepare_two_bit_compaction(store, &head, &sealed, output, caps)`
+with `TwoBitCompactionLimits`. It requires a sealed snapshot bound to the same
+root, dimensions and index namespace. It streams authenticated canonical base
+rows, suppresses IDs with any sealed mutation, and appends only sealed puts.
+Survivors retain original physical order; appended puts use signed-ID order.
+It returns `TwoBitCompactionSource` and installs `source.f32`, `ids.i64`, then
+`manifest.json` last in a new directory. Digests and base/mutation identity are
+recorded. This output is maintenance input, never a serving generation.
+
+No base vector or ID plane is held in memory. Payload admission charges twice
+the retained snapshot,262144 fixed bytes, delivered source chunk cap and three
+row widths; allocator/runtime/transport and other concurrent tasks are separate
+caller charges. Pending rows are copied into an in-process blocking worker,
+so disk streaming does not occupy a query executor thread. Caller owns
+maintenance task concurrency. Dropping the async future does not cancel an
+already-running blocking worker; retain/await the operation and its maintenance
+admission until completion. An abandoned operation requires receipt/file
+verification before reuse; it never updates a serving head. Disk admission reserves canonical input plus the
+maximum unfiltered merged raw/ID output and64KiB metadata before source GET.
+Source-response and failed-call charges remain available on errors. These are
+SDK submissions/delivered bytes, not hidden retries or wire accounting.
+
+Local canonical bytes are rehashed while consumed; nonfinite/nonunit coordinates
+reject. The authorized original builder validated base ID uniqueness; the
+existing `build_sq8_source_with_ids` checks merged IDs again. Use the raw/ID
+files with those existing native SQ8 and generation builders, then publish
+against the sealed original head. Generation replacement does not independently
+prove that an arbitrary prepared corpus includes the delta. A complete library
+compactor must own that orchestration and failure/reload path.
+
+An absent completion manifest means unpublished scratch. A failure after a
+manifest rename or directory sync has an uncertain durability outcome; reverify
+receipt/file hashes before reuse. An all-deleted source returns zero rows and
+empty files; the current generation builder rejects zero rows, so empty serving
+and complete crash-resumable compaction/GC remain OPEN. No sentinel rows or
+silently dropped acknowledged mutations.

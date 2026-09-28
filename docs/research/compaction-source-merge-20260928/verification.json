@@ -1,0 +1,14 @@
+{
+  "status": "focused_pass",
+  "source_base_commit": "9e1f2aeb",
+  "source_archive_sha256": "586072700a590b6703d89daf299bb10a931dea59019fced6dfd06f0d668d9ba5",
+  "terminal_sha256": "48efe327834ad97890d1426403468bf0539b7fc4112881c357c7e3c27ac9168d",
+  "instance_id": "i-08e2583fcc9aed45b",
+  "tests": {
+    "integration": 2,
+    "affected_http": 4
+  },
+  "ec2_state": "terminated",
+  "code_source_parity": "all3 modified source/test files match authenticated frozen S3 archive",
+  "scope": "Synthetic512-row D2 correctness, not recall/serving latency/100M/vendor qualification"
+}

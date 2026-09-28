@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "9e1f2aeb5f0d6cc1e2c1352aee0095eb2b6b3a5c",
+  "source_archive_sha256": "586072700a590b6703d89daf299bb10a931dea59019fced6dfd06f0d668d9ba5",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.4xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1500,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.3618",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "Focused tests2 then affected HTTP tests4; no benchmark",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918"
+}

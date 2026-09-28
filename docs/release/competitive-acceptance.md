@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
 | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
 | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
 |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; irreversible mutation-head CAS fence guards replacement; canonical/delta merge and GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; irreversible mutation-head CAS fence guards replacement; bounded canonical/delta preparation and nonempty native handoff pass; crash-resumable orchestrator, empty serving and GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
 | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
 | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
 
@@ -121,3 +121,19 @@ write-fencing primitive, not compaction or any vendor axis. Next single
 implementation: bounded canonical/delta stream merge with restart-safe handoff,
 then reader-safe in-process GC; empty-index semantics remain unresolved.
 [Mutation fence receipts](../research/mutation-seal-20260928/decision.md).
+
+
+Execution policy (operator2026-09-28): use AWS with profile `causality` for machine
+work. DGX Spark is prohibited for compilation, tests and benchmarks. The original
+Spark merge attempt was already terminal exit101 when cancellation arrived; no
+further Spark work is authorized. Current frozen focused correctness check is
+one Causality Spot worker; it establishes no vendor/latency/scale measurement.
+
+Bounded canonical/delta preparation now passes the frozen AWS Spot check:2
+focused fixtures plus4 affected local HTTP tests, original terminal exit0 and
+instance terminated. The signed-ID fixture rebuilds/publishes a nonempty
+replacement and preserves old-generation recovery. All-deleted preparation
+returns zero rows; empty serving still lacks a generation representation. Next
+single implementation is callable crash-resumable compaction orchestration;
+reader-safe GC remains required. No competitor or scale axis closes.
+[Canonical/delta merge receipts](../research/compaction-source-merge-20260928/decision.md).

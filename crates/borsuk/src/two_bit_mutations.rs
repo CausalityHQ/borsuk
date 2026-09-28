@@ -18,7 +18,7 @@ fn bad(message: &'static str) -> TwoBitStoreError {
 }
 
 /// A logical-ID upsert, or a delete when `vector` is None.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TwoBitMutation {
     /// Signed application ID, independent of physical row order.
     pub id: i64,
@@ -92,6 +92,9 @@ pub struct TwoBitMutationSnapshot {
 impl TwoBitMutationSnapshot {
     pub(crate) fn binds(&self, root: &str, dimensions: usize) -> bool {
         self.base_root == root && self.dimensions == dimensions
+    }
+    pub(crate) fn binds_head(&self, base: &TwoBitHead) -> bool {
+        self.binds(base.root_sha256(), base.dimensions()) && self.prefix == base.metadata_prefix()
     }
     pub(crate) fn put_rows(&self) -> usize {
         self.rows.iter().filter(|r| r.vector.is_some()).count()

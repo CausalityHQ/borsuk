@@ -803,4 +803,292 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         .unwrap();
     assert!(recovered_seal.is_sealed());
     assert_eq!(recovered_seal.rows(), restored.rows());
+    let compacted_dir = temp.path().join("compaction-input");
+    let compact_caps = borsuk::canonical_source::TwoBitCompactionLimits {
+        max_memory_bytes: 1_000_000,
+        max_disk_bytes: 1_000_000,
+        max_source_chunk_bytes: 16384,
+    };
+    let prepared = borsuk::canonical_source::prepare_two_bit_compaction(
+        store.as_ref(),
+        &head,
+        &sealed,
+        &compacted_dir,
+        compact_caps,
+    )
+    .await
+    .unwrap();
+    assert_eq!(prepared.dimensions, 2);
+    assert_eq!(prepared.base_root_sha256, head.root_sha256());
+    assert_eq!(prepared.mutation_sha256, sealed.sha256());
+    let merged_raw = std::fs::read(compacted_dir.join("source.f32")).unwrap();
+    let merged_ids_bytes = std::fs::read(compacted_dir.join("ids.i64")).unwrap();
+    assert_eq!(hash(&merged_raw), prepared.raw_sha256);
+    assert_eq!(hash(&merged_ids_bytes), prepared.ids_sha256);
+    assert_eq!(prepared.recovery.submitted_gets, 2);
+    assert_eq!(
+        prepared.recovery.source_response_bytes,
+        canonical_body.len() as u64
+    );
+    let merged_ids = merged_ids_bytes
+        .chunks_exact(8)
+        .map(|r| i64::from_le_bytes(r.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    let physical_ids = canonical_body
+        .chunks_exact(16)
+        .map(|r| i64::from_le_bytes(r[..8].try_into().unwrap()))
+        .collect::<Vec<_>>();
+    let mut expected_ids = physical_ids
+        .iter()
+        .copied()
+        .filter(|id| sealed.excluded_ids().binary_search(id).is_err())
+        .collect::<Vec<_>>();
+    expected_ids.extend(
+        sealed
+            .rows()
+            .iter()
+            .filter(|m| m.vector.is_some())
+            .map(|m| m.id),
+    );
+    assert_eq!(merged_ids, expected_ids);
+    assert_eq!(prepared.rows, expected_ids.len());
+    assert_eq!(merged_raw.len(), prepared.rows * 8);
+    for (physical, id) in physical_ids.iter().enumerate() {
+        if sealed.excluded_ids().binary_search(id).is_ok() {
+            continue;
+        }
+        let output_row = merged_ids.iter().position(|found| found == id).unwrap();
+        assert_eq!(
+            &merged_raw[output_row * 8..output_row * 8 + 8],
+            &canonical_body[physical * 16 + 8..physical * 16 + 16]
+        );
+    }
+    assert_eq!(
+        &merged_raw[merged_raw.len() - 8..],
+        &[1f32.to_le_bytes(), 0f32.to_le_bytes()].concat()
+    );
+    let on_disk: borsuk::canonical_source::TwoBitCompactionSource =
+        serde_json::from_slice(&std::fs::read(compacted_dir.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(on_disk.raw_sha256, prepared.raw_sha256);
+    for (snapshot, caps, name) in [
+        (&restored, compact_caps, "unsealed"),
+        (&sealed_other, compact_caps, "wrong-namespace"),
+        (
+            &sealed,
+            borsuk::canonical_source::TwoBitCompactionLimits {
+                max_memory_bytes: 1,
+                ..compact_caps
+            },
+            "memory",
+        ),
+        (
+            &sealed,
+            borsuk::canonical_source::TwoBitCompactionLimits {
+                max_disk_bytes: 1,
+                ..compact_caps
+            },
+            "disk",
+        ),
+    ] {
+        let path = temp.path().join(format!("rejected-merge-{name}"));
+        let failure = borsuk::canonical_source::prepare_two_bit_compaction(
+            store.as_ref(),
+            &head,
+            snapshot,
+            &path,
+            caps,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.stats.submitted_gets, 0);
+        assert!(!path.exists());
+    }
+    assert!(
+        borsuk::canonical_source::prepare_two_bit_compaction(
+            store.as_ref(),
+            &head,
+            &sealed,
+            &compacted_dir,
+            compact_caps
+        )
+        .await
+        .is_err()
+    );
+    let mut corrupt_canonical = canonical_body.to_vec();
+    *corrupt_canonical.last_mut().unwrap() ^= 1;
+    store
+        .put(&canonical_key, PutPayload::from(corrupt_canonical))
+        .await
+        .unwrap();
+    let rejected_merge = temp.path().join("rejected-corrupt-merge");
+    let failure = borsuk::canonical_source::prepare_two_bit_compaction(
+        store.as_ref(),
+        &head,
+        &sealed,
+        &rejected_merge,
+        compact_caps,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.stats.submitted_gets, 2);
+    assert_eq!(
+        failure.stats.source_response_bytes,
+        canonical_body.len() as u64
+    );
+    assert!(!rejected_merge.exists());
+    store
+        .put(&canonical_key, PutPayload::from(canonical_body.clone()))
+        .await
+        .unwrap();
+
+    let empty_prefix = ObjectPath::from("tenant/all-deleted-compaction");
+    let empty_head = publish_two_bit_generation(
+        store.as_ref(),
+        &empty_prefix,
+        &root,
+        &root_sha,
+        limits,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut deletes = ids
+        .iter()
+        .copied()
+        .map(|id| TwoBitMutation { id, vector: None })
+        .collect::<Vec<_>>();
+    deletes.sort_by_key(|m| m.id);
+    let deleted = apply_two_bit_mutations(
+        store.as_ref(),
+        &empty_head,
+        2,
+        None,
+        &deletes,
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    let deleted = borsuk::two_bit_mutations::seal_two_bit_mutations(
+        store.as_ref(),
+        &empty_head,
+        Some(&deleted),
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    let empty_dir = temp.path().join("empty-compaction-input");
+    let empty = borsuk::canonical_source::prepare_two_bit_compaction(
+        store.as_ref(),
+        &empty_head,
+        &deleted,
+        &empty_dir,
+        compact_caps,
+    )
+    .await
+    .unwrap();
+    assert_eq!(empty.rows, 0);
+    assert!(
+        std::fs::read(empty_dir.join("source.f32"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(std::fs::read(empty_dir.join("ids.i64")).unwrap().is_empty());
+
+    // Use only the existing native APIs to rebuild and publish this merged corpus.
+    let merged_order = (0..prepared.rows as u64).collect::<Vec<_>>();
+    let merged_sq8 = temp.path().join("compacted.sq8");
+    let encoding = build_sq8_source_with_ids(
+        &compacted_dir.join("source.f32"),
+        &prepared.raw_sha256,
+        2,
+        &merged_order,
+        &merged_ids,
+        &merged_sq8,
+        1_000_000,
+    )
+    .unwrap();
+    let merged_key_string = format!("tenant/objects/{}", encoding.sha256);
+    let merged_key = ObjectPath::from(merged_key_string.clone());
+    let merged_sq8_body = std::fs::read(&merged_sq8).unwrap();
+    let merged_etag = store
+        .put(&merged_key, PutPayload::from(merged_sq8_body.clone()))
+        .await
+        .unwrap()
+        .e_tag
+        .unwrap();
+    let next_root_dir = temp.path().join("compacted-generation");
+    let next_source = TwoBitSource {
+        raw: &compacted_dir.join("source.f32"),
+        raw_sha256: &prepared.raw_sha256,
+        sq8: &merged_sq8,
+        sq8_sha256: &encoding.sha256,
+        rows: prepared.rows,
+        dimensions: 2,
+    };
+    let next_root_sha = TwoBitGenerationBuilder {
+        source: next_source,
+        generation: 2,
+        low: &encoding.low,
+        step: &encoding.step,
+        sq8_object_key: &merged_key_string,
+        sq8_etag: &merged_etag,
+    }
+    .build_with_order(&merged_order, &next_root_dir, 1_000_000)
+    .unwrap();
+    let next_head = publish_two_bit_generation(
+        store.as_ref(),
+        &prefix,
+        &next_root_dir,
+        &next_root_sha,
+        limits,
+        Some(&head),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next_head.generation(), 2);
+    assert!(
+        read_two_bit_mutations(store.as_ref(), &next_head, 2, mutation_limits)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let new_canonical = std::fs::read(next_root_dir.join("canonical.bin")).unwrap();
+    let new_ids = new_canonical
+        .chunks_exact(16)
+        .map(|r| i64::from_le_bytes(r[..8].try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(new_ids, merged_ids);
+    let all = [ReturnedRange {
+        start: 0,
+        bytes: &merged_sq8_body,
+    }];
+    let hits = rank_returned_ranges(
+        Sq8Geometry {
+            rows: prepared.rows,
+            dimensions: 2,
+        },
+        &all,
+        &[1., 0.],
+        &encoding.low,
+        &encoding.step,
+        prepared.rows,
+        1_000_000,
+    )
+    .unwrap();
+    let mut returned_ids = hits.iter().map(|h| h.id).collect::<Vec<_>>();
+    returned_ids.sort_unstable();
+    let mut expected_sorted = merged_ids.clone();
+    expected_sorted.sort_unstable();
+    assert_eq!(returned_ids, expected_sorted);
+    assert!(!returned_ids.contains(&i64::MIN));
+    assert!(!returned_ids.contains(&7));
+    assert!(returned_ids.contains(&i64::MAX));
+    assert!(
+        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_sealed()
+    );
 }
