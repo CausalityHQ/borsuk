@@ -185,7 +185,7 @@ impl TwoBitSource<'_> {
             let id = usize::try_from(i64::from_le_bytes(sq8_buffer[..8].try_into().unwrap()))
                 .map_err(|_| bad("negative source ID"))?;
             let norm = f32::from_le_bytes(sq8_buffer[8..12].try_into().unwrap());
-            if id >= self.rows || !norm.is_finite() || norm < 0.0 {
+            if id >= self.rows || !norm.is_finite() || norm <= 0.0 {
                 return Err(bad("source ID or SQ8 norm"));
             }
             let bit = 1 << (id % 8);

@@ -162,11 +162,22 @@ impl UnitCentroidGraph {
         scorer: &UnitCentroidPages,
         centroid_blob: &[u8],
     ) -> Result<Self, UnitCentroidGraphError> {
-        if scorer.unit_count() < 2
+        if scorer.unit_count() == 0
             || scorer.unit_count() > u32::MAX as usize
             || !matching_scorer_blob(scorer, centroid_blob)
         {
             return Err(UnitCentroidGraphError::InvalidGeometry);
+        }
+        if scorer.unit_count() == 1 {
+            return Ok(Self {
+                rows: scorer.rows(),
+                dimensions: scorer.dimensions(),
+                unit_rows: scorer.unit_rows(),
+                page_rows: scorer.page_rows(),
+                centroid_sha256: Sha256::digest(centroid_blob).into(),
+                entry: 0,
+                neighbours: vec![vec![Vec::new()]],
+            });
         }
         // The build-only vectors are dropped after adjacency construction.
         // Query serving reuses the authenticated f32 centroid plane.
@@ -218,7 +229,7 @@ impl UnitCentroidGraph {
                 scorer.page_rows(),
                 scorer.unit_count(),
             )
-            || nodes < 2
+            || nodes == 0
             || field(32) >= nodes
             || field(36) != M
             || field(40) != M0
@@ -417,7 +428,7 @@ impl UnitCentroidGraph {
                 }
                 tower.push(layer);
             }
-            if tower.last().is_some_and(Vec::is_empty) {
+            if node_count > 1 && tower.last().is_some_and(Vec::is_empty) {
                 return Err(UnitCentroidGraphError::InvalidArtifact);
             }
             neighbours.push(tower);
@@ -888,11 +899,9 @@ mod tests {
             .unwrap();
         assert!(old.evaluated_scores.is_empty());
         assert_eq!(old.evaluated_units, full.evaluated_units);
-        assert!(
-            loaded
-                .search_pages_seeded(&scorer, &[2.1], &[0], 1, 1)
-                .is_err()
-        );
+        assert!(loaded
+            .search_pages_seeded(&scorer, &[2.1], &[0], 1, 1)
+            .is_err());
     }
 
     #[test]

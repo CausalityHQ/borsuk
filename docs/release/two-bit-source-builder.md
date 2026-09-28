@@ -24,7 +24,7 @@ files and checks the ID permutation, but their underlying vector relationship
 is the caller's construction contract. SQ8 rows are i64 ordinal ID, f32
 squared norm, then `dimensions` code bytes. Arbitrary application IDs require
 the generation's separate ID map. Nonfinite/zero source rows, unrepresentable
-codec scalars, duplicate/out-of-range IDs, bad hashes/lengths, overflow and
+codec scalars, duplicate/out-of-range IDs, nonpositive SQ8 norms, bad hashes/lengths, overflow and
 insufficient admission fail with an error. Existing output is never replaced.
 
 Outputs are `mean.bin`, `records.bin`, and `manifest.json` with schema

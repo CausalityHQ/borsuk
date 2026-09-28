@@ -1,3 +1,4 @@
+use borsuk::two_bit_build::TwoBitGenerationBuilder;
 use borsuk::two_bit_store::{publish_two_bit_generation, read_two_bit_head};
 use borsuk::{
     two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits},
@@ -81,8 +82,46 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
         "sq8_object_sha256":sq8_sha,"sq8_object_key":format!("tenant/g1/objects/{sq8_sha}"),
-        "sq8_etag":"etag-1","low":[0.,0.],"step":[1./255.,1./255.]})).unwrap();
+        "sq8_etag":"etag-1","low":[0.,0.],"step":[1_f32/255.,1_f32/255.]})).unwrap();
     fs::write(root.join("manifest.json"), &manifest).unwrap();
+    let generated = tempfile::tempdir().unwrap();
+    let generated_root = generated.path().join("generation");
+    let builder = TwoBitGenerationBuilder {
+        source: TwoBitSource {
+            raw: &raw_path,
+            raw_sha256: &hash(&raw),
+            sq8: &sq8_path,
+            sq8_sha256: &sq8_sha,
+            rows: 512,
+            dimensions: 2,
+        },
+        generation: 1,
+        low: &[0.; 2],
+        step: &[1. / 255.; 2],
+        sq8_object_key: &format!("tenant/g1/objects/{sq8_sha}"),
+        sq8_etag: "etag-1",
+    };
+    assert!(builder.build(&generated_root, 1).is_err());
+    assert!(!generated_root.exists());
+    let built_sha = builder.build(&generated_root, 2_000_000).unwrap();
+    assert_eq!(built_sha, hash(&manifest));
+    for name in [
+        "manifest.json",
+        "page_manifest.json",
+        "page_digests.bin",
+        "centroids.bin",
+        "graph.bin",
+        "plane/manifest.json",
+        "plane/mean.bin",
+        "plane/records.bin",
+    ] {
+        assert_eq!(
+            fs::read(generated_root.join(name)).unwrap(),
+            fs::read(root.join(name)).unwrap(),
+            "{name}"
+        );
+    }
+    assert!(builder.build(&generated_root, 2_000_000).is_err());
     let limits = TwoBitGenerationLimits {
         max_memory_bytes: 4_000_000,
         max_active_queries: 2,
@@ -384,4 +423,46 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         assert!(TwoBitGeneration::open(root, &hash(&manifest), limits).is_err());
         fs::write(root.join(name), original).unwrap();
     }
+    let tiny = tempfile::tempdir().unwrap();
+    let tiny_raw = tiny.path().join("raw");
+    let tiny_sq8 = tiny.path().join("sq8");
+    fs::write(&tiny_raw, &raw[..8]).unwrap();
+    fs::write(&tiny_sq8, &sq8[..14]).unwrap();
+    let tiny_sha = hash(&sq8[..14]);
+    let tiny_root = tiny.path().join("generation");
+    let tiny_builder = TwoBitGenerationBuilder {
+        source: TwoBitSource {
+            raw: &tiny_raw,
+            raw_sha256: &hash(&raw[..8]),
+            sq8: &tiny_sq8,
+            sq8_sha256: &tiny_sha,
+            rows: 1,
+            dimensions: 2,
+        },
+        generation: 1,
+        low: &[0.; 2],
+        step: &[1. / 255.; 2],
+        sq8_object_key: &format!("tenant/tiny/objects/{tiny_sha}"),
+        sq8_etag: "tiny-etag",
+    };
+    let tiny_root_sha = tiny_builder.build(&tiny_root, 2_000_000).unwrap();
+    let tiny_generation = TwoBitGeneration::open(&tiny_root, &tiny_root_sha, limits).unwrap();
+    let tiny_plan = tiny_generation.plan(&[0.5, 0.25]).await.unwrap();
+    assert_eq!(tiny_plan.planned_bytes, 14);
+    assert_eq!(tiny_plan.ranges, vec![0..14]);
+
+    let mut zero_norm = sq8[..14].to_vec();
+    zero_norm[8..12].copy_from_slice(&0_f32.to_le_bytes());
+    fs::write(&tiny_sq8, &zero_norm).unwrap();
+    let zero_sha = hash(&zero_norm);
+    let bad_output = tiny.path().join("zero-norm-generation");
+    let bad_builder = TwoBitGenerationBuilder {
+        source: TwoBitSource {
+            sq8_sha256: &zero_sha,
+            ..tiny_builder.source
+        },
+        ..tiny_builder
+    };
+    assert!(bad_builder.build(&bad_output, 2_000_000).is_err());
+    assert!(!bad_output.join("manifest.json").exists());
 }

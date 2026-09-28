@@ -89,7 +89,10 @@ integration remains open.
   plan/search with no PQ/vector hydration; focused open/reload/binding/corruption
   tests and64-query exact development plan parity pass. Prepared-generation
   publication now stages verified metadata and CASes an opaque namespace-bound
-  head last, with reload/stale-writer checks; raw-source create and compaction
+  head last, with reload/stale-writer checks. `TwoBitGenerationBuilder` now
+  assembles metadata/root from approved raw/SQ8 snapshots; eight-file fixture
+  parity, singleton and no-publication failure checks pass. Layout/SQ8 creation
+  and compaction
   publication integration remain open.
   Remote bootstrap has metadata-only InMemory open/plan/failure coverage;
   actual cold transport qualification remains open.

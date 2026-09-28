@@ -154,3 +154,46 @@ invalid metadata leaving the head unchanged, old pinned-root reload and SQ8
 ETag preservation. See `docs/research/native-two-bit-publication-check.json`.
 Lost-ack reconciliation has not been fault-injected; live S3/CAS/error/cost
 qualification remains required. No new recall or performance claim follows.
+
+## Build generation metadata in Rust
+
+```rust
+use borsuk::{two_bit_build::TwoBitGenerationBuilder, two_bit_source::TwoBitSource};
+
+let root_sha = TwoBitGenerationBuilder {
+    source: TwoBitSource { raw: raw_path, raw_sha256, sq8: sq8_path, sq8_sha256,
+        rows, dimensions },
+    generation,
+    low, step,
+    sq8_object_key, sq8_etag,
+}.build(new_metadata_dir, max_build_payload_bytes)?;
+// Pass new_metadata_dir/root_sha to publish_two_bit_generation.
+```
+
+Inputs are approved immutable source/SQ8 snapshots in the frozen physical order.
+Raw rows are ordinal f32; the SQ8 IDs are their permutation. Calibration must
+come from the same SQ8 encoder; construction does not infer that relationship
+from checksums. The builder accepts no query/GT and refits no layout. It streams
+the source codec, centroids and page digests, builds the existing centroid graph,
+then writes the root manifest last. Repeated output paths are rejected. Failed
+builds leave unpublished scratch for caller cleanup. Local staging rename can be
+lost on crash; remote conditional publication establishes the durable generation.
+
+Graph build payload is conservatively admitted before allocating:
+
+`262144 + 128*D + 256*(D+12) + 32*ceil(N/256) + ceil(N/32)*(32*D+16384)` bytes.
+
+The source codec also applies its own ID/bitset/buffer admission. These are
+payload models, not measured RSS guarantees. Runtime/allocator/OS cache and
+already pinned generations are additional caller charges. SQ8/source matrices
+are streamed; centroid and adjacency workspace is resident.100M build time,
+RSS and cost are unqualified. A single-node graph supports tiny indexes; the
+multi-node builder/encoding arithmetic is unchanged. Source/SQ8 zero norms
+are rejected for the cosine route.
+
+The synthetic focused test reproduces all eight manually sealed metadata files
+byte-for-byte and covers no-overwrite, budget refusal before output, singleton
+open/plan and zero-norm failure without a root. The same check retains publication,
+remote reload and stale-writer cases. This closes manual metadata/root assembly;
+raw-source semantic layout fitting and SQ8 encoding, full paired quality, cold
+HTTP, mutation and compaction/GC still require implementation/qualification.

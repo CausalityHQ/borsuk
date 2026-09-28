@@ -1,0 +1,36 @@
+{
+  "schema": "borsuk-two-bit-generation-builder-check-v1",
+  "baseline_commit": "e12fad2b",
+  "source_files": {
+    "crates/borsuk/src/two_bit_build.rs": "3c3b78c0526f745261d2b6d98e96e9602038c6559bf939e9e41a06f2c9f4be48",
+    "crates/borsuk/src/unit_centroid_graph.rs": "499c35d7959599ea612682641c35310ecc1ad77e50c030a3d8baf53624171938",
+    "crates/borsuk/src/two_bit_source.rs": "ff4cc58c54886872c661866f9fae0b602685885a63bf012e1d00188adcb8838c",
+    "crates/borsuk/src/resident_vector_graph.rs": "4259aac819f9cef7fb9e9bad8bd77b978b453d4af431a4d875b41effd3f11f73",
+    "crates/borsuk/src/object_native_generation.rs": "7e6f0dc9e70c58bb88826e74df937e2193aa950f312e53b65ff34ad45fa8e2aa",
+    "crates/borsuk/tests/two_bit_generation.rs": "e4b0ac8fd7fac004bb67c0d07dc66e23deb7b23441427151a4532573e4b98950"
+  },
+  "command": "CARGO_BUILD_JOBS=1 cargo test -p borsuk --test two_bit_generation",
+  "original_session": 44671,
+  "exit_code": 0,
+  "tests_passed": 1,
+  "test_seconds": 0.1,
+  "log_sha256": "f51d110b8982ae2bd35127869b29cd432199aea6b3ab6777543db1a90fd2abe0",
+  "checks": [
+    "all eight synthetic fixture metadata files byte-identical",
+    "build root SHA equals manual assembly",
+    "budget fails before output",
+    "overwrite refused",
+    "single-row build/open/plan",
+    "zero SQ8 norm fails without root publication",
+    "prior publication/local/remote failures and pin checks preserved"
+  ],
+  "causal_fix": "Single-node build initially exposed decoder prohibition on an empty base neighbor list; decoder now allows it only for node_count1. Multi-node graph logic is unchanged.",
+  "decision": "GO for approved-source/SQ8 metadata assembly primitive; retain frozen layout and query method",
+  "limits": [
+    "No full dataset build, paid job, cloud timing or new recall evidence",
+    "Approved immutable source/SQ8 and matching calibration are caller construction contract",
+    "Conservative build payload estimate is not measured process RSS or100M scaling proof",
+    "Layout fitting/SQ8 creation, full paired quality, cold HTTP, mutation/GC and vendor/lifecycle gates remain",
+    "Independent review remains deferred; no duplicate consultation"
+  ]
+}

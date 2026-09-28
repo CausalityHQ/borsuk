@@ -1147,9 +1147,9 @@ fn graph_digest(path: &Path) -> Result<String, ResidentFp16Error> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
-struct HashingReader<R> {
-    inner: R,
-    digest: Sha256,
+pub(crate) struct HashingReader<R> {
+    pub(crate) inner: R,
+    pub(crate) digest: Sha256,
 }
 
 impl<R: Read> Read for HashingReader<R> {

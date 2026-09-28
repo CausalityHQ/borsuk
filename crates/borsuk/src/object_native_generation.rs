@@ -133,7 +133,7 @@ fn is_hash(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn valid_object_key(key: &str, hash: &str) -> bool {
+pub(crate) fn valid_object_key(key: &str, hash: &str) -> bool {
     let parts = key.split('/').collect::<Vec<_>>();
     parts.len() >= 2
         && parts[parts.len() - 2] == "objects"
