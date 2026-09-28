@@ -87,7 +87,9 @@ integration remains open.
   create/publish/open/search and wrong/corrupt-generation tests pass.
   `TwoBitGeneration` now binds the local root and exposes semaphore-admitted
   plan/search with no PQ/vector hydration; focused open/reload/binding/corruption
-  tests and64-query exact development plan parity pass. Prepared-generation
+  tests passed. Historical64-query raw-input parity is retained as evidence;
+  corrected cosine normalization changes those plans and needs fresh qualification.
+  Corrected CoHere development0–63 and validation256–319 screens pass. Prepared-generation
   publication now stages verified metadata and CASes an opaque namespace-bound
   head last, with reload/stale-writer checks. `TwoBitGenerationBuilder` now
   assembles metadata/root from approved raw/SQ8 snapshots; eight-file fixture

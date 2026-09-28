@@ -230,3 +230,10 @@ The corrected CoHere validation256–319 short screen also passed: returned
 99.015625%/p05 98 against paired full SQ8 99.21875%/98, deficit0.203125pp;
 32GET/16,773,120bytes maximum. This does not qualify the full744-query split
 or the ReLAION dataset. Receipts: `docs/research/native-cosine-validation-*`.
+
+The full corrected CoHere validation256–999 split (744 queries) now passes:
+99.131720% mean R@100/p05 98 versus paired flat SQ8 99.315860%/98,
+deficit0.184140pp; maximum32GET/16,773,120bytes. This qualifies this offline
+single-dataset quality gate only. ReLAION, cold HTTP, lifecycle, scale and
+vendor gates remain open. Authenticated Spark SSH was revalidated and is
+available for heavier ReLAION preparation.

@@ -1,0 +1,52 @@
+{
+  "schema": "borsuk-corrected-cosine-full-validation-receipt-v1",
+  "source_commit": "4267a512",
+  "dataset": "CoHere first100k",
+  "dimensions": 768,
+  "metric": "cosine",
+  "k": 100,
+  "split": "validation256\u2013999",
+  "queries": 744,
+  "gate_sha256": "df1eae451e4011ddebb60e19384d7c499b32693517da563af2c89ad1d94f02b4",
+  "source_files": {
+    "crates/borsuk/src/bin/two_bit_plan_demo.rs": "1b0bb80f86eea52d5278ff1b2e3e8214677994aee54b11f1b49ad491a8533798",
+    "crates/borsuk/src/two_bit_generation.rs": "913e0310b0921b1c398cb2669638eb2341f44b25c2f4e57c39b7324857503fe0",
+    "scripts/native_two_bit_cosine_development.py": "38d5d1a8ca68cb289edf83b2dff65f468225e0d7490f38f29881086d3aae6502",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  },
+  "plans": {
+    "original_session": 97487,
+    "exit_code": 0,
+    "sha256": "0e9bb4b56dddfa26994d002744fbffbfb9da2c296f69639128a9d1b3c8813e95",
+    "elapsed_seconds": 170.93,
+    "peak_rss_kib": 48376
+  },
+  "score": {
+    "original_session": 17888,
+    "exit_code": 0,
+    "sha256": "4e68df5d0b2df3052ac1a32613fe45c0b1c8cd48500927a1c7b14c3e89e2cb20",
+    "elapsed_seconds": 131.32,
+    "peak_rss_kib": 235284
+  },
+  "swaps": 0,
+  "s3_reads": 0,
+  "decision": "CoHere offline full-split GO; hold paired qualification, release, scale and vendor claims",
+  "limits": [
+    "Single-dataset local debug/offline quality only",
+    "Python sequential-f32 scorer mirrors Rust scoring; no serving reads",
+    "Nomination versus fetch selection loss remains inseparable in API output"
+  ],
+  "remote_revalidation": {
+    "host": "spark-2751",
+    "ssh_user": "riomus",
+    "tailnet_ip": "100.104.199.68",
+    "ssh_exit_code": 0,
+    "architecture": "aarch64",
+    "logical_cpus": 20,
+    "available_memory_mib": 120525,
+    "free_disk_tib": 2.3,
+    "cargo_in_path": false,
+    "uv": "/snap/bin/uv",
+    "next_action": "Stage frozen source/data for ReLAION preparation; no competing cargo/python/borsuk process was found"
+  }
+}
