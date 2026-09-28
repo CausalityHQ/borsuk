@@ -1,0 +1,23 @@
+	Command being timed: "timeout --kill-after=10s 900 /home/riomus/borsuk-native-relaion-20260928-a0001/rust-repo/target/release/two_bit_plan_demo /home/riomus/borsuk-native-relaion-20260928-a0001/native-pipeline-quality-a0001/cohere/generation 7b02d4810002c02c842b2fcad454ebe9dd3d4fc5c889ddf6d046fb5a1f2cc7df /home/riomus/borsuk-native-relaion-20260928-a0001/native-sq8-cohere-input/cohere-requests.jsonl 86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812 /home/riomus/borsuk-native-relaion-20260928-a0001/native-pipeline-quality-a0001/cohere/development-plans.jsonl 0 64"
+	User time (seconds): 0.48
+	System time (seconds): 0.03
+	Percent of CPU this job got: 94%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.55
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 47716
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 12922
+	Voluntary context switches: 202
+	Involuntary context switches: 9
+	Swaps: 0
+	File system inputs: 49336
+	File system outputs: 88
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

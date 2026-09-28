@@ -96,8 +96,9 @@ integration remains open.
   publication now stages verified metadata and CASes an opaque namespace-bound
   head last, with reload/stale-writer checks. `TwoBitGenerationBuilder` now
   assembles metadata/root from approved raw/SQ8 snapshots; eight-file fixture
-  parity, singleton and no-publication failure checks pass. Layout/SQ8 creation
-  and compaction
+  parity, singleton and no-publication failure checks pass. Native normalization, semantic fitting and SQ8 creation now compose with
+  that builder in the public signed-HTTP fixture (`bb406498`); stable/hash/cap
+  checks and the runnable CLI pass. Full corpus qualification and compaction
   publication integration remain open.
   Remote bootstrap has metadata-only InMemory open/plan/failure coverage;
   actual cold transport qualification remains open.

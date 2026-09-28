@@ -1,0 +1,6 @@
+ec34a231f91d3c814db8f97e8269100614d137499e1a275e31e533278436301e  config.json
+543e247bf2a87706f72263b8c09e535181c358da1892851329b6e5fe8d2504aa  run.py
+45af1891d4bc29c8bb405fe62115cbbc9efa3b6d51c4dfa51f56ae41bd8dcf85  run.sh
+d04bd768984b40bebf6820c06642103ae353fc2efa7c8ddd6f629878147b6078  ../rust-repo/target/release/examples/build_sq8_source
+e0374ddf2c5308bac047b55888e3e806b83cf6aeb000cb9fcce2f9cf99a08779  ../rust-repo/target/release/build_two_bit_generation
+c1e64dedb1d6e8863ddd7442c732ee4cd6fa03576ff1a997672ed94391100519  ../rust-repo/target/release/two_bit_plan_demo

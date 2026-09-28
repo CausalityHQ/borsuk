@@ -1,0 +1,24 @@
+{
+  "relaion": {
+    "scope": "historical approved Python layout with native SQ8 norms, 744 validation queries256-999",
+    "metrics": {
+      "mean_fetched_hits": 99.53225806451613,
+      "mean_returned_hits": 99.16397849462365,
+      "mean_flat_hits": 99.56854838709677,
+      "p05_fetched_hits": 98,
+      "p05_returned_hits": 97,
+      "p05_flat_hits": 99
+    }
+  },
+  "cohere": {
+    "scope": "historical approved Python layout with native SQ8 norms, 744 validation queries256-999",
+    "metrics": {
+      "mean_fetched_hits": 99.73790322580645,
+      "mean_returned_hits": 99.13172043010752,
+      "mean_flat_hits": 99.31586021505376,
+      "p05_fetched_hits": 98,
+      "p05_returned_hits": 98,
+      "p05_flat_hits": 98
+    }
+  }
+}

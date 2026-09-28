@@ -1,0 +1,82 @@
+{
+  "decision": "KILL",
+  "first_failing_dataset": "relaion",
+  "split": "validation",
+  "results": [
+    {
+      "dataset": "relaion",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "first": 0,
+      "queries": 64,
+      "root_sha256": "b8f2ec97c0ad9633d1f3bc672b90ff88e32cb80b0d6ecbeb12f2ddbf74a48ff2",
+      "sq8_sha256": "1375696a51ac52fc3216e35456e441c370805feb0632a58ab197b17099a8de6f",
+      "plans_sha256": "789300785215a649a6f16a9ca56da23246444aee33501aba2551ace3d6f3637b",
+      "metrics": {
+        "mean_fetched_hits": 99.5625,
+        "mean_returned_hits": 99.15625,
+        "mean_flat_hits": 99.515625,
+        "p05_fetched_hits": 98,
+        "p05_returned_hits": 97,
+        "p05_flat_hits": 99
+      },
+      "max_gets": 32,
+      "max_bytes": 16773120,
+      "pass_gate": true,
+      "qualification": false,
+      "scope": "native raw-input preparation and Rust plans; established Python f32 SQ8 mirror/paired flat; no cloud transport or serving latency"
+    },
+    {
+      "dataset": "cohere",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "first": 0,
+      "queries": 64,
+      "root_sha256": "7b02d4810002c02c842b2fcad454ebe9dd3d4fc5c889ddf6d046fb5a1f2cc7df",
+      "sq8_sha256": "71ed1c4d5400f623d165269889d4c9727ae67031819e64ad522876ae3c83caa6",
+      "plans_sha256": "e767707411dd092eb928809822478fe8e23f44ccf52e5fe916522ac20de837d9",
+      "metrics": {
+        "mean_fetched_hits": 99.765625,
+        "mean_returned_hits": 99.09375,
+        "mean_flat_hits": 99.234375,
+        "p05_fetched_hits": 99,
+        "p05_returned_hits": 98,
+        "p05_flat_hits": 98
+      },
+      "max_gets": 32,
+      "max_bytes": 16773120,
+      "pass_gate": true,
+      "qualification": false,
+      "scope": "native raw-input preparation and Rust plans; established Python f32 SQ8 mirror/paired flat; no cloud transport or serving latency"
+    },
+    {
+      "dataset": "relaion",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "first": 256,
+      "queries": 744,
+      "root_sha256": "b8f2ec97c0ad9633d1f3bc672b90ff88e32cb80b0d6ecbeb12f2ddbf74a48ff2",
+      "sq8_sha256": "1375696a51ac52fc3216e35456e441c370805feb0632a58ab197b17099a8de6f",
+      "plans_sha256": "b7bdc70487c0b9551d69fec102e4533741784b741c157e99d6a6cd5a08b9ae18",
+      "metrics": {
+        "mean_fetched_hits": 99.22446236559139,
+        "mean_returned_hits": 98.8508064516129,
+        "mean_flat_hits": 99.56854838709677,
+        "p05_fetched_hits": 97,
+        "p05_returned_hits": 97,
+        "p05_flat_hits": 99
+      },
+      "max_gets": 32,
+      "max_bytes": 16773120,
+      "pass_gate": false,
+      "qualification": false,
+      "scope": "native raw-input preparation and Rust plans; established Python f32 SQ8 mirror/paired flat; no cloud transport or serving latency"
+    }
+  ]
+}

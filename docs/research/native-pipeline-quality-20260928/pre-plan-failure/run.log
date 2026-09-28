@@ -1,0 +1,16 @@
+Error: Io(Os { code: 20, kind: NotADirectory, message: "Not a directory" })
+Traceback (most recent call last):
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/native-pipeline-quality-a0001/run.py", line 70, in <module>
+    timed(directory, label + '-plan', [binaries / 'two_bit_plan_demo', manifest, root_sha, requests_path, item['requests_sha256'], plans_path, first, count])
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/riomus/borsuk-native-relaion-20260928-a0001/native-pipeline-quality-a0001/run.py", line 29, in timed
+    subprocess.run(['/usr/bin/time', '-v', '-o', str(directory / (phase + '.time')),
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    'timeout', '--kill-after=10s', '900', *map(str, args)],
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   stdout=stream, check=True)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/riomus/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/lib/python3.13/subprocess.py", line 577, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/time', '-v', '-o', '/home/riomus/borsuk-native-relaion-20260928-a0001/native-pipeline-quality-a0001/relaion/development-plan.time', 'timeout', '--kill-after=10s', '900', '/home/riomus/borsuk-native-relaion-20260928-a0001/rust-repo/target/release/two_bit_plan_demo', '/home/riomus/borsuk-native-relaion-20260928-a0001/native-pipeline-quality-a0001/relaion/generation/manifest.json', 'b8f2ec97c0ad9633d1f3bc672b90ff88e32cb80b0d6ecbeb12f2ddbf74a48ff2', '/home/riomus/borsuk-native-relaion-20260928-a0001/requests.jsonl', 'b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0', '/home/riomus/borsuk-native-relaion-20260928-a0001/native-pipeline-quality-a0001/relaion/development-plans.jsonl', '0', '64']' returned non-zero exit status 1.
