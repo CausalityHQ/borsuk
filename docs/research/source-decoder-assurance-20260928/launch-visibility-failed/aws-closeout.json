@@ -1,0 +1,5 @@
+{
+  "instance_id": "i-0e9b476a9facaa0e6",
+  "state": "terminated",
+  "reason": "EC2 initial visibility InvalidInstanceID.NotFound caused supervisor abort and termination; confirmed terminated via EC2; no terminal/test evidence; discard attempt"
+}

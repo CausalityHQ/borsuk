@@ -1,0 +1,24 @@
+{
+  "dataset": "ReLAION first100k D768 cosine k100",
+  "split": "reused development0-63",
+  "queries": 64,
+  "candidate_vs_fetched_equal_queries": 64,
+  "candidate_gt_coverage_percent": 99.5625,
+  "exhaustive_other_candidate_set_gt_coverage_percent": 99.875,
+  "current_unit_center_arrays_bytes_per_row_projection": 96.125,
+  "scope": "Closed receipt reconciliation and source-layout arithmetic; no new quality, RSS, latency or vendor measurement",
+  "inputs": [
+    {
+      "path": "centroid-discovery-diagnostic-20260928/result.json",
+      "sha256": "4dc667a7f4a832d3226894057052b910db0311e04ae030a27c5222df174279d6"
+    },
+    {
+      "path": "centroid-discovery-diagnostic-20260928/traces.jsonl",
+      "sha256": "727f81b3419b1e6a349a05bb5666a206cbf694534d93a9c3bbb1f8ffe9b2d23c"
+    },
+    {
+      "path": "native-pipeline-quality-20260928/relaion/development-score.json",
+      "sha256": "c7fb31345107195efe1bbe82a0f49a6aeaef58cd9386a6a60e327592899f03b2"
+    }
+  ]
+}

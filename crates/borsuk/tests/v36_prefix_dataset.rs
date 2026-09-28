@@ -2809,6 +2809,26 @@ fn v36_prefix_geometry_resident_projection_is_replayable_and_scalar_exact() {
     let source = directory.path().join("source.parquet");
     write_v36_prefix_source_parquet(&source, &[7, 9], [source_batch(false, false)]).unwrap();
 
+    // The decoder bound covers physical row groups, not only returned batches.
+    let error = project_v36_prefix_source_resident(&source, &[7, 9], 1).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("source decoder working set differs")
+    );
+    let batch = source_batch(false, false);
+    let properties = parquet::file::properties::WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1))
+        .build();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(
+        fs::File::create(&source).unwrap(),
+        batch.schema(),
+        Some(properties),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
     let mut projected = project_v36_prefix_source_resident(&source, &[7, 9], 1).unwrap();
     assert_eq!(projected.feature_ids(), &[7, 9]);
     assert_eq!(projected.row_count(), 2);
