@@ -68,8 +68,11 @@ recall or vendor wins. Exact single-mean extent nomination then failed: CoHere d
 fetched91.78125%,p05 77 with<=13 ranges/14713140B. KILL before SQ8/ReLAION.
 The exact nearest32-row summary arm also failed:92.4375%,p05 79,
 <=13 ranges/15164760B. Both squared-distance nomination arms are KILL before
-SQ8/ReLAION/graph/format/cloud. Inspect mean-norm/metric geometry before a
-distinct next representation; no GET/beam increase or prototype sweep.
+SQ8/ReLAION/graph/format/cloud. Unit normalization then recovered only0.625pp:93.0625%,p05 80,
+<=13 ranges/15449460B, also KILL. Stop centroid-minimum variants; choose a
+materially distinct boundary-coverage/compressed-nomination design after review.
+No GET/beam increase or prototype sweep.
+[Norm-bias isolation](../research/unit-prototype-nomination-20260928/decision.md).
 [Second negative gate](../research/extent-prototype-nomination-20260928/decision.md).
 [Exact negative gate](../research/extent-centroid-nomination-20260928/decision.md).
 No matched vendor gate is closed. [Exact decision](../research/hierarchical-source-layout-20260928/decision.md).
