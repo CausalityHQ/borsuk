@@ -66,8 +66,11 @@ first100k development0–63 GT-aware byte-feasible21-extent containment witnesse
 reach99.78125%/99.53125%, both p05 99. These are diagnostic bounds, not achieved
 recall or vendor wins. Exact single-mean extent nomination then failed: CoHere development0–63
 fetched91.78125%,p05 77 with<=13 ranges/14713140B. KILL before SQ8/ReLAION.
-Next single decision: check existing32-row summaries within each new extent
-instead of one mean, at unchanged21-extent byte cap, before graph/format work.
+The exact nearest32-row summary arm also failed:92.4375%,p05 79,
+<=13 ranges/15164760B. Both squared-distance nomination arms are KILL before
+SQ8/ReLAION/graph/format/cloud. Inspect mean-norm/metric geometry before a
+distinct next representation; no GET/beam increase or prototype sweep.
+[Second negative gate](../research/extent-prototype-nomination-20260928/decision.md).
 [Exact negative gate](../research/extent-centroid-nomination-20260928/decision.md).
 No matched vendor gate is closed. [Exact decision](../research/hierarchical-source-layout-20260928/decision.md).
 
