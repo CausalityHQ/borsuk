@@ -14,10 +14,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::budgeted_page_rank::{
-    BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages, choose_budgeted_pages_sparse,
+    choose_budgeted_pages, choose_budgeted_pages_sparse, BudgetedPageError, BudgetedPagePlan,
 };
 use crate::pq64_nominee::Pq64Error;
-use crate::pq64_router_artifact::{RouterArtifactError, SourceRouterArtifact, load_source_router};
+use crate::pq64_router_artifact::{load_source_router, RouterArtifactError, SourceRouterArtifact};
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use crate::sq8_s3_range::{
     OneAttemptS3, RangeFetchError, RankedSq8, RankedSq8Failure, Sq8ReadStats,
@@ -164,6 +164,82 @@ fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, ObjectNativeOpenError> 
     Ok(bytes)
 }
 
+/// Stream a fixed metadata set to owned scratch; authenticate the root first.
+/// Child identities and decoded memory are checked by the generation opener.
+pub(crate) async fn stage_generation_metadata(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    trusted_sha256: &str,
+    max_bytes: u64,
+    names: &[&str],
+    scratch_parent: &Path,
+) -> Result<tempfile::TempDir, ObjectNativeOpenError> {
+    if !is_hash(trusted_sha256) || max_bytes == 0 {
+        return Err(ObjectNativeOpenError::Invalid(
+            "trusted digest or memory cap",
+        ));
+    }
+    let scratch = tempfile::tempdir_in(scratch_parent).map_err(ObjectNativeOpenError::Io)?;
+    let mut total = 0_u64;
+    for &name in names {
+        let fetched = store
+            .get(&prefix.clone().join(name))
+            .await
+            .map_err(ObjectNativeOpenError::Store)?;
+        let limit = max_bytes
+            .saturating_sub(total)
+            .min(if name.ends_with(".json") {
+                MAX_MANIFEST as u64
+            } else {
+                u64::MAX
+            });
+        if fetched.meta.size == 0 || fetched.meta.size > limit {
+            return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+        }
+        let local = scratch.path().join(name);
+        if let Some(parent) = local.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(ObjectNativeOpenError::Io)?;
+        }
+        let mut output = tokio::fs::File::create(&local)
+            .await
+            .map_err(ObjectNativeOpenError::Io)?;
+        let mut count = 0_u64;
+        let mut digest = Sha256::new();
+        let expected = fetched.meta.size;
+        let mut stream = fetched.into_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(ObjectNativeOpenError::Store)?;
+            count = count
+                .checked_add(chunk.len() as u64)
+                .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
+            if count > limit || count > expected {
+                return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+            }
+            if name == "manifest.json" {
+                digest.update(&chunk);
+            }
+            output
+                .write_all(&chunk)
+                .await
+                .map_err(ObjectNativeOpenError::Io)?;
+        }
+        if count != expected {
+            return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+        }
+        output.flush().await.map_err(ObjectNativeOpenError::Io)?;
+        drop(output);
+        if name == "manifest.json" && format!("{:x}", digest.finalize()) != trusted_sha256 {
+            return Err(ObjectNativeOpenError::HashMismatch("generation manifest"));
+        }
+        total = total
+            .checked_add(count)
+            .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
+    }
+    Ok(scratch)
+}
+
 impl ObjectNativeGeneration {
     /// Download only routing metadata under an authorized, immutable prefix.
     /// The caller supplies a trusted root digest and scratch space; source
@@ -175,69 +251,15 @@ impl ObjectNativeGeneration {
         limits: ObjectNativeLimits,
         scratch_parent: &Path,
     ) -> Result<Self, ObjectNativeOpenError> {
-        if !is_hash(trusted_sha256) || limits.max_memory_bytes == 0 {
-            return Err(ObjectNativeOpenError::Invalid(
-                "trusted digest or memory cap",
-            ));
-        }
-        let scratch = tempfile::tempdir_in(scratch_parent).map_err(ObjectNativeOpenError::Io)?;
-        let mut total = 0_u64;
-        for name in METADATA_FILES {
-            let fetched = store
-                .get(&prefix.clone().join(name))
-                .await
-                .map_err(ObjectNativeOpenError::Store)?;
-            let limit =
-                limits
-                    .max_memory_bytes
-                    .saturating_sub(total)
-                    .min(if name == "manifest.json" {
-                        MAX_MANIFEST as u64
-                    } else {
-                        u64::MAX
-                    });
-            if fetched.meta.size == 0 || fetched.meta.size > limit {
-                return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
-            }
-            let local = scratch.path().join(name);
-            if let Some(parent) = local.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(ObjectNativeOpenError::Io)?;
-            }
-            let mut output = tokio::fs::File::create(&local)
-                .await
-                .map_err(ObjectNativeOpenError::Io)?;
-            let mut count = 0_u64;
-            let mut digest = Sha256::new();
-            let expected = fetched.meta.size;
-            let mut stream = fetched.into_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(ObjectNativeOpenError::Store)?;
-                count = count
-                    .checked_add(chunk.len() as u64)
-                    .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
-                if count > limit || count > expected {
-                    return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
-                }
-                digest.update(&chunk);
-                output
-                    .write_all(&chunk)
-                    .await
-                    .map_err(ObjectNativeOpenError::Io)?;
-            }
-            if count != expected {
-                return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
-            }
-            output.flush().await.map_err(ObjectNativeOpenError::Io)?;
-            drop(output);
-            if name == "manifest.json" && format!("{:x}", digest.finalize()) != trusted_sha256 {
-                return Err(ObjectNativeOpenError::HashMismatch("generation manifest"));
-            }
-            total = total
-                .checked_add(count)
-                .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
-        }
+        let scratch = stage_generation_metadata(
+            store,
+            prefix,
+            trusted_sha256,
+            limits.max_memory_bytes,
+            &METADATA_FILES,
+            scratch_parent,
+        )
+        .await?;
         Self::open(scratch.path(), trusted_sha256, limits)
     }
 
@@ -638,7 +660,7 @@ impl ObjectNativeGeneration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
+    use object_store::{memory::InMemory, ObjectStoreExt, PutPayload};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
@@ -767,11 +789,15 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(
-            ObjectNativeGeneration::open_remote(&store, &prefix, &sha256(&manifest), limits, &root)
-                .await
-                .is_err()
-        );
+        assert!(ObjectNativeGeneration::open_remote(
+            &store,
+            &prefix,
+            &sha256(&manifest),
+            limits,
+            &root
+        )
+        .await
+        .is_err());
         let plan = opened.plan_pages(&[0.0; 64], 1, 128, 100, 4).unwrap();
         assert_eq!(plan.ranges, vec![0..sq8.len()]);
         assert_eq!(

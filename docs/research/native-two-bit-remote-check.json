@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-two-bit-remote-bootstrap-check-v1",
+  "baseline_commit": "e2b01066",
+  "source_files": {
+    "crates/borsuk/src/object_native_generation.rs": "227e366746af8c70ab6be919204c4f1c0d1cb0a2a9683e2ba3ac19791f423b5c",
+    "crates/borsuk/src/two_bit_generation.rs": "e39113f5e6f8c7018a31e5eecc48a4ee1b78873d6fd5119f857d14e55c527934",
+    "crates/borsuk/tests/two_bit_generation.rs": "b5fd3ddbf13d1c9609bba61b2505184238b771d91ae4353897cc5b8fa1079db6"
+  },
+  "test_command": "CARGO_BUILD_JOBS=1 cargo test -p borsuk --test two_bit_generation",
+  "original_session": 49571,
+  "exit_code": 0,
+  "tests_passed": 1,
+  "test_seconds": 0.03,
+  "log_sha256": "8036fb54164952033501a9bcdd043768977bdba5c37dff753a86a936d1d6ad84",
+  "checks": [
+    "source/local generation cases preserved",
+    "metadata-only InMemory remote open; no SQ8 object exists",
+    "exact remote/local planned-range equality on source fixture",
+    "scratch removed after success and failures",
+    "wrong root digest rejected",
+    "corrupt records rejected",
+    "missing child rejected",
+    "insufficient metadata budget rejected"
+  ],
+  "behavior": "Eight fixed metadata objects; root authenticated first; JSON64KiB and total staging caps; common local admission/authentication; no planning/scoring arithmetic change",
+  "limits": [
+    "No live S3 or HTTP timing/cost measurement",
+    "Caller configures metadata credentials/retries and transport buffers",
+    "Full paired quality and product lifecycle/publication gates remain",
+    "Focused candidate/shared helper check only; no full repository suite or legacy-only unit rerun",
+    "Independent review remains deferred by prior cooldown; no replacement consultation launched"
+  ]
+}

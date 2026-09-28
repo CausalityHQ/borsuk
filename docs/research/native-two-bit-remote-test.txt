@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized] target(s) in 3.29s
+     Running tests/two_bit_generation.rs (/data/target/agents/borsuk-prod-ready-v9/debug/deps/two_bit_generation-d11c1f20507abc41)
+
+running 1 test
+test pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_budget ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

@@ -1,14 +1,16 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
 use crate::{
     budgeted_page_rank::{choose_budgeted_pages_sparse, BudgetedPageError, BudgetedPagePlan},
-    object_native_generation::ObjectNativeSearchResult,
+    object_native_generation::{
+        stage_generation_metadata, ObjectNativeOpenError, ObjectNativeSearchResult,
+    },
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{OneAttemptS3, RankedSq8Failure},
     two_bit_source::{read_authenticated, SourceBuildError, SourcePlaneReceipt, TwoBitPlane},
     unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError},
     unit_centroid_pages::{UnitCentroidError, UnitCentroidPages},
 };
-use object_store::path::Path as ObjectPath;
+use object_store::{path::Path as ObjectPath, ObjectStore};
 use serde::Deserialize;
 use std::{fs, path::Path};
 use tokio::sync::Semaphore;
@@ -20,6 +22,8 @@ pub enum TwoBitGenerationError {
     Invalid(&'static str),
     /// Local metadata I/O.
     Io(std::io::Error),
+    /// Remote metadata staging identity, transport or scratch failure.
+    Stage(ObjectNativeOpenError),
     /// Source-plane identity or codec.
     Plane(SourceBuildError),
     /// Centroid metadata/query.
@@ -87,6 +91,41 @@ pub struct TwoBitGeneration {
     slots: Semaphore,
 }
 impl TwoBitGeneration {
+    /// Stream only generation metadata from an authorized immutable prefix,
+    /// then reuse authenticated local open. No SQ8/source-vector GET is issued.
+    /// Scratch is removed on success/failure/cancellation. The caller configures
+    /// metadata transport retries; query range caps are a separate boundary.
+    pub async fn open_remote(
+        store: &dyn ObjectStore,
+        prefix: &ObjectPath,
+        trusted_sha256: &str,
+        limits: TwoBitGenerationLimits,
+        scratch_parent: &Path,
+    ) -> Result<Self> {
+        let scratch = stage_generation_metadata(
+            store,
+            prefix,
+            trusted_sha256,
+            limits
+                .max_memory_bytes
+                .saturating_sub(limits.already_pinned_bytes),
+            &[
+                "manifest.json",
+                "page_manifest.json",
+                "page_digests.bin",
+                "centroids.bin",
+                "graph.bin",
+                "plane/manifest.json",
+                "plane/mean.bin",
+                "plane/records.bin",
+            ],
+            scratch_parent,
+        )
+        .await
+        .map_err(TwoBitGenerationError::Stage)?;
+        Self::open(scratch.path(), trusted_sha256, limits)
+    }
+
     /// Open local metadata under a trusted root SHA. No PQ or SQ8 payload load.
     /// Artifact paths are fixed under `root`; caller supplies immutable metadata.
     pub fn open(root: &Path, trusted_sha256: &str, limits: TwoBitGenerationLimits) -> Result<Self> {

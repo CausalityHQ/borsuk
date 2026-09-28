@@ -4,6 +4,7 @@ use borsuk::{
     unit_centroid_graph::UnitCentroidGraph,
     unit_centroid_pages::UnitCentroidPages,
 };
+use object_store::{memory::InMemory, path::Path as ObjectPath, ObjectStoreExt, PutPayload};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Cursor};
 fn hash(b: &[u8]) -> String {
@@ -100,6 +101,89 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         reloaded.plan(&[0.5, 0.25]).await.unwrap().ranges
     );
     assert!(!root.join("router").exists());
+    // Only metadata exists remotely: an SQ8 payload GET would fail this open.
+    let store = InMemory::new();
+    let prefix = ObjectPath::from("tenant/g1/metadata");
+    for name in [
+        "manifest.json",
+        "page_manifest.json",
+        "page_digests.bin",
+        "centroids.bin",
+        "graph.bin",
+        "plane/manifest.json",
+        "plane/mean.bin",
+        "plane/records.bin",
+    ] {
+        store
+            .put(
+                &prefix.clone().join(name),
+                PutPayload::from(fs::read(root.join(name)).unwrap()),
+            )
+            .await
+            .unwrap();
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let remote =
+        TwoBitGeneration::open_remote(&store, &prefix, &hash(&manifest), limits, scratch.path())
+            .await
+            .unwrap();
+    assert_eq!(
+        first.ranges,
+        remote.plan(&[0.5, 0.25]).await.unwrap().ranges
+    );
+    assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+    assert!(TwoBitGeneration::open_remote(
+        &store,
+        &prefix,
+        &"0".repeat(64),
+        limits,
+        scratch.path()
+    )
+    .await
+    .is_err());
+    assert!(TwoBitGeneration::open_remote(
+        &store,
+        &prefix,
+        &hash(&manifest),
+        TwoBitGenerationLimits {
+            max_memory_bytes: 1,
+            ..limits
+        },
+        scratch.path()
+    )
+    .await
+    .is_err());
+    store
+        .put(
+            &prefix.clone().join("plane/records.bin"),
+            PutPayload::from(vec![0; 4608]),
+        )
+        .await
+        .unwrap();
+    assert!(TwoBitGeneration::open_remote(
+        &store,
+        &prefix,
+        &hash(&manifest),
+        limits,
+        scratch.path()
+    )
+    .await
+    .is_err());
+    store
+        .delete(&prefix.clone().join("plane/records.bin"))
+        .await
+        .unwrap();
+    assert!(TwoBitGeneration::open_remote(
+        &store,
+        &prefix,
+        &hash(&manifest),
+        limits,
+        scratch.path()
+    )
+    .await
+    .is_err());
+    assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+
     assert!(TwoBitGeneration::open(root, &"0".repeat(64), limits).is_err());
     assert!(TwoBitGeneration::open(
         root,

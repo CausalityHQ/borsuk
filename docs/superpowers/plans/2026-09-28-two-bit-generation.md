@@ -25,3 +25,23 @@ were reviewed/tightened before final verification. No cloud job or full suite.
 
 Final source also authenticates source-plane geometry before memory admission.
 Final replay output is byte-identical to the first integration replay.
+
+## Remote bootstrap follow-up
+
+Reuse the existing generation's streaming metadata staging loop as a shared
+helper (two real callers). Fixed filenames, root SHA verified first, per-file
+manifest and total staging caps, exact streamed lengths, temporary cleanup.
+Expose `TwoBitGeneration::open_remote` with caller store/prefix/trusted SHA and
+scratch parent, then call the same local opener. No SQ8 object GET or code-path
+change in planning/scoring. Existing publication/mutation/quality gates remain.
+
+- [x] Extend the focused check: metadata-only InMemory open/plan, scratch cleanup,
+  wrong root, corrupt record metadata, missing child and insufficient cap.
+- [x] Observe missing API red, extract/reuse staging, run affected check once.
+- [x] Seal source/test receipt, accurate docs, coherent fast-forward commit/push.
+
+Missing-API red session71404 observed. Final session49571 exit0:1 focused
+test passes,0.03s. A mechanical multiline variable substitution error was
+caught at compilation and repaired before green. Source/test receipt is
+`docs/research/native-two-bit-remote-check.json`. No paid/cloud run or full
+suite was started; source/query/SQ8/plan arithmetic remains frozen.

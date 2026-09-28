@@ -30,7 +30,8 @@ are fixed. Unknown/incompatible schemas fail; no legacy fallback is attempted.
 The completed source-plane manifest is described in `two-bit-source-builder.md`.
 
 The root is currently assembled from source-only preparation artifacts; a public
-end-to-end create/publish API and remote metadata bootstrap are still pending.
+end-to-end create/publish API is still pending. Remote metadata bootstrap is
+available through `TwoBitGeneration::open_remote`.
 Creation must bind calibration and centroids from the same immutable SQ8 build.
 Do not manufacture a root from untrusted metadata and call its computed digest
 trusted. Wrong bindings, corruption and admission failures reject the generation.
@@ -77,3 +78,32 @@ exactly. The debug replay took14.65seconds with37,796KiB GNU-time peak RSS,
 zero swaps and no S3 reads. These numbers describe offline integration
 verification, not query percentiles, production RSS/QPS, recall qualification or
 a vendor comparison. Receipts are `docs/research/native-two-bit-generation-*`.
+
+## Open metadata directly from object storage
+
+```rust
+let generation = TwoBitGeneration::open_remote(
+    &store, &metadata_prefix, trusted_root_sha256, limits, scratch_parent,
+).await?;
+```
+
+Use an application-authorized immutable prefix and a root digest obtained from
+its publication authority. The opener streams eight fixed metadata objects to
+an owned temporary directory, verifies the root before further downloads, then
+calls the same local authenticated opener. JSON manifests are capped at64KiB,
+total staged metadata at the memory allowance less older pins; decoded metadata
+and concurrent query buffers must still pass local admission. Scratch is removed
+when opening succeeds, fails or is cancelled. SQ8/source objects are not fetched.
+The two-bit nomination records and centroid/graph metadata become resident.
+
+The caller configures metadata store credentials, retries and transport buffers;
+bootstrap transport overhead/retry traffic is outside the payload model and the
+query range counters. This API has metadata-only InMemory coverage, not measured
+cold S3 bootstrap time, serving latency or cloud cost. Public create/publication,
+full paired quality, cold HTTP and incremental maintenance remain required.
+
+The focused remote check passes using metadata-only InMemory storage. It covers
+local/remote range equality, cleanup on success/failure, wrong-root, corrupt or
+missing code metadata and insufficient cap. This is functional API evidence,
+not an S3 benchmark. Source/test receipts are `native-two-bit-remote-check.json`
+and `native-two-bit-remote-test.txt` in `docs/research`.
