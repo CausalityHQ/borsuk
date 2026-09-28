@@ -1,0 +1,55 @@
+{
+  "status": "verified-closed-ARM-correctness",
+  "artifacts_verified": 4,
+  "archive_source_files_matched": 372,
+  "source_archive_sha256": "93bc284a78f60a5202b1c612a87a94e7938f17ac132448b5fa905051a45ad5e0",
+  "source_archive_bytes": 22421911,
+  "terminal_sha256": "a0f45578d61b9636274f14bda7d2ae696d1d21a6c8666783b6b96b74e87fa4e8",
+  "instance_state_verified": "terminated",
+  "test_summaries": [
+    [
+      7,
+      0,
+      0
+    ],
+    [
+      17,
+      0,
+      0
+    ],
+    [
+      14,
+      0,
+      2
+    ],
+    [
+      6,
+      0,
+      0
+    ],
+    [
+      1,
+      0,
+      0
+    ],
+    [
+      1,
+      0,
+      0
+    ]
+  ],
+  "passed": 46,
+  "failed": 0,
+  "ignored": 2,
+  "performance_or_quality_qualification": false,
+  "named_checks_verified": [
+    "pq4_core_production_scan_matches_detected_backend_contract",
+    "pq4_block_backend_detection_is_explicit_and_portable",
+    "pq4_block_simd_matches_scalar_for_boundary_patterns",
+    "fused_backend_matches_registered_scalar_bits",
+    "sequential_diverse_builder_is_deterministic_and_degree_bounded",
+    "v26_pq4_quality_runner_authenticates_full_inputs_and_obeys_backend_contract",
+    "v26_pq4_serving_screen_freezes_depth_and_obeys_backend_contract"
+  ],
+  "actual_backend": "Aarch64Neon asserted by passing backend-detection test and aarch64 target"
+}
