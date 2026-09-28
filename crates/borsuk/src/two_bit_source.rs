@@ -2,6 +2,7 @@
 use crate::rotated_two_bit::{PreparedTwoBit, RotatedTwoBitCodec, TwoBitError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -33,7 +34,8 @@ impl From<TwoBitError> for SourceBuildError {
     }
 }
 
-/// Caller-owned immutable source snapshots, with ordinal IDs in the SQ8 object.
+/// Caller-owned immutable source snapshots. `build` expects ordinal SQ8 IDs;
+/// `build_with_order` accepts logical IDs with an explicit raw-row permutation.
 /// The builder accepts no queries or truth. Keep these files immutable during build.
 pub struct TwoBitSource<'a> {
     /// Little-endian f32 source rows in source ordinal order.
@@ -68,6 +70,8 @@ pub struct SourcePlaneReceipt {
     pub source_sha256: String,
     /// Physical SQ8 order and payload identity.
     pub sq8_sha256: String,
+    /// Canonical physical-position to raw-row order, hashed as LE u64 ordinals.
+    pub source_order_sha256: String,
     /// Digest of little-endian f32 `mean.bin`.
     pub mean_sha256: String,
     /// Digest of Rust v1 `records.bin`.
@@ -93,9 +97,30 @@ impl TwoBitSource<'_> {
         output: &Path,
         max_memory_bytes: usize,
     ) -> Result<SourcePlaneReceipt, SourceBuildError> {
+        self.build_inner(None, output, max_memory_bytes)
+    }
+
+    /// Build with an explicit full source-row permutation, allowing unique i64
+    /// application IDs in SQ8. Charges the caller-owned order as well as payload.
+    pub fn build_with_order(
+        &self,
+        order: &[u64],
+        output: &Path,
+        max_memory_bytes: usize,
+    ) -> Result<SourcePlaneReceipt, SourceBuildError> {
+        self.build_inner(Some(order), output, max_memory_bytes)
+    }
+
+    fn build_inner(
+        &self,
+        order: Option<&[u64]>,
+        output: &Path,
+        max_memory_bytes: usize,
+    ) -> Result<SourcePlaneReceipt, SourceBuildError> {
         let bad = SourceBuildError::Invalid;
         if self.rows == 0
             || self.dimensions == 0
+            || order.is_some_and(|order| order.len() != self.rows)
             || !valid_digest(self.raw_sha256)
             || !valid_digest(self.sq8_sha256)
             || output.exists()
@@ -121,7 +146,7 @@ impl TwoBitSource<'_> {
         let bit_bytes = self.rows.div_ceil(8);
         let required = self
             .rows
-            .checked_mul(8)
+            .checked_mul(if order.is_some() { 16 } else { 8 })
             .and_then(|n| n.checked_add(bit_bytes))
             .and_then(|n| {
                 self.dimensions
@@ -176,24 +201,38 @@ impl TwoBitSource<'_> {
         seen.try_reserve_exact(bit_bytes)
             .map_err(|_| bad("ID bitset allocation"))?;
         seen.resize(bit_bytes, 0_u8);
+        if let Some(order) = order {
+            for &ordinal in order {
+                let ordinal = usize::try_from(ordinal).map_err(|_| bad("source ordinal"))?;
+                if ordinal >= self.rows || seen[ordinal / 8] & (1 << (ordinal % 8)) != 0 {
+                    return Err(bad("source permutation"));
+                }
+                seen[ordinal / 8] |= 1 << (ordinal % 8);
+            }
+        }
         let mut sq8_reader = BufReader::with_capacity(64 * 1024, sq8_file);
         let mut sq8_buffer = vec![0_u8; sq8_width];
         let mut sq8_digest = Sha256::new();
         for _ in 0..self.rows {
             sq8_reader.read_exact(&mut sq8_buffer)?;
             sq8_digest.update(&sq8_buffer);
-            let id = usize::try_from(i64::from_le_bytes(sq8_buffer[..8].try_into().unwrap()))
-                .map_err(|_| bad("negative source ID"))?;
+            let id = i64::from_le_bytes(sq8_buffer[..8].try_into().unwrap());
             let norm = f32::from_le_bytes(sq8_buffer[8..12].try_into().unwrap());
-            if id >= self.rows || !norm.is_finite() || norm <= 0.0 {
-                return Err(bad("source ID or SQ8 norm"));
+            if !norm.is_finite() || norm <= 0.0 {
+                return Err(bad("SQ8 norm"));
             }
-            let bit = 1 << (id % 8);
-            if seen[id / 8] & bit != 0 {
-                return Err(bad("duplicate source ID"));
+            if order.is_none() {
+                let ordinal = usize::try_from(id).map_err(|_| bad("negative source ID"))?;
+                if ordinal >= self.rows {
+                    return Err(bad("source ID"));
+                }
+                let bit = 1 << (ordinal % 8);
+                if seen[ordinal / 8] & bit != 0 {
+                    return Err(bad("duplicate source ID"));
+                }
+                seen[ordinal / 8] |= bit;
             }
-            seen[id / 8] |= bit;
-            ids.push(id);
+            ids.push(id as u64);
         }
         if format!("{:x}", sq8_digest.finalize()) != self.sq8_sha256 {
             return Err(bad("SQ8 source digest"));
@@ -201,6 +240,19 @@ impl TwoBitSource<'_> {
         drop(sq8_reader);
         drop(sq8_buffer);
         drop(seen);
+        let physical_order = if let Some(order) = order {
+            ids.sort_unstable();
+            if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err(bad("duplicate application ID"));
+            }
+            Cow::Borrowed(order)
+        } else {
+            Cow::Owned(ids)
+        };
+        let mut order_digest = Sha256::new();
+        for &ordinal in physical_order.iter() {
+            order_digest.update(ordinal.to_le_bytes());
+        }
         fs::create_dir(output)?;
         let mean_bytes = mean
             .iter()
@@ -213,7 +265,8 @@ impl TwoBitSource<'_> {
             BufWriter::with_capacity(64 * 1024, new_file(&output.join("records.bin"))?);
         let mut record_digest = Sha256::new();
         let mut row = vec![0.0_f32; self.dimensions];
-        for id in ids {
+        for &id in physical_order.iter() {
+            let id = usize::try_from(id).map_err(|_| bad("source ordinal"))?;
             // ponytail: random raw-row seeks; use an externally reordered source stream if large builds become I/O-bound.
             raw_file.seek(SeekFrom::Start((id * raw_width) as u64))?;
             raw_file.read_exact(&mut raw_buffer)?;
@@ -227,13 +280,14 @@ impl TwoBitSource<'_> {
         records.flush()?;
         records.get_ref().sync_all()?;
         let receipt = SourcePlaneReceipt {
-            schema: "borsuk-two-bit-plane-v1".into(),
+            schema: "borsuk-two-bit-plane-v2".into(),
             rows: self.rows,
             dimensions: self.dimensions,
             seed: 20260923,
             record_bytes: codec.record_bytes(),
             source_sha256: self.raw_sha256.to_owned(),
             sq8_sha256: self.sq8_sha256.to_owned(),
+            source_order_sha256: format!("{:x}", order_digest.finalize()),
             mean_sha256: format!("{:x}", Sha256::digest(&mean_bytes)),
             records_sha256: format!("{:x}", record_digest.finalize()),
             query_or_truth_used: false,
@@ -311,7 +365,7 @@ impl TwoBitPlane {
         let body = read_authenticated(&manifest_path, size, trusted_manifest_sha256)?;
         let receipt: SourcePlaneReceipt =
             serde_json::from_slice(&body).map_err(|_| bad("manifest schema"))?;
-        if receipt.schema != "borsuk-two-bit-plane-v1"
+        if receipt.schema != "borsuk-two-bit-plane-v2"
             || receipt.seed != 20260923
             || receipt.rows == 0
             || receipt.query_or_truth_used
@@ -319,6 +373,7 @@ impl TwoBitPlane {
             || [
                 &receipt.source_sha256,
                 &receipt.sq8_sha256,
+                &receipt.source_order_sha256,
                 &receipt.mean_sha256,
                 &receipt.records_sha256,
             ]

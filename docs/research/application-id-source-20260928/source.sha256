@@ -1,0 +1,4 @@
+16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795  crates/borsuk/src/sq8_source.rs
+b8e0336fc161b0f0983142cf45707404b6567a364c8c1d190c349ce1a2db19de  crates/borsuk/src/two_bit_source.rs
+996cb91d70899e177e5d9d85f467f4c7187396a0ed6e11d28e22446c881882b2  crates/borsuk/src/two_bit_build.rs
+b52c2743e680b8e7b02d61bfd35c72e3f1152b9fdfda45eca53865bf76baaa95  crates/borsuk/tests/two_bit_application_ids.rs

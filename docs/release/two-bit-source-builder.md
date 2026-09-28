@@ -22,13 +22,14 @@ The caller owns immutable input snapshots and the new output namespace. Raw
 row ordinals must correspond to SQ8 IDs; the builder authenticates the two
 files and checks the ID permutation, but their underlying vector relationship
 is the caller's construction contract. SQ8 rows are i64 ordinal ID, f32
-squared norm, then `dimensions` code bytes. Arbitrary application IDs require
-the generation's separate ID map. Nonfinite/zero source rows, unrepresentable
+squared norm, then `dimensions` code bytes. For signed-i64 application IDs,
+use the explicit-order methods described below; no separate resident ID map
+is required. Nonfinite/zero source rows, unrepresentable
 codec scalars, duplicate/out-of-range IDs, nonpositive SQ8 norms, bad hashes/lengths, overflow and
 insufficient admission fail with an error. Existing output is never replaced.
 
 Outputs are `mean.bin`, `records.bin`, and `manifest.json` with schema
-`borsuk-two-bit-plane-v1`. Records use the Rust codec's scale and inverse
+`borsuk-two-bit-plane-v2`. Records use the Rust codec's scale and inverse
 reconstructed norm; historical two-bit records used a different final scalar.
 Writes are streamed and synced before `manifest.pending` is renamed last.
 Failures can leave an unpublished directory for caller cleanup. A crash may
@@ -110,3 +111,38 @@ ordinal permutation from authenticated normalized f32 input without Python.
 Feed it to the public SQ8 encoder before the generation builder. Its ChaCha8
 RNG/arithmetic changes the layout; new quality gates and root hashes are required.
 The historical paired100k results used the original approved Python layout.
+
+## Logical IDs and explicit source order
+
+SQ8 may carry unique signed64-bit application IDs, including negative IDs.
+`build_sq8_source_with_ids` takes IDs indexed by raw-source row plus a complete
+physical-position-to-source-row permutation. `TwoBitSource::build_with_order`
+and `TwoBitGenerationBuilder::build_with_order` consume that same permutation;
+application IDs never address raw rows. Ordinal convenience methods still serve
+corpus/control inputs and emit the same current v2 source-plane marker. There
+is one codec/writer implementation per layer, no legacy reader or migration.
+
+v2 receipts include `source_order_sha256`, hashing canonical little-endian u64
+ordinals in physical order. The generation root authenticates the receipt and
+SQ8 body digest; IDs stay on demand in SQ8, not a hydrated ID/vector map. v1
+planes reject; historical artifacts retain their original source/schema.
+
+Caller source/IDs/order must be immutable and describe the same rows. Duplicate
+IDs, malformed permutations and over-budget input reject before a successful
+manifest/receipt. Writer admission charges caller order/IDs and sorted-ID check;
+source and generation builders charge the explicit caller order. Other retained
+caller state, allocator/runtime/OS cache and pin overlap are separate charges.
+
+```rust
+let encoding = borsuk::sq8_source::build_sq8_source_with_ids(
+    normalized_path, normalized_sha, dimensions, &order, &source_ids,
+    new_sq8_path, writer_payload_cap,
+)?;
+// builder.source binds the same raw/order/SQ8 geometry and encoding coefficients.
+let root_sha = builder.build_with_order(&order, new_generation_dir, build_cap)?;
+```
+
+This is a logical-ID construction prerequisite. String-ID catalog binding,
+incremental overlays, mutation publication/recovery/compaction and fresh ANN/
+HTTP/vendor/100M qualification remain open. It does not inherit a historical
+benchmark win or claim wrapper parity.

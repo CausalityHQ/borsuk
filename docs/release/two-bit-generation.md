@@ -191,7 +191,7 @@ let root_sha = TwoBitGenerationBuilder {
 ```
 
 Inputs are approved immutable source/SQ8 snapshots in the frozen physical order.
-Raw rows are ordinal f32; the SQ8 IDs are their permutation. Calibration must
+Raw rows are ordinal f32; SQ8 IDs can be logical signed64-bit IDs when the explicit source order is supplied. Calibration must
 come from the same SQ8 encoder; construction does not infer that relationship
 from checksums. The builder accepts no query/GT and refits no layout. It streams
 the source codec, centroids and page digests, builds the existing centroid graph,

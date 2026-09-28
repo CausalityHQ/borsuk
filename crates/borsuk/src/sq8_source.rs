@@ -124,12 +124,55 @@ pub fn build_sq8_source(
     output: &Path,
     max_payload_bytes: usize,
 ) -> Result<Sq8SourceReceipt, SourceBuildError> {
+    build_sq8_inner(
+        source,
+        source_sha256,
+        dimensions,
+        order,
+        None,
+        output,
+        max_payload_bytes,
+    )
+}
+
+/// Write SQ8 with unique signed-i64 application IDs indexed by raw source row.
+/// Physical order addresses source rows, never application IDs. Admission charges
+/// caller-owned order/IDs and an ID-validation copy; other caller state is separate.
+pub fn build_sq8_source_with_ids(
+    source: &Path,
+    source_sha256: &str,
+    dimensions: usize,
+    order: &[u64],
+    source_ids: &[i64],
+    output: &Path,
+    max_payload_bytes: usize,
+) -> Result<Sq8SourceReceipt, SourceBuildError> {
+    build_sq8_inner(
+        source,
+        source_sha256,
+        dimensions,
+        order,
+        Some(source_ids),
+        output,
+        max_payload_bytes,
+    )
+}
+
+fn build_sq8_inner(
+    source: &Path,
+    source_sha256: &str,
+    dimensions: usize,
+    order: &[u64],
+    source_ids: Option<&[i64]>,
+    output: &Path,
+    max_payload_bytes: usize,
+) -> Result<Sq8SourceReceipt, SourceBuildError> {
     let bad = SourceBuildError::Invalid;
     let rows = order.len();
     let width = dimensions.checked_mul(4).ok_or(bad("SQ8 geometry"))?;
     let bytes = width.checked_mul(rows).ok_or(bad("SQ8 geometry"))?;
     let modeled = rows
-        .checked_mul(8)
+        .checked_mul(if source_ids.is_some() { 24 } else { 8 })
         .and_then(|n| n.checked_add(rows.div_ceil(8)))
         .and_then(|n| n.checked_add(dimensions.checked_mul(32)?))
         .and_then(|n| n.checked_add(131072))
@@ -137,6 +180,7 @@ pub fn build_sq8_source(
     if rows == 0
         || dimensions == 0
         || rows > i64::MAX as usize
+        || source_ids.is_some_and(|ids| ids.len() != rows)
         || modeled > max_payload_bytes
         || output.exists()
         || source_sha256.len() != 64
@@ -145,6 +189,17 @@ pub fn build_sq8_source(
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     {
         return Err(bad("SQ8 inputs or memory budget"));
+    }
+    if let Some(ids) = source_ids {
+        let mut sorted = Vec::new();
+        sorted
+            .try_reserve_exact(rows)
+            .map_err(|_| bad("SQ8 ID allocation"))?;
+        sorted.extend_from_slice(ids);
+        sorted.sort_unstable();
+        if sorted.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(bad("SQ8 duplicate application ID"));
+        }
     }
     let mut seen = vec![0_u8; rows.div_ceil(8)];
     for &id in order {
@@ -218,7 +273,8 @@ pub fn build_sq8_source(
         if !norm.is_finite() || norm <= 0. {
             return Err(bad("SQ8 reconstructed norm"));
         }
-        let id_bytes = (id as i64).to_le_bytes();
+        let logical_id = source_ids.map_or(id as i64, |ids| ids[id as usize]);
+        let id_bytes = logical_id.to_le_bytes();
         let norm_bytes = norm.to_le_bytes();
         for part in [&id_bytes[..], &norm_bytes[..], &codes[..]] {
             output.write_all(part)?;
@@ -336,14 +392,16 @@ mod tests {
         }
         std::fs::write(&source, [0_u8; 16]).unwrap();
         let zero_sha = format!("{:x}", Sha256::digest([0_u8; 16]));
-        assert!(build_sq8_source(
-            &source,
-            &zero_sha,
-            2,
-            &[1, 0],
-            &dir.path().join("bad"),
-            200000
-        )
-        .is_err());
+        assert!(
+            build_sq8_source(
+                &source,
+                &zero_sha,
+                2,
+                &[1, 0],
+                &dir.path().join("bad"),
+                200000
+            )
+            .is_err()
+        );
     }
 }

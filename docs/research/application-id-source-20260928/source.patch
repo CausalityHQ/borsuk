@@ -1,0 +1,482 @@
+diff --git a/crates/borsuk/src/sq8_source.rs b/crates/borsuk/src/sq8_source.rs
+index 589bc881..4a948935 100644
+--- a/crates/borsuk/src/sq8_source.rs
++++ b/crates/borsuk/src/sq8_source.rs
+@@ -123,13 +123,56 @@ pub fn build_sq8_source(
+     order: &[u64],
+     output: &Path,
+     max_payload_bytes: usize,
++) -> Result<Sq8SourceReceipt, SourceBuildError> {
++    build_sq8_inner(
++        source,
++        source_sha256,
++        dimensions,
++        order,
++        None,
++        output,
++        max_payload_bytes,
++    )
++}
++
++/// Write SQ8 with unique signed-i64 application IDs indexed by raw source row.
++/// Physical order addresses source rows, never application IDs. Admission charges
++/// caller-owned order/IDs and an ID-validation copy; other caller state is separate.
++pub fn build_sq8_source_with_ids(
++    source: &Path,
++    source_sha256: &str,
++    dimensions: usize,
++    order: &[u64],
++    source_ids: &[i64],
++    output: &Path,
++    max_payload_bytes: usize,
++) -> Result<Sq8SourceReceipt, SourceBuildError> {
++    build_sq8_inner(
++        source,
++        source_sha256,
++        dimensions,
++        order,
++        Some(source_ids),
++        output,
++        max_payload_bytes,
++    )
++}
++
++fn build_sq8_inner(
++    source: &Path,
++    source_sha256: &str,
++    dimensions: usize,
++    order: &[u64],
++    source_ids: Option<&[i64]>,
++    output: &Path,
++    max_payload_bytes: usize,
+ ) -> Result<Sq8SourceReceipt, SourceBuildError> {
+     let bad = SourceBuildError::Invalid;
+     let rows = order.len();
+     let width = dimensions.checked_mul(4).ok_or(bad("SQ8 geometry"))?;
+     let bytes = width.checked_mul(rows).ok_or(bad("SQ8 geometry"))?;
+     let modeled = rows
+-        .checked_mul(8)
++        .checked_mul(if source_ids.is_some() { 24 } else { 8 })
+         .and_then(|n| n.checked_add(rows.div_ceil(8)))
+         .and_then(|n| n.checked_add(dimensions.checked_mul(32)?))
+         .and_then(|n| n.checked_add(131072))
+@@ -137,6 +180,7 @@ pub fn build_sq8_source(
+     if rows == 0
+         || dimensions == 0
+         || rows > i64::MAX as usize
++        || source_ids.is_some_and(|ids| ids.len() != rows)
+         || modeled > max_payload_bytes
+         || output.exists()
+         || source_sha256.len() != 64
+@@ -146,6 +190,17 @@ pub fn build_sq8_source(
+     {
+         return Err(bad("SQ8 inputs or memory budget"));
+     }
++    if let Some(ids) = source_ids {
++        let mut sorted = Vec::new();
++        sorted
++            .try_reserve_exact(rows)
++            .map_err(|_| bad("SQ8 ID allocation"))?;
++        sorted.extend_from_slice(ids);
++        sorted.sort_unstable();
++        if sorted.windows(2).any(|pair| pair[0] == pair[1]) {
++            return Err(bad("SQ8 duplicate application ID"));
++        }
++    }
+     let mut seen = vec![0_u8; rows.div_ceil(8)];
+     for &id in order {
+         let id = usize::try_from(id).map_err(|_| bad("SQ8 ordinal"))?;
+@@ -218,7 +273,8 @@ pub fn build_sq8_source(
+         if !norm.is_finite() || norm <= 0. {
+             return Err(bad("SQ8 reconstructed norm"));
+         }
+-        let id_bytes = (id as i64).to_le_bytes();
++        let logical_id = source_ids.map_or(id as i64, |ids| ids[id as usize]);
++        let id_bytes = logical_id.to_le_bytes();
+         let norm_bytes = norm.to_le_bytes();
+         for part in [&id_bytes[..], &norm_bytes[..], &codes[..]] {
+             output.write_all(part)?;
+@@ -336,14 +392,16 @@ mod tests {
+         }
+         std::fs::write(&source, [0_u8; 16]).unwrap();
+         let zero_sha = format!("{:x}", Sha256::digest([0_u8; 16]));
+-        assert!(build_sq8_source(
+-            &source,
+-            &zero_sha,
+-            2,
+-            &[1, 0],
+-            &dir.path().join("bad"),
+-            200000
+-        )
+-        .is_err());
++        assert!(
++            build_sq8_source(
++                &source,
++                &zero_sha,
++                2,
++                &[1, 0],
++                &dir.path().join("bad"),
++                200000
++            )
++            .is_err()
++        );
+     }
+ }
+diff --git a/crates/borsuk/src/two_bit_build.rs b/crates/borsuk/src/two_bit_build.rs
+index b52862a0..ff04bffe 100644
+--- a/crates/borsuk/src/two_bit_build.rs
++++ b/crates/borsuk/src/two_bit_build.rs
+@@ -47,6 +47,26 @@ impl TwoBitGenerationBuilder<'_> {
+     /// Payload model includes streamed buffers and conservative graph workspace;
+     /// runtime/allocator/OS cache and other pinned generations are caller charges.
+     pub fn build(&self, output: &Path, max_build_payload_bytes: usize) -> Result<String> {
++        self.build_inner(None, output, max_build_payload_bytes)
++    }
++
++    /// Assemble a generation with an explicit source-row order and logical SQ8 IDs.
++    /// Caller-owned order is included in payload admission; no ID map is hydrated.
++    pub fn build_with_order(
++        &self,
++        order: &[u64],
++        output: &Path,
++        max_build_payload_bytes: usize,
++    ) -> Result<String> {
++        self.build_inner(Some(order), output, max_build_payload_bytes)
++    }
++
++    fn build_inner(
++        &self,
++        order: Option<&[u64]>,
++        output: &Path,
++        max_build_payload_bytes: usize,
++    ) -> Result<String> {
+         let bad = TwoBitGenerationError::Invalid;
+         let rows = self.source.rows;
+         let dimensions = self.source.dimensions;
+@@ -60,6 +80,7 @@ impl TwoBitGenerationBuilder<'_> {
+         }
+         if rows == 0
+             || dimensions == 0
++            || order.is_some_and(|order| order.len() != rows)
+             || self.generation == 0
+             || output.exists()
+             || self.low.len() != dimensions
+@@ -92,14 +113,28 @@ impl TwoBitGenerationBuilder<'_> {
+             .and_then(|n| n.checked_add(pages.checked_mul(32)?))
+             .and_then(|n| n.checked_add(page_bytes))
+             .and_then(|n| n.checked_add(262144))
++            .and_then(|n| {
++                n.checked_add(if order.is_some() {
++                    rows.checked_mul(8)?
++                } else {
++                    0
++                })
++            })
+             .ok_or(bad("build memory"))?;
+         if modeled > max_build_payload_bytes || units > u32::MAX as usize {
+             return Err(bad("build memory budget"));
+         }
+         fs::create_dir(output).map_err(TwoBitGenerationError::Io)?;
+-        self.source
+-            .build(&output.join("plane"), max_build_payload_bytes)
+-            .map_err(TwoBitGenerationError::Plane)?;
++        match order {
++            Some(order) => {
++                self.source
++                    .build_with_order(order, &output.join("plane"), max_build_payload_bytes)
++            }
++            None => self
++                .source
++                .build(&output.join("plane"), max_build_payload_bytes),
++        }
++        .map_err(TwoBitGenerationError::Plane)?;
+         let mut sq8 = BufReader::with_capacity(
+             65536,
+             HashingReader {
+diff --git a/crates/borsuk/src/two_bit_source.rs b/crates/borsuk/src/two_bit_source.rs
+index eef8c09f..fc0cb916 100644
+--- a/crates/borsuk/src/two_bit_source.rs
++++ b/crates/borsuk/src/two_bit_source.rs
+@@ -2,6 +2,7 @@
+ use crate::rotated_two_bit::{PreparedTwoBit, RotatedTwoBitCodec, TwoBitError};
+ use serde::{Deserialize, Serialize};
+ use sha2::{Digest, Sha256};
++use std::borrow::Cow;
+ use std::fs::{self, File, OpenOptions};
+ use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+ use std::path::Path;
+@@ -33,7 +34,8 @@ impl From<TwoBitError> for SourceBuildError {
+     }
+ }
+ 
+-/// Caller-owned immutable source snapshots, with ordinal IDs in the SQ8 object.
++/// Caller-owned immutable source snapshots. `build` expects ordinal SQ8 IDs;
++/// `build_with_order` accepts logical IDs with an explicit raw-row permutation.
+ /// The builder accepts no queries or truth. Keep these files immutable during build.
+ pub struct TwoBitSource<'a> {
+     /// Little-endian f32 source rows in source ordinal order.
+@@ -68,6 +70,8 @@ pub struct SourcePlaneReceipt {
+     pub source_sha256: String,
+     /// Physical SQ8 order and payload identity.
+     pub sq8_sha256: String,
++    /// Canonical physical-position to raw-row order, hashed as LE u64 ordinals.
++    pub source_order_sha256: String,
+     /// Digest of little-endian f32 `mean.bin`.
+     pub mean_sha256: String,
+     /// Digest of Rust v1 `records.bin`.
+@@ -92,10 +96,31 @@ impl TwoBitSource<'_> {
+         &self,
+         output: &Path,
+         max_memory_bytes: usize,
++    ) -> Result<SourcePlaneReceipt, SourceBuildError> {
++        self.build_inner(None, output, max_memory_bytes)
++    }
++
++    /// Build with an explicit full source-row permutation, allowing unique i64
++    /// application IDs in SQ8. Charges the caller-owned order as well as payload.
++    pub fn build_with_order(
++        &self,
++        order: &[u64],
++        output: &Path,
++        max_memory_bytes: usize,
++    ) -> Result<SourcePlaneReceipt, SourceBuildError> {
++        self.build_inner(Some(order), output, max_memory_bytes)
++    }
++
++    fn build_inner(
++        &self,
++        order: Option<&[u64]>,
++        output: &Path,
++        max_memory_bytes: usize,
+     ) -> Result<SourcePlaneReceipt, SourceBuildError> {
+         let bad = SourceBuildError::Invalid;
+         if self.rows == 0
+             || self.dimensions == 0
++            || order.is_some_and(|order| order.len() != self.rows)
+             || !valid_digest(self.raw_sha256)
+             || !valid_digest(self.sq8_sha256)
+             || output.exists()
+@@ -121,7 +146,7 @@ impl TwoBitSource<'_> {
+         let bit_bytes = self.rows.div_ceil(8);
+         let required = self
+             .rows
+-            .checked_mul(8)
++            .checked_mul(if order.is_some() { 16 } else { 8 })
+             .and_then(|n| n.checked_add(bit_bytes))
+             .and_then(|n| {
+                 self.dimensions
+@@ -176,24 +201,38 @@ impl TwoBitSource<'_> {
+         seen.try_reserve_exact(bit_bytes)
+             .map_err(|_| bad("ID bitset allocation"))?;
+         seen.resize(bit_bytes, 0_u8);
++        if let Some(order) = order {
++            for &ordinal in order {
++                let ordinal = usize::try_from(ordinal).map_err(|_| bad("source ordinal"))?;
++                if ordinal >= self.rows || seen[ordinal / 8] & (1 << (ordinal % 8)) != 0 {
++                    return Err(bad("source permutation"));
++                }
++                seen[ordinal / 8] |= 1 << (ordinal % 8);
++            }
++        }
+         let mut sq8_reader = BufReader::with_capacity(64 * 1024, sq8_file);
+         let mut sq8_buffer = vec![0_u8; sq8_width];
+         let mut sq8_digest = Sha256::new();
+         for _ in 0..self.rows {
+             sq8_reader.read_exact(&mut sq8_buffer)?;
+             sq8_digest.update(&sq8_buffer);
+-            let id = usize::try_from(i64::from_le_bytes(sq8_buffer[..8].try_into().unwrap()))
+-                .map_err(|_| bad("negative source ID"))?;
++            let id = i64::from_le_bytes(sq8_buffer[..8].try_into().unwrap());
+             let norm = f32::from_le_bytes(sq8_buffer[8..12].try_into().unwrap());
+-            if id >= self.rows || !norm.is_finite() || norm <= 0.0 {
+-                return Err(bad("source ID or SQ8 norm"));
++            if !norm.is_finite() || norm <= 0.0 {
++                return Err(bad("SQ8 norm"));
+             }
+-            let bit = 1 << (id % 8);
+-            if seen[id / 8] & bit != 0 {
+-                return Err(bad("duplicate source ID"));
++            if order.is_none() {
++                let ordinal = usize::try_from(id).map_err(|_| bad("negative source ID"))?;
++                if ordinal >= self.rows {
++                    return Err(bad("source ID"));
++                }
++                let bit = 1 << (ordinal % 8);
++                if seen[ordinal / 8] & bit != 0 {
++                    return Err(bad("duplicate source ID"));
++                }
++                seen[ordinal / 8] |= bit;
+             }
+-            seen[id / 8] |= bit;
+-            ids.push(id);
++            ids.push(id as u64);
+         }
+         if format!("{:x}", sq8_digest.finalize()) != self.sq8_sha256 {
+             return Err(bad("SQ8 source digest"));
+@@ -201,6 +240,19 @@ impl TwoBitSource<'_> {
+         drop(sq8_reader);
+         drop(sq8_buffer);
+         drop(seen);
++        let physical_order = if let Some(order) = order {
++            ids.sort_unstable();
++            if ids.windows(2).any(|pair| pair[0] == pair[1]) {
++                return Err(bad("duplicate application ID"));
++            }
++            Cow::Borrowed(order)
++        } else {
++            Cow::Owned(ids)
++        };
++        let mut order_digest = Sha256::new();
++        for &ordinal in physical_order.iter() {
++            order_digest.update(ordinal.to_le_bytes());
++        }
+         fs::create_dir(output)?;
+         let mean_bytes = mean
+             .iter()
+@@ -213,7 +265,8 @@ impl TwoBitSource<'_> {
+             BufWriter::with_capacity(64 * 1024, new_file(&output.join("records.bin"))?);
+         let mut record_digest = Sha256::new();
+         let mut row = vec![0.0_f32; self.dimensions];
+-        for id in ids {
++        for &id in physical_order.iter() {
++            let id = usize::try_from(id).map_err(|_| bad("source ordinal"))?;
+             // ponytail: random raw-row seeks; use an externally reordered source stream if large builds become I/O-bound.
+             raw_file.seek(SeekFrom::Start((id * raw_width) as u64))?;
+             raw_file.read_exact(&mut raw_buffer)?;
+@@ -227,13 +280,14 @@ impl TwoBitSource<'_> {
+         records.flush()?;
+         records.get_ref().sync_all()?;
+         let receipt = SourcePlaneReceipt {
+-            schema: "borsuk-two-bit-plane-v1".into(),
++            schema: "borsuk-two-bit-plane-v2".into(),
+             rows: self.rows,
+             dimensions: self.dimensions,
+             seed: 20260923,
+             record_bytes: codec.record_bytes(),
+             source_sha256: self.raw_sha256.to_owned(),
+             sq8_sha256: self.sq8_sha256.to_owned(),
++            source_order_sha256: format!("{:x}", order_digest.finalize()),
+             mean_sha256: format!("{:x}", Sha256::digest(&mean_bytes)),
+             records_sha256: format!("{:x}", record_digest.finalize()),
+             query_or_truth_used: false,
+@@ -311,7 +365,7 @@ impl TwoBitPlane {
+         let body = read_authenticated(&manifest_path, size, trusted_manifest_sha256)?;
+         let receipt: SourcePlaneReceipt =
+             serde_json::from_slice(&body).map_err(|_| bad("manifest schema"))?;
+-        if receipt.schema != "borsuk-two-bit-plane-v1"
++        if receipt.schema != "borsuk-two-bit-plane-v2"
+             || receipt.seed != 20260923
+             || receipt.rows == 0
+             || receipt.query_or_truth_used
+@@ -319,6 +373,7 @@ impl TwoBitPlane {
+             || [
+                 &receipt.source_sha256,
+                 &receipt.sq8_sha256,
++                &receipt.source_order_sha256,
+                 &receipt.mean_sha256,
+                 &receipt.records_sha256,
+             ]
+diff --git a/docs/release/competitive-acceptance.md b/docs/release/competitive-acceptance.md
+index e45087b0..12a91e5b 100644
+--- a/docs/release/competitive-acceptance.md
++++ b/docs/release/competitive-acceptance.md
+@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
+ | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
+ | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
+ |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
+-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search fixture works; current object-native application-ID mutation and compaction path missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
++| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; mutation and compaction path missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+ | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
+ | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
+ 
+@@ -89,9 +89,15 @@ ranking workspace and one planner per active query; shared ranker releases
+ fetched-score capacity before returning a small top-k buffer. Red/green, loader
+ fixtures and exact scoring checks pass. This is a payload-admission correctness
+ fix, not measured RSS/latency or a reopened architecture win. Next product gap
+-is application-ID/source-ordinal separation before incremental overlays.
++is incremental overlays after application-ID/source-ordinal separation.
+ [Code/evidence decision](../research/query-ranking-admission-20260928/decision.md).
+ 
++Signed-i64 IDs now remain independent of raw-source ordinals through build,
++publication, authenticated reload and returned-range scoring. The source plane
++is v2 and rejects v1; historical benchmark artifacts remain unchanged. Mutation,
++recovery and compaction remain OPEN.
++[ID API and receipts](../research/application-id-source-20260928/decision.md).
++
+ Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
+ [discovery diagnostic](../research/nomination-trace-20260928/decision.md),
+ [centroid diagnostic](../research/centroid-discovery-diagnostic-20260928/decision.md),
+diff --git a/docs/release/two-bit-generation.md b/docs/release/two-bit-generation.md
+index 0cc1e9a8..ae652f65 100644
+--- a/docs/release/two-bit-generation.md
++++ b/docs/release/two-bit-generation.md
+@@ -191,7 +191,7 @@ let root_sha = TwoBitGenerationBuilder {
+ ```
+ 
+ Inputs are approved immutable source/SQ8 snapshots in the frozen physical order.
+-Raw rows are ordinal f32; the SQ8 IDs are their permutation. Calibration must
++Raw rows are ordinal f32; SQ8 IDs can be logical signed64-bit IDs when the explicit source order is supplied. Calibration must
+ come from the same SQ8 encoder; construction does not infer that relationship
+ from checksums. The builder accepts no query/GT and refits no layout. It streams
+ the source codec, centroids and page digests, builds the existing centroid graph,
+diff --git a/docs/release/two-bit-source-builder.md b/docs/release/two-bit-source-builder.md
+index dda95df3..2a553f61 100644
+--- a/docs/release/two-bit-source-builder.md
++++ b/docs/release/two-bit-source-builder.md
+@@ -22,13 +22,14 @@ The caller owns immutable input snapshots and the new output namespace. Raw
+ row ordinals must correspond to SQ8 IDs; the builder authenticates the two
+ files and checks the ID permutation, but their underlying vector relationship
+ is the caller's construction contract. SQ8 rows are i64 ordinal ID, f32
+-squared norm, then `dimensions` code bytes. Arbitrary application IDs require
+-the generation's separate ID map. Nonfinite/zero source rows, unrepresentable
++squared norm, then `dimensions` code bytes. For signed-i64 application IDs,
++use the explicit-order methods described below; no separate resident ID map
++is required. Nonfinite/zero source rows, unrepresentable
+ codec scalars, duplicate/out-of-range IDs, nonpositive SQ8 norms, bad hashes/lengths, overflow and
+ insufficient admission fail with an error. Existing output is never replaced.
+ 
+ Outputs are `mean.bin`, `records.bin`, and `manifest.json` with schema
+-`borsuk-two-bit-plane-v1`. Records use the Rust codec's scale and inverse
++`borsuk-two-bit-plane-v2`. Records use the Rust codec's scale and inverse
+ reconstructed norm; historical two-bit records used a different final scalar.
+ Writes are streamed and synced before `manifest.pending` is renamed last.
+ Failures can leave an unpublished directory for caller cleanup. A crash may
+@@ -110,3 +111,38 @@ ordinal permutation from authenticated normalized f32 input without Python.
+ Feed it to the public SQ8 encoder before the generation builder. Its ChaCha8
+ RNG/arithmetic changes the layout; new quality gates and root hashes are required.
+ The historical paired100k results used the original approved Python layout.
++
++## Logical IDs and explicit source order
++
++SQ8 may carry unique signed64-bit application IDs, including negative IDs.
++`build_sq8_source_with_ids` takes IDs indexed by raw-source row plus a complete
++physical-position-to-source-row permutation. `TwoBitSource::build_with_order`
++and `TwoBitGenerationBuilder::build_with_order` consume that same permutation;
++application IDs never address raw rows. Ordinal convenience methods still serve
++corpus/control inputs and emit the same current v2 source-plane marker. There
++is one codec/writer implementation per layer, no legacy reader or migration.
++
++v2 receipts include `source_order_sha256`, hashing canonical little-endian u64
++ordinals in physical order. The generation root authenticates the receipt and
++SQ8 body digest; IDs stay on demand in SQ8, not a hydrated ID/vector map. v1
++planes reject; historical artifacts retain their original source/schema.
++
++Caller source/IDs/order must be immutable and describe the same rows. Duplicate
++IDs, malformed permutations and over-budget input reject before a successful
++manifest/receipt. Writer admission charges caller order/IDs and sorted-ID check;
++source and generation builders charge the explicit caller order. Other retained
++caller state, allocator/runtime/OS cache and pin overlap are separate charges.
++
++```rust
++let encoding = borsuk::sq8_source::build_sq8_source_with_ids(
++    normalized_path, normalized_sha, dimensions, &order, &source_ids,
++    new_sq8_path, writer_payload_cap,
++)?;
++// builder.source binds the same raw/order/SQ8 geometry and encoding coefficients.
++let root_sha = builder.build_with_order(&order, new_generation_dir, build_cap)?;
++```
++
++This is a logical-ID construction prerequisite. String-ID catalog binding,
++incremental overlays, mutation publication/recovery/compaction and fresh ANN/
++HTTP/vendor/100M qualification remain open. It does not inherit a historical
++benchmark win or claim wrapper parity.

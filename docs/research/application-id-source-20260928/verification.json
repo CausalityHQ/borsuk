@@ -1,0 +1,27 @@
+{
+  "base": "7b97ec31464537e8e68a72cde0fa76d4bcef6602",
+  "host": "spark-2751 / aarch64",
+  "jobs": [
+    {
+      "log": "application-id-green.log",
+      "raw_sha256": "cae1107436ec924c048f6e7dda807079164023f8111c5c61b215db98c7440532",
+      "exit": 0
+    },
+    {
+      "log": "application-id-integration.log",
+      "raw_sha256": "cbd92262c9a75fdc0ea41720c3353accf86e16f2f19f1d02f22103cdb327ada8",
+      "exit": 0
+    },
+    {
+      "log": "application-id-red.log",
+      "raw_sha256": "ac550656a592d76700661cfc66e5cf83b82cee6d54d5f1d668ad27a8bce6e537",
+      "exit": 101
+    },
+    {
+      "log": "application-id-sq8.log",
+      "raw_sha256": "fdf53d011f62f3075b6c7c4909bf36ca21d8246787628a1c4d602fed1044307f",
+      "exit": 0
+    }
+  ],
+  "note": "Source parity verified after terminal; only source-struct documentation comment changed after test. No measurement run."
+}

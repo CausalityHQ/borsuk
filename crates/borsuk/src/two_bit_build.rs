@@ -47,6 +47,26 @@ impl TwoBitGenerationBuilder<'_> {
     /// Payload model includes streamed buffers and conservative graph workspace;
     /// runtime/allocator/OS cache and other pinned generations are caller charges.
     pub fn build(&self, output: &Path, max_build_payload_bytes: usize) -> Result<String> {
+        self.build_inner(None, output, max_build_payload_bytes)
+    }
+
+    /// Assemble a generation with an explicit source-row order and logical SQ8 IDs.
+    /// Caller-owned order is included in payload admission; no ID map is hydrated.
+    pub fn build_with_order(
+        &self,
+        order: &[u64],
+        output: &Path,
+        max_build_payload_bytes: usize,
+    ) -> Result<String> {
+        self.build_inner(Some(order), output, max_build_payload_bytes)
+    }
+
+    fn build_inner(
+        &self,
+        order: Option<&[u64]>,
+        output: &Path,
+        max_build_payload_bytes: usize,
+    ) -> Result<String> {
         let bad = TwoBitGenerationError::Invalid;
         let rows = self.source.rows;
         let dimensions = self.source.dimensions;
@@ -60,6 +80,7 @@ impl TwoBitGenerationBuilder<'_> {
         }
         if rows == 0
             || dimensions == 0
+            || order.is_some_and(|order| order.len() != rows)
             || self.generation == 0
             || output.exists()
             || self.low.len() != dimensions
@@ -92,14 +113,28 @@ impl TwoBitGenerationBuilder<'_> {
             .and_then(|n| n.checked_add(pages.checked_mul(32)?))
             .and_then(|n| n.checked_add(page_bytes))
             .and_then(|n| n.checked_add(262144))
+            .and_then(|n| {
+                n.checked_add(if order.is_some() {
+                    rows.checked_mul(8)?
+                } else {
+                    0
+                })
+            })
             .ok_or(bad("build memory"))?;
         if modeled > max_build_payload_bytes || units > u32::MAX as usize {
             return Err(bad("build memory budget"));
         }
         fs::create_dir(output).map_err(TwoBitGenerationError::Io)?;
-        self.source
-            .build(&output.join("plane"), max_build_payload_bytes)
-            .map_err(TwoBitGenerationError::Plane)?;
+        match order {
+            Some(order) => {
+                self.source
+                    .build_with_order(order, &output.join("plane"), max_build_payload_bytes)
+            }
+            None => self
+                .source
+                .build(&output.join("plane"), max_build_payload_bytes),
+        }
+        .map_err(TwoBitGenerationError::Plane)?;
         let mut sq8 = BufReader::with_capacity(
             65536,
             HashingReader {
