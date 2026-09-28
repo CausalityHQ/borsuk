@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-two-bit-builder-cli-check-v1",
+  "base_commit": "90213ff7",
+  "rust_source_archive_sha256": "5579ba980e58f33918a714c985a989dd56383c65174154ba62003a199052988b",
+  "cli_source_sha256": "2ce21a20f6da49ff28db8697e61ab81db0fb686cb494cef8eb196f42e7a814ab",
+  "host": "spark-2751",
+  "rustc": "1.98.1",
+  "test_original_session": 57104,
+  "test_exit_code": 0,
+  "tests_passed": 1,
+  "build_original_session": 98354,
+  "build_exit_code": 0,
+  "checks": [
+    "config correct digest parses",
+    "wrong config digest rejects",
+    "oversize config rejects",
+    "unknown truth field rejects"
+  ],
+  "qualification": false
+}

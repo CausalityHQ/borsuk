@@ -237,3 +237,19 @@ deficit0.184140pp; maximum32GET/16,773,120bytes. This qualifies this offline
 single-dataset quality gate only. ReLAION, cold HTTP, lifecycle, scale and
 vendor gates remain open. Authenticated Spark SSH was revalidated and is
 available for heavier ReLAION preparation.
+
+## Command-line metadata assembly
+
+The small build_two_bit_generation binary calls the same public builder:
+
+    build_two_bit_generation CONFIG CONFIG_SHA MAX_MEMORY_BYTES NEW_OUTPUT
+
+The authenticated JSON configuration is capped at64KiB and rejects unknown
+fields. It contains raw/raw_sha256, sq8/sq8_sha256, rows, dimensions, generation,
+low, step, sq8_object_key and sq8_etag. Paths identify caller-owned immutable
+local snapshots; calibration must come from that approved SQ8 build. The
+command prints the completed root SHA and refuses output overwrite through the
+underlying builder. It does not fit layout/SQ8, read queries/GT, upload data or
+authorize the computed root as a serving authority. Use a real immutable SQ8
+ETag before remote publication; the offline harness placeholder is never a
+production object identity.
