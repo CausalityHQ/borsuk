@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-union-nomination-red-v1",
+  "source_base_commit": "9813e37bcf66751109c40cf4dc1f3fafcc3a2186",
+  "source_archive_sha256": "694a4e58ae3d651ed78c89a0e268a36b9a26a354ca85cf05156c560a53b407ad",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 300,
+  "test_timeout_seconds": 60,
+  "cargo_jobs": 0,
+  "spot_price_observed_usd_per_hour": "0.179900",
+  "spot_quote_timestamp": "2026-09-28T22:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.1,
+  "cost_allowance_ebs_s3_usd": 0.05,
+  "scope": "Expected standalone Rust union-page admission stub failure; no library compile/corpus/query",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

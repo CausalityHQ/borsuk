@@ -1,0 +1,266 @@
+{
+  "schema": "borsuk-union-nomination-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "rows": 100000,
+  "dimensions": 768,
+  "k": 100,
+  "first": 0,
+  "count": 64,
+  "metric": "cosine",
+  "scorer_hashes": {
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  },
+  "helper_sha256": "142aaf45ba490bc62868e7f946d0ed43ad020511ca7cd6967233262217e2e1b3",
+  "source_terminal_sha256": "c3a57ae052d72ab846c0d62e820a5e9674e2f2a8e057e16ff5da6498451e0d69",
+  "items": [
+    {
+      "name": "relaion",
+      "artifacts": {
+        "control/manifest.json": {
+          "bytes": 33696,
+          "sha256": "4726f2bd986815d1e46f8c1fa3564738d40f139fac04369a3b72357cff4cbde9",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/manifest.json"
+        },
+        "control/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "461ac067c7fe5fb6bd2ff4cd2688eb737ff35cf7c0613a631558a61175e896dd",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/page_manifest.json"
+        },
+        "control/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "da21e09d75986e977265122c3535aa7bd90d4868e2bbfe235d607fb4a9b8b584",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/page_digests.bin"
+        },
+        "control/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "16a4ee5f77d03999dc79cc9c1203e3206ddf5d02a508195ae599fa9f7a0244cd",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/centroids.bin"
+        },
+        "control/graph.bin": {
+          "bytes": 426398,
+          "sha256": "876526c890de03850740f5776ce9d011b48419ffa652a79ed343465d933ceee5",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/graph.bin"
+        },
+        "control/plane/manifest.json": {
+          "bytes": 548,
+          "sha256": "559a3a9eb89d8d4df8b77f4bc972c4bd0cf5058ccc3349120fafee6451bdaab8",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/plane/manifest.json"
+        },
+        "control/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/plane/mean.bin"
+        },
+        "control/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "3ee78eb720317ff86c981580fbc025671dd6ce5d1b95e5ef0f691563d0c3592b",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/plane/records.bin"
+        },
+        "candidate/manifest.json": {
+          "bytes": 33696,
+          "sha256": "ba8a35fbaf6240c6ba78756e1514242bcd34f345fb9339b70f1d03c8ee6ce9c9",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/manifest.json"
+        },
+        "candidate/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "461ac067c7fe5fb6bd2ff4cd2688eb737ff35cf7c0613a631558a61175e896dd",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/page_manifest.json"
+        },
+        "candidate/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "da21e09d75986e977265122c3535aa7bd90d4868e2bbfe235d607fb4a9b8b584",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/page_digests.bin"
+        },
+        "candidate/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "16a4ee5f77d03999dc79cc9c1203e3206ddf5d02a508195ae599fa9f7a0244cd",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/centroids.bin"
+        },
+        "candidate/graph.bin": {
+          "bytes": 426398,
+          "sha256": "bbb4f66900daa5a5bc5440579630c36fbbce2a566caa328db94bfb7501f27340",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/graph.bin"
+        },
+        "candidate/plane/manifest.json": {
+          "bytes": 548,
+          "sha256": "559a3a9eb89d8d4df8b77f4bc972c4bd0cf5058ccc3349120fafee6451bdaab8",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/plane/manifest.json"
+        },
+        "candidate/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/plane/mean.bin"
+        },
+        "candidate/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "3ee78eb720317ff86c981580fbc025671dd6ce5d1b95e5ef0f691563d0c3592b",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/candidate/plane/records.bin"
+        },
+        "sq8.bin": {
+          "bytes": 78000000,
+          "sha256": "1375696a51ac52fc3216e35456e441c370805feb0632a58ab197b17099a8de6f",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/sq8.bin"
+        },
+        "scores.npy": {
+          "bytes": 25600128,
+          "sha256": "0e963a7ee6574fa89da77c74470da0de6aabc3c9abb1f27d8df884e9a8968c74",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/scores.npy"
+        },
+        "paired-plans.jsonl": {
+          "bytes": 1025427,
+          "sha256": "302d857fe77e2cd15d8e28b0f2f4abca1a2eb04f96734ae46e9f7ba93ad65e9e",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/paired-plans.jsonl"
+        },
+        "preflight-plans.jsonl": {
+          "bytes": 35382,
+          "sha256": "789300785215a649a6f16a9ca56da23246444aee33501aba2551ace3d6f3637b",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/preflight-plans.jsonl"
+        },
+        "authority.json": {
+          "bytes": 12764,
+          "sha256": "604464fd329ede15d71f1e39463f2b8267d570d002f2b1667be4b038aa3b298f",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/authority.json"
+        },
+        "requests": {
+          "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+          "bytes": 17714558
+        },
+        "truth": {
+          "key": "research/validation-loss-diagnostic/20260928/a0001/artifacts/diagnostic/truth.u32",
+          "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e",
+          "bytes": 400000
+        }
+      },
+      "roots": {
+        "control": "4726f2bd986815d1e46f8c1fa3564738d40f139fac04369a3b72357cff4cbde9",
+        "candidate": "ba8a35fbaf6240c6ba78756e1514242bcd34f345fb9339b70f1d03c8ee6ce9c9"
+      }
+    },
+    {
+      "name": "cohere",
+      "artifacts": {
+        "control/manifest.json": {
+          "bytes": 33747,
+          "sha256": "8b7d079a2caa64dcf06e7259e9385d1769b60b6e89844e923d7ab2b80695697a",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/manifest.json"
+        },
+        "control/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "d77486340cc5e3eb1a9010b7c611bd2232df378c376836cb8c2c60867721f598",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/page_manifest.json"
+        },
+        "control/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "9f5666a312208112694ff81fa826608e2f14387acd3296ed9231419447c2c77e",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/page_digests.bin"
+        },
+        "control/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "a6a2d98b6942bcd5f55763a1b2214d1230d9d05fdd49348ef5938436fd1323ac",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/centroids.bin"
+        },
+        "control/graph.bin": {
+          "bytes": 426398,
+          "sha256": "93c490f93d4a30dfada6d4141d50106755918b0d3cb2dc4e6df35ec6a30ff851",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/graph.bin"
+        },
+        "control/plane/manifest.json": {
+          "bytes": 548,
+          "sha256": "3966348dbaa183946a8e2b9d098bd536183680c81aef707c3488f731a85345ff",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/plane/manifest.json"
+        },
+        "control/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/plane/mean.bin"
+        },
+        "control/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "5f4b535bcf7f2dd07ec7243282192312a0cf7d39330482bf6005723340177147",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/control/plane/records.bin"
+        },
+        "candidate/manifest.json": {
+          "bytes": 33747,
+          "sha256": "1a8eae27993f95470f2d9c3a41a3b8947ae88ad4d491e834aecb1c4425e2a5b3",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/manifest.json"
+        },
+        "candidate/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "d77486340cc5e3eb1a9010b7c611bd2232df378c376836cb8c2c60867721f598",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/page_manifest.json"
+        },
+        "candidate/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "9f5666a312208112694ff81fa826608e2f14387acd3296ed9231419447c2c77e",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/page_digests.bin"
+        },
+        "candidate/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "a6a2d98b6942bcd5f55763a1b2214d1230d9d05fdd49348ef5938436fd1323ac",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/centroids.bin"
+        },
+        "candidate/graph.bin": {
+          "bytes": 426398,
+          "sha256": "c5eb6004be968adf6d99a6a22d5545f63f4df052c9942e88fb11101599d99635",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/graph.bin"
+        },
+        "candidate/plane/manifest.json": {
+          "bytes": 548,
+          "sha256": "3966348dbaa183946a8e2b9d098bd536183680c81aef707c3488f731a85345ff",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/plane/manifest.json"
+        },
+        "candidate/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/plane/mean.bin"
+        },
+        "candidate/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "5f4b535bcf7f2dd07ec7243282192312a0cf7d39330482bf6005723340177147",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/candidate/plane/records.bin"
+        },
+        "sq8.bin": {
+          "bytes": 78000000,
+          "sha256": "71ed1c4d5400f623d165269889d4c9727ae67031819e64ad522876ae3c83caa6",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/sq8.bin"
+        },
+        "scores.npy": {
+          "bytes": 25600128,
+          "sha256": "7594e553678f25c50eb3a2a031a31054d530783c9ac3b2f214f9b27f758ae1da",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/scores.npy"
+        },
+        "paired-plans.jsonl": {
+          "bytes": 1034029,
+          "sha256": "bc79cafbd5caff8709c0b28fe7c0c7a74338c28a09dd56e4b1a2d3ecbebf61bf",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/paired-plans.jsonl"
+        },
+        "preflight-plans.jsonl": {
+          "bytes": 41403,
+          "sha256": "e767707411dd092eb928809822478fe8e23f44ccf52e5fe916522ac20de837d9",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/preflight-plans.jsonl"
+        },
+        "authority.json": {
+          "bytes": 12742,
+          "sha256": "83f447afe8b7e5da5775c154a89018a57c4bca3c76e353dfcd6bfb0b1cd70cc9",
+          "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/cohere/authority.json"
+        },
+        "requests": {
+          "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+          "bytes": 15369495
+        },
+        "truth": {
+          "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/truth.u32",
+          "sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+          "bytes": 400000
+        }
+      },
+      "roots": {
+        "control": "8b7d079a2caa64dcf06e7259e9385d1769b60b6e89844e923d7ab2b80695697a",
+        "candidate": "1a8eae27993f95470f2d9c3a41a3b8947ae88ad4d491e834aecb1c4425e2a5b3"
+      }
+    }
+  ]
+}

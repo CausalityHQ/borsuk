@@ -1,0 +1,190 @@
+{
+  "instance_id": "i-01b4445af3dee632b",
+  "state": "terminated",
+  "source_files_matched": 397,
+  "artifacts_verified": 21,
+  "source_archive_sha256": "18741a7b22c8e49e15fbf3f6e7804c703edd403942e59769546cf179b7354527",
+  "terminal_sha256": "fb39f11ff0efa9f99439b1f167f32ae0f3985be67093c6a71e99a82340d2be55",
+  "convergence_rows": [
+    {
+      "dataset": "relaion",
+      "split": "consumed development0-63",
+      "decision": "GO",
+      "checks": {
+        "positive_discovery": true,
+        "fetched_floor": true,
+        "returned_floor": true,
+        "no_returned_regression": true,
+        "flat_gap": true,
+        "p05": true
+      },
+      "metrics": {
+        "control": {
+          "candidate_hits": {
+            "mean": 99.5625,
+            "p05": 98,
+            "total": 6372
+          },
+          "fetched_hits": {
+            "mean": 99.5625,
+            "p05": 98,
+            "total": 6372
+          },
+          "flat_hits": {
+            "mean": 99.515625,
+            "p05": 99,
+            "total": 6369
+          },
+          "returned_hits": {
+            "mean": 99.15625,
+            "p05": 97,
+            "total": 6346
+          }
+        },
+        "union": {
+          "candidate_hits": {
+            "mean": 99.875,
+            "p05": 99,
+            "total": 6392
+          },
+          "fetched_hits": {
+            "mean": 99.875,
+            "p05": 99,
+            "total": 6392
+          },
+          "flat_hits": {
+            "mean": 99.515625,
+            "p05": 99,
+            "total": 6369
+          },
+          "returned_hits": {
+            "mean": 99.421875,
+            "p05": 99,
+            "total": 6363
+          }
+        }
+      },
+      "nomination_only_ms": {
+        "control": {
+          "nomination_process_cpu_ns": {
+            "p50": 6.5645475,
+            "p90": 6.6302197000000005,
+            "p95": 6.6520989,
+            "p99": 6.68537251
+          },
+          "nomination_wall_ns": {
+            "p50": 6.563521,
+            "p90": 6.6292772,
+            "p95": 6.6507998,
+            "p99": 6.68455218
+          }
+        },
+        "union": {
+          "nomination_process_cpu_ns": {
+            "p50": 6.9170435,
+            "p90": 7.1219243,
+            "p95": 7.17457885,
+            "p99": 7.254961399999999
+          },
+          "nomination_wall_ns": {
+            "p50": 6.9168245,
+            "p90": 7.120859299999999,
+            "p95": 7.17336115,
+            "p99": 7.25373263
+          }
+        }
+      }
+    },
+    {
+      "dataset": "cohere",
+      "split": "consumed development0-63",
+      "decision": "GO",
+      "checks": {
+        "positive_discovery": true,
+        "fetched_floor": true,
+        "returned_floor": true,
+        "no_returned_regression": true,
+        "flat_gap": true,
+        "p05": true
+      },
+      "metrics": {
+        "control": {
+          "candidate_hits": {
+            "mean": 99.796875,
+            "p05": 99,
+            "total": 6387
+          },
+          "fetched_hits": {
+            "mean": 99.765625,
+            "p05": 99,
+            "total": 6385
+          },
+          "flat_hits": {
+            "mean": 99.234375,
+            "p05": 98,
+            "total": 6351
+          },
+          "returned_hits": {
+            "mean": 99.09375,
+            "p05": 98,
+            "total": 6342
+          }
+        },
+        "union": {
+          "candidate_hits": {
+            "mean": 99.921875,
+            "p05": 99,
+            "total": 6395
+          },
+          "fetched_hits": {
+            "mean": 99.890625,
+            "p05": 99,
+            "total": 6393
+          },
+          "flat_hits": {
+            "mean": 99.234375,
+            "p05": 98,
+            "total": 6351
+          },
+          "returned_hits": {
+            "mean": 99.171875,
+            "p05": 98,
+            "total": 6347
+          }
+        }
+      },
+      "nomination_only_ms": {
+        "control": {
+          "nomination_process_cpu_ns": {
+            "p50": 6.4850925,
+            "p90": 6.5140687,
+            "p95": 6.54470825,
+            "p99": 6.57697424
+          },
+          "nomination_wall_ns": {
+            "p50": 6.483973499999999,
+            "p90": 6.5133742,
+            "p95": 6.5432235,
+            "p99": 6.57778331
+          }
+        },
+        "union": {
+          "nomination_process_cpu_ns": {
+            "p50": 6.592067,
+            "p90": 6.8282185,
+            "p95": 6.9262844,
+            "p99": 7.02696824
+          },
+          "nomination_wall_ns": {
+            "p50": 6.591020500000001,
+            "p90": 6.8270832,
+            "p95": 6.92503575,
+            "p99": 7.02590702
+          }
+        }
+      }
+    }
+  ],
+  "ordered_id_scoring_parity_scope": "AWS cached SQ8 sorting only; local verification checks GT sets/counts, not reranking",
+  "qualification": false
+}

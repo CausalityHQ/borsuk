@@ -1,0 +1,72 @@
+[
+  {
+    "dataset": "relaion",
+    "stages": {
+      "candidate": {
+        "gained": 20,
+        "lost": 0
+      },
+      "nominated": {
+        "gained": 20,
+        "lost": 0
+      },
+      "physical": {
+        "gained": 20,
+        "lost": 0
+      },
+      "returned": {
+        "gained": 20,
+        "lost": 3
+      }
+    },
+    "resources": {
+      "control": {
+        "total_ranges": 1615,
+        "total_bytes": 1072206720,
+        "max_ranges": 32,
+        "max_bytes": 16773120
+      },
+      "union": {
+        "total_ranges": 1663,
+        "total_bytes": 1072281600,
+        "max_ranges": 32,
+        "max_bytes": 16773120
+      }
+    }
+  },
+  {
+    "dataset": "cohere",
+    "stages": {
+      "candidate": {
+        "gained": 8,
+        "lost": 0
+      },
+      "nominated": {
+        "gained": 8,
+        "lost": 0
+      },
+      "physical": {
+        "gained": 8,
+        "lost": 0
+      },
+      "returned": {
+        "gained": 8,
+        "lost": 3
+      }
+    },
+    "resources": {
+      "control": {
+        "total_ranges": 1922,
+        "total_bytes": 1072955520,
+        "max_ranges": 32,
+        "max_bytes": 16773120
+      },
+      "union": {
+        "total_ranges": 1934,
+        "total_bytes": 1072955520,
+        "max_ranges": 32,
+        "max_bytes": 16773120
+      }
+    }
+  }
+]
