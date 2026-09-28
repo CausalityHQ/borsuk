@@ -681,3 +681,25 @@ call removes recognized obsolete jobs. Remote reader-safe GC is **not** included
 old roots/objects must remain available to pinned readers. Interrupted attempts
 may leave unreferenced remote objects. Automatic scheduling, safe remote GC,
 100M maintenance cost and matched vendor performance remain release gates.
+
+
+### Coordinated reader lifetime (single host)
+
+`TwoBitIndex::open_coordinated(store, prefix, maintenance_directory, limits,
+scratch_parent)` acquires a shared filesystem lifetime lock **before** reading
+the latest authenticated head. It retains that lock until the index is dropped.
+Use the same maintenance directory as callable compaction. Compaction's owned
+worker also retains a shared lifetime lock through completion. An exclusive
+lock on `lifecycle.lock` fails while a coordinated reader/worker is alive;
+coordinated opens and compaction fail while it is exclusively locked. Prefix
+binding is initialized under `binding.lock`, with no overwrites.
+
+This coordinates cooperating processes on one host/filesystem. Use the SAME
+bucket/index identity and directory; do not replace/unlink its lockfiles while
+participants live. Direct `open_remote`, low-level publishers and readers on
+other hosts are unregistered. No remote GC is enabled by this API.
+
+A local lock alone does not fence an S3 publication request still in flight
+when its process crashes. Future destructive GC must also fence publication,
+protect authenticated references and handle partially committed requests.
+Durable multihost pinning and safe remote reclamation remain release gates.

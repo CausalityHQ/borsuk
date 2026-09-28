@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-080741a97072347e8",
+  "prefix": "research/native-library-check/lifetime-pin/5211a5dad1888171b758ac615bbe7d9d1f7f84bf1f9c7d2ac0db10cfaf8e7b2f/a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "5211a5dad1888171b758ac615bbe7d9d1f7f84bf1f9c7d2ac0db10cfaf8e7b2f",
+  "source_base_commit": "29fa70cd45f45df2d2175df8838285a0cf9e3bae"
+}

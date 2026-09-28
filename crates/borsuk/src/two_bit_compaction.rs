@@ -192,6 +192,40 @@ fn disk_bound(rows: usize, dimensions: usize) -> Result<u64> {
         .ok_or(bad("compaction disk geometry"))
 }
 
+// Shared lifetime gate for cooperating processes on ONE host/filesystem.
+// Destructive GC must acquire this same file exclusively before remote I/O.
+// Advisory locks do not coordinate other hosts or uncoordinated low-level APIs.
+pub(crate) fn shared_lifecycle(prefix: &ObjectPath, directory: &Path) -> Result<File> {
+    fs::create_dir_all(directory)?;
+    let open_lock = |name: &str| -> Result<File> {
+        Ok(OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(directory.join(name))?)
+    };
+    let binding = open_lock("binding.lock")?;
+    binding
+        .try_lock()
+        .map_err(|_| bad("lifecycle binding busy"))?;
+    let identity = directory.join("index.json");
+    if identity.exists() {
+        let (saved, _): (String, _) = read_json(&identity)?;
+        if saved != prefix.as_ref() {
+            return Err(bad("compaction directory namespace"));
+        }
+    } else {
+        write_json(&identity, &prefix.as_ref())?;
+    }
+    let lifetime = open_lock("lifecycle.lock")?;
+    lifetime
+        .try_lock_shared()
+        .map_err(|_| bad("reclamation in progress"))?;
+    drop(binding);
+    Ok(lifetime)
+}
+
 /// Compact the latest authenticated base/delta and return its published head.
 /// Reuse ONE exclusive maintenance directory per index across retries/calls.
 /// Local journal/files are trusted writer state; checksums detect corruption,
@@ -209,7 +243,7 @@ pub async fn compact_two_bit_index(
     let prefix = prefix.clone();
     let directory = maintenance_directory.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        fs::create_dir_all(&directory)?;
+        let _lifecycle = shared_lifecycle(&prefix, &directory)?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -250,15 +284,6 @@ async fn compact_owned(
     ) {
         return Err(bad("compaction object namespace"));
     }
-    let identity = directory.join("index.json");
-    if identity.exists() {
-        let (saved, _): (String, _) = read_json(&identity)?;
-        if saved != prefix.as_ref() {
-            return Err(bad("compaction directory namespace"));
-        }
-    } else {
-        write_json(&identity, &prefix.as_ref())?;
-    }
     let base = read_two_bit_head(store, prefix)
         .await?
         .ok_or(bad("compaction index absent"))?;
@@ -268,7 +293,15 @@ async fn compact_owned(
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_str().ok_or(bad("compaction path"))?;
-        if name == "index.json" || name == "compaction.lock" || name == base.root_sha256() {
+        if [
+            "index.json",
+            "compaction.lock",
+            "binding.lock",
+            "lifecycle.lock",
+        ]
+        .contains(&name)
+            || name == base.root_sha256()
+        {
             continue;
         }
         if !valid_sha256(name) || !entry.file_type()?.is_dir() {

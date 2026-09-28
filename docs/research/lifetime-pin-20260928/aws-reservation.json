@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "29fa70cd45f45df2d2175df8838285a0cf9e3bae",
+  "source_archive_sha256": "5211a5dad1888171b758ac615bbe7d9d1f7f84bf1f9c7d2ac0db10cfaf8e7b2f",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.4xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.3618",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "Frozen missing coordinated-reader API red then integration tests2 and affected HTTP tests4; no benchmark",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "red_source_archive_sha256": "9a8ddd3aa631156ecadc854d79bb6722c2c94394efcca8e3a89ef251d875c385",
+  "red_timeout_seconds": 300
+}

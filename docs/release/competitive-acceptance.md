@@ -154,3 +154,11 @@ empty/populated transitions, wrong-prefix/lock/corrupt-ready rejection and local
 staging cleanup are checked. Reader-safe remote GC, full qualification and both
 matched vendor comparisons remain OPEN. No recall/latency measurement is added.
 [Callable compaction receipts](../research/callable-compaction-20260928/decision.md).
+
+
+Coordinated single-host reader lifetime now passes the frozen AWS Spot functional
+gate (2 integration+4 HTTP-layer checks): shared pin acquired before head lookup,
+exclusive reclamation contention and namespace binding. Remote GC remains
+**disabled**: a durable publication fence must handle S3 requests surviving a
+writer-process crash; other-host/direct API readers remain unregistered. No
+vendor axis changes. [Lifetime-pin evidence](../research/lifetime-pin-20260928/decision.md).

@@ -1463,4 +1463,74 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         .unwrap()
         .is_sealed()
     );
+    let coordinated = borsuk::two_bit_index::TwoBitIndex::open_coordinated(
+        store.as_ref(),
+        &empty_prefix,
+        &maintenance,
+        limits,
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    let reclamation_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(maintenance.join("lifecycle.lock"))
+        .unwrap();
+    assert!(reclamation_lock.try_lock().is_err());
+    assert!(
+        borsuk::two_bit_index::TwoBitIndex::open_coordinated(
+            store.as_ref(),
+            &prefix,
+            &maintenance,
+            limits,
+            temp.path(),
+        )
+        .await
+        .is_err()
+    );
+    drop(coordinated);
+    reclamation_lock.try_lock().unwrap();
+    assert!(
+        borsuk::two_bit_index::TwoBitIndex::open_coordinated(
+            store.as_ref(),
+            &empty_prefix,
+            &maintenance,
+            limits,
+            temp.path(),
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        borsuk::two_bit_compaction::compact_two_bit_index(
+            store.clone(),
+            &empty_prefix,
+            &maintenance,
+            options,
+        )
+        .await
+        .is_err()
+    );
+    drop(reclamation_lock);
+    let coordinated = borsuk::two_bit_index::TwoBitIndex::open_coordinated(
+        store.as_ref(),
+        &empty_prefix,
+        &maintenance,
+        limits,
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        borsuk::two_bit_compaction::compact_two_bit_index(
+            store.clone(),
+            &empty_prefix,
+            &maintenance,
+            options,
+        )
+        .await
+        .is_ok()
+    );
+    drop(coordinated);
 }

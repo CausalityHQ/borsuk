@@ -21,8 +21,30 @@ pub struct TwoBitIndex {
     limits: TwoBitGenerationLimits,
     modeled_bytes: u64,
     slots: Semaphore,
+    _lifecycle: Option<std::fs::File>,
 }
 impl TwoBitIndex {
+    /// Open latest head while holding a shared lifetime lock until this index drops.
+    /// Use the SAME maintenance directory as compaction and future exclusive GC.
+    /// Only cooperating readers/writers on one host/shared local filesystem are
+    /// protected; other hosts and direct open_remote callers remain unmanaged.
+    /// Lockfiles must never be replaced/unlinked while participants are alive.
+    pub async fn open_coordinated(
+        store: &dyn ObjectStore,
+        prefix: &object_store::path::Path,
+        maintenance_directory: &Path,
+        limits: TwoBitGenerationLimits,
+        scratch_parent: &Path,
+    ) -> Result<Self, TwoBitStoreError> {
+        let lifetime = crate::two_bit_compaction::shared_lifecycle(prefix, maintenance_directory)?;
+        let head = crate::two_bit_store::read_two_bit_head(store, prefix)
+            .await?
+            .ok_or(TwoBitStoreError::Invalid("index absent"))?;
+        let mut index = Self::open_remote(store, head, limits, scratch_parent).await?;
+        index._lifecycle = Some(lifetime);
+        Ok(index)
+    }
+
     /// Open populated routing metadata or one small empty root, without vector
     /// hydration. The head must come from the same authorized store/prefix.
     pub async fn open_remote(
@@ -99,6 +121,7 @@ impl TwoBitIndex {
             limits,
             modeled_bytes,
             slots: Semaphore::new(limits.max_active_queries),
+            _lifecycle: None,
         })
     }
 
