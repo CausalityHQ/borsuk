@@ -77,15 +77,7 @@ impl RotatedTwoBitCodec {
             return Err(TwoBitError::Vector);
         }
         let complete = mean.len() / 256 * 256;
-        let tail = mean.len() % 256;
-        let padded = complete
-            .checked_add(if tail == 0 {
-                0
-            } else {
-                tail.next_power_of_two()
-            })
-            .filter(|&n| n <= u32::MAX as usize)
-            .ok_or(TwoBitError::Geometry)?;
+        let padded = Self::padded_dimensions(mean.len())?;
         let mut padded_mean = vec![0.0; padded];
         for (target, &source) in padded_mean.iter_mut().zip(mean) {
             *target = f64::from(source);
@@ -116,6 +108,22 @@ impl RotatedTwoBitCodec {
             blocks,
             packed_bytes: padded.div_ceil(4),
         })
+    }
+
+    pub(crate) fn padded_dimensions(dimensions: usize) -> Result<usize, TwoBitError> {
+        if dimensions == 0 {
+            return Err(TwoBitError::Geometry);
+        }
+        let complete = dimensions / 256 * 256;
+        let tail = dimensions % 256;
+        complete
+            .checked_add(if tail == 0 {
+                0
+            } else {
+                tail.next_power_of_two()
+            })
+            .filter(|&n| n <= u32::MAX as usize)
+            .ok_or(TwoBitError::Geometry)
     }
 
     /// Original source coordinate width, excluding block padding.

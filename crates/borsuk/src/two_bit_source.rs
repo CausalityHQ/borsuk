@@ -1,6 +1,6 @@
 //! Bounded, query-blind construction of rotated two-bit nomination metadata.
-use crate::rotated_two_bit::{RotatedTwoBitCodec, TwoBitError};
-use serde::Serialize;
+use crate::rotated_two_bit::{PreparedTwoBit, RotatedTwoBitCodec, TwoBitError};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -51,10 +51,11 @@ pub struct TwoBitSource<'a> {
 }
 
 /// Final source-only manifest; a generation must bind its hash before serving.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourcePlaneReceipt {
     /// Format marker; historical research code planes have a different scalar.
-    pub schema: &'static str,
+    pub schema: String,
     /// Source row count.
     pub rows: usize,
     /// Source dimensions.
@@ -226,7 +227,7 @@ impl TwoBitSource<'_> {
         records.flush()?;
         records.get_ref().sync_all()?;
         let receipt = SourcePlaneReceipt {
-            schema: "borsuk-two-bit-plane-v1",
+            schema: "borsuk-two-bit-plane-v1".into(),
             rows: self.rows,
             dimensions: self.dimensions,
             seed: 20260923,
@@ -250,5 +251,138 @@ impl TwoBitSource<'_> {
             output.join("manifest.json"),
         )?;
         Ok(receipt)
+    }
+}
+
+/// Authenticated resident nomination metadata. Source vectors/SQ8 remain on demand.
+/// The caller must bind the manifest and SQ8 digest to its trusted generation root.
+pub struct TwoBitPlane {
+    receipt: SourcePlaneReceipt,
+    codec: RotatedTwoBitCodec,
+    records: Vec<u8>,
+}
+
+// Exact allocation and an extra-byte probe bound concurrent file growth as well.
+fn read_authenticated(path: &Path, size: usize, digest: &str) -> Result<Vec<u8>, SourceBuildError> {
+    let mut file = File::open(path)?;
+    if file.metadata()?.len() != size as u64 {
+        return Err(SourceBuildError::Invalid("artifact length"));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(size)
+        .map_err(|_| SourceBuildError::Invalid("allocation"))?;
+    bytes.resize(size, 0);
+    file.read_exact(&mut bytes)?;
+    if file.read(&mut [0])? != 0 || format!("{:x}", Sha256::digest(&bytes)) != digest {
+        return Err(SourceBuildError::Invalid("artifact identity"));
+    }
+    Ok(bytes)
+}
+
+impl TwoBitPlane {
+    /// Reload immutable metadata under a payload memory cap. Includes manifest,
+    /// records, mean and codec working storage; excludes runtime/allocator and OS
+    /// page cache. Query scratch is separately admitted per concurrent query.
+    pub fn open(
+        root: &Path,
+        trusted_manifest_sha256: &str,
+        expected_sq8_sha256: &str,
+        max_memory_bytes: usize,
+    ) -> Result<Self, SourceBuildError> {
+        let bad = SourceBuildError::Invalid;
+        const MANIFEST_CAP: usize = 64 * 1024;
+        if !valid_digest(trusted_manifest_sha256)
+            || !valid_digest(expected_sq8_sha256)
+            || max_memory_bytes < MANIFEST_CAP * 2
+        {
+            return Err(bad("identity or memory budget"));
+        }
+        let manifest_path = root.join("manifest.json");
+        let size = usize::try_from(fs::metadata(&manifest_path)?.len())
+            .map_err(|_| bad("manifest size"))?;
+        if size == 0 || size > MANIFEST_CAP {
+            return Err(bad("manifest size"));
+        }
+        let body = read_authenticated(&manifest_path, size, trusted_manifest_sha256)?;
+        let receipt: SourcePlaneReceipt =
+            serde_json::from_slice(&body).map_err(|_| bad("manifest schema"))?;
+        if receipt.schema != "borsuk-two-bit-plane-v1"
+            || receipt.seed != 20260923
+            || receipt.rows == 0
+            || receipt.query_or_truth_used
+            || receipt.sq8_sha256 != expected_sq8_sha256
+            || [
+                &receipt.source_sha256,
+                &receipt.sq8_sha256,
+                &receipt.mean_sha256,
+                &receipt.records_sha256,
+            ]
+            .iter()
+            .any(|s| !valid_digest(s))
+        {
+            return Err(bad("manifest identity"));
+        }
+        let padded = RotatedTwoBitCodec::padded_dimensions(receipt.dimensions)?;
+        if receipt.record_bytes != padded.div_ceil(4) + 8 {
+            return Err(bad("record geometry"));
+        }
+        let record_size = receipt
+            .rows
+            .checked_mul(receipt.record_bytes)
+            .ok_or(bad("geometry overflow"))?;
+        let mean_size = receipt
+            .dimensions
+            .checked_mul(4)
+            .ok_or(bad("geometry overflow"))?;
+        let required = padded
+            .checked_mul(128)
+            .and_then(|n| n.checked_add(record_size))
+            .and_then(|n| n.checked_add(MANIFEST_CAP * 2))
+            .ok_or(bad("memory overflow"))?;
+        if required > max_memory_bytes {
+            return Err(bad("memory budget"));
+        }
+        let mean_bytes =
+            read_authenticated(&root.join("mean.bin"), mean_size, &receipt.mean_sha256)?;
+        let mean = mean_bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let codec = RotatedTwoBitCodec::new(&mean, receipt.seed)?;
+        let records = read_authenticated(
+            &root.join("records.bin"),
+            record_size,
+            &receipt.records_sha256,
+        )?;
+        // Scalars are checked by the shared scorer before any value is returned.
+        Ok(Self {
+            receipt,
+            codec,
+            records,
+        })
+    }
+
+    /// Generation-bound source geometry and artifact identities.
+    pub fn receipt(&self) -> &SourcePlaneReceipt {
+        &self.receipt
+    }
+
+    /// Borrow a physical row; no allocation or vector hydration.
+    pub fn record(&self, physical_row: usize) -> Option<&[u8]> {
+        if physical_row >= self.receipt.rows {
+            return None;
+        }
+        let start = physical_row * self.receipt.record_bytes;
+        Some(&self.records[start..start + self.receipt.record_bytes])
+    }
+
+    /// Prepare one query using the existing codec and its explicit scratch cap.
+    pub fn prepare_query(
+        &self,
+        query: &[f32],
+        max_scratch_bytes: usize,
+    ) -> Result<PreparedTwoBit, TwoBitError> {
+        self.codec.prepare_query(query, max_scratch_bytes)
     }
 }

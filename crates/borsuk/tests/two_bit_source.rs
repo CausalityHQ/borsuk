@@ -1,4 +1,4 @@
-use borsuk::two_bit_source::TwoBitSource;
+use borsuk::two_bit_source::{TwoBitPlane, TwoBitSource};
 use sha2::{Digest, Sha256};
 use std::fs;
 
@@ -127,4 +127,62 @@ fn streams_source_records_and_rejects_wrong_identity_order_budget_and_overwrite(
     let prepared = codec.prepare_query(&row, 8192).unwrap();
     assert!(prepared.score(&records[..10]).unwrap() < -0.95);
     assert!(prepared.score(&records[10..]).unwrap() > 0.95);
+}
+
+#[test]
+fn opens_authenticated_plane_and_rejects_wrong_generation_corruption_and_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = [1_f32, 2., -1., -2.]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect::<Vec<_>>();
+    let sq8 = [0_i64, 1]
+        .into_iter()
+        .flat_map(|id| {
+            let mut record = id.to_le_bytes().to_vec();
+            record.extend_from_slice(&1_f32.to_le_bytes());
+            record.extend_from_slice(&[0, 0]);
+            record
+        })
+        .collect::<Vec<_>>();
+    let raw_path = dir.path().join("raw");
+    let sq8_path = dir.path().join("sq8");
+    fs::write(&raw_path, &raw).unwrap();
+    fs::write(&sq8_path, &sq8).unwrap();
+    let root = dir.path().join("plane");
+    let sq8_sha = hash(&sq8);
+    TwoBitSource {
+        raw: &raw_path,
+        raw_sha256: &hash(&raw),
+        sq8: &sq8_path,
+        sq8_sha256: &sq8_sha,
+        rows: 2,
+        dimensions: 2,
+    }
+    .build(&root, 1024 * 1024)
+    .unwrap();
+    let manifest = fs::read(root.join("manifest.json")).unwrap();
+    let trusted = hash(&manifest);
+    let plane = TwoBitPlane::open(&root, &trusted, &sq8_sha, 1024 * 1024).unwrap();
+    assert_eq!(plane.receipt().rows, 2);
+    let query = plane.prepare_query(&[1., 2.], 8192).unwrap();
+    assert!(query.score(plane.record(0).unwrap()).unwrap() > 0.95);
+    assert!(query.score(plane.record(1).unwrap()).unwrap() < -0.95);
+    assert!(plane.record(2).is_none());
+    assert!(TwoBitPlane::open(&root, &trusted, &sq8_sha, 1).is_err());
+    assert!(TwoBitPlane::open(&root, &"0".repeat(64), &sq8_sha, 1024 * 1024).is_err());
+    assert!(TwoBitPlane::open(&root, &trusted, &"0".repeat(64), 1024 * 1024).is_err());
+    for name in ["mean.bin", "records.bin"] {
+        let original = fs::read(root.join(name)).unwrap();
+        let mut corrupt = original.clone();
+        corrupt[0] ^= 1;
+        fs::write(root.join(name), corrupt).unwrap();
+        assert!(TwoBitPlane::open(&root, &trusted, &sq8_sha, 1024 * 1024).is_err());
+        fs::write(root.join(name), original).unwrap();
+    }
+    let mut unsupported: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    unsupported["schema"] = "legacy".into();
+    let body = serde_json::to_vec(&unsupported).unwrap();
+    fs::write(root.join("manifest.json"), &body).unwrap();
+    assert!(TwoBitPlane::open(&root, &hash(&body), &sq8_sha, 1024 * 1024).is_err());
 }

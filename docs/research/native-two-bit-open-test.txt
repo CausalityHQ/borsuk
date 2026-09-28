@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized] target(s) in 2m 45s
+     Running tests/two_bit_source.rs (/data/target/agents/borsuk-prod-ready-v9/debug/deps/two_bit_source-cb7c794fd7e943a2)
+
+running 2 tests
+test opens_authenticated_plane_and_rejects_wrong_generation_corruption_and_budget ... ok
+test streams_source_records_and_rejects_wrong_identity_order_budget_and_overwrite ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

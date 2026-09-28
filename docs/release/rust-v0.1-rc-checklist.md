@@ -77,7 +77,10 @@ R@100/p05 97 versus paired flat98.578125%/97 within32GET/16MiB; this does not
 qualify full paired validation or release. The public
 [`TwoBitSource::build`](two-bit-source-builder.md) now streams source-only
 nomination metadata in Rust with identity/permutation and memory checks.
-Generation publication/maintenance integration remains open.
+`TwoBitPlane::open` authenticates and reloads that metadata under an explicit
+payload cap and provides borrowed records to the same query scorer. It does
+not hydrate source vectors/SQ8. Single-root ANN publication/maintenance
+integration remains open.
 
 - [ ] A single authenticated product root binds the two-bit mean/record plane,
   centroid metadata and physical SQ8 identity; public object-native

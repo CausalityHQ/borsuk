@@ -55,3 +55,21 @@ complete plane bytes. Source-plane manifest/source/test time receipts are sealed
 in docs/research/native-two-bit-source*. Generation/paired/HTTP scope stays open.
 Ruling: independent dual review deferred after native cooldown rejection; no
 override or paid replacement. No production-release claim is made by this slice.
+
+## Authenticated reload follow-up
+
+Reuse the codec and manifest for a caller-trusted Rust metadata opener. Require
+manifest SHA and generation SQ8 SHA, exact bounded file reads, format/geometry
+checks and metadata admission before large allocations. Expose borrowed physical
+records and the existing per-query admitted lookup. No alternative index,
+compatibility reader, raw-vector cache or new dependency.
+
+- [x] Missing-opener API red observed in focused integration test.
+- [x] Implement opener and share padded geometry with the codec.
+- [x] Focused test: reload score, wrong root/SQ8, corruption, cap, incompatible format.
+- [x] Seal evidence, document resident metadata limits, commit and fast-forward push.
+
+Original session71870 completed exit0: both focused tests pass,0.03s test
+runtime after165s build/link. Formatting and diff checks pass for touched Rust
+files. Receipt `docs/research/native-two-bit-open-check.json` seals this slice.
+No cloud job or full suite was started.

@@ -74,3 +74,31 @@ cooldown; no override or replacement consultation was launched.
 
 Full paired ReLAION/CoHere validation, generation binding/open/search,
 incremental mutation/GC, cold HTTP and vendor qualification remain open.
+
+## Authenticated reload and scoring
+
+```rust
+use borsuk::two_bit_source::TwoBitPlane;
+
+let plane = TwoBitPlane::open(
+    output_dir, trusted_manifest_sha256, expected_sq8_sha256, max_metadata_bytes,
+)?;
+let query = plane.prepare_query(query_vector, max_query_scratch_bytes)?;
+let score = query.score(plane.record(physical_row).ok_or("unknown row")?)?;
+```
+
+Both expected hashes must come from the caller's authenticated generation,
+not from the artifact being opened. The opener rejects incompatible manifests,
+wrong SQ8 binding, changed mean/records, invalid geometry and insufficient
+admission. Exact-size reads also reject concurrent growth/truncation; content
+hashes authenticate the bytes actually read. The scorer validates record scalars
+before returning a value.
+
+This intentionally loads **nomination metadata**, not source vectors or SQ8.
+D768 records occupy200bytes/row:20MB at100k, projected20GB at100M before
+other routing metadata and old generation pins. This primitive does not qualify
+that 100M memory envelope. Open admission conservatively charges record bytes
+plus128times padded dimensions plus128KiB for manifest/deserialization; runtime,
+allocator and OS page cache are excluded. Each concurrent query admits scratch
+separately. Caller-level total concurrency and generation-swap accounting remain
+integration requirements. Complete ANN creation/open/search remains pending.

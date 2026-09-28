@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-native-two-bit-open-check-v1",
+  "baseline_commit": "221eda87",
+  "command": "CARGO_BUILD_JOBS=1 cargo test -p borsuk --test two_bit_source",
+  "original_session": 71870,
+  "exit_code": 0,
+  "tests_passed": 2,
+  "test_seconds": 0.03,
+  "build_elapsed_seconds": 165,
+  "files": {
+    "crates/borsuk/src/two_bit_source.rs": "410baf1be9097505b56504939e387ec4a3a339508cf8ce000028e23365590bc3",
+    "crates/borsuk/src/rotated_two_bit.rs": "0f51015f31c08022b988ac00c40be534df8115e0aa54c482852bc51f0bb9ae60",
+    "crates/borsuk/tests/two_bit_source.rs": "1ef34a59e79d2a443aed3f42ff1c7afa10fb647f34251f108a015d77652d3e02"
+  },
+  "test_log_sha256": "e7f2171bda854ca08f767a982fbae64e1a46a0b0558075b080e552ba1055793d",
+  "checks": [
+    "authenticated reload scoring",
+    "source ordering",
+    "wrong root and SQ8 identity",
+    "mean and record corruption",
+    "incompatible format",
+    "memory admission",
+    "builder invalid inputs and overwrite"
+  ],
+  "limitations": [
+    "metadata primitive only; complete ANN single-root integration pending",
+    "full paired validation and cold HTTP pending remote access",
+    "not service latency or vendor evidence",
+    "independent review deferred by existing dual-critique cooldown"
+  ]
+}
