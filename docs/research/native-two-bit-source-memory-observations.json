@@ -1,0 +1,1 @@
+{"gnu_time_reported_maximum_rss_kib":2432,"original_ps_snapshot":{"elapsed_seconds":55,"pid":1632902,"ppid":1632901,"rss_kib":2860,"source":"original tool ps -eo pid,ppid,rss,etime,args during this run"},"os_file_cache_included":false,"schema":"borsuk-native-source-memory-observations-v1","strict_process_peak_proven":false}

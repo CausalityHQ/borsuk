@@ -71,8 +71,24 @@ The source-only `rotated_two_bit` Rust module now provides the candidate
 encoder and a query lookup scorer with explicit scratch admission. Its tests
 pin the qualified D768 Python encoding and cover padded tails and malformed
 inputs. V293's bounded centroid route passes only CoHere development0–63;
-the new codec still needs frozen whole-route parity, paired validation and
-generation publication/maintenance integration before release.
+V294's full100k source parity and V295's exact whole-route development parity
+now pass. V296 CoHere validation256–319 short screen returns98.296875% mean
+R@100/p05 97 versus paired flat98.578125%/97 within32GET/16MiB; this does not
+qualify full paired validation or release. The public
+[`TwoBitSource::build`](two-bit-source-builder.md) now streams source-only
+nomination metadata in Rust with identity/permutation and memory checks.
+Generation publication/maintenance integration remains open.
+
+- [ ] A single authenticated product root binds the two-bit mean/record plane,
+  centroid metadata and physical SQ8 identity; public object-native
+  create/publish/open/search and wrong/corrupt-generation tests pass.
+- [ ] Incremental insert/update/delete survive reload, preserve application
+  IDs, and honor the committed values/tombstones of each pinned generation.
+- [ ] In-process callable or automatic compaction/GC respects active readers,
+  bounded overlap and conditional publication; no separate cleaner instance.
+- [ ] Full frozen ReLAION+CoHere100k validation and one fresh1M cold HTTP gate
+  qualify the exact revision before scale/vendor promotion. Short screens,
+  source-build RSS and debug planner costs cannot satisfy these gates.
 
 V270 `a0001` was launched before the release-cut directive, then deliberately
 stopped at 2026-09-26 UTC without a terminal measurement. Spot instance
