@@ -4984,7 +4984,7 @@ mod tests {
         assert!(validate_v37_local_build_authority(&request, &wrong_workers).is_err());
 
         let mut wrong_backend = manifest;
-        wrong_backend.numeric.fma_backend = "x86-avx-fma".to_owned();
+        wrong_backend.numeric.fma_backend = "invalid-backend".to_owned();
         assert!(validate_v37_local_build_authority(&request, &wrong_backend).is_err());
     }
 

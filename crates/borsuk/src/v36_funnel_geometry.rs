@@ -10731,8 +10731,8 @@ mod tests {
                 V36SupercellAssignmentRow::new(0, 1, vector(100.0)).unwrap(),
             ],
             vec![
-                V36SupercellAssignmentRow::new(1, 2, vector(51.0)).unwrap(),
-                V36SupercellAssignmentRow::new(1, 3, vector(52.0)).unwrap(),
+                V36SupercellAssignmentRow::new(1, 2, vector(49.0)).unwrap(),
+                V36SupercellAssignmentRow::new(1, 3, vector(50.0)).unwrap(),
             ],
         ];
         let mut source = ResidentChunkSource::default();
@@ -10791,9 +10791,10 @@ mod tests {
         assert_eq!(source.reads, 2);
         assert_eq!(diagnostic.postings_per_supercell(), &[1, 1]);
         assert_eq!(diagnostic.centroids()[0][0].to_bits(), 50.0_f32.to_bits());
-        assert_eq!(diagnostic.centroids()[1][0].to_bits(), 51.5_f32.to_bits());
+        assert_eq!(diagnostic.centroids()[1][0].to_bits(), 49.5_f32.to_bits());
         assert_eq!(diagnostic.assignments().source_ordinals(), &[0, 1, 2, 3]);
-        assert_eq!(diagnostic.assignments().primary_occupancy(), &[1, 3]);
+        assert_eq!(diagnostic.assignments().primary_occupancy(), &[2, 2]);
+        assert_eq!(diagnostic.assignments().owners(), &[1, 0, 1, 0]);
 
         source.chunks[0].0[0] ^= 1;
         assert!(

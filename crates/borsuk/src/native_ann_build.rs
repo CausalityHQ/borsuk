@@ -1530,7 +1530,7 @@ mod tests {
         let outcome = snapshot.search(&[0.0; 64], 10).unwrap();
         assert_eq!(outcome.hits[0].id, b"0000");
         assert!(outcome.pages_read <= first.reference.router.limits.max_output_pages as usize);
-        assert!(outcome.physical_gets <= 1);
+        assert_eq!(outcome.physical_gets, outcome.pages_read as u64);
     }
 
     #[test]

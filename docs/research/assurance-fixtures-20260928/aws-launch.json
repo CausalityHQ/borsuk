@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0216ea425de3b87f1",
+  "prefix": "research/native-library-check/assurance-fixtures/c57a294917cd3d4bbf4d4a89e5b6f219f2b57f0a2bb473785c44a9572e22a2a7/a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "c57a294917cd3d4bbf4d4a89e5b6f219f2b57f0a2bb473785c44a9572e22a2a7",
+  "source_base_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77"
+}

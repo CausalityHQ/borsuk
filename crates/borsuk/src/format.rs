@@ -11368,6 +11368,7 @@ mod tests {
                 array(Int64Array::from_iter([None::<i64>])),
                 array(StringArray::from_iter([None::<String>])),
                 array(StringArray::from_iter([None::<String>])),
+                array(StringArray::from_iter([None::<String>])),
                 array(StringArray::from_iter_values(["[]"])),
                 array(StringArray::from_iter([None::<String>])),
             ],
