@@ -3,10 +3,12 @@ use crate::{
     exact_sq8_nominee::{ScoredNominee, Sq8ScoreError},
     resident_graph_generation::valid_sha256,
     sq8_source::cosine_vector,
-    two_bit_store::{TwoBitHead, TwoBitStoreError, small_object},
+    two_bit_store::{
+        HeadBody, MutationState, TwoBitHead, TwoBitStoreError, commit_control, read_control,
+        small_object,
+    },
 };
 use object_store::{ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion, path::Path};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{cmp::Ordering, collections::BinaryHeap};
 
@@ -64,15 +66,6 @@ pub struct TwoBitMutationLimits {
     /// Conservative simultaneous old/new snapshot, body and input payload cap.
     /// Allocator/runtime/transport overhead is outside this payload model.
     pub max_memory_bytes: usize,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HeadBody {
-    schema: String,
-    revision: u64,
-    sha256: String,
-    sealed: bool,
 }
 
 /// Recovered authenticated latest state plus an opaque conditional writer token.
@@ -333,43 +326,37 @@ pub async fn read_two_bit_mutations(
     Ok(Some(snapshot))
 }
 
+async fn mutation_authority(
+    store: &dyn ObjectStore,
+    base: &TwoBitHead,
+) -> Result<(HeadBody, UpdateVersion)> {
+    let (control, version) = read_control(store, base.index_prefix())
+        .await?
+        .ok_or(bad("mutation index absent"))?;
+    if control.root_sha256 != base.root_sha256() || control.generation != base.generation() {
+        return Err(bad("mutation base retired"));
+    }
+    if control.fence.is_some() {
+        return Err(bad("writes fenced for reclamation"));
+    }
+    Ok((control, version))
+}
 async fn read_mutation_head(
     store: &dyn ObjectStore,
     base: &TwoBitHead,
-) -> Result<Option<(HeadBody, UpdateVersion)>> {
-    let (body, version) = match small_object(
-        store,
-        &base.metadata_prefix().join("mutation-head.json"),
-        1024,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(TwoBitStoreError::Store(object_store::Error::NotFound { .. })) => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let head: HeadBody = serde_json::from_slice(&body).map_err(|_| bad("mutation head schema"))?;
-    if head.schema != "borsuk-two-bit-mutation-head-v2"
-        || head.revision == 0
-        || !valid_sha256(&head.sha256)
-        || (version.e_tag.is_none() && version.version.is_none())
-    {
-        return Err(bad("mutation head authority"));
-    }
-    Ok(Some((head, version)))
+) -> Result<Option<(MutationState, UpdateVersion)>> {
+    let (control, version) = mutation_authority(store, base).await?;
+    Ok(control.mutation.map(|state| (state, version)))
 }
-
 pub(crate) async fn require_sealed_two_bit_mutations(
     store: &dyn ObjectStore,
     base: &TwoBitHead,
-) -> Result<()> {
-    if !read_mutation_head(store, base)
-        .await?
-        .is_some_and(|(h, _)| h.sealed)
-    {
+) -> Result<(HeadBody, UpdateVersion)> {
+    let authority = mutation_authority(store, base).await?;
+    if !authority.0.mutation.as_ref().is_some_and(|s| s.sealed) {
         return Err(bad("generation replacement requires sealed mutations"));
     }
-    Ok(())
+    Ok(authority)
 }
 
 /// Irreversibly fence writers to this base before building its replacement.
@@ -455,6 +442,19 @@ async fn publish_mutation_state(
         }
         return Ok(current);
     }
+    let (mut control, _) = mutation_authority(store, base).await?;
+    if match (control.mutation.as_ref(), expected) {
+        (None, None) => false,
+        (Some(current), Some(previous)) => {
+            current.revision != previous.revision
+                || current.sha256 != previous.sha256
+                || current.sealed != previous.sealed
+        }
+        _ => true,
+    } {
+        return Err(bad("mutation head changed"));
+    }
+    control.advance()?;
     // Validate the entire incoming batch before staging even one object.
     for update in updates {
         if let Some(vector) = &update.vector {
@@ -565,42 +565,18 @@ async fn publish_mutation_state(
         }
         Err(e) => return Err(e.into()),
     }
-    let body = serde_json::to_vec(&HeadBody {
-        schema: "borsuk-two-bit-mutation-head-v2".into(),
+    control.mutation = Some(MutationState {
         revision,
         sha256: sha256.clone(),
         sealed: seal,
-    })
-    .map_err(|_| bad("mutation head serialization"))?;
-    let result = store
-        .put_opts(
-            &prefix.join("mutation-head.json"),
-            PutPayload::from(body),
-            PutOptions {
-                mode: expected.map_or(PutMode::Create, |s| PutMode::Update(s.version.clone())),
-                ..Default::default()
-            },
-        )
-        .await;
-    let version = match result {
-        Ok(result) => UpdateVersion::from(result),
-        Err(error) => {
-            // The CAS may have committed while its acknowledgement was lost.
-            if let Ok(Some(current)) = read_two_bit_mutations(store, base, dimensions, limits).await
-            {
-                if current.revision == revision
-                    && current.sha256 == sha256
-                    && (!seal || current.sealed)
-                {
-                    return Ok(current);
-                }
-            }
-            return Err(error.into());
-        }
-    };
-    if version.e_tag.is_none() && version.version.is_none() {
-        return Err(bad("mutation conditional token"));
-    }
+    });
+    let version = commit_control(
+        store,
+        base.index_prefix(),
+        &control,
+        Some(expected.map_or_else(|| base.version.clone(), |s| s.version.clone())),
+    )
+    .await?;
     snapshot.sealed = seal;
     snapshot.version = version;
     Ok(snapshot)

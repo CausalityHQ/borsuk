@@ -36,12 +36,31 @@ pub enum TwoBitStoreError {
     Invalid(&'static str),
 }
 type Result<T> = std::result::Result<T, TwoBitStoreError>;
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct HeadBody {
-    schema: String,
-    generation: u64,
-    root_sha256: String,
+pub(crate) struct MutationState {
+    pub(crate) revision: u64,
+    pub(crate) sha256: String,
+    pub(crate) sealed: bool,
+}
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HeadBody {
+    pub(crate) schema: String,
+    pub(crate) epoch: u64,
+    pub(crate) generation: u64,
+    pub(crate) root_sha256: String,
+    pub(crate) mutation: Option<MutationState>,
+    pub(crate) fence: Option<String>,
+}
+impl HeadBody {
+    pub(crate) fn advance(&mut self) -> Result<()> {
+        self.epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or(TwoBitStoreError::Invalid("control epoch overflow"))?;
+        Ok(())
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,9 +91,12 @@ pub struct TwoBitHead {
     generation: u64,
     root_sha256: String,
     prefix: ObjectPath,
-    version: UpdateVersion,
+    pub(crate) version: UpdateVersion,
 }
 impl TwoBitHead {
+    pub(crate) fn index_prefix(&self) -> &ObjectPath {
+        &self.prefix
+    }
     /// Dimensions declared by the authenticated generation root.
     pub fn dimensions(&self) -> usize {
         self.dimensions
@@ -133,20 +155,86 @@ pub async fn read_two_bit_head(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
 ) -> Result<Option<TwoBitHead>> {
-    let (body, version) = match small_object(store, &prefix.clone().join("head.json"), 1024).await {
+    let Some((head, version)) = read_control(store, prefix).await? else {
+        return Ok(None);
+    };
+    if head.fence.is_some() {
+        return Err(TwoBitStoreError::Invalid("writes fenced for reclamation"));
+    }
+    Ok(Some(
+        head_from_control(store, prefix, &head, version).await?,
+    ))
+}
+
+pub(crate) async fn read_control(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+) -> Result<Option<(HeadBody, UpdateVersion)>> {
+    let (body, version) = match small_object(store, &prefix.clone().join("head.json"), 4096).await {
         Ok(v) => v,
         Err(TwoBitStoreError::Store(object_store::Error::NotFound { .. })) => return Ok(None),
         Err(e) => return Err(e),
     };
     let head: HeadBody =
         serde_json::from_slice(&body).map_err(|_| TwoBitStoreError::Invalid("head schema"))?;
-    if head.schema != "borsuk-two-bit-head-v1"
+    if head.schema != "borsuk-two-bit-head-v2"
+        || head.epoch == 0
         || head.generation == 0
         || !valid_sha256(&head.root_sha256)
+        || head
+            .mutation
+            .as_ref()
+            .is_some_and(|m| m.revision == 0 || !valid_sha256(&m.sha256))
+        || head
+            .fence
+            .as_ref()
+            .is_some_and(|f| f.len() != 32 || !f.bytes().all(|c| c.is_ascii_hexdigit()))
         || (version.e_tag.is_none() && version.version.is_none())
     {
         return Err(TwoBitStoreError::Invalid("head authority"));
     }
+    Ok(Some((head, version)))
+}
+pub(crate) async fn commit_control(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    head: &HeadBody,
+    expected: Option<UpdateVersion>,
+) -> Result<UpdateVersion> {
+    let body =
+        serde_json::to_vec(head).map_err(|_| TwoBitStoreError::Invalid("head serialization"))?;
+    let result = store
+        .put_opts(
+            &prefix.clone().join("head.json"),
+            PutPayload::from(body),
+            PutOptions {
+                mode: expected.map_or(PutMode::Create, PutMode::Update),
+                ..Default::default()
+            },
+        )
+        .await;
+    let version = match result {
+        Ok(r) => UpdateVersion::from(r),
+        Err(error) => {
+            if let Ok(Some((current, version))) = read_control(store, prefix).await {
+                if current == *head {
+                    return Ok(version);
+                }
+            }
+            return Err(error.into());
+        }
+    };
+    if version.e_tag.is_none() && version.version.is_none() {
+        return Err(TwoBitStoreError::Invalid("head conditional token"));
+    }
+    Ok(version)
+}
+async fn head_from_control(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    head: &HeadBody,
+    version: UpdateVersion,
+) -> Result<TwoBitHead> {
     let root_path = prefix
         .clone()
         .join("generations")
@@ -175,14 +263,14 @@ pub async fn read_two_bit_head(
         }
         _ => return Err(TwoBitStoreError::Invalid("head generation")),
     };
-    Ok(Some(TwoBitHead {
+    Ok(TwoBitHead {
         dimensions,
         empty,
         generation: head.generation,
-        root_sha256: head.root_sha256,
+        root_sha256: head.root_sha256.clone(),
         prefix: prefix.clone(),
         version,
-    }))
+    })
 }
 /// Validate prepared local metadata, stream/hash it to an immutable root prefix,
 /// then CAS the head. SQ8 must already exist at its immutable approved key/ETag.
@@ -202,9 +290,11 @@ pub async fn publish_two_bit_generation(
     if expected.is_some_and(|h| h.prefix != *prefix) {
         return Err(TwoBitStoreError::Invalid("head namespace"));
     }
-    if let Some(previous) = expected {
-        crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?;
-    }
+    let authority = if let Some(previous) = expected {
+        Some(crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?)
+    } else {
+        None
+    };
     // Admit and authenticate using exactly the serving reader, then release it
     // before multipart buffers are allocated. No SQ8 payload is loaded.
     drop(TwoBitGeneration::open(local, trusted_root_sha256, limits)?);
@@ -299,6 +389,7 @@ pub async fn publish_two_bit_generation(
         manifest.low.len(),
         false,
         expected,
+        authority,
     )
     .await
 }
@@ -311,45 +402,34 @@ async fn publish_head(
     dimensions: usize,
     empty: bool,
     expected: Option<&TwoBitHead>,
+    authority: Option<(HeadBody, UpdateVersion)>,
 ) -> Result<TwoBitHead> {
     if expected.is_some_and(|h| {
         h.prefix != *prefix || h.generation >= generation || h.dimensions != dimensions
     }) {
         return Err(TwoBitStoreError::Invalid("head namespace/order/dimensions"));
     }
-    let body = serde_json::to_vec(&HeadBody {
-        schema: "borsuk-two-bit-head-v1".into(),
-        generation,
-        root_sha256: root_sha256.to_owned(),
-    })
-    .map_err(|_| TwoBitStoreError::Invalid("head serialization"))?;
-    let mode = expected.map_or(PutMode::Create, |h| PutMode::Update(h.version.clone()));
-    let result = store
-        .put_opts(
-            &prefix.clone().join("head.json"),
-            PutPayload::from(body),
-            PutOptions {
-                mode,
-                ..Default::default()
-            },
-        )
-        .await;
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            // A committed CAS can lose its acknowledgement; authenticate readback.
-            if let Ok(Some(head)) = read_two_bit_head(store, prefix).await {
-                if head.generation == generation && head.root_sha256 == root_sha256 {
-                    return Ok(head);
-                }
-            }
-            return Err(error.into());
+    let (mut control, version) = match authority {
+        Some((mut control, version)) => {
+            control.advance()?;
+            (control, Some(version))
         }
+        None => (
+            HeadBody {
+                schema: "borsuk-two-bit-head-v2".into(),
+                epoch: 1,
+                generation,
+                root_sha256: root_sha256.into(),
+                mutation: None,
+                fence: None,
+            },
+            None,
+        ),
     };
-    let version = UpdateVersion::from(result);
-    if version.e_tag.is_none() && version.version.is_none() {
-        return Err(TwoBitStoreError::Invalid("head conditional token"));
-    }
+    control.generation = generation;
+    control.root_sha256 = root_sha256.into();
+    control.mutation = None;
+    let version = commit_control(store, prefix, &control, version).await?;
     Ok(TwoBitHead {
         dimensions,
         empty,
@@ -384,9 +464,11 @@ pub async fn publish_empty_two_bit_generation(
     {
         return Err(bad("empty generation namespace/order/dimensions"));
     }
-    if let Some(previous) = expected {
-        crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?;
-    }
+    let authority = if let Some(previous) = expected {
+        Some(crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?)
+    } else {
+        None
+    };
     let bytes = serde_json::to_vec(&root).map_err(|_| bad("empty root schema"))?;
     use sha2::{Digest, Sha256};
     let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -416,7 +498,74 @@ pub async fn publish_empty_two_bit_generation(
         Err(error) => return Err(error.into()),
     }
     publish_head(
-        store, prefix, generation, &digest, dimensions, true, expected,
+        store, prefix, generation, &digest, dimensions, true, expected, authority,
     )
     .await
+}
+
+/// Durable write fence. It preserves data references and does not pin readers.
+/// Store ACLs authorize acquiring/resuming it; no objects are deleted by this API.
+pub struct TwoBitWriteFence {
+    control: HeadBody,
+    head: TwoBitHead,
+    version: UpdateVersion,
+}
+impl TwoBitWriteFence {
+    /// Stable identity for this interrupted/recovered fence.
+    pub fn id(&self) -> &str {
+        self.control.fence.as_deref().unwrap()
+    }
+    /// Authenticated base retained by the fence, including empty bases.
+    pub fn head(&self) -> &TwoBitHead {
+        &self.head
+    }
+    /// Latest mutation object that reclamation must retain, if present.
+    pub fn mutation_sha256(&self) -> Option<&str> {
+        self.control.mutation.as_ref().map(|m| m.sha256.as_str())
+    }
+}
+
+/// CAS-freeze BOTH generation and mutation commits, or recover an existing fence.
+/// New latest reads reject while fenced; already-pinned queries remain readable.
+/// This does NOT establish reader quiescence or enable remote GC by itself.
+pub async fn begin_two_bit_write_fence(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+) -> Result<TwoBitWriteFence> {
+    let (mut control, version) = read_control(store, prefix)
+        .await?
+        .ok_or(TwoBitStoreError::Invalid("fence index absent"))?;
+    let mut head = head_from_control(store, prefix, &control, version.clone()).await?;
+    let version = if control.fence.is_some() {
+        version
+    } else {
+        control.advance()?;
+        control.fence = Some(uuid::Uuid::new_v4().simple().to_string());
+        commit_control(store, prefix, &control, Some(version)).await?
+    };
+    head.version = version.clone();
+    Ok(TwoBitWriteFence {
+        control,
+        head,
+        version,
+    })
+}
+
+/// Release precisely this fence, preserving data references and advancing epoch.
+/// Conditional failure requires rereading/resuming; never clear another fence.
+pub async fn end_two_bit_write_fence(
+    store: &dyn ObjectStore,
+    fence: &TwoBitWriteFence,
+) -> Result<()> {
+    let mut control = fence.control.clone();
+    control.advance()?;
+    control.fence = None;
+    commit_control(
+        store,
+        fence.head.index_prefix(),
+        &control,
+        Some(fence.version.clone()),
+    )
+    .await?;
+    Ok(())
 }

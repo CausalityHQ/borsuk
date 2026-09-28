@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-09ef230f601dbd6b9",
+  "prefix": "research/native-library-check/control-fence/2808fcb892f68b6a95bf1ffcfbabe56a97a0158305f23ca5e752f335ebd6913f/a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "2808fcb892f68b6a95bf1ffcfbabe56a97a0158305f23ca5e752f335ebd6913f",
+  "source_base_commit": "5f704d5b077807fad35110a1a73ca9cc252d4af1"
+}

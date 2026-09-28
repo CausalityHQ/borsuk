@@ -411,11 +411,17 @@ let updated = apply_two_bit_mutations(
 Snapshots use binary `BTMUT001`: root SHA, dimensions, revision, row count, then
 signed ID, operation and normalized FP32 put coordinates. Objects are stored at
 `generations/<base-root>/mutations/<snapshot-sha>` with conditional create;
-`mutation-head.json` uses `borsuk-two-bit-mutation-head-v2`, with required
-`sealed` flag, and is conditionally created/updated last. Head v1 is rejected. An opaque recovered
-CAS token serializes writers. A stale CAS error requires rereading/reapplying the
+The required `borsuk-two-bit-head-v2` control at `<index>/head.json` contains
+root/generation, monotonic epoch, optional mutation revision/digest/seal and
+optional write fence. There is no separate mutable mutation head. The control
+CAS commits last; v1 index heads reject, with no prerelease migration layer.
+An opaque recovered CAS token serializes generation and mutation writers. A stale CAS error requires rereading/reapplying the
 batch; a committed write with a lost acknowledgement is accepted only after
-exact authenticated revision/digest readback. Store ACLs authorize writers.
+exact control-body readback, including epoch. Store ACLs authorize writers.
+Latest mutation recovery requires this base to remain the current root; a
+retired base rejects rather than consulting a historical mutable head. Already
+decoded snapshots continue to serve pinned readers. After fence entry/exit,
+recover a fresh head/snapshot before writing; old CAS tokens are stale.
 Hashes reject altered bytes and malformed or wrong-base/dimension snapshots.
 
 `max_snapshot_bytes` bounds serialized latest state. The conservative helper
@@ -703,3 +709,30 @@ A local lock alone does not fence an S3 publication request still in flight
 when its process crashes. Future destructive GC must also fence publication,
 protect authenticated references and handle partially committed requests.
 Durable multihost pinning and safe remote reclamation remain release gates.
+
+
+### Durable write fence for reclamation
+
+`begin_two_bit_write_fence(store, prefix)` authenticates the current root and
+CAS-installs a durable fence in the shared control, or resumes an existing fence
+after restart. `TwoBitWriteFence::head()` and `mutation_sha256()` identify data
+references that must be retained. `end_two_bit_write_fence(store, &fence)` clears
+precisely that conditional fence, preserving root and mutation state. Lost
+acknowledgements reconcile only through exact control-body readback; stale tokens
+cannot clear a newer fence.
+
+Generation publication captures its sealed control version BEFORE uploading
+metadata; mutation publication uses its recovered control token. Every commit,
+including fence entry/exit, advances the epoch, so a released fence never
+recreates the earlier control body/ETag. Requests submitted before fencing
+cannot commit after fence entry or release. Immutable staged uploads may arrive
+late and become orphaned, but their stale control commit fails. Current latest
+head/mutation recovery rejects while fenced; previously pinned query data stays
+readable. Interrupted fencing pauses writes/new latest opens until resumed and
+released. A fence does not seal mutations or rebuild the base.
+
+This is write-publication fencing only. No objects are deleted. Reclamation
+still requires authoritative reader pins/quiescence, a bounded authenticated
+keep-set, safe candidate filtering, restart and partial-delete handling. Local
+single-host coordinated readers cover only cooperating same-directory users;
+remote/unmanaged readers remain outside that proof. Do not claim multihost GC.

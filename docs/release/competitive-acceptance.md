@@ -162,3 +162,11 @@ exclusive reclamation contention and namespace binding. Remote GC remains
 **disabled**: a durable publication fence must handle S3 requests surviving a
 writer-process crash; other-host/direct API readers remain unregistered. No
 vendor axis changes. [Lifetime-pin evidence](../research/lifetime-pin-20260928/decision.md).
+
+
+Generation and mutation commits now share one required v2 control authority.
+The AWS functional gate (3 integration+4 HTTP tests) verifies delayed real writer
+CAS failure after fence entry/release, preserved state and fence lost-ack/recovery.
+No deletion is enabled; bounded reader-safe reclamation and live-S3 conditional
+qualification remain next. All vendor/scale axes are unchanged and OPEN.
+[Unified control/fence evidence](../research/control-fence-20260928/decision.md).

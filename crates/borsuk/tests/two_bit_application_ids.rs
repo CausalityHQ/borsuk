@@ -373,9 +373,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let lost_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
         store.clone(),
         1,
-        |op, path| {
-            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
-        },
+        |op, path| op == common::StoreOperation::Put && path.as_ref().ends_with("/head.json"),
     );
     let acknowledged = apply_two_bit_mutations(
         &lost_ack,
@@ -393,7 +391,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     assert_eq!(acknowledged.revision(), 1);
     let before_commit =
         common::FaultInjectingObjectStore::fail_nth_matching(store.clone(), 1, true, |op, path| {
-            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
+            op == common::StoreOperation::Put && path.as_ref().ends_with("/head.json")
         });
     assert!(
         apply_two_bit_mutations(
@@ -448,9 +446,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let lost_seal_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
         store.clone(),
         1,
-        |op, path| {
-            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
-        },
+        |op, path| op == common::StoreOperation::Put && path.as_ref().ends_with("/head.json"),
     );
     let sealed_other = borsuk::two_bit_mutations::seal_two_bit_mutations(
         &lost_seal_ack,
@@ -594,7 +590,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         .put(&snapshot_key, PutPayload::from(original_snapshot))
         .await
         .unwrap();
-    let mutation_head_key = head.metadata_prefix().join("mutation-head.json");
+    let mutation_head_key = prefix.clone().join("head.json");
     let original_head = store
         .get(&mutation_head_key)
         .await
@@ -603,8 +599,8 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         .await
         .unwrap();
     let mut legacy: serde_json::Value = serde_json::from_slice(&original_head).unwrap();
-    legacy["schema"] = "borsuk-two-bit-mutation-head-v1".into();
-    legacy.as_object_mut().unwrap().remove("sealed");
+    legacy["schema"] = "borsuk-two-bit-head-v1".into();
+    legacy.as_object_mut().unwrap().remove("epoch");
     store
         .put(
             &mutation_head_key,
@@ -655,7 +651,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             .await
             .unwrap();
         let mut forged_head: serde_json::Value = serde_json::from_slice(&original_head).unwrap();
-        forged_head["sha256"] = digest.into();
+        forged_head["mutation"]["sha256"] = digest.into();
         store
             .put(
                 &mutation_head_key,
@@ -1265,9 +1261,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     assert!(
         read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
             .await
-            .unwrap()
-            .unwrap()
-            .is_sealed()
+            .is_err()
     );
     let maintenance = temp.path().join("callable-maintenance");
     let options = borsuk::two_bit_compaction::TwoBitCompactionOptions {
@@ -1459,9 +1453,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             mutation_limits
         )
         .await
-        .unwrap()
-        .unwrap()
-        .is_sealed()
+        .is_err()
     );
     let coordinated = borsuk::two_bit_index::TwoBitIndex::open_coordinated(
         store.as_ref(),
@@ -1533,4 +1525,173 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         .is_ok()
     );
     drop(coordinated);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_fence_rejects_delayed_mutation_and_generation_commits_after_release() {
+    use borsuk::two_bit_mutations::{
+        TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
+        seal_two_bit_mutations,
+    };
+    use borsuk::two_bit_store::{
+        begin_two_bit_write_fence, end_two_bit_write_fence, publish_empty_two_bit_generation,
+    };
+    use object_store::ObjectStore;
+    use std::sync::{Arc, Barrier};
+    let store = Arc::new(InMemory::new());
+    let prefix = ObjectPath::from("fenced");
+    let base = publish_empty_two_bit_generation(store.as_ref(), &prefix, 2, 1, None)
+        .await
+        .unwrap();
+    let caps = TwoBitMutationLimits {
+        max_snapshot_bytes: 16384,
+        max_memory_bytes: 1_000_000,
+    };
+    let current = apply_two_bit_mutations(
+        store.as_ref(),
+        &base,
+        2,
+        None,
+        &[TwoBitMutation {
+            id: 1,
+            vector: Some(vec![1., 0.]),
+        }],
+        caps,
+    )
+    .await
+    .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let (paused, log) = common::FaultInjectingObjectStore::new(store.clone())
+        .with_put_barrier(barrier.clone(), |op, path| {
+            op == common::StoreOperation::Put && path.as_ref() == "fenced/head.json"
+        })
+        .with_operation_log();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(apply_two_bit_mutations(
+                &paused,
+                &base,
+                2,
+                Some(&current),
+                &[TwoBitMutation {
+                    id: 2,
+                    vector: None,
+                }],
+                caps,
+            ))
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while log.count_matching(|op, p| op == common::StoreOperation::Put && p == "fenced/head.json")
+        == 0
+    {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+    let lost_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        store.clone(),
+        1,
+        |op, path| op == common::StoreOperation::Put && path.as_ref() == "fenced/head.json",
+    );
+    let fence = begin_two_bit_write_fence(&lost_ack, &prefix).await.unwrap();
+    assert!(read_two_bit_head(store.as_ref(), &prefix).await.is_err());
+    let resumed = begin_two_bit_write_fence(store.as_ref(), &prefix)
+        .await
+        .unwrap();
+    assert_eq!(fence.id(), resumed.id());
+    let staged =
+        log.matching_paths(|op, p| op == common::StoreOperation::Put && p.contains("/mutations/"));
+    assert_eq!(staged.len(), 1);
+    store
+        .delete(&ObjectPath::from(staged[0].clone()))
+        .await
+        .unwrap();
+    let lost_exit_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        store.clone(),
+        1,
+        |op, path| op == common::StoreOperation::Put && path.as_ref() == "fenced/head.json",
+    );
+    end_two_bit_write_fence(&lost_exit_ack, &fence)
+        .await
+        .unwrap();
+    end_two_bit_write_fence(store.as_ref(), &resumed)
+        .await
+        .unwrap();
+    let next_fence = begin_two_bit_write_fence(store.as_ref(), &prefix)
+        .await
+        .unwrap();
+    assert!(
+        end_two_bit_write_fence(store.as_ref(), &resumed)
+            .await
+            .is_err()
+    );
+    end_two_bit_write_fence(store.as_ref(), &next_fence)
+        .await
+        .unwrap();
+    barrier.wait();
+    assert!(worker.join().unwrap().is_err());
+    let base = read_two_bit_head(store.as_ref(), &prefix)
+        .await
+        .unwrap()
+        .unwrap();
+    let current = read_two_bit_mutations(store.as_ref(), &base, 2, caps)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.rows().len(), 1);
+    seal_two_bit_mutations(store.as_ref(), &base, Some(&current), caps)
+        .await
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let (paused, log) = common::FaultInjectingObjectStore::new(store.clone())
+        .with_put_barrier(barrier.clone(), |op, path| {
+            op == common::StoreOperation::Put && path.as_ref() == "fenced/head.json"
+        })
+        .with_operation_log();
+    let target_prefix = prefix.clone();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(publish_empty_two_bit_generation(
+                &paused,
+                &target_prefix,
+                2,
+                2,
+                Some(&base),
+            ))
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while log.count_matching(|op, p| op == common::StoreOperation::Put && p == "fenced/head.json")
+        == 0
+    {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+    let fence = begin_two_bit_write_fence(store.as_ref(), &prefix)
+        .await
+        .unwrap();
+    let staged = log
+        .matching_paths(|op, p| op == common::StoreOperation::Put && p.ends_with("/manifest.json"));
+    assert_eq!(staged.len(), 1);
+    store
+        .delete(&ObjectPath::from(staged[0].clone()))
+        .await
+        .unwrap();
+    end_two_bit_write_fence(store.as_ref(), &fence)
+        .await
+        .unwrap();
+    barrier.wait();
+    assert!(worker.join().unwrap().is_err());
+    assert_eq!(
+        read_two_bit_head(store.as_ref(), &prefix)
+            .await
+            .unwrap()
+            .unwrap()
+            .generation(),
+        1
+    );
 }
