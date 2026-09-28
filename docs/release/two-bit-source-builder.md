@@ -102,3 +102,11 @@ plus128times padded dimensions plus128KiB for manifest/deserialization; runtime,
 allocator and OS page cache are excluded. Each concurrent query admits scratch
 separately. Caller-level total concurrency and generation-swap accounting remain
 integration requirements. Complete ANN creation/open/search remains pending.
+
+## Native physical order
+
+The [native source-only fitter](native-source-order.md) now supplies a physical
+ordinal permutation from authenticated normalized f32 input without Python.
+Feed it to the public SQ8 encoder before the generation builder. Its ChaCha8
+RNG/arithmetic changes the layout; new quality gates and root hashes are required.
+The historical paired100k results used the original approved Python layout.

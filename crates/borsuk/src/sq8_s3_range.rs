@@ -3,12 +3,12 @@
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use crate::{
     exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError},
-    returned_sq8::{rank_returned_ranges, ReturnedRange},
+    returned_sq8::{ReturnedRange, rank_returned_ranges},
 };
 use bytes::{Bytes, BytesMut};
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
-use object_store::{path::Path, GetOptions, GetResultPayload, ObjectStore, RetryConfig};
+use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path};
 
 #[derive(Debug)]
 pub enum RangeFetchError {
@@ -304,13 +304,13 @@ async fn fetch_verified_pages_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use object_store::{memory::InMemory, ObjectStoreExt, PutPayload};
+    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -465,11 +465,14 @@ mod tests {
             200000,
         )
         .unwrap();
+        let order =
+            crate::source_order::fit_source_order(&normalized_path, &normalized_sha, 2, 2, 1 << 20)
+                .unwrap();
         let encoded = crate::sq8_source::build_sq8_source(
             &normalized_path,
             &normalized_sha,
             2,
-            &[0, 1],
+            &order,
             &sq8_path,
             200000,
         )

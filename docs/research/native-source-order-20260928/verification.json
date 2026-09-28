@@ -1,0 +1,39 @@
+{
+  "decision": "GO native preparation API; HOLD corpus quality/scale/release",
+  "source_base": "69c2b82e",
+  "jobs": [
+    {
+      "job": "native-order-red",
+      "exit_code": 101,
+      "raw_log_sha256": "ea024ca263b472839350c6fd06dcb690cd426404105322b829c203be07352f1a"
+    },
+    {
+      "job": "native-order-green",
+      "exit_code": 0,
+      "raw_log_sha256": "ebb38d7a23b1e710103e5dc60ee0e39c60ca4790f0940e5df5b0be9934d920b4"
+    },
+    {
+      "job": "native-order-integrated-compile-error",
+      "exit_code": 101,
+      "raw_log_sha256": "c368e50df947de6f2a1da999a9a2dab5bb6b6e77fd13f8e403322f87e368eb47"
+    },
+    {
+      "job": "native-order-integrated",
+      "exit_code": 0,
+      "raw_log_sha256": "c1a144b23f31b61bec9726c8d1f09250eb4d4ec0e2a5479c52089f3152e2b42a"
+    }
+  ],
+  "tests_passed": 5,
+  "cli_rows": 513,
+  "cli_dimensions": 2,
+  "new_cloud_jobs": 0,
+  "corpus_native_layout_quality": "unmeasured",
+  "100M_build": "unqualified flat fitting ceiling",
+  "next_gate": "CoHere100k development0-63 page oracle: <=32 GET/16MiB, mean upper-bound fetched >=98.7, p05>=95; fit <=15min, payload256MiB, processRSS<=4GiB; no new paid machine",
+  "changed_source_sha256": {
+    "crates/borsuk/src/source_order.rs": "ff11d3cbc49717489aaa078733e8ace11a9f4c592b458ade32c621c14fe823d6",
+    "crates/borsuk/src/lib.rs": "3885db8918f41df114eebcf544e880e6796c784a12ae79162548011b64039731",
+    "crates/borsuk/src/sq8_s3_range.rs": "4d21fa172b76466d9cbefd67b93295909dc768d41952546f8df9de272226d0f8",
+    "crates/borsuk/examples/build_sq8_source.rs": "1243d0d48857b63c5e7962eec7b790731e4f5351f0bee0418aaa6c2f8dd8e853"
+  }
+}

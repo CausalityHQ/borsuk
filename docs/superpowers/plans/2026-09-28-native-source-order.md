@@ -1,0 +1,7 @@
+# Native source-only semantic order
+
+Port the frozen V283 layout recipe: ceil(N/256) cells, min(N,64*cells) uniform source sample, 12 Lloyd updates, nearest-centroid Euclidean assignment, centroid chain, stable radius/ordinal order. Reuse nalgebra and ChaCha8; do not emulate NumPy PCG or promise byte parity. New candidate source artifacts must be authenticated and quality-qualified before promotion.
+
+Expose one public function over sealed normalized little-endian f32 input/SHA/geometry and a checked payload budget. Stream input twice, sample only source rows, authenticate both passes, return an ordinal permutation. No source matrix hydration, queries/GT, overwrite, schema compatibility or new dependency. Add a fit mode to the existing example and use the fitter in the two-row signed-HTTP fixture. Start with a red trust-boundary/stable-order test, then implement, run that test plus affected HTTP tests on existing Spark. Preserve original jobs; no cloud launch.
+
+Known ceiling: flat Lloyd/assignment and centroid chain are not a qualified 100M build method. Payload admission rejects over-budget geometry before allocation. Next evidence gate is ONE predeclared native-layout CoHere100k development0-63 page-coverage falsifier under the frozen <=32GET/16MiB caps (mean fetched upper bound>=98.7,p05>=95), before paired 744-query validation. At most 15 minutes fitting, 256MiB declared payload, 4GiB process RSS; use existing Spark, no paid job. A short pass only permits the next gate, never a release/vendor/scale win.

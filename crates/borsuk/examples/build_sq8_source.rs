@@ -4,14 +4,47 @@ use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fs::File,
-    io::{BufReader, Read},
+    io::{BufReader, Read, Write},
     path::Path,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() != 8 {
-        return Err("usage: build_sq8_source SOURCE SOURCE_SHA DIMENSIONS ORDER_LE_U64 ORDER_SHA MAX_PAYLOAD_BYTES NEW_OUTPUT (or normalize SOURCE SOURCE_SHA ROWS DIMENSIONS MAX_PAYLOAD_BYTES NEW_OUTPUT)".into());
+        return Err("usage: build_sq8_source SOURCE SOURCE_SHA DIMENSIONS ORDER_LE_U64 ORDER_SHA MAX_PAYLOAD_BYTES NEW_OUTPUT (or normalize SOURCE SOURCE_SHA ROWS DIMENSIONS MAX_PAYLOAD_BYTES NEW_OUTPUT; fit has the same arguments as normalize)".into());
+    }
+    if args[1] == "fit" {
+        let output = Path::new(&args[7]);
+        if output.exists() {
+            return Err("output already exists".into());
+        }
+        let order = borsuk::source_order::fit_source_order(
+            Path::new(&args[2]),
+            &args[3],
+            args[4].parse()?,
+            args[5].parse()?,
+            args[6].parse()?,
+        )?;
+        let parent = output
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut pending = tempfile::NamedTempFile::new_in(parent)?;
+        let mut digest = Sha256::new();
+        for ordinal in &order {
+            let bytes = ordinal.to_le_bytes();
+            pending.write_all(&bytes)?;
+            digest.update(bytes);
+        }
+        pending.as_file().sync_all()?;
+        pending.persist_noclobber(output).map_err(|e| e.error)?;
+        File::open(parent)?.sync_all()?;
+        println!(
+            "{}",
+            serde_json::json!({"order_sha256":format!("{:x}",digest.finalize()),
+            "rows":order.len(), "recipe":"borsuk-semantic-order-chacha8-f32-v1", "query_or_truth_used":false})
+        );
+        return Ok(());
     }
     if args[1] == "normalize" {
         let sha = normalize_source(

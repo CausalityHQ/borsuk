@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized] target(s) in 49.33s
+running 1 test
+test source_order::tests::source_only_order_is_stable_authenticated_and_admitted ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1688 filtered out; finished in 0.02s
+    Finished `test` profile [unoptimized] target(s) in 0.11s
+running 4 tests
+test sq8_s3_range::tests::conditional_short_tail_rejects_mutated_object ... ok
+test sq8_s3_range::tests::bounded_query_reads_only_verified_pages_and_charges_failures ... ok
+test sq8_s3_range::tests::generation_publish_reload_and_http_search_fail_closed ... ok
+test sq8_s3_range::tests::real_http_range_faults_fail_closed_without_hidden_retries ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1685 filtered out; finished in 0.26s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 56.05s

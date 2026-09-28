@@ -104,6 +104,7 @@ mod segment;
 mod segment_cache;
 pub mod serving_generation;
 mod simd_control;
+pub mod source_order;
 pub mod sparse;
 pub mod sparse_index;
 pub mod sq8_page_authority;
