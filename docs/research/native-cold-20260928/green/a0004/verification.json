@@ -1,0 +1,30 @@
+{
+  "instance_id": "i-0ab7faed97cf0b8d9",
+  "state": "terminated",
+  "source_archive_sha256": "86018fe4fa2fff505cb06ceeb5af7a05fa8a82fa807294327239828e22bcf0c4",
+  "source_files_matched": 396,
+  "terminal_sha256": "8aec47d5a88a0816b524a2a2199c43ff85ee9061342aa182611f1acb5f706abd",
+  "verified_artifacts": 18,
+  "published_head_root_verified": true,
+  "gt_reduction_verified": true,
+  "returned_hits": 6346,
+  "returned_recall_percent": 99.15625,
+  "complete_library_call_latency_ms": {
+    "p50": 103.7408185,
+    "p90": 107.8465926,
+    "p95": 108.67386189999999,
+    "p99": 195.83653527999974
+  },
+  "query_process_cpu_ms": {
+    "p50": 106.418029,
+    "p90": 109.0641897,
+    "p95": 110.54714175,
+    "p99": 124.50101230999998
+  },
+  "serial_observed_qps": 9.269621369611432,
+  "data_get_attempts": 1615,
+  "verified_data_bytes": 1072206720,
+  "new_exhaustive_sq8_kernel_calls": 0,
+  "native_search_calls": 64,
+  "qualification": false
+}

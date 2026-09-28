@@ -1,0 +1,11 @@
+{
+  "status": "invalid-compile",
+  "source_files_matched": 396,
+  "verified_artifacts": 5,
+  "instance_id": "i-0c12c77f822c221a9",
+  "state": "terminated",
+  "corpus_downloads": 0,
+  "publications": 0,
+  "queries": 0,
+  "terminal_sha256": "fa2da5d297da3de8ee633bba6a5f04429efb8cd6291a8bc3fe60a7db64b2d8cd"
+}

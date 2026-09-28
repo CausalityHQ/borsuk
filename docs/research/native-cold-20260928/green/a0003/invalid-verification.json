@@ -1,0 +1,12 @@
+{
+  "status": "invalid-cache-bootstrap-escaping",
+  "source_files_matched": 396,
+  "native_source_files_matched": 391,
+  "verified_artifacts": 4,
+  "instance_id": "i-0ac07aea900a25f83",
+  "state": "terminated",
+  "corpus_downloads": 0,
+  "publications": 0,
+  "queries": 0,
+  "terminal_sha256": "9b8b8176523fcc2e2b2c321c9256ab2c5d1703c62a1cf67eedc5969b1b82e6e1"
+}

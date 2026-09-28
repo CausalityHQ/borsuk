@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-live-split-red-check-v1",
+  "source_base_commit": "73569e89b3d53f75ae022714cf80aecd99a7a058",
+  "source_archive_sha256": "471c7b32ed8dcc9cbc6fda1247b420d98efd14c4ca1ca7710091b7303fb6b833",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 1200,
+  "test_timeout_seconds": 900,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.180000",
+  "spot_quote_timestamp": "2026-09-28T14:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.1,
+  "cost_allowance_ebs_s3_usd": 0.05,
+  "scope": "Expected live-split Rust binary unit stub failure only; no corpus or S3 publication/query",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "s3_versioning_observed": "Disabled"
+}

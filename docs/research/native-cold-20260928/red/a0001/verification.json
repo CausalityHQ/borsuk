@@ -1,0 +1,9 @@
+{
+  "expected_red": true,
+  "source_archive_sha256": "471c7b32ed8dcc9cbc6fda1247b420d98efd14c4ca1ca7710091b7303fb6b833",
+  "source_files_matched": 393,
+  "verified_artifacts": 4,
+  "instance_id": "i-07599ed70bae7f1c1",
+  "state": "terminated",
+  "terminal_sha256": "2c5befae1e235cbb2772cd75da3648c438b774de57f230be3ebf5cb84cff7ebb"
+}

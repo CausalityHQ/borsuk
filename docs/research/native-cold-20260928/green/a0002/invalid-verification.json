@@ -1,0 +1,17 @@
+{
+  "status": "invalid-controller-import",
+  "source_files_matched": 396,
+  "verified_artifacts": 9,
+  "instance_id": "i-015b4ee0b3da2ec43",
+  "state": "terminated",
+  "corpus_downloads": 0,
+  "publications": 0,
+  "queries": 0,
+  "native_release_compile": "passed",
+  "focused_native_unit": "passed",
+  "binary": {
+    "bytes": 11390680,
+    "sha256": "5a78c8d19fd374616c7649c08f17f55deec603ae0c521f0e17719530b2cd0a2f"
+  },
+  "terminal_sha256": "99d5f754c6c5a35b868fa98645640a1cb0dd70ba53662f00ca4f10c5be75afe9"
+}

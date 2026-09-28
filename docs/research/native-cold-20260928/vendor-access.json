@@ -1,0 +1,9 @@
+{
+  "observed_utc": "2026-09-28T21:36:22.975391+00:00",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "operation": "ListVectorBuckets",
+  "returned_vector_bucket_count": 0,
+  "next_token_present": false,
+  "scope": "Read-only metadata access; no create/upload/query permission or performance inferred"
+}

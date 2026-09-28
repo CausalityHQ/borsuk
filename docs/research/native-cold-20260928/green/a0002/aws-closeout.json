@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-015b4ee0b3da2ec43",
+  "state": "terminated",
+  "observed_elapsed_s": 615,
+  "compute_cost_estimate_usd": 0.0307,
+  "cost_status": "estimate from observed Spot quote and elapsed wall; excludes EBS/S3, not invoice"
+}

@@ -1,0 +1,934 @@
+{
+  "source_terminal_sha256": "c3a57ae052d72ab846c0d62e820a5e9674e2f2a8e057e16ff5da6498451e0d69",
+  "decision": "Direct physical union forbidden; nomination under unchanged caps is unmeasured",
+  "results": [
+    {
+      "dataset": "relaion",
+      "split": "consumed development0-63",
+      "rows": 100000,
+      "dimensions": 768,
+      "k": 100,
+      "scope": "Closed trace set/interval reduction only; not a new candidate query or returned recall",
+      "candidate_gt_union_total": 6392,
+      "physical_gt_union_total": 6392,
+      "queries_over_byte_cap": 57,
+      "queries_over_range_cap": 14,
+      "max_union_bytes": 19169280,
+      "max_union_ranges": 36,
+      "samples": [
+        {
+          "query_ordinal": 0,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 19,
+          "exact_union_bytes": 17496960
+        },
+        {
+          "query_ordinal": 1,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17771520
+        },
+        {
+          "query_ordinal": 2,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 23,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 3,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 25,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 4,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17771520
+        },
+        {
+          "query_ordinal": 5,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 24,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 6,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 20,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 7,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 25,
+          "exact_union_bytes": 17097600
+        },
+        {
+          "query_ordinal": 8,
+          "union_candidate_gt_hits": 98,
+          "union_physical_gt_hits": 98,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 9,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 19,
+          "exact_union_bytes": 17297280
+        },
+        {
+          "query_ordinal": 10,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 11,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 12,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 22,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 13,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 34,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 14,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17696640
+        },
+        {
+          "query_ordinal": 15,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 22,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 16,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 23,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 17,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 18,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 19,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 36,
+          "exact_union_bytes": 19169280
+        },
+        {
+          "query_ordinal": 20,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 16897920
+        },
+        {
+          "query_ordinal": 21,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 18170880
+        },
+        {
+          "query_ordinal": 22,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 34,
+          "exact_union_bytes": 17971200
+        },
+        {
+          "query_ordinal": 23,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 24,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 23,
+          "exact_union_bytes": 17297280
+        },
+        {
+          "query_ordinal": 25,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 27,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 26,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 27,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 18,
+          "exact_union_bytes": 17097600
+        },
+        {
+          "query_ordinal": 28,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 16,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 29,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 30,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 30,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 31,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 32,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17297280
+        },
+        {
+          "query_ordinal": 33,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 36,
+          "exact_union_bytes": 18570240
+        },
+        {
+          "query_ordinal": 34,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 35,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 36,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 23,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 37,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 22,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 38,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 21,
+          "exact_union_bytes": 17297280
+        },
+        {
+          "query_ordinal": 39,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 24,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 40,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17496960
+        },
+        {
+          "query_ordinal": 41,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 21,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 42,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 43,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 15,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 44,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 25,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 45,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 46,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 27,
+          "exact_union_bytes": 17771520
+        },
+        {
+          "query_ordinal": 47,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 30,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 48,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 49,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 19,
+          "exact_union_bytes": 17097600
+        },
+        {
+          "query_ordinal": 50,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 25,
+          "exact_union_bytes": 17771520
+        },
+        {
+          "query_ordinal": 51,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 29,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 52,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 27,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 53,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 54,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 21,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 55,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 20,
+          "exact_union_bytes": 16897920
+        },
+        {
+          "query_ordinal": 56,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 24,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 57,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 17,
+          "exact_union_bytes": 17097600
+        },
+        {
+          "query_ordinal": 58,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 59,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 23,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 60,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 61,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 18,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 62,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 63,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 17172480
+        }
+      ]
+    },
+    {
+      "dataset": "cohere",
+      "split": "consumed development0-63",
+      "rows": 100000,
+      "dimensions": 768,
+      "k": 100,
+      "scope": "Closed trace set/interval reduction only; not a new candidate query or returned recall",
+      "candidate_gt_union_total": 6395,
+      "physical_gt_union_total": 6393,
+      "queries_over_byte_cap": 40,
+      "queries_over_range_cap": 13,
+      "max_union_bytes": 18969600,
+      "max_union_ranges": 35,
+      "samples": [
+        {
+          "query_ordinal": 0,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 1,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 27,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 2,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 3,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 4,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 30,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 5,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 6,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 34,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 7,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 8,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 9,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 10,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16897920
+        },
+        {
+          "query_ordinal": 11,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 12,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 25,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 13,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 14,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 15,
+          "union_candidate_gt_hits": 98,
+          "union_physical_gt_hits": 98,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 16,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 17,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 18,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 19,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 20,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 21,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 22,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 23,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 34,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 24,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 25,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 26,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 27,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 34,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 28,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 29,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 30,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 27,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 31,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 32,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 33,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 34,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 35,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 24,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 36,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 35,
+          "exact_union_bytes": 18969600
+        },
+        {
+          "query_ordinal": 37,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 24,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 38,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 39,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 29,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 40,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 41,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 29,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 42,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 43,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 29,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 44,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 29,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 45,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 25,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 46,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 47,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 26,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 48,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 49,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 30,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 50,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 27,
+          "exact_union_bytes": 16698240
+        },
+        {
+          "query_ordinal": 51,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 52,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 29,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 53,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 34,
+          "exact_union_bytes": 17372160
+        },
+        {
+          "query_ordinal": 54,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 55,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 28,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 56,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 57,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 58,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 33,
+          "exact_union_bytes": 17571840
+        },
+        {
+          "query_ordinal": 59,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 31,
+          "exact_union_bytes": 16972800
+        },
+        {
+          "query_ordinal": 60,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 61,
+          "union_candidate_gt_hits": 99,
+          "union_physical_gt_hits": 99,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 17172480
+        },
+        {
+          "query_ordinal": 62,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        },
+        {
+          "query_ordinal": 63,
+          "union_candidate_gt_hits": 100,
+          "union_physical_gt_hits": 100,
+          "exact_union_ranges": 32,
+          "exact_union_bytes": 16773120
+        }
+      ]
+    }
+  ]
+}

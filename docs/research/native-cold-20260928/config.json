@@ -1,0 +1,96 @@
+{
+  "schema": "borsuk-native-cold-baseline-v1",
+  "dataset": "ReLAION first100k",
+  "rows": 100000,
+  "dimensions": 768,
+  "k": 100,
+  "metric": "cosine",
+  "first": 0,
+  "count": 64,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "08d1d06fdff7f62bbb7adc5a37fff1b1947c5865e1e5199e07ac356de6681557",
+  "source_terminal_sha256": "c3a57ae052d72ab846c0d62e820a5e9674e2f2a8e057e16ff5da6498451e0d69",
+  "control_root_sha256": "4726f2bd986815d1e46f8c1fa3564738d40f139fac04369a3b72357cff4cbde9",
+  "scorer_hashes": {
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  },
+  "artifacts": {
+    "control/manifest.json": {
+      "bytes": 33696,
+      "sha256": "4726f2bd986815d1e46f8c1fa3564738d40f139fac04369a3b72357cff4cbde9",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/manifest.json"
+    },
+    "control/page_manifest.json": {
+      "bytes": 279,
+      "sha256": "461ac067c7fe5fb6bd2ff4cd2688eb737ff35cf7c0613a631558a61175e896dd",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/page_manifest.json"
+    },
+    "control/page_digests.bin": {
+      "bytes": 12512,
+      "sha256": "da21e09d75986e977265122c3535aa7bd90d4868e2bbfe235d607fb4a9b8b584",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/page_digests.bin"
+    },
+    "control/centroids.bin": {
+      "bytes": 4800032,
+      "sha256": "16a4ee5f77d03999dc79cc9c1203e3206ddf5d02a508195ae599fa9f7a0244cd",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/centroids.bin"
+    },
+    "control/graph.bin": {
+      "bytes": 426398,
+      "sha256": "876526c890de03850740f5776ce9d011b48419ffa652a79ed343465d933ceee5",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/graph.bin"
+    },
+    "control/plane/manifest.json": {
+      "bytes": 548,
+      "sha256": "559a3a9eb89d8d4df8b77f4bc972c4bd0cf5058ccc3349120fafee6451bdaab8",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/plane/manifest.json"
+    },
+    "control/plane/mean.bin": {
+      "bytes": 3072,
+      "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/plane/mean.bin"
+    },
+    "control/plane/records.bin": {
+      "bytes": 20000000,
+      "sha256": "3ee78eb720317ff86c981580fbc025671dd6ce5d1b95e5ef0f691563d0c3592b",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/plane/records.bin"
+    },
+    "control/canonical.bin": {
+      "bytes": 308000000,
+      "sha256": "76fff1af2aab58df16ff946fe8cda832ba1e2e350458b87169309776d05e79f7",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/control/canonical.bin"
+    },
+    "sq8.bin": {
+      "bytes": 78000000,
+      "sha256": "1375696a51ac52fc3216e35456e441c370805feb0632a58ab197b17099a8de6f",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/sq8.bin"
+    },
+    "scores.npy": {
+      "bytes": 25600128,
+      "sha256": "0e963a7ee6574fa89da77c74470da0de6aabc3c9abb1f27d8df884e9a8968c74",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/scores.npy"
+    },
+    "preflight-plans.jsonl": {
+      "bytes": 35382,
+      "sha256": "789300785215a649a6f16a9ca56da23246444aee33501aba2551ace3d6f3637b",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/preflight-plans.jsonl"
+    },
+    "authority.json": {
+      "bytes": 12764,
+      "sha256": "604464fd329ede15d71f1e39463f2b8267d570d002f2b1667be4b038aa3b298f",
+      "key": "research/topology-mechanism-screen/20260928/a0003/artifacts/screen/relaion/authority.json"
+    },
+    "requests": {
+      "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+      "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+      "bytes": 17714558
+    },
+    "truth": {
+      "key": "research/validation-loss-diagnostic/20260928/a0001/artifacts/diagnostic/truth.u32",
+      "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e",
+      "bytes": 400000
+    }
+  },
+  "scope": "Nearest baseline cold serving integration; no diverse candidate, fresh validation, scale or vendor qualification"
+}
