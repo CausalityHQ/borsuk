@@ -1,0 +1,7 @@
+#32-page physical containment stress diagnostic
+
+Reuse completed rejected native source-only ReLAION/CoHere100k layouts and exact GT100 development0–63. Authenticate original roots, ordinal orders and truth. Compare to one fixed NumPy PCG64 random permutation seed20260928. For each query, sum the largest32 per-page GT counts: exact optimistic coverage of32 physical256-row pages, necessarily<=32 GETs and6389760 bytes. No dynamic programming is needed because32 pages cannot exceed32 disjoint ranges. No query/GT enters the source order.
+
+Report mean and p05 GT100 hit upper bound, GT-bearing page count, random control and per-query raw samples. This is stricter than the actual84-page/32-range/16MiB gate and cannot reject that serving route or claim100M scalability. If native containment misses98.7 mean or95 p05, a proposed single-page-per-GET layout cannot qualify even with perfect discovery on these queries; its new specification needs more containment/boundary coverage or larger semantic extents before training. A pass permits a layout specification, not returned quality or a scale/vendor run.
+
+This executes the completed Fable418e158ae6644129 recommendation on current native hashes; prior V28384-page GT oracle100 and V285 exact nearest-row scheduling did not answer this smaller containment question. Existing V139/V146/V149/V150 and two new traversal failures remain closed. One seconds-scale run on existing Spark, timeout60s/one BLAS thread/1GiB cap. No fit, build, full validation, paid machine or new consultation.

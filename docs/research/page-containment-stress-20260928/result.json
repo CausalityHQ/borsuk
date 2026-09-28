@@ -1,0 +1,1606 @@
+{
+  "qualification": false,
+  "scope": "GT-aware optimistic32-page upper bound versus random order; tighter byte budget than frozen84-page gate; no source fitting, returned recall, transport, latency or100M qualification",
+  "results": [
+    {
+      "dataset": "relaion",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "split": "development0-63",
+      "queries": 64,
+      "max_pages": 32,
+      "max_logical_gets": 32,
+      "max_bytes": 6389760,
+      "arms": [
+        {
+          "arm": "native",
+          "order_sha256": "fbeb4a14093c449ae4acf212155979a50fb16b50e864172dfc1dc1ddffbbc5d1",
+          "mean_top32_hits": 99.46875,
+          "p05_top32_hits": 97,
+          "mean_gt_pages": 17.890625,
+          "samples": [
+            {
+              "query_ordinal": 0,
+              "top32_hits": 100,
+              "gt_pages": 6,
+              "max_hits_per_page": 84
+            },
+            {
+              "query_ordinal": 1,
+              "top32_hits": 100,
+              "gt_pages": 16,
+              "max_hits_per_page": 43
+            },
+            {
+              "query_ordinal": 2,
+              "top32_hits": 100,
+              "gt_pages": 5,
+              "max_hits_per_page": 70
+            },
+            {
+              "query_ordinal": 3,
+              "top32_hits": 100,
+              "gt_pages": 24,
+              "max_hits_per_page": 22
+            },
+            {
+              "query_ordinal": 4,
+              "top32_hits": 97,
+              "gt_pages": 35,
+              "max_hits_per_page": 27
+            },
+            {
+              "query_ordinal": 5,
+              "top32_hits": 100,
+              "gt_pages": 5,
+              "max_hits_per_page": 66
+            },
+            {
+              "query_ordinal": 6,
+              "top32_hits": 100,
+              "gt_pages": 19,
+              "max_hits_per_page": 44
+            },
+            {
+              "query_ordinal": 7,
+              "top32_hits": 100,
+              "gt_pages": 25,
+              "max_hits_per_page": 18
+            },
+            {
+              "query_ordinal": 8,
+              "top32_hits": 84,
+              "gt_pages": 48,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 9,
+              "top32_hits": 100,
+              "gt_pages": 6,
+              "max_hits_per_page": 39
+            },
+            {
+              "query_ordinal": 10,
+              "top32_hits": 100,
+              "gt_pages": 20,
+              "max_hits_per_page": 23
+            },
+            {
+              "query_ordinal": 11,
+              "top32_hits": 100,
+              "gt_pages": 9,
+              "max_hits_per_page": 57
+            },
+            {
+              "query_ordinal": 12,
+              "top32_hits": 100,
+              "gt_pages": 8,
+              "max_hits_per_page": 46
+            },
+            {
+              "query_ordinal": 13,
+              "top32_hits": 100,
+              "gt_pages": 21,
+              "max_hits_per_page": 35
+            },
+            {
+              "query_ordinal": 14,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 24
+            },
+            {
+              "query_ordinal": 15,
+              "top32_hits": 91,
+              "gt_pages": 41,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 16,
+              "top32_hits": 100,
+              "gt_pages": 12,
+              "max_hits_per_page": 37
+            },
+            {
+              "query_ordinal": 17,
+              "top32_hits": 100,
+              "gt_pages": 19,
+              "max_hits_per_page": 26
+            },
+            {
+              "query_ordinal": 18,
+              "top32_hits": 100,
+              "gt_pages": 22,
+              "max_hits_per_page": 33
+            },
+            {
+              "query_ordinal": 19,
+              "top32_hits": 100,
+              "gt_pages": 15,
+              "max_hits_per_page": 29
+            },
+            {
+              "query_ordinal": 20,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 42
+            },
+            {
+              "query_ordinal": 21,
+              "top32_hits": 100,
+              "gt_pages": 15,
+              "max_hits_per_page": 52
+            },
+            {
+              "query_ordinal": 22,
+              "top32_hits": 100,
+              "gt_pages": 9,
+              "max_hits_per_page": 44
+            },
+            {
+              "query_ordinal": 23,
+              "top32_hits": 100,
+              "gt_pages": 31,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 24,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 35
+            },
+            {
+              "query_ordinal": 25,
+              "top32_hits": 100,
+              "gt_pages": 24,
+              "max_hits_per_page": 20
+            },
+            {
+              "query_ordinal": 26,
+              "top32_hits": 100,
+              "gt_pages": 19,
+              "max_hits_per_page": 19
+            },
+            {
+              "query_ordinal": 27,
+              "top32_hits": 100,
+              "gt_pages": 19,
+              "max_hits_per_page": 15
+            },
+            {
+              "query_ordinal": 28,
+              "top32_hits": 95,
+              "gt_pages": 37,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 29,
+              "top32_hits": 100,
+              "gt_pages": 22,
+              "max_hits_per_page": 20
+            },
+            {
+              "query_ordinal": 30,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 46
+            },
+            {
+              "query_ordinal": 31,
+              "top32_hits": 100,
+              "gt_pages": 13,
+              "max_hits_per_page": 23
+            },
+            {
+              "query_ordinal": 32,
+              "top32_hits": 99,
+              "gt_pages": 33,
+              "max_hits_per_page": 14
+            },
+            {
+              "query_ordinal": 33,
+              "top32_hits": 100,
+              "gt_pages": 27,
+              "max_hits_per_page": 23
+            },
+            {
+              "query_ordinal": 34,
+              "top32_hits": 100,
+              "gt_pages": 32,
+              "max_hits_per_page": 21
+            },
+            {
+              "query_ordinal": 35,
+              "top32_hits": 100,
+              "gt_pages": 24,
+              "max_hits_per_page": 17
+            },
+            {
+              "query_ordinal": 36,
+              "top32_hits": 100,
+              "gt_pages": 4,
+              "max_hits_per_page": 43
+            },
+            {
+              "query_ordinal": 37,
+              "top32_hits": 100,
+              "gt_pages": 23,
+              "max_hits_per_page": 38
+            },
+            {
+              "query_ordinal": 38,
+              "top32_hits": 100,
+              "gt_pages": 7,
+              "max_hits_per_page": 45
+            },
+            {
+              "query_ordinal": 39,
+              "top32_hits": 100,
+              "gt_pages": 11,
+              "max_hits_per_page": 55
+            },
+            {
+              "query_ordinal": 40,
+              "top32_hits": 100,
+              "gt_pages": 18,
+              "max_hits_per_page": 49
+            },
+            {
+              "query_ordinal": 41,
+              "top32_hits": 100,
+              "gt_pages": 21,
+              "max_hits_per_page": 44
+            },
+            {
+              "query_ordinal": 42,
+              "top32_hits": 100,
+              "gt_pages": 20,
+              "max_hits_per_page": 53
+            },
+            {
+              "query_ordinal": 43,
+              "top32_hits": 100,
+              "gt_pages": 10,
+              "max_hits_per_page": 55
+            },
+            {
+              "query_ordinal": 44,
+              "top32_hits": 100,
+              "gt_pages": 12,
+              "max_hits_per_page": 28
+            },
+            {
+              "query_ordinal": 45,
+              "top32_hits": 100,
+              "gt_pages": 9,
+              "max_hits_per_page": 57
+            },
+            {
+              "query_ordinal": 46,
+              "top32_hits": 100,
+              "gt_pages": 12,
+              "max_hits_per_page": 26
+            },
+            {
+              "query_ordinal": 47,
+              "top32_hits": 100,
+              "gt_pages": 22,
+              "max_hits_per_page": 32
+            },
+            {
+              "query_ordinal": 48,
+              "top32_hits": 100,
+              "gt_pages": 28,
+              "max_hits_per_page": 33
+            },
+            {
+              "query_ordinal": 49,
+              "top32_hits": 100,
+              "gt_pages": 23,
+              "max_hits_per_page": 36
+            },
+            {
+              "query_ordinal": 50,
+              "top32_hits": 100,
+              "gt_pages": 10,
+              "max_hits_per_page": 61
+            },
+            {
+              "query_ordinal": 51,
+              "top32_hits": 100,
+              "gt_pages": 12,
+              "max_hits_per_page": 34
+            },
+            {
+              "query_ordinal": 52,
+              "top32_hits": 100,
+              "gt_pages": 26,
+              "max_hits_per_page": 25
+            },
+            {
+              "query_ordinal": 53,
+              "top32_hits": 100,
+              "gt_pages": 32,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 54,
+              "top32_hits": 100,
+              "gt_pages": 21,
+              "max_hits_per_page": 23
+            },
+            {
+              "query_ordinal": 55,
+              "top32_hits": 100,
+              "gt_pages": 11,
+              "max_hits_per_page": 35
+            },
+            {
+              "query_ordinal": 56,
+              "top32_hits": 100,
+              "gt_pages": 8,
+              "max_hits_per_page": 53
+            },
+            {
+              "query_ordinal": 57,
+              "top32_hits": 100,
+              "gt_pages": 11,
+              "max_hits_per_page": 30
+            },
+            {
+              "query_ordinal": 58,
+              "top32_hits": 100,
+              "gt_pages": 10,
+              "max_hits_per_page": 44
+            },
+            {
+              "query_ordinal": 59,
+              "top32_hits": 100,
+              "gt_pages": 5,
+              "max_hits_per_page": 65
+            },
+            {
+              "query_ordinal": 60,
+              "top32_hits": 100,
+              "gt_pages": 7,
+              "max_hits_per_page": 51
+            },
+            {
+              "query_ordinal": 61,
+              "top32_hits": 100,
+              "gt_pages": 10,
+              "max_hits_per_page": 50
+            },
+            {
+              "query_ordinal": 62,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 49
+            },
+            {
+              "query_ordinal": 63,
+              "top32_hits": 100,
+              "gt_pages": 16,
+              "max_hits_per_page": 31
+            }
+          ]
+        },
+        {
+          "arm": "random",
+          "order_sha256": "58fc6155c26a2b1c60cb0511c5cd70ff253dfa49543d02badca176dcd967d101",
+          "mean_top32_hits": 43.609375,
+          "p05_top32_hits": 39,
+          "mean_gt_pages": 88.390625,
+          "samples": [
+            {
+              "query_ordinal": 0,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 1,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 2,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 3,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 4,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 5,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 6,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 7,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 8,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 9,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 10,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 11,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 12,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 13,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 14,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 4
+            },
+            {
+              "query_ordinal": 15,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 16,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 17,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 18,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 19,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 20,
+              "top32_hits": 38,
+              "gt_pages": 94,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 21,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 22,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 23,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 24,
+              "top32_hits": 36,
+              "gt_pages": 96,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 25,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 26,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 27,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 28,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 4
+            },
+            {
+              "query_ordinal": 29,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 30,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 31,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 32,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 33,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 34,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 35,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 36,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 37,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 38,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 39,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 40,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 41,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 42,
+              "top32_hits": 39,
+              "gt_pages": 93,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 43,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 5
+            },
+            {
+              "query_ordinal": 44,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 45,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 46,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 4
+            },
+            {
+              "query_ordinal": 47,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 48,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 49,
+              "top32_hits": 37,
+              "gt_pages": 95,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 50,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 51,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 52,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 53,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 54,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 55,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 56,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 57,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 58,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 59,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 60,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 61,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 62,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 63,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "cohere",
+      "rows": 100000,
+      "dimensions": 768,
+      "metric": "cosine",
+      "k": 100,
+      "split": "development0-63",
+      "queries": 64,
+      "max_pages": 32,
+      "max_logical_gets": 32,
+      "max_bytes": 6389760,
+      "arms": [
+        {
+          "arm": "native",
+          "order_sha256": "fdf00dc981eb5efe6ef2543b74650494f6d93f8bc3b1c0b2d2f4c3c464929534",
+          "mean_top32_hits": 97.625,
+          "p05_top32_hits": 89,
+          "mean_gt_pages": 28.3125,
+          "samples": [
+            {
+              "query_ordinal": 0,
+              "top32_hits": 95,
+              "gt_pages": 37,
+              "max_hits_per_page": 17
+            },
+            {
+              "query_ordinal": 1,
+              "top32_hits": 95,
+              "gt_pages": 37,
+              "max_hits_per_page": 17
+            },
+            {
+              "query_ordinal": 2,
+              "top32_hits": 96,
+              "gt_pages": 36,
+              "max_hits_per_page": 20
+            },
+            {
+              "query_ordinal": 3,
+              "top32_hits": 89,
+              "gt_pages": 43,
+              "max_hits_per_page": 12
+            },
+            {
+              "query_ordinal": 4,
+              "top32_hits": 95,
+              "gt_pages": 37,
+              "max_hits_per_page": 22
+            },
+            {
+              "query_ordinal": 5,
+              "top32_hits": 100,
+              "gt_pages": 26,
+              "max_hits_per_page": 19
+            },
+            {
+              "query_ordinal": 6,
+              "top32_hits": 94,
+              "gt_pages": 38,
+              "max_hits_per_page": 15
+            },
+            {
+              "query_ordinal": 7,
+              "top32_hits": 100,
+              "gt_pages": 30,
+              "max_hits_per_page": 27
+            },
+            {
+              "query_ordinal": 8,
+              "top32_hits": 100,
+              "gt_pages": 15,
+              "max_hits_per_page": 51
+            },
+            {
+              "query_ordinal": 9,
+              "top32_hits": 100,
+              "gt_pages": 23,
+              "max_hits_per_page": 20
+            },
+            {
+              "query_ordinal": 10,
+              "top32_hits": 100,
+              "gt_pages": 26,
+              "max_hits_per_page": 18
+            },
+            {
+              "query_ordinal": 11,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 28
+            },
+            {
+              "query_ordinal": 12,
+              "top32_hits": 93,
+              "gt_pages": 39,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 13,
+              "top32_hits": 89,
+              "gt_pages": 43,
+              "max_hits_per_page": 9
+            },
+            {
+              "query_ordinal": 14,
+              "top32_hits": 100,
+              "gt_pages": 24,
+              "max_hits_per_page": 22
+            },
+            {
+              "query_ordinal": 15,
+              "top32_hits": 87,
+              "gt_pages": 45,
+              "max_hits_per_page": 11
+            },
+            {
+              "query_ordinal": 16,
+              "top32_hits": 100,
+              "gt_pages": 31,
+              "max_hits_per_page": 19
+            },
+            {
+              "query_ordinal": 17,
+              "top32_hits": 100,
+              "gt_pages": 20,
+              "max_hits_per_page": 31
+            },
+            {
+              "query_ordinal": 18,
+              "top32_hits": 100,
+              "gt_pages": 30,
+              "max_hits_per_page": 14
+            },
+            {
+              "query_ordinal": 19,
+              "top32_hits": 95,
+              "gt_pages": 37,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 20,
+              "top32_hits": 100,
+              "gt_pages": 20,
+              "max_hits_per_page": 40
+            },
+            {
+              "query_ordinal": 21,
+              "top32_hits": 100,
+              "gt_pages": 18,
+              "max_hits_per_page": 20
+            },
+            {
+              "query_ordinal": 22,
+              "top32_hits": 100,
+              "gt_pages": 15,
+              "max_hits_per_page": 52
+            },
+            {
+              "query_ordinal": 23,
+              "top32_hits": 100,
+              "gt_pages": 11,
+              "max_hits_per_page": 60
+            },
+            {
+              "query_ordinal": 24,
+              "top32_hits": 100,
+              "gt_pages": 26,
+              "max_hits_per_page": 15
+            },
+            {
+              "query_ordinal": 25,
+              "top32_hits": 100,
+              "gt_pages": 32,
+              "max_hits_per_page": 15
+            },
+            {
+              "query_ordinal": 26,
+              "top32_hits": 100,
+              "gt_pages": 12,
+              "max_hits_per_page": 42
+            },
+            {
+              "query_ordinal": 27,
+              "top32_hits": 100,
+              "gt_pages": 29,
+              "max_hits_per_page": 22
+            },
+            {
+              "query_ordinal": 28,
+              "top32_hits": 100,
+              "gt_pages": 24,
+              "max_hits_per_page": 19
+            },
+            {
+              "query_ordinal": 29,
+              "top32_hits": 100,
+              "gt_pages": 23,
+              "max_hits_per_page": 43
+            },
+            {
+              "query_ordinal": 30,
+              "top32_hits": 100,
+              "gt_pages": 24,
+              "max_hits_per_page": 32
+            },
+            {
+              "query_ordinal": 31,
+              "top32_hits": 96,
+              "gt_pages": 36,
+              "max_hits_per_page": 17
+            },
+            {
+              "query_ordinal": 32,
+              "top32_hits": 97,
+              "gt_pages": 35,
+              "max_hits_per_page": 15
+            },
+            {
+              "query_ordinal": 33,
+              "top32_hits": 100,
+              "gt_pages": 32,
+              "max_hits_per_page": 28
+            },
+            {
+              "query_ordinal": 34,
+              "top32_hits": 98,
+              "gt_pages": 34,
+              "max_hits_per_page": 24
+            },
+            {
+              "query_ordinal": 35,
+              "top32_hits": 100,
+              "gt_pages": 29,
+              "max_hits_per_page": 24
+            },
+            {
+              "query_ordinal": 36,
+              "top32_hits": 100,
+              "gt_pages": 27,
+              "max_hits_per_page": 20
+            },
+            {
+              "query_ordinal": 37,
+              "top32_hits": 100,
+              "gt_pages": 16,
+              "max_hits_per_page": 34
+            },
+            {
+              "query_ordinal": 38,
+              "top32_hits": 100,
+              "gt_pages": 29,
+              "max_hits_per_page": 50
+            },
+            {
+              "query_ordinal": 39,
+              "top32_hits": 89,
+              "gt_pages": 43,
+              "max_hits_per_page": 19
+            },
+            {
+              "query_ordinal": 40,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 29
+            },
+            {
+              "query_ordinal": 41,
+              "top32_hits": 100,
+              "gt_pages": 18,
+              "max_hits_per_page": 35
+            },
+            {
+              "query_ordinal": 42,
+              "top32_hits": 100,
+              "gt_pages": 31,
+              "max_hits_per_page": 11
+            },
+            {
+              "query_ordinal": 43,
+              "top32_hits": 94,
+              "gt_pages": 38,
+              "max_hits_per_page": 31
+            },
+            {
+              "query_ordinal": 44,
+              "top32_hits": 95,
+              "gt_pages": 37,
+              "max_hits_per_page": 12
+            },
+            {
+              "query_ordinal": 45,
+              "top32_hits": 100,
+              "gt_pages": 22,
+              "max_hits_per_page": 18
+            },
+            {
+              "query_ordinal": 46,
+              "top32_hits": 100,
+              "gt_pages": 12,
+              "max_hits_per_page": 36
+            },
+            {
+              "query_ordinal": 47,
+              "top32_hits": 100,
+              "gt_pages": 29,
+              "max_hits_per_page": 21
+            },
+            {
+              "query_ordinal": 48,
+              "top32_hits": 100,
+              "gt_pages": 25,
+              "max_hits_per_page": 34
+            },
+            {
+              "query_ordinal": 49,
+              "top32_hits": 100,
+              "gt_pages": 29,
+              "max_hits_per_page": 19
+            },
+            {
+              "query_ordinal": 50,
+              "top32_hits": 100,
+              "gt_pages": 15,
+              "max_hits_per_page": 16
+            },
+            {
+              "query_ordinal": 51,
+              "top32_hits": 100,
+              "gt_pages": 15,
+              "max_hits_per_page": 43
+            },
+            {
+              "query_ordinal": 52,
+              "top32_hits": 100,
+              "gt_pages": 26,
+              "max_hits_per_page": 34
+            },
+            {
+              "query_ordinal": 53,
+              "top32_hits": 100,
+              "gt_pages": 18,
+              "max_hits_per_page": 49
+            },
+            {
+              "query_ordinal": 54,
+              "top32_hits": 90,
+              "gt_pages": 42,
+              "max_hits_per_page": 15
+            },
+            {
+              "query_ordinal": 55,
+              "top32_hits": 86,
+              "gt_pages": 46,
+              "max_hits_per_page": 8
+            },
+            {
+              "query_ordinal": 56,
+              "top32_hits": 91,
+              "gt_pages": 41,
+              "max_hits_per_page": 7
+            },
+            {
+              "query_ordinal": 57,
+              "top32_hits": 100,
+              "gt_pages": 22,
+              "max_hits_per_page": 17
+            },
+            {
+              "query_ordinal": 58,
+              "top32_hits": 100,
+              "gt_pages": 30,
+              "max_hits_per_page": 24
+            },
+            {
+              "query_ordinal": 59,
+              "top32_hits": 100,
+              "gt_pages": 23,
+              "max_hits_per_page": 30
+            },
+            {
+              "query_ordinal": 60,
+              "top32_hits": 94,
+              "gt_pages": 38,
+              "max_hits_per_page": 18
+            },
+            {
+              "query_ordinal": 61,
+              "top32_hits": 90,
+              "gt_pages": 42,
+              "max_hits_per_page": 13
+            },
+            {
+              "query_ordinal": 62,
+              "top32_hits": 100,
+              "gt_pages": 30,
+              "max_hits_per_page": 21
+            },
+            {
+              "query_ordinal": 63,
+              "top32_hits": 100,
+              "gt_pages": 17,
+              "max_hits_per_page": 38
+            }
+          ]
+        },
+        {
+          "arm": "random",
+          "order_sha256": "58fc6155c26a2b1c60cb0511c5cd70ff253dfa49543d02badca176dcd967d101",
+          "mean_top32_hits": 43.765625,
+          "p05_top32_hits": 40,
+          "mean_gt_pages": 88.234375,
+          "samples": [
+            {
+              "query_ordinal": 0,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 1,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 2,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 3,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 4,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 5,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 6,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 7,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 8,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 9,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 10,
+              "top32_hits": 39,
+              "gt_pages": 93,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 11,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 12,
+              "top32_hits": 39,
+              "gt_pages": 93,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 13,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 4
+            },
+            {
+              "query_ordinal": 14,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 15,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 16,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 17,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 18,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 19,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 20,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 4
+            },
+            {
+              "query_ordinal": 21,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 22,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 23,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 24,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 25,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 26,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 27,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 28,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 29,
+              "top32_hits": 50,
+              "gt_pages": 82,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 30,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 31,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 32,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 33,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 34,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 35,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 36,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 37,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 4
+            },
+            {
+              "query_ordinal": 38,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 39,
+              "top32_hits": 48,
+              "gt_pages": 84,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 40,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 41,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 42,
+              "top32_hits": 50,
+              "gt_pages": 82,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 43,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 44,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 45,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 46,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 47,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 48,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 4
+            },
+            {
+              "query_ordinal": 49,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 50,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 51,
+              "top32_hits": 43,
+              "gt_pages": 89,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 52,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 53,
+              "top32_hits": 40,
+              "gt_pages": 92,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 54,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 55,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 56,
+              "top32_hits": 46,
+              "gt_pages": 86,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 57,
+              "top32_hits": 39,
+              "gt_pages": 93,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 58,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 59,
+              "top32_hits": 45,
+              "gt_pages": 87,
+              "max_hits_per_page": 3
+            },
+            {
+              "query_ordinal": 60,
+              "top32_hits": 41,
+              "gt_pages": 91,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 61,
+              "top32_hits": 47,
+              "gt_pages": 85,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 62,
+              "top32_hits": 42,
+              "gt_pages": 90,
+              "max_hits_per_page": 2
+            },
+            {
+              "query_ordinal": 63,
+              "top32_hits": 44,
+              "gt_pages": 88,
+              "max_hits_per_page": 2
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
