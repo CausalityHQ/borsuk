@@ -1,0 +1,538 @@
+diff --git a/crates/borsuk/src/sq8_s3_range.rs b/crates/borsuk/src/sq8_s3_range.rs
+index ff739952..60af81e4 100644
+--- a/crates/borsuk/src/sq8_s3_range.rs
++++ b/crates/borsuk/src/sq8_s3_range.rs
+@@ -627,6 +627,173 @@ mod tests {
+         )
+         .await
+         .unwrap();
++        use crate::two_bit_mutations::{
++            TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
++        };
++        let mutation_caps = TwoBitMutationLimits {
++            max_snapshot_bytes: 16384,
++            max_memory_bytes: 1_000_000,
++        };
++        let first = apply_two_bit_mutations(
++            &store,
++            &head,
++            2,
++            None,
++            &[
++                TwoBitMutation {
++                    id: 0,
++                    vector: Some(vec![-1., 0.]),
++                },
++                TwoBitMutation {
++                    id: 1,
++                    vector: None,
++                },
++                TwoBitMutation {
++                    id: 7,
++                    vector: Some(vec![2., 1.]),
++                },
++            ],
++            mutation_caps,
++        )
++        .await
++        .unwrap();
++        let recovered = read_two_bit_mutations(&store, &head, 2, mutation_caps)
++            .await
++            .unwrap()
++            .unwrap();
++        let charged = TwoBitGeneration::open_remote(
++            &store,
++            &head.metadata_prefix(),
++            head.root_sha256(),
++            TwoBitGenerationLimits {
++                already_pinned_bytes: 4 * recovered.resident_payload_bytes() as u64,
++                ..limits
++            },
++            temp.path(),
++        )
++        .await
++        .unwrap();
++        let other_root = temp.path().join("other-generation");
++        let other_sha = TwoBitGenerationBuilder {
++            source: TwoBitSource {
++                raw: &raw_path,
++                raw_sha256: &hash(&raw),
++                sq8: &sq8_path,
++                sq8_sha256: &hash(&sq8),
++                rows: 2,
++                dimensions: 2,
++            },
++            generation: 2,
++            low: &encoded.low,
++            step: &encoded.step,
++            sq8_object_key: &key,
++            sq8_etag: &etag,
++        }
++        .build(&other_root, 2_000_000)
++        .unwrap();
++        let other_generation = TwoBitGeneration::open(
++            &other_root,
++            &other_sha,
++            TwoBitGenerationLimits {
++                already_pinned_bytes: 4 * recovered.resident_payload_bytes() as u64,
++                ..limits
++            },
++        )
++        .unwrap();
++        let response = http_response(
++            "206 Partial Content",
++            Some("bytes 0-27/28"),
++            &etag,
++            28,
++            &sq8,
++        );
++        let (reader, stop, requests, server) = http_fixture(response);
++        assert!(matches!(
++            generation
++                .search_with_mutations(&reader, &[2., 1.], 3, &recovered)
++                .await,
++            Err(TwoBitGenerationError::Invalid(
++                "mutation binding or admission"
++            ))
++        ));
++        assert!(matches!(
++            other_generation
++                .search_with_mutations(&reader, &[2., 1.], 3, &recovered)
++                .await,
++            Err(TwoBitGenerationError::Invalid(
++                "mutation binding or admission"
++            ))
++        ));
++        assert!(requests.lock().unwrap().is_empty());
++        let hits = charged
++            .search_with_mutations(&reader, &[2., 1.], usize::MAX, &recovered)
++            .await
++            .unwrap();
++        assert_eq!(
++            hits.candidates.iter().map(|h| h.id).collect::<Vec<_>>(),
++            vec![7, 0]
++        );
++        assert!(hits.candidates[0].score.abs() < 1e-6);
++        assert!(
++            hits.candidates.capacity() <= 4,
++            "large k must not allocate a large heap"
++        );
++        assert_eq!(hits.mutation_revision, first.revision());
++        assert_eq!(hits.mutation_sha256, first.sha256());
++        assert_eq!(hits.mutation_rows_scanned, 3);
++        assert_eq!(hits.mutation_put_rows_scored, 2);
++        assert_eq!(
++            hits.stats,
++            Sq8ReadStats {
++                submitted_gets: 1,
++                verified_bytes: 28,
++                failed_gets: 0
++            }
++        );
++        let second = apply_two_bit_mutations(
++            &store,
++            &head,
++            2,
++            Some(&recovered),
++            &[
++                TwoBitMutation {
++                    id: 0,
++                    vector: Some(vec![1., 0.]),
++                },
++                TwoBitMutation {
++                    id: 7,
++                    vector: None,
++                },
++            ],
++            mutation_caps,
++        )
++        .await
++        .unwrap();
++        let restarted = read_two_bit_mutations(&store, &head, 2, mutation_caps)
++            .await
++            .unwrap()
++            .unwrap();
++        let after = charged
++            .search_with_mutations(&reader, &[1., 0.], 2, &restarted)
++            .await
++            .unwrap();
++        assert_eq!(
++            after.candidates.iter().map(|h| h.id).collect::<Vec<_>>(),
++            vec![0]
++        );
++        assert_eq!(after.mutation_revision, second.revision());
++        let pinned = charged
++            .search_with_mutations(&reader, &[2., 1.], 1, &first)
++            .await
++            .unwrap();
++        assert_eq!(pinned.candidates, vec![hits.candidates[0]]);
++        stop.store(true, Ordering::Relaxed);
++        server.join().unwrap();
++        assert_eq!(
++            requests.lock().unwrap().len(),
++            3,
++            "one GET per query, none for admission failure"
++        );
+         let mut corrupted = sq8.clone();
+         corrupted[12] ^= 1;
+         for response in [
+diff --git a/crates/borsuk/src/two_bit_generation.rs b/crates/borsuk/src/two_bit_generation.rs
+index 8d2a4bbf..9f3c8cec 100644
+--- a/crates/borsuk/src/two_bit_generation.rs
++++ b/crates/borsuk/src/two_bit_generation.rs
+@@ -5,7 +5,8 @@ use crate::{
+         ObjectNativeOpenError, ObjectNativeSearchResult, stage_generation_metadata,
+     },
+     sq8_page_authority::{PageAuthority, PageError},
+-    sq8_s3_range::{OneAttemptS3, RankedSq8Failure},
++    sq8_s3_range::{OneAttemptS3, RankedSq8Failure, Sq8ReadStats},
++    two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
+     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
+     unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError},
+     unit_centroid_pages::{UnitCentroidError, UnitCentroidPages},
+@@ -92,6 +93,8 @@ pub(crate) const METADATA_FILES: [&str; 8] = [
+ ];
+ /// Immutable metadata; SQ8 rows are fetched conditionally and never cached here.
+ pub struct TwoBitGeneration {
++    root_sha256: String,
++    modeled_memory_bytes: u64,
+     plane: TwoBitPlane,
+     pages: PageAuthority,
+     centroids: UnitCentroidPages,
+@@ -100,6 +103,24 @@ pub struct TwoBitGeneration {
+     limits: TwoBitGenerationLimits,
+     slots: Semaphore,
+ }
++
++/// One generation-pinned base fetch merged with a bounded immutable delta.
++pub struct TwoBitMutationSearchResult {
++    /// Physical base-page admission, unchanged by mutation visibility.
++    pub plan: BudgetedPagePlan,
++    /// Up to k visible logical candidates ordered by score then ID.
++    pub candidates: Vec<TwoBitMutationHit>,
++    /// Base-query GETs/bytes/failures; earlier snapshot recovery is lifecycle I/O.
++    pub stats: Sq8ReadStats,
++    /// Latest-state rows visited, including tombstones.
++    pub mutation_rows_scanned: usize,
++    /// Normalized pending puts scored in this query.
++    pub mutation_put_rows_scored: usize,
++    /// Pinned snapshot revision, independent of subsequent publications.
++    pub mutation_revision: u64,
++    /// Pinned authenticated mutation-body identity.
++    pub mutation_sha256: String,
++}
+ impl TwoBitGeneration {
+     /// Stream only generation metadata from an authorized immutable prefix,
+     /// then reuse authenticated local open. No SQ8/source-vector GET is issued.
+@@ -323,6 +344,8 @@ impl TwoBitGeneration {
+             return Err(bad("generation binding"));
+         }
+         Ok(Self {
++            root_sha256: trusted_sha256.into(),
++            modeled_memory_bytes: modeled,
+             plane,
+             pages,
+             centroids,
+@@ -477,6 +500,77 @@ impl TwoBitGeneration {
+             .await
+     }
+ 
++    /// Root-bound upsert/delete search under the same query semaphore as base
++    /// retrieval. Charge all retained snapshots in `already_pinned_bytes`.
++    /// Pending puts are scanned once; no base-vector hydration or extra GET.
++    /// Returns up to k rows, including underfill when nomination omits live rows.
++    pub async fn search_with_mutations(
++        &self,
++        reader: &OneAttemptS3,
++        query: &[f32],
++        top_k: usize,
++        mutations: &TwoBitMutationSnapshot,
++    ) -> Result<TwoBitMutationSearchResult> {
++        if !mutations.binds(&self.root_sha256, self.pages.dimensions())
++            || mutations.resident_payload_bytes() as u64 > self.limits.already_pinned_bytes
++        {
++            return Err(TwoBitGenerationError::Invalid(
++                "mutation binding or admission",
++            ));
++        }
++        if top_k == 0 {
++            return Err(TwoBitGenerationError::Invalid("top k"));
++        }
++        let fetched_rows = self
++            .pages
++            .rows()
++            .min(self.limits.max_query_bytes / (self.pages.dimensions() + 12));
++        let capacity = top_k.min(
++            fetched_rows
++                .checked_add(mutations.put_rows())
++                .ok_or(TwoBitGenerationError::Invalid("mutation query memory"))?,
++        );
++        let extra = (capacity as u64)
++            .checked_mul(32)
++            .and_then(|n| n.checked_add(4096))
++            .and_then(|n| n.checked_mul(self.limits.max_active_queries as u64))
++            .and_then(|n| n.checked_add(self.modeled_memory_bytes))
++            .ok_or(TwoBitGenerationError::Invalid("mutation query memory"))?;
++        if extra > self.limits.max_memory_bytes {
++            return Err(TwoBitGenerationError::Invalid("mutation query memory"));
++        }
++        let _permit = self
++            .slots
++            .acquire()
++            .await
++            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
++        let base = self
++            .search_unadmitted(
++                reader,
++                query,
++                top_k.min(self.pages.rows()),
++                Some(mutations.excluded_ids()),
++            )
++            .await?;
++        let candidates = mutations
++            .rank_with_base(&base.ranked.candidates, query, top_k)
++            .map_err(|error| {
++                TwoBitGenerationError::Read(RankedSq8Failure {
++                    error: crate::sq8_s3_range::RangeFetchError::Score(error),
++                    stats: base.ranked.stats,
++                })
++            })?;
++        Ok(TwoBitMutationSearchResult {
++            plan: base.plan,
++            candidates,
++            stats: base.ranked.stats,
++            mutation_rows_scanned: mutations.rows().len(),
++            mutation_put_rows_scored: mutations.put_rows(),
++            mutation_revision: mutations.revision(),
++            mutation_sha256: mutations.sha256().into(),
++        })
++    }
++
+     async fn search_inner(
+         &self,
+         reader: &OneAttemptS3,
+@@ -492,6 +586,17 @@ impl TwoBitGeneration {
+             .acquire()
+             .await
+             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
++        self.search_unadmitted(reader, query, top_k, excluded_ids)
++            .await
++    }
++
++    async fn search_unadmitted(
++        &self,
++        reader: &OneAttemptS3,
++        query: &[f32],
++        top_k: usize,
++        excluded_ids: Option<&[i64]>,
++    ) -> Result<ObjectNativeSearchResult> {
+         let (plan, normalized) = self.plan_inner(query, None)?;
+         let page_bytes = 256 * (self.pages.dimensions() + 12);
+         let ranges = plan
+diff --git a/crates/borsuk/src/two_bit_mutations.rs b/crates/borsuk/src/two_bit_mutations.rs
+index f7795d94..eae3e5a8 100644
+--- a/crates/borsuk/src/two_bit_mutations.rs
++++ b/crates/borsuk/src/two_bit_mutations.rs
+@@ -1,14 +1,14 @@
+ //! Authenticated latest-state deltas for one immutable object-native generation.
+ use crate::{
++    exact_sq8_nominee::{ScoredNominee, Sq8ScoreError},
+     resident_graph_generation::valid_sha256,
+     sq8_source::cosine_vector,
+     two_bit_store::{TwoBitHead, TwoBitStoreError, small_object},
+ };
+-use object_store::{
+-    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion, path::Path,
+-};
++use object_store::{ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion, path::Path};
+ use serde::{Deserialize, Serialize};
+ use sha2::{Digest, Sha256};
++use std::{cmp::Ordering, collections::BinaryHeap};
+ 
+ const MAGIC: &[u8; 8] = b"BTMUT001";
+ const HEADER: usize = 92;
+@@ -26,6 +26,36 @@ pub struct TwoBitMutation {
+     pub vector: Option<Vec<f32>>,
+ }
+ 
++/// Logical candidate from an SQ8 base row or normalized pending FP32 put.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct TwoBitMutationHit {
++    /// Signed application ID; pending puts have no base physical ordinal.
++    pub id: i64,
++    /// Normalized squared-L2 score, smaller is better. Base SQ8 is approximate.
++    pub score: f32,
++}
++
++struct HeapHit(TwoBitMutationHit);
++impl Ord for HeapHit {
++    fn cmp(&self, other: &Self) -> Ordering {
++        self.0
++            .score
++            .total_cmp(&other.0.score)
++            .then(self.0.id.cmp(&other.0.id))
++    }
++}
++impl PartialOrd for HeapHit {
++    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
++        Some(self.cmp(other))
++    }
++}
++impl PartialEq for HeapHit {
++    fn eq(&self, other: &Self) -> bool {
++        self.cmp(other) == Ordering::Equal
++    }
++}
++impl Eq for HeapHit {}
++
+ /// Snapshot caps. Concurrent publishers/recovered pins must be charged separately.
+ #[derive(Clone, Copy)]
+ pub struct TwoBitMutationLimits {
+@@ -58,6 +88,65 @@ pub struct TwoBitMutationSnapshot {
+     excluded_ids: Vec<i64>,
+ }
+ impl TwoBitMutationSnapshot {
++    pub(crate) fn binds(&self, root: &str, dimensions: usize) -> bool {
++        self.base_root == root && self.dimensions == dimensions
++    }
++    pub(crate) fn put_rows(&self) -> usize {
++        self.rows.iter().filter(|r| r.vector.is_some()).count()
++    }
++    pub(crate) fn rank_with_base(
++        &self,
++        base: &[ScoredNominee],
++        query: &[f32],
++        top_k: usize,
++    ) -> std::result::Result<Vec<TwoBitMutationHit>, Sq8ScoreError> {
++        if top_k == 0 || query.len() != self.dimensions || query.iter().any(|x| !x.is_finite()) {
++            return Err(Sq8ScoreError::InvalidQuery);
++        }
++        let normalized = cosine_vector(query).map_err(|_| Sq8ScoreError::InvalidQuery)?;
++        let capacity = top_k.min(
++            base.len()
++                .checked_add(self.put_rows())
++                .ok_or(Sq8ScoreError::InvalidRoster)?,
++        );
++        let mut heap = BinaryHeap::<HeapHit>::new();
++        heap.try_reserve_exact(capacity)
++            .map_err(|_| Sq8ScoreError::InvalidRoster)?;
++        let mut offer = |hit: TwoBitMutationHit| {
++            let candidate = HeapHit(hit);
++            if heap.len() < capacity {
++                heap.push(candidate);
++            } else if heap.peek().is_some_and(|worst| candidate < *worst) {
++                *heap.peek_mut().unwrap() = candidate;
++            }
++        };
++        for row in base {
++            if !row.score.is_finite() || self.excluded_ids.binary_search(&row.id).is_ok() {
++                return Err(Sq8ScoreError::InvalidRoster);
++            }
++            offer(TwoBitMutationHit {
++                id: row.id,
++                score: row.score,
++            });
++        }
++        // ponytail: scan the capped pending puts; compact into the base before
++        // the delta's measured CPU/write amplification becomes a bottleneck.
++        for row in &self.rows {
++            let Some(vector) = &row.vector else {
++                continue;
++            };
++            let squared = normalized
++                .iter()
++                .zip(vector)
++                .map(|(&q, &v)| (f64::from(q) - f64::from(v)).powi(2))
++                .sum::<f64>() as f32;
++            offer(TwoBitMutationHit {
++                id: row.id,
++                score: squared,
++            });
++        }
++        Ok(heap.into_sorted_vec().into_iter().map(|h| h.0).collect())
++    }
+     /// Conditional publication sequence within this immutable generation.
+     pub fn revision(&self) -> u64 {
+         self.revision
+diff --git a/docs/release/competitive-acceptance.md b/docs/release/competitive-acceptance.md
+index fe5560aa..4a8c9c69 100644
+--- a/docs/release/competitive-acceptance.md
++++ b/docs/release/competitive-acceptance.md
+@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
+ | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
+ | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
+ |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
+-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; query-side ID exclusion and authenticated CAS snapshot recovery work; upsert query merging and coordinated compaction/GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
++| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; coordinated compaction/GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+ | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
+ | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
+ 
+@@ -99,10 +99,12 @@ recovery and compaction remain OPEN.
+ [ID API and receipts](../research/application-id-source-20260928/decision.md).
+ The range reader now applies borrowed mutation exclusions before top-k and
+ retains page authentication/physical charges. Durable snapshot CAS/recovery now
+-passes focused functional checks; upsert merging and coordinated compaction
+-remain the next implementation gates.
++passes focused functional checks. Root-bound upsert/deletion query merge and
++recover/search parity now pass real local HTTP checks; canonical source binding
++and coordinated compaction remain the next implementation gates.
+ [Visibility primitive](../research/mutation-visibility-20260928/decision.md).
+ [Durable snapshot receipts](../research/durable-mutation-snapshot-20260928/decision.md).
++[Mutation query receipts](../research/mutation-search-20260928/decision.md).
+ 
+ Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/decision.md),
+ [discovery diagnostic](../research/nomination-trace-20260928/decision.md),
+diff --git a/docs/release/two-bit-generation.md b/docs/release/two-bit-generation.md
+index afedfb4d..d6c1c7ae 100644
+--- a/docs/release/two-bit-generation.md
++++ b/docs/release/two-bit-generation.md
+@@ -422,9 +422,46 @@ process admission. Cap failure leaves the existing head intact. There is no
+ unbounded log or full base hydration. Each batch rewrites the bounded delta;
+ this write amplification must be measured in lifecycle cost.
+ 
+-This persistence primitive does not yet merge new puts into search results or
+-compact/GC snapshots. Exclusion alone would hide a replaced row without returning
+-its replacement. Do not present that composition as complete mutation search.
++`search_with_mutations` below merges recovered puts into query results. This
++persistence primitive itself does not score queries or compact/GC snapshots.
++Using exclusion alone still hides replacements without returning their new rows.
+ Keep writes pinned to their base: changing the index head without incorporating
+ its mutations can lose visibility. Coordinated base replacement, upsert ranking,
+ compaction and safe old-object reclamation remain release gates.
++
++## Search a recovered mutation snapshot
++
++```rust,ignore
++let snapshot = read_two_bit_mutations(store, &head, head.dimensions(), caps)
++    .await?.expect("published mutation state");
++// Reopen with every retained snapshot payload charged in already_pinned_bytes.
++let result = generation.search_with_mutations(&reader, &query, k, &snapshot).await?;
++```
++
++The method checks the authenticated base-root/dimension binding and retained
++snapshot charge before any GET. One query semaphore permit covers planning,
++conditional SQ8 retrieval, pre-top-k exclusion and pending-put scoring/merge.
++Deletes never reappear from base pages; replacements use their pending vectors;
++new IDs can be returned even when k exceeds base N. The method returns up to k
++visible hits, with actual count exposed. It does not fetch extra pages to fill k.
++
++`TwoBitMutationSearchResult` contains logical ID/score hits, the base page plan,
++base-query GET/verified-byte/failure stats, delta rows visited/puts scored and the
++pinned mutation revision/digest. Pending vectors have no base physical ordinal.
++Earlier snapshot recovery I/O must be counted separately in lifecycle/cold-start
++cost; these query stats do not claim it was free.
++
++Pending normalized FP32 vectors are scored in normalized squared-L2 units;
++base scores remain the existing SQ8 approximation. A bounded std BinaryHeap
++selects score/ID order. Extra heap/output payload `(32 * capacity + 4096)` is
++charged for every configured active query on top of the loader's complete
++payload model. Capacity is bounded by potential fetched base rows plus pending
++puts, not a caller's arbitrarily large k. Runtime/allocator/transport overhead
++and result buffers retained beyond completed queries require separate admission.
++
++Focused local HTTP mutation/recovery checks prove functional visibility and
++one GET per fixture query. They do not measure ANN quality, AWS latency/QPS,
++100M RSS, costs or vendor superiority. Generation compaction still needs a
++durable canonical source binding and an atomic base/delta handoff: the current
++root records only the original source hash, not an owned recoverable source
++object. Reconstructing that source from SQ8 would introduce quantization drift.

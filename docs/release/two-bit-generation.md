@@ -422,9 +422,46 @@ process admission. Cap failure leaves the existing head intact. There is no
 unbounded log or full base hydration. Each batch rewrites the bounded delta;
 this write amplification must be measured in lifecycle cost.
 
-This persistence primitive does not yet merge new puts into search results or
-compact/GC snapshots. Exclusion alone would hide a replaced row without returning
-its replacement. Do not present that composition as complete mutation search.
+`search_with_mutations` below merges recovered puts into query results. This
+persistence primitive itself does not score queries or compact/GC snapshots.
+Using exclusion alone still hides replacements without returning their new rows.
 Keep writes pinned to their base: changing the index head without incorporating
 its mutations can lose visibility. Coordinated base replacement, upsert ranking,
 compaction and safe old-object reclamation remain release gates.
+
+## Search a recovered mutation snapshot
+
+```rust,ignore
+let snapshot = read_two_bit_mutations(store, &head, head.dimensions(), caps)
+    .await?.expect("published mutation state");
+// Reopen with every retained snapshot payload charged in already_pinned_bytes.
+let result = generation.search_with_mutations(&reader, &query, k, &snapshot).await?;
+```
+
+The method checks the authenticated base-root/dimension binding and retained
+snapshot charge before any GET. One query semaphore permit covers planning,
+conditional SQ8 retrieval, pre-top-k exclusion and pending-put scoring/merge.
+Deletes never reappear from base pages; replacements use their pending vectors;
+new IDs can be returned even when k exceeds base N. The method returns up to k
+visible hits, with actual count exposed. It does not fetch extra pages to fill k.
+
+`TwoBitMutationSearchResult` contains logical ID/score hits, the base page plan,
+base-query GET/verified-byte/failure stats, delta rows visited/puts scored and the
+pinned mutation revision/digest. Pending vectors have no base physical ordinal.
+Earlier snapshot recovery I/O must be counted separately in lifecycle/cold-start
+cost; these query stats do not claim it was free.
+
+Pending normalized FP32 vectors are scored in normalized squared-L2 units;
+base scores remain the existing SQ8 approximation. A bounded std BinaryHeap
+selects score/ID order. Extra heap/output payload `(32 * capacity + 4096)` is
+charged for every configured active query on top of the loader's complete
+payload model. Capacity is bounded by potential fetched base rows plus pending
+puts, not a caller's arbitrarily large k. Runtime/allocator/transport overhead
+and result buffers retained beyond completed queries require separate admission.
+
+Focused local HTTP mutation/recovery checks prove functional visibility and
+one GET per fixture query. They do not measure ANN quality, AWS latency/QPS,
+100M RSS, costs or vendor superiority. Generation compaction still needs a
+durable canonical source binding and an atomic base/delta handoff: the current
+root records only the original source hash, not an owned recoverable source
+object. Reconstructing that source from SQ8 would introduce quantization drift.

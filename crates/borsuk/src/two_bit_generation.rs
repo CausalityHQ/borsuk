@@ -5,7 +5,8 @@ use crate::{
         ObjectNativeOpenError, ObjectNativeSearchResult, stage_generation_metadata,
     },
     sq8_page_authority::{PageAuthority, PageError},
-    sq8_s3_range::{OneAttemptS3, RankedSq8Failure},
+    sq8_s3_range::{OneAttemptS3, RankedSq8Failure, Sq8ReadStats},
+    two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
     unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError},
     unit_centroid_pages::{UnitCentroidError, UnitCentroidPages},
@@ -92,6 +93,8 @@ pub(crate) const METADATA_FILES: [&str; 8] = [
 ];
 /// Immutable metadata; SQ8 rows are fetched conditionally and never cached here.
 pub struct TwoBitGeneration {
+    root_sha256: String,
+    modeled_memory_bytes: u64,
     plane: TwoBitPlane,
     pages: PageAuthority,
     centroids: UnitCentroidPages,
@@ -99,6 +102,24 @@ pub struct TwoBitGeneration {
     manifest: Manifest,
     limits: TwoBitGenerationLimits,
     slots: Semaphore,
+}
+
+/// One generation-pinned base fetch merged with a bounded immutable delta.
+pub struct TwoBitMutationSearchResult {
+    /// Physical base-page admission, unchanged by mutation visibility.
+    pub plan: BudgetedPagePlan,
+    /// Up to k visible logical candidates ordered by score then ID.
+    pub candidates: Vec<TwoBitMutationHit>,
+    /// Base-query GETs/bytes/failures; earlier snapshot recovery is lifecycle I/O.
+    pub stats: Sq8ReadStats,
+    /// Latest-state rows visited, including tombstones.
+    pub mutation_rows_scanned: usize,
+    /// Normalized pending puts scored in this query.
+    pub mutation_put_rows_scored: usize,
+    /// Pinned snapshot revision, independent of subsequent publications.
+    pub mutation_revision: u64,
+    /// Pinned authenticated mutation-body identity.
+    pub mutation_sha256: String,
 }
 impl TwoBitGeneration {
     /// Stream only generation metadata from an authorized immutable prefix,
@@ -323,6 +344,8 @@ impl TwoBitGeneration {
             return Err(bad("generation binding"));
         }
         Ok(Self {
+            root_sha256: trusted_sha256.into(),
+            modeled_memory_bytes: modeled,
             plane,
             pages,
             centroids,
@@ -477,6 +500,77 @@ impl TwoBitGeneration {
             .await
     }
 
+    /// Root-bound upsert/delete search under the same query semaphore as base
+    /// retrieval. Charge all retained snapshots in `already_pinned_bytes`.
+    /// Pending puts are scanned once; no base-vector hydration or extra GET.
+    /// Returns up to k rows, including underfill when nomination omits live rows.
+    pub async fn search_with_mutations(
+        &self,
+        reader: &OneAttemptS3,
+        query: &[f32],
+        top_k: usize,
+        mutations: &TwoBitMutationSnapshot,
+    ) -> Result<TwoBitMutationSearchResult> {
+        if !mutations.binds(&self.root_sha256, self.pages.dimensions())
+            || mutations.resident_payload_bytes() as u64 > self.limits.already_pinned_bytes
+        {
+            return Err(TwoBitGenerationError::Invalid(
+                "mutation binding or admission",
+            ));
+        }
+        if top_k == 0 {
+            return Err(TwoBitGenerationError::Invalid("top k"));
+        }
+        let fetched_rows = self
+            .pages
+            .rows()
+            .min(self.limits.max_query_bytes / (self.pages.dimensions() + 12));
+        let capacity = top_k.min(
+            fetched_rows
+                .checked_add(mutations.put_rows())
+                .ok_or(TwoBitGenerationError::Invalid("mutation query memory"))?,
+        );
+        let extra = (capacity as u64)
+            .checked_mul(32)
+            .and_then(|n| n.checked_add(4096))
+            .and_then(|n| n.checked_mul(self.limits.max_active_queries as u64))
+            .and_then(|n| n.checked_add(self.modeled_memory_bytes))
+            .ok_or(TwoBitGenerationError::Invalid("mutation query memory"))?;
+        if extra > self.limits.max_memory_bytes {
+            return Err(TwoBitGenerationError::Invalid("mutation query memory"));
+        }
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        let base = self
+            .search_unadmitted(
+                reader,
+                query,
+                top_k.min(self.pages.rows()),
+                Some(mutations.excluded_ids()),
+            )
+            .await?;
+        let candidates = mutations
+            .rank_with_base(&base.ranked.candidates, query, top_k)
+            .map_err(|error| {
+                TwoBitGenerationError::Read(RankedSq8Failure {
+                    error: crate::sq8_s3_range::RangeFetchError::Score(error),
+                    stats: base.ranked.stats,
+                })
+            })?;
+        Ok(TwoBitMutationSearchResult {
+            plan: base.plan,
+            candidates,
+            stats: base.ranked.stats,
+            mutation_rows_scanned: mutations.rows().len(),
+            mutation_put_rows_scored: mutations.put_rows(),
+            mutation_revision: mutations.revision(),
+            mutation_sha256: mutations.sha256().into(),
+        })
+    }
+
     async fn search_inner(
         &self,
         reader: &OneAttemptS3,
@@ -492,6 +586,17 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        self.search_unadmitted(reader, query, top_k, excluded_ids)
+            .await
+    }
+
+    async fn search_unadmitted(
+        &self,
+        reader: &OneAttemptS3,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+    ) -> Result<ObjectNativeSearchResult> {
         let (plan, normalized) = self.plan_inner(query, None)?;
         let page_bytes = 256 * (self.pages.dimensions() + 12);
         let ranges = plan

@@ -1,0 +1,27 @@
+{
+  "base": "23f3dcb0",
+  "host": "spark-2751 / aarch64",
+  "jobs": [
+    {
+      "log": "mutation-search-final-http.log",
+      "raw_sha256": "4d7a442d98fa617c570123223c7ec7b6a113f30cecf584a2ee591e6a2f867218",
+      "exit": 0
+    },
+    {
+      "log": "mutation-search-green.log",
+      "raw_sha256": "02664a1743a7ad7cc1ddeaca20a4ca09424cc925e7386300eea8fff06476a4d1",
+      "exit": 0
+    },
+    {
+      "log": "mutation-search-red.log",
+      "raw_sha256": "eca41f12e4e74b2be4659b7736d0d0816a0d1ac3321005b32323ed63cdab9b35",
+      "exit": 101
+    },
+    {
+      "log": "mutation-search-regression.log",
+      "raw_sha256": "dc8e81422ab2c1242b6ee35e88c2424851b23bd230117461d7171b99e1d8ba8b",
+      "exit": 0
+    }
+  ],
+  "final_gate": "Four range/local-HTTP tests exit0, then two application-ID/generation integration fixtures exit0. Exact final source parity. Three successful merged queries use one28B GET each; uncharged/wrong-root failures0GET. This is fixture correctness, not AWS latency/ANN quality/RSS/vendor evidence."
+}

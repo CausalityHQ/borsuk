@@ -627,6 +627,173 @@ mod tests {
         )
         .await
         .unwrap();
+        use crate::two_bit_mutations::{
+            TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
+        };
+        let mutation_caps = TwoBitMutationLimits {
+            max_snapshot_bytes: 16384,
+            max_memory_bytes: 1_000_000,
+        };
+        let first = apply_two_bit_mutations(
+            &store,
+            &head,
+            2,
+            None,
+            &[
+                TwoBitMutation {
+                    id: 0,
+                    vector: Some(vec![-1., 0.]),
+                },
+                TwoBitMutation {
+                    id: 1,
+                    vector: None,
+                },
+                TwoBitMutation {
+                    id: 7,
+                    vector: Some(vec![2., 1.]),
+                },
+            ],
+            mutation_caps,
+        )
+        .await
+        .unwrap();
+        let recovered = read_two_bit_mutations(&store, &head, 2, mutation_caps)
+            .await
+            .unwrap()
+            .unwrap();
+        let charged = TwoBitGeneration::open_remote(
+            &store,
+            &head.metadata_prefix(),
+            head.root_sha256(),
+            TwoBitGenerationLimits {
+                already_pinned_bytes: 4 * recovered.resident_payload_bytes() as u64,
+                ..limits
+            },
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let other_root = temp.path().join("other-generation");
+        let other_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &hash(&sq8),
+                rows: 2,
+                dimensions: 2,
+            },
+            generation: 2,
+            low: &encoded.low,
+            step: &encoded.step,
+            sq8_object_key: &key,
+            sq8_etag: &etag,
+        }
+        .build(&other_root, 2_000_000)
+        .unwrap();
+        let other_generation = TwoBitGeneration::open(
+            &other_root,
+            &other_sha,
+            TwoBitGenerationLimits {
+                already_pinned_bytes: 4 * recovered.resident_payload_bytes() as u64,
+                ..limits
+            },
+        )
+        .unwrap();
+        let response = http_response(
+            "206 Partial Content",
+            Some("bytes 0-27/28"),
+            &etag,
+            28,
+            &sq8,
+        );
+        let (reader, stop, requests, server) = http_fixture(response);
+        assert!(matches!(
+            generation
+                .search_with_mutations(&reader, &[2., 1.], 3, &recovered)
+                .await,
+            Err(TwoBitGenerationError::Invalid(
+                "mutation binding or admission"
+            ))
+        ));
+        assert!(matches!(
+            other_generation
+                .search_with_mutations(&reader, &[2., 1.], 3, &recovered)
+                .await,
+            Err(TwoBitGenerationError::Invalid(
+                "mutation binding or admission"
+            ))
+        ));
+        assert!(requests.lock().unwrap().is_empty());
+        let hits = charged
+            .search_with_mutations(&reader, &[2., 1.], usize::MAX, &recovered)
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.candidates.iter().map(|h| h.id).collect::<Vec<_>>(),
+            vec![7, 0]
+        );
+        assert!(hits.candidates[0].score.abs() < 1e-6);
+        assert!(
+            hits.candidates.capacity() <= 4,
+            "large k must not allocate a large heap"
+        );
+        assert_eq!(hits.mutation_revision, first.revision());
+        assert_eq!(hits.mutation_sha256, first.sha256());
+        assert_eq!(hits.mutation_rows_scanned, 3);
+        assert_eq!(hits.mutation_put_rows_scored, 2);
+        assert_eq!(
+            hits.stats,
+            Sq8ReadStats {
+                submitted_gets: 1,
+                verified_bytes: 28,
+                failed_gets: 0
+            }
+        );
+        let second = apply_two_bit_mutations(
+            &store,
+            &head,
+            2,
+            Some(&recovered),
+            &[
+                TwoBitMutation {
+                    id: 0,
+                    vector: Some(vec![1., 0.]),
+                },
+                TwoBitMutation {
+                    id: 7,
+                    vector: None,
+                },
+            ],
+            mutation_caps,
+        )
+        .await
+        .unwrap();
+        let restarted = read_two_bit_mutations(&store, &head, 2, mutation_caps)
+            .await
+            .unwrap()
+            .unwrap();
+        let after = charged
+            .search_with_mutations(&reader, &[1., 0.], 2, &restarted)
+            .await
+            .unwrap();
+        assert_eq!(
+            after.candidates.iter().map(|h| h.id).collect::<Vec<_>>(),
+            vec![0]
+        );
+        assert_eq!(after.mutation_revision, second.revision());
+        let pinned = charged
+            .search_with_mutations(&reader, &[2., 1.], 1, &first)
+            .await
+            .unwrap();
+        assert_eq!(pinned.candidates, vec![hits.candidates[0]]);
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            3,
+            "one GET per query, none for admission failure"
+        );
         let mut corrupted = sq8.clone();
         corrupted[12] ^= 1;
         for response in [

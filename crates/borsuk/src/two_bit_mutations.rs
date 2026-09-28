@@ -1,14 +1,14 @@
 //! Authenticated latest-state deltas for one immutable object-native generation.
 use crate::{
+    exact_sq8_nominee::{ScoredNominee, Sq8ScoreError},
     resident_graph_generation::valid_sha256,
     sq8_source::cosine_vector,
     two_bit_store::{TwoBitHead, TwoBitStoreError, small_object},
 };
-use object_store::{
-    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion, path::Path,
-};
+use object_store::{ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion, path::Path};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::{cmp::Ordering, collections::BinaryHeap};
 
 const MAGIC: &[u8; 8] = b"BTMUT001";
 const HEADER: usize = 92;
@@ -25,6 +25,36 @@ pub struct TwoBitMutation {
     /// Finite nonzero cosine vector; publication normalizes it once.
     pub vector: Option<Vec<f32>>,
 }
+
+/// Logical candidate from an SQ8 base row or normalized pending FP32 put.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TwoBitMutationHit {
+    /// Signed application ID; pending puts have no base physical ordinal.
+    pub id: i64,
+    /// Normalized squared-L2 score, smaller is better. Base SQ8 is approximate.
+    pub score: f32,
+}
+
+struct HeapHit(TwoBitMutationHit);
+impl Ord for HeapHit {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .score
+            .total_cmp(&other.0.score)
+            .then(self.0.id.cmp(&other.0.id))
+    }
+}
+impl PartialOrd for HeapHit {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for HeapHit {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for HeapHit {}
 
 /// Snapshot caps. Concurrent publishers/recovered pins must be charged separately.
 #[derive(Clone, Copy)]
@@ -58,6 +88,65 @@ pub struct TwoBitMutationSnapshot {
     excluded_ids: Vec<i64>,
 }
 impl TwoBitMutationSnapshot {
+    pub(crate) fn binds(&self, root: &str, dimensions: usize) -> bool {
+        self.base_root == root && self.dimensions == dimensions
+    }
+    pub(crate) fn put_rows(&self) -> usize {
+        self.rows.iter().filter(|r| r.vector.is_some()).count()
+    }
+    pub(crate) fn rank_with_base(
+        &self,
+        base: &[ScoredNominee],
+        query: &[f32],
+        top_k: usize,
+    ) -> std::result::Result<Vec<TwoBitMutationHit>, Sq8ScoreError> {
+        if top_k == 0 || query.len() != self.dimensions || query.iter().any(|x| !x.is_finite()) {
+            return Err(Sq8ScoreError::InvalidQuery);
+        }
+        let normalized = cosine_vector(query).map_err(|_| Sq8ScoreError::InvalidQuery)?;
+        let capacity = top_k.min(
+            base.len()
+                .checked_add(self.put_rows())
+                .ok_or(Sq8ScoreError::InvalidRoster)?,
+        );
+        let mut heap = BinaryHeap::<HeapHit>::new();
+        heap.try_reserve_exact(capacity)
+            .map_err(|_| Sq8ScoreError::InvalidRoster)?;
+        let mut offer = |hit: TwoBitMutationHit| {
+            let candidate = HeapHit(hit);
+            if heap.len() < capacity {
+                heap.push(candidate);
+            } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+                *heap.peek_mut().unwrap() = candidate;
+            }
+        };
+        for row in base {
+            if !row.score.is_finite() || self.excluded_ids.binary_search(&row.id).is_ok() {
+                return Err(Sq8ScoreError::InvalidRoster);
+            }
+            offer(TwoBitMutationHit {
+                id: row.id,
+                score: row.score,
+            });
+        }
+        // ponytail: scan the capped pending puts; compact into the base before
+        // the delta's measured CPU/write amplification becomes a bottleneck.
+        for row in &self.rows {
+            let Some(vector) = &row.vector else {
+                continue;
+            };
+            let squared = normalized
+                .iter()
+                .zip(vector)
+                .map(|(&q, &v)| (f64::from(q) - f64::from(v)).powi(2))
+                .sum::<f64>() as f32;
+            offer(TwoBitMutationHit {
+                id: row.id,
+                score: squared,
+            });
+        }
+        Ok(heap.into_sorted_vec().into_iter().map(|h| h.0).collect())
+    }
     /// Conditional publication sequence within this immutable generation.
     pub fn revision(&self) -> u64 {
         self.revision
