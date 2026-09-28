@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-native-relaion-source-preparation-gate-v1",
+  "source_baseline": "6c1e96d9",
+  "host": "spark-2751",
+  "ssh_user": "riomus",
+  "job_directory": "/home/riomus/borsuk-native-relaion-20260928-a0001",
+  "input_sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d",
+  "rows": 100000,
+  "dimensions": 768,
+  "threads": 4,
+  "wall_cap_seconds": 1200,
+  "layout": "unchanged V283 ceil(N/256) source-only semantic ordering; sampling seed8201/Lloyd12 seed8202",
+  "two_bit_source": "original Parquet f32 rows, not normalized source export",
+  "query_or_truth_used": false,
+  "cloud_instance_launch": false,
+  "code_sha256": "173b3111130c984b9314e1f44e3dab7718339562b70b509e749a4126a0d7efe1",
+  "check_sha256": "32603bdffcbafa0937cdec41e5a28cc8a067049eecb927a2caf8620f88029a6e",
+  "checks": "failure terminal, closed-job refusal, active flock refusal pass",
+  "decision": "Source preparation only. Authenticate terminal/artifacts before developing router. No recall, latency or release claim.",
+  "next_gate": "Development0\u201363 page oracle first; then corrected API/flat scoring under frozen98/p05 95/0.5pp/32GET/16MiB gates; no scale until full paired validation"
+}
