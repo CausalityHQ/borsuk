@@ -40,7 +40,7 @@ vendor evidence remains an unresolved final release blocker.
 | Same-quality end-to-end p90/p95; p50/p99 | No qualifying cold object-native HTTP run from current complete native pipeline | Same workload/transport/cache/SLO required | Same workload/transport/cache/SLO required | OPEN |
 | Sustainable QPS at same recall and tail SLO | No qualifying current-route measurement | Direct matched QPS needed | Direct matched QPS needed | OPEN |
 |100M+ bounded RAM without hydration | Compressed codes alone project20GB at100M D768; excludes centroid/graph/overlap/runtime. Not measured total RSS or qualified scale. | Record disclosed resource/lifecycle configuration | Record disclosed resource/lifecycle configuration | OPEN |
-| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; coordinated compaction/GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
+| Incremental IDs/insert/update/delete/recovery/compaction | Immutable authenticated create/publish/open/search and signed-i64 application-ID binding fixtures work; root-bound insert/update/delete query merging and authenticated CAS snapshot recovery pass focused HTTP checks; canonical source is durable under v2; irreversible mutation-head CAS fence guards replacement; canonical/delta merge and GC missing | Exercise equivalent workload/lifecycle | Exercise equivalent workload/lifecycle | OPEN |
 | Total lifecycle cost and throughput/$ | No complete current-route lifecycle receipt | Direct matched cost ledger needed | Direct matched cost ledger needed | OPEN |
 | Install/package/CI/security/failure checks | Local helper-backed crate archive smoke and focused binding/corruption tests pass; registry install and exact release CI unverified | Not a vendor timing substitute | Not a vendor timing substitute | OPEN |
 
@@ -113,3 +113,11 @@ Evidence: [native pipeline KILL](../research/native-pipeline-quality-20260928/de
 [centroid diagnostic](../research/centroid-discovery-diagnostic-20260928/decision.md),
 [traversal KILL](../research/page-diverse-expansion-20260928/decision.md),
 [32-page containment diagnostic](../research/page-containment-stress-20260928/decision.md).
+
+Mutation-head v2 now seals empty or populated deltas and generation replacement
+requires the seal before staging. Focused checks cover stale writers and
+lost acknowledgements, including equal-body unsealed races. This closes a
+write-fencing primitive, not compaction or any vendor axis. Next single
+implementation: bounded canonical/delta stream merge with restart-safe handoff,
+then reader-safe in-process GC; empty-index semantics remain unresolved.
+[Mutation fence receipts](../research/mutation-seal-20260928/decision.md).

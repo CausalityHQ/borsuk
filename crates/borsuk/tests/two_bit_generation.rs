@@ -266,6 +266,10 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     .await
     .unwrap();
     assert_eq!(first.ranges, live.plan(&[0.5, 0.25]).await.unwrap().ranges);
+    let seal_limits = borsuk::two_bit_mutations::TwoBitMutationLimits {
+        max_snapshot_bytes: 1024,
+        max_memory_bytes: 32768,
+    };
     for generation_id in [2, 3] {
         let mut page: serde_json::Value = serde_json::from_slice(&page_manifest).unwrap();
         page["generation"] = generation_id.into();
@@ -275,6 +279,53 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         prepared["page_manifest_sha256"] = hash(&page_bytes).into();
         let bytes = serde_json::to_vec(&prepared).unwrap();
         fs::write(publication.path().join("manifest.json"), &bytes).unwrap();
+        if generation_id == 2 {
+            assert!(
+                publish_two_bit_generation(
+                    &published_store,
+                    &index_prefix,
+                    publication.path(),
+                    &hash(&bytes),
+                    publish_limits,
+                    Some(&pinned),
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(
+                read_two_bit_head(&published_store, &index_prefix)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .generation(),
+                1
+            );
+            let empty = borsuk::two_bit_mutations::seal_two_bit_mutations(
+                &published_store,
+                &pinned,
+                None,
+                seal_limits,
+            )
+            .await
+            .unwrap();
+            assert!(empty.is_sealed());
+            assert!(empty.rows().is_empty());
+            assert!(
+                borsuk::two_bit_mutations::apply_two_bit_mutations(
+                    &published_store,
+                    &pinned,
+                    2,
+                    None,
+                    &[borsuk::two_bit_mutations::TwoBitMutation {
+                        id: 7,
+                        vector: None
+                    }],
+                    seal_limits,
+                )
+                .await
+                .is_err()
+            );
+        }
         let result = publish_two_bit_generation(
             &published_store,
             &index_prefix,

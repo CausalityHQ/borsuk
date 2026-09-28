@@ -152,6 +152,9 @@ pub async fn read_two_bit_head(
 }
 /// Validate prepared local metadata, stream/hash it to an immutable root prefix,
 /// then CAS the head. SQ8 must already exist at its immutable approved key/ETag.
+/// Replacement requires the previous mutation head to be sealed first. The caller
+/// must incorporate those sealed states in the prepared replacement; this low-level
+/// publisher does not prove corpus equivalence. Initial publication needs no seal.
 /// Inputs must remain immutable. This checks SQ8 HEAD, not a full SQ8 re-download.
 /// Failed staging can leave unreachable metadata for in-process GC to reclaim.
 pub async fn publish_two_bit_generation(
@@ -164,6 +167,9 @@ pub async fn publish_two_bit_generation(
 ) -> Result<TwoBitHead> {
     if expected.is_some_and(|h| h.prefix != *prefix) {
         return Err(TwoBitStoreError::Invalid("head namespace"));
+    }
+    if let Some(previous) = expected {
+        crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?;
     }
     // Admit and authenticate using exactly the serving reader, then release it
     // before multipart buffers are allocated. No SQ8 payload is loaded.

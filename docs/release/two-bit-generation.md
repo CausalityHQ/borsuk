@@ -147,7 +147,8 @@ let generation = TwoBitGeneration::open_remote(
 The application must authorize this store/prefix and head writers. Use a
 conditional-put-capable store. The opaque token is bound to the index prefix;
 use it with the same store that issued it. New IDs must exceed the expected
-head's generation. The canonical source and all fixed metadata files are streamed, length/SHA checked
+head's generation. Replacing an existing head requires sealing its mutation head first
+(see below), even when there are no pending rows. The canonical source and all fixed metadata files are streamed, length/SHA checked
 before multipart completion, under `generations/ROOT_SHA/`. The head changes
 last via create-or-CAS. A lost head-write acknowledgement is reconciled against
 authenticated readback. Failed staging or stale publication can leave unreachable
@@ -410,7 +411,8 @@ let updated = apply_two_bit_mutations(
 Snapshots use binary `BTMUT001`: root SHA, dimensions, revision, row count, then
 signed ID, operation and normalized FP32 put coordinates. Objects are stored at
 `generations/<base-root>/mutations/<snapshot-sha>` with conditional create;
-`mutation-head.json` is conditionally created/updated last. An opaque recovered
+`mutation-head.json` uses `borsuk-two-bit-mutation-head-v2`, with required
+`sealed` flag, and is conditionally created/updated last. Head v1 is rejected. An opaque recovered
 CAS token serializes writers. A stale CAS error requires rereading/reapplying the
 batch; a committed write with a lost acknowledgement is accepted only after
 exact authenticated revision/digest readback. Store ACLs authorize writers.
@@ -429,8 +431,36 @@ this write amplification must be measured in lifecycle cost.
 persistence primitive itself does not score queries or compact/GC snapshots.
 Using exclusion alone still hides replacements without returning their new rows.
 Keep writes pinned to their base: changing the index head without incorporating
-its mutations can lose visibility. Coordinated base replacement, upsert ranking,
-compaction and safe old-object reclamation remain release gates.
+its mutations can lose visibility. The publication fence below closes writers,
+but replacement corpus construction, compaction and safe old-object reclamation
+remain release gates.
+
+## Fence mutations before generation replacement
+
+```rust,ignore
+let latest = read_two_bit_mutations(store, &head, head.dimensions(), caps).await?;
+let sealed = borsuk::two_bit_mutations::seal_two_bit_mutations(
+    store, &head, latest.as_ref(), caps,
+).await?;
+assert!(sealed.is_sealed());
+// Stream canonical base + these sealed latest states into a new generation.
+// Only then publish with expected=Some(&head); never discard sealed rows.
+```
+
+Sealing is irreversible. It CAS-publishes a readable snapshot, including an empty
+snapshot for an absent mutation head. Stale writers fail CAS; writes using an
+observed sealed token reject before staging. If a writer wins the CAS first,
+sealing fails: reread and retry with its complete latest state. A seal with a lost
+acknowledgement requires an authenticated **sealed** revision/SHA readback.
+Sealing an already-sealed recovered token is idempotent after readback.
+
+A crash between seal and replacement leaves old-generation queries working but
+pauses writes; resume from the recovered sealed state. There is no unseal API.
+Low-level generation publication requires a sealed old head before uploading
+objects, but cannot prove that prepared target rows incorporate that state.
+The full library compactor must perform that merge and recovery workflow.
+Neither this fence nor its functional tests qualify full compaction, GC,
+cloud latency, scale or vendor superiority.
 
 ## Search a recovered mutation snapshot
 

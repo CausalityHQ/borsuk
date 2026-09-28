@@ -1,0 +1,27 @@
+{
+  "base": "9f3890eb",
+  "host": "spark-2751 / aarch64",
+  "jobs": [
+    {
+      "log": "mutation-seal-fixed.log",
+      "raw_sha256": "d65d0aae3ea785314eebc5d1a8cd3275f32e13be5405215a0865abc3353777a6",
+      "exit": 0
+    },
+    {
+      "log": "mutation-seal-green.log",
+      "raw_sha256": "d83187908b281426580842a4a68ba428be2ba194bb437d61a0efa556b51a065a",
+      "exit": 101
+    },
+    {
+      "log": "mutation-seal-http.log",
+      "raw_sha256": "e6955a14bc0ed86d13ae6049034cc100a267ee6f65e58f741fbd048f57058812",
+      "exit": 0
+    },
+    {
+      "log": "mutation-seal-red.log",
+      "raw_sha256": "00b08b59546b44c6b6c37e901ddd5b7addb6d7e8d976b953b3d906066390b8dd",
+      "exit": 101
+    }
+  ],
+  "final_gate": "Focused application-ID and generation tests2 exit0; affected HTTP tests4 exit0. Local/remote source SHA parity. Initial green failed misplaced legacy-head test setup; fixed at failing layer. Equal-SHA unsealed competing publication cannot acknowledge seal. No paid benchmark or duplicate job. Prior native dual critique remains cooldown-rejected; no override."
+}

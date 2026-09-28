@@ -418,6 +418,50 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             .sha256(),
         acknowledged.sha256()
     );
+    // A concurrent no-op put has exactly the intended seal's immutable body.
+    // Matching revision/SHA without a sealed head must never acknowledge a fence.
+    let no_op = apply_two_bit_mutations(
+        store.as_ref(),
+        &other,
+        2,
+        Some(&acknowledged),
+        &[TwoBitMutation {
+            id: 7,
+            vector: Some(vec![1., 0.]),
+        }],
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert!(!no_op.is_sealed());
+    assert!(
+        borsuk::two_bit_mutations::seal_two_bit_mutations(
+            store.as_ref(),
+            &other,
+            Some(&acknowledged),
+            mutation_limits,
+        )
+        .await
+        .is_err()
+    );
+    let acknowledged = no_op;
+    let lost_seal_ack = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        store.clone(),
+        1,
+        |op, path| {
+            op == common::StoreOperation::Put && path.as_ref().ends_with("mutation-head.json")
+        },
+    );
+    let sealed_other = borsuk::two_bit_mutations::seal_two_bit_mutations(
+        &lost_seal_ack,
+        &other,
+        Some(&acknowledged),
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert!(sealed_other.is_sealed());
+    assert_eq!(sealed_other.rows(), acknowledged.rows());
     let second = apply_two_bit_mutations(
         store.as_ref(),
         &head,
@@ -558,6 +602,25 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         .bytes()
         .await
         .unwrap();
+    let mut legacy: serde_json::Value = serde_json::from_slice(&original_head).unwrap();
+    legacy["schema"] = "borsuk-two-bit-mutation-head-v1".into();
+    legacy.as_object_mut().unwrap().remove("sealed");
+    store
+        .put(
+            &mutation_head_key,
+            PutPayload::from(serde_json::to_vec(&legacy).unwrap()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+            .await
+            .is_err()
+    );
+    store
+        .put(&mutation_head_key, PutPayload::from(original_head.clone()))
+        .await
+        .unwrap();
     let original_snapshot = store
         .get(&snapshot_key)
         .await
@@ -676,4 +739,68 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         hits.iter().map(|h| h.id).collect::<Vec<_>>(),
         ids.iter().step_by(2).take(5).copied().collect::<Vec<_>>()
     );
+    let sealed = borsuk::two_bit_mutations::seal_two_bit_mutations(
+        store.as_ref(),
+        &head,
+        Some(&restored),
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert!(sealed.is_sealed());
+    assert_eq!(sealed.rows(), restored.rows());
+    assert_eq!(sealed.revision(), restored.revision() + 1);
+    let idempotent = borsuk::two_bit_mutations::seal_two_bit_mutations(
+        store.as_ref(),
+        &head,
+        Some(&sealed),
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    assert_eq!(idempotent.sha256(), sealed.sha256());
+    for expected in [Some(&restored), Some(&sealed), None] {
+        assert!(
+            apply_two_bit_mutations(
+                store.as_ref(),
+                &head,
+                2,
+                expected,
+                &[TwoBitMutation {
+                    id: 0,
+                    vector: None
+                }],
+                mutation_limits
+            )
+            .await
+            .is_err()
+        );
+    }
+    let (closed_store, closed_ops) =
+        common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
+    assert!(
+        apply_two_bit_mutations(
+            &closed_store,
+            &head,
+            2,
+            Some(&sealed),
+            &[TwoBitMutation {
+                id: 0,
+                vector: None
+            }],
+            mutation_limits
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        closed_ops.count_matching(|op, _| op == common::StoreOperation::Put),
+        0
+    );
+    let recovered_seal = read_two_bit_mutations(store.as_ref(), &head, 2, mutation_limits)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(recovered_seal.is_sealed());
+    assert_eq!(recovered_seal.rows(), restored.rows());
 }

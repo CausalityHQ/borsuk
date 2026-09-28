@@ -72,6 +72,7 @@ struct HeadBody {
     schema: String,
     revision: u64,
     sha256: String,
+    sealed: bool,
 }
 
 /// Recovered authenticated latest state plus an opaque conditional writer token.
@@ -86,6 +87,7 @@ pub struct TwoBitMutationSnapshot {
     version: UpdateVersion,
     rows: Vec<TwoBitMutation>,
     excluded_ids: Vec<i64>,
+    sealed: bool,
 }
 impl TwoBitMutationSnapshot {
     pub(crate) fn binds(&self, root: &str, dimensions: usize) -> bool {
@@ -146,6 +148,10 @@ impl TwoBitMutationSnapshot {
             });
         }
         Ok(heap.into_sorted_vec().into_iter().map(|h| h.0).collect())
+    }
+    /// Closed to further writes; the snapshot remains readable during compaction.
+    pub fn is_sealed(&self) -> bool {
+        self.sealed
     }
     /// Conditional publication sequence within this immutable generation.
     pub fn revision(&self) -> u64 {
@@ -285,6 +291,7 @@ fn decode(
         version,
         rows,
         excluded_ids,
+        sealed: false,
     })
 }
 
@@ -300,28 +307,17 @@ pub async fn read_two_bit_mutations(
     if dimensions != base.dimensions() {
         return Err(bad("mutation base dimensions"));
     }
+    let Some((head, version)) = read_mutation_head(store, base).await? else {
+        return Ok(None);
+    };
     let prefix = base.metadata_prefix();
-    let (body, version) =
-        match small_object(store, &prefix.clone().join("mutation-head.json"), 1024).await {
-            Ok(v) => v,
-            Err(TwoBitStoreError::Store(object_store::Error::NotFound { .. })) => return Ok(None),
-            Err(e) => return Err(e),
-        };
-    let head: HeadBody = serde_json::from_slice(&body).map_err(|_| bad("mutation head schema"))?;
-    if head.schema != "borsuk-two-bit-mutation-head-v1"
-        || head.revision == 0
-        || !valid_sha256(&head.sha256)
-        || (version.e_tag.is_none() && version.version.is_none())
-    {
-        return Err(bad("mutation head authority"));
-    }
     let (bytes, _) = small_object(
         store,
         &prefix.join("mutations").join(head.sha256.as_str()),
         limits.max_snapshot_bytes as u64,
     )
     .await?;
-    decode(
+    let mut snapshot = decode(
         &bytes,
         &head.sha256,
         base,
@@ -329,8 +325,61 @@ pub async fn read_two_bit_mutations(
         head.revision,
         version,
         limits,
+    )?;
+    snapshot.sealed = head.sealed;
+    Ok(Some(snapshot))
+}
+
+async fn read_mutation_head(
+    store: &dyn ObjectStore,
+    base: &TwoBitHead,
+) -> Result<Option<(HeadBody, UpdateVersion)>> {
+    let (body, version) = match small_object(
+        store,
+        &base.metadata_prefix().join("mutation-head.json"),
+        1024,
     )
-    .map(Some)
+    .await
+    {
+        Ok(v) => v,
+        Err(TwoBitStoreError::Store(object_store::Error::NotFound { .. })) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let head: HeadBody = serde_json::from_slice(&body).map_err(|_| bad("mutation head schema"))?;
+    if head.schema != "borsuk-two-bit-mutation-head-v2"
+        || head.revision == 0
+        || !valid_sha256(&head.sha256)
+        || (version.e_tag.is_none() && version.version.is_none())
+    {
+        return Err(bad("mutation head authority"));
+    }
+    Ok(Some((head, version)))
+}
+
+pub(crate) async fn require_sealed_two_bit_mutations(
+    store: &dyn ObjectStore,
+    base: &TwoBitHead,
+) -> Result<()> {
+    if !read_mutation_head(store, base)
+        .await?
+        .is_some_and(|(h, _)| h.sealed)
+    {
+        return Err(bad("generation replacement requires sealed mutations"));
+    }
+    Ok(())
+}
+
+/// Irreversibly fence writers to this base before building its replacement.
+/// CAS closes even an absent mutation head. Old snapshots stay readable.
+/// A crash after sealing pauses writes; resume compaction from the sealed state.
+/// This does not validate replacement contents or perform compaction/GC.
+pub async fn seal_two_bit_mutations(
+    store: &dyn ObjectStore,
+    base: &TwoBitHead,
+    expected: Option<&TwoBitMutationSnapshot>,
+    limits: TwoBitMutationLimits,
+) -> Result<TwoBitMutationSnapshot> {
+    publish_mutation_state(store, base, base.dimensions(), expected, &[], limits, true).await
 }
 
 /// Atomically publish a sorted unique batch over the exact recovered latest state.
@@ -345,10 +394,22 @@ pub async fn apply_two_bit_mutations(
     updates: &[TwoBitMutation],
     limits: TwoBitMutationLimits,
 ) -> Result<TwoBitMutationSnapshot> {
+    publish_mutation_state(store, base, dimensions, expected, updates, limits, false).await
+}
+
+async fn publish_mutation_state(
+    store: &dyn ObjectStore,
+    base: &TwoBitHead,
+    dimensions: usize,
+    expected: Option<&TwoBitMutationSnapshot>,
+    updates: &[TwoBitMutation],
+    limits: TwoBitMutationLimits,
+    seal: bool,
+) -> Result<TwoBitMutationSnapshot> {
     if dimensions == 0
         || dimensions != base.dimensions()
         || u32::try_from(dimensions).is_err()
-        || updates.is_empty()
+        || (!seal && updates.is_empty())
         || updates.windows(2).any(|r| r[0].id >= r[1].id)
         || expected.is_some_and(|s| {
             s.base_root != base.root_sha256()
@@ -376,6 +437,21 @@ pub async fn apply_two_bit_mutations(
             .checked_add(base.metadata_prefix().as_ref().len())
             .ok_or(bad("mutation input width"))?,
     )?;
+    if let Some(previous) = expected.filter(|s| s.sealed) {
+        if !seal {
+            return Err(bad("mutation generation sealed"));
+        }
+        let current = read_two_bit_mutations(store, base, dimensions, limits)
+            .await?
+            .ok_or(bad("sealed mutation head missing"))?;
+        if !current.sealed
+            || current.revision != previous.revision
+            || current.sha256 != previous.sha256
+        {
+            return Err(bad("sealed mutation head changed"));
+        }
+        return Ok(current);
+    }
     // Validate the entire incoming batch before staging even one object.
     for update in updates {
         if let Some(vector) = &update.vector {
@@ -487,9 +563,10 @@ pub async fn apply_two_bit_mutations(
         Err(e) => return Err(e.into()),
     }
     let body = serde_json::to_vec(&HeadBody {
-        schema: "borsuk-two-bit-mutation-head-v1".into(),
+        schema: "borsuk-two-bit-mutation-head-v2".into(),
         revision,
         sha256: sha256.clone(),
+        sealed: seal,
     })
     .map_err(|_| bad("mutation head serialization"))?;
     let result = store
@@ -508,7 +585,10 @@ pub async fn apply_two_bit_mutations(
             // The CAS may have committed while its acknowledgement was lost.
             if let Ok(Some(current)) = read_two_bit_mutations(store, base, dimensions, limits).await
             {
-                if current.revision == revision && current.sha256 == sha256 {
+                if current.revision == revision
+                    && current.sha256 == sha256
+                    && (!seal || current.sealed)
+                {
                     return Ok(current);
                 }
             }
@@ -518,6 +598,7 @@ pub async fn apply_two_bit_mutations(
     if version.e_tag.is_none() && version.version.is_none() {
         return Err(bad("mutation conditional token"));
     }
+    snapshot.sealed = seal;
     snapshot.version = version;
     Ok(snapshot)
 }
