@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-native-library-spot-check-v1",
+  "source_base_commit": "8e4802daeea709b9ee1e99ee17c68897f09ce81e",
+  "source_archive_sha256": "b232f7c07cb8d9fb0c593c50536271c3a518f1879950ed9795066c4e8c67257e",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "wall_seconds": 1800,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.2128",
+  "spot_max_usd_per_hour": "0.60",
+  "cost_cap_compute_usd": 0.3,
+  "scope": "Native WAL red/green integration target, then one final full workspace gate on success; no benchmark",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-06121aa3085b6f918",
+  "red_source_archive_sha256": "0349d2530f7eceabe90a95666b7033e5ffc22033ccb87294ccb7d3403bc19d3d",
+  "s3_versioning_observed": "Disabled"
+}

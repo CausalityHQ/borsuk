@@ -9852,7 +9852,11 @@ impl BorsukIndex {
     }
 
     fn validate_unique_id_bulk_load_authority(&self, manifest: &Manifest) -> Result<()> {
-        if manifest.global_ann_ref.is_some() || manifest.global_cell_card_ann_ref.is_some() {
+        if manifest.global_ann_ref.is_some()
+            || manifest.global_cell_card_ann_ref.is_some()
+            || manifest.native_ann_ref.is_some()
+            || manifest.native_bounded_ann_ref.is_some()
+        {
             return Err(BorsukError::InvalidStorage(
                 "unique-id bulk load is unavailable after index finalization".to_string(),
             ));

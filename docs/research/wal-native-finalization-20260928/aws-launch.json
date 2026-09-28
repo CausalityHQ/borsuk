@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-01bd7841c1c48ab70",
+  "prefix": "research/native-library-check/wal-native-finalization/874f1276d24c310d2b671720a981347b7e7b8d4d77325caa2d8b6ef94ab3d9d8/a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "874f1276d24c310d2b671720a981347b7e7b8d4d77325caa2d8b6ef94ab3d9d8",
+  "source_base_commit": "8e4802daeea709b9ee1e99ee17c68897f09ce81e"
+}

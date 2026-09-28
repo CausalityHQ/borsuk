@@ -34,6 +34,19 @@ fn config(uri: String) -> IndexConfig {
     }
 }
 
+fn native_config(uri: String) -> IndexConfig {
+    IndexConfig {
+        metric: VectorMetric::SquaredEuclidean,
+        dimensions: 64,
+        segment_max_vectors: 16,
+        ..config(uri)
+    }
+}
+
+fn native_vector(value: f32) -> Vec<f32> {
+    vec![value; 64]
+}
+
 /// An enabled WAL with a low record threshold so flushes are easy to trigger.
 fn small_wal() -> WalConfig {
     WalConfig {
@@ -242,27 +255,27 @@ fn wal_disabled_add_after_finalization_invalidates_stale_global_ann() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
     let mut index =
-        BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::disabled()).unwrap();
+        BorsukIndex::create_with_wal(native_config(uri.clone()), WalConfig::disabled()).unwrap();
     index
         .add(
             (0..128)
-                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32, row as f32]))
+                .map(|row| VectorRecord::new(format!("base-{row}"), native_vector(row as f32)))
                 .collect(),
         )
         .unwrap();
     index.finish_bulk_load().unwrap();
-    assert_eq!(index.stats().global_ann_layout_version, Some(20));
+    assert!(serde_json::to_value(index.manifest()).unwrap()["native_bounded_ann_ref"].is_object());
 
     index
-        .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
+        .add(vec![VectorRecord::new("new", native_vector(1_000.0))])
         .unwrap();
 
-    assert_eq!(index.stats().global_ann_layout_version, Some(20));
+    assert!(serde_json::to_value(index.manifest()).unwrap()["native_bounded_ann_ref"].is_object());
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(
         reopened
             .search_ids(
-                &[1_000.0, 1_000.0],
+                &native_vector(1_000.0),
                 SearchOptions::approx(1, borsuk::LeafMode::SrhtPqScan)
                     .with_max_segments(usize::MAX),
             )
@@ -276,7 +289,7 @@ fn wal_disabled_paged_add_after_finalization_invalidates_stale_global_ann() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
     let mut index = BorsukIndex::create_with_wal_routing_page_fanout_and_leaf_capability(
-        config(uri.clone()),
+        native_config(uri.clone()),
         WalConfig::disabled(),
         2,
         LeafCapability::GraphEnabled,
@@ -285,24 +298,24 @@ fn wal_disabled_paged_add_after_finalization_invalidates_stale_global_ann() {
     index
         .add(
             (0..128)
-                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32, row as f32]))
+                .map(|row| VectorRecord::new(format!("base-{row}"), native_vector(row as f32)))
                 .collect(),
         )
         .unwrap();
     index.finish_bulk_load().unwrap();
     assert!(index.stats().routing_max_level > 0);
-    assert_eq!(index.stats().global_ann_layout_version, Some(20));
+    assert!(serde_json::to_value(index.manifest()).unwrap()["native_bounded_ann_ref"].is_object());
 
     index
-        .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
+        .add(vec![VectorRecord::new("new", native_vector(1_000.0))])
         .unwrap();
 
-    assert_eq!(index.stats().global_ann_layout_version, Some(20));
+    assert!(serde_json::to_value(index.manifest()).unwrap()["native_bounded_ann_ref"].is_object());
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(
         reopened
             .search_ids(
-                &[1_000.0, 1_000.0],
+                &native_vector(1_000.0),
                 SearchOptions::approx(1, borsuk::LeafMode::SrhtPqScan)
                     .with_max_segments(usize::MAX),
             )
@@ -1071,7 +1084,7 @@ fn bulk_add_is_append_only_and_compaction_is_the_single_build() {
 fn unique_id_bulk_loaders_commit_concurrently_without_claim_artifacts() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
-    BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
+    BorsukIndex::create_with_wal(native_config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
 
     std::thread::scope(|scope| {
         let joins = (0..4)
@@ -1083,7 +1096,10 @@ fn unique_id_bulk_loaders_commit_concurrently_without_claim_artifacts() {
                     index
                         .bulk_load_vectors_with_unique_ids_on_source_shard(
                             u8::try_from(writer).unwrap(),
-                            vec![vec![start as f32, 1.0], vec![(start + 1) as f32, 1.0]],
+                            vec![
+                                native_vector(start as f32),
+                                native_vector((start + 1) as f32),
+                            ],
                             vec![start.to_string(), (start + 1).to_string()],
                         )
                         .unwrap();
@@ -1104,18 +1120,21 @@ fn unique_id_bulk_loaders_commit_concurrently_without_claim_artifacts() {
     assert_eq!(finalizer.manifest().tombstone_delta_run_count(), 0);
     assert!(!finalizer.manifest().has_mutation_directory());
     finalizer.finish_bulk_load().unwrap();
+    assert!(
+        serde_json::to_value(finalizer.manifest()).unwrap()["native_bounded_ann_ref"].is_object()
+    );
     assert_eq!(finalizer.stats().records, 8);
     for row in 0..8 {
         assert_eq!(
             finalizer.get_vector(&row.to_string()).unwrap(),
-            Some(vec![row as f32, 1.0])
+            Some(native_vector(row as f32))
         );
     }
     assert!(
         finalizer
             .bulk_load_vectors_with_unique_ids_on_source_shard(
                 0,
-                vec![vec![9.0, 1.0]],
+                vec![native_vector(9.0)],
                 vec!["9".to_string()],
             )
             .is_err(),
@@ -1176,23 +1195,26 @@ fn unique_id_bulk_load_refreshes_and_rejects_a_finalized_collection() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
     let mut finalizer =
-        BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
+        BorsukIndex::create_with_wal(native_config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
     finalizer
         .bulk_load_vectors_with_unique_ids_on_source_shard(
             0,
-            vec![vec![0.0, 1.0]],
+            vec![native_vector(0.0)],
             vec!["0".to_string()],
         )
         .unwrap();
     let mut stale_writer = BorsukIndex::open(&uri).unwrap();
 
     finalizer.finish_bulk_load().unwrap();
+    assert!(
+        serde_json::to_value(finalizer.manifest()).unwrap()["native_bounded_ann_ref"].is_object()
+    );
 
     assert!(
         stale_writer
             .bulk_load_vectors_with_unique_ids_on_source_shard(
                 1,
-                vec![vec![1.0, 1.0]],
+                vec![native_vector(1.0)],
                 vec!["1".to_string()],
             )
             .is_err(),
