@@ -60,12 +60,13 @@ for arm,records in plans.items():
         sample=result['samples'][arm][q];stage={k:set(v) for k,v in sample['stages'].items()};assert all(len(v)==len(stage[k]) and stage[k]<=gt for k,v in sample['stages'].items())
         expected_d={i for i in gt if positions[i]//256 in r['ranked_candidate_pages']};expected_n={i for i in gt if positions[i]//256 in r['selected_pages']};expected_f={i for i in gt if any(a//780<=positions[i]<b//780 for a,b in ranges)}
         assert stage['candidate']==expected_d and stage['nominated']==expected_n and stage['fetched']==expected_f and stage['returned']==gt&set(result['expected_ids'][arm][q]) and sample['returned_hits']==len(stage['returned'])
-        assert sample['gets']==len(ranges) and sample['bytes']==r['planned_bytes'];gets+=len(ranges);bytes_+=r['planned_bytes'];walk_gt={i for i in gt if positions[i]//32 in units}
+        assert sample['gets']==len(ranges) and sample['bytes']==r['planned_bytes'];gets+=len(ranges);bytes_+=r['planned_bytes'];walk_pages={u//8 for u in units};walk_gt={i for i in gt if positions[i]//256 in walk_pages}
         for key,value in [('gt_walk_pool',len(gt-walk_gt)),('gt_roster',len(walk_gt-stage['candidate'])),('gt_nomination',len(stage['candidate']-stage['nominated'])),('gt_physical',len(stage['nominated']-stage['fetched'])),('gt_ranking',len(stage['fetched']-stage['returned'])),('flat_discovery',len(stage['flat']-stage['candidate'])),('flat_nomination',len((stage['flat']&stage['candidate'])-stage['nominated'])),('flat_physical',len((stage['flat']&stage['nominated'])-stage['fetched'])),('flat_ranking',len((stage['flat']&stage['fetched'])-stage['returned']))]:loss[key]+=value
     normal=''.join(json.dumps({k:r[k] for k in ['query_ordinal','ranges','planned_bytes']},sort_keys=True,separators=(',',':'))+'\n' for r in records)
     assert hashlib.sha256(normal.encode()).hexdigest()==result['plans_sha256'][arm]
     assert result['returned_hits'][arm]==sum(s['returned_hits'] for s in result['samples'][arm]) and result['p05'][arm]==sorted(s['returned_hits'] for s in result['samples'][arm])[3]
     decomposition[arm]=dict(losses=loss,planned_gets=gets,planned_bytes=bytes_,source_row_evaluations=calls)
+assert all(a['stages']['flat']==b['stages']['flat'] for a,b in zip(result['samples']['control'],result['samples']['candidate']))
 assert result['flat_hits']==sum(len(s['stages']['flat']) for s in result['samples']['control'])==sum(len(s['stages']['flat']) for s in result['samples']['candidate'])
 passed=result['returned_hits']['candidate']/64>=98 and result['p05']['candidate']>=95 and result['flat_hits']-result['returned_hits']['candidate']<=32 and result['returned_hits']['candidate']>=result['returned_hits']['control']
 def near(a,b):assert math.isclose(a,b,rel_tol=1e-12,abs_tol=1e-8),(a,b)

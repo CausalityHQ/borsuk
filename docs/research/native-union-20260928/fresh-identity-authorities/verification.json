@@ -1,0 +1,41 @@
+{
+  "metadata_verified": true,
+  "complete_prior_query_audit": false,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_receipt_sha256": "e08ac93eecd9dda22aa4611884bf3f072fcee7ea5918966607d271630bc0f385",
+  "corpus_rows": 1000000,
+  "registered_source_shards_verified": 16,
+  "original_query_roles": [
+    {
+      "role": "development",
+      "rows": 1000
+    },
+    {
+      "role": "validation",
+      "rows": 1000
+    },
+    {
+      "role": "sealed-holdout",
+      "rows": 1000
+    },
+    {
+      "role": "performance",
+      "rows": 10000
+    }
+  ],
+  "closed_history_metadata_locators": [
+    {
+      "key": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/ATTEMPT_COMPLETE.json",
+      "bytes": 4719
+    },
+    {
+      "key": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/population-authority.json",
+      "bytes": 9839
+    },
+    {
+      "key": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/checkpoints/objects/be6abb86e2930b38da572cb7daec3fc0e1a7adb93a53ce974ab038f1efa42fbe-population-authority.json",
+      "bytes": 9839
+    }
+  ],
+  "scope": "Authenticates consumed population authority only. Identity-column exclusion and all-history derivative inventory still required before selecting/sealing new cohort; no novelty or quality claim."
+}

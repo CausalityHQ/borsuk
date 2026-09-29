@@ -65,7 +65,10 @@ Terminal:
 
 1. Preserve/push these closed measurements; keep the integrated mechanism and
 fixed gates. Do not tune on a new cohort or reopen the novelty-rejected seal.
-2. Establish a genuinely unused query identity cohort outside the first1M
+2. Run the separately preregistered bounded ReLAION first1M development falsifier
+using consumed external dev0–63, old/new planners on the SAME newly built root.
+This is an early scale rejection, not fresh confirmation. In parallel establish
+a genuinely unused query identity cohort outside the first1M
 indexed rows, with complete historical external/source-pseudoquery identity
 inventory BEFORE query/GT/quality access. The previously sealed100000–100999
 interval is unsuitable: it overlaps consumed identities and lies inside1M.
