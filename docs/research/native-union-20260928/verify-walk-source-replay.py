@@ -28,6 +28,7 @@ if missing:
 if terminal['status']!='complete' or terminal['exit_code']!=0:
     report.update(valid_measurement=False,phase=terminal['phase'],exit_code=terminal['exit_code']);(out/'invalid-verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report));sys.exit(0)
 config=json.loads((root/'walk-source-config.json').read_text());assert hashlib.sha256((root/'walk-source-config.json').read_bytes()).hexdigest()==reservation['config_sha256'];helper=obj('helper.json');assert helper['source_archive_sha256']==reservation['reused_native_source_archive_sha256'] and helper['reused_binary'] and helper['native_source_matches_compiled_transformation'] and helper['sha256']==terminal['artifacts']['binaries/build_sq8_source']['sha256'] and helper['bytes']==terminal['artifacts']['binaries/build_sq8_source']['bytes']
+for name,digest in config['scorer_hashes'].items():assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==digest
 decision=obj('screen/decision.json');rows=[]
 assert len(decision['results'])==1 and [r['dataset'] for r in decision['results']]==[i['name'] for i in config['items'][:len(decision['results'])]]
 assert decision['decision']==decision['results'][-1]['decision']
