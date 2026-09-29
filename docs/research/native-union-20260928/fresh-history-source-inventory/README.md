@@ -89,3 +89,9 @@ Further source proof, 2026-09-29:
   `crates/`, literal raw ReLAION source references occur only in the V36
   builder/tests. This narrows direct-import risk; indirect runtime inputs and
   query transformations still require separate lineage checks.
+
+`../fresh-rank16-selection-decision.md` records a subsequently preregistered,
+quality-blind 1,000-ID **provisional** selection. Original-bank exclusion and
+all selected physical locators passed an independent ID-only check. Historical
+selected-ID query lineage remains open, so no accepted fresh cohort, vector/GT
+seal, ANN quality or serving result exists for that panel.

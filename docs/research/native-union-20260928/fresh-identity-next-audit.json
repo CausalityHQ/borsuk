@@ -2,7 +2,7 @@
   "metadata_only": true,
   "query_embedding_gt_or_sealed_bodies_opened": false,
   "complete_prior_query_audit": false,
-  "cohort_selected": false,
+  "cohort_selected": true,
   "qualification": false,
   "source_code_leads": [
     {
@@ -55,9 +55,9 @@
   ],
   "existing_authenticated_population_authority": "fresh-identity-authorities/verification.json",
   "next_actions": [
-    "Authenticate CLOSED terminal/source archive for relevant query producers; inventory derivative reuse and query identities, not just current source code.",
-    "Exclude the 5,724 candidate IDs shared with the original V36 physical bank before query selection; then bind archive-executed input/query aliases for all prior ReLAION external and pseudoquery banks. Keep candidate IDs provisional until historical lineage is complete; no query/quality inspection.",
-    "Preregister entirely separate representative source/query panel outside indexed1M and all prior-query identities; identity rejection ends whole panel, no per-query salvage.",
+    "Bind every selected provisional feature ID to all historical ReLAION external and source-pseudoquery lineages, including nonversioned runtime inputs; reject whole panel on any reuse or unresolved provenance before any vector/GT/ANN quality access.",
+    "Audit indirect runtime inputs in later nonversioned ReLAION campaigns against the original V36 source/query authorities and provisional selected IDs; retain exact archive/source-binding limits.",
+    "Retain the frozen 1000-ID provisional selection unchanged. On any selected-ID collision or unresolved lineage, reject the whole panel and preregister a new one before selection.",
     "After identity PASS, seal f64 exactGT10/100 and immutable source/scorer/currentcandidate roots; measure R@10/R@100 separately and actual incomingHTTP at declaredcoldprotocol,8QPS then saturation/costcurve."
   ],
   "paid_launch_hold": "Lifted by FINAL RELOAD RELEASED immediate-1790693371082917915-2014084; SAME native goal ACTIVE, no further reload needed.",
@@ -71,5 +71,7 @@
   "additional_development_query_lineage": "fresh-relaion-development-format-family.json: old V114 100k query SHA4834cf63... derives via archived V85 converter from V36 original development parquet SHA310bb54f...; V85 source binding is same-attempt plus matching Git code and CLOSED input checks, not a terminal archive SHA.",
   "candidate_physical_bank": "fresh-relaion-physical-id-overlap.json: all32 frozen objects full-SHA-verified, ID column only. Original3,583,054 physical rows/3,579,759 unique IDs; rank16-31 candidate3,581,781 physical rows/3,578,530 unique IDs; 5,724 unique IDs shared, leaving3,572,806 candidate IDs after original-bank exclusion. No cohort selected; complete historical query audit false.",
   "additional_direct_source_scan": "fresh-history-direct-source-scan.json:35 original SHA-authenticated source archives incl both V126 attempts and149 exact Git source commits; literal direct raw ReLAION shard references in scripts/crates only V36 builder/tests. Does not prove all indirect runtime query inputs.",
-  "provisional_panel_preregister": "fresh-rank16-panel-preregister.md freezes rank16-31 ID-only hash selection after excluding all original16 physical IDs; whole panel remains provisional until complete selected-ID historical lineage PASS and sealed exactGT. No quality access."
+  "provisional_panel_preregister": "fresh-rank16-panel-preregister.md freezes rank16-31 ID-only hash selection after excluding all original16 physical IDs; whole panel remains provisional until complete selected-ID historical lineage PASS and sealed exactGT. No quality access.",
+  "cohort_accepted": false,
+  "provisional_panel": "fresh-rank16-provisional-ids.json SHAa8bd97d6e6468e715c4b26d9df8c400f649e5428b2a85f151307f20cb030230c:1000 unique quality-blind IDs rank16-31; zero selected IDs in original16 confirmed independently; no vectors/GT/quality opened. Historical selected-ID lineage pending, no accepted cohort."
 }
