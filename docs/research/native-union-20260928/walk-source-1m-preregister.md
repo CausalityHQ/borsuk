@@ -71,3 +71,21 @@ still needs whollynew cohort outsideindexed1M and authenticated all-history
 queryidentity audit BEFOREquality access. Both10M/100M, pin/swapRSS, mutation/
 compaction/GC/recovery/postmaintenancequality and matched S3Vectors AND Turbopuffer
 lifecycle economics remain mandatory. Native product goal unchanged and active.
+
+## Explicit controller correction after closed a0002, before a0003
+
+Original a0002 is engineeringINVALID BEFOREGT/scoring: 3GB corpus memmap failed
+fixed4GiB virtual address admission. Instance actuallyterminated528s; INVALID
+and authenticated nativeconstruction metadata preserved85b5c74d. Replace only
+oracle I/O with8192-row stdlibbinaryfile reads, preserve identical f64matrix/
+sort/merge/tie math. Existing remote scalar/tie/merge selfcheck now ALSO calls
+actual streamingoracle on a3-row2-queryD768 fixture under SAMEAS cap, before
+construction. No local numericaltests, Rust/fullassurance/scorer/control/gate change.
+
+Reuse authenticated closed1M order, source-v3 recipe, SQ8receipt/body/objectHEAD/
+builder/root from a2. No repeatednormalize/sourcefit/SQ8write. Recreate public
+fullgeneration solely to regenerate unretained canonicalbody; root bytes AND all
+retained generationcomponents MUSTexactly equal a2. This repeat is reconstruction,
+not new build gain. Global caps unchanged, a3 new immutable prefix andsame eu1a
+matchedenvironment. All neworacle/paired/native/HTTP cells run afresh; nothing
+scientific from a2 exists to reuse/mix. Noautomaticreplacement or overlappingjob.

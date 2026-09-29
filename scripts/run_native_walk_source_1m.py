@@ -18,18 +18,21 @@ def best(ids,scores,k=100):
 
 def oracle(raw,queries,rows):
     # Complete block sorts and exact top100 merges; no approximate neighbor search.
-    vectors=np.memmap(raw,dtype='<f4',mode='r',shape=(rows,768))
-    query=np.asarray(queries,dtype=np.float64);query/=np.sqrt(np.sum(query*query,axis=1))[:,None]
+    query=np.asarray(queries,dtype=np.float32).astype(np.float64);query/=np.sqrt(np.sum(query*query,axis=1))[:,None]
     retained=[(np.empty(0,dtype=np.int64),np.empty(0,dtype=np.float64)) for _ in query]
-    for start in range(0,rows,8192):
-        block=np.asarray(vectors[start:start+8192],dtype=np.float64)
-        block/=np.sqrt(np.sum(block*block,axis=1))[:,None]
-        distances=1-query@block.T
-        assert np.isfinite(distances).all() and (distances>=-1e-12).all() and (distances<=2+1e-12).all()
-        ids=np.arange(start,start+len(block),dtype=np.int64)
-        for q,scores in enumerate(distances):
-            old_ids,old_scores=retained[q];new_ids,new_scores=best(ids,scores)
-            retained[q]=best(np.concatenate((old_ids,new_ids)),np.concatenate((old_scores,new_scores)))
+    with Path(raw).open('rb') as source:
+        for start in range(0,rows,8192):
+            count=min(8192,rows-start);body=source.read(count*768*4);assert len(body)==count*768*4
+            block=np.frombuffer(body,dtype='<f4').reshape(count,768).astype(np.float64)
+            block/=np.sqrt(np.sum(block*block,axis=1))[:,None]
+            distances=1-query@block.T
+            assert np.isfinite(distances).all() and (distances>=-1e-12).all() and (distances<=2+1e-12).all()
+            ids=np.arange(start,start+len(block),dtype=np.int64)
+            for q,scores in enumerate(distances):
+                old_ids,old_scores=retained[q];new_ids,new_scores=best(ids,scores)
+                retained[q]=best(np.concatenate((old_ids,new_ids)),np.concatenate((old_scores,new_scores)))
+        assert source.read(1)==b''
+
     return np.asarray([ids for ids,_ in retained],dtype='<u4')
 
 
@@ -44,6 +47,11 @@ def self_check():
     matrix=1-(q/np.sqrt(np.sum(q*q,axis=1))[:,None])@(x/np.sqrt(np.sum(x*x,axis=1))[:,None]).T
     scalar=np.array([[1-sum(float(a)*float(b) for a,b in zip(y,z))/(math.sqrt(sum(float(a)**2 for a in y))*math.sqrt(sum(float(b)**2 for b in z))) for z in x] for y in q])
     assert np.max(np.abs(matrix-scalar))<1e-12
+    import tempfile
+    padded=np.zeros((3,768),dtype='<f4');padded[:,:3]=x;queries=np.zeros((2,768));queries[:,:3]=q
+    with tempfile.TemporaryDirectory() as directory:
+        raw=Path(directory)/'raw';padded.tofile(raw)
+        assert oracle(raw,queries,3).tolist()==[np.lexsort((np.arange(3),r)).tolist() for r in scalar]
 
 
 def main():
@@ -53,7 +61,7 @@ def main():
     assert config['arm_order']==['control','candidate','candidate','control'] and config['fresh_cohort_used'] is False
     assert np.__version__=='2.3.3' and pa.__version__=='24.0.0' and sorted(os.sched_getaffinity(0))==[0,1,2,3]
     for name,digest in config['dependencies'].items():assert sha(repo/name)==digest
-    out.mkdir();self_check();write(out/'self-check.json',dict(passed=True,top100_merge_signed_id_ties=True))
+    out.mkdir();self_check();write(out/'self-check.json',dict(passed=True,top100_merge_signed_id_ties=True,actual_streaming_oracle_fixture=True,scalar_matrix_f64_parity=True))
     def resources():
         group=Path('/sys/fs/cgroup')/Path('/proc/self/cgroup').read_text().strip().split('0::')[-1].lstrip('/')
         write(out/'cgroup.json',{k:(group/k).read_text() for k in ['memory.max','memory.peak','memory.swap.max','memory.swap.peak','memory.events','cpu.stat']})
@@ -69,23 +77,21 @@ def main():
             values=np.asarray(col.values.slice(col.offset*768,len(col)*768).to_numpy(zero_copy_only=False),dtype='<f4').reshape(len(col),768)
             assert np.isfinite(values).all() and (values!=0).any(axis=1).all();stream.write(values.tobytes())
     assert raw.stat().st_size==3072000000 and sha(raw)==config['raw_sha256']
-    helper=binaries/'build_sq8_source';normalized=directory/'normalized.f32';order=directory/'order.u64'
-    native(directory,'normalize',[helper,'normalize',raw,config['raw_sha256'],rows,768,1073741824,normalized],180)
-    assert sha(normalized)==config['normalized_sha256']
-    native(directory,'hier-fit',[helper,'hier-fit',normalized,config['normalized_sha256'],rows,768,1073741824,order],600)
-    recipe=json.loads((directory/'hier-fit.log').read_text());values=np.fromfile(order,dtype='<u8')
+    order=directory/'order.u64';sq8_path=directory/'sq8.bin'
+    recipe=json.loads((directory/'hier-fit.log').read_text());receipt=json.loads((directory/'sq8.log').read_text());values=np.fromfile(order,dtype='<u8')
     assert len(values)==rows and np.array_equal(np.sort(values),np.arange(rows,dtype=np.uint64))
     assert recipe['order_sha256']==sha(order) and recipe['recipe']=='borsuk-hierarchical-extents-chacha8-v3' and recipe['query_or_truth_used'] is False and recipe['source_cell_target_rows']==256 and recipe['sampling_cell_target_rows']==1024 and recipe['samples_per_sampling_cell']==64 and recipe['source_cell_order']=='nearest-unvisited-layer0-entry-ordinal-fallback-v1'
     extents=recipe['extents'];assert extents[0][0]==0 and extents[-1][1]==rows and all(0<b-a<=1024 for a,b in extents) and all(x[1]==y[0] for x,y in zip(extents,extents[1:]))
-    sq8_path=directory/'sq8.bin';native(directory,'sq8',[helper,normalized,config['normalized_sha256'],768,order,sha(order),1073741824,sq8_path],180)
-    receipt=json.loads((directory/'sq8.log').read_text());sq8_sha=sha(sq8_path);assert receipt['sq8_sha256']==sq8_sha and receipt['rows']==rows and sq8_path.stat().st_size==780000000
-    key=prefix+'/data/relaion/objects/'+sq8_sha
-    subprocess.run(['aws','s3api','put-object','--bucket',config['bucket'],'--key',key,'--body',str(sq8_path),'--if-none-match','*','--metadata','sha256='+sq8_sha],check=True,stdout=subprocess.DEVNULL)
-    head=json.loads(subprocess.check_output(['aws','s3api','head-object','--bucket',config['bucket'],'--key',key]));assert head['ContentLength']==780000000 and head['Metadata']['sha256']==sq8_sha
-    build=dict(raw=str(raw),raw_sha256=config['raw_sha256'],sq8=str(sq8_path),sq8_sha256=sq8_sha,rows=rows,dimensions=768,generation=1,base_epoch=0,low=receipt['low'],step=receipt['step'],sq8_object_key=key,sq8_etag=head['ETag']);write(directory/'builder.json',build)
+    build=json.loads((directory/'closed-builder.json').read_text());binding=json.loads((directory/'closed-binding.json').read_text());sq8_sha=sha(sq8_path);key=build['sq8_object_key']
+    assert receipt['sq8_sha256']==sq8_sha==build['sq8_sha256'] and receipt['rows']==rows and sq8_path.stat().st_size==780000000
+    assert binding['source_order_sha256']==sha(order) and binding['raw_sha256']==config['raw_sha256'] and binding['normalized_sha256']==config['normalized_sha256']
+    head=json.loads(subprocess.check_output(['aws','s3api','head-object','--bucket',config['bucket'],'--key',key]));assert head['ContentLength']==780000000 and head['Metadata']['sha256']==sq8_sha and head['ETag']==build['sq8_etag']
+    build.update(raw=str(raw),sq8=str(sq8_path));write(directory/'builder.json',build)
     generation=directory/'generation';native(directory,'build',[binaries/'build_two_bit_generation',directory/'builder.json',sha(directory/'builder.json'),2147483648,generation],600)
     root_sha=sha(generation/'manifest.json');root=json.loads((generation/'manifest.json').read_text());assert root['schema']=='borsuk-two-bit-generation-v4' and json.loads((generation/'page_manifest.json').read_text())['rows']==rows and root['sq8_object_key']==key and root['sq8_etag']==head['ETag']
-    write(directory/'binding.json',dict(root_sha256=root_sha,source_recipe=recipe,source_order_sha256=sha(order),raw_sha256=sha(raw),normalized_sha256=sha(normalized),same_root_source_scorer_control=True,query_or_truth_used_for_construction=False))
+    assert (generation/'manifest.json').read_bytes()==(directory/'closed-manifest.json').read_bytes()
+    for name,ident in config['closed_generation_components'].items():assert (generation/name).stat().st_size==ident['bytes'] and sha(generation/name)==ident['sha256']
+    write(directory/'binding.json',dict(closed_construction_reused=True,root_sha256=root_sha,source_recipe=recipe,source_order_sha256=sha(order),raw_sha256=sha(raw),normalized_sha256=config['normalized_sha256'],same_root_source_scorer_control=True,query_or_truth_used_for_construction=False))
     requests=[json.loads(s) for s in (directory/'requests').read_text().splitlines()];assert len(requests)==1000 and [q['query_ordinal'] for q in requests]==list(range(1000))
     started=time.monotonic();truth=oracle(raw,[r['query'] for r in requests[:64]],rows);truth.tofile(directory/'truth.u32')
     write(directory/'oracle.json',dict(dtype='float64',distance='1-dot of f64-normalized original f32',tie='signed source ordinal ascending',queries=64,rows=rows,truth_sha256=sha(directory/'truth.u32'),wall_s=time.monotonic()-started,exact_block_sort_merge=True))

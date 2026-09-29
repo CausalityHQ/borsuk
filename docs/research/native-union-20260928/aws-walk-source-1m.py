@@ -105,6 +105,10 @@ prior_http=json.loads((ROOT_OUT/'walk-source-http/a0002/verification.json').read
 assert prior_http['valid_measurement'] and len(prior_http['rows'])==2 and all(r['decision'].startswith('GO') for r in prior_http['rows'])
 assert ec2.describe_instances(InstanceIds=[prior_http['instance_id']])['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
 reservation['predecessor_http_terminal_sha256']=prior_http['terminal_sha256']
+prior_build=json.loads((ROOT_OUT/'walk-source-1m/a0002/construction-verification.json').read_text());assert prior_build['valid_native_construction_metadata'] and prior_build['instance_terminated']
+assert prior_build['terminal_sha256']==config['closed_construction_terminal_sha256']==hashlib.sha256((ROOT_OUT/'walk-source-1m/a0002/aws-terminal.json').read_bytes()).hexdigest()
+assert ec2.describe_instances(InstanceIds=[json.loads((ROOT_OUT/'walk-source-1m/a0002/aws-launch.json').read_text())['instance_id']])['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
+reservation['closed_construction_terminal_sha256']=prior_build['terminal_sha256']
 small=('helper.json','binaries/build_sq8_source','cpu.txt','environment.txt','reuse.json','test.log','test-resources.txt','screen/decision.json','screen/cgroup.json','screen/self-check.json')
 small+=tuple('screen/relaion/'+name for name in ['normalize.log','normalize.time','hier-fit.log','hier-fit.time','order.u64','sq8.log','sq8.time','builder.json','binding.json','build.log','build.time','plan-control.log','plan-control.time','plan-control.jsonl','plan-candidate.log','plan-candidate.time','plan-candidate.jsonl','quality.json','result.json','oracle.json','truth.u32'])
 small+=tuple('screen/relaion/generation/'+name for name in ['manifest.json','page_manifest.json','page_digests.bin','centroids.bin','graph.bin','diverse_graph.bin','plane/manifest.json','plane/mean.bin','plane/records.bin'])
