@@ -1,0 +1,593 @@
+{
+  "scope": "Closed hash-authenticated GT/trace/order membership and integer work counts; no query/scoring kernel",
+  "dataset": "ReLAION first100k D768 cosine k100",
+  "split": "consumed dev0\u201363",
+  "sums": {
+    "gt_walk_units": 6390,
+    "gt_walk_pages": 6400,
+    "roster_drop": 12,
+    "roster_drop_in_walk_units": 6,
+    "unique_walk_units": 95688,
+    "old_whole_page_rows_scored": 2784192
+  },
+  "per_query": [
+    {
+      "query_ordinal": 0,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1475,
+      "old_whole_page_rows_scored": 44288
+    },
+    {
+      "query_ordinal": 1,
+      "gt_walk_units": 98,
+      "gt_walk_pages": 100,
+      "roster_drop": 2,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1541,
+      "old_whole_page_rows_scored": 45312
+    },
+    {
+      "query_ordinal": 2,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1449,
+      "old_whole_page_rows_scored": 42240
+    },
+    {
+      "query_ordinal": 3,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1447,
+      "old_whole_page_rows_scored": 42912
+    },
+    {
+      "query_ordinal": 4,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1523,
+      "old_whole_page_rows_scored": 45312
+    },
+    {
+      "query_ordinal": 5,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1497,
+      "old_whole_page_rows_scored": 42496
+    },
+    {
+      "query_ordinal": 6,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1486,
+      "old_whole_page_rows_scored": 43264
+    },
+    {
+      "query_ordinal": 7,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1438,
+      "old_whole_page_rows_scored": 42240
+    },
+    {
+      "query_ordinal": 8,
+      "gt_walk_units": 99,
+      "gt_walk_pages": 100,
+      "roster_drop": 1,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1595,
+      "old_whole_page_rows_scored": 44800
+    },
+    {
+      "query_ordinal": 9,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1482,
+      "old_whole_page_rows_scored": 42752
+    },
+    {
+      "query_ordinal": 10,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1447,
+      "old_whole_page_rows_scored": 42752
+    },
+    {
+      "query_ordinal": 11,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1453,
+      "old_whole_page_rows_scored": 42496
+    },
+    {
+      "query_ordinal": 12,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1534,
+      "old_whole_page_rows_scored": 43936
+    },
+    {
+      "query_ordinal": 13,
+      "gt_walk_units": 98,
+      "gt_walk_pages": 100,
+      "roster_drop": 1,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1537,
+      "old_whole_page_rows_scored": 44544
+    },
+    {
+      "query_ordinal": 14,
+      "gt_walk_units": 99,
+      "gt_walk_pages": 100,
+      "roster_drop": 3,
+      "roster_drop_in_walk_units": 2,
+      "unique_walk_units": 1500,
+      "old_whole_page_rows_scored": 44544
+    },
+    {
+      "query_ordinal": 15,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 1,
+      "roster_drop_in_walk_units": 1,
+      "unique_walk_units": 1447,
+      "old_whole_page_rows_scored": 43168
+    },
+    {
+      "query_ordinal": 16,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1452,
+      "old_whole_page_rows_scored": 43168
+    },
+    {
+      "query_ordinal": 17,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1491,
+      "old_whole_page_rows_scored": 41632
+    },
+    {
+      "query_ordinal": 18,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1490,
+      "old_whole_page_rows_scored": 43776
+    },
+    {
+      "query_ordinal": 19,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1534,
+      "old_whole_page_rows_scored": 44288
+    },
+    {
+      "query_ordinal": 20,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1467,
+      "old_whole_page_rows_scored": 42240
+    },
+    {
+      "query_ordinal": 21,
+      "gt_walk_units": 99,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1607,
+      "old_whole_page_rows_scored": 46240
+    },
+    {
+      "query_ordinal": 22,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1637,
+      "old_whole_page_rows_scored": 47360
+    },
+    {
+      "query_ordinal": 23,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1525,
+      "old_whole_page_rows_scored": 43520
+    },
+    {
+      "query_ordinal": 24,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1475,
+      "old_whole_page_rows_scored": 44288
+    },
+    {
+      "query_ordinal": 25,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1415,
+      "old_whole_page_rows_scored": 42752
+    },
+    {
+      "query_ordinal": 26,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1504,
+      "old_whole_page_rows_scored": 44704
+    },
+    {
+      "query_ordinal": 27,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1484,
+      "old_whole_page_rows_scored": 43520
+    },
+    {
+      "query_ordinal": 28,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1439,
+      "old_whole_page_rows_scored": 41728
+    },
+    {
+      "query_ordinal": 29,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1460,
+      "old_whole_page_rows_scored": 41984
+    },
+    {
+      "query_ordinal": 30,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1525,
+      "old_whole_page_rows_scored": 43776
+    },
+    {
+      "query_ordinal": 31,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1498,
+      "old_whole_page_rows_scored": 42496
+    },
+    {
+      "query_ordinal": 32,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1463,
+      "old_whole_page_rows_scored": 45472
+    },
+    {
+      "query_ordinal": 33,
+      "gt_walk_units": 99,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1526,
+      "old_whole_page_rows_scored": 43776
+    },
+    {
+      "query_ordinal": 34,
+      "gt_walk_units": 98,
+      "gt_walk_pages": 100,
+      "roster_drop": 2,
+      "roster_drop_in_walk_units": 1,
+      "unique_walk_units": 1538,
+      "old_whole_page_rows_scored": 44544
+    },
+    {
+      "query_ordinal": 35,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1477,
+      "old_whole_page_rows_scored": 42144
+    },
+    {
+      "query_ordinal": 36,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 1,
+      "roster_drop_in_walk_units": 1,
+      "unique_walk_units": 1511,
+      "old_whole_page_rows_scored": 43008
+    },
+    {
+      "query_ordinal": 37,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1446,
+      "old_whole_page_rows_scored": 42496
+    },
+    {
+      "query_ordinal": 38,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1518,
+      "old_whole_page_rows_scored": 43520
+    },
+    {
+      "query_ordinal": 39,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1489,
+      "old_whole_page_rows_scored": 43008
+    },
+    {
+      "query_ordinal": 40,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 1,
+      "roster_drop_in_walk_units": 1,
+      "unique_walk_units": 1568,
+      "old_whole_page_rows_scored": 44192
+    },
+    {
+      "query_ordinal": 41,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1471,
+      "old_whole_page_rows_scored": 43264
+    },
+    {
+      "query_ordinal": 42,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1454,
+      "old_whole_page_rows_scored": 43264
+    },
+    {
+      "query_ordinal": 43,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1503,
+      "old_whole_page_rows_scored": 43776
+    },
+    {
+      "query_ordinal": 44,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1438,
+      "old_whole_page_rows_scored": 42656
+    },
+    {
+      "query_ordinal": 45,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1597,
+      "old_whole_page_rows_scored": 44288
+    },
+    {
+      "query_ordinal": 46,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1518,
+      "old_whole_page_rows_scored": 43520
+    },
+    {
+      "query_ordinal": 47,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1485,
+      "old_whole_page_rows_scored": 43776
+    },
+    {
+      "query_ordinal": 48,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1513,
+      "old_whole_page_rows_scored": 41984
+    },
+    {
+      "query_ordinal": 49,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1481,
+      "old_whole_page_rows_scored": 42752
+    },
+    {
+      "query_ordinal": 50,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1510,
+      "old_whole_page_rows_scored": 44544
+    },
+    {
+      "query_ordinal": 51,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1503,
+      "old_whole_page_rows_scored": 43776
+    },
+    {
+      "query_ordinal": 52,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1446,
+      "old_whole_page_rows_scored": 42496
+    },
+    {
+      "query_ordinal": 53,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1492,
+      "old_whole_page_rows_scored": 43264
+    },
+    {
+      "query_ordinal": 54,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1544,
+      "old_whole_page_rows_scored": 45472
+    },
+    {
+      "query_ordinal": 55,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1505,
+      "old_whole_page_rows_scored": 42240
+    },
+    {
+      "query_ordinal": 56,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1473,
+      "old_whole_page_rows_scored": 43264
+    },
+    {
+      "query_ordinal": 57,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1507,
+      "old_whole_page_rows_scored": 43520
+    },
+    {
+      "query_ordinal": 58,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1471,
+      "old_whole_page_rows_scored": 44032
+    },
+    {
+      "query_ordinal": 59,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1471,
+      "old_whole_page_rows_scored": 42240
+    },
+    {
+      "query_ordinal": 60,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1500,
+      "old_whole_page_rows_scored": 42912
+    },
+    {
+      "query_ordinal": 61,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1470,
+      "old_whole_page_rows_scored": 42752
+    },
+    {
+      "query_ordinal": 62,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1505,
+      "old_whole_page_rows_scored": 43936
+    },
+    {
+      "query_ordinal": 63,
+      "gt_walk_units": 100,
+      "gt_walk_pages": 100,
+      "roster_drop": 0,
+      "roster_drop_in_walk_units": 0,
+      "unique_walk_units": 1441,
+      "old_whole_page_rows_scored": 43776
+    }
+  ],
+  "new_unique_unit_rows_upper_bound": 3062016,
+  "fixed_worst_case_rows_scored_per_query": 81408
+}
