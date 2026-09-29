@@ -1,0 +1,21 @@
+{
+  "immutable_payloads_retained_in_s3": true,
+  "local_authenticated_duplicate_payloads_removed": [
+    "screen/relaion/candidate/page_digests.bin",
+    "screen/relaion/candidate/graph.bin",
+    "screen/relaion/candidate/centroids.bin",
+    "screen/relaion/candidate/diverse_graph.bin",
+    "screen/relaion/candidate/canonical.bin",
+    "screen/relaion/candidate/plane/records.bin",
+    "screen/relaion/candidate/plane/mean.bin",
+    "screen/cohere/candidate/page_digests.bin",
+    "screen/cohere/candidate/graph.bin",
+    "screen/cohere/candidate/centroids.bin",
+    "screen/cohere/candidate/diverse_graph.bin",
+    "screen/cohere/candidate/canonical.bin",
+    "screen/cohere/candidate/plane/records.bin",
+    "screen/cohere/candidate/plane/mean.bin"
+  ],
+  "prefix": "research/native-union/20260928/source-precision-http-a0002",
+  "identity_authority": "aws-terminal.json artifact bytes/sha256; independent closed verification"
+}
