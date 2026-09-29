@@ -1,0 +1,470 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "original_source_archives_scanned": 33,
+  "records": [
+    {
+      "source_key": "research/native-ann-100k/1b7f2526b74fe66c7b865c281d9ea884e86e860d/runs/native-100k-dev1000-20260921T042444Z-1b7f2526/a0001/source.tar.gz",
+      "source_sha256": "4f27ba047a48cf071d5dab149c3b909963f7a41eae9feeb0e0c6e558ac71848a",
+      "source_bytes": 10802240,
+      "terminal_keys": [
+        "research/native-ann-100k/1b7f2526b74fe66c7b865c281d9ea884e86e860d/runs/native-100k-dev1000-20260921T042444Z-1b7f2526/a0001/evidence/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-ann-100k/4ec23fe50ae5524292469b008febe85ee1c3f0e2/runs/native-100k-dev1000-20260921T041227Z-4ec23fe5/a0001/source.tar.gz",
+      "source_sha256": "6e75d126380c15903b3868072e754c2569b3c9ce9d50b3cd04b5f4a31b55ac21",
+      "source_bytes": 10801735,
+      "terminal_keys": [
+        "research/native-ann-100k/4ec23fe50ae5524292469b008febe85ee1c3f0e2/runs/native-100k-dev1000-20260921T041227Z-4ec23fe5/a0001/evidence/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-ann-100k/69be0e20f74b892dce20ecfa33a865c11b55a0a3/runs/native-100k-dev1000-20260921T043822Z-69be0e20/a0001/source.tar.gz",
+      "source_sha256": "092b9dd850e17cb2d09f3db4be023f2ec6ec820c9de730da399b52079944009b",
+      "source_bytes": 10801921,
+      "terminal_keys": [
+        "research/native-ann-100k/69be0e20f74b892dce20ecfa33a865c11b55a0a3/runs/native-100k-dev1000-20260921T043822Z-69be0e20/a0001/evidence/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-ann-100k/74d2f322cec1ac3aa500dacd358262f7ad144808/runs/native-100k-dev1000-20260921T040139Z-74d2f322/a0001/source.tar.gz",
+      "source_sha256": "f36ad50b59d9e7b5bbb343675303f6fe2cf40e1e464fa861ee4a42132dca7292",
+      "source_bytes": 10737714,
+      "terminal_keys": [
+        "research/native-ann-100k/74d2f322cec1ac3aa500dacd358262f7ad144808/runs/native-100k-dev1000-20260921T040139Z-74d2f322/a0001/evidence/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-ann-100k/9c2435b9229bd75685607f1304b962e628b753a9/runs/native-100k-dev1000-20260921T043239Z-9c2435b9/a0001/source.tar.gz",
+      "source_sha256": "1e08a7639e3413c61f4f8b68bfaaa16b72f8cf3a3194e84e88b579218642460b",
+      "source_bytes": 10802238,
+      "terminal_keys": [
+        "research/native-ann-100k/9c2435b9229bd75685607f1304b962e628b753a9/runs/native-100k-dev1000-20260921T043239Z-9c2435b9/a0001/evidence/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-hundred-thousand-opq8-paired/b0c0c25fb6816af68935690f3c4b6603e37b2d39/source/source.tar.gz",
+      "source_sha256": "a02528fa15ebc1dc9bbb9169dd23315399f2fd6940b50cb2787b8170b3cd6f3f",
+      "source_bytes": 11596552,
+      "terminal_keys": [
+        "research/native-hundred-thousand-opq8-paired/b0c0c25fb6816af68935690f3c4b6603e37b2d39/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-hundred-thousand-opq8-router/87236c5765186fb8ab977ef86f87a6b1047effb1/source/source.tar.gz",
+      "source_sha256": "f337048cbf9e981a5f79c19d919996f5aedb61e0b3fc8995a373a8333a3f4e4a",
+      "source_bytes": 11584428,
+      "terminal_keys": [
+        "research/native-hundred-thousand-opq8-router/87236c5765186fb8ab977ef86f87a6b1047effb1/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-hundred-thousand-pq96/88daad4fac6052e36c5533a42da32669aca0c5a5/source/source.tar.gz",
+      "source_sha256": "fccbd7e61ec6593fa49285fac46cfafff8a6a54339b7ec80a4ca55e4b9093b74",
+      "source_bytes": 11286750,
+      "terminal_keys": [
+        "research/native-hundred-thousand-pq96/88daad4fac6052e36c5533a42da32669aca0c5a5/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-hundred-thousand-sign96/13c724f667d1af246a3be3e3a0b3bf108aa53fb8/source/source.tar.gz",
+      "source_sha256": "1e1504350766c9b0fafe179db5bb2ea1afe3d3777124cd3ae94044a13729cf91",
+      "source_bytes": 11277096,
+      "terminal_keys": [
+        "research/native-hundred-thousand-sign96/13c724f667d1af246a3be3e3a0b3bf108aa53fb8/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-byte-selector/32660c4e1ca8ef8c505292553f5e7277e8648eed/source/source.tar.gz",
+      "source_sha256": "f6429fd4e837837a8e1fef30943ceedafe93f60921bb69e5d8c98f894a60d895",
+      "source_bytes": 11113524,
+      "terminal_keys": [
+        "research/native-one-million-byte-selector/32660c4e1ca8ef8c505292553f5e7277e8648eed/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-data-range-selector/d9dd64ac00920eabd2200078291666757b2d25df/source/source.tar.gz",
+      "source_sha256": "fe0d1973b88e4e198904f0ed872e8ae61bd42e2623a36bff676d9017905b3abd",
+      "source_bytes": 11227897,
+      "terminal_keys": [
+        "research/native-one-million-data-range-selector/d9dd64ac00920eabd2200078291666757b2d25df/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-group-selector/6c81003e879eff4e741c9fc4855e47a7562d51b2/source/source.tar.gz",
+      "source_sha256": "3ba68e91745a27ca68e4ac108e607e304b5ed0eb3432d103ec27e51e235150dd",
+      "source_bytes": 11097000,
+      "terminal_keys": [
+        "research/native-one-million-group-selector/6c81003e879eff4e741c9fc4855e47a7562d51b2/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-layout-selector/c4ca7d184cbd37a4101953ef3f010bb7accd5bc1/source/source.tar.gz",
+      "source_sha256": "3980c5b27649aaef839d74abd13e0ed74cc1bae2401f80a8504f4205e2cdf026",
+      "source_bytes": 11553421,
+      "terminal_keys": [
+        "research/native-one-million-layout-selector/c4ca7d184cbd37a4101953ef3f010bb7accd5bc1/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-mass-selector/6c6671ea4ea70c5873bb81df79d3616c6a7d6625/source/source.tar.gz",
+      "source_sha256": "cf6d2b692c294e6c6141cf56cc054eb6db4576ac6bfa714c0a63e5ae854313b0",
+      "source_bytes": 11566911,
+      "terminal_keys": [
+        "research/native-one-million-mass-selector/6c6671ea4ea70c5873bb81df79d3616c6a7d6625/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-opq8-selector/cc0dd60de8b63a87656475591be12127ad4f3769/source/source.tar.gz",
+      "source_sha256": "c5721f7d8b5a1ab187637e65003c4e80d232c0d50cc6ed4eeacca8d9a2069357",
+      "source_bytes": 11180211,
+      "terminal_keys": [
+        "research/native-one-million-opq8-selector/cc0dd60de8b63a87656475591be12127ad4f3769/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-page-oracle-selector/5fc9256d4c08a05d7469931b5ab44190bb7fa806/source/source.tar.gz",
+      "source_sha256": "c373eb8a870212d963e5b50a86d44cc3ec64c13f10c5cb4aa684d662a0433587",
+      "source_bytes": 11128122,
+      "terminal_keys": [
+        "research/native-one-million-page-oracle-selector/5fc9256d4c08a05d7469931b5ab44190bb7fa806/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-page-selector/7ac8fc842c5cfd5fd6701bdd3bd1f3d04f6dc17c/source/source.tar.gz",
+      "source_sha256": "ec46f255bfbc56a79dcde709653f7c314573c4d6d6069274c74b9a4f1d69b42f",
+      "source_bytes": 11105077,
+      "terminal_keys": [
+        "research/native-one-million-page-selector/7ac8fc842c5cfd5fd6701bdd3bd1f3d04f6dc17c/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-pq80-selector/b4066786fd0618a17d99c5cea72e08e3bbd0ea2f/source/source.tar.gz",
+      "source_sha256": "7caef968eb07567599e22bfee094c8187e5c3e941d3690efebed4b139187c8bb",
+      "source_bytes": 11119211,
+      "terminal_keys": [
+        "research/native-one-million-pq80-selector/b4066786fd0618a17d99c5cea72e08e3bbd0ea2f/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-pq96-selector/1a1d2e7380c4d6635a2b370784ea009aa3af0851/source/source.tar.gz",
+      "source_sha256": "2e55b018748d70307dab439beef8898fba176ccb67d3cc79837a8e304e0af723",
+      "source_bytes": 11117131,
+      "terminal_keys": [
+        "research/native-one-million-pq96-selector/1a1d2e7380c4d6635a2b370784ea009aa3af0851/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-progressive_code_wave-selector/7a06b24b0b5790406ba558d2c0f097493f401de1/source/source.tar.gz",
+      "source_sha256": "abfb90075599cd6c2ef944fcae8be9d4b11bb461f738847ae6f73983ea8f25e2",
+      "source_bytes": 11783491,
+      "terminal_keys": [
+        "research/native-one-million-progressive_code_wave-selector/7a06b24b0b5790406ba558d2c0f097493f401de1/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/source/source.tar.gz",
+      "source_sha256": "ac6863ab9eb11a2e72c3953cbdeeb0079cb71634423f04d7c997c6591a83efc4",
+      "source_bytes": 11803539,
+      "terminal_keys": [
+        "research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-range-selector/1626e78507dbc6531e9e9ff3b51ec79459f26564/source/source.tar.gz",
+      "source_sha256": "a5755e935f31d47c5034b05b3cd48c05f19b3335d6175b8a3f90aacad841ac06",
+      "source_bytes": 11110792,
+      "terminal_keys": [
+        "research/native-one-million-range-selector/1626e78507dbc6531e9e9ff3b51ec79459f26564/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-source-range-diagnostic/d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f/source/source.tar.gz",
+      "source_sha256": "9d84c88425363e67583c39ac75ce6a01a0055c694577265f3d50ad3aae799f28",
+      "source_bytes": 11245110,
+      "terminal_keys": [
+        "research/native-one-million-source-range-diagnostic/d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-one-million-two_bit_code_wave-selector/658f35f8e3378250c1bc3421f59efddd2c6aa02c/source/source.tar.gz",
+      "source_sha256": "47bf34fd5c6aa3195018fb806418f3f6d58cf7988eeb14e981255b7807f2ed9b",
+      "source_bytes": 11303085,
+      "terminal_keys": [
+        "research/native-one-million-two_bit_code_wave-selector/658f35f8e3378250c1bc3421f59efddd2c6aa02c/runs/relaion-1m-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-page-centered-groups/fd3b14ba84c863fede148cd9d8beea80f67dd409/source/source.tar.gz",
+      "source_sha256": "0642eb8e186bfe5b742ce6bf290bde79ad186a8f804410ffe8847cde2688089e",
+      "source_bytes": 11045882,
+      "terminal_keys": [
+        "research/native-page-centered-groups/fd3b14ba84c863fede148cd9d8beea80f67dd409/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-pq192-returned-g0c/d0c9b801c2c107008419a64dd31c54465fff9220/source/source.tar.gz",
+      "source_sha256": "bceab606173b3e2745d046081bb90d4318bd85a13623f2a577608aba5d3904b3",
+      "source_bytes": 11382454,
+      "terminal_keys": [
+        "research/native-pq192-returned-g0c/d0c9b801c2c107008419a64dd31c54465fff9220/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-residual-row-score/8fc9c497a85dbdbfc016346e8fc1cd3100a089a6/source/source.tar.gz",
+      "source_sha256": "55c4931b91435affff2f22d02067dc4ac76d37c4bd394de6a8cd0ccebcdda600",
+      "source_bytes": 11016946,
+      "terminal_keys": [
+        "research/native-residual-row-score/8fc9c497a85dbdbfc016346e8fc1cd3100a089a6/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-rotated-two-bit/68b4439351b137425931a22a88b70f741aff0a7c/source/source.tar.gz",
+      "source_sha256": "5a801883fe1b355645e8fcfb64753d56c1a923bdb210951859ba610b53d99477",
+      "source_bytes": 11075330,
+      "terminal_keys": [
+        "research/native-rotated-two-bit/68b4439351b137425931a22a88b70f741aff0a7c/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-rotated-two-bit/80ddf40533aefd3c24b7d3ea4539887aa94f91bb/source/source.tar.gz",
+      "source_sha256": "de8f6f59abe40eaf5985103906f5bd19d8a4b9f418429321ebefb3b994cd8559",
+      "source_bytes": 11075884,
+      "terminal_keys": [
+        "research/native-rotated-two-bit/80ddf40533aefd3c24b7d3ea4539887aa94f91bb/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-rotated-two-bit/8d920de52b6d1469b9af565faf8dbf3049ce0f00/source/source.tar.gz",
+      "source_sha256": "715b1fac20978982f4cb9189c8472bdd95020e494799bbe5c8b291394c0b62cd",
+      "source_bytes": 11075354,
+      "terminal_keys": [
+        "research/native-rotated-two-bit/8d920de52b6d1469b9af565faf8dbf3049ce0f00/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-rotated-two-bit/e06ae59998063ec8fd12b98d86af2079e0558fc7/source/source.tar.gz",
+      "source_sha256": "072f1f95c3d8f9248355351a9fa4dd9dc82c2494f375750fc3d73370b7734394",
+      "source_bytes": 11075191,
+      "terminal_keys": [
+        "research/native-rotated-two-bit/e06ae59998063ec8fd12b98d86af2079e0558fc7/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-two-bit-norm-g0b/915e5a2eea297ccb07f7765c4d4614f2d51f99de/source/source.tar.gz",
+      "source_sha256": "d58eb6e17dddd0ee981cedde3c743caae7c0606a1a944acfa73ec7be15b135f0",
+      "source_bytes": 11371588,
+      "terminal_keys": [
+        "research/native-two-bit-norm-g0b/915e5a2eea297ccb07f7765c4d4614f2d51f99de/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "source_key": "research/native-two-bit-returned/9cf22cad5eba477b688806327f14fa248c8afb2b/source/source.tar.gz",
+      "source_sha256": "a394bca734a17b72a26a430d5197a60f483c7719cf9d2cb3cc9f93ecc38aefb8",
+      "source_bytes": 11368115,
+      "terminal_keys": [
+        "research/native-two-bit-returned/9cf22cad5eba477b688806327f14fa248c8afb2b/runs/relaion-100k-dev1000-a0001/terminal.json"
+      ],
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    }
+  ]
+}

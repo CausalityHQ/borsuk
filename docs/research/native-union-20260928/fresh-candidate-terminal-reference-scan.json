@@ -1,0 +1,9 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "historical_terminal_records_checked": 701,
+  "candidate_source_objects": 16,
+  "direct_candidate_source_token_hits": [],
+  "method": "SHA-verify each inventoried terminal JSON body; search exact candidate rank16-31 path, basename and registered full SHA256 tokens. Negative result is terminal-text only, not indirect lineage proof."
+}

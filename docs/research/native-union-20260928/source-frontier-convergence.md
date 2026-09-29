@@ -43,15 +43,15 @@ the original V36 development bank.
 An ID-only scan full-SHA-verified the original16 frozen V36 source objects and
 the next16 rank-selected candidate objects. Their3,579,759 and3,578,530 unique
 physical feature IDs overlap by5,724. The candidate bank cannot be used whole
-as a fresh panel; 3,572,806 IDs remain after excluding the original-bank IDs,
-subject to the remaining history audit. No embeddings were decoded or queries
-selected by that check. A subsequent preregistered ID-only selector chose a
-**provisional** 1,000-ID panel. An independent pass confirmed zero selected IDs
-in the original physical bank and all1,000 candidate row locators. Its whole
-panel must be rejected if any prior query reused a selected ID.
-**Complete prior query-source closure remains false.** No fresh panel was accepted;
-no query vectors, GT, old rejected seal bodies or quality results were opened by
-this audit. Next close selected-ID historical lineage before vector/GT access.
+as a fresh panel; 3,572,806 IDs remain after excluding the original-bank IDs.
+A preregistered ID-only selector chose 1,000 provisional IDs, and an independent
+pass confirmed zero selected IDs in the original bank and every candidate row
+locator. Further original source/archive and runtime-input audits support a
+[scoped selected-ID GO](fresh-rank16-identity-decision.md) for sealed vector and
+exact-GT construction. **Complete all-history query-artifact closure remains
+false.** The panel has no ANN quality or cold HTTP result; reject all 1,000 IDs
+if later authenticated input proves reuse of any selected ID. No query vectors,
+GT, old rejected seal bodies or quality results were opened by this audit.
 
 Recent code/measurement evidence: [four-slot decision](four-slot-1m-offered-http-decision.md),
 [frozen strict1M decision](source-completion-1m-decision.md),

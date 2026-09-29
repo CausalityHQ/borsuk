@@ -1,0 +1,1022 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_count": 50,
+  "config_bound_count": 23,
+  "unresolved_config_count": 1,
+  "records": [
+    {
+      "terminal_key": "research/native-union/20260928/cold-a0001/terminal.json",
+      "terminal_sha256": "c419d609f2a7f50e90c08fd4e2d6eeb502ffb8f31d0a14768903c51c03ceac1e",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/cold-a0001/reservation.json",
+      "reservation_sha256": "6c9e39d4fcd0b14c098a82a890160855b97878e470cba1a2229a70c1c2a02a9e",
+      "scope": "Same-binary v4 control/candidate ABBA native client-cold S3, ReLAION-first CoHere-second consumed dev64; no validation/scale/vendor qualification",
+      "config_sha256": "320d175930d3d5b6a523d22737e3df863d33f2bc2e111047b836982b09b0e812",
+      "config_path": "docs/research/native-union-20260928/cold-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/connectivity-check-a0001/terminal.json",
+      "terminal_sha256": "a29d0b4e923ebb4e539732b33d32c24c383b8562cd32df3f274311a29d1259c6",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/connectivity-check-a0001/reservation.json",
+      "reservation_sha256": "e5bbcd86f8509c2ae9c6c8c91f96a65182018aa3d6fcb6b330e88e649419783b",
+      "scope": "duplicate-centroid reachability RED; declared base-layer successor cycle; graph and two-bit GREEN; one full shared-library gate; retained release binaries; no corpus queries/performance",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/connectivity-layout-a0002/terminal.json",
+      "terminal_sha256": "94f3e33a6491a4c3d480c122364eab3a41ab7939dad84a3e0f07ccf22235e550",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/connectivity-layout-a0002/reservation.json",
+      "reservation_sha256": "08701a58a370cfd47fe57460c4fcdf4571f643cf902d455032f2ac009de14f7a",
+      "scope": "One degree-bounded base-layer successor cycle relative to killed hierarchical-order arm; fixed source/scorer/query caps, paired dev64 R-first quality then native cold; no corpus/source changes or fresh/scale/vendor qualification",
+      "config_sha256": "7c40df3c440bbe2d4dcfe7fb4d978c0b91c336e1cf27fcac36a8ce535632a002",
+      "config_path": "docs/research/native-union-20260928/layout-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/current-1m-offered-http-a0001/terminal.json",
+      "terminal_sha256": "40bea9a0de1ece2a5e5cf46920b22ada614165af8df2d431abbfee98e107b856",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/current-1m-offered-http-a0001/reservation.json",
+      "reservation_sha256": "5f10ad353ace110cf1354de7fb282cc8662329fbd22a930dd6fbb655ff6d60fd",
+      "scope": "Actual ReLAIONFIRST1M D768 consumed external development0-63 k10/100 native and offered8QPS HTTP, no fresh/vendor/matched control/lifecycle qualification; no Cargo/numerical recomputation",
+      "config_sha256": "d78116754e2374f5dc59a3a318e61354a6e3423faa840edc2466e23c6e55e722",
+      "config_path": "docs/research/native-union-20260928/current-1m-offered-http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/original-requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/fine-source-check-a0001/terminal.json",
+      "terminal_sha256": "7e224a33b22a01bcc2609902eee4f028f04061820d952cbbdbe2546123080c16",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/fine-source-check-a0001/reservation.json",
+      "reservation_sha256": "b16eceb86f8ef2fee3162a18421f1b1b7bf3f6b324a7a038ab68bb404902f9c9",
+      "scope": "fine coherent source-group RED; declared256 group count with original fixed reservoir andv2 recipe; source identity/budget/GREEN; one full shared-library gate; release andsynthetic publicCLI receipt; no corpus ANN/quality",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/fine-source-check-a0002/terminal.json",
+      "terminal_sha256": "6da3a9fdd184d3d4f0869139c017b3c79e761680349d9a885e44193a24b69c84",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/fine-source-check-a0002/reservation.json",
+      "reservation_sha256": "cd150b84a9fad93f9115f95cc56c67d9c1534ed7d41db8c482e384d8d12a9b2d",
+      "scope": "fine coherent source-group RED; declared256 group count with original fixed reservoir andv2 recipe; source identity/budget/GREEN; one full shared-library gate; release andsynthetic publicCLI receipt; no corpus ANN/quality",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/fine-source-layout-a0001/terminal.json",
+      "terminal_sha256": "1cb444dff25743facbe62a101642bf4ea1bbbbe430b2bd3499e131478415e91c",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/fine-source-layout-a0001/reservation.json",
+      "reservation_sha256": "f17498dc3ce49aac9f0b2817f6a904b04b0bb7578c219e886603aca78be15192",
+      "scope": "One fine256-source-group count relative to killed coarse1024 arm, SAME original global reservoir, fixed source/scorer/query caps, paired dev64 R-first quality then native cold; no fresh/scale/vendor qualification",
+      "config_sha256": "a027f232e780bb916f7a9d552e83bb38e7795982471ec52443876d6cdcfebdda",
+      "config_path": "docs/research/native-union-20260928/fine-source-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/four-slot-1m-offered-http-a0001/terminal.json",
+      "terminal_sha256": "2d4ed0cbe1f2d506eadba67ad14d087af33665476b4cfa6dff26aa518cfa35ac",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/four-slot-1m-offered-http-a0001/reservation.json",
+      "reservation_sha256": "6d4cc97d78e0e69ff8c548912740ff17f5485125de6a724382644c99dbe8fd65",
+      "scope": "Focused four-slot HTTP example RED/GREEN/release then SAME actual ReLAION1M consumed development64 offered8QPS; reuse CLOSED native refs/full2696; no GT/source recomputation or fresh/vendor qualification",
+      "config_sha256": "3a8f25e33e104fd5745e82cee4f814e7f47c26c9ff389ef2b2a3bb7dc2df7356",
+      "config_path": "docs/research/native-union-20260928/four-slot-1m-offered-http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/original-requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/fresh-a0001/terminal.json",
+      "terminal_sha256": "09f250871ab9bf0cdac6dd8adb984251347ef4a1f96fd94ee28edbc8d59210d6",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/fresh-a0001/reservation.json",
+      "reservation_sha256": "e93a7b6f827544e2c54ae049b0daafac4dbe97fba3610d2ae58c09274cbed135",
+      "scope": "Frozen source parity then sealed disjoint1000-query corpus/exhaustive-f64GT construction per dataset; no ANN/live/scale/vendor qualification",
+      "config_sha256": "8c63f02b09562f88c8165d253b20772a93970b14aa45dd3b4074eae244f06729",
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": {
+        "decision_sha256": "cad91ad42e337eb2bb71fa98d8b335f8fb495a3341535a7db368ba3d12b52fb3",
+        "sealed": false,
+        "decision": "INVALID prospective cohort source mismatch"
+      },
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/fresh-a0002/terminal.json",
+      "terminal_sha256": "e69fcf4d3e8c9a76d905646920bc0aa92546d44682c675e45b6eeae4cc0efe98",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/fresh-a0002/reservation.json",
+      "reservation_sha256": "785fc204da0ffc02ce631b3e4e3d622cca5fa5d19a37a04e6d917456b83ecac6",
+      "scope": "Frozen source parity then sealed disjoint1000-query corpus/exhaustive-f64GT construction per dataset; no ANN/live/scale/vendor qualification",
+      "config_sha256": "f396143a5ff3e7af7eab96db0cf027c23c8f7206520cad3e803b62c83d45d169",
+      "config_path": "docs/research/native-union-20260928/fresh-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/chunks/0",
+          "key_or_uri": "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+          "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+        },
+        {
+          "role": "/items/1/chunks/0",
+          "key_or_uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000000.parquet",
+          "sha256": "e5d33e3c6f198a457b7d98bb2db0c599ab89ab9f92dda85d3e0cf92b57ce5b14"
+        },
+        {
+          "role": "/items/1/chunks/1",
+          "key_or_uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000001.parquet",
+          "sha256": "4e8a626563331b7d50a0e46751f2c3338470eeca9ea64019a001a99260870f5e"
+        },
+        {
+          "role": "/items/1/chunks/2",
+          "key_or_uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000002.parquet",
+          "sha256": "6b0984e8acec1f0e2c692401b59f469025730d8b936eb1155f1d91766f71c435"
+        },
+        {
+          "role": "/items/1/chunks/3",
+          "key_or_uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000003.parquet",
+          "sha256": "119ff42ff0a5d4f3fa3a07bdc831271d5ecf9666c092e01b6fde017a95af103d"
+        },
+        {
+          "role": "/items/1/chunks/4",
+          "key_or_uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000004.parquet",
+          "sha256": "e34b10b5b8f0f17cfc345b1fdda736337a78883e3b62bad485a1e1bee404da30"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/green-a0001/terminal.json",
+      "terminal_sha256": "9e5902858fa71fba139947c599ab7edf9806e806c1ecfc1688e4fbaba0bdbd1e",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/green-a0001/reservation.json",
+      "reservation_sha256": "479899ad1f98f2e6a89909784d978bf443d1bfa637c1f113cf2d86062592250b",
+      "scope": "Native union focused build/generation/lifecycle tests, full workspace assurance once, release callable binaries; no corpus/performance",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/green-a0002/terminal.json",
+      "terminal_sha256": "39c7860a60dc224551c2eb3dffa8685888e37c3678b13f50c509e3ab414f692d",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/green-a0002/reservation.json",
+      "reservation_sha256": "95eb51e7427e667b6e696720a26c0d160712601493f5255c495f29f3f41c29c9",
+      "scope": "Native union focused build/generation/lifecycle tests, full workspace assurance once, release callable binaries; no corpus/performance",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/green-a0003/terminal.json",
+      "terminal_sha256": "e9049db8260e186f2fd218dc79a3d60d7b2521fe7281cfa0afc5a7d3da312746",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/green-a0003/reservation.json",
+      "reservation_sha256": "cb7227120594b2f5f3d01da2916c02d4ffd8474030a1214f42269518a455b11e",
+      "scope": "Native union focused build/generation/lifecycle tests, full workspace assurance once, release callable binaries; no corpus/performance",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/http-a0001/terminal.json",
+      "terminal_sha256": "6e7c26cffeddf53ec5bb2f23ab29995bafcb8f1a1c2f0f5fa318e2bed9f3effe",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/http-a0001/reservation.json",
+      "reservation_sha256": "72cb0cdf5ae4dd2a1a7e7f506cd958f58c29e2d0b706bee0574104bf52a88cb2",
+      "scope": "Same-binary nearest/union incoming HTTP ABBA, fixed closed head/query/ordered-ID/counter parity; dev64 only, no fresh/scale/vendor qualification",
+      "config_sha256": "0857d27aa0c4e8662cb3a4642ff48ac1634975fed09dadc29f41ff34fdb4cc9e",
+      "config_path": "docs/research/native-union-20260928/http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/http-check-a0001/terminal.json",
+      "terminal_sha256": "2ec4cd42f98af1f208a4723916d96750b5d3edf7d00ff2916ed49e367d6e795f",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/http-check-a0001/reservation.json",
+      "reservation_sha256": "8703347f2679192b93960dd248abe11f1940c53cd26e7badb6ae59c2e24db650",
+      "scope": "HTTP example epoch mutation RED, original GREEN, narrow release build; unchanged core assurance reused, no ANN/performance",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/http-check-a0002/terminal.json",
+      "terminal_sha256": "acf69a64ec5fd7e2c48fe3a0f69a573b05747d67efc1985e5d54149b2e0e5fba",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/http-check-a0002/reservation.json",
+      "reservation_sha256": "8148f0e6ce89b8d9b9e89b0ee7bfed79521a3e9fb6a324607e87b48ff9063f71",
+      "scope": "HTTP example epoch mutation RED, original GREEN, narrow release build; Send-future shared range iterator repair, focused affected range tests and one full workspace gate, no ANN/performance",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/http-offered-protocol-a0002/terminal.json",
+      "terminal_sha256": "4e063dafec3b96386d8dd1b45e42a2fe9a8b7f20234a84c6a892a8443b77955a",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/http-offered-protocol-a0002/reservation.json",
+      "reservation_sha256": "1d6771a5324a0b9b1cae417f7b2327d21f0ba66236619222ecad37346fde9a8e",
+      "scope": "Python-only synthetic socket offered-load checks; no corpus/ANN/native build/full gate; unchanged native authority reused",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/http-offered-protocol-a0003/terminal.json",
+      "terminal_sha256": "d17b23371cd0d909055c7fa4b5369e32a9c7198c14a6a08a6de5a306c2166080",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/http-offered-protocol-a0003/reservation.json",
+      "reservation_sha256": "d14b3a7fb1cc40e3b3e9f35b5c3af4fadaada970f04d4f66ae5bd73f2bf7493a",
+      "scope": "Python-only synthetic socket offered-load checks; no corpus/ANN/native build/full gate; unchanged native authority reused",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/http-topk-authority-a0002/terminal.json",
+      "terminal_sha256": "3767c83a8552e08db72bcd575c45a79cecac60f6b74eea866fe078fb5d536644",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/http-topk-authority-a0002/reservation.json",
+      "reservation_sha256": "8b48e27f33ff8cdc8fc815a685df328447bb23fc53333648ce3f3b264301fd02",
+      "scope": "HTTP boundary exactlyk10/k100 only; expected k10 RED then exact one-line GREEN, all example tests and HTTP release rebuild; unchanged2696 library authority; no corpus/full gate",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/layout-a0001/terminal.json",
+      "terminal_sha256": "287cc0fa0e8f5672c8aac2514cba33ec45e1b5e378359fe88c40f4e514907761",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/layout-a0001/reservation.json",
+      "reservation_sha256": "c06eebda696770af24946f93b65d56a539fbd6b4db79b74cd16e333a82092b62",
+      "scope": "Existing hierarchical physical source order through fixed v4 union, exact per-ID source/scorer parity then dev64 nonregression and ABBA native cold; ReLAION-first CoHere-second, no fresh/scale/vendor qualification",
+      "config_sha256": "7c40df3c440bbe2d4dcfe7fb4d978c0b91c336e1cf27fcac36a8ce535632a002",
+      "config_path": "docs/research/native-union-20260928/layout-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/locality-source-check-a0001/terminal.json",
+      "terminal_sha256": "967c922507ec0bc81302ef42712cc7ebb2bebf790d6466fd32ca0c6714037452",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/locality-source-check-a0001/reservation.json",
+      "reservation_sha256": "32403d07ac78955fb4bb56c1c3a5e5f02cb9eaf12f2749bf8b56efd453b0e959",
+      "scope": "source-cell nearest-edge ordering assertion RED; declared adjacency-local chain andv3 recipe, same groups/reservoir/assignment/radius/querycaps; graph/source identity/budget/GREEN; one full native gate; release/synthetic publicCLI; no corpusANN/quality",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/locality-source-layout-a0001/terminal.json",
+      "terminal_sha256": "1fbcb08cc45da80fbd91baba5feeb54b3a605633f55106d0239f0b7a5d89792d",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/locality-source-layout-a0001/reservation.json",
+      "reservation_sha256": "2216ef3bb95f33237c58002efd8b89c0c1b5068aabcccd4451e29ba8e48451a0",
+      "scope": "One adjacency-local nearest source-cell order relative to killed numeric fine256 order; SAME groups/reservoir/training/assignment/radius/querycaps; paired dev64 R-first quality then native cold; no fresh/scale/vendor qualification",
+      "config_sha256": "668b84b01647bfae0e236215c7792de27ff21885c67760c113a1fe2a3c223213",
+      "config_path": "docs/research/native-union-20260928/locality-source-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/native-memory-authority-a0001/terminal.json",
+      "terminal_sha256": "a3ab7a1cfd7129bd1d1976d5d2f7589ef3880702ef68c70bbf8b4beaf4ee7876",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/native-memory-authority-a0001/reservation.json",
+      "reservation_sha256": "17849730b353c0063529d5ca78b525e156b69133089ff36dcc24b998941a9360",
+      "scope": "development-runner caller memory admission only; unchanged library full authority reused, release-mode expected legacy-default RED and focused parser GREEN, planner/HTTP rebuild only, no corpus/full gate",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/native-reference-panel-a0001/terminal.json",
+      "terminal_sha256": "ae108df55093349a57cf2a5a7ea06166835b153b8fee4a316de558902623d898",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/native-reference-panel-a0001/reservation.json",
+      "reservation_sha256": "ae1f48821f3f2d1980473c6367b8e7a6c365fb241d17e95c9e6536da4a9bf3ef",
+      "scope": "Affected native reference bin panel-count/k10/k100 CLI tests and release build only; no corpus/full gate; unchanged2696 library and HTTP authority",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/native-reference-panel-a0002/terminal.json",
+      "terminal_sha256": "daec7b4fec08bfd178d45655520de42ae41306ed8bef9e346a77945f7f348263",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/native-reference-panel-a0002/reservation.json",
+      "reservation_sha256": "e88336e7590d47fb83b49637ca3e076abea580607b49c7864f02f61ed8c3cdf9",
+      "scope": "Reuse unchanged-source3passing native tests; release build and5pendingCLIchecks/binary retention only; no corpus/full gate; unchanged2696 library and HTTP authority",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/red-a0001/terminal.json",
+      "terminal_sha256": "a4a9fc10d827bcdbbd3bf56d5ad4b39cecccc2ea1b3f613360e530329f67945d",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/red-a0001/reservation.json",
+      "reservation_sha256": "f4a8ca8e0020c6915bfe89217c3e0e88ba7ee4bd04591706c4108fbc4415886c",
+      "scope": "Expected native builder two-graph format failure; synthetic lib test, no corpus/query",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-completion-1m-a0001/terminal.json",
+      "terminal_sha256": "2e3306d61c5ecc83a7bd95578e9a9f0dd1c163b500b76761796febb1b3e3e365",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-completion-1m-a0001/reservation.json",
+      "reservation_sha256": "69f694e884ed91dd6079a40379564a371d1451ccd7b0eb8108b69cd153b4a84c",
+      "scope": "ReLAION first1M consumed development0-63; same exact v4 CURRENT integrated-core control and bounded source-completion candidate root; ALL source-v3 components unchanged; fixed quality then incoming HTTP; no fresh/vendor qualification",
+      "config_sha256": "164e8e64dfc6058698bee8b6e0d511eb89c8afa6b748040734e4f1fd7ef7a8f2",
+      "config_path": "docs/research/native-union-20260928/source-completion-1m-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/source.parquet",
+          "key_or_uri": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+          "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+        },
+        {
+          "role": "/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-completion-http-a0001/terminal.json",
+      "terminal_sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-completion-http-a0001/reservation.json",
+      "reservation_sha256": "5d9c76b191f5c9bbca9401d9b450493d1fb33ffcfd05e5faeeff7a93f8194854",
+      "scope": "one source precision change, dev64 ReLAION then CoHere, old/current versus new format separate binaries, fixed BOTH quality before incoming HTTP; no fresh/scale/vendor qualification",
+      "config_sha256": "06c52df531f8bdb7c30b746cd1a480830e1f2b074ab4d92e45a1c73199ee0a6e",
+      "config_path": "docs/research/native-union-20260928/source-completion-http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-completion-integration-a0002/terminal.json",
+      "terminal_sha256": "d9a7f53bf0f2f1bbf60a3e295e7ed145916afb8cae411ca4ce05fa689456d80b",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-completion-integration-a0002/reservation.json",
+      "reservation_sha256": "455e2bd6ff949054b64644c18bc63f79c164bbac68e90d73d6d489d29e0a20ca",
+      "scope": "bounded source completion productionplanner/trace change: focused GREEN, one full, releaseconstructor/planner/HTTP; no corpus",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-completion-red-a0001/terminal.json",
+      "terminal_sha256": "5db3fc2f58475bf258fa77abaedd3403b9c5bacf28ae74572690e919a3ed2cdb",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/source-completion-red-a0001/reservation.json",
+      "reservation_sha256": "59b13bb52182b4d296406ab61222f0c8f85d92e0b08c19c02c17018e18d5e210",
+      "scope": "expected missing-source-row native RED only; exact restored productionprefix; no corpus/full gate",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-completion-red-a0002/terminal.json",
+      "terminal_sha256": "e15c4eaf3b938a1dd8e11530f7684b0407ebc48a7a3e3516a366761325a77f95",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-completion-red-a0002/reservation.json",
+      "reservation_sha256": "cb25178e2d9da6fb0a54a62da4206d2a07d3fcb02b3f5c8858a2765e7d0ea826",
+      "scope": "expected missing-source-row native RED only; exact restored productionprefix; no corpus/full gate",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-frontier-http-a0003/terminal.json",
+      "terminal_sha256": "8d83d7f58381a6d7f8c26fb8c96c90fe14af59f1c3916df6df4b6215b38c686a",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-frontier-http-a0003/reservation.json",
+      "reservation_sha256": "64748aa44d1c4cdae62898658f8e7be403360ddb834fc7a50089cbdfa688bb6e",
+      "scope": "source-priority same-root dev64 R then CoHere against current integrated core; fixed quality then BOTH incoming HTTP; no fresh/scale/vendor qualification",
+      "config_sha256": "187896b9c25df1d2d1e89f713aa83f9e313206ebe65c84a4c397e65bc650941e",
+      "config_path": "docs/research/native-union-20260928/source-frontier-http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-frontier-integration-a0003/terminal.json",
+      "terminal_sha256": "309388f4bddaa58fa397f150b0c4ae0ad46e1958320758bd25c063f2c947567d",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-frontier-integration-a0003/reservation.json",
+      "reservation_sha256": "2333c4131a1ca0bf09a123f48a75b5bc7638206f8a4175f754c89acea4a3b539",
+      "scope": "shared source-priority graph frontier and cached source scoring; centroid-behavior assertion RED, affected graph/planner GREEN, one full assurance and release actual constructor/planner/HTTP; no corpus ANN",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-precision-1m-a0001/terminal.json",
+      "terminal_sha256": "a54d27503fd359561930b7b8b210cc1970efef5a1309911e2fb305e82580dde1",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/source-precision-1m-a0001/reservation.json",
+      "reservation_sha256": "b5be9790ca24cf412f332962f2d4de88b23229999c9cd113a36d799b07b8aea4",
+      "scope": "ReLAION first1M consumed development0-63; separate v4 CURRENT integrated-core control and v5 three-bit candidate roots; unchanged noncodec source-v3 components; fixed quality then incoming HTTP; no fresh/vendor qualification",
+      "config_sha256": "6024451cc08d2922b0bb43c9cb5147360809229e62fa5668da86912799991dce",
+      "config_path": "docs/research/native-union-20260928/source-precision-1m-config.json",
+      "config_commit": "8e7e9130f570f0f4afde3e80dea7da870db65ca3",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/source.parquet",
+          "key_or_uri": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+          "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+        },
+        {
+          "role": "/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-precision-1m-a0002/terminal.json",
+      "terminal_sha256": "adfa18d717c607e723a54bc3882bfe6ea962a3f001e4cd3303f5017b8ab13a60",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-precision-1m-a0002/reservation.json",
+      "reservation_sha256": "43b06c6e1859f728173c6f501aedd505015bae7d8f44097405a6d05bf02d9e6d",
+      "scope": "ReLAION first1M consumed development0-63; separate v4 CURRENT integrated-core control and v5 three-bit candidate roots; unchanged noncodec source-v3 components; fixed quality then incoming HTTP; no fresh/vendor qualification",
+      "config_sha256": "27b15c95abfb08c35e51f557a7904fe355a018e4bf0b9d5916f67da728796225",
+      "config_path": "docs/research/native-union-20260928/source-precision-1m-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/source.parquet",
+          "key_or_uri": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+          "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+        },
+        {
+          "role": "/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-precision-http-a0002/terminal.json",
+      "terminal_sha256": "585d06384718cb4d80b99eb3f8e0aedbe4c199cd6724873336c5ac0c3f02481c",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-precision-http-a0002/reservation.json",
+      "reservation_sha256": "db24548db317ab3b70f7f13ad67608359759ab6fc6dc0f967eb0ec63834e2077",
+      "scope": "one source precision change, dev64 ReLAION then CoHere, old/current versus new format separate binaries, fixed BOTH quality before incoming HTTP; no fresh/scale/vendor qualification",
+      "config_sha256": "50d4ec49d0cef0df5cce22949b1f9b46f872474ffa11cf5e53c2fa75f304383e",
+      "config_path": "docs/research/native-union-20260928/source-precision-http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-precision-integration-a0001/terminal.json",
+      "terminal_sha256": "ab22b9eb3e502f4bd28556f181a062a9735c8171df7428884c09303c86716a40",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/source-precision-integration-a0001/reservation.json",
+      "reservation_sha256": "e015a2f47c58e004901018469da98e8b77290762e78d1e931af3d20e9741d750",
+      "scope": "one source precision change: focused codec/source/generation GREEN, one affected full assurance, retained constructor/planner/HTTP; prior exact RED independently verified; no corpus queries",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-precision-integration-a0002/terminal.json",
+      "terminal_sha256": "bdf0a8955a33b4b624f24983ad435ade078d49546433d84609031de85a9bc14e",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/source-precision-integration-a0002/reservation.json",
+      "reservation_sha256": "a7c956cc3a9a00868eb82d0ef0ecf15225d9685d58d23a1404db00ad0a6d67bb",
+      "scope": "one source precision change: focused codec/source/generation GREEN, one affected full assurance, retained constructor/planner/HTTP; prior exact RED independently verified; no corpus queries",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-precision-integration-a0003/terminal.json",
+      "terminal_sha256": "31bca4ce97aff9ad2f24945c321337e8f88dfc986952b8b8e14f087187fcd4bb",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-precision-integration-a0003/reservation.json",
+      "reservation_sha256": "cab666ca5ff85103a881123c56c18b6c7a725fe75603ffa5b619dbefffda4d90",
+      "scope": "one source precision change: focused codec/source/generation GREEN, one affected full assurance, retained constructor/planner/HTTP; prior exact RED independently verified; no corpus queries",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/source-precision-red-a0003/terminal.json",
+      "terminal_sha256": "851c7e49740a2a6603ac6cdcef752e549d460d7dd3154f96af66d9d55110bfbd",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/source-precision-red-a0003/reservation.json",
+      "reservation_sha256": "ca7d3c6e1e605fb23be296d1f97780b2229c3b7c035752f0c2095cc1064c7412",
+      "scope": "expected three-bit record geometry assertion RED against unchanged two-bit production codec; no full assurance, release or corpus queries",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/two-slot-1m-offered-http-a0001/terminal.json",
+      "terminal_sha256": "0867f694fd6ab2de59d8967062f1c0932697cee710ca8fa23092b5f8c7284762",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/two-slot-1m-offered-http-a0001/reservation.json",
+      "reservation_sha256": "bd96c45a30854bfa7aa8fcc11f534cf844a12f5bcdafd9558df726ce926c3141",
+      "scope": "Focused two-slot HTTP example RED/GREEN/release then SAME actual ReLAION1M consumed development64 offered8QPS; reuse CLOSED native refs/full2696; no GT/source recomputation or fresh/vendor qualification",
+      "config_sha256": "6227235aaceab16fd340878dcc18b47c8fbab8101c8e45fb00ca483df47a247d",
+      "config_path": "docs/research/native-union-20260928/two-slot-1m-offered-http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/original-requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/validation-a0001/terminal.json",
+      "terminal_sha256": "16f12839d97237ce2c41c3d05cb2c8358352bb041bfb75030bd7cbad27abdce7",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/validation-a0001/reservation.json",
+      "reservation_sha256": "5c187223f26ed073ed50c2b4ece4da7d5ceef60eca0af3dd18425cf0693e7cb0",
+      "scope": "Same-binary v4 nearest/union offline consumed744 fixed quality/stage gates, ReLAION-first CoHere-second; no fresh/live/scale/vendor qualification",
+      "config_sha256": "bdc21ed32a5cf667470596bba62e35d349d1f3cb048b558f90649a13d843081d",
+      "config_path": "docs/research/native-union-20260928/validation-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/validation-a0002/terminal.json",
+      "terminal_sha256": "58487d8bd914e21b1d915115d23b8011356de4b31be3ddcecb223aca74d0e567",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/validation-a0002/reservation.json",
+      "reservation_sha256": "aaa5c2742d9a70001fcf8800301f3f16e1ff6374bf2e1f89dd3e699c02d91120",
+      "scope": "Same-binary v4 nearest/union offline consumed744 fixed quality/stage gates, ReLAION-first CoHere-second; no fresh/live/scale/vendor qualification",
+      "config_sha256": "bdc21ed32a5cf667470596bba62e35d349d1f3cb048b558f90649a13d843081d",
+      "config_path": "docs/research/native-union-20260928/validation-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/walk-source-1m-a0002/terminal.json",
+      "terminal_sha256": "ce455c3c717d223118462a78010d9296aac7152a51ea4e3e2a36854bde8bb1de",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/walk-source-1m-a0002/reservation.json",
+      "reservation_sha256": "40a393e0236d78a7a396fcbee57dd346ea09916b8bf50247be3c71a25917c66c",
+      "scope": "ReLAION first1M consumed development0-63; same newly built root old/new nomination control; fixed quality then incoming HTTP; no fresh/vendor qualification",
+      "config_sha256": "d80eba327c235a7ceb255585424de835c4ed453e09cd54c9311d4eb8dabab5da",
+      "config_path": "docs/research/native-union-20260928/walk-source-1m-config.json",
+      "config_commit": "5de1b65db13cddb1540a8321d4ff6c3d08b7e61a",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/source.parquet",
+          "key_or_uri": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+          "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+        },
+        {
+          "role": "/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/walk-source-1m-a0003/terminal.json",
+      "terminal_sha256": "b90b737a11563582a867cfe09e31ae90cea328128e47ee255b1a03eb58fd6c49",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/walk-source-1m-a0003/reservation.json",
+      "reservation_sha256": "9997419ae57b452acbf77df10b969157da053eb3067a549951909d8c6029f80d",
+      "scope": "ReLAION first1M consumed development0-63; same newly built root old/new nomination control; fixed quality then incoming HTTP; no fresh/vendor qualification",
+      "config_sha256": "d8bc9266d5d2dd28ddaff247207dfef578b73118ef3e6f0a2cacce251f61bd86",
+      "config_path": "docs/research/native-union-20260928/walk-source-1m-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/artifacts/source.parquet",
+          "key_or_uri": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+          "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+        },
+        {
+          "role": "/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/walk-source-check-a0001/terminal.json",
+      "terminal_sha256": "38a246558f3a7a743efc0c7fa273f8503bf252bdd54518e46e74c40ebf9ce2b7",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/walk-source-check-a0001/reservation.json",
+      "reservation_sha256": "7e11194bc4b26c4ac4f852eed0e2ee029f8b4ddb3009d109bc08a837e70a2c30",
+      "scope": "isolated new walk-source replay primitive assertion RED/GREEN and release only; 393 shared native files unchanged and full assurance reused; no corpus ANN",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/walk-source-http-a0001/terminal.json",
+      "terminal_sha256": "8c9ae23ccfa0f93970c9b6b5c53e38ea263d714cf5f5cdb02c79bdd734a786a5",
+      "terminal_status": "failed",
+      "reservation_key": "research/native-union/20260928/walk-source-http-a0001/reservation.json",
+      "reservation_sha256": "ed44741ee611b0793ff4483b93bb51d42f3d282ab7e05b4faf8c36f08597e70f",
+      "scope": "actual-core source nomination dev64 R then CoHere; separately retained unchanged old control; fixed quality then both-corpus incoming cold HTTP; no fresh/scale/vendor qualification",
+      "config_sha256": "47837a2d382eec3014f1ccc963fc4d2743766c10f081bd813246139f4300d0b8",
+      "config_path": "docs/research/native-union-20260928/walk-source-http-config.json",
+      "config_commit": "b06648c161a2071738d30288b67a6d5f3c5fb30f",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/walk-source-http-a0002/terminal.json",
+      "terminal_sha256": "fb32ead222b368a159b1f9f4107a0bf0a0e2c009f8f3526c149b5149de47d124",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/walk-source-http-a0002/reservation.json",
+      "reservation_sha256": "531274bb21bd093ae12574531116d7c2ea7e71bf7b3a15dc90df845fd515588d",
+      "scope": "actual-core source nomination dev64 R then CoHere; separately retained unchanged old control; fixed quality then both-corpus incoming cold HTTP; no fresh/scale/vendor qualification",
+      "config_sha256": "6e9812674943ef8729b2af4c49f268a8280e8da7f649d1c51984045da9955439",
+      "config_path": "docs/research/native-union-20260928/walk-source-http-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        },
+        {
+          "role": "/items/1/artifacts/source",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+          "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+        },
+        {
+          "role": "/items/1/artifacts/requests",
+          "key_or_uri": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+        }
+      ]
+    },
+    {
+      "terminal_key": "research/native-union/20260928/walk-source-integration-a0001/terminal.json",
+      "terminal_sha256": "3b91dadde8185af5a0a85a80eafe0930ddf6bf7459513ed83a29d949b97c4ec1",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/walk-source-integration-a0001/reservation.json",
+      "reservation_sha256": "c82df2bb99be29d84997ceb076a418a9a1019f6f3d4047af27a1275e827732f4",
+      "scope": "actual shared planner early partial-unit source nomination; new assertion RED/GREEN and affected generation integration, one full assurance and release native planner/HTTP; no corpus ANN",
+      "config_sha256": null,
+      "config_path": null,
+      "config_commit": null,
+      "invalid_source_proof": null,
+      "source_query_refs": []
+    },
+    {
+      "terminal_key": "research/native-union/20260928/walk-source-replay-a0001/terminal.json",
+      "terminal_sha256": "738da455adc884deef5bc589c2b7695ba848b831e0a3e88293ba4a0c34518f26",
+      "terminal_status": "complete",
+      "reservation_key": "research/native-union/20260928/walk-source-replay-a0001/reservation.json",
+      "reservation_sha256": "d565e3c4bc33fc1193c0a963812c1594474c860e0c098898631d9b1a5db4e1ed",
+      "scope": "ONE ReLAION consumed dev0-63 early source-code partial-unit roster replay; exact reconstructed closed root, unchanged old flat-union control and scorer; fixed quality gates; no cold or fresh or scale",
+      "config_sha256": "abd7073456f2ab172f00cbd50bc361e9cd9fbd7f278e96a76cfb15a3590c1cff",
+      "config_path": "docs/research/native-union-20260928/walk-source-config.json",
+      "config_commit": "HEAD",
+      "invalid_source_proof": null,
+      "source_query_refs": [
+        {
+          "role": "/items/0/artifacts/source",
+          "key_or_uri": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+          "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        },
+        {
+          "role": "/items/0/artifacts/requests",
+          "key_or_uri": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+        }
+      ]
+    }
+  ]
+}

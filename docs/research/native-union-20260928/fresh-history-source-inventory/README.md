@@ -93,5 +93,17 @@ Further source proof, 2026-09-29:
 `../fresh-rank16-selection-decision.md` records a subsequently preregistered,
 quality-blind 1,000-ID **provisional** selection. Original-bank exclusion and
 all selected physical locators passed an independent ID-only check. Historical
-selected-ID query lineage remains open, so no accepted fresh cohort, vector/GT
-seal, ANN quality or serving result exists for that panel.
+selected-ID query lineage remained open at that checkpoint; no vector/GT seal,
+ANN quality or serving result existed for that panel.
+
+Selected-ID follow-up: `../fresh-nonversioned-direct-source-scan.json` verifies
+33 more terminal-bound original source archives; direct ReLAION raw references
+remain confined to V36's builder/tests. `../fresh-native-union-runtime-inputs.json`
+authenticates50 CLOSED native-union terminal/reservation pairs and binds23
+exact current/historical Git configs; the one unmatched historical fresh config
+has a terminal-authenticated source-mismatch decision with no seal. A separate
+SHA check of701 distinct closed terminal JSON bodies found zero direct candidate
+shard path/name/SHA references. The combined selected-ID inference and its
+limits are stated in `../fresh-rank16-identity-decision.md`. This permits
+sealed source/GT construction; it is not an ANN quality result or a claim that
+every historical query artifact has been individually decoded.
