@@ -1,7 +1,10 @@
 # Peer HTTP development gate, 2026-09-29
 
-Frozen inputs: peer-1m-config.json binds the unchanged qualified ARM Rust HTTP
-binary, generation roots and closed development receipts. Reuse the existing
+Frozen inputs: peer-1m-config.json currently binds the historical ARM HTTP
+binary, generation roots and closed development receipts. LAUNCH HOLD: that
+binary is loopback-only. Before peer launch, qualify the example-only private
+IPv4 listener change and freeze its new binary identity and receipt in this
+configuration. Preserve unchanged library/scorer source authority. Reuse the existing
 published native namespaces; do not publish or download canonical vectors.
 ReLAION FIRST1M D768 cosine development ordinals 0–63 runs first, then CoHere
 FIRST1M D768 cosine development ordinals 0–63. These are previously observed

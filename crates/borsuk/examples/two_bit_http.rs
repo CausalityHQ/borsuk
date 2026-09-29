@@ -126,11 +126,13 @@ async fn search(
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() != 8 {
-        return Err("usage: two_bit_http BUCKET REGION PREFIX TRUSTED_ROOT_SHA GENERATION CONTROL_EPOCH LOOPBACK_LISTEN".into());
+        return Err("usage: two_bit_http BUCKET REGION PREFIX TRUSTED_ROOT_SHA GENERATION CONTROL_EPOCH LOCAL_LISTEN".into());
     }
     let listen: SocketAddr = args[7].parse()?;
-    if !listen.ip().is_loopback() {
-        return Err("development listener must be loopback".into());
+    if !listen.ip().is_loopback()
+        && !matches!(listen.ip(), std::net::IpAddr::V4(ip) if ip.is_private())
+    {
+        return Err("development listener must be loopback or private IPv4".into());
     }
     let authority = Authority {
         root_sha256: args[4].clone(),
