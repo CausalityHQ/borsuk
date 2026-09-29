@@ -1,0 +1,89 @@
+{
+  "instance_id": "i-031fa612728d48703",
+  "state": "terminated",
+  "source_archive_sha256": "1697b39b5fa31a41dd133314ac3bbb2de2ab2f148355177fd59502913f53569f",
+  "terminal_sha256": "40bea9a0de1ece2a5e5cf46920b22ada614165af8df2d431abbfee98e107b856",
+  "native_files_matched": 395,
+  "artifacts_verified": 20,
+  "full_library_assurance_reused": 2696,
+  "offered_protocol_checks_reused": 5,
+  "qualification": false,
+  "fresh_cohort_used": false,
+  "matched_control_http_measured": false,
+  "matched_vendor_measured": false,
+  "compute_cost_estimate_usd": 0.0128,
+  "compute_cost_status": "estimate from observed Spot quote and elapsed wall; excludes EBS/S3, not invoice",
+  "valid_measurement": true,
+  "engineering_invalid": false,
+  "decision": "FAIL current1M consumed development offered8QPS",
+  "native_quality": {
+    "100": {
+      "hits": 6318,
+      "denominator": 6400,
+      "recall": 0.9871875,
+      "actual_native_serving": true,
+      "offline_ordered_id_plan_parity": true
+    },
+    "10": {
+      "hits": 635,
+      "denominator": 640,
+      "recall": 0.9921875,
+      "actual_native_serving": true,
+      "offline_ordered_id_plan_parity": true
+    }
+  },
+  "runs": [
+    {
+      "rep": 0,
+      "k": 10,
+      "successful_count": 59,
+      "outcomes": {
+        "success": 59,
+        "rejected_503": 5
+      },
+      "mean_offered_recall": 0.9140625,
+      "mean_successful_recall": 0.9915254237288136,
+      "incoming_http_ms": {
+        "p50": 112.031078,
+        "p90": 116.83023020000002,
+        "p95": 127.80749469999999,
+        "p99": 141.54698932
+      },
+      "all_offered_terminal_ms": {
+        "p50": 112.064121,
+        "p90": 116.3770474,
+        "p95": 127.7955075,
+        "p99": 141.62527579
+      },
+      "successful_qps": 7.375,
+      "process_max_rss_kib": 362860,
+      "known_gets": 1786,
+      "known_verified_bytes": 989614080,
+      "physical_counters_complete": true,
+      "development_gate_passed": false
+    }
+  ],
+  "original_strict_diagnostic_preserved": "KILL 1M consumed development quality",
+  "cgroup": {
+    "cgroup": {
+      "memory.max": "8589934592\n",
+      "memory.peak": "4032815104\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+      "cpu.stat": "usage_usec 85951646\nuser_usec 74951944\nsystem_usec 10999701\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+    },
+    "address_space_limit": [
+      4294967296,
+      4294967296
+    ],
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "matched_offline_recall100_control": 0.9825,
+  "matched_offline_flat_sq8_recall100": 0.99421875
+}

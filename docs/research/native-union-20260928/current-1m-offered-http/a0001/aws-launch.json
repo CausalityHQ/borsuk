@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-031fa612728d48703",
+  "prefix": "research/native-union/20260928/current-1m-offered-http-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "1697b39b5fa31a41dd133314ac3bbb2de2ab2f148355177fd59502913f53569f",
+  "source_base_commit": "77122d25208a507666c4e116c837130508702b5f"
+}

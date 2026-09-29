@@ -92,3 +92,9 @@ Nextdecisive producttest freshrepresentativeR@10>=95 and1MD768coldp90<444ms
 reportedcontext, then8QPS/saturation/costcurve. StrictFAILpreserved; noarchitecture
 KILLinferred. Retaincandidate, nonewpaidlaunchuntilreload. BOTHvendorqualification,
 freshidentity,maintenance/pins/recovery/10M100M/lifecycle remain unresolved.
+
+## 2026-09-29 actual1M serving and offered load
+
+| Baseline | Candidate and actual quality delta | Measured serving/throughput/cost | Remaining gap to BOTH vendors | Next decisive test |
+|---|---|---|---|---|
+| ReLAIONFIRST1M D768 cosine consumed external dev0–63: CLOSED offline R@100 control98.25%, flatSQ899.421875%; no matched1M HTTP control | Actual native R@10=99.21875%,R@100=98.71875%;+.46875pp vs offlinecontrol,−.703125pp vsflat; original strict FAIL preserved | One k10 cell offered8QPS:59success/5HTTP503; all-offeredR@10=91.40625%,successfulR@10=99.15254237%; successful HTTPp90/p95=116.8302302/127.8074947ms,successful7.375QPS;RSS362860KiB;1,786GET/989,614,080verifiedB;workercompute$0.0128 ESTexclEBS/S3 | Valid development throughputFAIL; single admission slot clips tails. No fresh/CoHere1M/scale/saturation/lifecycle/matchedvendor qualification | Qualify two bounded HTTP+library slots, reuse actualCLOSED nativek10/100refs, same fixed offered8QPS panel; all64success/R10>=95/p90<444/QPS>=8 twice |
