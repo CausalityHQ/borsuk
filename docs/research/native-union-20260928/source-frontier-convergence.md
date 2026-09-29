@@ -1,23 +1,26 @@
 # Current convergence checkpoint
 
 2026-09-29. Latest results below are verified CLOSED measurements. Source and
-scorer remain frozen; only the qualified HTTP example uses four bounded slots.
-The original BOTH-vendor production goal remains active.
+scorer remain frozen; the qualified HTTP example uses four bounded slots.
+The original BOTH-vendor production goal remains open.
 
 | Baseline | Current candidate / actual quality delta | Measured latency, throughput, resources and cost | Remaining BOTH-vendor gap | Next decisive gate |
 |---|---|---|---|---|
-| ReLAION FIRST1M D768 cosine, **fresh rank16 development0–63**; practical competitor-based floor mean R@10>=95%. No matched fresh control. Consumed R@100control98.25% and flat99.421875% are stale/different split. | Native/current HTTP R@10=636/640=99.375%, +4.375pp vs stated floor; R@100=6299/6400=98.421875% reported separately. No actual fresh matched-control delta. | All256 offers success at8.0QPS each cell. k10 incoming p90=124.6767/115.9056ms, p95=139.2233/118.6152ms; namespace ready4.71–4.81s separate. 7,708 actual GET/4,293,918,720B; RSSmax376420KiB, cgroup peak4,000,931,840B. Spot compute$0.0159 **estimate**, EBS/S3/lifecycle unknown. | **GO fresh development only.** Published Turbo1MD768 coldp90444ms is nonpaired context. Prospective936, CoHere,10M/100M, saturation/lifecycle and matched BOTH vendors open. | Fixed prospective64–999 confirmation without tuning; then CoHere and bounded scale/lifecycle/vendor protocol. |
+| ReLAION FIRST1M D768 cosine, **fresh rank16 prospective64–999**; practical competitor-based floor mean R@10>=95%. No matched fresh control. Consumed R@100control98.25% and flat99.421875% are stale/different split. | Native/HTTP R@10=9239/9360=98.7073%, +3.7073pp vs stated floor; R@100=92206/93600=98.5107% separately. No actual fresh matched-control delta. | All3,744 offers success at8.0QPS per cell. k10 incoming p90=112.8224/116.9879ms, p95=115.7277/136.3771ms; namespace ready4.71–4.91s separate. 111,704 actual GET/62,791,372,800B; RSSmax402108KiB, cgroup peak4,114,006,016B. Spot compute$0.0473 **estimate**, EBS/S3/lifecycle unknown. | **GO prospective confirmation.** Published Turbo1MD768 coldp90444ms is nonpaired context. CoHere,10M/100M, saturation/lifecycle and matched BOTH vendors remain open. | Independent CoHere fixed split, then runnable10M cold/saturation/cost and mutation lifecycle on frozen object-native revision. |
 
-The measured protocol uses fixed order[k10,k100,k100,k10],64 requests per cell, fresh HTTP process per cell,
+The prospective protocol uses fixed order[k10,k100,k100,k10],936 requests per cell, fresh HTTP process per cell,
 8 workers and5s request timeout. Data fetches use no application SQ8 cache;
 source/router metadata is resident, namespace hydration is excluded from request
 timing, S3 service cache is uncontrolled, client is loopback with separate
 connections. Both fresh k10 repetitions pass the frozen development gates:
-all64 successful, R10>=95%, p90<444ms and successfulQPS>=8. Prior consumed
+all936 successful, R10>=95%, p90<444ms and successfulQPS>=8. Prior consumed
 development R@10=635/640=99.21875%, R@100=6318/6400=98.71875%, k10
 p90=302.778/146.643ms at8QPS are different-split historical evidence. Its
 first k10 p95=449.209ms missed the old400ms engineering stretch. Original
 strict R100, one-slot and two-slot FAILs remain immutable.
+The fresh development0–63 R@10=99.375% and R@100=98.421875% passed its
+separate gate before the prospective panel was opened; together the fixed
+1,000-query panel descriptively gives R@10=98.75% and R@100=98.505%.
 
 Published comparison context: Turbopuffer1M D768 coldp90=444ms; its published8QPS
 homepage workload is10M D1024. These are disclosed differences, not paired vendor
@@ -55,16 +58,18 @@ has now sealed all1,000 query vectors and exhaustive f64 GT100, verified16
 candidate shards, exact original1M raw-source parity, three immutable S3
 artifact SHA256s and actual instance termination. Cgroup peak5.865GB;
 compute$0.0264 **estimated** excluding EBS/S3. The subsequent
-[fresh development gate](fresh-rank16-dev64-decision.md) passed on ordinals0–63;
-prospective64–999 remain sealed. **Complete all-history query-artifact closure
-remains false.** Reject all1,000 IDs if later authenticated input proves reuse.
+[fresh development gate](fresh-rank16-dev64-decision.md) passed on ordinals0–63,
+then the frozen [prospective confirmation](fresh-rank16-confirm936-decision.md)
+passed on ordinals64–999 with no tuning. **Complete all-history query-artifact
+closure remains false.** Reject all1,000 IDs if later authenticated input
+proves reuse.
 
-Recent code/measurement evidence: [fresh development decision](fresh-rank16-dev64-decision.md),
+Recent code/measurement evidence: [prospective decision](fresh-rank16-confirm936-decision.md),
+[fresh development decision](fresh-rank16-dev64-decision.md),
 [four-slot consumed decision](four-slot-1m-offered-http-decision.md),
 [frozen strict1M decision](source-completion-1m-decision.md),
 [prior two-slot decision](two-slot-1m-offered-http-decision.md),
 [prior one-slot decision](current-1m-offered-http-decision.md).
 Unchanged2696-pass core assurance and five offered-protocol checks are reused.
-The original construction and fresh development jobs are CLOSED; both instances
-are terminated. No operator decision is needed for the next fixed prospective
-confirmation design.
+Construction, development and prospective jobs are CLOSED; all instances
+are terminated. No operator decision is needed for the next fixed gate.

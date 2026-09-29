@@ -1,0 +1,113 @@
+{
+  "valid_measurement": true,
+  "decision": "GO fresh ReLAION1M fresh rank16 prospective64-999",
+  "prospective_confirmation": true,
+  "qualification": false,
+  "matched_vendor_measured": false,
+  "matched_control_http_measured": false,
+  "instance_id": "i-0bf7f63baa89c2e7b",
+  "state": "terminated",
+  "terminal_sha256": "9a9c8b0e06c94589957b6ab67be49f639e4373a16b47352f5313fc07f81c4300",
+  "reservation_sha256": "6ca9850c2afd87a3e8974b0e239b8a3671c25d144105e42e9fe8ac95b9cc6455",
+  "source_archive_sha256": "c81b69313204585ef6c658b04394e84b5f8508a1551978c89640b7f04842906e",
+  "config_sha256": "b6105a89702c47b00f5a394a197c698851e758958ab1c29a42c9ae94c989a9cd",
+  "native_quality": {
+    "10": {
+      "hits": 9239,
+      "denominator": 9360,
+      "recall": 0.9870726495726496
+    },
+    "100": {
+      "hits": 92206,
+      "denominator": 93600,
+      "recall": 0.9851068376068376
+    }
+  },
+  "runs": [
+    {
+      "rep": 0,
+      "k": 10,
+      "hits": 9239,
+      "denominator": 9360,
+      "outcomes": {
+        "success": 936
+      },
+      "incoming_http_ms": {
+        "p50": 110.162328,
+        "p90": 112.8224005,
+        "p95": 115.727705,
+        "p99": 144.844384
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4712.782253,
+      "data_gets": 27926,
+      "verified_data_bytes": 15697843200
+    },
+    {
+      "rep": 1,
+      "k": 100,
+      "hits": 92206,
+      "denominator": 93600,
+      "outcomes": {
+        "success": 936
+      },
+      "incoming_http_ms": {
+        "p50": 110.35493550000001,
+        "p90": 113.70415,
+        "p95": 119.00152775,
+        "p99": 145.86828235
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4912.30491,
+      "data_gets": 27926,
+      "verified_data_bytes": 15697843200
+    },
+    {
+      "rep": 2,
+      "k": 100,
+      "hits": 92206,
+      "denominator": 93600,
+      "outcomes": {
+        "success": 936
+      },
+      "incoming_http_ms": {
+        "p50": 110.5049865,
+        "p90": 113.29866899999999,
+        "p95": 121.20153400000001,
+        "p99": 146.58786089999998
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4811.89845,
+      "data_gets": 27926,
+      "verified_data_bytes": 15697843200
+    },
+    {
+      "rep": 3,
+      "k": 10,
+      "hits": 9239,
+      "denominator": 9360,
+      "outcomes": {
+        "success": 936
+      },
+      "incoming_http_ms": {
+        "p50": 110.378911,
+        "p90": 116.987938,
+        "p95": 136.37713775,
+        "p99": 176.59577069999995
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4811.927031,
+      "data_gets": 27926,
+      "verified_data_bytes": 15697843200
+    }
+  ],
+  "all_offered_requests": 3744,
+  "all_successful_requests": 3744,
+  "physical_data_gets": 111704,
+  "verified_data_bytes": 62791372800,
+  "cgroup_peak_bytes": 4114006016,
+  "swap_peak_bytes": 0,
+  "instance_elapsed_seconds": 951,
+  "compute_cost_estimate_usd": 0.0473,
+  "cost_scope": "estimate only; excludes EBS/S3 and is not an invoice"
+}
