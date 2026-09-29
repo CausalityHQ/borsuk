@@ -25,6 +25,7 @@ def run(out,rep,k,config,binary,index,requests,reference,truth):
     directory=out/('run'+str(rep)+'-k'+str(k));directory.mkdir()
     authority=dict(root_sha256=config['root_sha256'],generation=1,control_epoch=1)
     command=[str(binary),config['bucket'],config['region'],index,authority['root_sha256'],'1','1','127.0.0.1:8080']
+    startup_ns=time.monotonic_ns()
     with (directory/'server.log').open('x') as log:
         server=subprocess.Popen(['/usr/bin/time','-v','-o',str(directory/'server.time'),'timeout','--signal=TERM','--kill-after=5','180',*command],stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         try:
@@ -41,11 +42,12 @@ def run(out,rep,k,config,binary,index,requests,reference,truth):
                 except (OSError,ConnectionError):
                     if time.monotonic()>deadline:raise TimeoutError('server readiness')
                     time.sleep(.1)
+            namespace_ready_ms=(time.monotonic_ns()-startup_ns)/1e6
             samples,result=measure(requests,reference,truth,authority,k=k,offered_qps=8,workers=8,timeout_seconds=5)
             if server.poll() is not None:raise ValueError('server terminated during measurement')
             with (directory/'http.jsonl').open('x') as stream:
                 for row in samples:stream.write(json.dumps(row,sort_keys=True,allow_nan=False)+'\n')
-            result.update(rep=rep,dataset='ReLAION',rows=1000000,dimensions=768,split='consumed external development0-63',authority=authority,metadata_resident=True,application_sq8_cache=False,fresh_cohort_used=False,matched_control_http_measured=False)
+            result.update(rep=rep,dataset='ReLAION',rows=1000000,dimensions=768,split=config.get('query_split','consumed external development0-63'),authority=authority,namespace_ready_ms=namespace_ready_ms,metadata_resident=True,application_sq8_cache=False,fresh_cohort_used=config.get('fresh_cohort_used',False),matched_control_http_measured=False)
             if not result['identity_parity_valid']:raise ValueError('HTTP source/scorer/native reference integrity')
             result['development_gate_passed']=(result['successful_count']==64 and result['mean_offered_recall']>=.95 and result['successful_incoming_http_ms']['p90']<444 and result['achieved_successful_qps']>=8)
             write(directory/'result.json',result)
