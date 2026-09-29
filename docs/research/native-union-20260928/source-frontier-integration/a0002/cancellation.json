@@ -1,0 +1,9 @@
+{
+  "valid_check": false,
+  "science_started": false,
+  "reason": "Static review found nonexistent release target two_bit_generation_build; actual target build_two_bit_generation. Cancel to avoid knowingly doomed full compile; discard entire cell.",
+  "instance_id": "i-094c19a7aa3869f09",
+  "native_session": 85883,
+  "termination_requested": true,
+  "replacement_allowed_only_after_actual_termination": true
+}

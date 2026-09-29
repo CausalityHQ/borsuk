@@ -1,0 +1,11 @@
+{
+  "valid_check": false,
+  "phase": "local-client-token-validation",
+  "cause": "client token exceeds AWS 64-character bound; assertion before reservation and RunInstances",
+  "native_session": 87979,
+  "exit_code": 1,
+  "launched_instances": 0,
+  "active_tag_instances_verified": 0,
+  "correction": "shorten constant prefix; next explicit a0002",
+  "science_started": false
+}

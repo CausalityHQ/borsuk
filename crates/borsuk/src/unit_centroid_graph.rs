@@ -107,6 +107,34 @@ impl Ord for Candidate {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct WalkCandidate {
+    priority: f64,
+    node: u32,
+}
+
+impl PartialEq for WalkCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node && self.priority.to_bits() == other.priority.to_bits()
+    }
+}
+
+impl Eq for WalkCandidate {}
+
+impl PartialOrd for WalkCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for WalkCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.priority
+            .total_cmp(&other.priority)
+            .then_with(|| self.node.cmp(&other.node))
+    }
+}
+
 fn matching_scorer_blob(scorer: &UnitCentroidPages, blob: &[u8]) -> bool {
     blob.len() >= 32 && &Sha256::digest(blob)[..] == scorer.blob_sha256()
 }
@@ -648,6 +676,7 @@ impl UnitCentroidGraph {
             max_additional_pages,
             max_evaluations,
             false,
+            None,
         )
     }
 
@@ -667,6 +696,28 @@ impl UnitCentroidGraph {
             max_additional_pages,
             max_evaluations,
             true,
+            None,
+        )
+    }
+
+    /// Visit the same bounded graph using caller priorities; lower values expand first.
+    pub(crate) fn search_pages_seeded_by_source(
+        &self,
+        scorer: &UnitCentroidPages,
+        query: &[f32],
+        primary_pages: &[usize],
+        max_additional_pages: usize,
+        max_evaluations: usize,
+        priority: &mut dyn FnMut(usize) -> Result<f64, UnitCentroidGraphError>,
+    ) -> Result<PageDiverseGraphSearch, UnitCentroidGraphError> {
+        self.search_pages_seeded_impl(
+            scorer,
+            query,
+            primary_pages,
+            max_additional_pages,
+            max_evaluations,
+            false,
+            Some(priority),
         )
     }
 
@@ -678,6 +729,7 @@ impl UnitCentroidGraph {
         max_additional_pages: usize,
         max_evaluations: usize,
         export_scores: bool,
+        mut priority: Option<&mut dyn FnMut(usize) -> Result<f64, UnitCentroidGraphError>>,
     ) -> Result<PageDiverseGraphSearch, UnitCentroidGraphError> {
         let page_count = self.rows.div_ceil(self.page_rows);
         let units_per_page = self.page_rows / self.unit_rows;
@@ -717,8 +769,15 @@ impl UnitCentroidGraph {
                     max_evaluations,
                 )?
                 .ok_or(UnitCentroidGraphError::InvalidGeometry)?;
-                frontier.push(Reverse(Candidate {
-                    distance_squared: distance,
+                let value = match priority.as_deref_mut() {
+                    Some(score) => score(unit)?,
+                    None => f64::from(distance),
+                };
+                if !value.is_finite() {
+                    return Err(UnitCentroidGraphError::InvalidQuery);
+                }
+                frontier.push(Reverse(WalkCandidate {
+                    priority: value,
                     node: unit as u32,
                 }));
             }
@@ -745,8 +804,15 @@ impl UnitCentroidGraph {
                     exhausted = true;
                     break 'walk;
                 };
-                frontier.push(Reverse(Candidate {
-                    distance_squared: distance,
+                let value = match priority.as_deref_mut() {
+                    Some(score) => score(neighbor as usize)?,
+                    None => f64::from(distance),
+                };
+                if !value.is_finite() {
+                    return Err(UnitCentroidGraphError::InvalidQuery);
+                }
+                frontier.push(Reverse(WalkCandidate {
+                    priority: value,
                     node: neighbor,
                 }));
             }
@@ -895,6 +961,49 @@ mod tests {
         assert_eq!(decoded.neighbours, graph.neighbours);
         let found = decoded.search(&scorer, &[127.0], 8, 128).unwrap();
         assert_eq!(found.units[0].0, 127);
+    }
+
+    #[test]
+    fn source_frontier_finds_target_under_the_same_work_cap() {
+        let (blob, scorer) = centroids();
+        let mut graph = UnitCentroidGraph::build(&scorer, &blob).unwrap();
+        // Seeds 0/1: centroid expands 0 -> 2, while source expands 1 -> target 3.
+        graph.neighbours = vec![vec![vec![2]], vec![vec![3]], vec![vec![0]], vec![vec![1]]];
+        let old = graph
+            .search_pages_seeded(&scorer, &[0.0], &[0], 1, 3)
+            .unwrap();
+        assert_eq!(old.evaluated_units, vec![0, 1, 2]);
+        let mut calls = Vec::new();
+        let mut source = |unit| {
+            calls.push(unit);
+            Ok(if unit == 1 { -10.0 } else { 0.0 })
+        };
+        let found = graph
+            .search_pages_seeded_by_source(&scorer, &[0.0], &[0], 1, 3, &mut source)
+            .unwrap();
+        assert_eq!(found.evaluated_units, vec![0, 1, 3]);
+        assert_eq!(calls, found.evaluated_units);
+        assert_eq!(found.unit_evaluations, 3);
+        assert!(found.work_exhausted);
+        assert!(
+            graph
+                .search_pages_seeded_by_source(&scorer, &[0.0], &[0, 0], 1, 3, &mut |_| panic!(
+                    "invalid geometry scored"
+                ))
+                .is_err()
+        );
+        assert!(
+            graph
+                .search_pages_seeded_by_source(&scorer, &[0.0], &[0], 1, 1, &mut |_| panic!(
+                    "invalid budget scored"
+                ))
+                .is_err()
+        );
+        assert!(
+            graph
+                .search_pages_seeded_by_source(&scorer, &[0.0], &[0], 1, 3, &mut |_| Ok(f64::NAN))
+                .is_err()
+        );
     }
 
     #[test]

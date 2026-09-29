@@ -1,0 +1,53 @@
+{
+  "instance_id": "i-0615e6fe0086c066f",
+  "state": "terminated",
+  "source_archive_sha256": "71edd9a491c53a3970168fe65554716c361126929dd32b9c58496288f9d4a182",
+  "terminal_sha256": "309388f4bddaa58fa397f150b0c4ae0ad46e1958320758bd25c063f2c947567d",
+  "native_files_matched": 394,
+  "artifacts_verified": 14,
+  "qualification": false,
+  "no_corpus_query": true,
+  "valid_check": true,
+  "boundary": {
+    "qualified": false,
+    "no_corpus_query": true,
+    "full_workspace_repeated": true,
+    "original_source_sha256": "0817cf4b6e99d1deb2532ef00cc8296e1061e1c8f2dc6118d6e8b6f977d12f6c",
+    "fixed_source_sha256": "0817cf4b6e99d1deb2532ef00cc8296e1061e1c8f2dc6118d6e8b6f977d12f6c",
+    "centroid_red_source_sha256": "e03d52f2b9a360637427ab521dc3a634fad2816f9ddf6bd6549ed683a3bd62cb",
+    "generation_source_sha256": "c007d58461a67c2bc2f6de47ef5f286c8763b7875b1364ff6861c9a589632cbf",
+    "red_status": 101,
+    "green_passed": true,
+    "binaries": {
+      "two_bit_plan_demo": {
+        "bytes": 11700136,
+        "sha256": "7c740aa41b1c4785f4c959bb88f714cb6e69690a7d54913dc3fa2355cf8f1737"
+      },
+      "build_two_bit_generation": {
+        "bytes": 1268536,
+        "sha256": "9d21d69bdb7dd794e60a9108ac8afcd6a0e9ad2d0f6bcf7eeba8ab877781165a"
+      },
+      "two_bit_http": {
+        "bytes": 12532152,
+        "sha256": "1809efdce172888dc4b62c36f3dd81a53f78b5b2efad4880c2b5f13b2b7f52bd"
+      }
+    }
+  },
+  "cgroup": {
+    "memory.peak": "10737418240\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 20161\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 7828480403\nuser_usec 7477510508\nsystem_usec 350969894\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  },
+  "full_assurance": {
+    "passed": 2694,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 145
+  },
+  "cargo_executed_targets": 146,
+  "benchmark_smoke_checks": 12,
+  "exact_previous_roster_plus_one_graph_test": true,
+  "compiled_graph_sha256": "0817cf4b6e99d1deb2532ef00cc8296e1061e1c8f2dc6118d6e8b6f977d12f6c",
+  "compiled_generation_sha256": "c007d58461a67c2bc2f6de47ef5f286c8763b7875b1364ff6861c9a589632cbf"
+}

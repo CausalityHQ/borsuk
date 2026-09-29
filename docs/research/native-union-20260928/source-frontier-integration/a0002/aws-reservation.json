@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-native-source-frontier-integration-v1",
+  "source_base_commit": "3b7a949b56ea919300a9b156d7318e661af7dd7e",
+  "source_archive_sha256": "8f533f0f3744765a7ac9a6c736c8353a8b6a517fd76acbf0670ab2b18707764a",
+  "source_dirty": true,
+  "attempt": "a0002",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "wall_seconds": 4200,
+  "test_timeout_seconds": 3900,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.204800",
+  "spot_quote_timestamp": "2026-09-29T04:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.35,
+  "cost_allowance_ebs_s3_usd": 0.1,
+  "scope": "shared source-priority graph frontier and cached source scoring; centroid-behavior assertion RED, affected graph/planner GREEN, one full assurance and release actual constructor/planner/HTTP; no corpus ANN",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "existing_native_files_verified_except_declared_change": 394,
+  "changed_native_files": [
+    "crates/borsuk/src/two_bit_generation.rs",
+    "crates/borsuk/src/unit_centroid_graph.rs"
+  ],
+  "reused_previous_assurance_terminal_sha256": "3b91dadde8185af5a0a85a80eafe0930ddf6bf7459513ed83a29d949b97c4ec1",
+  "measurement_memory_max_bytes": 10737418240,
+  "swap_max_bytes": 0,
+  "cpu_affinity": "0-3",
+  "threads": 4,
+  "s3_versioning_observed": "Disabled"
+}
