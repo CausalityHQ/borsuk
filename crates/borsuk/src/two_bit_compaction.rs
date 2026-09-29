@@ -177,8 +177,11 @@ fn prepared_manifest(directory: &Path, ready: &Ready) -> Result<Manifest> {
     serde_json::from_slice(&root).map_err(|_| bad("compaction root schema"))
 }
 fn disk_bound(rows: usize, dimensions: usize) -> Result<u64> {
-    let codec = RotatedTwoBitCodec::encoded_record_bytes(dimensions)
-        .map_err(|e| plane(SourceBuildError::Codec(e)))?;
+    let codec = RotatedTwoBitCodec::padded_dimensions(dimensions)
+        .map_err(|e| plane(SourceBuildError::Codec(e)))?
+        .div_ceil(4)
+        .checked_add(8)
+        .ok_or(bad("compaction disk geometry"))?;
     let per_row = dimensions
         .checked_mul(9)
         .and_then(|n| n.checked_add(36))

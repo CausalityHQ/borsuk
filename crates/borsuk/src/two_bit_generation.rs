@@ -86,7 +86,7 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v5";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v4";
 pub(crate) const METADATA_FILES: [&str; 9] = [
     "manifest.json",
     "page_manifest.json",
@@ -385,15 +385,13 @@ impl TwoBitGeneration {
         .map_err(TwoBitGenerationError::Plane)?;
         let geometry: SourcePlaneReceipt =
             serde_json::from_slice(&plane_body).map_err(|_| bad("plane schema"))?;
+        let padded =
+            crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(geometry.dimensions)
+                .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
         let expected_mean = geometry.dimensions.checked_mul(4).ok_or(bad("mean size"))?;
         let expected_records = geometry
             .rows
-            .checked_mul(
-                crate::rotated_two_bit::RotatedTwoBitCodec::encoded_record_bytes(
-                    geometry.dimensions,
-                )
-                .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
-            )
+            .checked_mul(padded.div_ceil(4) + 8)
             .ok_or(bad("record size"))?;
         if geometry.dimensions != manifest.low.len()
             || geometry.dimensions != manifest.canonical.dimensions

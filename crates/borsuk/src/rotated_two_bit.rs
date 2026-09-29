@@ -1,6 +1,6 @@
-//! Source-only rotated three-bit codes for precise page nomination.
+//! Source-only rotated two-bit codes for precise page nomination.
 //!
-//! Current records contain packed three-bit levels, a little-endian f32 scale,
+//! Version 1 records contain packed two-bit levels, a little-endian f32 scale,
 //! and the inverse reconstructed vector norm as f32. A generation must bind
 //! dimensions, source mean, rotation seed and record bytes in its trusted root.
 //! Historical research records stored a different final scalar and are not
@@ -23,7 +23,7 @@ pub enum TwoBitError {
 
 impl std::fmt::Display for TwoBitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "rotated three-bit source codec: {self:?}")
+        write!(formatter, "rotated two-bit codec: {self:?}")
     }
 }
 
@@ -106,7 +106,7 @@ impl RotatedTwoBitCodec {
             mean: padded_mean,
             signs,
             blocks,
-            packed_bytes: Self::encoded_record_bytes(mean.len())? - 8,
+            packed_bytes: padded.div_ceil(4),
         })
     }
 
@@ -123,14 +123,6 @@ impl RotatedTwoBitCodec {
                 tail.next_power_of_two()
             })
             .filter(|&n| n <= u32::MAX as usize)
-            .ok_or(TwoBitError::Geometry)
-    }
-
-    pub(crate) fn encoded_record_bytes(dimensions: usize) -> Result<usize, TwoBitError> {
-        Self::padded_dimensions(dimensions)?
-            .checked_mul(3)
-            .map(|bits| bits.div_ceil(8))
-            .and_then(|bytes| bytes.checked_add(8))
             .ok_or(TwoBitError::Geometry)
     }
 
@@ -183,22 +175,14 @@ impl RotatedTwoBitCodec {
             rotated[coordinate] = f64::from(row[coordinate]) - self.mean[coordinate];
         }
         self.rotate(&mut rotated, false);
-        let mut scale = rotated.iter().map(|x| x.abs()).sum::<f64>() / rotated.len() as f64 / 4.0;
+        let mut scale = rotated.iter().map(|x| x.abs()).sum::<f64>() / rotated.len() as f64 / 1.6;
         let mut levels = vec![0_i8; rotated.len()];
         for _ in 0..8 {
             let mut numerator = 0.0;
             let mut denominator = 0.0;
             for (level, &value) in levels.iter_mut().zip(&rotated) {
                 *level = if value >= 0.0 { 1 } else { -1 }
-                    * if value.abs() > 6.0 * scale {
-                        7
-                    } else if value.abs() > 4.0 * scale {
-                        5
-                    } else if value.abs() > 2.0 * scale {
-                        3
-                    } else {
-                        1
-                    };
+                    * if value.abs() > 2.0 * scale { 3 } else { 1 };
                 numerator += f64::from(*level) * value;
                 denominator += f64::from(*level) * f64::from(*level);
             }
@@ -210,12 +194,7 @@ impl RotatedTwoBitCodec {
         }
         let mut record = vec![0_u8; self.record_bytes()];
         for (coordinate, &level) in levels.iter().enumerate() {
-            let bit = coordinate * 3;
-            let word = u16::from((level + 7) as u8 / 2) << (bit % 8);
-            record[bit / 8] |= word as u8;
-            if bit / 8 + 1 < self.packed_bytes {
-                record[bit / 8 + 1] |= (word >> 8) as u8;
-            }
+            record[coordinate / 4] |= ((i16::from(level) + 3) as u8 / 2) << (2 * (coordinate % 4));
         }
         // The final scalar excludes padded coordinates after inverse rotation,
         // so arbitrary dimension tails retain the intended cosine metric.
@@ -237,8 +216,8 @@ impl RotatedTwoBitCodec {
         Ok(record)
     }
 
-    /// Rotate a query once and build a 64-entry lookup per coordinate pair.
-    /// D768 uses 384 lookups per row instead of vector reconstruction.
+    /// Rotate a query once and build one four-coordinate lookup per packed
+    /// byte. D768 uses 192 lookups per row instead of vector reconstruction.
     /// `max_scratch_bytes` admits the lookup and temporary rotated query;
     /// allocator overhead and immutable codec metadata are charged separately.
     pub fn prepare_query(
@@ -248,10 +227,8 @@ impl RotatedTwoBitCodec {
     ) -> Result<PreparedTwoBit, TwoBitError> {
         let query_norm2 = self.validate_vector(query)?;
         let table_len = self
-            .mean
-            .len()
-            .div_ceil(2)
-            .checked_mul(64)
+            .packed_bytes
+            .checked_mul(256)
             .ok_or(TwoBitError::Geometry)?;
         let peak_scratch = table_len
             .checked_add(self.mean.len())
@@ -279,17 +256,17 @@ impl RotatedTwoBitCodec {
             .try_reserve_exact(table_len)
             .map_err(|_| TwoBitError::MemoryBudget)?;
         table.resize(table_len, 0.0);
-        for pair in 0..self.mean.len().div_ceil(2) {
-            for word in 0..64 {
+        for byte in 0..self.packed_bytes {
+            for word in 0..256 {
                 let mut dot = 0.0;
-                for slot in 0..2 {
-                    let coordinate = pair * 2 + slot;
+                for slot in 0..4 {
+                    let coordinate = byte * 4 + slot;
                     if coordinate < rotated.len() {
-                        let level = ((word >> (3 * slot)) & 7) as i8 * 2 - 7;
+                        let level = ((word >> (2 * slot)) & 3) as i8 * 2 - 3;
                         dot += f64::from(level) * rotated[coordinate];
                     }
                 }
-                table[pair * 64 + word] = dot;
+                table[byte * 256 + word] = dot;
             }
         }
         Ok(PreparedTwoBit {
@@ -322,21 +299,10 @@ impl PreparedTwoBit {
         if !scale.is_finite() || scale < 0.0 || !inverse_norm.is_finite() || inverse_norm <= 0.0 {
             return Err(TwoBitError::Record);
         }
-        let dot = self
-            .table
-            .chunks_exact(64)
+        let dot = record[..self.packed_bytes]
+            .iter()
             .enumerate()
-            .map(|(pair, table)| {
-                let bit = pair * 6;
-                let first = bit / 8;
-                let word = u16::from(record[first])
-                    | if first + 1 < self.packed_bytes {
-                        u16::from(record[first + 1]) << 8
-                    } else {
-                        0
-                    };
-                table[usize::from((word >> (bit % 8)) & 63)]
-            })
+            .map(|(byte, &word)| self.table[byte * 256 + usize::from(word)])
             .sum::<f64>();
         let score = (self.mean_dot + f64::from(scale) * dot)
             * self.inverse_query_norm
@@ -345,97 +311,5 @@ impl PreparedTwoBit {
             return Err(TwoBitError::Record);
         }
         Ok(score)
-    }
-}
-
-#[cfg(test)]
-mod precision_tests {
-    use super::*;
-
-    #[test]
-    fn three_bit_records_match_scalar_cosine_and_admit_exact_lookup_scratch() {
-        for dimensions in [768, 1, 2, 5, 257] {
-            let mean = (0..dimensions)
-                .map(|i| (i % 5) as f32 * 0.25 - 0.5)
-                .collect::<Vec<_>>();
-            let codec = RotatedTwoBitCodec::new(&mean, 20260923).unwrap();
-            let padded = codec.mean.len();
-            let mut source = (0..padded)
-                .map(|i| ((i % 8) as f64 * 2.0 - 7.0) * 0.125)
-                .collect::<Vec<_>>();
-            codec.rotate(&mut source, true);
-            let row = source[..dimensions]
-                .iter()
-                .zip(&mean)
-                .map(|(&x, &m)| (x + f64::from(m)) as f32)
-                .collect::<Vec<_>>();
-            let record = codec.encode(&row).unwrap();
-            assert_eq!(
-                record.len(),
-                (padded * 3).div_ceil(8) + 8,
-                "three-bit record geometry"
-            );
-            let packed = record.len() - 8;
-            let scale = f32::from_le_bytes(record[packed..packed + 4].try_into().unwrap());
-            let mut reconstructed = Vec::with_capacity(padded);
-            let mut codes = std::collections::BTreeSet::new();
-            for coordinate in 0..padded {
-                let bit = coordinate * 3;
-                let first = bit / 8;
-                let word = u16::from(record[first])
-                    | if first + 1 < packed {
-                        u16::from(record[first + 1]) << 8
-                    } else {
-                        0
-                    };
-                let code = ((word >> (bit % 8)) & 7) as u8;
-                codes.insert(code);
-                reconstructed.push((f64::from(code) * 2.0 - 7.0) * f64::from(scale));
-            }
-            if dimensions == 768 {
-                assert_eq!(codes, (0..8).collect());
-            }
-            codec.rotate(&mut reconstructed, true);
-            for (value, &m) in reconstructed.iter_mut().zip(&mean) {
-                *value += f64::from(m);
-            }
-            let query = row
-                .iter()
-                .enumerate()
-                .map(|(i, &x)| x + (i % 3) as f32 * 0.0625)
-                .collect::<Vec<_>>();
-            let dot = query
-                .iter()
-                .zip(&reconstructed)
-                .map(|(&q, &x)| f64::from(q) * x)
-                .sum::<f64>();
-            let norm = reconstructed[..dimensions]
-                .iter()
-                .map(|x| x * x)
-                .sum::<f64>()
-                .sqrt();
-            let query_norm = query
-                .iter()
-                .map(|&q| f64::from(q) * f64::from(q))
-                .sum::<f64>()
-                .sqrt();
-            let scalar = dot / norm / query_norm;
-            let table_values = padded.div_ceil(2) * 64;
-            let peak = (table_values + padded) * 8;
-            let prepared = codec.prepare_query(&query, peak).unwrap();
-            assert_eq!(prepared.scratch_bytes(), table_values * 8);
-            assert!(matches!(
-                codec.prepare_query(&query, peak - 1),
-                Err(TwoBitError::MemoryBudget)
-            ));
-            assert!((prepared.score(&record).unwrap() - scalar).abs() < 1e-6);
-            assert!(prepared.score(&record[..record.len() - 1]).is_err());
-            let mut corrupt = record.clone();
-            corrupt[packed..packed + 4].copy_from_slice(&(-1.0_f32).to_le_bytes());
-            assert!(prepared.score(&corrupt).is_err());
-            corrupt = record;
-            corrupt[packed + 4..].copy_from_slice(&f32::NAN.to_le_bytes());
-            assert!(prepared.score(&corrupt).is_err());
-        }
     }
 }

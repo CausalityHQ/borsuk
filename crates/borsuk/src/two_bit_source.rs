@@ -1,4 +1,4 @@
-//! Bounded, query-blind construction of rotated three-bit nomination metadata.
+//! Bounded, query-blind construction of rotated two-bit nomination metadata.
 use crate::rotated_two_bit::{PreparedTwoBit, RotatedTwoBitCodec, TwoBitError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -74,7 +74,7 @@ pub struct SourcePlaneReceipt {
     pub source_order_sha256: String,
     /// Digest of little-endian f32 `mean.bin`.
     pub mean_sha256: String,
-    /// Digest of current three-bit `records.bin`.
+    /// Digest of Rust v1 `records.bin`.
     pub records_sha256: String,
     /// Always false: construction accepts no query or truth inputs.
     pub query_or_truth_used: bool,
@@ -280,7 +280,7 @@ impl TwoBitSource<'_> {
         records.flush()?;
         records.get_ref().sync_all()?;
         let receipt = SourcePlaneReceipt {
-            schema: "borsuk-rotated-three-bit-plane-v1".into(),
+            schema: "borsuk-two-bit-plane-v2".into(),
             rows: self.rows,
             dimensions: self.dimensions,
             seed: 20260923,
@@ -365,7 +365,7 @@ impl TwoBitPlane {
         let body = read_authenticated(&manifest_path, size, trusted_manifest_sha256)?;
         let receipt: SourcePlaneReceipt =
             serde_json::from_slice(&body).map_err(|_| bad("manifest schema"))?;
-        if receipt.schema != "borsuk-rotated-three-bit-plane-v1"
+        if receipt.schema != "borsuk-two-bit-plane-v2"
             || receipt.seed != 20260923
             || receipt.rows == 0
             || receipt.query_or_truth_used
@@ -383,7 +383,7 @@ impl TwoBitPlane {
             return Err(bad("manifest identity"));
         }
         let padded = RotatedTwoBitCodec::padded_dimensions(receipt.dimensions)?;
-        if receipt.record_bytes != RotatedTwoBitCodec::encoded_record_bytes(receipt.dimensions)? {
+        if receipt.record_bytes != padded.div_ceil(4) + 8 {
             return Err(bad("record geometry"));
         }
         let record_size = receipt

@@ -44,16 +44,16 @@ fn streams_source_records_and_rejects_wrong_identity_order_budget_and_overwrite(
     let receipt = input.build(&output, 1024 * 1024).unwrap();
     assert_eq!(
         (receipt.rows, receipt.dimensions, receipt.record_bytes),
-        (2, 5, 11)
+        (2, 5, 10)
     );
     let mean = fs::read(output.join("mean.bin")).unwrap();
     assert_eq!(mean, raw[..20]);
     let records = fs::read(output.join("records.bin")).unwrap();
-    assert_eq!(records.len(), 22);
-    for record in records.chunks_exact(11) {
-        assert_eq!(&record[..3], &[0x24, 0x49, 0x92]);
-        assert_eq!(f32::from_le_bytes(record[3..7].try_into().unwrap()), 0.0);
-        let inv = f32::from_le_bytes(record[7..].try_into().unwrap());
+    assert_eq!(records.len(), 20);
+    for record in records.chunks_exact(10) {
+        assert_eq!(&record[..2], &[0xaa, 0xaa]);
+        assert_eq!(f32::from_le_bytes(record[2..6].try_into().unwrap()), 0.0);
+        let inv = f32::from_le_bytes(record[6..].try_into().unwrap());
         assert!((inv - 1.0 / 15.25_f32.sqrt()).abs() < 1e-7);
     }
     assert_eq!(receipt.mean_sha256, hash(&mean));
@@ -125,8 +125,8 @@ fn streams_source_records_and_rejects_wrong_identity_order_budget_and_overwrite(
     let records = fs::read(varied_output.join("records.bin")).unwrap();
     let codec = borsuk::rotated_two_bit::RotatedTwoBitCodec::new(&[0.0; 5], 20260923).unwrap();
     let prepared = codec.prepare_query(&row, 8192).unwrap();
-    assert!(prepared.score(&records[..11]).unwrap() < -0.95);
-    assert!(prepared.score(&records[11..]).unwrap() > 0.95);
+    assert!(prepared.score(&records[..10]).unwrap() < -0.95);
+    assert!(prepared.score(&records[10..]).unwrap() > 0.95);
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn opens_authenticated_plane_and_rejects_wrong_generation_corruption_and_budget(
         fs::write(root.join(name), original).unwrap();
     }
     let mut unsupported: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
-    unsupported["schema"] = "borsuk-two-bit-plane-v2".into();
+    unsupported["schema"] = "legacy".into();
     let body = serde_json::to_vec(&unsupported).unwrap();
     fs::write(root.join("manifest.json"), &body).unwrap();
     assert!(TwoBitPlane::open(&root, &hash(&body), &sq8_sha, 1024 * 1024).is_err());
