@@ -1,0 +1,12 @@
+{
+  "metadata_only": true,
+  "no_numerical_execution": true,
+  "config_sha256": "d0056860ca1166be126825c71e51f18a1bb91b5bd81f2dfa6ae42017a16ff8ef",
+  "root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+  "components": 9,
+  "canonical_bytes_expected_from_authenticated_root": 3080000000,
+  "canonical_body_verified": false,
+  "oracle_selfcheck_and_topk_ast_unchanged": true,
+  "control_hits": 6288,
+  "flat_hits": 6363
+}

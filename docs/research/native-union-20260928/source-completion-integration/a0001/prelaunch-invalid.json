@@ -1,0 +1,7 @@
+{
+  "valid_check": false,
+  "no_instance_created": true,
+  "active_tag_instances_verified": 0,
+  "reason": "EC2 client token exceeded64 chars; preRunInstances assert",
+  "source_archive_sha256": "7f915dc7630efd532a993964a0417837160d9f8c1884ed164ee869122e1fc7b8"
+}

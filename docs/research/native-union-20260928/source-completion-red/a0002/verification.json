@@ -1,0 +1,26 @@
+{
+  "valid_check": true,
+  "instance_id": "i-0f8fbe9534a34c7e7",
+  "state": "terminated",
+  "source_archive_sha256": "81cb0b5b7e2845cb83992b247c1da4563d1b7c907d5cb7d90ae20c35b4c16f2f",
+  "terminal_sha256": "e15c4eaf3b938a1dd8e11530f7684b0407ebc48a7a3e3516a366761325a77f95",
+  "native_files_matched": 395,
+  "artifacts_verified": 7,
+  "qualification": false,
+  "no_corpus_query": true,
+  "production_body_unchanged": true,
+  "boundary": {
+    "qualified": false,
+    "no_corpus_query": true,
+    "full_workspace_repeated": false,
+    "red_status": 101,
+    "production_prefix_sha256": "cf100eec5f3ce2b825a169b139366637330d3ea55a216792e4a8119ee4327a4e",
+    "generation_sha256": "44d5227a025e0e8ea94d9fa5b98771ef795d72cbd7280fdc91376c1b67be0333"
+  },
+  "cgroup": {
+    "memory.peak": "6942756864\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 1250775333\nuser_usec 1212431596\nsystem_usec 38343737\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  }
+}

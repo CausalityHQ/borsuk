@@ -1,0 +1,21 @@
+{
+  "metadata_only": true,
+  "no_numerical_execution": true,
+  "config_sha256": "06c52df531f8bdb7c30b746cd1a480830e1f2b074ab4d92e45a1c73199ee0a6e",
+  "rows": [
+    {
+      "dataset": "relaion",
+      "root": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b",
+      "components": 9,
+      "control_hits": 6366,
+      "flat_hits": 6369
+    },
+    {
+      "dataset": "cohere",
+      "root": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521",
+      "components": 9,
+      "control_hits": 6349,
+      "flat_hits": 6351
+    }
+  ]
+}

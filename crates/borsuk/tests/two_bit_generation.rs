@@ -184,6 +184,13 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let (diagnostic, trace) = generation.diagnostic_plan(&[0.5, 0.25]).await.unwrap();
     assert_eq!(diagnostic, first);
     assert_eq!(trace.ranked_candidate_pages, vec![0, 1]);
+    let evaluated = trace
+        .nomination_evaluated_units
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(evaluated.len(), trace.nomination_evaluated_units.len());
+    assert_eq!(evaluated, (0..generation.rows().div_ceil(32)).collect());
     assert!(
         trace
             .ranked_candidate_pages

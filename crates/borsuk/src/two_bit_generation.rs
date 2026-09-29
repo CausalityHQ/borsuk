@@ -150,6 +150,8 @@ pub struct TwoBitDiscoveryTrace {
 pub struct TwoBitPlanTrace {
     /// Source two-bit max-row nomination order of up to318 union pages.
     pub ranked_candidate_pages: Vec<usize>,
+    /// Globally distinct32-row units source-scored, including bounded completion.
+    pub nomination_evaluated_units: Vec<usize>,
     /// First ranked page, required by physical admission.
     pub primary_page: usize,
     /// Nearest then diversity discovery; identical graph identities run once.
@@ -163,6 +165,7 @@ impl TwoBitPlanTrace {
             + 2 * std::mem::size_of::<TwoBitDiscoveryTrace>()
             + 2 * (rows.div_ceil(256).min(159) + units.min(128) + units.min(1272))
                 * std::mem::size_of::<usize>()
+            + units.min(2544) * std::mem::size_of::<usize>()
     }
 }
 // Source nomination over bounded graph walks; no corpus-sized query allocation.
@@ -216,7 +219,33 @@ fn rank_walked_source(
         }
         pages
     }
-    let global = page_maxima(
+    let mut global = page_maxima(
+        memo.iter()
+            .map(|&(unit, value)| (unit / 8, value))
+            .collect(),
+    );
+    let walked_count = memo.len();
+    let mut completion = global.clone();
+    completion.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
+    'complete: for (page, _) in completion {
+        for unit in page * 8..((page + 1) * 8).min(rows.div_ceil(32)) {
+            if memo.len() == 2544 {
+                break 'complete;
+            }
+            if memo[..walked_count]
+                .binary_search_by_key(&unit, |&(id, _)| id)
+                .is_ok()
+            {
+                continue;
+            }
+            let value = score(unit)?;
+            if !value.is_finite() {
+                return Err(TwoBitGenerationError::Invalid("nonfinite source score"));
+            }
+            memo.push((unit, value));
+        }
+    }
+    global = page_maxima(
         memo.iter()
             .map(|&(unit, value)| (unit / 8, value))
             .collect(),
@@ -227,8 +256,10 @@ fn rank_walked_source(
             evaluated
                 .iter()
                 .map(|unit| {
-                    let index = memo.binary_search_by_key(unit, |&(id, _)| id).unwrap();
-                    (unit / 8, memo[index].1)
+                    let index = global
+                        .binary_search_by_key(&(unit / 8), |&(page, _)| page)
+                        .unwrap();
+                    (unit / 8, global[index].1)
                 })
                 .collect(),
         );
@@ -592,7 +623,12 @@ impl TwoBitGeneration {
             }
             walks.push((seed_page, evaluated));
         }
+        let mut nomination_evaluated_units =
+            Vec::with_capacity(if trace.is_some() { 2544 } else { 0 });
         let ranked = rank_walked_source(self.pages.rows(), &walks, |unit| {
+            if trace.is_some() {
+                nomination_evaluated_units.push(unit);
+            }
             let mut maximum = f64::NEG_INFINITY;
             for row in unit * 32..((unit + 1) * 32).min(self.pages.rows()) {
                 maximum = maximum.max(
@@ -605,6 +641,7 @@ impl TwoBitGeneration {
         })?;
         if let Some(trace) = trace {
             trace.primary_page = ranked[0].0;
+            trace.nomination_evaluated_units = nomination_evaluated_units;
             trace.ranked_candidate_pages = ranked.iter().map(|&(page, _)| page).collect();
         }
         let primary = [ranked[0].0 * 256];
@@ -824,6 +861,35 @@ impl TwoBitGeneration {
 mod source_walk_tests {
     use super::*;
     #[test]
+    fn bounded_completion_recovers_unvisited_rows_without_duplicate_or_extra_work() {
+        let mut units = (0..1272).collect::<Vec<_>>();
+        units[1271] = 1280;
+        let mut seen = std::collections::BTreeSet::new();
+        let ranked = rank_walked_source(100000, &[(0, units)], |unit| {
+            assert!(seen.insert(unit), "source unit scored twice");
+            Ok(if unit == 1281 { 10.0 } else { 1.0 })
+        })
+        .unwrap();
+        assert_eq!(ranked[0], (160, 10.0), "incomplete page hid its best row");
+        assert_eq!(seen.len(), 1280);
+
+        let walk = |start: usize| {
+            (0..8)
+                .chain((start..start + 1264).map(|page| page * 8))
+                .collect::<Vec<_>>()
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        let ranked = rank_walked_source(1000000, &[(0, walk(1)), (0, walk(1265))], |unit| {
+            assert!(seen.insert(unit), "source unit scored twice");
+            assert!(seen.len() <= 2544, "source row allowance exceeded");
+            Ok(if unit == 9 { 10.0 } else { 1.0 })
+        })
+        .unwrap();
+        assert_eq!(seen.len(), 2544);
+        assert_eq!(ranked[0], (1, 10.0));
+        assert!(ranked.len() <= 318);
+    }
+    #[test]
     fn source_nomination_precedes_centroid_cutoff_and_scores_units_once() {
         let mut units = (0..1272).collect::<Vec<_>>();
         units[1271] = 1280;
@@ -835,7 +901,7 @@ mod source_walk_tests {
             Ok(if unit == 1280 { 10.0 } else { 1.0 })
         })
         .expect("walked source nomination not integrated");
-        assert_eq!(calls, 1272);
+        assert_eq!(calls, 1280);
         assert_eq!(ranked.len(), 159);
         assert_eq!(ranked[0], (160, 10.0));
         assert_eq!(ranked[1], (0, 1.0));

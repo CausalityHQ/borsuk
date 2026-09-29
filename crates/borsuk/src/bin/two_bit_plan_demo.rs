@@ -228,6 +228,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     serde_json::json!(diagnostic.ranked_candidate_pages);
                 record["primary_page"] = diagnostic.primary_page.into();
                 record["discoveries"] = serde_json::json!(diagnostic.discoveries);
+                record["nomination_evaluated_units"] =
+                    serde_json::json!(diagnostic.nomination_evaluated_units);
                 record["selected_pages"] = serde_json::json!(plan.selected_pages);
             }
             if paired {

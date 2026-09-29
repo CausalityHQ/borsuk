@@ -1,0 +1,13 @@
+{
+  "valid_check": false,
+  "instance_id": "i-0a8bf031538ef3dca",
+  "state": "terminated",
+  "source_archive_sha256": "3b561ba1a3dd203dd654b49d81fd66368e74e3d72eee21ea7400359b00406900",
+  "terminal_sha256": "5db3fc2f58475bf258fa77abaedd3403b9c5bacf28ae74572690e919a3ed2cdb",
+  "native_files_matched": 395,
+  "artifacts_verified": 6,
+  "qualification": false,
+  "no_corpus_query": true,
+  "production_body_unchanged": true,
+  "reason": "Focused test closure integer inference compile failure; no expected RED executed"
+}
