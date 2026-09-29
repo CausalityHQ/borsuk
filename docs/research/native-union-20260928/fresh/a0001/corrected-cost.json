@@ -1,0 +1,9 @@
+{
+  "instance_id": "i-0b83f4d01b9fa2ef9",
+  "observed_elapsed_s": 76,
+  "spot_quote_usd_per_hour": "0.179900",
+  "compute_cost_estimate_usd": 0.0038,
+  "cost_status": "Corrected observed quote times rounded closed wall /3600 seconds per hour; excludes EBS/S3, not invoice",
+  "original_closeout_estimate_usd": 0.0153,
+  "root_cause": "Launcher deadline replacement accidentally changed seconds-per-hour divisor to900; original receipt retained, current launcher fixed."
+}

@@ -8,7 +8,9 @@ gap.104839pp; CoHere99.059140%→99.215054%,flat99.315860%,gap.100806pp. Both p0
 Verified latest dev0–63 native candidate p90/p95ms R108.488395/109.708413,
 C106.605597/107.813765,serialQPS R9.419019,C9.504854; slightly slower than matched
 nearest control. No744 serving timing, fresh/scale/lifecycle/vendor qualification.
-All jobs terminated; next fresh source-parity/cohort gate, then1M feasibility.
+All jobs terminated; [prospective cohort construction](fresh-decision.md) now
+passes source parity/exhaustiveGT/sealing, without ANN quality or novelty proof.
+Next novelty audit and1M source/order/build feasibility.
 Remaining sections preserve the integration checkpoint.
 
 The verified discovery-union mechanism is now the callable Rust generation path.

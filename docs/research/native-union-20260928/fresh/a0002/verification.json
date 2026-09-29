@@ -1,0 +1,110 @@
+{
+  "instance_id": "i-03ff41564af5fe2d5",
+  "state": "terminated",
+  "source_archive_sha256": "4b9b78f3f74c863930f7d03b9b0bc4d64377f89324985c5abb708cad94c6b319",
+  "terminal_sha256": "e69fcf4d3e8c9a76d905646920bc0aa92546d44682c675e45b6eeae4cc0efe98",
+  "native_files_matched": 392,
+  "source_files_matched": 395,
+  "artifacts_verified": 12,
+  "qualification": false,
+  "sealed_data_opened": false,
+  "valid_construction": true,
+  "decision": "PASS source parity and sealed cohort construction only",
+  "source_parity": [
+    {
+      "dataset": "relaion",
+      "expected_source_raw_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2",
+      "query_count": 1000,
+      "query_source_raw_sha256": "a69350b61ad1dac2d3a460c987fbc2fa7e5fb8dc06132c3616327861b1f9abcb",
+      "source_parity": true,
+      "source_query_intervals_disjoint": true,
+      "source_raw_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2"
+    },
+    {
+      "dataset": "cohere",
+      "expected_source_raw_sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e",
+      "query_count": 1000,
+      "query_source_raw_sha256": "10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0",
+      "source_parity": true,
+      "source_query_intervals_disjoint": true,
+      "source_raw_sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+    }
+  ],
+  "cohorts": [
+    {
+      "ann_queries_or_scoring": 0,
+      "artifacts": {
+        "queries.raw": {
+          "bytes": 3072000,
+          "key": "research/native-union/20260928/fresh-a0002/sealed/relaion/queries.raw",
+          "sha256": "a69350b61ad1dac2d3a460c987fbc2fa7e5fb8dc06132c3616327861b1f9abcb"
+        },
+        "requests.jsonl": {
+          "bytes": 14673389,
+          "key": "research/native-union/20260928/fresh-a0002/sealed/relaion/requests.jsonl",
+          "sha256": "df09b53429e0553bc2ced8b7ff972a6164bfe7297c3304338e8d66c3d904c1a5"
+        },
+        "truth.u32": {
+          "bytes": 400000,
+          "key": "research/native-union/20260928/fresh-a0002/sealed/relaion/truth.u32",
+          "sha256": "e65884ce48ae1e077bfe69cbb59bf38cd89108333f7907a67c508f076614f554"
+        }
+      },
+      "dataset": "relaion",
+      "exhaustive_oracle_queries": 1000,
+      "gt_cutoff_exact_ties": 0,
+      "minimum_100_101_cosine_margin": 2.2112831898901675e-08,
+      "oracle": "exhaustive cosine float64; normalize original f32 source/query in f64; distance=1-dot; tie signed ID ascending",
+      "oracle_scalar_check": true,
+      "oracle_wall_seconds": 13.630464380000006,
+      "qualification": false,
+      "quality_peek": false,
+      "query_cohort": "disjoint staged training embeddings rows100000-100999, not official test distribution",
+      "query_source_count": 1000,
+      "query_source_first": 100000,
+      "source_parity": true,
+      "source_raw_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2"
+    },
+    {
+      "ann_queries_or_scoring": 0,
+      "artifacts": {
+        "queries.raw": {
+          "bytes": 3072000,
+          "key": "research/native-union/20260928/fresh-a0002/sealed/cohere/queries.raw",
+          "sha256": "10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0"
+        },
+        "requests.jsonl": {
+          "bytes": 15368978,
+          "key": "research/native-union/20260928/fresh-a0002/sealed/cohere/requests.jsonl",
+          "sha256": "dae9ceca85dbc7aba6f0972ae9ca67837a2e67a5aba497326c81393d998036b8"
+        },
+        "truth.u32": {
+          "bytes": 400000,
+          "key": "research/native-union/20260928/fresh-a0002/sealed/cohere/truth.u32",
+          "sha256": "77c67a6199925f187dc95ba957244d32635f9a22be37013546474543fc9bf61c"
+        }
+      },
+      "dataset": "cohere",
+      "exhaustive_oracle_queries": 1000,
+      "gt_cutoff_exact_ties": 0,
+      "minimum_100_101_cosine_margin": 1.7426816212307017e-08,
+      "oracle": "exhaustive cosine float64; normalize original f32 source/query in f64; distance=1-dot; tie signed ID ascending",
+      "oracle_scalar_check": true,
+      "oracle_wall_seconds": 13.618595827000007,
+      "qualification": false,
+      "quality_peek": false,
+      "query_cohort": "disjoint staged training embeddings rows100000-100999, not official test distribution",
+      "query_source_count": 1000,
+      "query_source_first": 100000,
+      "source_parity": true,
+      "source_raw_sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+    }
+  ],
+  "cgroup": {
+    "cpu.stat": "usage_usec 75859384\nuser_usec 72099091\nsystem_usec 3760292\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "memory.peak": "3395739648\n",
+    "memory.swap.peak": "0\n"
+  },
+  "ann_quality_measured": false
+}
