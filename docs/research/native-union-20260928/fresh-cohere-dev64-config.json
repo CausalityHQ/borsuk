@@ -122,6 +122,11 @@
       "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/plane/records.bin",
       "bytes": 200000000,
       "sha256": "491888c5ce5887efb5aaf55106c707b6a3f98566eb0b602643dbec8abb1d4eaf"
+    },
+    "generation/canonical.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/objects/be2200926dbf7e241523d37c3b061c775911bd94f589a8fc67cadb632659e8dc",
+      "bytes": 3080000000,
+      "sha256": "be2200926dbf7e241523d37c3b061c775911bd94f589a8fc67cadb632659e8dc"
     }
   },
   "dataset": "CoHere",

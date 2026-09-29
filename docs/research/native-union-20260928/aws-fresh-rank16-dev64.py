@@ -91,7 +91,8 @@ def main(attempt, subnet, mode="dev64", family="rank16"):
                 or source["root_sha256"] != config["root_sha256"]
                 or sealed_proof["root_sha256"] != config["root_sha256"]):
             raise ValueError("closed CoHere source authority differs")
-        expected_generation = source["generation_artifacts"]
+        expected_generation = {**source["generation_artifacts"],
+                               "generation/canonical.bin": source["canonical_artifact"]}
     else:
         current = json.loads((ROOT / "current-1m-offered-http-config.json").read_text())
         expected_generation = {name: ident for name, ident in current["artifacts"].items()

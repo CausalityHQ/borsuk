@@ -1,0 +1,22 @@
+{
+  "valid_infrastructure_failure": true,
+  "valid_measurement": false,
+  "state": "terminated",
+  "decision": "STARTUP FAIL missing local canonical.bin; no ANN quality result",
+  "instance_id": "i-01ae6b4e33a2a40fa",
+  "terminal_sha256": "64ae61dd5458442abaf9eb1871582cd77aaa083096d415134615ec524ed241b4",
+  "reservation_sha256": "9b66e58f207ec2aecf6de8c365f29dace08ad7effc7dc3f090cfb4fa559bb670",
+  "source_base_commit": "869f21451182791dea05adf05cf47b198257f79f",
+  "source_archive_sha256": "cf197e757b4aee362919ddda96de09fb384adf8ae9af9ec1e89960e97156c06d",
+  "config_sha256": "79e2dac6265badda13424833eba65e554084e75d141bd8155a422f88868f5274",
+  "ann_responses": 0,
+  "ann_quality_measured": false,
+  "http_measured": false,
+  "qualification": false,
+  "cgroup_peak_bytes": 653205504,
+  "swap_peak_bytes": 0,
+  "instance_elapsed_seconds": 97,
+  "compute_cost_estimate_usd": 0.0048,
+  "cost_scope": "estimate only; excludes EBS/S3 and is not an invoice",
+  "remediation": "Include source-authenticated canonical artifact in local generation download roster; source/root/scorer/query/gates unchanged"
+}

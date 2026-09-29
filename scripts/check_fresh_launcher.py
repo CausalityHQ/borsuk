@@ -32,7 +32,8 @@ def check():
             config.update(schema='borsuk-fresh-cohere-1m-dev64-v1',
                           root_sha256=source['root_sha256'],
                           source_raw_sha256=source['source_raw_sha256'],
-                          generation_artifacts=source['generation_artifacts'],
+                          generation_artifacts={**source['generation_artifacts'],
+                                                'generation/canonical.bin': source['canonical_artifact']},
                           root_manifest=source['generation_artifacts']['generation/manifest.json'])
             virtual[ROOT / 'cohere-source-1m/a0001/verification.json'] = json.dumps(proof).encode()
             config['source_construction_verification_sha256'] = launcher.sha(next(iter(virtual.values())))
@@ -58,6 +59,8 @@ def check():
 
     assert accepted('rank16') and accepted('cohere')
     if (ROOT / 'fresh-cohere-dev64-config.json').exists():
+        actual = json.loads((ROOT / 'fresh-cohere-dev64-config.json').read_text())
+        assert actual['generation_artifacts']['generation/canonical.bin'] == source['canonical_artifact'], 'native publisher requires authenticated local canonical.bin'
         with patch.object(launcher.subprocess, 'check_output', side_effect=['', 'f' * 40]), \
              patch.object(launcher.subprocess, 'run'), \
              patch.object(launcher.io, 'BytesIO', side_effect=Accepted), \

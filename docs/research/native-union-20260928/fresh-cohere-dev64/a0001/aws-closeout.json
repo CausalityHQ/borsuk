@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-01ae6b4e33a2a40fa",
+  "state": "terminated",
+  "observed_elapsed_s": 97,
+  "compute_cost_estimate_usd": 0.0048,
+  "cost_status": "estimate only; excludes EBS/S3 and is not an invoice"
+}
