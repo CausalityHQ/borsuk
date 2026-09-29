@@ -80,3 +80,15 @@ serial QPS8.81918/9.24361, slower than matched controls. Lifecycle$ unmeasured.
 Same source/root/scorer/discovery; fixed work caps. Next decisive test fixedR1M
 >=6331hits,p05>=95 then actual nativeHTTP; kill exact arm on scientific failure.
 Both vendor gap, fresh identity/scale/maintenance/pins/recovery remain unresolved.
+
+## Latest1M completion: verified strict FAIL, retain product candidate
+
+ReLAION FIRST1M D768 cosine k100 consumeddev0–63: matchedcontrol6288=98.25%
+→candidate6318=98.71875%,+30hits/+.46875pp,p0592→97. Flat6363=99.421875%,
+45hit/.703125ppgap fails frozen32hitdiagnostic. No1MHTTP/QPS/lifecycle$ measured.
+Candidatewalk/roster/nomination/physical/final loss46/7/2/0/27; unchangeddiscovery.
+395native/403source/38artifacts verified; actualtermination528s,$.0263computeESTexcl.
+Nextdecisive producttest freshrepresentativeR@10>=95 and1MD768coldp90<444ms
+reportedcontext, then8QPS/saturation/costcurve. StrictFAILpreserved; noarchitecture
+KILLinferred. Retaincandidate, nonewpaidlaunchuntilreload. BOTHvendorqualification,
+freshidentity,maintenance/pins/recovery/10M100M/lifecycle remain unresolved.
