@@ -1,0 +1,421 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v138-unit-bound/b1afc2f8361d46317d2e6b34e394688f7a5396a6/runs/v138-20260924T085601Z/a0002/terminal.json",
+  "terminal_sha256": "2b619fb40b5ab0db56bfd60da044809efc7871e7993fc2b2fb7a9aaa8d81af2a",
+  "terminal_status": "complete",
+  "source_commit": "b1afc2f8361d46317d2e6b34e394688f7a5396a6",
+  "archive_key": "research/v138-unit-bound/b1afc2f8361d46317d2e6b34e394688f7a5396a6/source/b459a99896a9b3187ee11da33d6c9f17882bc6a66eb299ba87eeaebbe83de8f8.tar.gz",
+  "archive_sha256": "b459a99896a9b3187ee11da33d6c9f17882bc6a66eb299ba87eeaebbe83de8f8",
+  "archive_bytes": 11962267,
+  "source_code": {
+    "scripts/launch_v138_unit_bound_spot.py": {
+      "sha256": "9320ba78466c2d7b34146a318f7ef74dc8a92620a005f2a5590e97649d8ead16",
+      "lines": [
+        {
+          "line": 26,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/queries.jsonl\", 2_041_773),"
+        },
+        {
+          "line": 27,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/built/sq8.bin\", 10_800_000),"
+        },
+        {
+          "line": 28,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/low.bin\", 384),"
+        },
+        {
+          "line": 29,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/step.bin\", 384),"
+        },
+        {
+          "line": 30,
+          "text": "    (\"research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl\", 18_726_909),"
+        },
+        {
+          "line": 31,
+          "text": "    (\"research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/rust-replay.jsonl\", 13_455_525),"
+        },
+        {
+          "line": 33,
+          "text": "    (\"research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/low.bin\", 3_072),"
+        },
+        {
+          "line": 34,
+          "text": "    (\"research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/step.bin\", 3_072),"
+        },
+        {
+          "line": 40,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 63,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 65,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 71,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 74,
+          "text": "            f\"research/v138-unit-bound/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 88,
+          "text": "            f\"export V138_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 110,
+          "text": "  \"source_commit\":os.environ[\"V138_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 111,
+          "text": "  \"source_archive_sha256\":os.environ[\"V138_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 121,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 122,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 123,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 124,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 158,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 177,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 188,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 190,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 191,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 192,
+          "text": "                or \"scripts/v138_unit_bound_feasibility.py\" not in source.getnames()"
+        },
+        {
+          "line": 193,
+          "text": "                or \"docs/research/inputs/v138-deep-primary.jsonl\" not in source.getnames()):"
+        },
+        {
+          "line": 194,
+          "text": "            raise ValueError(\"source archive lacks V138 runner or evaluator\")"
+        },
+        {
+          "line": 203,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 204,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 234,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 245,
+          "text": "                    or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 246,
+          "text": "                    or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 272,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 279,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v138_unit_bound_remote.sh": {
+      "sha256": "78cd4591da15ebd7ca36dbf2379805f649537e6f60151ca45aa894685c0da4fd",
+      "lines": [
+        {
+          "line": 2,
+          "text": "# One frozen, fail-fast, source-only unit-bound feasibility screen on Spot."
+        },
+        {
+          "line": 28,
+          "text": "    rm -f deep.raw.jsonl deep.summary.json relaion.raw.jsonl relaion.summary.json"
+        },
+        {
+          "line": 31,
+          "text": "  for path in install.log download.log deep-resources.txt relaion-resources.txt \\"
+        },
+        {
+          "line": 32,
+          "text": "      deep.raw.jsonl deep.summary.json relaion.raw.jsonl relaion.summary.json \\"
+        },
+        {
+          "line": 46,
+          "text": "names=('install.log','download.log','deep-resources.txt','relaion-resources.txt',"
+        },
+        {
+          "line": 47,
+          "text": "       'deep.raw.jsonl','deep.summary.json','relaion.raw.jsonl','relaion.summary.json',"
+        },
+        {
+          "line": 54,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 55,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 60,
+          "text": "  'source_commit':os.environ['V138_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 61,
+          "text": "  'source_archive_sha256':os.environ['V138_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 93,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 119,
+          "text": "v122=research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts"
+        },
+        {
+          "line": 120,
+          "text": "download_checked deep/queries.jsonl \"$v122/queries.jsonl\" 2041773 dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99"
+        },
+        {
+          "line": 133,
+          "text": "  --cohort deep-image-96-angular-random100k --rows 100000 --dimensions 96 \\"
+        },
+        {
+          "line": 138,
+          "text": "with open('deep.summary.json') as source: summary=json.load(source)"
+        },
+        {
+          "line": 142,
+          "text": "  printf '%s\\n' '{\"schema\":\"borsuk-v138-decision-v1\",\"deep_stop\":true,\"relaion_skipped\":true}' >decision.json"
+        },
+        {
+          "line": 144,
+          "text": "  phase=download-relaion"
+        },
+        {
+          "line": 145,
+          "text": "  v116=research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts"
+        },
+        {
+          "line": 146,
+          "text": "  v115=research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router"
+        },
+        {
+          "line": 147,
+          "text": "  download_checked relaion/requests.jsonl \"$v116/requests.jsonl\" 18726909 c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9"
+        },
+        {
+          "line": 148,
+          "text": "  download_checked relaion/rust-replay.jsonl \"$v116/rust-replay.jsonl\" 13455525 3bfd155ac5f9e1b7aacbc263e1732e2314c9722f235d3454e0f17d0c6bc3c960"
+        },
+        {
+          "line": 149,
+          "text": "  download_checked relaion/sq8.bin research/v70-algorithm-first/single-stage-a4a695d66f508edf/index/sq8.bin 780000000 2284f24745f964ff2b125eedb883d5cd8ff6afab0738f49f9e16e593167a318b"
+        },
+        {
+          "line": 150,
+          "text": "  download_checked relaion/low.bin \"$v115/low.bin\" 3072 ce036f48f918312f694adbd12994646987eb0e144df20f64ffe583bed0d1f891"
+        },
+        {
+          "line": 151,
+          "text": "  download_checked relaion/step.bin \"$v115/step.bin\" 3072 64d49c7413f163fb3446183629d743f69199156f208fa959523d1bcde27da69c"
+        },
+        {
+          "line": 152,
+          "text": "  phase=evaluate-relaion"
+        },
+        {
+          "line": 155,
+          "text": "  run_science relaion bash -c \\"
+        },
+        {
+          "line": 158,
+          "text": "    --cohort ReLAION-1M --rows 1000000 --dimensions 768 \\"
+        },
+        {
+          "line": 159,
+          "text": "    --input relaion --sq8 relaion/sq8.bin --low relaion/low.bin \\"
+        },
+        {
+          "line": 160,
+          "text": "    --step relaion/step.bin --raw relaion.raw.jsonl \\"
+        },
+        {
+          "line": 161,
+          "text": "    --summary relaion.summary.json"
+        },
+        {
+          "line": 164,
+          "text": "with open('deep.summary.json') as source: deep=json.load(source)"
+        },
+        {
+          "line": 165,
+          "text": "with open('relaion.summary.json') as source: relaion=json.load(source)"
+        },
+        {
+          "line": 167,
+          "text": "  'relaion_skipped':False,'relaion_stop':relaion['stop_primary_exact_policy'],"
+        },
+        {
+          "line": 168,
+          "text": "  'primary_exact_policy_feasible':not relaion['stop_primary_exact_policy']},"
+        }
+      ]
+    },
+    "scripts/v138_unit_bound_feasibility.py": {
+      "sha256": "4011168f10bcf1f3942cd236b0c619d4f0fa6693154cdb0675b189a32bda8f69",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"Source-only SQ8 unit-bound feasibility screen; no GT or returned IDs.\"\"\""
+        },
+        {
+          "line": 41,
+          "text": "    if name == \"deep-image-96-angular-random100k\":"
+        },
+        {
+          "line": 42,
+          "text": "        requests = [json.loads(line) for line in (root / \"queries.jsonl\").open()]"
+        },
+        {
+          "line": 45,
+          "text": "        requests = [json.loads(line) for line in (root / \"requests.jsonl\").open()]"
+        },
+        {
+          "line": 47,
+          "text": "    if len(requests) != 1000 or len(sealed) != 1000:"
+        },
+        {
+          "line": 49,
+          "text": "    queries = []"
+        },
+        {
+          "line": 51,
+          "text": "    for ordinal, (request, record) in enumerate(zip(requests, sealed)):"
+        },
+        {
+          "line": 52,
+          "text": "        if request[\"query_ordinal\"] != ordinal or record[\"query_ordinal\"] != ordinal:"
+        },
+        {
+          "line": 53,
+          "text": "            raise ValueError(\"sealed query ordinal differs\")"
+        },
+        {
+          "line": 54,
+          "text": "        if name == \"deep-image-96-angular-random100k\" and ("
+        },
+        {
+          "line": 55,
+          "text": "            request[\"source_query_ordinal\"] != 9000 + ordinal"
+        },
+        {
+          "line": 56,
+          "text": "            or record[\"source_query_ordinal\"] != 9000 + ordinal"
+        },
+        {
+          "line": 58,
+          "text": "            raise ValueError(\"deep-image source query ordinal differs\")"
+        },
+        {
+          "line": 61,
+          "text": "        queries.append(request[\"query\"])"
+        },
+        {
+          "line": 63,
+          "text": "    return np.asarray(queries, dtype=np.float32), np.asarray(primary, dtype=np.int64)"
+        },
+        {
+          "line": 79,
+          "text": "    queries, primary = load_cohort(args.input, args.cohort)"
+        },
+        {
+          "line": 80,
+          "text": "    if queries.shape != (1000, dimensions) or np.any(~np.isfinite(queries)) or np.any(primary < 0) or np.any(primary >= rows):"
+        },
+        {
+          "line": 81,
+          "text": "        raise ValueError(\"query or primary geometry differs\")"
+        },
+        {
+          "line": 98,
+          "text": "        for start in range(0, queries.shape[0], 32):"
+        },
+        {
+          "line": 99,
+          "text": "            batch = queries[start:start + 32]"
+        },
+        {
+          "line": 100,
+          "text": "            query_norms = np.einsum(\"ij,ij->i\", batch, batch)"
+        },
+        {
+          "line": 101,
+          "text": "            distances = np.sqrt(np.maximum(0.0, query_norms[:, None] + center_norms[None, :]"
+        },
+        {
+          "line": 103,
+          "text": "            for offset, query in enumerate(batch):"
+        },
+        {
+          "line": 107,
+          "text": "                                                 - query.astype(np.float64), axis=1).max()"
+        },
+        {
+          "line": 115,
+          "text": "                    \"query_ordinal\": ordinal,"
+        },
+        {
+          "line": 132,
+          "text": "        \"unit_count\": unit_count, \"query_count\": len(records),"
+        },
+        {
+          "line": 147,
+          "text": "            or (args.cohort == \"deep-image-96-angular-random100k\""
+        },
+        {
+          "line": 156,
+          "text": "    parser.add_argument(\"--cohort\", choices=(\"deep-image-96-angular-random100k\", \"ReLAION-1M\"), required=True)"
+        },
+        {
+          "line": 166,
+          "text": "    if (args.cohort == \"deep-image-96-angular-random100k\" and (args.rows, args.dimensions) != (100_000, 96)) or (args.cohort == \"ReLAION-1M\" and (args.rows, args.dimensions) != (1_000_000, 768)):"
+        }
+      ]
+    }
+  }
+}

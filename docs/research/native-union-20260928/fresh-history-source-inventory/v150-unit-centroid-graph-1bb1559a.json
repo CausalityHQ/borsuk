@@ -1,0 +1,396 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v150-unit-centroid-graph/1bb1559a775a241f1049f812f40a93d7f1c22fdc/runs/v150-20260924T121622Z/a0001/terminal.json",
+  "terminal_sha256": "c00e15182688a17b94f2182c30f3144d6cb9c2a5e57ecfa0235eb842790a7e07",
+  "terminal_status": "complete",
+  "source_commit": "1bb1559a775a241f1049f812f40a93d7f1c22fdc",
+  "archive_key": "research/v150-unit-centroid-graph/1bb1559a775a241f1049f812f40a93d7f1c22fdc/source/7a2b21341e8d435732b185ecee76ac9975bd1d88cdff1b89680b0b19a899c320/source.tar.gz",
+  "archive_sha256": "7a2b21341e8d435732b185ecee76ac9975bd1d88cdff1b89680b0b19a899c320",
+  "archive_bytes": 16825716,
+  "source_code": {
+    "scripts/launch_v150_unit_centroid_graph_spot.py": {
+      "sha256": "c676167c721409fefc7fbc629ffb3026a66a866bba00f230620c81e5cd9c5fb2",
+      "lines": [
+        {
+          "line": 31,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/queries.jsonl\", 2_041_773),"
+        },
+        {
+          "line": 42,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 65,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 67,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 73,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 76,
+          "text": "            f\"research/v150-unit-centroid-graph/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 90,
+          "text": "            f\"export V150_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 113,
+          "text": "  \"source_commit\":os.environ[\"V150_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 114,
+          "text": "  \"source_archive_sha256\":os.environ[\"V150_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 124,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 125,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 126,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 127,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 161,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 180,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 181,
+          "text": "    subprocess.run([\"git\", \"merge-base\", \"--is-ancestor\", plan.source_commit,"
+        },
+        {
+          "line": 193,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 195,
+          "text": "        [\"git\", \"archive\", \"--format=tar\", plan.source_commit],"
+        },
+        {
+          "line": 199,
+          "text": "        raise ValueError(\"source archive is not the named Git commit\")"
+        },
+        {
+          "line": 201,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 202,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 203,
+          "text": "                or \"crates/borsuk/src/bin/v150_unit_centroid_graph.rs\" not in source.getnames()"
+        },
+        {
+          "line": 204,
+          "text": "                or \"crates/borsuk/src/budgeted_page_rank.rs\" not in source.getnames()"
+        },
+        {
+          "line": 205,
+          "text": "                or \"crates/borsuk/src/centroid_hnsw.rs\" not in source.getnames()"
+        },
+        {
+          "line": 206,
+          "text": "                or \"crates/borsuk/src/unit_centroid_pages.rs\" not in source.getnames()"
+        },
+        {
+          "line": 207,
+          "text": "                or \"crates/borsuk/src/unit_centroid_graph.rs\" not in source.getnames()"
+        },
+        {
+          "line": 208,
+          "text": "                or \"crates/borsuk/src/lib.rs\" not in source.getnames()"
+        },
+        {
+          "line": 209,
+          "text": "                or \"crates/borsuk/Cargo.toml\" not in source.getnames()"
+        },
+        {
+          "line": 210,
+          "text": "                or \"Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 211,
+          "text": "                or \"docs/research/inputs/v138-deep-primary.jsonl\" not in source.getnames()):"
+        },
+        {
+          "line": 212,
+          "text": "            raise ValueError(\"source archive lacks V150 runner or evaluator\")"
+        },
+        {
+          "line": 221,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 222,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 289,
+          "text": "            or summary.get(\"query_count\") != 1000 or summary.get(\"m\") != 16"
+        },
+        {
+          "line": 339,
+          "text": "    query_key = next(key for key, _ in INPUTS if key.endswith(\"/queries.jsonl\"))"
+        },
+        {
+          "line": 340,
+          "text": "    query_bytes = s3.get_object(Bucket=BUCKET, Key=query_key)[\"Body\"].read()"
+        },
+        {
+          "line": 341,
+          "text": "    if (len(query_bytes) != 2_041_773 or hashlib.sha256(query_bytes).hexdigest()"
+        },
+        {
+          "line": 343,
+          "text": "        raise ValueError(\"V122 query reference differs\")"
+        },
+        {
+          "line": 344,
+          "text": "    queries = [json.loads(line) for line in query_bytes.splitlines()]"
+        },
+        {
+          "line": 345,
+          "text": "    if len(queries) != 1000:"
+        },
+        {
+          "line": 346,
+          "text": "        raise ValueError(\"V122 query count differs\")"
+        },
+        {
+          "line": 377,
+          "text": "        if (record[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 378,
+          "text": "                or record[\"source_query_ordinal\"] != ordinal + 9000):"
+        },
+        {
+          "line": 379,
+          "text": "            raise ValueError(\"V150 query ordinal differs\")"
+        },
+        {
+          "line": 384,
+          "text": "        query_diff = 0.0"
+        },
+        {
+          "line": 389,
+          "text": "            query_diff = max(query_diff, abs(score - references[ordinal * 391 + page]))"
+        },
+        {
+          "line": 390,
+          "text": "        if abs(query_diff - record[\"query_max_abs_score_difference\"]) > 1e-7:"
+        },
+        {
+          "line": 392,
+          "text": "        max_diff = max(max_diff, query_diff)"
+        },
+        {
+          "line": 394,
+          "text": "        if (roster_record[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 395,
+          "text": "                or roster_record[\"source_query_ordinal\"] != ordinal + 9000):"
+        },
+        {
+          "line": 402,
+          "text": "        if (baseline_record[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 422,
+          "text": "        query_record = queries[ordinal]"
+        },
+        {
+          "line": 423,
+          "text": "        if (query_record[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 424,
+          "text": "                or query_record[\"source_query_ordinal\"] != ordinal + 9000):"
+        },
+        {
+          "line": 425,
+          "text": "            raise ValueError(\"V122 query identity differs\")"
+        },
+        {
+          "line": 426,
+          "text": "        query = query_record[\"query\"]"
+        },
+        {
+          "line": 429,
+          "text": "            expected = math.sqrt(sum((left - right) ** 2 for left, right in zip(query, center)))"
+        },
+        {
+          "line": 499,
+          "text": "        query_caps = (range_ok and record[\"gets\"] <= 32"
+        },
+        {
+          "line": 501,
+          "text": "        if record[\"plan_caps_hold\"] is not query_caps:"
+        },
+        {
+          "line": 503,
+          "text": "        all_caps &= query_caps"
+        },
+        {
+          "line": 508,
+          "text": "        query_capture = len(selected_set & baseline_selected)"
+        },
+        {
+          "line": 509,
+          "text": "        query_control_capture = len(control_selected_set & baseline_selected)"
+        },
+        {
+          "line": 510,
+          "text": "        if (record[\"selected_baseline_capture\"] != query_capture"
+        },
+        {
+          "line": 511,
+          "text": "                or record[\"control_selected_baseline_capture\"] != query_control_capture):"
+        },
+        {
+          "line": 513,
+          "text": "        capture += query_capture"
+        },
+        {
+          "line": 514,
+          "text": "        control_capture += query_control_capture"
+        },
+        {
+          "line": 560,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 572,
+          "text": "                        or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 573,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 590,
+          "text": "                required = {\"install.log\", \"core-check-resources.txt\","
+        },
+        {
+          "line": 591,
+          "text": "                            \"core-test-resources.txt\", \"core-test.log\","
+        },
+        {
+          "line": 592,
+          "text": "                            \"gate-build-resources.txt\", \"download.log\","
+        },
+        {
+          "line": 593,
+          "text": "                            \"science-resources.txt\", \"science.jsonl\","
+        },
+        {
+          "line": 644,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 651,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v150_unit_centroid_graph_remote.sh": {
+      "sha256": "71dac8ac4788477e7d47c9a8ae596212e50b34ff5e9911bd26f16b99e5b10e3c",
+      "lines": [
+        {
+          "line": 34,
+          "text": "  for path in install.log core-check.log core-check-resources.txt \\"
+        },
+        {
+          "line": 35,
+          "text": "      core-test.log core-test-resources.txt \\"
+        },
+        {
+          "line": 36,
+          "text": "      gate-build.log gate-build-resources.txt download.log \\"
+        },
+        {
+          "line": 37,
+          "text": "      science.log science-resources.txt science.jsonl \\"
+        },
+        {
+          "line": 52,
+          "text": "names=('install.log','core-check.log','core-check-resources.txt',"
+        },
+        {
+          "line": 53,
+          "text": "       'core-test.log','core-test-resources.txt',"
+        },
+        {
+          "line": 54,
+          "text": "       'gate-build.log','gate-build-resources.txt','download.log',"
+        },
+        {
+          "line": 55,
+          "text": "       'science.log','science-resources.txt','science.jsonl',"
+        },
+        {
+          "line": 63,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 64,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 69,
+          "text": "  'source_commit':os.environ['V150_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 70,
+          "text": "  'source_archive_sha256':os.environ['V150_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 103,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 146,
+          "text": "v122=research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts"
+        },
+        {
+          "line": 147,
+          "text": "download_checked deep/queries.jsonl \"$v122/queries.jsonl\" 2041773 dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99"
+        },
+        {
+          "line": 154,
+          "text": "if v146.get('status')!='complete' or v146.get('source_commit')!='ac9c60b3b2a8cb18bfa3c9a9417b0f8e7d831bc0':"
+        },
+        {
+          "line": 156,
+          "text": "if v140.get('status')!='complete' or v140.get('source_commit')!='3213ca34cf6a8c32824dec6967b39eb06dd5fba6':"
+        },
+        {
+          "line": 166,
+          "text": "  deep/queries.jsonl deep/primary.jsonl deep/centroids.bin \\"
+        }
+      ]
+    }
+  }
+}

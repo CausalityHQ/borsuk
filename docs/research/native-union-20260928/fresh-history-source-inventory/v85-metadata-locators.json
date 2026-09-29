@@ -1,0 +1,14 @@
+[
+  {
+    "key": "research/v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/evidence/hashes.log",
+    "bytes": 147
+  },
+  {
+    "key": "research/v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/source/source.tar.zst",
+    "bytes": 9660806
+  },
+  {
+    "key": "research/v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/terminal.json",
+    "bytes": 131
+  }
+]

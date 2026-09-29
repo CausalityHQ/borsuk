@@ -1,0 +1,370 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T051018Z/a0001/terminal.json",
+  "terminal_sha256": "c1a32204e7bf0bc808c00bce1f45dfab2a63135eb6fdcaced7fb5016e6d0dc5d",
+  "terminal_status": "failed",
+  "source_commit": "56f7071716681fde524432d29a436015584df773",
+  "archive_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T051018Z/a0001/source.tar.gz",
+  "archive_sha256": "1eddaf458f2a6278744a1c743d5a1c056eb4a546e28495cab0f3c82e5d755a0a",
+  "archive_bytes": 4943242,
+  "source_code": {
+    "scripts/launch_v130_source_replay_spot.py": {
+      "sha256": "cfc0654a8f1b97312f79927c3a44ec728b2fd3c2d1b0f741eb00945c92379f6c",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"Launch one immutable V130 100k source replay on Causality Spot.\"\"\""
+        },
+        {
+          "line": 20,
+          "text": "    f\"s3://{BUCKET}/research/v122-deep-image-100k/\""
+        },
+        {
+          "line": 25,
+          "text": "SCHEMA = \"borsuk-v130-source-replay-spot-v1\""
+        },
+        {
+          "line": 26,
+          "text": "TAG = \"borsuk-v130-source-replay\""
+        },
+        {
+          "line": 28,
+          "text": "    \"SOURCE\": (\"subset/source.parquet\", 36_528_755, \"da3ad1295d6031818b7ccb817529c6102e9f0ec93bb4ad0792e2b7ab3cd21e69\"),"
+        },
+        {
+          "line": 32,
+          "text": "    \"QUERIES\": (\"queries.jsonl\", 2_041_773, \"dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99\"),"
+        },
+        {
+          "line": 59,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 77,
+          "text": "    if (not hex_value(plan.source_commit, 40)"
+        },
+        {
+          "line": 82,
+          "text": "            or plan.source_commit not in plan.output_prefix"
+        },
+        {
+          "line": 92,
+          "text": "        f\"export V130_SOURCE_COMMIT={shlex.quote(plan.source_commit)}\","
+        },
+        {
+          "line": 106,
+          "text": "root=/mnt/v130-source-replay"
+        },
+        {
+          "line": 119,
+          "text": "print(json.dumps({{\"schema\":\"{SCHEMA}\",\"source_commit\":os.environ[\"V130_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 120,
+          "text": "  \"source_archive_sha256\":os.environ[\"V130_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 131,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 132,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 133,
+          "text": "printf '%s  source.tar.gz\\\\n' {shlex.quote(plan.archive_sha256)} | sha256sum -c -"
+        },
+        {
+          "line": 134,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 136,
+          "text": "exec bash repo/scripts/run_v130_source_replay_remote.sh"
+        },
+        {
+          "line": 142,
+          "text": "        f\"{plan.source_commit}:{plan.output_prefix}:{zone}\".encode()"
+        },
+        {
+          "line": 159,
+          "text": "        \"TagSpecifications\": [{\"ResourceType\": \"instance\", \"Tags\": ["
+        },
+        {
+          "line": 200,
+          "text": "    if (terminal.get(\"schema\") != \"borsuk-v122-deep-image-100k-spot-v1\""
+        },
+        {
+          "line": 220,
+          "text": "        source_bucket, key = _location(V122_PREFIX + \"/artifacts/\" + path)"
+        },
+        {
+          "line": 221,
+          "text": "        if s3.head_object(Bucket=source_bucket, Key=key)[\"ContentLength\"] != length:"
+        },
+        {
+          "line": 225,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 226,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 230,
+          "text": "        \"decision\": \"production SQ8 replay parity, source Recall@100 and local scorer cost\","
+        },
+        {
+          "line": 259,
+          "text": "                        or result.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 260,
+          "text": "                        or result.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 279,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 285,
+          "text": "    terminal = launch_and_monitor(Plan(args.source_commit, args.archive_uri,"
+        }
+      ]
+    },
+    "scripts/run_v130_source_replay_remote.sh": {
+      "sha256": "ccde72ae2cb343e0f500152300edc1d14ec5eaaddf01df6c58d066d7bd5b327b",
+      "lines": [
+        {
+          "line": 2,
+          "text": "# One immutable, development-only source replay on Causality Spot."
+        },
+        {
+          "line": 4,
+          "text": "root=/mnt/v130-source-replay"
+        },
+        {
+          "line": 28,
+          "text": "  for path in hashes.log install.log compile.log compile-resources.txt \\"
+        },
+        {
+          "line": 29,
+          "text": "      preflight.log preflight-resources.txt prepare.log prepare-resources.txt \\"
+        },
+        {
+          "line": 30,
+          "text": "      evaluate.log evaluate-resources.txt source.raw \\"
+        },
+        {
+          "line": 31,
+          "text": "      built/source-tier.bin built/source-id-map.bin built/replay.jsonl \\"
+        },
+        {
+          "line": 45,
+          "text": "names=('hashes.log','install.log','compile.log','compile-resources.txt',"
+        },
+        {
+          "line": 46,
+          "text": "       'preflight.log','preflight-resources.txt','prepare.log',"
+        },
+        {
+          "line": 47,
+          "text": "       'prepare-resources.txt','evaluate.log','evaluate-resources.txt',"
+        },
+        {
+          "line": 48,
+          "text": "       'source.raw','built/source-tier.bin','built/source-id-map.bin',"
+        },
+        {
+          "line": 55,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 56,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 60,
+          "text": "print(json.dumps({'schema':'borsuk-v130-source-replay-spot-v1',"
+        },
+        {
+          "line": 61,
+          "text": "  'source_commit':os.environ['V130_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 62,
+          "text": "  'source_archive_sha256':os.environ['V130_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 95,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 129,
+          "text": "  --manifest-path repo/crates/borsuk/Cargo.toml --example v130_source_replay"
+        },
+        {
+          "line": 131,
+          "text": "download_checked SOURCE source.parquet"
+        },
+        {
+          "line": 135,
+          "text": "download_checked QUERIES queries.jsonl"
+        },
+        {
+          "line": 140,
+          "text": "run_science preflight .venv/bin/python -m scripts.v130_source_replay_preflight \\"
+        },
+        {
+          "line": 141,
+          "text": "  queries.jsonl truth.npy evidence.jsonl summary-v122.json"
+        },
+        {
+          "line": 143,
+          "text": "run_science prepare .venv/bin/python -m scripts.v130_source_replay_prepare \\"
+        },
+        {
+          "line": 144,
+          "text": "  source.parquet source.raw"
+        },
+        {
+          "line": 146,
+          "text": "run_science evaluate \"$CARGO_TARGET_DIR/release/examples/v130_source_replay\" \\"
+        },
+        {
+          "line": 147,
+          "text": "  source.raw sq8.bin low.bin step.bin queries.jsonl evidence.jsonl \\"
+        }
+      ]
+    },
+    "scripts/v130_source_replay_preflight.py": {
+      "sha256": "1c943ee72983d84fba4b1b373206a71bfae46342f30a85349134ee955829a13b",
+      "lines": [
+        {
+          "line": 1,
+          "text": "\"\"\"Check sealed V122 query and truth identity before production-source replay.\"\"\""
+        },
+        {
+          "line": 12,
+          "text": "def verify(queries: Path, truth: Path, evidence: Path, summary: Path) -> None:"
+        },
+        {
+          "line": 14,
+          "text": "    query_rows = [json.loads(line) for line in queries.read_text().splitlines()]"
+        },
+        {
+          "line": 17,
+          "text": "    if (expected.shape != (1000, 100) or len(query_rows) != 1000"
+        },
+        {
+          "line": 20,
+          "text": "            or baseline.get(\"query_count\") != 1000):"
+        },
+        {
+          "line": 23,
+          "text": "    for ordinal, (query, row, gold) in enumerate(zip(query_rows, evidence_rows, expected)):"
+        },
+        {
+          "line": 24,
+          "text": "        if (query.get(\"query_ordinal\") != ordinal"
+        },
+        {
+          "line": 25,
+          "text": "                or row.get(\"query_ordinal\") != ordinal"
+        },
+        {
+          "line": 26,
+          "text": "                or query.get(\"source_query_ordinal\") != 9000 + ordinal"
+        },
+        {
+          "line": 27,
+          "text": "                or row.get(\"source_query_ordinal\") != 9000 + ordinal"
+        },
+        {
+          "line": 29,
+          "text": "                or len(query.get(\"query\", [])) != 96"
+        },
+        {
+          "line": 31,
+          "text": "            raise ValueError(f\"sealed V122 query/truth mismatch at {ordinal}\")"
+        },
+        {
+          "line": 45,
+          "text": "    for name in (\"queries\", \"truth\", \"evidence\", \"summary\"):"
+        },
+        {
+          "line": 48,
+          "text": "    verify(args.queries, args.truth, args.evidence, args.summary)"
+        },
+        {
+          "line": 49,
+          "text": "    print(\"sealed V122 1000-query identity and SQ8 baseline verified\")"
+        }
+      ]
+    },
+    "scripts/v130_source_replay_prepare.py": {
+      "sha256": "33fe0d78c2e3d29430a9d78daad2d0c4b99a407a3e0126853b35b561a95eda4f",
+      "lines": [
+        {
+          "line": 1,
+          "text": "\"\"\"Materialize an authenticated V122 100k Parquet source as ID+F32 rows.\"\"\""
+        },
+        {
+          "line": 11,
+          "text": "SOURCE_SHA = \"da3ad1295d6031818b7ccb817529c6102e2b7ab3cd21e69\""
+        },
+        {
+          "line": 18,
+          "text": "    with path.open(\"rb\") as source:"
+        },
+        {
+          "line": 19,
+          "text": "        for block in iter(lambda: source.read(4 * 1024 * 1024), b\"\"):"
+        },
+        {
+          "line": 24,
+          "text": "def materialize(source: Path, output: Path) -> None:"
+        },
+        {
+          "line": 28,
+          "text": "    if sha256(source) != SOURCE_SHA or output.exists():"
+        },
+        {
+          "line": 29,
+          "text": "        raise ValueError(\"source hash or output path differs\")"
+        },
+        {
+          "line": 30,
+          "text": "    table = pq.read_table(source, columns=[\"feature_row_id\", \"embedding\"])"
+        },
+        {
+          "line": 36,
+          "text": "        raise ValueError(\"source geometry differs\")"
+        },
+        {
+          "line": 39,
+          "text": "        raise ValueError(\"source ID order differs\")"
+        },
+        {
+          "line": 46,
+          "text": "        raise ValueError(\"source vectors differ\")"
+        },
+        {
+          "line": 52,
+          "text": "        raise ValueError(\"raw source byte length differs\")"
+        },
+        {
+          "line": 57,
+          "text": "    parser.add_argument(\"source\", type=Path)"
+        },
+        {
+          "line": 60,
+          "text": "    materialize(arguments.source, arguments.output)"
+        }
+      ]
+    }
+  }
+}

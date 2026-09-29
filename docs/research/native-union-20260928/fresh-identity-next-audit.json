@@ -56,7 +56,7 @@
   "existing_authenticated_population_authority": "fresh-identity-authorities/verification.json",
   "next_actions": [
     "Authenticate CLOSED terminal/source archive for relevant query producers; inventory derivative reuse and query identities, not just current source code.",
-    "Collect identity columns and archive-bound source mapping for historical external/pseudoquery sets; do not inspect quality or sealed bodies.",
+    "Collect ID columns from all16 original V36 physical shards and the candidate rank16-31 shards with full per-object SHA checks; compare complete physical feature-ID sets before any query selection. Separately bind archive-executed input/query aliases for historical external and pseudoquery banks; do not inspect quality or sealed bodies.",
     "Preregister entirely separate representative source/query panel outside indexed1M and all prior-query identities; identity rejection ends whole panel, no per-query salvage.",
     "After identity PASS, seal f64 exactGT10/100 and immutable source/scorer/currentcandidate roots; measure R@10/R@100 separately and actual incomingHTTP at declaredcoldprotocol,8QPS then saturation/costcurve."
   ],
@@ -66,5 +66,8 @@
   "additional_authenticated_query_family": "fresh-cohere-request-family.json:20CLOSED terminal manifests share one registered1000CoHere-test-query SHA; originalV248 source archive authenticated.",
   "additional_authenticated_relaion_query_family": "fresh-relaion-validation-family.json: original V36 validation1000 -> CLOSED V116 request bank -> V154/V198/V279 derivatives; exclude whole bank, not just encoded-file SHAs.",
   "additional_authenticated_cohere_stress_exclusions": "fresh-cohere-stress-query-families.json: V273-276 canonical CoHere raw rows100000-103999, four1000-query banks; V274-276 add previously omitted rows101000-103999. With CLOSED V277 exclude100000-104999 inclusive.",
-  "additional_terminal_archive_bindings": "fresh-history-source-bindings.json: all697 inventoried terminal bodies reauthenticated;371 terminal SHA-only,28 nested archive identities,298 without archive SHA in terminal. Original same-attempt V114-116 reservations separately bind five archives; never describe those hashes as present in terminals."
+  "additional_terminal_archive_bindings": "fresh-history-source-bindings.json: all697 inventoried terminal bodies reauthenticated;371 terminal SHA-only,28 nested archive identities,298 without archive SHA in terminal. Original same-attempt V114-116 reservations separately bind five archives; never describe those hashes as present in terminals.",
+  "additional_authenticated_source_code": "fresh-history-archive-reconstruction.json: 149/356 terminal-bound Git archive commit/SHA pairs exact, covering158 terminal references; 207 mismatches unresolved by reconstruction. fresh-history-source-inventory/v130-v155-collection-status.json: 28 selected original CLOSED source archives SHA-verified against terminal archive identities, including failed attempts; source bytes alone do not close query-input lineage.",
+  "additional_development_query_lineage": "fresh-relaion-development-format-family.json: old V114 100k query SHA4834cf63... derives via archived V85 converter from V36 original development parquet SHA310bb54f...; V85 source binding is same-attempt plus matching Git code and CLOSED input checks, not a terminal archive SHA.",
+  "candidate_physical_bank": "fresh-relaion-physical-bank-envelope.json: rank16-31 of pinned V36 registry, 16 disjoint source paths/5,483,342,562 encoded bytes; source-only candidate, no feature-ID disjointness or complete historical query audit, no cohort selected."
 }

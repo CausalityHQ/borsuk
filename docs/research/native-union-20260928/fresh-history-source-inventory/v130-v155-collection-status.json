@@ -1,0 +1,165 @@
+[
+  {
+    "terminal_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T051018Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v130-source-replay-56f70717-additional-1eddaf45.json",
+    "source_code_files": 4,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T051504Z/a0002/terminal.json",
+    "proof": "fresh-history-source-inventory/v130-source-replay-56f70717-additional-5b6441bd.json",
+    "source_code_files": 4,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T052116Z/a0003/terminal.json",
+    "proof": "fresh-history-source-inventory/v130-source-replay-56f70717.json",
+    "source_code_files": 4,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v131-source-replay/56f7071716681fde524432d29a436015584df773/runs/v131-20260924T052935Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v131-source-replay-56f70717.json",
+    "source_code_files": 4,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v132-live-s3/8f57a2d3faabd0353270d3b55850ae038b464e56/runs/v132-20260924T063919Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v132-live-s3-8f57a2d3.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v133-local-sq8/e6e99b58ec1e47a8445e7f2f3a96bb7407766246/runs/v133-20260924T070622Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v133-local-sq8-e6e99b58.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v134-native-route/5cb3936dbbddacbc552f558c3b9078ffeb46402c/runs/v134-20260924T072127Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v134-native-route-5cb3936d.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v135-hull-route/7f17b45cab5b26083eab80ef72416b1a64932a48/runs/v135-20260924T074030Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v135-hull-route-7f17b45c.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v136-concurrent-route/717757d9ad18139fb8dc020414ec4a1b4f3e9931/runs/v136-20260924T080000Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v136-concurrent-route-717757d9.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v136-concurrent-route/af689bab9e441aa8d7c4cced218860b02bfbae6a/runs/v136-20260924T081400Z/a0002/terminal.json",
+    "proof": "fresh-history-source-inventory/v136-concurrent-route-af689bab.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v138-unit-bound/2832f76339547fa5facf785fe53083ead6bb364c/runs/v138-20260924T085148Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v138-unit-bound-2832f763.json",
+    "source_code_files": 3,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v138-unit-bound/b1afc2f8361d46317d2e6b34e394688f7a5396a6/runs/v138-20260924T085601Z/a0002/terminal.json",
+    "proof": "fresh-history-source-inventory/v138-unit-bound-b1afc2f8.json",
+    "source_code_files": 3,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v140-budgeted-page/3213ca34cf6a8c32824dec6967b39eb06dd5fba6/runs/v140-20260924T092255Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v140-budgeted-page-3213ca34.json",
+    "source_code_files": 3,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v141-deep-returned/f4fb48461e323e148fd2905da43558932d122768/runs/v141-20260924T094142Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v141-deep-returned-f4fb4846.json",
+    "source_code_files": 3,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v142-relaion-returned/38e626d98f13f285476595ffa67c124dacf043b9/runs/v142-20260924T100058Z/a0002/terminal.json",
+    "proof": "fresh-history-source-inventory/v142-relaion-returned-38e626d9.json",
+    "source_code_files": 3,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v142-relaion-returned/70aed5ac666fb658b3f3d7f35edbf2d3c33916ba/runs/v142-20260924T095403Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v142-relaion-returned-70aed5ac.json",
+    "source_code_files": 3,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v142-relaion-returned/da63de3292905fe9246ee50c078345592e7c9083/runs/v142-20260924T100356Z/a0003/terminal.json",
+    "proof": "fresh-history-source-inventory/v142-relaion-returned-da63de32.json",
+    "source_code_files": 3,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v144-page-parity/094fc86460da04e904a0e33625c70a3043870abb/runs/v144-20260924T102526Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v144-page-parity-094fc864.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v145-page-parity/e0e8e01f89be2c40438e09f325d9c1f72da1ca76/runs/v145-20260924T110000Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v145-page-parity-e0e8e01f.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v146-centroid-score/ac9c60b3b2a8cb18bfa3c9a9417b0f8e7d831bc0/runs/v146-20260924T111500Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v146-centroid-score-ac9c60b3.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v149-contiguous-hierarchy/052bdb9785d405a3da621ff95582d2ed64ea18b6/runs/v149-20260924T114152Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v149-contiguous-hierarchy-052bdb97.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v150-unit-centroid-graph/1bb1559a775a241f1049f812f40a93d7f1c22fdc/runs/v150-20260924T121622Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v150-unit-centroid-graph-1bb1559a.json",
+    "source_code_files": 2,
+    "already_authenticated": false
+  },
+  {
+    "terminal_key": "research/v151-page-seeded-graph/84bfeefc73f4ccca8d785e2c63fb4f642df82ddd/runs/v151-20260924T130137Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v151-page-seeded-graph-84bfeefc.json",
+    "already_authenticated": true
+  },
+  {
+    "terminal_key": "research/v152-cached-page-graph/0cf15985a352d5143d4c9dfb56ff5652a202c4e0/runs/v153-planner-once-20260924T135920Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v152-cached-page-graph-0cf15985.json",
+    "already_authenticated": true
+  },
+  {
+    "terminal_key": "research/v152-cached-page-graph/1cd267782e52fb3cca2c9ce176b2e48970f85c7a/runs/v152-20260924T134009Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v152-cached-page-graph-1cd26778.json",
+    "already_authenticated": true
+  },
+  {
+    "terminal_key": "research/v154-relaion-graph/6513bc4c18dbadd1f570c01083086e71066fa290/runs/v154-20260924T142813Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v154-relaion-graph-6513bc4c.json",
+    "already_authenticated": true
+  },
+  {
+    "terminal_key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/runs/v154-20260924T143744Z/a0002/terminal.json",
+    "proof": "fresh-history-source-inventory/v154-relaion-graph-8f2c5ce4.json",
+    "already_authenticated": true
+  },
+  {
+    "terminal_key": "research/v155-relaion-returned-quality/10850f917c4583f05d8c33afec459f4f76b194bd/runs/v155-20260924T150712Z/a0001/terminal.json",
+    "proof": "fresh-history-source-inventory/v155-relaion-returned-quality-10850f91.json",
+    "source_code_files": 4,
+    "already_authenticated": false
+  }
+]

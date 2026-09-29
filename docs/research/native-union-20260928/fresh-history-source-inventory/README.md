@@ -55,3 +55,27 @@ Remaining gate: authenticate remaining producer banks/source-ID mappings, or
 prove a conservative new source bank excludes every historical query bank.
 No fresh cohort selected, no query/GT/sealed bodies opened, no ANN/numerical
 work, native build/test, paid job or full assurance rerun occurred in this slice.
+
+Further source proof, 2026-09-29:
+
+- `../fresh-history-archive-reconstruction.json` checks356 terminal-bound
+  commit/archive pairs against exact `git archive` bytes and its deterministic
+  gzip form. 149 pairs covering158 terminal references match exactly. The207
+  mismatches remain unverified by this method; a commit alone does not prove
+  archive bytes. This proves source content only, not executed query inputs.
+- `v130-v155-collection-status.json` indexes28 selected original CLOSED
+  terminal source archives, all independently SHA-verified against their
+  terminal identities. Five prior proofs were reused and23 original archives
+  were newly collected. These attempts include Deep Image and ReLAION sources,
+  and failed attempts remain in the exclusion inventory.
+- `v85-metadata-locators.json` and `../fresh-relaion-development-format-family.json`
+  bind the older V114 100k formatted query SHA to the original V36 development
+  parquet via the archived V85 converter and CLOSED input-check receipt. V85's
+  terminal lacks an archive SHA; its source binding is same-attempt plus matching
+  Git code and the closed input checks, not terminal-SHA binding.
+- `../fresh-relaion-physical-bank-envelope.json` verifies all16 original V36
+  ranked source objects against the authenticated population authority and
+  records ranked source objects16–31 as a *candidate physical bank only*.
+  The 5,483,342,562 encoded bytes have not been read here. Feature-ID
+  disjointness and historical query identity remain unverified; no cohort was
+  selected or quality measured.

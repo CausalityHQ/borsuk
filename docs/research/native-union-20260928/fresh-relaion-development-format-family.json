@@ -1,0 +1,213 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/terminal.json",
+  "terminal_sha256": "ea50eb119407b7b235bf47c7f096b47937c69570920935b5c2c15c98db277b19",
+  "terminal": {
+    "exit_code": 104,
+    "instance_id": "i-07da75d2499d6e449",
+    "phase": "summary",
+    "source_commit": "fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d"
+  },
+  "archive_key": "research/v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/source/source.tar.zst",
+  "archive_sha256": "7fe9b42620fc6918bcccd5e46eca2daeda7492669084665752e88aaa128ac82e",
+  "archive_bytes": 9660806,
+  "archive_binding": "Original same-attempt archived input; relevant source files exactly match terminal's declared Git commit. CLOSED input-check log confirms archive/query input checks; terminal does not record archive digest.",
+  "checks": {
+    "key": "research/v85-competitive-rescore/fb976932ecd4076e2f76a7cb7e7aa7efe01e9a2d/runs/v85-100k-dev1000-20260920T094401Z-fb976932/a0001/evidence/hashes.log",
+    "sha256": "7853b336d5189cc882386ef1f9d989032e68c913e32997081a23f4a7e4d39977",
+    "text": "source.tar.zst: OK\nsource.parquet: OK\nquery-source.parquet: OK\ntruth-source.parquet: OK\ngeneration.json: OK\nbase-000.arrow: OK\ndelta-000.arrow: OK\n"
+  },
+  "original_query_bank_sha256": "310bb54f79f2e79d09fe63aa4f6b5c6e9e7ffb31101964f816be978dadb2db54",
+  "formatted_query_sha256": "4834cf63a50971b7d605c00f91b5142f67b049e91ea2c62c220271b50bffa6ac",
+  "query_count": 1000,
+  "dimensions": 768,
+  "downstream_closed_v114_terminal_key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/terminal.json",
+  "downstream_closed_v114_terminal_sha256": "b0123edaf3895bc893c952cc01bb6ccde120533be9f7e53a1ea1800aebc1054c",
+  "source_code": {
+    "scripts/v85_pq16_100k_rescore_run_remote.sh": {
+      "sha256": "7c894f4f289774c35600284d2800b5dfb59007c94620f2796e0097fed1b9f66f",
+      "git_commit_match": true
+    },
+    "scripts/v85_build_delta.py": {
+      "sha256": "62743438dbe06561f9a0f0071ec1e3c987d546fd1d478261626cefbedcacd057",
+      "git_commit_match": true
+    }
+  },
+  "producer_function": {
+    "line": 117,
+    "text": "def canonicalize_evaluation(\n    query_source: pathlib.Path,\n    truth_source: pathlib.Path,\n    query_output: pathlib.Path,\n    truth_output: pathlib.Path,\n    *,\n    dimensions: int,\n    neighbors: int,\n    query_limit: int,\n) -> None:\n    \"\"\"Convert frozen ReLAION evaluation inputs to the strict reader schemas.\"\"\"\n\n    if dimensions <= 0 or neighbors <= 0 or query_limit <= 0:\n        raise ValueError(\"evaluation shape differs\")\n    query_table = pq.read_table(query_source)\n    expected_query = pa.schema(\n        [\n            pa.field(\"query_ordinal\", pa.uint32(), nullable=False),\n            pa.field(\"feature_row_id\", pa.uint64(), nullable=False),\n            pa.field(\"embedding\", _source_vector_type(dimensions), nullable=False),\n        ]\n    )\n    if query_table.schema != expected_query or query_table.num_rows < query_limit:\n        raise ValueError(\"query source authority differs\")\n    query_values = np.asarray(\n        query_table.column(\"embedding\").combine_chunks().values.to_numpy(),\n        dtype=np.float32,\n    ).reshape(-1, dimensions)[:query_limit]\n    if not np.isfinite(query_values).all():\n        raise ValueError(\"query source is non-finite\")\n    query_ordinals = np.asarray(\n        query_table.column(\"query_ordinal\").combine_chunks().to_numpy(), dtype=np.uint32\n    )[:query_limit]\n    if not np.array_equal(query_ordinals, np.arange(query_limit, dtype=np.uint32)):\n        raise ValueError(\"query ordinals differ\")\n    canonical_queries = pa.Table.from_arrays(\n        [\n            pa.array(query_ordinals, type=pa.uint32()),\n            pa.FixedSizeListArray.from_arrays(\n                pa.array(query_values.reshape(-1), type=pa.float32()), dimensions\n            ),\n        ],\n        schema=pa.schema(\n            [\n                pa.field(\"query\", pa.uint32(), nullable=False),\n                pa.field(\"vector\", _vector_type(dimensions), nullable=False),\n            ]\n        ),\n    )\n\n    truth_table = pq.read_table(truth_source, columns=[\"feature_row_id\"])\n    truth_column = truth_table.column(\"feature_row_id\").combine_chunks()\n    wanted = query_limit * neighbors\n    if (\n        truth_column.type != pa.uint64()\n        or truth_column.null_count != 0\n        or len(truth_column) < wanted\n    ):\n        raise ValueError(\"truth source authority differs\")\n    truth_values = np.asarray(truth_column.to_numpy(), dtype=np.uint64)[:wanted]\n    if np.any(truth_values > np.iinfo(np.int64).max):\n        raise ValueError(\"truth ID is not representable\")\n    canonical_truth = pa.Table.from_arrays(\n        [\n            pa.array(np.arange(query_limit, dtype=np.uint32), type=pa.uint32()),\n            pa.FixedSizeListArray.from_arrays(\n                pa.array(truth_values.astype(np.int64, copy=False), type=pa.int64()),\n                neighbors,\n            ),\n        ],\n        schema=pa.schema(\n            [\n                pa.field(\"query\", pa.uint32(), nullable=False),\n                pa.field(\n                    \"neighbors\",\n                    pa.list_(\n                        pa.field(\"element\", pa.int64(), nullable=False), neighbors\n                    ),\n                    nullable=False,\n                ),\n            ]\n        ),\n    )\n    pq.write_table(canonical_queries, query_output)\n    pq.write_table(canonical_truth, truth_output)"
+  },
+  "runner_bank_lines": [
+    {
+      "line": 65,
+      "text": ""
+    },
+    {
+      "line": 66,
+      "text": "phase=inputs"
+    },
+    {
+      "line": 67,
+      "text": "artifact_prefix=s3://borsuk-bench-453182569524-euc1/research/v85-delta-qualification/856a5988e185f9f26be96354353510468c583ae7/100k-current-a0021/attempt/artifacts"
+    },
+    {
+      "line": 68,
+      "text": "source_uri=s3://borsuk-bench-453182569524-euc1/research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet"
+    },
+    {
+      "line": 69,
+      "text": "evaluation_prefix=s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000"
+    },
+    {
+      "line": 70,
+      "text": "aws s3 cp \"$source_uri\" source.parquet --only-show-errors || exit 98"
+    },
+    {
+      "line": 71,
+      "text": "aws s3 cp \"$evaluation_prefix/development-query.parquet\" query-source.parquet --only-show-errors || exit 98"
+    },
+    {
+      "line": 72,
+      "text": "aws s3 cp \"$evaluation_prefix/development-gt100.parquet\" truth-source.parquet --only-show-errors || exit 98"
+    },
+    {
+      "line": 73,
+      "text": "for name in generation.json router.arrow mutations.arrow base-000.arrow delta-000.arrow; do"
+    },
+    {
+      "line": 74,
+      "text": "  aws s3 cp \"$artifact_prefix/$name\" \"$name\" --only-show-errors || exit 98"
+    },
+    {
+      "line": 75,
+      "text": "done"
+    },
+    {
+      "line": 76,
+      "text": "sha256sum -c >>hashes.log 2>&1 <<'HASHES' || exit 99"
+    },
+    {
+      "line": 77,
+      "text": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d  source.parquet"
+    },
+    {
+      "line": 78,
+      "text": "310bb54f79f2e79d09fe63aa4f6b5c6e9e7ffb31101964f816be978dadb2db54  query-source.parquet"
+    },
+    {
+      "line": 79,
+      "text": "fed7524fd675087f42b48b2f7fa9192b4661aaa4b665600de8378b8b6c696e11  truth-source.parquet"
+    },
+    {
+      "line": 80,
+      "text": "04ad43e8e085231d355f9e65f4f6ad32b65b660f885a6c0d7724359cc51ff002  generation.json"
+    },
+    {
+      "line": 81,
+      "text": "8b8130994b2b0bb3217e3bfd993f3967adc5b6d0020da725755bcd18d8135081  base-000.arrow"
+    },
+    {
+      "line": 82,
+      "text": "0167013decfdd2b486e66229768bd89ef01d6c989f53dab739711e01f123023f  delta-000.arrow"
+    },
+    {
+      "line": 83,
+      "text": "HASHES"
+    },
+    {
+      "line": 84,
+      "text": ""
+    },
+    {
+      "line": 85,
+      "text": "phase=truth"
+    },
+    {
+      "line": 86,
+      "text": "export PYTHONPATH=\"$root/repo\""
+    },
+    {
+      "line": 87,
+      "text": "/usr/bin/time -v -o truth.time timeout 600 .venv/bin/python - <<'PY' >prepare.log 2>&1 || exit 100"
+    },
+    {
+      "line": 88,
+      "text": "from pathlib import Path"
+    },
+    {
+      "line": 89,
+      "text": "from scripts.v85_build_delta import canonicalize_evaluation, compute_exact_truth"
+    },
+    {
+      "line": 90,
+      "text": ""
+    },
+    {
+      "line": 91,
+      "text": "canonicalize_evaluation("
+    },
+    {
+      "line": 92,
+      "text": "    Path(\"query-source.parquet\"), Path(\"truth-source.parquet\"),"
+    },
+    {
+      "line": 93,
+      "text": "    Path(\"queries.parquet\"), Path(\"truth-original.parquet\"),"
+    },
+    {
+      "line": 94,
+      "text": "    dimensions=768, neighbors=100, query_limit=1_000,"
+    },
+    {
+      "line": 95,
+      "text": ")"
+    },
+    {
+      "line": 96,
+      "text": "compute_exact_truth("
+    },
+    {
+      "line": 97,
+      "text": "    Path(\"source.parquet\"), Path(\"query-source.parquet\"), Path(\"truth.parquet\"),"
+    },
+    {
+      "line": 98,
+      "text": "    dimensions=768, corpus_rows=100_000, neighbors=100, query_limit=1_000,"
+    },
+    {
+      "line": 99,
+      "text": ")"
+    },
+    {
+      "line": 100,
+      "text": "PY"
+    },
+    {
+      "line": 101,
+      "text": "queries_uri=$V85_OUTPUT_URI/inputs/queries.parquet"
+    },
+    {
+      "line": 102,
+      "text": "truth_uri=$V85_OUTPUT_URI/inputs/truth-100k.parquet"
+    },
+    {
+      "line": 103,
+      "text": "aws s3 cp queries.parquet \"$queries_uri\" --only-show-errors || exit 101"
+    },
+    {
+      "line": 104,
+      "text": "aws s3 cp truth.parquet \"$truth_uri\" --only-show-errors || exit 101"
+    },
+    {
+      "line": 105,
+      "text": ""
+    },
+    {
+      "line": 106,
+      "text": "generation_sha=$(sha256sum generation.json | cut -d' ' -f1)"
+    }
+  ],
+  "decision": "Same original development1000 bank after schema conversion; exclude its whole feature-ID bank. No fresh cohort or quality claim."
+}

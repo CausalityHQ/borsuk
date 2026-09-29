@@ -1,0 +1,436 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v144-page-parity/094fc86460da04e904a0e33625c70a3043870abb/runs/v144-20260924T102526Z/a0001/terminal.json",
+  "terminal_sha256": "2e73fee33b2b67c74059e342c1a27a2431f4a98e28ec0b7930313dd922d0fbb0",
+  "terminal_status": "failed",
+  "source_commit": "094fc86460da04e904a0e33625c70a3043870abb",
+  "archive_key": "research/v144-page-parity/094fc86460da04e904a0e33625c70a3043870abb/source/b6e07a5e9cd29cbe8882e9cde1d1d7180adc5911ca9ec0a6daa694cefe2fc656.tar.gz",
+  "archive_sha256": "b6e07a5e9cd29cbe8882e9cde1d1d7180adc5911ca9ec0a6daa694cefe2fc656",
+  "archive_bytes": 13967809,
+  "source_code": {
+    "scripts/launch_v144_page_parity_spot.py": {
+      "sha256": "d1b05a0523159bcb215f8e12ad3ffaf21cfc2e9c044174b7c662a0c7463c176c",
+      "lines": [
+        {
+          "line": 26,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/queries.jsonl\", 2_041_773),"
+        },
+        {
+          "line": 27,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/built/sq8.bin\", 10_800_000),"
+        },
+        {
+          "line": 28,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/low.bin\", 384),"
+        },
+        {
+          "line": 29,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/step.bin\", 384),"
+        },
+        {
+          "line": 30,
+          "text": "    (\"research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl\", 18_726_909),"
+        },
+        {
+          "line": 32,
+          "text": "    (\"research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/low.bin\", 3_072),"
+        },
+        {
+          "line": 33,
+          "text": "    (\"research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/step.bin\", 3_072),"
+        },
+        {
+          "line": 36,
+          "text": "    (\"research/v140-budgeted-page/3213ca34cf6a8c32824dec6967b39eb06dd5fba6/runs/v140-20260924T092255Z/a0001/artifacts/relaion.raw.jsonl\", 3_430_072),"
+        },
+        {
+          "line": 42,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 65,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 67,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 73,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 76,
+          "text": "            f\"research/v144-page-parity/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 90,
+          "text": "            f\"export V144_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 113,
+          "text": "  \"source_commit\":os.environ[\"V144_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 114,
+          "text": "  \"source_archive_sha256\":os.environ[\"V144_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 124,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 125,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 126,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 127,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 161,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 180,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 191,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 193,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 194,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 195,
+          "text": "                or \"scripts/v140_budgeted_page_rank.py\" not in source.getnames()"
+        },
+        {
+          "line": 196,
+          "text": "                or \"scripts/v114_score_rust/src/bin/v144_page_parity.rs\" not in source.getnames()"
+        },
+        {
+          "line": 197,
+          "text": "                or \"crates/borsuk/src/budgeted_page_rank.rs\" not in source.getnames()"
+        },
+        {
+          "line": 198,
+          "text": "                or \"crates/borsuk/src/lib.rs\" not in source.getnames()"
+        },
+        {
+          "line": 199,
+          "text": "                or \"crates/borsuk/Cargo.toml\" not in source.getnames()"
+        },
+        {
+          "line": 200,
+          "text": "                or \"Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 201,
+          "text": "                or \"scripts/v114_score_rust/Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 202,
+          "text": "                or \"scripts/v138_unit_bound_feasibility.py\" not in source.getnames()"
+        },
+        {
+          "line": 203,
+          "text": "                or \"docs/research/inputs/v138-deep-primary.jsonl\" not in source.getnames()"
+        },
+        {
+          "line": 204,
+          "text": "                or \"scripts/v139_centroid_page_screen.py\" not in source.getnames()"
+        },
+        {
+          "line": 205,
+          "text": "                or \"docs/research/inputs/v139-relaion-primary.jsonl\" not in source.getnames()):"
+        },
+        {
+          "line": 206,
+          "text": "            raise ValueError(\"source archive lacks V144 runner or evaluator\")"
+        },
+        {
+          "line": 215,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 216,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 246,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 258,
+          "text": "                        or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 259,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 272,
+          "text": "                required = {\"install.log\", \"core-check-resources.txt\","
+        },
+        {
+          "line": 273,
+          "text": "                            \"parity-build-resources.txt\", \"download.log\","
+        },
+        {
+          "line": 274,
+          "text": "                            \"deep-resources.txt\", \"deep.scores.bin\", \"deep.raw.jsonl\","
+        },
+        {
+          "line": 275,
+          "text": "                            \"deep.summary.json\", \"deep-parity-resources.txt\","
+        },
+        {
+          "line": 277,
+          "text": "                            \"relaion-resources.txt\", \"relaion.scores.bin\","
+        },
+        {
+          "line": 278,
+          "text": "                            \"relaion.raw.jsonl\", \"relaion.summary.json\","
+        },
+        {
+          "line": 279,
+          "text": "                            \"relaion-parity-resources.txt\", \"relaion.parity.jsonl\","
+        },
+        {
+          "line": 280,
+          "text": "                            \"relaion.parity.summary.json\", \"decision.json\","
+        },
+        {
+          "line": 286,
+          "text": "                                    \"deep_completed\": True, \"relaion_completed\": True}:"
+        },
+        {
+          "line": 322,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 329,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v144_page_parity_remote.sh": {
+      "sha256": "dae8056933ad75105b93169cb92ba502320793e12626abb01184655327e59634",
+      "lines": [
+        {
+          "line": 2,
+          "text": "# One frozen, fail-fast, source-only page-parity feasibility screen on Spot."
+        },
+        {
+          "line": 28,
+          "text": "  for path in install.log core-check.log core-check-resources.txt \\"
+        },
+        {
+          "line": 29,
+          "text": "      parity-build.log parity-build-resources.txt download.log \\"
+        },
+        {
+          "line": 30,
+          "text": "      deep.log deep-resources.txt deep-parity.log deep-parity-resources.txt \\"
+        },
+        {
+          "line": 31,
+          "text": "      relaion.log relaion-resources.txt relaion-parity.log relaion-parity-resources.txt \\"
+        },
+        {
+          "line": 34,
+          "text": "      relaion.scores.bin relaion.raw.jsonl relaion.summary.json \\"
+        },
+        {
+          "line": 35,
+          "text": "      relaion.parity.jsonl relaion.parity.summary.json \\"
+        },
+        {
+          "line": 49,
+          "text": "names=('install.log','core-check.log','core-check-resources.txt',"
+        },
+        {
+          "line": 50,
+          "text": "       'parity-build.log','parity-build-resources.txt','download.log',"
+        },
+        {
+          "line": 51,
+          "text": "       'deep.log','deep-resources.txt','deep-parity.log','deep-parity-resources.txt',"
+        },
+        {
+          "line": 52,
+          "text": "       'relaion.log','relaion-resources.txt','relaion-parity.log','relaion-parity-resources.txt',"
+        },
+        {
+          "line": 55,
+          "text": "       'relaion.scores.bin','relaion.raw.jsonl','relaion.summary.json',"
+        },
+        {
+          "line": 56,
+          "text": "       'relaion.parity.jsonl','relaion.parity.summary.json',"
+        },
+        {
+          "line": 63,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 64,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 69,
+          "text": "  'source_commit':os.environ['V144_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 70,
+          "text": "  'source_archive_sha256':os.environ['V144_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 102,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 135,
+          "text": "  --manifest-path repo/scripts/v114_score_rust/Cargo.toml --bin v144_page_parity"
+        },
+        {
+          "line": 141,
+          "text": "download_checked v140-relaion.raw.jsonl \"$v140/artifacts/relaion.raw.jsonl\" 3430072 3dc54d101814b0f8e2b2d80f1b79e2762edcc885ad423ee14ae601669eb0804a"
+        },
+        {
+          "line": 144,
+          "text": "with open('v140-terminal.json') as source: terminal=json.load(source)"
+        },
+        {
+          "line": 145,
+          "text": "if terminal.get('status')!='complete' or terminal.get('source_commit')!='3213ca34cf6a8c32824dec6967b39eb06dd5fba6':"
+        },
+        {
+          "line": 148,
+          "text": "v122=research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts"
+        },
+        {
+          "line": 149,
+          "text": "download_checked deep/queries.jsonl \"$v122/queries.jsonl\" 2041773 dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99"
+        },
+        {
+          "line": 162,
+          "text": "  --cohort deep-image-96-angular-random100k --rows 100000 --dimensions 96 \\"
+        },
+        {
+          "line": 169,
+          "text": "  deep-image-96-angular-random100k 100000 96 deep.scores.bin \\"
+        },
+        {
+          "line": 178,
+          "text": "phase=download-relaion"
+        },
+        {
+          "line": 179,
+          "text": "v116=research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts"
+        },
+        {
+          "line": 180,
+          "text": "v115=research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router"
+        },
+        {
+          "line": 181,
+          "text": "download_checked relaion/requests.jsonl \"$v116/requests.jsonl\" 18726909 c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9"
+        },
+        {
+          "line": 182,
+          "text": "cp repo/docs/research/inputs/v139-relaion-primary.jsonl relaion/rust-replay.jsonl"
+        },
+        {
+          "line": 183,
+          "text": "printf '%s  %s\\n' 71bfdf71f293ca1d23f58694866b3ba52ee8ee95ed9b02e676a2a8bf031f3162 relaion/rust-replay.jsonl | sha256sum -c - >>download.log"
+        },
+        {
+          "line": 184,
+          "text": "download_checked relaion/sq8.bin research/v70-algorithm-first/single-stage-a4a695d66f508edf/index/sq8.bin 780000000 2284f24745f964ff2b125eedb883d5cd8ff6afab0738f49f9e16e593167a318b"
+        },
+        {
+          "line": 185,
+          "text": "download_checked relaion/low.bin \"$v115/low.bin\" 3072 ce036f48f918312f694adbd12994646987eb0e144df20f64ffe583bed0d1f891"
+        },
+        {
+          "line": 186,
+          "text": "download_checked relaion/step.bin \"$v115/step.bin\" 3072 64d49c7413f163fb3446183629d743f69199156f208fa959523d1bcde27da69c"
+        },
+        {
+          "line": 187,
+          "text": "phase=evaluate-relaion"
+        },
+        {
+          "line": 190,
+          "text": "run_science relaion bash -c \\"
+        },
+        {
+          "line": 193,
+          "text": "  --cohort ReLAION-1M --rows 1000000 --dimensions 768 \\"
+        },
+        {
+          "line": 194,
+          "text": "  --input relaion --sq8 relaion/sq8.bin --low relaion/low.bin \\"
+        },
+        {
+          "line": 195,
+          "text": "  --step relaion/step.bin --raw relaion.raw.jsonl \\"
+        },
+        {
+          "line": 196,
+          "text": "  --summary relaion.summary.json --scores-output relaion.scores.bin"
+        },
+        {
+          "line": 197,
+          "text": "printf '%s  %s\\n' 3dc54d101814b0f8e2b2d80f1b79e2762edcc885ad423ee14ae601669eb0804a relaion.raw.jsonl | sha256sum -c - >>download.log"
+        },
+        {
+          "line": 198,
+          "text": "phase=parity-relaion"
+        },
+        {
+          "line": 199,
+          "text": "run_science relaion-parity \"$CARGO_TARGET_DIR/release/v144_page_parity\" \\"
+        },
+        {
+          "line": 200,
+          "text": "  ReLAION-1M 1000000 768 relaion.scores.bin \\"
+        },
+        {
+          "line": 201,
+          "text": "  relaion/rust-replay.jsonl v140-relaion.raw.jsonl relaion.parity.summary.json"
+        },
+        {
+          "line": 202,
+          "text": "cp relaion-parity.log relaion.parity.jsonl"
+        },
+        {
+          "line": 205,
+          "text": "value=json.load(open('relaion.parity.summary.json'))"
+        },
+        {
+          "line": 207,
+          "text": "    raise ValueError('ReLAION planner parity or p95 gate differs')"
+        },
+        {
+          "line": 209,
+          "text": "printf '%s\\n' '{\"schema\":\"borsuk-v144-decision-v1\",\"deep_completed\":true,\"relaion_completed\":true}' >decision.json"
+        }
+      ]
+    }
+  }
+}

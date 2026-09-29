@@ -1,0 +1,974 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v155-relaion-returned-quality/10850f917c4583f05d8c33afec459f4f76b194bd/runs/v155-20260924T150712Z/a0001/terminal.json",
+  "terminal_sha256": "784097f577f11bd49468473e43b1ba06642bf107ecde06a8b0b0ce09b0cd9cdb",
+  "terminal_status": "complete",
+  "source_commit": "10850f917c4583f05d8c33afec459f4f76b194bd",
+  "archive_key": "research/v155-relaion-returned-quality/10850f917c4583f05d8c33afec459f4f76b194bd/source/de67cc65077f58cbbff1328cbcd668f950b45f3b4c1f03410bdee664ebe52683/source.tar.gz",
+  "archive_sha256": "de67cc65077f58cbbff1328cbcd668f950b45f3b4c1f03410bdee664ebe52683",
+  "archive_bytes": 14003539,
+  "source_code": {
+    "scripts/launch_v155_relaion_returned_spot.py": {
+      "sha256": "312c9319dead8ebbce2e31fb838c4432001ac390f3558f6bcf43af6e92d2bc5e",
+      "lines": [
+        {
+          "line": 25,
+          "text": "TAG = \"borsuk-v155-relaion-returned-quality\""
+        },
+        {
+          "line": 26,
+          "text": "RUNNER = \"scripts/run_v155_relaion_returned_remote.sh\""
+        },
+        {
+          "line": 28,
+          "text": "    (\"research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet\", 1_458_450_077),"
+        },
+        {
+          "line": 30,
+          "text": "    (\"research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl\", 18_726_909),"
+        },
+        {
+          "line": 31,
+          "text": "    (\"research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/rust-replay.jsonl\", 13_455_525),"
+        },
+        {
+          "line": 33,
+          "text": "    (\"research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/artifacts/mirror/manifest.json\", 29_780),"
+        },
+        {
+          "line": 34,
+          "text": "    (\"research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/artifacts/mirror/blocks.sha256\", 6_093_760),"
+        },
+        {
+          "line": 35,
+          "text": "    (\"research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/validation-gt100.parquet\", 2_045_045),"
+        },
+        {
+          "line": 37,
+          "text": "    (\"research/v140-budgeted-page/3213ca34cf6a8c32824dec6967b39eb06dd5fba6/runs/v140-20260924T092255Z/a0001/artifacts/relaion.raw.jsonl\", 3_430_072),"
+        },
+        {
+          "line": 38,
+          "text": "    (\"research/v142-relaion-returned/da63de3292905fe9246ee50c078345592e7c9083/runs/v142-20260924T100356Z/a0003/terminal.json\", 2_165),"
+        },
+        {
+          "line": 39,
+          "text": "    (\"research/v142-relaion-returned/da63de3292905fe9246ee50c078345592e7c9083/runs/v142-20260924T100356Z/a0003/artifacts/scored.jsonl\", 16_714_942),"
+        },
+        {
+          "line": 40,
+          "text": "    (\"research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/runs/v154-20260924T143744Z/a0002/terminal.json\", 2_672),"
+        },
+        {
+          "line": 41,
+          "text": "    (\"research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/runs/v154-20260924T143744Z/a0002/artifacts/science.jsonl\", 99_226_409),"
+        },
+        {
+          "line": 47,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 70,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 72,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 78,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 81,
+          "text": "            f\"research/v155-relaion-returned-quality/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 95,
+          "text": "            f\"export V155_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 104,
+          "text": "root=/mnt/v155-relaion-returned-quality"
+        },
+        {
+          "line": 117,
+          "text": "print(json.dumps({{\"schema\":\"borsuk-v155-relaion-returned-quality-spot-v1\","
+        },
+        {
+          "line": 118,
+          "text": "  \"source_commit\":os.environ[\"V155_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 119,
+          "text": "  \"source_archive_sha256\":os.environ[\"V155_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 129,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 130,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 131,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 132,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 166,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 185,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 186,
+          "text": "    subprocess.run([\"git\", \"merge-base\", \"--is-ancestor\", plan.source_commit,"
+        },
+        {
+          "line": 198,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 200,
+          "text": "        [\"git\", \"archive\", \"--format=tar\", plan.source_commit],"
+        },
+        {
+          "line": 204,
+          "text": "        raise ValueError(\"source archive is not the named Git commit\")"
+        },
+        {
+          "line": 206,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 207,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 208,
+          "text": "                or \"scripts/v155_relaion_returned_quality.py\" not in source.getnames()"
+        },
+        {
+          "line": 209,
+          "text": "                or \"scripts/v155_independent_recount.py\" not in source.getnames()"
+        },
+        {
+          "line": 210,
+          "text": "                or \"scripts/v114_score_rust/Cargo.toml\" not in source.getnames()"
+        },
+        {
+          "line": 211,
+          "text": "                or \"scripts/v114_score_rust/src/main.rs\" not in source.getnames()"
+        },
+        {
+          "line": 212,
+          "text": "                or \"crates/borsuk/src/returned_sq8.rs\" not in source.getnames()"
+        },
+        {
+          "line": 213,
+          "text": "                or \"scripts/v124_source_tier_precision.py\" not in source.getnames()"
+        },
+        {
+          "line": 214,
+          "text": "                or \"docs/research/v155-relaion-returned-quality-prereg.md\" not in source.getnames()):"
+        },
+        {
+          "line": 215,
+          "text": "            raise ValueError(\"source archive lacks V155 runner or evaluator\")"
+        },
+        {
+          "line": 223,
+          "text": "        \"schema\": \"borsuk-v155-relaion-returned-quality-reservation-v1\","
+        },
+        {
+          "line": 224,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 225,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 255,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 266,
+          "text": "                if (terminal.get(\"schema\") != \"borsuk-v155-relaion-returned-quality-spot-v1\""
+        },
+        {
+          "line": 267,
+          "text": "                        or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 268,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 285,
+          "text": "                required = {\"install.log\", \"compile.log\", \"compile-resources.txt\","
+        },
+        {
+          "line": 286,
+          "text": "                            \"download.log\", \"prepare-resources.txt\", \"sparse.raw.jsonl\","
+        },
+        {
+          "line": 287,
+          "text": "                            \"flat-score-resources.txt\", \"flat.scored.jsonl\","
+        },
+        {
+          "line": 288,
+          "text": "                            \"sparse-score-resources.txt\", \"sparse.scored.jsonl\","
+        },
+        {
+          "line": 289,
+          "text": "                            \"replay-resources.txt\", \"replay.jsonl\", \"replay.seal.json\","
+        },
+        {
+          "line": 291,
+          "text": "                            \"reduce-resources.txt\", \"evidence.jsonl\","
+        },
+        {
+          "line": 372,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 379,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v155_relaion_returned_remote.sh": {
+      "sha256": "38453372bdf8ae62a5195b4370a5b412467cc291f53d0f714ec560a87d60bbaf",
+      "lines": [
+        {
+          "line": 4,
+          "text": "root=/mnt/v155-relaion-returned-quality"
+        },
+        {
+          "line": 30,
+          "text": "  for path in install.log compile.log compile-resources.txt download.log \\"
+        },
+        {
+          "line": 31,
+          "text": "      prepare.log prepare-resources.txt sparse.raw.jsonl \\"
+        },
+        {
+          "line": 32,
+          "text": "      flat-score.log flat-score-resources.txt flat.scored.jsonl \\"
+        },
+        {
+          "line": 33,
+          "text": "      sparse-score.log sparse-score-resources.txt sparse.scored.jsonl \\"
+        },
+        {
+          "line": 34,
+          "text": "      replay.log replay-resources.txt replay.jsonl replay.seal.json seal-upload.log \\"
+        },
+        {
+          "line": 35,
+          "text": "      reduce.log reduce-resources.txt evidence.jsonl summary.json \\"
+        },
+        {
+          "line": 58,
+          "text": "names=('install.log','compile.log','compile-resources.txt','download.log',"
+        },
+        {
+          "line": 59,
+          "text": "       'prepare.log','prepare-resources.txt','sparse.raw.jsonl',"
+        },
+        {
+          "line": 60,
+          "text": "       'flat-score.log','flat-score-resources.txt','flat.scored.jsonl',"
+        },
+        {
+          "line": 61,
+          "text": "       'sparse-score.log','sparse-score-resources.txt','sparse.scored.jsonl',"
+        },
+        {
+          "line": 62,
+          "text": "       'replay.log','replay-resources.txt','replay.jsonl','replay.seal.json','seal-upload.log',"
+        },
+        {
+          "line": 63,
+          "text": "       'reduce.log','reduce-resources.txt','evidence.jsonl','summary.json',"
+        },
+        {
+          "line": 71,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 72,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 76,
+          "text": "print(json.dumps({'schema':'borsuk-v155-relaion-returned-quality-spot-v1',"
+        },
+        {
+          "line": 77,
+          "text": "  'source_commit':os.environ['V155_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 78,
+          "text": "  'source_archive_sha256':os.environ['V155_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 111,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 142,
+          "text": "  --manifest-path repo/scripts/v114_score_rust/Cargo.toml --bin borsuk-v114-score-gate"
+        },
+        {
+          "line": 145,
+          "text": "v36=research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000"
+        },
+        {
+          "line": 146,
+          "text": "v116=research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts"
+        },
+        {
+          "line": 147,
+          "text": "v114=research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/artifacts"
+        },
+        {
+          "line": 149,
+          "text": "v142=research/v142-relaion-returned/da63de3292905fe9246ee50c078345592e7c9083/runs/v142-20260924T100356Z/a0003"
+        },
+        {
+          "line": 150,
+          "text": "v154=research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/runs/v154-20260924T143744Z/a0002"
+        },
+        {
+          "line": 153,
+          "text": "download_checked source.parquet \"$v36/source.parquet\" 1458450077 2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+        },
+        {
+          "line": 155,
+          "text": "download_checked requests.jsonl \"$v116/requests.jsonl\" 18726909 c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9"
+        },
+        {
+          "line": 156,
+          "text": "download_checked sealed.jsonl \"$v116/rust-replay.jsonl\" 13455525 3bfd155ac5f9e1b7aacbc263e1732e2314c9722f235d3454e0f17d0c6bc3c960"
+        },
+        {
+          "line": 158,
+          "text": "download_checked mirror-manifest.json \"$v114/mirror/manifest.json\" 29780 48e01d4488d0c84b991baef521a02bca75ce096c0f9a1154f779c046732707f8"
+        },
+        {
+          "line": 159,
+          "text": "download_checked blocks.sha256 \"$v114/mirror/blocks.sha256\" 6093760 ec32ad7926aaf8dc1e80186d226d1e9dc5e97fdbd8aeccd14cdeefc1173938ca"
+        },
+        {
+          "line": 161,
+          "text": "download_checked v140-raw.jsonl \"$v140/artifacts/relaion.raw.jsonl\" 3430072 3dc54d101814b0f8e2b2d80f1b79e2762edcc885ad423ee14ae601669eb0804a"
+        },
+        {
+          "line": 171,
+          "text": "    or a.get('source_commit')!='8f2c5ce4bffadc421fb4a48e4deccf989f803770'"
+        },
+        {
+          "line": 174,
+          "text": "    or b.get('source_commit')!='da63de3292905fe9246ee50c078345592e7c9083'"
+        },
+        {
+          "line": 176,
+          "text": "    or c.get('source_commit')!='3213ca34cf6a8c32824dec6967b39eb06dd5fba6'):"
+        },
+        {
+          "line": 180,
+          "text": "run_science prepare .venv/bin/python -m scripts.v155_relaion_returned_quality prepare \\"
+        },
+        {
+          "line": 184,
+          "text": "run_science flat-score \"$CARGO_TARGET_DIR/release/borsuk-v114-score-gate\" \\"
+        },
+        {
+          "line": 186,
+          "text": "  requests.jsonl sealed.jsonl v140-raw.jsonl 512"
+        },
+        {
+          "line": 189,
+          "text": "run_science sparse-score \"$CARGO_TARGET_DIR/release/borsuk-v114-score-gate\" \\"
+        },
+        {
+          "line": 191,
+          "text": "  requests.jsonl sealed.jsonl sparse.raw.jsonl 512"
+        },
+        {
+          "line": 199,
+          "text": "  v155 .venv/bin/python -m scripts.v155_relaion_returned_quality replay \\"
+        },
+        {
+          "line": 200,
+          "text": "  --source source.parquet --layout layout.npy --sq8 sq8.bin \\"
+        },
+        {
+          "line": 201,
+          "text": "  --requests requests.jsonl --sealed sealed.jsonl --plans plans.jsonl \\"
+        },
+        {
+          "line": 227,
+          "text": "download_checked truth.parquet \"$v36/validation-gt100.parquet\" 2045045 bf0fb0c934c986d05282e3d1c63dc351c553976ea05bfcab0cd3f06d2979e871"
+        },
+        {
+          "line": 231,
+          "text": "  v155 .venv/bin/python -m scripts.v155_relaion_returned_quality reduce \\"
+        },
+        {
+          "line": 239,
+          "text": "if s.get('schema')!='borsuk-v155-relaion-returned-quality-v1':"
+        }
+      ]
+    },
+    "scripts/v155_independent_recount.py": {
+      "sha256": "a5dd90200344174038b37c7e5d3beafca85a8700c46a16be6eef74a7b5fe810a",
+      "lines": [
+        {
+          "line": 13,
+          "text": "QUERIES = 1000"
+        },
+        {
+          "line": 20,
+          "text": "    with path.open(\"rb\") as source:"
+        },
+        {
+          "line": 21,
+          "text": "        for block in iter(lambda: source.read(4 * 1024 * 1024), b\"\"):"
+        },
+        {
+          "line": 27,
+          "text": "    with path.open() as source:"
+        },
+        {
+          "line": 28,
+          "text": "        result = [json.loads(line) for line in source]"
+        },
+        {
+          "line": 29,
+          "text": "    if len(result) != QUERIES:"
+        },
+        {
+          "line": 48,
+          "text": "    if (summary[\"schema\"] != \"borsuk-v155-relaion-returned-quality-v1\""
+        },
+        {
+          "line": 49,
+          "text": "            or summary[\"query_count\"] != QUERIES"
+        },
+        {
+          "line": 56,
+          "text": "    truth = integers(truth_path, QUERIES * 100)"
+        },
+        {
+          "line": 62,
+          "text": "        from scripts.v124_source_tier_precision import load_truth"
+        },
+        {
+          "line": 65,
+          "text": "            dtype=np.int64).reshape(QUERIES * 100)"
+        },
+        {
+          "line": 69,
+          "text": "        raise ValueError(\"SQ8 source-ID permutation differs\")"
+        },
+        {
+          "line": 70,
+          "text": "    position = {source_id: ordinal for ordinal, source_id in enumerate(sq8_ids)}"
+        },
+        {
+          "line": 71,
+          "text": "    fields = (\"source\", \"sq8\", \"physical\", \"bytes\", \"gets\", \"union\","
+        },
+        {
+          "line": 72,
+          "text": "              \"sq8_ns\", \"source_ns\")"
+        },
+        {
+          "line": 76,
+          "text": "        if row[\"query_ordinal\"] != ordinal or observed[\"query_ordinal\"] != ordinal:"
+        },
+        {
+          "line": 77,
+          "text": "            raise ValueError(\"query identity differs\")"
+        },
+        {
+          "line": 86,
+          "text": "            source_top = arm[\"source_top100_ids\"]"
+        },
+        {
+          "line": 89,
+          "text": "                    or len(source_top) != 100 or len(set(source_top)) != 100"
+        },
+        {
+          "line": 91,
+          "text": "                    or not set(source_top).issubset(position)):"
+        },
+        {
+          "line": 108,
+          "text": "            source_hits = len(set(source_top) & gold)"
+        },
+        {
+          "line": 113,
+          "text": "                    \"source_hits\": source_hits, \"sq8_hits\": sq8_hits,"
+        },
+        {
+          "line": 117,
+          "text": "            found = {\"source\": source_hits, \"sq8\": sq8_hits,"
+        },
+        {
+          "line": 120,
+          "text": "                     \"sq8_ns\": arm[\"sq8_ns\"], \"source_ns\": arm[\"source_ns\"]}"
+        },
+        {
+          "line": 123,
+          "text": "            hits[name] = source_hits"
+        },
+        {
+          "line": 130,
+          "text": "        expected = {\"source_hits\": sum(arm[\"source\"]),"
+        },
+        {
+          "line": 131,
+          "text": "                    \"source_recall_at_100\": sum(arm[\"source\"]) / (QUERIES * 100),"
+        },
+        {
+          "line": 132,
+          "text": "                    \"source_p05_hits\": sorted(arm[\"source\"])[49],"
+        },
+        {
+          "line": 133,
+          "text": "                    \"source_sub90_queries\": sum(n < 90 for n in arm[\"source\"]),"
+        },
+        {
+          "line": 135,
+          "text": "                    \"sq8_recall_at_100\": sum(arm[\"sq8\"]) / (QUERIES * 100),"
+        },
+        {
+          "line": 137,
+          "text": "                    \"sq8_sub90_queries\": sum(n < 90 for n in arm[\"sq8\"]),"
+        },
+        {
+          "line": 139,
+          "text": "                    \"physical_coverage_at_100\": sum(arm[\"physical\"]) / (QUERIES * 100),"
+        },
+        {
+          "line": 141,
+          "text": "                    \"mean_planned_bytes\": sum(arm[\"bytes\"]) / QUERIES,"
+        },
+        {
+          "line": 144,
+          "text": "                    \"mean_gets\": sum(arm[\"gets\"]) / QUERIES,"
+        },
+        {
+          "line": 146,
+          "text": "                    \"mean_union_size\": sum(arm[\"union\"]) / QUERIES,"
+        },
+        {
+          "line": 148,
+          "text": "                    \"source_p95_ms\": sorted(arm[\"source_ns\"])[949] / 1e6}"
+        },
+        {
+          "line": 153,
+          "text": "    if flat[\"source_hits\"] != 99_607 or flat[\"sq8_hits\"] != 99_255:"
+        },
+        {
+          "line": 155,
+          "text": "    passed = (sparse[\"source_hits\"] >= 99_500"
+        },
+        {
+          "line": 156,
+          "text": "              and sparse[\"source_hits\"] >= flat[\"source_hits\"] - 100"
+        },
+        {
+          "line": 157,
+          "text": "              and sparse[\"source_p05_hits\"] >= 98"
+        },
+        {
+          "line": 158,
+          "text": "              and sparse[\"source_sub90_queries\"] <= 2"
+        },
+        {
+          "line": 163,
+          "text": "    return {\"verified_queries\": QUERIES, \"verdict\": \"pass\" if passed else \"reject\","
+        },
+        {
+          "line": 164,
+          "text": "            \"flat_source_hits\": flat[\"source_hits\"],"
+        },
+        {
+          "line": 165,
+          "text": "            \"sparse_source_hits\": sparse[\"source_hits\"],"
+        }
+      ]
+    },
+    "scripts/v155_relaion_returned_quality.py": {
+      "sha256": "4c8a68956d38b74a3dacc653bb503b4c1abfb3c8f242290fb15d2f6e8aab944a",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"Seal V154 flat/sparse returned IDs, then reduce against ReLAION GT100.\"\"\""
+        },
+        {
+          "line": 14,
+          "text": "QUERIES = 1000"
+        },
+        {
+          "line": 16,
+          "text": "REQUEST_SHA = \"c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9\""
+        },
+        {
+          "line": 21,
+          "text": "SOURCE_SHA = \"2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86\""
+        },
+        {
+          "line": 29,
+          "text": "    with path.open(\"rb\") as source:"
+        },
+        {
+          "line": 30,
+          "text": "        for block in iter(lambda: source.read(4 * 1024 * 1024), b\"\"):"
+        },
+        {
+          "line": 38,
+          "text": "    with path.open() as source:"
+        },
+        {
+          "line": 39,
+          "text": "        values = [json.loads(line) for line in source]"
+        },
+        {
+          "line": 40,
+          "text": "    if len(values) != QUERIES:"
+        },
+        {
+          "line": 46,
+          "text": "    if (plan[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 47,
+          "text": "            or plan[\"source_query_ordinal\"] != ordinal):"
+        },
+        {
+          "line": 48,
+          "text": "        raise ValueError(\"V154 query identity differs\")"
+        },
+        {
+          "line": 64,
+          "text": "            if prior[\"query_ordinal\"] != ordinal:"
+        },
+        {
+          "line": 65,
+          "text": "                raise ValueError(\"V140 query identity differs\")"
+        },
+        {
+          "line": 72,
+          "text": "            output.write(json.dumps({\"query_ordinal\": ordinal,"
+        },
+        {
+          "line": 81,
+          "text": "    from scripts.v124_source_tier_precision import rank, unit"
+        },
+        {
+          "line": 83,
+          "text": "    for path, expected in ((args.source, SOURCE_SHA), (args.layout, LAYOUT_SHA),"
+        },
+        {
+          "line": 86,
+          "text": "            raise ValueError(f\"source/layout/SQ8 differs: {path}\")"
+        },
+        {
+          "line": 91,
+          "text": "    table = pq.read_table(args.source, columns=[\"feature_row_id\", \"embedding\"])"
+        },
+        {
+          "line": 95,
+          "text": "        raise ValueError(\"source geometry differs\")"
+        },
+        {
+          "line": 96,
+          "text": "    source_ids = table[\"feature_row_id\"].combine_chunks().to_numpy(zero_copy_only=False)"
+        },
+        {
+          "line": 97,
+          "text": "    if not np.issubdtype(source_ids.dtype, np.integer) or np.unique(source_ids).size != ROWS:"
+        },
+        {
+          "line": 98,
+          "text": "        raise ValueError(\"source IDs differ\")"
+        },
+        {
+          "line": 99,
+          "text": "    source = np.asarray(table[\"embedding\"].combine_chunks().values.to_numpy("
+        },
+        {
+          "line": 101,
+          "text": "    if not np.isfinite(source).all():"
+        },
+        {
+          "line": 102,
+          "text": "        raise ValueError(\"source coordinates differ\")"
+        },
+        {
+          "line": 107,
+          "text": "            or not np.array_equal(sq8[\"id\"], source_ids[layout])):"
+        },
+        {
+          "line": 108,
+          "text": "        raise ValueError(\"SQ8, layout and source-ID mapping differ\")"
+        },
+        {
+          "line": 109,
+          "text": "    ids_to_rows = {int(value): ordinal for ordinal, value in enumerate(source_ids)}"
+        },
+        {
+          "line": 110,
+          "text": "    requests = records(args.requests, REQUEST_SHA)"
+        },
+        {
+          "line": 117,
+          "text": "        for ordinal, (request, old, plan, flat, sparse, reference) in enumerate("
+        },
+        {
+          "line": 118,
+          "text": "                zip(requests, sealed, plans, flat_scored, sparse_scored, historical)):"
+        },
+        {
+          "line": 119,
+          "text": "            if any(row[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 120,
+          "text": "                   for row in (request, old, plan, flat, sparse, reference)):"
+        },
+        {
+          "line": 121,
+          "text": "                raise ValueError(\"query identity differs\")"
+        },
+        {
+          "line": 122,
+          "text": "            if (request[\"nominees\"] != old[\"nominees\"]"
+        },
+        {
+          "line": 123,
+          "text": "                    or request[\"baseline_ranges\"] != old[\"baseline_ranges\"]"
+        },
+        {
+          "line": 124,
+          "text": "                    or len(request[\"nominees\"]) != 512"
+        },
+        {
+          "line": 125,
+          "text": "                    or len(set(request[\"nominees\"])) != 512):"
+        },
+        {
+          "line": 126,
+          "text": "                raise ValueError(\"source-only router differs\")"
+        },
+        {
+          "line": 131,
+          "text": "            query = np.asarray(request[\"query\"], dtype=np.float64)"
+        },
+        {
+          "line": 132,
+          "text": "            if (query.shape != (DIMS,) or not np.isfinite(query).all()"
+        },
+        {
+          "line": 133,
+          "text": "                    or np.linalg.norm(query) <= 0):"
+        },
+        {
+          "line": 134,
+          "text": "                raise ValueError(\"query differs\")"
+        },
+        {
+          "line": 135,
+          "text": "            query /= np.linalg.norm(query)"
+        },
+        {
+          "line": 136,
+          "text": "            nominee_ids = set(map(int, sq8[\"id\"][request[\"nominees\"]]))"
+        },
+        {
+          "line": 137,
+          "text": "            result = {\"query_ordinal\": ordinal, \"arms\": {}}"
+        },
+        {
+          "line": 150,
+          "text": "                    raise ValueError(\"source union width differs\")"
+        },
+        {
+          "line": 151,
+          "text": "                source_rows = np.fromiter((ids_to_rows[int(value)] for value in union),"
+        },
+        {
+          "line": 154,
+          "text": "                exact = rank(union, unit(source[source_rows].astype(np.float64)) @ query, 100)"
+        },
+        {
+          "line": 155,
+          "text": "                source_ns = time.perf_counter_ns() - started"
+        },
+        {
+          "line": 162,
+          "text": "                    \"source_top100_ids\": exact.tolist(),"
+        },
+        {
+          "line": 163,
+          "text": "                    \"sq8_ns\": scored[\"sq8_ns\"], \"source_ns\": source_ns,"
+        },
+        {
+          "line": 171,
+          "text": "    from scripts.v124_source_tier_precision import load_truth"
+        },
+        {
+          "line": 183,
+          "text": "        raise ValueError(\"SQ8 source IDs differ\")"
+        },
+        {
+          "line": 187,
+          "text": "    np.asarray(truth, dtype=\"<i8\").reshape(QUERIES, 100).tofile(args.truth_ids)"
+        },
+        {
+          "line": 189,
+          "text": "    fields = (\"source\", \"sq8\", \"physical\", \"bytes\", \"gets\", \"union\", \"sq8_ns\", \"source_ns\")"
+        },
+        {
+          "line": 194,
+          "text": "            if row[\"query_ordinal\"] != ordinal:"
+        },
+        {
+          "line": 195,
+          "text": "                raise ValueError(\"replay query identity differs\")"
+        },
+        {
+          "line": 197,
+          "text": "            result = {\"query_ordinal\": ordinal, \"arms\": {}}"
+        },
+        {
+          "line": 200,
+          "text": "                if (len(arm[\"source_top100_ids\"]) != 100"
+        },
+        {
+          "line": 201,
+          "text": "                        or len(set(arm[\"source_top100_ids\"])) != 100"
+        },
+        {
+          "line": 205,
+          "text": "                source_hits = len(set(arm[\"source_top100_ids\"]) & gold_set)"
+        },
+        {
+          "line": 211,
+          "text": "                found = {\"source\": source_hits, \"sq8\": sq8_hits,"
+        },
+        {
+          "line": 214,
+          "text": "                         \"sq8_ns\": arm[\"sq8_ns\"], \"source_ns\": arm[\"source_ns\"]}"
+        },
+        {
+          "line": 217,
+          "text": "                result[\"arms\"][name] = {\"source_hits\": source_hits,"
+        },
+        {
+          "line": 222,
+          "text": "            left = result[\"arms\"][\"sparse\"][\"source_hits\"]"
+        },
+        {
+          "line": 223,
+          "text": "            right = result[\"arms\"][\"flat\"][\"source_hits\"]"
+        },
+        {
+          "line": 227,
+          "text": "    if (sum(values[\"flat\"][\"source\"]) != 99_607"
+        },
+        {
+          "line": 230,
+          "text": "    summary = {\"schema\": \"borsuk-v155-relaion-returned-quality-v1\","
+        },
+        {
+          "line": 231,
+          "text": "               \"dataset\": \"ReLAION-1M\", \"split\": \"validation-1000-already-used\","
+        },
+        {
+          "line": 232,
+          "text": "               \"query_count\": QUERIES, \"replay_sha256\": sha256(args.replay),"
+        },
+        {
+          "line": 238,
+          "text": "            \"source_hits\": sum(arm[\"source\"]),"
+        },
+        {
+          "line": 239,
+          "text": "            \"source_recall_at_100\": sum(arm[\"source\"]) / (QUERIES * 100),"
+        },
+        {
+          "line": 240,
+          "text": "            \"source_p05_hits\": sorted(arm[\"source\"])[49],"
+        },
+        {
+          "line": 241,
+          "text": "            \"source_sub90_queries\": sum(n < 90 for n in arm[\"source\"]),"
+        },
+        {
+          "line": 243,
+          "text": "            \"sq8_recall_at_100\": sum(arm[\"sq8\"]) / (QUERIES * 100),"
+        },
+        {
+          "line": 245,
+          "text": "            \"sq8_sub90_queries\": sum(n < 90 for n in arm[\"sq8\"]),"
+        },
+        {
+          "line": 247,
+          "text": "            \"physical_coverage_at_100\": sum(arm[\"physical\"]) / (QUERIES * 100),"
+        },
+        {
+          "line": 249,
+          "text": "            \"mean_planned_bytes\": sum(arm[\"bytes\"]) / QUERIES,"
+        },
+        {
+          "line": 252,
+          "text": "            \"mean_gets\": sum(arm[\"gets\"]) / QUERIES,"
+        },
+        {
+          "line": 254,
+          "text": "            \"mean_union_size\": sum(arm[\"union\"]) / QUERIES,"
+        },
+        {
+          "line": 256,
+          "text": "            \"source_p95_ms\": sorted(arm[\"source_ns\"])[949] / 1e6,"
+        },
+        {
+          "line": 261,
+          "text": "        sparse[\"source_hits\"] >= 99_500"
+        },
+        {
+          "line": 262,
+          "text": "        and sparse[\"source_hits\"] >= flat[\"source_hits\"] - 100"
+        },
+        {
+          "line": 263,
+          "text": "        and sparse[\"source_p05_hits\"] >= 98"
+        },
+        {
+          "line": 264,
+          "text": "        and sparse[\"source_sub90_queries\"] <= 2"
+        },
+        {
+          "line": 281,
+          "text": "    for name in (\"source\", \"layout\", \"sq8\", \"requests\", \"sealed\", \"plans\","
+        }
+      ]
+    }
+  }
+}

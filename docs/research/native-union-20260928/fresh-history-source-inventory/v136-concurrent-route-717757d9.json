@@ -1,0 +1,156 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v136-concurrent-route/717757d9ad18139fb8dc020414ec4a1b4f3e9931/runs/v136-20260924T080000Z/a0001/terminal.json",
+  "terminal_sha256": "718164be56ddf9ccfc3b26a5962421c79c84c561466109e99301acaf4163e04b",
+  "terminal_status": "failed",
+  "source_commit": "717757d9ad18139fb8dc020414ec4a1b4f3e9931",
+  "archive_key": "research/v136-concurrent-route/717757d9ad18139fb8dc020414ec4a1b4f3e9931/source/49ad3ea4df570823b1681bacebb5be866c92cc23f68e59e773756bd63679486a.tar.gz",
+  "archive_sha256": "49ad3ea4df570823b1681bacebb5be866c92cc23f68e59e773756bd63679486a",
+  "archive_bytes": 11670284,
+  "source_code": {
+    "scripts/launch_v136_concurrent_route_spot.py": {
+      "sha256": "fca4fcfda885d8ff7a3698f09b3f37c42cbe3792674f29b2a30574b7881ae61b",
+      "lines": [
+        {
+          "line": 34,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 57,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 59,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 64,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 67,
+          "text": "            f\"research/v136-concurrent-route/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 81,
+          "text": "            f\"export V136_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 105,
+          "text": "  \"source_commit\":os.environ[\"V136_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 106,
+          "text": "  \"source_archive_sha256\":os.environ[\"V136_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 118,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 119,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 120,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 121,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 165,
+          "text": "                \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 190,
+          "text": "def check_source(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 199,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 219,
+          "text": "            \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 220,
+          "text": "            \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 276,
+          "text": "    check_source(s3, plan)"
+        },
+        {
+          "line": 295,
+          "text": "                or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 296,
+          "text": "                or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 330,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 338,
+          "text": "            source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v136_concurrent_route_remote.sh": {
+      "sha256": "67a3c6e124f2719373f115d991fa96b59443d7c2b88817b7bd3e7049a8395f68",
+      "lines": [
+        {
+          "line": 28,
+          "text": "  for path in install.log compile.log compile-resources.txt \\"
+        },
+        {
+          "line": 29,
+          "text": "      prepare.log prepare-resources.txt prepared/prepare-summary.json \\"
+        },
+        {
+          "line": 30,
+          "text": "      evaluate.log evaluate-resources.txt replay.jsonl summary.json \\"
+        },
+        {
+          "line": 44,
+          "text": "names=('install.log','compile.log','compile-resources.txt',"
+        },
+        {
+          "line": 45,
+          "text": "       'prepare.log','prepare-resources.txt','prepared/prepare-summary.json',"
+        },
+        {
+          "line": 46,
+          "text": "       'evaluate.log','evaluate-resources.txt','replay.jsonl','summary.json',"
+        },
+        {
+          "line": 53,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 54,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 59,
+          "text": "  'source_commit':os.environ['V136_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 60,
+          "text": "  'source_archive_sha256':os.environ['V136_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 94,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        }
+      ]
+    }
+  }
+}

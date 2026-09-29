@@ -1,0 +1,452 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v146-centroid-score/ac9c60b3b2a8cb18bfa3c9a9417b0f8e7d831bc0/runs/v146-20260924T111500Z/a0001/terminal.json",
+  "terminal_sha256": "45d98502b274be939c9e9fd4ba4fca2033cdb3a0323cf28a6148ffd88a095086",
+  "terminal_status": "complete",
+  "source_commit": "ac9c60b3b2a8cb18bfa3c9a9417b0f8e7d831bc0",
+  "archive_key": "research/v146-centroid-score/ac9c60b3b2a8cb18bfa3c9a9417b0f8e7d831bc0/source/3e1819686295eb3a4f5c206a2628a447e28b281baed7872538eff82adcc649fa.tar.gz",
+  "archive_sha256": "3e1819686295eb3a4f5c206a2628a447e28b281baed7872538eff82adcc649fa",
+  "archive_bytes": 13982441,
+  "source_code": {
+    "scripts/launch_v146_centroid_score_spot.py": {
+      "sha256": "386871f94b70951ec5a49683a74a99457e541280f3605c3e9f50c1fa6cf27045",
+      "lines": [
+        {
+          "line": 26,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/queries.jsonl\", 2_041_773),"
+        },
+        {
+          "line": 27,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/built/sq8.bin\", 10_800_000),"
+        },
+        {
+          "line": 28,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/low.bin\", 384),"
+        },
+        {
+          "line": 29,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/step.bin\", 384),"
+        },
+        {
+          "line": 30,
+          "text": "    (\"research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl\", 18_726_909),"
+        },
+        {
+          "line": 32,
+          "text": "    (\"research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/low.bin\", 3_072),"
+        },
+        {
+          "line": 33,
+          "text": "    (\"research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router/step.bin\", 3_072),"
+        },
+        {
+          "line": 36,
+          "text": "    (\"research/v140-budgeted-page/3213ca34cf6a8c32824dec6967b39eb06dd5fba6/runs/v140-20260924T092255Z/a0001/artifacts/relaion.raw.jsonl\", 3_430_072),"
+        },
+        {
+          "line": 39,
+          "text": "    (\"research/v145-page-parity/e0e8e01f89be2c40438e09f325d9c1f72da1ca76/runs/v145-20260924T110000Z/a0001/artifacts/relaion.scores.bin\", 15_628_000),"
+        },
+        {
+          "line": 45,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 68,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 70,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 76,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 79,
+          "text": "            f\"research/v146-centroid-score/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 93,
+          "text": "            f\"export V146_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 116,
+          "text": "  \"source_commit\":os.environ[\"V146_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 117,
+          "text": "  \"source_archive_sha256\":os.environ[\"V146_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 127,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 128,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 129,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 130,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 164,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 183,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 194,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 196,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 197,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 198,
+          "text": "                or \"scripts/v140_budgeted_page_rank.py\" not in source.getnames()"
+        },
+        {
+          "line": 199,
+          "text": "                or \"scripts/v114_score_rust/src/bin/v146_centroid_score.rs\" not in source.getnames()"
+        },
+        {
+          "line": 200,
+          "text": "                or \"crates/borsuk/src/budgeted_page_rank.rs\" not in source.getnames()"
+        },
+        {
+          "line": 201,
+          "text": "                or \"crates/borsuk/src/unit_centroid_pages.rs\" not in source.getnames()"
+        },
+        {
+          "line": 202,
+          "text": "                or \"crates/borsuk/src/lib.rs\" not in source.getnames()"
+        },
+        {
+          "line": 203,
+          "text": "                or \"crates/borsuk/Cargo.toml\" not in source.getnames()"
+        },
+        {
+          "line": 204,
+          "text": "                or \"Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 205,
+          "text": "                or \"scripts/v114_score_rust/Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 206,
+          "text": "                or \"scripts/v138_unit_bound_feasibility.py\" not in source.getnames()"
+        },
+        {
+          "line": 207,
+          "text": "                or \"docs/research/inputs/v138-deep-primary.jsonl\" not in source.getnames()"
+        },
+        {
+          "line": 208,
+          "text": "                or \"scripts/v139_centroid_page_screen.py\" not in source.getnames()"
+        },
+        {
+          "line": 209,
+          "text": "                or \"docs/research/inputs/v139-relaion-primary.jsonl\" not in source.getnames()):"
+        },
+        {
+          "line": 210,
+          "text": "            raise ValueError(\"source archive lacks V146 runner or evaluator\")"
+        },
+        {
+          "line": 219,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 220,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 250,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 262,
+          "text": "                        or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 263,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 276,
+          "text": "                required = {\"install.log\", \"core-check-resources.txt\","
+        },
+        {
+          "line": 277,
+          "text": "                            \"score-build-resources.txt\", \"download.log\","
+        },
+        {
+          "line": 278,
+          "text": "                            \"deep-score-resources.txt\", \"deep.centroids.bin\","
+        },
+        {
+          "line": 288,
+          "text": "                                \"pass\", \"reject-deep-parity\", \"reject-relaion-parity\","
+        },
+        {
+          "line": 291,
+          "text": "                    if decision[\"relaion_completed\"] is True:"
+        },
+        {
+          "line": 292,
+          "text": "                        required |= {\"relaion-score-resources.txt\","
+        },
+        {
+          "line": 293,
+          "text": "                                     \"relaion.centroids.bin\", \"relaion.rust-scores.bin\","
+        },
+        {
+          "line": 294,
+          "text": "                                     \"relaion.score.jsonl\", \"relaion.score.summary.json\","
+        },
+        {
+          "line": 295,
+          "text": "                                     \"relaion.cgroup-memory.txt\"}"
+        },
+        {
+          "line": 298,
+          "text": "                                       \"relaion_completed\": False,"
+        },
+        {
+          "line": 337,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 344,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v146_centroid_score_remote.sh": {
+      "sha256": "c025c7b97f2497939cc80328820d487127bad833440e7ebfdc988837a48184b5",
+      "lines": [
+        {
+          "line": 2,
+          "text": "# One frozen, fail-fast, source-only centroid scoring screen on Spot."
+        },
+        {
+          "line": 27,
+          "text": "  for cohort in deep relaion; do"
+        },
+        {
+          "line": 35,
+          "text": "  for path in install.log core-check.log core-check-resources.txt \\"
+        },
+        {
+          "line": 36,
+          "text": "      score-build.log score-build-resources.txt download.log \\"
+        },
+        {
+          "line": 37,
+          "text": "      deep-score.log deep-score-resources.txt deep.score.jsonl \\"
+        },
+        {
+          "line": 40,
+          "text": "      relaion-score.log relaion-score-resources.txt relaion.score.jsonl \\"
+        },
+        {
+          "line": 41,
+          "text": "      relaion.score.summary.json relaion.centroids.bin relaion.rust-scores.bin \\"
+        },
+        {
+          "line": 42,
+          "text": "      relaion.cgroup-memory.txt decision.json worker.log interrupt-stop.txt; do"
+        },
+        {
+          "line": 55,
+          "text": "names=('install.log','core-check.log','core-check-resources.txt',"
+        },
+        {
+          "line": 56,
+          "text": "       'score-build.log','score-build-resources.txt','download.log',"
+        },
+        {
+          "line": 57,
+          "text": "       'deep-score.log','deep-score-resources.txt','deep.score.jsonl',"
+        },
+        {
+          "line": 60,
+          "text": "       'relaion-score.log','relaion-score-resources.txt','relaion.score.jsonl',"
+        },
+        {
+          "line": 61,
+          "text": "       'relaion.score.summary.json','relaion.centroids.bin','relaion.rust-scores.bin',"
+        },
+        {
+          "line": 62,
+          "text": "       'relaion.cgroup-memory.txt','decision.json','worker.log','interrupt-stop.txt')"
+        },
+        {
+          "line": 68,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 69,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 74,
+          "text": "  'source_commit':os.environ['V146_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 75,
+          "text": "  'source_archive_sha256':os.environ['V146_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 108,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 138,
+          "text": "  --manifest-path repo/scripts/v114_score_rust/Cargo.toml --bin v146_centroid_score"
+        },
+        {
+          "line": 144,
+          "text": "download_checked v140-relaion.raw.jsonl \"$v140/artifacts/relaion.raw.jsonl\" 3430072 3dc54d101814b0f8e2b2d80f1b79e2762edcc885ad423ee14ae601669eb0804a"
+        },
+        {
+          "line": 148,
+          "text": "download_checked relaion.ref-scores.bin \"$v145/artifacts/relaion.scores.bin\" 15628000 5624e9cff1c1d032d7b502b21d7e52293e34a7ac21a040a10494cb60dcb95bbc"
+        },
+        {
+          "line": 153,
+          "text": "if v140.get('status')!='complete' or v140.get('source_commit')!='3213ca34cf6a8c32824dec6967b39eb06dd5fba6':"
+        },
+        {
+          "line": 155,
+          "text": "if v145.get('status')!='complete' or v145.get('source_commit')!='e0e8e01f89be2c40438e09f325d9c1f72da1ca76':"
+        },
+        {
+          "line": 158,
+          "text": "v122=research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts"
+        },
+        {
+          "line": 159,
+          "text": "download_checked deep/queries.jsonl \"$v122/queries.jsonl\" 2041773 dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99"
+        },
+        {
+          "line": 172,
+          "text": "  deep-image-96-angular-random100k 100000 96 deep/queries.jsonl \\"
+        },
+        {
+          "line": 185,
+          "text": "  printf '%s\\n' '{\"schema\":\"borsuk-v146-decision-v1\",\"deep_completed\":true,\"relaion_completed\":false,\"verdict\":\"reject-deep-parity\"}' >decision.json"
+        },
+        {
+          "line": 189,
+          "text": "phase=download-relaion"
+        },
+        {
+          "line": 190,
+          "text": "v116=research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts"
+        },
+        {
+          "line": 191,
+          "text": "v115=research/v115-source-router-parity/8140fd86defff60ff35ef33be7596f2bda34f879/runs/v115-router-20260923T235000Z/a0001/artifacts/router"
+        },
+        {
+          "line": 192,
+          "text": "download_checked relaion/requests.jsonl \"$v116/requests.jsonl\" 18726909 c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9"
+        },
+        {
+          "line": 193,
+          "text": "cp repo/docs/research/inputs/v139-relaion-primary.jsonl relaion/primary.jsonl"
+        },
+        {
+          "line": 194,
+          "text": "printf '%s  %s\\n' 71bfdf71f293ca1d23f58694866b3ba52ee8ee95ed9b02e676a2a8bf031f3162 relaion/primary.jsonl | sha256sum -c - >>download.log"
+        },
+        {
+          "line": 195,
+          "text": "download_checked relaion/sq8.bin research/v70-algorithm-first/single-stage-a4a695d66f508edf/index/sq8.bin 780000000 2284f24745f964ff2b125eedb883d5cd8ff6afab0738f49f9e16e593167a318b"
+        },
+        {
+          "line": 196,
+          "text": "download_checked relaion/low.bin \"$v115/low.bin\" 3072 ce036f48f918312f694adbd12994646987eb0e144df20f64ffe583bed0d1f891"
+        },
+        {
+          "line": 197,
+          "text": "download_checked relaion/step.bin \"$v115/step.bin\" 3072 64d49c7413f163fb3446183629d743f69199156f208fa959523d1bcde27da69c"
+        },
+        {
+          "line": 198,
+          "text": "phase=score-relaion"
+        },
+        {
+          "line": 199,
+          "text": "mkdir /sys/fs/cgroup/v146-relaion"
+        },
+        {
+          "line": 202,
+          "text": "run_science relaion-score bash -c \\"
+        },
+        {
+          "line": 203,
+          "text": "  'echo \"$BASHPID\" >/sys/fs/cgroup/v146-relaion/cgroup.procs; exec \"$@\"' \\"
+        },
+        {
+          "line": 205,
+          "text": "  ReLAION-1M 1000000 768 relaion/requests.jsonl \\"
+        },
+        {
+          "line": 206,
+          "text": "  relaion/primary.jsonl relaion/sq8.bin relaion/low.bin relaion/step.bin \\"
+        },
+        {
+          "line": 207,
+          "text": "  relaion.ref-scores.bin v140-relaion.raw.jsonl \\"
+        },
+        {
+          "line": 208,
+          "text": "  relaion.centroids.bin relaion.rust-scores.bin relaion.score.summary.json"
+        },
+        {
+          "line": 209,
+          "text": "cp relaion-score.log relaion.score.jsonl"
+        },
+        {
+          "line": 213,
+          "text": "relaion=json.load(open('relaion.score.summary.json'))"
+        },
+        {
+          "line": 214,
+          "text": "parity=relaion['exact_page_plan_matches']==1000"
+        },
+        {
+          "line": 215,
+          "text": "cpu=deep['scoring_and_planner_p95_ms']<=10 and relaion['scoring_and_planner_p95_ms']<=10"
+        },
+        {
+          "line": 216,
+          "text": "verdict='pass' if parity and cpu else ('reject-relaion-parity' if not parity else 'reject-cpu')"
+        },
+        {
+          "line": 219,
+          "text": "               'relaion_completed':True,'verdict':verdict},output,sort_keys=True)"
+        }
+      ]
+    }
+  }
+}

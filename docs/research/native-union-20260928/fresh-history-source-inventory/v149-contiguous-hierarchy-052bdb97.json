@@ -1,0 +1,324 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v149-contiguous-hierarchy/052bdb9785d405a3da621ff95582d2ed64ea18b6/runs/v149-20260924T114152Z/a0001/terminal.json",
+  "terminal_sha256": "42d054f0dd0c4ae4dd754bd505a85eeab9f7e11e51d258a52262a022dab0a8f4",
+  "terminal_status": "complete",
+  "source_commit": "052bdb9785d405a3da621ff95582d2ed64ea18b6",
+  "archive_key": "research/v149-contiguous-hierarchy/052bdb9785d405a3da621ff95582d2ed64ea18b6/source/8601e9913bfddc15393cc0c183fffb4b1a2c317b8027d6b0253294b7b293aebb/source.tar.gz",
+  "archive_sha256": "8601e9913bfddc15393cc0c183fffb4b1a2c317b8027d6b0253294b7b293aebb",
+  "archive_bytes": 14003285,
+  "source_code": {
+    "scripts/launch_v149_contiguous_hierarchy_spot.py": {
+      "sha256": "b4879e19a045d11594fc28f78c8ba0bbdcb9e4aa505dc70ab46d41d1f095a659",
+      "lines": [
+        {
+          "line": 29,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/queries.jsonl\", 2_041_773),"
+        },
+        {
+          "line": 40,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 63,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 65,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 71,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 74,
+          "text": "            f\"research/v149-contiguous-hierarchy/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 88,
+          "text": "            f\"export V149_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 111,
+          "text": "  \"source_commit\":os.environ[\"V149_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 112,
+          "text": "  \"source_archive_sha256\":os.environ[\"V149_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 122,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 123,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 124,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 125,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 159,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 178,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 189,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 191,
+          "text": "        [\"git\", \"archive\", \"--format=tar\", plan.source_commit],"
+        },
+        {
+          "line": 195,
+          "text": "        raise ValueError(\"source archive is not the named Git commit\")"
+        },
+        {
+          "line": 197,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 198,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 199,
+          "text": "                or \"scripts/v114_score_rust/src/bin/v149_contiguous_hierarchy.rs\" not in source.getnames()"
+        },
+        {
+          "line": 200,
+          "text": "                or \"crates/borsuk/src/budgeted_page_rank.rs\" not in source.getnames()"
+        },
+        {
+          "line": 201,
+          "text": "                or \"crates/borsuk/src/contiguous_page_hierarchy.rs\" not in source.getnames()"
+        },
+        {
+          "line": 202,
+          "text": "                or \"crates/borsuk/src/unit_centroid_pages.rs\" not in source.getnames()"
+        },
+        {
+          "line": 203,
+          "text": "                or \"crates/borsuk/src/lib.rs\" not in source.getnames()"
+        },
+        {
+          "line": 204,
+          "text": "                or \"crates/borsuk/Cargo.toml\" not in source.getnames()"
+        },
+        {
+          "line": 205,
+          "text": "                or \"Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 206,
+          "text": "                or \"scripts/v114_score_rust/Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 207,
+          "text": "                or \"docs/research/inputs/v138-deep-primary.jsonl\" not in source.getnames()):"
+        },
+        {
+          "line": 208,
+          "text": "            raise ValueError(\"source archive lacks V149 runner or evaluator\")"
+        },
+        {
+          "line": 217,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 218,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 241,
+          "text": "            or summary.get(\"dimensions\") != 96 or summary.get(\"query_count\") != 1000"
+        },
+        {
+          "line": 262,
+          "text": "        if (record[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 263,
+          "text": "                or record[\"source_query_ordinal\"] != ordinal + 9000):"
+        },
+        {
+          "line": 264,
+          "text": "            raise ValueError(\"V149 query ordinal differs\")"
+        },
+        {
+          "line": 269,
+          "text": "        query_diff = 0.0"
+        },
+        {
+          "line": 274,
+          "text": "            query_diff = max(query_diff, abs(score - references[ordinal * 391 + page]))"
+        },
+        {
+          "line": 275,
+          "text": "        if abs(query_diff - record[\"query_max_abs_score_difference\"]) > 1e-7:"
+        },
+        {
+          "line": 277,
+          "text": "        max_diff = max(max_diff, query_diff)"
+        },
+        {
+          "line": 282,
+          "text": "        if (baseline_record[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 319,
+          "text": "        query_caps = (range_ok and record[\"gets\"] <= 32"
+        },
+        {
+          "line": 321,
+          "text": "        if record[\"plan_caps_hold\"] is not query_caps:"
+        },
+        {
+          "line": 323,
+          "text": "        all_caps &= query_caps"
+        },
+        {
+          "line": 328,
+          "text": "        query_capture = len(selected_set & baseline_selected)"
+        },
+        {
+          "line": 329,
+          "text": "        query_control_capture = len(control_selected_set & baseline_selected)"
+        },
+        {
+          "line": 330,
+          "text": "        if (record[\"selected_baseline_capture\"] != query_capture"
+        },
+        {
+          "line": 331,
+          "text": "                or record[\"control_selected_baseline_capture\"] != query_control_capture):"
+        },
+        {
+          "line": 333,
+          "text": "        capture += query_capture"
+        },
+        {
+          "line": 334,
+          "text": "        control_capture += query_control_capture"
+        },
+        {
+          "line": 371,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 383,
+          "text": "                        or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 384,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 397,
+          "text": "                required = {\"install.log\", \"core-check-resources.txt\","
+        },
+        {
+          "line": 398,
+          "text": "                            \"gate-build-resources.txt\", \"download.log\","
+        },
+        {
+          "line": 399,
+          "text": "                            \"science-resources.txt\", \"science.jsonl\","
+        },
+        {
+          "line": 446,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 453,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v149_contiguous_hierarchy_remote.sh": {
+      "sha256": "1663ec7fa5b77387ed174c108e99cad23953c7a3c372440bcfd9a60a3fb07863",
+      "lines": [
+        {
+          "line": 33,
+          "text": "  for path in install.log core-check.log core-check-resources.txt \\"
+        },
+        {
+          "line": 34,
+          "text": "      gate-build.log gate-build-resources.txt download.log \\"
+        },
+        {
+          "line": 35,
+          "text": "      science.log science-resources.txt science.jsonl \\"
+        },
+        {
+          "line": 50,
+          "text": "names=('install.log','core-check.log','core-check-resources.txt',"
+        },
+        {
+          "line": 51,
+          "text": "       'gate-build.log','gate-build-resources.txt','download.log',"
+        },
+        {
+          "line": 52,
+          "text": "       'science.log','science-resources.txt','science.jsonl',"
+        },
+        {
+          "line": 60,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 61,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 66,
+          "text": "  'source_commit':os.environ['V149_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 67,
+          "text": "  'source_archive_sha256':os.environ['V149_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 100,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 130,
+          "text": "  --manifest-path repo/scripts/v114_score_rust/Cargo.toml --bin v149_contiguous_hierarchy"
+        },
+        {
+          "line": 140,
+          "text": "v122=research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts"
+        },
+        {
+          "line": 141,
+          "text": "download_checked deep/queries.jsonl \"$v122/queries.jsonl\" 2041773 dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99"
+        },
+        {
+          "line": 148,
+          "text": "if v146.get('status')!='complete' or v146.get('source_commit')!='ac9c60b3b2a8cb18bfa3c9a9417b0f8e7d831bc0':"
+        },
+        {
+          "line": 150,
+          "text": "if v140.get('status')!='complete' or v140.get('source_commit')!='3213ca34cf6a8c32824dec6967b39eb06dd5fba6':"
+        },
+        {
+          "line": 160,
+          "text": "  deep/queries.jsonl deep/primary.jsonl deep/centroids.bin \\"
+        }
+      ]
+    }
+  }
+}

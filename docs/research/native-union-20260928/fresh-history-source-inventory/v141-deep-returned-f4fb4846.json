@@ -1,0 +1,529 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "terminal_key": "research/v141-deep-returned/f4fb48461e323e148fd2905da43558932d122768/runs/v141-20260924T094142Z/a0001/terminal.json",
+  "terminal_sha256": "3608cfa6266978355302ab9ad8d89958514f4ad01dc5ff14ec5dbc19cc60ad34",
+  "terminal_status": "complete",
+  "source_commit": "f4fb48461e323e148fd2905da43558932d122768",
+  "archive_key": "research/v141-deep-returned/f4fb48461e323e148fd2905da43558932d122768/source/b699523bb325d619ddc69e366e39007836ce582b1d7d30082006393f5841409f.tar.gz",
+  "archive_sha256": "b699523bb325d619ddc69e366e39007836ce582b1d7d30082006393f5841409f",
+  "archive_bytes": 13949725,
+  "source_code": {
+    "scripts/launch_v141_deep_returned_spot.py": {
+      "sha256": "ef25f40184e4f611bcb58621c459fe8c03e42e034d83f68f78f79948c66c3b64",
+      "lines": [
+        {
+          "line": 26,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/subset/source.parquet\", 36_528_755),"
+        },
+        {
+          "line": 27,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/queries.jsonl\", 2_041_773),"
+        },
+        {
+          "line": 28,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/built/sq8.bin\", 10_800_000),"
+        },
+        {
+          "line": 29,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/low.bin\", 384),"
+        },
+        {
+          "line": 30,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/router/step.bin\", 384),"
+        },
+        {
+          "line": 31,
+          "text": "    (\"research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts/truth.npy\", 800_128),"
+        },
+        {
+          "line": 39,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 62,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 64,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 70,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 73,
+          "text": "            f\"research/v141-deep-returned/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 87,
+          "text": "            f\"export V141_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 110,
+          "text": "  \"source_commit\":os.environ[\"V141_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 111,
+          "text": "  \"source_archive_sha256\":os.environ[\"V141_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 121,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 122,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 123,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 124,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 158,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 177,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 188,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 190,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 191,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 192,
+          "text": "                or \"scripts/v141_deep_returned_quality.py\" not in source.getnames()"
+        },
+        {
+          "line": 193,
+          "text": "                or \"scripts/v114_1m_paired.py\" not in source.getnames()"
+        },
+        {
+          "line": 194,
+          "text": "                or \"scripts/v124_source_tier_precision.py\" not in source.getnames()"
+        },
+        {
+          "line": 195,
+          "text": "                or \"docs/research/inputs/v141-deep-route-only.jsonl\" not in source.getnames()):"
+        },
+        {
+          "line": 196,
+          "text": "            raise ValueError(\"source archive lacks V141 runner or evaluator\")"
+        },
+        {
+          "line": 205,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 206,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 236,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 248,
+          "text": "                        or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 249,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 262,
+          "text": "                required = {\"install.log\", \"download.log\", \"replay-resources.txt\","
+        },
+        {
+          "line": 263,
+          "text": "                            \"reduce-resources.txt\", \"replay.jsonl\", \"evidence.jsonl\","
+        },
+        {
+          "line": 306,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 313,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/run_v141_deep_returned_remote.sh": {
+      "sha256": "081d12355da0f987dff0c02ee5a3f73cd99b58e0249ab845447daf0ca7e44919",
+      "lines": [
+        {
+          "line": 32,
+          "text": "      replay-resources.txt reduce-resources.txt \\"
+        },
+        {
+          "line": 48,
+          "text": "       'replay-resources.txt','reduce-resources.txt',"
+        },
+        {
+          "line": 56,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 57,
+          "text": "            for block in iter(lambda:source.read(4*1024*1024),b''):"
+        },
+        {
+          "line": 62,
+          "text": "  'source_commit':os.environ['V141_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 63,
+          "text": "  'source_archive_sha256':os.environ['V141_ARCHIVE_SHA256'],"
+        },
+        {
+          "line": 95,
+          "text": "    /usr/bin/time -v \"$@\" >\"$label.log\" 2>\"$label-resources.txt\" &"
+        },
+        {
+          "line": 122,
+          "text": "v122=research/v122-deep-image-100k/afe07cb5a9ba8518263375595f589639fdf3f4f1/runs/v122-20260924T011355Z/a0001/artifacts"
+        },
+        {
+          "line": 124,
+          "text": "download_checked source.parquet \"$v122/subset/source.parquet\" 36528755 da3ad1295d6031818b7ccb817529c6102e9f0ec93bb4ad0792e2b7ab3cd21e69"
+        },
+        {
+          "line": 125,
+          "text": "download_checked queries.jsonl \"$v122/queries.jsonl\" 2041773 dd95571cc7c333f331b8c4c0b55070b366b389508b0e195e0e56d5982177da99"
+        },
+        {
+          "line": 134,
+          "text": "with open('v140-terminal.json') as source: terminal=json.load(source)"
+        },
+        {
+          "line": 136,
+          "text": "    or terminal.get('source_commit')!='3213ca34cf6a8c32824dec6967b39eb06dd5fba6'):"
+        },
+        {
+          "line": 147,
+          "text": "  --source source.parquet --sq8 sq8.bin --low low.bin --step step.bin \\"
+        },
+        {
+          "line": 148,
+          "text": "  --queries queries.jsonl --routes routes.jsonl --v140-raw v140-raw.jsonl \\"
+        }
+      ]
+    },
+    "scripts/v141_deep_returned_quality.py": {
+      "sha256": "eff0c192b34ca22d443ad55459634b5aed18f16cd14d64c258d2376ee5373f09",
+      "lines": [
+        {
+          "line": 14,
+          "text": "from scripts.v114_1m_paired import score_sq8_ranges"
+        },
+        {
+          "line": 15,
+          "text": "from scripts.v124_source_tier_precision import rank, unit"
+        },
+        {
+          "line": 19,
+          "text": "QUERY_COUNT = 1000"
+        },
+        {
+          "line": 23,
+          "text": "BASELINE_SOURCE_HITS = {\"broad\": 99_942, \"control\": 98_827}"
+        },
+        {
+          "line": 29,
+          "text": "    with path.open(\"rb\") as source:"
+        },
+        {
+          "line": 30,
+          "text": "        for chunk in iter(lambda: source.read(4 * 1024 * 1024), b\"\"):"
+        },
+        {
+          "line": 39,
+          "text": "    if len(values) != QUERY_COUNT:"
+        },
+        {
+          "line": 40,
+          "text": "        raise ValueError(f\"query row count differs: {path}\")"
+        },
+        {
+          "line": 75,
+          "text": "        raise ValueError(\"SQ8 source IDs differ\")"
+        },
+        {
+          "line": 82,
+          "text": "    table = pq.read_table(args.source, columns=[\"feature_row_id\", \"embedding\"])"
+        },
+        {
+          "line": 87,
+          "text": "        raise ValueError(\"source geometry differs\")"
+        },
+        {
+          "line": 88,
+          "text": "    source_ids = table[\"feature_row_id\"].combine_chunks().to_numpy(zero_copy_only=False)"
+        },
+        {
+          "line": 89,
+          "text": "    if not np.array_equal(source_ids, np.arange(ROWS)):"
+        },
+        {
+          "line": 90,
+          "text": "        raise ValueError(\"source ID order differs\")"
+        },
+        {
+          "line": 91,
+          "text": "    source = np.asarray("
+        },
+        {
+          "line": 94,
+          "text": "    if not np.isfinite(source).all():"
+        },
+        {
+          "line": 95,
+          "text": "        raise ValueError(\"source coordinates differ\")"
+        },
+        {
+          "line": 96,
+          "text": "    queries = checked_lines(args.queries)"
+        },
+        {
+          "line": 100,
+          "text": "        for ordinal, (request, route, plan) in enumerate(zip(queries, routes, plans)):"
+        },
+        {
+          "line": 101,
+          "text": "            if (request[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 102,
+          "text": "                    or request[\"source_query_ordinal\"] != 9000 + ordinal"
+        },
+        {
+          "line": 103,
+          "text": "                    or route[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 104,
+          "text": "                    or route[\"source_query_ordinal\"] != 9000 + ordinal"
+        },
+        {
+          "line": 105,
+          "text": "                    or plan[\"query_ordinal\"] != ordinal):"
+        },
+        {
+          "line": 106,
+          "text": "                raise ValueError(\"replay query identity differs\")"
+        },
+        {
+          "line": 107,
+          "text": "            query = np.asarray(request[\"query\"], dtype=np.float32)"
+        },
+        {
+          "line": 108,
+          "text": "            if (query.shape != (DIMENSIONS,) or not np.isfinite(query).all()"
+        },
+        {
+          "line": 109,
+          "text": "                    or np.linalg.norm(query) <= 0):"
+        },
+        {
+          "line": 110,
+          "text": "                raise ValueError(\"query vector differs\")"
+        },
+        {
+          "line": 122,
+          "text": "            outcome = {\"query_ordinal\": ordinal,"
+        },
+        {
+          "line": 123,
+          "text": "                       \"source_query_ordinal\": 9000 + ordinal, \"arms\": {}}"
+        },
+        {
+          "line": 131,
+          "text": "                    sq8, query, low, step, ranges, top_k=512)"
+        },
+        {
+          "line": 137,
+          "text": "                    raise ValueError(\"source union width differs\")"
+        },
+        {
+          "line": 139,
+          "text": "                source_scores = unit(source[union].astype(np.float64)) @ query.astype(np.float64)"
+        },
+        {
+          "line": 140,
+          "text": "                exact = rank(union, source_scores, 100)"
+        },
+        {
+          "line": 141,
+          "text": "                source_ns = time.perf_counter_ns() - started"
+        },
+        {
+          "line": 145,
+          "text": "                    \"source_top100_ids\": exact.tolist(),"
+        },
+        {
+          "line": 147,
+          "text": "                    \"sq8_ns\": sq8_ns, \"source_ns\": source_ns,"
+        },
+        {
+          "line": 156,
+          "text": "    if truth.shape != (QUERY_COUNT, 100) or truth.min() < 0 or truth.max() >= ROWS:"
+        },
+        {
+          "line": 168,
+          "text": "    counts = {name: {\"source\": [], \"sq8\": [], \"bytes\": [], \"gets\": [],"
+        },
+        {
+          "line": 169,
+          "text": "                     \"physical\": [], \"union\": [], \"sq8_ns\": [], \"source_ns\": []}"
+        },
+        {
+          "line": 175,
+          "text": "            if (row[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 176,
+          "text": "                    or row[\"source_query_ordinal\"] != 9000 + ordinal"
+        },
+        {
+          "line": 178,
+          "text": "                raise ValueError(\"reduced query identity differs\")"
+        },
+        {
+          "line": 180,
+          "text": "            result = {\"query_ordinal\": ordinal, \"arms\": {}}"
+        },
+        {
+          "line": 182,
+          "text": "                source_ids = arm[\"source_top100_ids\"]"
+        },
+        {
+          "line": 184,
+          "text": "                if (len(source_ids) != 100 or len(set(source_ids)) != 100"
+        },
+        {
+          "line": 187,
+          "text": "                source_hits = len(set(source_ids) & gold_set)"
+        },
+        {
+          "line": 190,
+          "text": "                    any(first <= int(inverse[int(source_id)]) * record.itemsize < last"
+        },
+        {
+          "line": 192,
+          "text": "                    for source_id in gold)"
+        },
+        {
+          "line": 195,
+          "text": "                result[\"arms\"][name] = {\"source_hits\": source_hits,"
+        },
+        {
+          "line": 199,
+          "text": "                    (\"source\", source_hits), (\"sq8\", sq8_hits),"
+        },
+        {
+          "line": 203,
+          "text": "                    (\"sq8_ns\", arm[\"sq8_ns\"]), (\"source_ns\", arm[\"source_ns\"]),"
+        },
+        {
+          "line": 207,
+          "text": "                beta_hits = result[\"arms\"][\"beta4\"][\"source_hits\"]"
+        },
+        {
+          "line": 208,
+          "text": "                baseline_hits = result[\"arms\"][baseline][\"source_hits\"]"
+        },
+        {
+          "line": 213,
+          "text": "    for name in BASELINE_SOURCE_HITS:"
+        },
+        {
+          "line": 214,
+          "text": "        if (sum(counts[name][\"source\"]) != BASELINE_SOURCE_HITS[name]"
+        },
+        {
+          "line": 216,
+          "text": "                or sum(counts[name][\"physical\"]) != BASELINE_SOURCE_HITS[name]):"
+        },
+        {
+          "line": 221,
+          "text": "               \"dataset\": \"deep-image-96-angular random100k train subset\","
+        },
+        {
+          "line": 223,
+          "text": "               \"query_count\": QUERY_COUNT,"
+        },
+        {
+          "line": 230,
+          "text": "        source = sorted(values[\"source\"])"
+        },
+        {
+          "line": 233,
+          "text": "            \"source_hits\": sum(source), \"sq8_hits\": sum(sq8),"
+        },
+        {
+          "line": 235,
+          "text": "            \"source_p05_hits\": source[49],"
+        },
+        {
+          "line": 236,
+          "text": "            \"source_sub90_queries\": sum(value < 90 for value in source),"
+        },
+        {
+          "line": 238,
+          "text": "            \"mean_planned_bytes\": sum(values[\"bytes\"]) / QUERY_COUNT,"
+        },
+        {
+          "line": 240,
+          "text": "            \"mean_gets\": sum(values[\"gets\"]) / QUERY_COUNT,"
+        },
+        {
+          "line": 242,
+          "text": "            \"mean_union_size\": sum(values[\"union\"]) / QUERY_COUNT,"
+        },
+        {
+          "line": 244,
+          "text": "            \"source_p95_ms\": sorted(values[\"source_ns\"])[949] / 1e6,"
+        },
+        {
+          "line": 248,
+          "text": "        beta[\"source_hits\"] >= 99_500"
+        },
+        {
+          "line": 249,
+          "text": "        and beta[\"source_p05_hits\"] >= 98"
+        },
+        {
+          "line": 250,
+          "text": "        and beta[\"source_sub90_queries\"] == 0"
+        },
+        {
+          "line": 251,
+          "text": "        and beta[\"source_hits\"] >= BASELINE_SOURCE_HITS[\"control\"]"
+        },
+        {
+          "line": 259,
+          "text": "    for name in (\"source\", \"sq8\", \"low\", \"step\", \"queries\", \"routes\","
+        },
+        {
+          "line": 264,
+          "text": "        needed = (\"source\", \"sq8\", \"low\", \"step\", \"queries\", \"routes\","
+        }
+      ]
+    }
+  }
+}

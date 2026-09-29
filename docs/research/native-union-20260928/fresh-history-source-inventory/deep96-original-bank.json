@@ -1,0 +1,22 @@
+{
+  "terminal_key": "publication/v3/20260812/datasets/deep-image-96/attempts/0001/STAGING_COMPLETE.json",
+  "terminal_sha256": "eb10a317cc778b30e2ee88eee8614b760e36f31d2d7af1a62a60f5f32c163230",
+  "dataset": "deep-image-96",
+  "query": {
+    "bytes": 3843448,
+    "format": "parquet",
+    "role": "query",
+    "rows": 10000,
+    "sha256": "296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4",
+    "uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/deep-image-96/attempts/0001/materialized/test.parquet"
+  },
+  "source_provenance": {
+    "dataset": "deep-image-96",
+    "materialization_sha256": "02eec37494dce759433fef0983c871856b4bf445b4c93e35abceb430b7109408",
+    "schema_version": 1,
+    "source": "https://ann-benchmarks.com/deep-image-96-angular.hdf5",
+    "source_sha256": "a0a44dfe80c58e63860862eeea2d34e62cff958dc3aec14fd65263d1d3c751f8"
+  },
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false
+}
