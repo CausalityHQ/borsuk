@@ -70,10 +70,16 @@ def main(attempt, subnet):
         raise ValueError("attempt already registered; inspect original")
     active = ec2.describe_instances(Filters=[
         {"Name": "tag:Name", "Values": ["borsuk-*"]},
-        {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
+        {"Name": "instance-state-name", "Values": ["pending", "running", "stopping"]},
     ])
     if any(r["Instances"] for r in active["Reservations"]):
         raise ValueError("BORSUK Spot worker already active")
+    stopped = ec2.describe_instances(Filters=[
+        {"Name": "tag:Name", "Values": [TAG]},
+        {"Name": "instance-state-name", "Values": ["stopped"]},
+    ])
+    if any(r["Instances"] for r in stopped["Reservations"]):
+        raise ValueError("original rank16 worker stopped; inspect it before retry")
     az = ec2.describe_subnets(SubnetIds=[subnet])["Subnets"][0]["AvailabilityZone"]
     quote = ec2.describe_spot_price_history(
         InstanceTypes=["c7g.4xlarge"], ProductDescriptions=["Linux/UNIX"],
