@@ -1,0 +1,9 @@
+{
+  "status": "prelaunch-capacity-rejected",
+  "error_code": "InsufficientInstanceCapacity",
+  "instance_created": false,
+  "active_worker_count_verified": 0,
+  "science_started": false,
+  "source_archive_sha256": "7fdc2467c2fb9d107679b375e8ff23aa13a5f6955c2a5f32227a4baec5190a2d",
+  "manual_next": "a0002 registered eu-central-1a subnet, same native/controller/config/gates/caps"
+}
