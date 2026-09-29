@@ -1,0 +1,144 @@
+{
+  "instance_id": "i-030fcef55a83a03a5",
+  "state": "terminated",
+  "source_archive_sha256": "da6033f0558d9eb7100faf6d30e3a6c4ff7e21030c511bbea08363d7e9c71bb7",
+  "terminal_sha256": "6da3a9fdd184d3d4f0869139c017b3c79e761680349d9a885e44193a24b69c84",
+  "native_files_matched": 393,
+  "source_files_matched": 395,
+  "artifacts_verified": 19,
+  "qualification": false,
+  "no_corpus_query": true,
+  "cargo_executed_targets": 145,
+  "benchmark_smoke_checks": 12,
+  "exact_previous_top_level_roster_plus_one": true,
+  "raw_summary_passes": 2693,
+  "raw_summary_count": 149,
+  "count_note": "Top-level harness totals; nested subprocess stdout summaries can interleave and are not separate Cargo targets",
+  "public_recipe": {
+    "passed": true,
+    "source_sha256": "a49df38f92f2bbcbc2ad88495eb1c2e706c28ae482ea2cfcc75bf3679acf420b",
+    "order_sha256": "c1b914cd01e719fce4bbe90d2dbdf5def77cc8c4b749c01b72cb33399fcf6a2c",
+    "receipt": {
+      "extent_row_cap": 1024,
+      "extents": [
+        [
+          0,
+          256
+        ],
+        [
+          256,
+          512
+        ],
+        [
+          512,
+          768
+        ],
+        [
+          768,
+          1024
+        ],
+        [
+          1024,
+          1280
+        ],
+        [
+          1280,
+          1536
+        ],
+        [
+          1536,
+          1792
+        ],
+        [
+          1792,
+          2048
+        ],
+        [
+          2048,
+          2304
+        ],
+        [
+          2304,
+          2560
+        ],
+        [
+          2560,
+          2816
+        ],
+        [
+          2816,
+          3072
+        ],
+        [
+          3072,
+          3328
+        ],
+        [
+          3328,
+          3584
+        ],
+        [
+          3584,
+          3840
+        ],
+        [
+          3840,
+          4096
+        ]
+      ],
+      "order_sha256": "c1b914cd01e719fce4bbe90d2dbdf5def77cc8c4b749c01b72cb33399fcf6a2c",
+      "query_or_truth_used": false,
+      "recipe": "borsuk-hierarchical-extents-chacha8-v2",
+      "rows": 4096,
+      "samples_per_sampling_cell": 64,
+      "sampling_cell_target_rows": 1024,
+      "source_cell_target_rows": 256
+    },
+    "corpus_used": false
+  },
+  "valid_check": true,
+  "boundary": {
+    "qualified": false,
+    "original_source_sha256": "60e16906cd2ccfcd4ce01b63434ee9c38cef5f4690009ef164c95a1f16383c26",
+    "fixed_source_sha256": "b9ae8c8173341fda29820493a9f9984bd2dba0d1f3f0e1ad2690aeec4d5432de",
+    "original_example_sha256": "29fddcc1991be49b204fbf2fac117ef9c370dc729ca044cf7af2e660b57b5661",
+    "fixed_example_sha256": "b8f1f23a3e4c623b1d5b7dbbdaab45a1666713000b118b54017393c018357ccd",
+    "red_status": 101,
+    "green_passed": true,
+    "binaries": {
+      "build_two_bit_generation": {
+        "bytes": 1266696,
+        "sha256": "ee2c042ee56eff3612143f20f85ca974cb3c425a8fc97f6a3a3ae8c2361ec641"
+      },
+      "two_bit_plan_demo": {
+        "bytes": 11620000,
+        "sha256": "7986aeaa73c90b8f79ed34b4d72ea5b38111eec9741aab5ef0a3775da38fa82e"
+      },
+      "two_bit_http": {
+        "bytes": 12517536,
+        "sha256": "7bda4a6f0d393bddda558d2418653b51b4202efaee21271d381f09900a905de7"
+      },
+      "build_sq8_source": {
+        "bytes": 1270448,
+        "sha256": "48b8e02d664f7bd8727a5e095fc90308be5fc6f72b83d1add1677c07534655bb"
+      }
+    },
+    "full_workspace_repeated": true,
+    "no_corpus_query": true
+  },
+  "cgroup": {
+    "memory.peak": "10737418240\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 19417\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 7267115878\nuser_usec 6963757171\nsystem_usec 303358706\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  },
+  "full_assurance": {
+    "passed": 2688,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 144
+  },
+  "compiled_source_sha256": "b9ae8c8173341fda29820493a9f9984bd2dba0d1f3f0e1ad2690aeec4d5432de",
+  "compiled_example_sha256": "b8f1f23a3e4c623b1d5b7dbbdaab45a1666713000b118b54017393c018357ccd",
+  "declared_source_transformation": true
+}

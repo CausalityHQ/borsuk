@@ -56,7 +56,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut receipt = serde_json::json!({"order_sha256":format!("{:x}",digest.finalize()),
             "rows":order.len(), "recipe":"borsuk-semantic-order-chacha8-f32-v1", "query_or_truth_used":false});
         if let Some(extents) = extents {
-            receipt["recipe"] = "borsuk-hierarchical-extents-chacha8-v1".into();
+            receipt["recipe"] = "borsuk-hierarchical-extents-chacha8-v2".into();
+            receipt["source_cell_target_rows"] = 256.into();
+            receipt["sampling_cell_target_rows"] = 1024.into();
+            receipt["samples_per_sampling_cell"] = 64.into();
             receipt["extent_row_cap"] = 1024.into();
             receipt["extents"] =
                 serde_json::json!(extents.iter().map(|r| [r.start, r.end]).collect::<Vec<_>>());

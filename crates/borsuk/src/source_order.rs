@@ -93,8 +93,13 @@ pub fn fit_hierarchical_source_layout(
     max_payload_bytes: usize,
 ) -> Result<SemanticSourceLayout, SourceBuildError> {
     let bad = SourceBuildError::Invalid;
-    let cells = rows.div_ceil(1024);
-    let sample_rows = rows.min(cells.checked_mul(64).ok_or(bad("layout geometry"))?);
+    let cells = rows.div_ceil(256);
+    // Hold the original global source-only reservoir fixed while refining groups.
+    let sample_rows = rows.min(
+        rows.div_ceil(1024)
+            .checked_mul(64)
+            .ok_or(bad("layout geometry"))?,
+    );
     let product = |a: usize, b: usize| a.checked_mul(b).ok_or(bad("layout memory geometry"));
     let width = product(dimensions, 4)?;
     let length = product(rows, width)?;
@@ -432,6 +437,45 @@ mod tests {
                 fit_hierarchical_source_layout(&source, &sha, usize::MAX, 2, usize::MAX).is_err()
             );
         }
+    }
+
+    #[test]
+    fn hierarchical_group_target_keeps_separate_source_modes() {
+        // Sixteen interleaved, distinct unit-vector modes; each fits one
+        // 256-row source group. Coarse 1024-row groups mix these modes.
+        let rows = 4096;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.f32");
+        let bytes: Vec<u8> = (0..rows)
+            .flat_map(|row| {
+                let angle = std::f32::consts::TAU * (row % 16) as f32 / 16.;
+                [angle.cos(), angle.sin()].map(f32::to_le_bytes).concat()
+            })
+            .collect();
+        fs::write(&source, &bytes).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let layout = fit_hierarchical_source_layout(&source, &sha, rows, 2, 16 << 20).unwrap();
+        assert_eq!(
+            layout.extents.len(),
+            16,
+            "coarse source groups merge distinct modes"
+        );
+        for extent in &layout.extents {
+            assert_eq!(extent.len(), 256);
+            let mode = layout.order[extent.start] % 16;
+            assert!(
+                layout.order[extent.clone()]
+                    .iter()
+                    .all(|row| row % 16 == mode)
+            );
+        }
+        let mut ids = layout.order.clone();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..rows as u64).collect::<Vec<_>>());
+        assert_eq!(
+            layout,
+            fit_hierarchical_source_layout(&source, &sha, rows, 2, 16 << 20).unwrap()
+        );
     }
 
     #[test]
