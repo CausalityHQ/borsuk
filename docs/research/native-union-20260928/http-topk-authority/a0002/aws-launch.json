@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0b7932d73e1d02360",
+  "prefix": "research/native-union/20260928/http-topk-authority-a0002",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "c85e2a1fc6943a26c995a26da1a091ef6773157f035ba24d0ecb66d83d5cafd3",
+  "source_base_commit": "0323a20a54ef581d701205123ca4b8bfe9a3aea8"
+}

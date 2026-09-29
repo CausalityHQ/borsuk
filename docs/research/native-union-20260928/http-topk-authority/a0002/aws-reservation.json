@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-native-http-topk-authority-v1",
+  "source_base_commit": "0323a20a54ef581d701205123ca4b8bfe9a3aea8",
+  "source_archive_sha256": "c85e2a1fc6943a26c995a26da1a091ef6773157f035ba24d0ecb66d83d5cafd3",
+  "source_dirty": true,
+  "attempt": "a0002",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 2100,
+  "test_timeout_seconds": 1800,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.179200",
+  "spot_quote_timestamp": "2026-09-29T07:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.175,
+  "cost_allowance_ebs_s3_usd": 0.1,
+  "scope": "HTTP boundary exactlyk10/k100 only; expected k10 RED then exact one-line GREEN, all example tests and HTTP release rebuild; unchanged2696 library authority; no corpus/full gate",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "existing_native_files_verified_except_declared_change": 395,
+  "changed_native_files": [
+    "crates/borsuk/examples/two_bit_http.rs"
+  ],
+  "reused_previous_assurance_terminal_sha256": "d9a7f53bf0f2f1bbf60a3e295e7ed145916afb8cae411ca4ce05fa689456d80b",
+  "measurement_memory_max_bytes": 10737418240,
+  "swap_max_bytes": 0,
+  "cpu_affinity": "0-3",
+  "threads": 4,
+  "s3_versioning_observed": "Disabled"
+}

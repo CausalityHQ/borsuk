@@ -59,7 +59,7 @@ fn validate(
     {
         return Err(StatusCode::CONFLICT);
     }
-    if request.k != 100
+    if !matches!(request.k, 10 | 100)
         || request.query.len() != dimensions
         || request.query.iter().any(|x| !x.is_finite())
         || !request.query.iter().any(|x| *x != 0.0)
@@ -229,6 +229,9 @@ mod tests {
             control_epoch: 1,
         };
         assert_eq!(validate(&request, &authority, 768), Ok(()));
+        request.k = 10;
+        assert_eq!(validate(&request, &authority, 768), Ok(()));
+        request.k = 100;
         request.control_epoch = 2;
         assert_eq!(
             validate(&request, &authority, 768),
@@ -246,11 +249,13 @@ mod tests {
             Err(StatusCode::BAD_REQUEST)
         );
         request.query.fill(1.0);
-        request.k = 101;
-        assert_eq!(
-            validate(&request, &authority, 768),
-            Err(StatusCode::BAD_REQUEST)
-        );
+        for k in [0, 1, 9, 11, 99, 101] {
+            request.k = k;
+            assert_eq!(
+                validate(&request, &authority, 768),
+                Err(StatusCode::BAD_REQUEST)
+            );
+        }
         request.k = 100;
         request.query.pop();
         assert_eq!(

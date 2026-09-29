@@ -1,0 +1,13 @@
+{
+  "valid_check": false,
+  "no_instance_launched": true,
+  "reason": "Global duplicate guard included unrelated stopped historical instances",
+  "observed_historical_stopped_ids": [
+    "i-0a50129f7f9076bfb",
+    "i-0641c0333f007a30f",
+    "i-0e73bacb470807838"
+  ],
+  "native_session": 23867,
+  "exit_code": 1,
+  "correction": "Global live-state guard plus exact-tag stopped guard; new attempta0002, same source test/production prefix"
+}
