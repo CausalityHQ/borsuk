@@ -1,0 +1,123 @@
+{
+  "valid_diagnostic": true,
+  "ann_queries": 0,
+  "first_query_measured": false,
+  "matched_vendor_measured": false,
+  "state": "terminated",
+  "instance_id": "i-0810780a8cdf0fa5b",
+  "source_archive_sha256": "4a8437ff664adbbd4cf8fb6e09382ac7dc923f886615a8a0be6e7990ab6cf6c0",
+  "source_commit": "217a33dfc6b63d74169a793c3c49ccd9912e4419",
+  "config_sha256": "8f002b7888dd45c36eabdadb0e923fe98cb258cf700756c778099ad3cf5658c3",
+  "terminal_sha256": "404d6c6e69ef98c5ea158612d56db7416efd8723b788f25d3b5e9b35c7fa8093",
+  "compiled_native_sha256": {
+    "crates/borsuk/examples/two_bit_http.rs": "c8f2327561304a088b0bfd3a4509047a94c05210b8d5d44e008b90faea3cdc29",
+    "crates/borsuk/src/object_native_generation.rs": "c235938f22b8cfaee18edd631ff26e64a16d4f73e179057ba1d3f1e0a9060920",
+    "crates/borsuk/src/two_bit_generation.rs": "7a134fe3e03e735bad63c611ce2b78d865345c8617a6a4b1c5dd70ce1384cc45",
+    "crates/borsuk/tests/two_bit_generation.rs": "da29358a0c797f2ad232a3efd033d7c8a7eb370dd43d44fbb37264885cbdf0f6"
+  },
+  "records": [
+    {
+      "cell": 0,
+      "dataset": "ReLAION",
+      "namespace_ready_ms": 4823.85723,
+      "head_read_ms": 93.699728,
+      "remote_open_ms": 4624.661993,
+      "metadata_objects": 9,
+      "metadata_bytes": 256694403,
+      "transport_chunks": 21894,
+      "get_header_ms": 362.311813,
+      "stream_and_output_ms": 2439.335454,
+      "awaited_writes_ms": 85.734638,
+      "staging_ms": 2802.140489,
+      "decode_ms": 1798.949625
+    },
+    {
+      "cell": 1,
+      "dataset": "CoHere",
+      "namespace_ready_ms": 4714.630909,
+      "head_read_ms": 89.601147,
+      "remote_open_ms": 4591.922619,
+      "metadata_objects": 9,
+      "metadata_bytes": 256694456,
+      "transport_chunks": 28920,
+      "get_header_ms": 398.368285,
+      "stream_and_output_ms": 2372.995994,
+      "awaited_writes_ms": 96.602968,
+      "staging_ms": 2771.922665,
+      "decode_ms": 1795.992671
+    },
+    {
+      "cell": 2,
+      "dataset": "ReLAION",
+      "namespace_ready_ms": 4714.429513,
+      "head_read_ms": 91.234299,
+      "remote_open_ms": 4519.745807,
+      "metadata_objects": 9,
+      "metadata_bytes": 256694403,
+      "transport_chunks": 25594,
+      "get_header_ms": 284.406049,
+      "stream_and_output_ms": 2420.222991,
+      "awaited_writes_ms": 80.628799,
+      "staging_ms": 2705.112271,
+      "decode_ms": 1792.047908
+    },
+    {
+      "cell": 3,
+      "dataset": "CoHere",
+      "namespace_ready_ms": 4713.980158,
+      "head_read_ms": 90.458503,
+      "remote_open_ms": 4504.121879,
+      "metadata_objects": 9,
+      "metadata_bytes": 256694456,
+      "transport_chunks": 25921,
+      "get_header_ms": 277.77129,
+      "stream_and_output_ms": 2409.136701,
+      "awaited_writes_ms": 89.02364,
+      "staging_ms": 2687.480953,
+      "decode_ms": 1793.774335
+    },
+    {
+      "cell": 4,
+      "dataset": "ReLAION",
+      "namespace_ready_ms": 4714.176859,
+      "head_read_ms": 86.135189,
+      "remote_open_ms": 4501.333983,
+      "metadata_objects": 9,
+      "metadata_bytes": 256694403,
+      "transport_chunks": 22452,
+      "get_header_ms": 233.643539,
+      "stream_and_output_ms": 2451.781077,
+      "awaited_writes_ms": 73.823584,
+      "staging_ms": 2685.884136,
+      "decode_ms": 1792.752627
+    },
+    {
+      "cell": 5,
+      "dataset": "CoHere",
+      "namespace_ready_ms": 4714.21166,
+      "head_read_ms": 91.871189,
+      "remote_open_ms": 4511.861061,
+      "metadata_objects": 9,
+      "metadata_bytes": 256694456,
+      "transport_chunks": 30776,
+      "get_header_ms": 245.410892,
+      "stream_and_output_ms": 2448.731324,
+      "awaited_writes_ms": 103.790066,
+      "staging_ms": 2694.613933,
+      "decode_ms": 1795.14739
+    }
+  ],
+  "build_cgroup_peak_bytes": 7034101760,
+  "profile_cgroup_peak_bytes": 639819776,
+  "swap_peak_bytes": 0,
+  "profile_cpu_affinity": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "profile_address_space_bytes": [
+    4294967296,
+    4294967296
+  ]
+}
