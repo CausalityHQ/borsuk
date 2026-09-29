@@ -100,13 +100,13 @@ def exercise(config, role, *, fail_cell=None, metric=None, corrupt=None):
             authority = item['authority']
             assert command[-8:-1] == [str(binary), config['bucket'], config['region'], item['indexes'][str(k)],
                 authority['root_sha256'], str(authority['generation']), str(authority['control_epoch'])]
-            assert command[-1].rsplit(':', 1)[-1] == '8080'
+            assert command[-1] == NODES['server']['private_ip'] + ':8080'
             assert kwargs['start_new_session'] is True
             commands.append(command)
             return Mock(poll=Mock(return_value=None))
 
         def health(url, **kwargs):
-            assert url == 'http://127.0.0.1:8080/health'
+            assert url == ENDPOINT + '/health'
             item = config['items'][(len(commands) - 1) // 4]
             return contextlib.closing(io.BytesIO(json.dumps(dict(authority=item['authority'], dimensions=768)).encode()))
 

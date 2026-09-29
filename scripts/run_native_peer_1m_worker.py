@@ -121,7 +121,7 @@ def main():
             if role == 'server':
                 command = [binary, bucket, config['region'], item['indexes'][str(k)],
                            authority['root_sha256'], str(authority['generation']),
-                           str(authority['control_epoch']), '0.0.0.0:8080']
+                           str(authority['control_epoch']), launch['server']['private_ip'] + ':8080']
                 start = time.monotonic_ns()
                 with (out / f'cell{cell}-server.log').open('x') as log:
                     server = subprocess.Popen(['/usr/bin/time', '-v', '-o', str(out / f'cell{cell}-server.time'),
@@ -133,7 +133,7 @@ def main():
                             if server.poll() is not None:
                                 raise ValueError('server closed before readiness')
                             try:
-                                with urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2) as response:
+                                with urllib.request.urlopen(endpoint + '/health', timeout=2) as response:
                                     health = json.loads(response.read())
                                 assert health['authority'] == authority and health['dimensions'] == 768
                                 break

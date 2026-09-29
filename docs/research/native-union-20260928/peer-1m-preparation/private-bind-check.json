@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "aws_calls": 0,
+  "paid_jobs": 0,
+  "checks": [
+    "exact private IPv4 listener bind",
+    "same endpoint readiness",
+    "both role marker coordination",
+    "k10 failure stops subsequent cells",
+    "malformed markers reject",
+    "partial launch cleanup"
+  ],
+  "source_sha256": {
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/check_native_peer_1m_worker.py": "c8603bf9c7c466c54d37454a81f136faac8c4a61f88b543a1334bf6a104bb593",
+    "scripts/launch_native_peer_1m_spot.py": "d1cab299880b52e816e8973050ff4438b226dfa08369ac028a721ee68275286b",
+    "scripts/check_native_peer_1m_controller.py": "a311365263090417ce94f22e49220613360810994e64c6e55d476fe47fc0ab44",
+    "docs/research/native-union-20260928/peer-1m-config.json": "86b02654463dadfb7876c0abb805d99bfe566f8045ebab189392d0be769c2d0a"
+  }
+}

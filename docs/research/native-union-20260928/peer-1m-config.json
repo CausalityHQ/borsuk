@@ -117,5 +117,5 @@
   "metadata_resident": true,
   "application_sq8_cache": false,
   "namespace_cold_start_included": false,
-  "worker_sha256": "9f16e8ce1094805774e81396ab487a5f348ac466956d50827358354a663e18b8"
+  "worker_sha256": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3"
 }
