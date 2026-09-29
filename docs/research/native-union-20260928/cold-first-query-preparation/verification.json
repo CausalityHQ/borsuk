@@ -1,0 +1,10 @@
+{
+  "worker_synthetic_checks_passed": true,
+  "synthetic_calls": 128,
+  "connection_refusal_timing_checked": true,
+  "failed_call_evidence_and_cleanup_checked": true,
+  "identity_and_physical_rejection_checked": true,
+  "cold_first_query_measured": false,
+  "native_source_changed": false,
+  "native_binary_rebuilt": false
+}
