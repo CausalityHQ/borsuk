@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-cohere-source-1m-v4-build-v1",
+  "source_sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005",
+  "normalized_sha256": "fd175b35b04bb6e00210eed9ace3622833af5d7b663a11c47d53f1e6cef8073c",
+  "order_sha256": "25672572b8e36eafea6ba856068f33aca5064e3ce02544340f682cd39881ea02",
+  "sq8_sha256": "b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1",
+  "root_sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e",
+  "builder_sha256": "a02543a385603eef297a587263ff390cc941f9cf6451f7ae902604d3cf83d4fc",
+  "sq8_object_key": "research/native-union/20260929/cohere-source-1m-v4/objects/b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1",
+  "sq8_object_etag": "\"69683eede8cf10f7e57b557503831eac\"",
+  "query_or_truth_used": false,
+  "quality_measured": false,
+  "controller_sha256": "64ce6d7ae35874fb561748786d4e3a8241771a85e949a82da4e85da925ce4eeb",
+  "source_commit": "33fa7273a2514ddb7548b582392e0ba4f192412b",
+  "binaries": {
+    "build_sq8_source": "a17d3aad62f7bfa1cb85244c5155bc2674bcc12533e93afd0c08515e0fa7d1e1",
+    "build_two_bit_generation": "4ecc9f3a1a4fa3f89cb34392ba4641ff25a072ab87ac3d815a064d10ed1130e8"
+  }
+}

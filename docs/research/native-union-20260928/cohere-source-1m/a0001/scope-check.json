@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "accepted_fixed_scopes": 4,
+  "rejected_gate_or_shape_changes": 7,
+  "dataset_s3_or_native_execution": false,
+  "controller_sha256": "028a09fe6702706b592228a979c75f283c5b61f747b1091623bb463a3fd8d458",
+  "shared_http_sha256": "50920bc77656b915b17c02db86d70d6c884d8181b3f88327f2748b2c8c24c08f"
+}

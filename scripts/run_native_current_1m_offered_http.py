@@ -47,7 +47,7 @@ def run(out,rep,k,config,binary,index,requests,reference,truth):
             if server.poll() is not None:raise ValueError('server terminated during measurement')
             with (directory/'http.jsonl').open('x') as stream:
                 for row in samples:stream.write(json.dumps(row,sort_keys=True,allow_nan=False)+'\n')
-            result.update(rep=rep,dataset='ReLAION',rows=1000000,dimensions=768,split=config.get('query_split','consumed external development0-63'),authority=authority,namespace_ready_ms=namespace_ready_ms,metadata_resident=True,application_sq8_cache=False,fresh_cohort_used=config.get('fresh_cohort_used',False),matched_control_http_measured=False)
+            result.update(rep=rep,dataset=config.get('dataset','ReLAION'),rows=1000000,dimensions=768,split=config.get('query_split','consumed external development0-63'),authority=authority,namespace_ready_ms=namespace_ready_ms,metadata_resident=True,application_sq8_cache=False,fresh_cohort_used=config.get('fresh_cohort_used',False),matched_control_http_measured=False)
             if not result['identity_parity_valid']:raise ValueError('HTTP source/scorer/native reference integrity')
             result['development_gate_passed']=(result['successful_count']==len(requests) and result['mean_offered_recall']>=.95 and result['successful_incoming_http_ms']['p90']<444 and result['achieved_successful_qps']>=8)
             write(directory/'result.json',result)

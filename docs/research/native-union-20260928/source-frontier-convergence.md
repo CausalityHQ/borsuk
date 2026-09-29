@@ -73,3 +73,15 @@ Recent code/measurement evidence: [prospective decision](fresh-rank16-confirm936
 Unchanged2696-pass core assurance and five offered-protocol checks are reused.
 Construction, development and prospective jobs are CLOSED; all instances
 are terminated. No operator decision is needed for the next fixed gate.
+
+## CoHere FIRST1M transfer preparation,2026-09-29
+
+| Baseline/context | Current candidate | Actual quality delta | Query tails/QPS/total cost | Remaining gap to BOTH vendors | Next decisive test |
+|---|---|---|---|---|---|
+| Practical R@10>=95%; published1M D768 cold p90=444 ms context;8 offered QPS | Source-only v4 root `a4eb4851…`, independently published20 artifacts | Unmeasured; no CoHere1M ANN result | Unmeasured; verified source build1,940.77 s/407,004 KiB RSS on shared VPS, no matched baseline | CoHere quality/HTTP, matched vendor protocol, saturation/cost,10M/100M and lifecycle | Fixed rows1,005,000–1,005,999 identity/GT, then native R10/R100 and frozen8 QPS HTTP dev64 |
+
+The [source construction](cohere-source-1m-decision.md) is CLOSED and verified;
+no EC2 was launched and no query/GT/quality body was opened. Its resource
+numbers are construction measurements, not query performance. The
+[preregistered transfer gate](fresh-cohere-1m-preregister.md) retains the current
+mechanism and all existing valid ReLAION evidence.

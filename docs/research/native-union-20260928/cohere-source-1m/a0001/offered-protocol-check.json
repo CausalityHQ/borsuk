@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "cases": [
+    "absolute8QPS_full10panel_k10_wire_parity_counters_denominator",
+    "actual_k100_reference_geometry",
+    "rejection_bad_head_timeout_all_offers_retained_no_false_counter_completeness",
+    "bounded_nonqueued_client_overload_drops_drain_successQPS",
+    "invalid_rate_and_wrong_reference_rejected_before_dispatch"
+  ],
+  "checks": 5,
+  "synthetic_protocol_only": true,
+  "ann_queries": 0,
+  "dataset_quality_measured": false,
+  "full_native_assurance_repeated": false,
+  "source_sha256": {
+    "scripts/run_native_union_offered_http.py": "2e62577aec250d038f12598bdf5a733abdaa9819ab0cb43929177a5d49b4c5e0",
+    "scripts/check_native_union_offered_http.py": "aac2332f33fa8f5756f811bbcd6ec0634eeebb7ec243eaa81efb89ecf9417a7d",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880"
+  },
+  "cgroup": {
+    "memory.peak": "6898380800\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+    "cpu.stat": "usage_usec 254710650\nuser_usec 226236394\nsystem_usec 28474256\nnice_usec 223419774\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  }
+}

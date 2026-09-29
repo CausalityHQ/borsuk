@@ -1,4 +1,4 @@
-"""One frozen fresh ReLAION dev64 native quality and offered HTTP gate on AWS."""
+"""One frozen fresh 1M native quality and offered HTTP gate on AWS."""
 
 import atexit
 import json
@@ -38,7 +38,9 @@ def main():
     if ((config["schema"], config["rows"], config["dimensions"], first, count,
          config["offered_qps"]) not in (
              ("borsuk-fresh-rank16-1m-dev64-v1", 1_000_000, 768, 0, 64, 8),
-             ("borsuk-fresh-rank16-1m-confirm936-v1", 1_000_000, 768, 64, 936, 8))
+             ("borsuk-fresh-rank16-1m-confirm936-v1", 1_000_000, 768, 64, 936, 8),
+             ("borsuk-fresh-cohere-1m-dev64-v1", 1_000_000, 768, 0, 64, 8),
+             ("borsuk-fresh-cohere-1m-confirm936-v1", 1_000_000, 768, 64, 936, 8))
             or config["setting_order"] != [10, 100, 100, 10]
             or config["gates"] != {"native_mean_recall_at_10_minimum": .95,
                                    "incoming_http_p90_ms_exclusive_maximum": 444,
@@ -58,6 +60,9 @@ def main():
             raise ValueError(f"qualified native binary differs: {name}")
     out.mkdir()
     config["measurement_prefix"] = prefix
+    dataset = "CoHere" if config["schema"].startswith("borsuk-fresh-cohere-") else "ReLAION"
+    config["dataset"] = dataset
+    index_prefix = prefix + "/indexes/" + dataset.lower()
 
     def resources():
         group = Path("/sys/fs/cgroup") / Path("/proc/self/cgroup").read_text().strip().split("0::")[-1].lstrip("/")
@@ -121,7 +126,7 @@ def main():
     native_quality = {}
     for k in (10, 100):
         reference = out / f"reference-k{k}.jsonl"
-        index = prefix + f"/indexes/relaion/k{k}"
+        index = index_prefix + f"/k{k}"
         native(out, f"reference-k{k}", [binaries / "two_bit_plan_demo", generation,
               config["root_sha256"], requests_path, sha(requests_path), reference,
               0, count, "--live-s3", config["bucket"], config["region"], index,
@@ -143,7 +148,7 @@ def main():
             hits += len(set(row["ids"]) & set(truth[q][:k]))
         native_quality[str(k)] = {"hits": hits, "denominator": count * k,
                                   "recall": hits / (count * k)}
-    quality = {"dataset": "ReLAION FIRST1M D768 cosine", "split": config["query_split"],
+    quality = {"dataset": dataset + " FIRST1M D768 cosine", "split": config["query_split"],
                "root_sha256": config["root_sha256"], "query_prefix_sha256": raw_sha,
                "requests_prefix_sha256": request_sha, "truth_prefix_sha256": truth_sha,
                "opened_original_ordinals": [first, first + count - 1],
@@ -151,21 +156,21 @@ def main():
                "qualification": False}
     write(out / "native-quality.json", quality)
     if native_quality["10"]["recall"] < .95:
-        write(out / "decision.json", {"decision": "FAIL fresh ReLAION1M native R@10 " + config["query_split"],
+        write(out / "decision.json", {"decision": "FAIL fresh " + dataset + "1M native R@10 " + config["query_split"],
                                       "native_quality": native_quality, "fresh_cohort_used": True,
                                       "http_measured": False, "qualification": False})
         return
     runs = []
     for rep, k in enumerate(config["setting_order"]):
         result = run(out, rep, k, config, binaries / "two_bit_http",
-                     prefix + f"/indexes/relaion/k{k}", requests, refs[k], truth)
+                     index_prefix + f"/k{k}", requests, refs[k], truth)
         runs.append(result)
         if k == 10 and not result["development_gate_passed"]:
             break
     k10 = [r for r in runs if r["k"] == 10]
     passed = len(k10) == 2 and all(r["development_gate_passed"] for r in k10)
-    write(out / "decision.json", {"decision": ("GO fresh ReLAION1M " if passed else
-                                  "FAIL fresh ReLAION1M offered HTTP ") + config["query_split"],
+    write(out / "decision.json", {"decision": ("GO fresh " + dataset + "1M " if passed else
+                                  "FAIL fresh " + dataset + "1M offered HTTP ") + config["query_split"],
                                   "native_quality": native_quality, "runs": runs,
                                   "fresh_cohort_used": True, "http_measured": True,
                                   "qualification": False, "matched_control_http_measured": False,
