@@ -41,6 +41,9 @@ for item in config['items'][:len(decision['results'])]:
     base='screen/'+item['name']+'/';result=obj(base+'result.json');binding=obj(base+'binding.json');assert binding['control_root_sha256']==item['control_root_sha256'] and binding['per_id_sq8_and_two_bit_payload_exact'] and binding['coefficient_f32_bits_exact']
     assert result==decision['results'][len(rows)] and result['source_recipe']==binding['source_only_recipe']
     recipe=result['source_recipe'];assert recipe['recipe']==config['source_recipe']=='borsuk-hierarchical-extents-chacha8-v3' and recipe['source_cell_order']=='nearest-unvisited-layer0-entry-ordinal-fallback-v1' and recipe['source_cell_target_rows']==256 and recipe['sampling_cell_target_rows']==1024 and recipe['samples_per_sampling_cell']==64 and recipe['rows']==100000 and recipe['query_or_truth_used'] is False
+    if 'closed-manifest.json' in item['artifacts']:
+        ident=item['artifacts']['closed-manifest.json'];expected=s3.get_object(Bucket=config['bucket'],Key=ident['key'])['Body'].read()
+        assert len(expected)==ident['bytes'] and hashlib.sha256(expected).hexdigest()==ident['sha256'] and get(base+'candidate/manifest.json')==expected
     records=[json.loads(s) for s in get(base+'actual-paired.jsonl').splitlines()];assert len(records)==128;plans={a:[] for a in ['control','candidate']}
     if item['name']=='relaion':
         ident=item['artifacts']['closed-replay.jsonl'];replay=s3.get_object(Bucket=config['bucket'],Key=ident['key'])['Body'].read()
