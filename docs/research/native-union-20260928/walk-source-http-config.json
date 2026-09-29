@@ -229,6 +229,31 @@
           "key": "research/native-union/20260928/cold-a0001/artifacts/screen/cohere/native-paired.jsonl",
           "bytes": 1436414,
           "sha256": "7f6271ddc14458989d6691f044aae44494e835d9867c1deebf0f16d40b3ab0fa"
+        },
+        "order.u64": {
+          "bytes": 800000,
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50",
+          "key": "research/native-union/20260928/walk-source-http-a0001/artifacts/screen/cohere/order.u64"
+        },
+        "closed-builder.json": {
+          "bytes": 41109,
+          "sha256": "0fa43ebecea0e713b9ee4c21c3b4951cf71dfab6926237c5fd2563cf91b64b3d",
+          "key": "research/native-union/20260928/walk-source-http-a0001/artifacts/screen/cohere/builder.json"
+        },
+        "closed-binding.json": {
+          "bytes": 15227,
+          "sha256": "a64108ee11b140d6ace22e9dbc24db8eab8e8f7a499176e31c0ea72dbabf3542",
+          "key": "research/native-union/20260928/walk-source-http-a0001/artifacts/screen/cohere/binding.json"
+        },
+        "closed-manifest.json": {
+          "bytes": 33988,
+          "sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521",
+          "key": "research/native-union/20260928/walk-source-http-a0001/artifacts/screen/cohere/candidate/manifest.json"
+        },
+        "hier-fit.log": {
+          "bytes": 4660,
+          "sha256": "71ed764d2ddb6e2a16deee3475441dc796a004cee5547a03e06160a864d61118",
+          "key": "research/native-union/20260928/walk-source-http-a0001/artifacts/screen/cohere/hier-fit.log"
         }
       },
       "control_root_sha256": "bf9d8777e51f4bf2150a014af9584513f64b27822fea4711b011271c37474a99",
@@ -246,5 +271,13 @@
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/run_native_union_cold.py": "6a4bbd483c28432587b8ee9c92e72c679fea73bd65af1a773ee255e67606f7d9",
     "scripts/run_native_cold.py": "adc14ad6580b328e8bee9c75660493d6b7bb526865686f8e110e83feea5a262c"
+  },
+  "manual_correction": {
+    "original_attempt": "a0001",
+    "original_instance": "i-0e46d72835620045e",
+    "original_terminated": true,
+    "reason": "Final result placeholder conflicts with exclusive writer; final result now written once",
+    "same_native_source_and_gates": true,
+    "reuse_exact_closed_CoHere_construction": true
   }
 }

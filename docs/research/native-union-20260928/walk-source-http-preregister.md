@@ -57,3 +57,21 @@ shared lock, unique reservation/token<=64, active-tag guard. Required final
 result/cgroup/resources; live observation terminal/infra only. Independentclosed
 source/control/GT/orderedID/physical/HTTPclock/quantile/head/cgroup/termination.
 No sealed/fresh/1M/10M/100M/vendor/lifecycle or maintenance qualification.
+
+## Explicit manual correction a0002 after terminated INVALID a0001
+
+Original79037/i-0e46d72835620045e terminated309s, estimate$.0154 compute
+excludesEBS/S3. Preserve original terminal/source/all82artifacts and INVALID
+verification. No whole measurement GO/KILL from incomplete BOTH-corpus frame.
+Root cause: shared write() creates exclusively; quality placeholder result.json
+was written before final HTTP result. Correct controller to write quality.json
+once at prelude and EACH result.json ONCE after outcome, then decision last.
+No Rust/scorer/control/quality/work/physical/timing gate changes or full rebuild.
+New attempt a0002 only after original termination. Reuse exact authenticated
+closed CoHere order/recipe/builder/manifest from a0001 instead of refitting or
+changing source object identity. CoHere root9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521;
+order e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50.
+OriginalSQ8key/ETag/length/SHA and root bytes MUSTmatch. Recompute same paired
+quality and restart ALL HTTP cells from beginning; no combining a0001 timings
+with a0002. Previous completed cells remain immutable incomplete-campaign
+artifacts. Independent final marker/BOTH corpus/orderedID/timer/cleanup proof.

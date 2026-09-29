@@ -28,7 +28,7 @@ def evaluate(item,directory,config,binaries,prefix):
     if raw.stat().st_size!=307200000 or sha(raw)!=item['raw_sha256'] or sha(control/'manifest.json')!=item['control_root_sha256']:raise ValueError('source/control identity')
     fit=binaries/'build_sq8_source';normalized=directory/'normalized.raw';order=directory/'order.u64';new_sq8=directory/'candidate-sq8.bin'
     native(directory,'normalize',[fit,'normalize',raw,item['raw_sha256'],100000,768,1073741824,normalized])
-    if item['name']=='cohere':native(directory,'hier-fit',[fit,'hier-fit',normalized,sha(normalized),100000,768,1073741824,order])
+    if 'closed-builder.json' not in item['artifacts']:native(directory,'hier-fit',[fit,'hier-fit',normalized,sha(normalized),100000,768,1073741824,order])
     recipe=json.loads((directory/'hier-fit.log').read_text());values=np.fromfile(order,dtype='<u8')
     if values.shape!=(100000,) or not np.array_equal(np.sort(values),np.arange(100000)) or recipe['order_sha256']!=sha(order) or recipe['query_or_truth_used'] is not False or recipe['recipe']!=config['source_recipe'] or recipe['extents'][0][0]!=0 or recipe['extents'][-1][1]!=100000 or any(not 0<b-a<=1024 for a,b in recipe['extents']) or any(recipe['extents'][i][1]!=recipe['extents'][i+1][0] for i in range(len(recipe['extents'])-1)):raise ValueError('source-only hierarchical order authority')
     native(directory,'sq8',[fit,normalized,sha(normalized),768,order,sha(order),1073741824,new_sq8])
@@ -40,7 +40,7 @@ def evaluate(item,directory,config,binaries,prefix):
     if not np.array_equal(candidate_sq8['id'],values) or not np.array_equal(np.sort(old['id']),np.arange(100000)) or old[np.argsort(old['id'])].tobytes()!=candidate_sq8[np.argsort(candidate_sq8['id'])].tobytes():raise ValueError('per-ID exact SQ8 payload parity')
     sq8_sha=sha(new_sq8)
     if sq8_sha!=sq8_receipt['sq8_sha256']:raise ValueError('new source SQ8 identity')
-    if item['name']=='relaion':
+    if 'closed-builder.json' in item['artifacts']:
         build=json.loads((directory/'closed-builder.json').read_text())
         if build['sq8_sha256']!=sq8_sha or build['low']!=sq8_receipt['low'] or build['step']!=sq8_receipt['step']:raise ValueError('exact old builder payload')
         sq8_key=build['sq8_object_key']
@@ -60,7 +60,7 @@ def evaluate(item,directory,config,binaries,prefix):
     old_records=np.memmap(control/'plane/records.bin',mode='r',dtype=np.dtype('V200'));new_records=np.memmap(candidate/'plane/records.bin',mode='r',dtype=np.dtype('V200'))
     if old_records[np.argsort(old['id'])].tobytes()!=new_records[np.argsort(candidate_sq8['id'])].tobytes():raise ValueError('per-ID exact source two-bit row parity')
     write(directory/'binding.json',dict(control_root_sha256=item['control_root_sha256'],candidate_root_sha256=candidate_sha,per_id_sq8_and_two_bit_payload_exact=True,coefficient_f32_bits_exact=True,source_order_sha256=sha(order),source_only_recipe=recipe,sq8_object_key=sq8_key,sq8_etag=head['ETag']))
-    if item['name']=='relaion' and (candidate/'manifest.json').read_bytes()!=(directory/'closed-manifest.json').read_bytes():raise ValueError('exact reconstructed root')
+    if 'closed-manifest.json' in item['artifacts'] and (candidate/'manifest.json').read_bytes()!=(directory/'closed-manifest.json').read_bytes():raise ValueError('exact reconstructed root')
     binary=binaries/'old_two_bit_plan_demo';request_sha=item['artifacts']['requests']['sha256']
     native(directory,'paired',[binary,control,item['control_root_sha256'],directory/'requests',request_sha,directory/'paired.jsonl',0,64,'--trace','--paired',candidate,candidate_sha])
     records=[json.loads(s) for s in (directory/'paired.jsonl').read_text().splitlines()]
@@ -102,7 +102,7 @@ def evaluate(item,directory,config,binaries,prefix):
     hits=sum(s['returned_hits'] for s in samples['candidate']);p05=sorted(s['returned_hits'] for s in samples['candidate'])[3];passed=hits/64>=98 and p05>=95 and item['control_flat_hits']-hits<=32 and hits>=item['control_returned_hits']
     result=dict(dataset=item['name'],decision='GO actual core development quality only' if passed else 'KILL actual core quality',samples=samples,returned_hits={a:sum(s['returned_hits'] for s in samples[a]) for a in samples},p05={a:sorted(s['returned_hits'] for s in samples[a])[3] for a in samples},normal_plans_sha256={a:plan_sha(p) for a,p in plans.items()},qualification=False,expected_ids=expected_ids,source_recipe=recipe,per_id_source_and_scorer_parity=True,new_exhaustive_sq8_kernel_calls=0,cached_sort_queries=128,physical_cold_measured=False)
     write(directory/'quality.json',result)
-    write(directory/'result.json',result);return result
+    return result
 
 def main():
     path,digest,repo,out,binaries,prefix=sys.argv[1:];repo,out,binaries=map(Path,[repo,out,binaries]);config=json.loads(Path(path).read_text())
@@ -135,8 +135,8 @@ def main():
             from scripts.run_native_union_http import quantile
             medians={arm:{label:quantile([r['incoming_http_ms'][label] for r in runs if r['arm']==arm],.5) for label in ['p50','p90','p95','p99']} for arm in ['control','candidate']}
             result.update(runs=runs,arm_median_incoming_http_ms=medians,arm_median_serial_qps={arm:quantile([r['serial_observed_qps'] for r in runs if r['arm']==arm],.5) for arm in ['control','candidate']},physical_cold_measured=True,incoming_service_http_measured=True,decision='GO actual core and HTTP development envelope only' if medians['candidate']['p90']<=250 and medians['candidate']['p95']<=400 else 'KILL actual core HTTP envelope')
-            write(directory/'result.json',result)
             if result['decision'].startswith('KILL'):break
+    for item,result in zip(config['items'],results):write(out/item['name']/'result.json',result)
     write(out/'decision.json',dict(decision=results[-1]['decision'] if all(r['decision'].startswith('GO') for r in results) else next(r['decision'] for r in results if r['decision'].startswith('KILL')),results=results,qualification=False,fresh_cohort_used=False,scale_run=False))
 
 if __name__=='__main__':

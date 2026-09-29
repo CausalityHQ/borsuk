@@ -1,0 +1,17 @@
+{
+  "instance_id": "i-0e46d72835620045e",
+  "state": "terminated",
+  "source_archive_sha256": "1b3c856003b1ec2f0420f5042f233cfa4a59244a7b97f83325c93a49cd749355",
+  "terminal_sha256": "8c9ae23ccfa0f93970c9b6b5c53e38ea263d714cf5f5cdb02c79bdd734a786a5",
+  "native_files_matched": 394,
+  "source_files_matched": 402,
+  "artifacts_verified": 82,
+  "qualification": false,
+  "valid_measurement": false,
+  "reason": "Incomplete required measurement artifacts",
+  "missing_artifacts": [
+    "screen/decision.json"
+  ],
+  "reported_status": "failed",
+  "reported_exit_code": 1
+}
