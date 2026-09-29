@@ -543,29 +543,6 @@ impl TwoBitGeneration {
         // temporary preparation buffer is released, within the same scratch cap.
         let normalized =
             crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
-        let mut source_memo = Vec::<(usize, f64)>::with_capacity(2 * 1272);
-        let mut source_score = |unit| -> Result<f64> {
-            let index = match source_memo.binary_search_by_key(&unit, |&(id, _)| id) {
-                Ok(index) => return Ok(source_memo[index].1),
-                Err(index) => index,
-            };
-            if unit >= self.pages.rows().div_ceil(32) || source_memo.len() == 2 * 1272 {
-                return Err(TwoBitGenerationError::Invalid("source memo geometry"));
-            }
-            let mut maximum = f64::NEG_INFINITY;
-            for row in unit * 32..((unit + 1) * 32).min(self.pages.rows()) {
-                maximum = maximum.max(
-                    prepared
-                        .score(self.plane.record(row).unwrap())
-                        .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
-                );
-            }
-            if !maximum.is_finite() {
-                return Err(TwoBitGenerationError::Invalid("nonfinite source score"));
-            }
-            source_memo.insert(index, (unit, maximum));
-            Ok(maximum)
-        };
         let mut walks = Vec::with_capacity(2);
         let graph_count = if self.manifest.graph_sha256 == self.manifest.diverse_graph_sha256 {
             1
@@ -583,24 +560,15 @@ impl TwoBitGeneration {
                 .0
                 / 8;
             let (evaluated, exhausted) = if count > 1 {
-                let mut source_error = None;
-                let mut priority = |unit| match source_score(unit) {
-                    Ok(value) => Ok(-value),
-                    Err(error) => {
-                        source_error = Some(error);
-                        Err(crate::unit_centroid_graph::UnitCentroidGraphError::InvalidQuery)
-                    }
-                };
                 let found = graph
-                    .search_pages_seeded_by_source(
+                    .search_pages_seeded(
                         &self.centroids,
                         normalized.as_ref(),
                         &[seed_page],
                         count - 1,
                         1272,
-                        &mut priority,
                     )
-                    .map_err(|error| source_error.unwrap_or(TwoBitGenerationError::Graph(error)))?;
+                    .map_err(TwoBitGenerationError::Graph)?;
                 (found.evaluated_units, found.work_exhausted)
             } else {
                 (
@@ -624,7 +592,17 @@ impl TwoBitGeneration {
             }
             walks.push((seed_page, evaluated));
         }
-        let ranked = rank_walked_source(self.pages.rows(), &walks, &mut source_score)?;
+        let ranked = rank_walked_source(self.pages.rows(), &walks, |unit| {
+            let mut maximum = f64::NEG_INFINITY;
+            for row in unit * 32..((unit + 1) * 32).min(self.pages.rows()) {
+                maximum = maximum.max(
+                    prepared
+                        .score(self.plane.record(row).unwrap())
+                        .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
+                );
+            }
+            Ok(maximum)
+        })?;
         if let Some(trace) = trace {
             trace.primary_page = ranked[0].0;
             trace.ranked_candidate_pages = ranked.iter().map(|&(page, _)| page).collect();
