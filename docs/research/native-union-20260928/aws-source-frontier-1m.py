@@ -69,8 +69,12 @@ assert narrow_proof['valid_check'] and narrow_proof['state']=='terminated' and n
 assert hashlib.sha256(narrow_raw).hexdigest()==narrow_proof['terminal_sha256']
 assert hashlib.sha256(Path('crates/borsuk/src/two_bit_generation.rs').read_bytes()).hexdigest()==narrow_proof['compiled_generation_sha256']
 assert hashlib.sha256(Path('crates/borsuk/src/unit_centroid_graph.rs').read_bytes()).hexdigest()==narrow_proof['compiled_graph_sha256']
-for receipt in [old_launch,control_launch,narrow_launch]:
-    assert ec2.describe_instances(InstanceIds=[receipt['instance_id']])['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
+for receipt,directory in [(old_launch,previous),(control_launch,control),(narrow_launch,narrow)]:
+    close=json.loads((directory/'aws-closeout.json').read_text())
+    assert close['instance_id']==receipt['instance_id'] and close['state']=='terminated'
+    found=[instance for reservation in ec2.describe_instances(InstanceIds=[receipt['instance_id']])['Reservations'] for instance in reservation['Instances']]
+    assert not found or len(found)==1 and found[0]['InstanceId']==receipt['instance_id'] and found[0]['State']['Name']=='terminated'
+
 new_archive=s3.get_object(Bucket=BUCKET,Key='research/native-library-check/sources/'+narrow_launch['source_archive_sha256']+'.tar.gz')['Body'].read()
 assert hashlib.sha256(new_archive).hexdigest()==narrow_launch['source_archive_sha256']
 new_matched=0

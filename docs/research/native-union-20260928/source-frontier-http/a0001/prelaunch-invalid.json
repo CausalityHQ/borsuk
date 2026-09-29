@@ -1,0 +1,11 @@
+{
+  "valid_measurement": false,
+  "science_started": false,
+  "native_session": 20112,
+  "exit_code": 1,
+  "launched_instances": 0,
+  "active_tag_instances_verified": 0,
+  "phase": "historical-authority-inventory",
+  "cause": "EC2 DescribeInstances expires older terminated instances; empty Reservations indexed as present",
+  "correction": "Absent historical inventory permitted only with prior authenticated terminal/proof and actual matching termination closeout; present instances must be terminated; original no science/instance/reservation"
+}
