@@ -10,7 +10,8 @@
       "sha256": "3e0cc374e8888729ec9dc6bf3e0b74fee114c9c04c01f1aa74369716364588ac",
       "dataset": "CoHere",
       "code_inventory_observation": "Prepares source rows1000000\u20131000999; outside1M alone cannot establish novelty.",
-      "closed_execution_authenticated_here": false
+      "closed_execution_authenticated_here": true,
+      "closed_identity_proof": "fresh-cohere-prior-identity/verification.json"
     },
     {
       "path": "scripts/v277_extra_reverse_fresh.py",

@@ -1,0 +1,35 @@
+{
+  "metadata_verified": true,
+  "complete_prior_query_audit": false,
+  "qualification": false,
+  "query_embedding_gt_or_sealed_bodies_opened": false,
+  "dataset": "CoHere-large10M D768",
+  "prior_query_rows_inclusive": [
+    1000000,
+    1000999
+  ],
+  "terminal_key": "research/v271-rust-rc-fresh-frontier/979f9a2db13a5c2406071add1864edeb043f0241/runs/a0001/terminal.json",
+  "terminal_sha256": "13775dc6c5176c636fc8442b4bd2bddd2ee375818a98d1328d2c0352423bc80b",
+  "source_archive_key": "research/v271-rust-rc-fresh-frontier/979f9a2db13a5c2406071add1864edeb043f0241/sources/e293ebca4dbb778810bb5c657e91cd9bb2cbc4bfd8da0d4d9ec725bdf667341f.tar.gz",
+  "source_archive_sha256": "e293ebca4dbb778810bb5c657e91cd9bb2cbc4bfd8da0d4d9ec725bdf667341f",
+  "archived_query_preparer_sha256": "3e0cc374e8888729ec9dc6bf3e0b74fee114c9c04c01f1aa74369716364588ac",
+  "metadata_artifacts": {
+    "prepare.json": {
+      "bytes": 412,
+      "sha256": "1ff65518c3738bba8cf474980e7552858afa98b4aa96fbc2510160c855e63d0f"
+    },
+    "new1m.search.json": {
+      "bytes": 220,
+      "sha256": "bb66c8fe82a97b27ce0eea5dc9e92c301388426b4d1135e553468243a3a95987"
+    },
+    "prior.search.json": {
+      "bytes": 262,
+      "sha256": "8a4c2f73545e0ddcd402937f2cb03f26ac3836efb48238d5d8726037158540cd"
+    }
+  },
+  "query_identity": {
+    "bytes": 3072000,
+    "sha256": "24ff130daf48ef8cd644c9994cd92fd7ad8305d3a5a38127e9ff239fa8a41a22"
+  },
+  "action": "Exclude this authenticated previously prepared/searched panel from unused1M qualification; still inventory other derivative panels and authenticate ID mappings."
+}

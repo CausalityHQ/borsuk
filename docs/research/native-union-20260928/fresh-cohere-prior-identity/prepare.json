@@ -1,0 +1,12 @@
+{
+  "dataset": "CoHere-large-10M first1M D768 cosine",
+  "faiss_version": "1.15.1",
+  "holdout_rows": [
+    1000000,
+    1000999
+  ],
+  "query_sha256": "24ff130daf48ef8cd644c9994cd92fd7ad8305d3a5a38127e9ff239fa8a41a22",
+  "schema": "borsuk-v271-fresh-panel-v1",
+  "truth100_sha256": "d2b0ffeb3b2ebcc8714955fc78d3eec8ea751abcbeec91fdb8d7a2d41f2e8c6e",
+  "truth1m_sha256": "be2bce0b2172d536d44d0efdb671bc9cfdb8dccee94be8f93ad99c06a29d610b"
+}

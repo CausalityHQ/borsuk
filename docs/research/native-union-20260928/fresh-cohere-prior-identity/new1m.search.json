@@ -1,0 +1,12 @@
+{
+  "dimensions": 768,
+  "elapsed_ms": 49601.118846,
+  "generation": 1,
+  "hydration": {
+    "object_gets": 0,
+    "response_bytes": 0
+  },
+  "queries": 1000,
+  "root_sha256": "c3a60f9969f8bc0fc6cf2f24831c45d3918bd7090a474c090b5812629851f86a",
+  "rows": 1000000
+}
