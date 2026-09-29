@@ -96,3 +96,12 @@ closed remote bodies independently rehashed; one development GT row recomputed
 over first1M. ANN recall, query tails/QPS and total cost remain **unmeasured**.
 Next decisive test: frozen dev64 native R@10>=95%, followed conditionally by
 four offered HTTP cells at8QPS and k10 p90<444ms. No matched vendor delta.
+
+### CoHere verified development convergence,2026-09-29
+
+| Baseline/context | Candidate/split | Actual quality delta | Measured tails/QPS/cost | Remaining gap to BOTH vendors | Next decisive test |
+|---|---|---|---|---|---|
+| Practical95% R@10; published TP1M D768 cold p90=444ms context | Frozen roota4eb4851, CoHere FIRST1M D768 cosine dev0–63 | VerifiedR10=96.875%,R100=94.484375%; no matched delta | Verifiedk10 p90=113.945/113.470ms,p95=114.465/114.029ms,8QPS/cell,256/256success; compute$0.0158 estimated excludingEBS/S3 | Prospective/peer cold protocol, matched vendor/control, saturation/totalcost,10M/100M/lifecycle | Unchanged prospective936 on closeddev a0002, then peer-client measurement |
+
+[Closed development decision](fresh-cohere-dev64-decision.md); original startup
+a0001 remains an immutable infrastructure failure, not a quality KILL.

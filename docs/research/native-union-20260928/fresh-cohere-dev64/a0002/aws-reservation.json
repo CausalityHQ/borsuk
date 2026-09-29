@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-fresh-cohere-1m-dev64-spot-v1",
+  "attempt": "a0002",
+  "source_base_commit": "e8293b6eaf23912888df8a5c929ecc6a951641ec",
+  "source_archive_sha256": "cf0e73b4de56de73de6def6f5b25b9219fa16383673fe476da2bc3e7dfc2543e",
+  "config_sha256": "0a1f90c2679f6ab6b27095cea7dea600add31ddd99e411ab7cc5cc6e23d0b1ce",
+  "sealed_construction_terminal_sha256": "ee86ab749d222394861d272714f27edd2f4b80bdcb09b04682144bbd6803fd69",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "availability_zone": "eu-central-1c",
+  "instance_type": "c7g.2xlarge",
+  "spot_price_observed_usd_per_hour": "0.178900",
+  "spot_quote_timestamp": "2026-09-29T15:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "compute_cost_cap_usd": 0.15,
+  "ebs_s3_allowance_usd": 0.15,
+  "wall_seconds": 1800,
+  "measurement_memory_max_bytes": 8589934592,
+  "swap_max_bytes": 0,
+  "interruption_policy": "Discard interrupted cell; no automatic retry",
+  "scope": "Frozen cohere fresh dev64 native R10/R100 then conditional four-slot HTTP; prospective untouched"
+}

@@ -1,0 +1,102 @@
+{
+  "valid_measurement": true,
+  "decision": "GO fresh CoHere1M fresh CoHere development0-63",
+  "qualification": false,
+  "matched_vendor_measured": false,
+  "matched_control_http_measured": false,
+  "fresh_dev64_only": true,
+  "prospective_queries_opened": false,
+  "instance_id": "i-03e94b8d500ceae2f",
+  "state": "terminated",
+  "terminal_sha256": "cdf6163ae3fa22fa1fbc9768ed599d8569489ad3004b40c1b463b47a8fc2ec25",
+  "reservation_sha256": "207c81629106a0cbd3484ab8d409e77bdd729e8cbb0a74253451242a5c17953c",
+  "source_archive_sha256": "cf0e73b4de56de73de6def6f5b25b9219fa16383673fe476da2bc3e7dfc2543e",
+  "config_sha256": "0a1f90c2679f6ab6b27095cea7dea600add31ddd99e411ab7cc5cc6e23d0b1ce",
+  "native_quality": {
+    "10": {
+      "hits": 620,
+      "denominator": 640,
+      "recall": 0.96875
+    },
+    "100": {
+      "hits": 6047,
+      "denominator": 6400,
+      "recall": 0.94484375
+    }
+  },
+  "runs": [
+    {
+      "rep": 0,
+      "k": 10,
+      "hits": 620,
+      "denominator": 640,
+      "incoming_http_ms": {
+        "p50": 111.16914,
+        "p90": 113.9453392,
+        "p95": 114.46480195,
+        "p99": 125.73935941999997
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4713.182508,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "rep": 1,
+      "k": 100,
+      "hits": 6047,
+      "denominator": 6400,
+      "incoming_http_ms": {
+        "p50": 111.7445775,
+        "p90": 114.8265298,
+        "p95": 116.4951787,
+        "p99": 138.67103199999997
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4711.69828,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "rep": 2,
+      "k": 100,
+      "hits": 6047,
+      "denominator": 6400,
+      "incoming_http_ms": {
+        "p50": 111.198489,
+        "p90": 113.6671496,
+        "p95": 114.23692030000001,
+        "p99": 122.51558286999995
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4712.142854,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "rep": 3,
+      "k": 10,
+      "hits": 620,
+      "denominator": 640,
+      "incoming_http_ms": {
+        "p50": 110.36565999999999,
+        "p90": 113.46955030000001,
+        "p95": 114.02860460000001,
+        "p99": 121.54351125999996
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4812.187619,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    }
+  ],
+  "all_offered_requests": 256,
+  "all_successful_requests": 256,
+  "physical_data_gets": 8140,
+  "verified_data_bytes": 4293918720,
+  "cgroup_peak_bytes": 4001656832,
+  "swap_peak_bytes": 0,
+  "instance_elapsed_seconds": 319,
+  "compute_cost_estimate_usd": 0.0158,
+  "cost_scope": "estimate only; excludes EBS/S3 and is not an invoice"
+}

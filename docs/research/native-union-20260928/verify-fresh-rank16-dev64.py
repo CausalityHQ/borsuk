@@ -110,7 +110,9 @@ def main(attempt, family="rank16"):
         assert result["split"] == config["query_split"] and result["fresh_cohort_used"]
         assert result["successful_count"] == 64 and result["outcomes"] == {"success": 64}
         assert result["identity_parity_valid"] and result["physical_counters_complete"]
-        assert result["namespace_ready_ms"] > 0 and result["development_gate_passed"]
+        assert result["namespace_ready_ms"] > 0
+        if k == 10:
+            assert result["development_gate_passed"]
         samples = [json.loads(row) for row in artifact(f"run{rep}-k{k}/http.jsonl").splitlines()]
         assert len(samples) == 64
         hits = gets = verified_bytes = 0
