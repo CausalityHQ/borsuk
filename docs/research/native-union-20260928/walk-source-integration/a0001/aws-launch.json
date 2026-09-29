@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-04325b8cea9b01da8",
+  "prefix": "research/native-union/20260928/walk-source-integration-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "6001cb85dce6a88008cb0aa4d78ab0698aab2a4dc53bc9553e3b51db5b895997",
+  "source_base_commit": "28cf76694f9864366065d59683ac482520037e74"
+}

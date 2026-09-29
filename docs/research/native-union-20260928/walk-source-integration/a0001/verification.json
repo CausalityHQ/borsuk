@@ -1,0 +1,48 @@
+{
+  "instance_id": "i-04325b8cea9b01da8",
+  "state": "terminated",
+  "source_archive_sha256": "6001cb85dce6a88008cb0aa4d78ab0698aab2a4dc53bc9553e3b51db5b895997",
+  "terminal_sha256": "3b91dadde8185af5a0a85a80eafe0930ddf6bf7459513ed83a29d949b97c4ec1",
+  "native_files_matched": 394,
+  "artifacts_verified": 13,
+  "qualification": false,
+  "no_corpus_query": true,
+  "previous_native_files_verified_except_declared_regression": 394,
+  "valid_check": true,
+  "boundary": {
+    "qualified": false,
+    "no_corpus_query": true,
+    "full_workspace_repeated": true,
+    "original_source_sha256": "380e7401975809530416a7bb3fac64b2bcfd78a79d66b85e9f9859840a43eac0",
+    "fixed_source_sha256": "bd49c81067a68845461632a35f8b9af2ce91e9e27b970caab12eefbe0a82dc86",
+    "red_status": 101,
+    "green_passed": true,
+    "binaries": {
+      "two_bit_plan_demo": {
+        "bytes": 11630088,
+        "sha256": "2248338210e833a569eef9129a6238bdd72fcd40ae428f1bbc22430600b660ea"
+      },
+      "two_bit_http": {
+        "bytes": 12527608,
+        "sha256": "01e00da5376903b3043073769472b4906adedc9e6a2544e7f2caf7ed7737abfb"
+      }
+    }
+  },
+  "cgroup": {
+    "memory.peak": "10737418240\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 21844\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 7623433693\nuser_usec 7275888932\nsystem_usec 347544760\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  },
+  "full_assurance": {
+    "passed": 2693,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 145
+  },
+  "cargo_executed_targets": 146,
+  "benchmark_smoke_checks": 12,
+  "exact_previous_roster_plus_two_core_and_new_binary": true,
+  "roster_note": "Logical Cargo source/executable stems; adding binary target changes integration-test executable fingerprints",
+  "compiled_source_sha256": "bd49c81067a68845461632a35f8b9af2ce91e9e27b970caab12eefbe0a82dc86"
+}

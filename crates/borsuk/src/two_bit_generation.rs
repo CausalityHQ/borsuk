@@ -165,6 +165,99 @@ impl TwoBitPlanTrace {
                 * std::mem::size_of::<usize>()
     }
 }
+// Source nomination over bounded graph walks; no corpus-sized query allocation.
+fn rank_walked_source(
+    rows: usize,
+    walks: &[(usize, Vec<usize>)],
+    mut score: impl FnMut(usize) -> Result<f64>,
+) -> Result<Vec<(usize, f64)>> {
+    let invalid = || TwoBitGenerationError::Invalid("walked source geometry");
+    if rows == 0 || walks.is_empty() || walks.len() > 2 {
+        return Err(invalid());
+    }
+    let count = rows.div_ceil(256).min(159);
+    let mut units = Vec::with_capacity(2 * 1272);
+    for (seed, evaluated) in walks {
+        if *seed >= rows.div_ceil(256) || evaluated.is_empty() || evaluated.len() > 1272 {
+            return Err(invalid());
+        }
+        let mut sorted = evaluated.clone();
+        sorted.sort_unstable();
+        if sorted.iter().any(|&unit| unit >= rows.div_ceil(32))
+            || sorted.windows(2).any(|pair| pair[0] == pair[1])
+            || (seed * 8..((seed + 1) * 8).min(rows.div_ceil(32)))
+                .any(|unit| sorted.binary_search(&unit).is_err())
+        {
+            return Err(invalid());
+        }
+        units.extend_from_slice(&sorted);
+    }
+    units.sort_unstable();
+    units.dedup();
+    let mut memo = Vec::with_capacity(units.len());
+    for unit in units {
+        let value = score(unit)?;
+        if !value.is_finite() {
+            return Err(TwoBitGenerationError::Invalid("nonfinite source score"));
+        }
+        memo.push((unit, value));
+    }
+    fn page_maxima(mut units: Vec<(usize, f64)>) -> Vec<(usize, f64)> {
+        units.sort_unstable_by_key(|&(page, _)| page);
+        let mut pages = Vec::<(usize, f64)>::with_capacity(units.len());
+        for (page, value) in units {
+            if let Some(last) = pages.last_mut()
+                && last.0 == page
+            {
+                last.1 = last.1.max(value);
+            } else {
+                pages.push((page, value));
+            }
+        }
+        pages
+    }
+    let global = page_maxima(
+        memo.iter()
+            .map(|&(unit, value)| (unit / 8, value))
+            .collect(),
+    );
+    let mut selected = Vec::with_capacity(2 * count);
+    for (seed, evaluated) in walks {
+        let mut pages = page_maxima(
+            evaluated
+                .iter()
+                .map(|unit| {
+                    let index = memo.binary_search_by_key(unit, |&(id, _)| id).unwrap();
+                    (unit / 8, memo[index].1)
+                })
+                .collect(),
+        );
+        pages.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
+        if pages.len() < count {
+            return Err(invalid());
+        }
+        selected.push(*seed);
+        selected.extend(
+            pages
+                .iter()
+                .filter(|&&(page, _)| page != *seed)
+                .take(count - 1)
+                .map(|&(page, _)| page),
+        );
+    }
+    selected.sort_unstable();
+    selected.dedup();
+    let mut ranked = selected
+        .into_iter()
+        .map(|page| {
+            let index = global.binary_search_by_key(&page, |&(id, _)| id).unwrap();
+            (page, global[index].1)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
+    Ok(ranked)
+}
+
 impl TwoBitGeneration {
     /// Physical row count of this immutable nonempty base.
     pub fn rows(&self) -> usize {
@@ -450,7 +543,7 @@ impl TwoBitGeneration {
         // temporary preparation buffer is released, within the same scratch cap.
         let normalized =
             crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
-        let mut candidates = Vec::with_capacity(2 * count);
+        let mut walks = Vec::with_capacity(2);
         let graph_count = if self.manifest.graph_sha256 == self.manifest.diverse_graph_sha256 {
             1
         } else {
@@ -466,10 +559,7 @@ impl TwoBitGeneration {
                 .ok_or(TwoBitGenerationError::Invalid("no seed"))?
                 .0
                 / 8;
-            let mut found_pages = vec![seed_page];
-            let mut walk_evaluated_units = Vec::new();
-            let mut walk_work_exhausted = false;
-            if count > 1 {
+            let (evaluated, exhausted) = if count > 1 {
                 let found = graph
                     .search_pages_seeded(
                         &self.centroids,
@@ -479,42 +569,40 @@ impl TwoBitGeneration {
                         1272,
                     )
                     .map_err(TwoBitGenerationError::Graph)?;
-                found_pages.extend(found.pages.iter().map(|&(p, _)| p));
-                if trace.is_some() {
-                    walk_evaluated_units = found.evaluated_units;
-                    walk_work_exhausted = found.work_exhausted;
-                }
-            }
-            found_pages.sort_unstable();
-            if found_pages.len() != count || found_pages.windows(2).any(|p| p[0] >= p[1]) {
-                return Err(TwoBitGenerationError::Invalid("candidate geometry"));
-            }
-            candidates.extend(found_pages);
+                (found.evaluated_units, found.work_exhausted)
+            } else {
+                (
+                    (seed_page * 8..((seed_page + 1) * 8).min(self.pages.rows().div_ceil(32)))
+                        .collect(),
+                    false,
+                )
+            };
             if let Some(trace) = trace.as_deref_mut() {
                 trace.discoveries.push(TwoBitDiscoveryTrace {
                     seed_page,
                     seed_evaluated_units: seed.evaluated_units,
                     seed_work_exhausted: seed.work_exhausted,
-                    walk_evaluated_units,
-                    walk_work_exhausted,
+                    walk_evaluated_units: if count > 1 {
+                        evaluated.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    walk_work_exhausted: exhausted,
                 });
             }
+            walks.push((seed_page, evaluated));
         }
-        candidates.sort_unstable();
-        candidates.dedup();
-        let mut ranked = Vec::with_capacity(candidates.len());
-        for page in candidates {
-            let mut score = f64::NEG_INFINITY;
-            for row in page * 256..((page + 1) * 256).min(self.pages.rows()) {
-                score = score.max(
+        let ranked = rank_walked_source(self.pages.rows(), &walks, |unit| {
+            let mut maximum = f64::NEG_INFINITY;
+            for row in unit * 32..((unit + 1) * 32).min(self.pages.rows()) {
+                maximum = maximum.max(
                     prepared
                         .score(self.plane.record(row).unwrap())
                         .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
                 );
             }
-            ranked.push((page, score));
-        }
-        ranked.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
+            Ok(maximum)
+        })?;
         if let Some(trace) = trace {
             trace.primary_page = ranked[0].0;
             trace.ranked_candidate_pages = ranked.iter().map(|&(page, _)| page).collect();
@@ -729,5 +817,56 @@ impl TwoBitGeneration {
             }));
         }
         Ok(ObjectNativeSearchResult { plan, ranked })
+    }
+}
+
+#[cfg(test)]
+mod source_walk_tests {
+    use super::*;
+    #[test]
+    fn source_nomination_precedes_centroid_cutoff_and_scores_units_once() {
+        let mut units = (0..1272).collect::<Vec<_>>();
+        units[1271] = 1280;
+        let mut reverse = units.clone();
+        reverse.reverse();
+        let mut calls = 0;
+        let ranked = rank_walked_source(100000, &[(0, units), (0, reverse)], |unit| {
+            calls += 1;
+            Ok(if unit == 1280 { 10.0 } else { 1.0 })
+        })
+        .expect("walked source nomination not integrated");
+        assert_eq!(calls, 1272);
+        assert_eq!(ranked.len(), 159);
+        assert_eq!(ranked[0], (160, 10.0));
+        assert_eq!(ranked[1], (0, 1.0));
+        assert!(!ranked.iter().any(|&(page, _)| page == 158));
+    }
+    #[test]
+    fn source_nomination_handles_one_graph_partial_rows_and_rejects_invalid_walks() {
+        let mut rows_scored = 0;
+        let ranked = rank_walked_source(257, &[(1, (0..9).collect())], |unit| {
+            rows_scored += ((unit + 1) * 32).min(257) - unit * 32;
+            Ok(if unit == 8 { 2.0 } else { 1.0 })
+        })
+        .unwrap();
+        assert_eq!(ranked, vec![(1, 2.0), (0, 1.0)]);
+        assert_eq!(rows_scored, 257);
+        assert_eq!(
+            rank_walked_source(1, &[(0, vec![0])], |_| Ok(3.0)).unwrap(),
+            vec![(0, 3.0)]
+        );
+        for (rows, walks) in [
+            (0, vec![(0, vec![0])]),
+            (257, vec![]),
+            (1, vec![(0, vec![0]); 3]),
+            (257, vec![(2, vec![0])]),
+            (257, vec![(0, vec![0, 0])]),
+            (257, vec![(0, vec![0, 9])]),
+            (257, vec![(0, vec![0, 1])]),
+            (100000, vec![(0, (0..1273).collect())]),
+        ] {
+            assert!(rank_walked_source(rows, &walks, |_| panic!("invalid walk scored")).is_err());
+        }
+        assert!(rank_walked_source(1, &[(0, vec![0])], |_| Ok(f64::NAN)).is_err());
     }
 }
