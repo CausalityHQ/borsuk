@@ -1,7 +1,10 @@
-"""AWS-only real-socket protocol checks; synthetic IDs, no ANN/data/quality claim."""
+"""Real-socket protocol checks; synthetic IDs, no ANN/data/quality claim."""
 import hashlib
 import json
 import sys
+import struct
+import subprocess
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,11 +55,12 @@ def check():
     driver.connection = lambda: http.client.HTTPConnection(*server.server_address, timeout=5)
     cases = []
     try:
-        def run(modes, k=10, rate=8, workers=8, timeout=5):
+        def run(modes, k=10, rate=8, workers=8, timeout=5, factory=None):
             requests = [dict(query_ordinal=q, query=[mode]) for q, mode in enumerate(modes)]
             return driver.measure(requests, [reference(k) for _ in modes],
                                   [list(range(100)) for _ in modes], AUTHORITY,
-                                  k=k, offered_qps=rate, workers=workers, timeout_seconds=timeout)
+                                  k=k, offered_qps=rate, workers=workers, timeout_seconds=timeout,
+                                  **({"connection_factory": factory} if factory is not None else {}))
 
         rows, result = run([1] * 10)
         assert result['offered_count'] == result['successful_count'] == 10
@@ -75,6 +79,57 @@ def check():
         rows, result = run([1], k=100)
         assert len(rows[0]['response']['ids']) == 100 and result['successful_count'] == 1
         cases.append('actual_k100_reference_geometry')
+
+        default = driver.connection
+        def forbidden_default():
+            raise AssertionError('explicit connector ignored')
+        driver.connection = forbidden_default
+        try:
+            rows, result = run([1, 2, 3], factory=default)
+            assert result['outcomes'] == dict(success=1, rejected_503=1, invalid_response=1)
+            assert result['offered_count'] == 3 and result['mean_offered_recall'] == 1 / 3
+            assert not result['identity_parity_valid']
+            try:
+                run([1], factory=object())
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('noncallable connection factory accepted')
+        finally:
+            driver.connection = default
+        cases.append('explicit_socket_connector_preserves_all_offers_and_authority_checks')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'requests').write_text(''.join(json.dumps(dict(query_ordinal=q, query=[1] + [0] * 767)) + '\n' for q in range(64)))
+            header = dict(AUTHORITY, top_k=10, declared_panel_count=64)
+            (root / 'reference').write_text('\n'.join(json.dumps(row) for row in
+                [header] + [dict(query_ordinal=q, **reference(10)) for q in range(64)] + [dict(count=64)]) + '\n')
+            (root / 'truth').write_bytes(struct.pack('<100I', *range(100)) * 64)
+            config = dict(schema='borsuk-native-peer-offered-http-v1', count=64, k=10,
+                          offered_qps=8, workers=8, authority=AUTHORITY, rows=1000000, dimensions=768,
+                          dataset='synthetic protocol only', query_split='synthetic socket check',
+                          metadata_resident=True, application_sq8_cache=False,
+                          code_sha256={name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in
+                                       ['scripts/run_native_peer_offered_http.py', 'scripts/run_native_union_offered_http.py',
+                                        'scripts/run_native_union_http.py', 'scripts/rest_coexistence_load.py']},
+                          inputs={name: dict(path=str(root / name), bytes=(root / name).stat().st_size,
+                                             sha256=hashlib.sha256((root / name).read_bytes()).hexdigest())
+                                  for name in ['requests', 'reference', 'truth']})
+            path = root / 'config.json'
+            path.write_text(json.dumps(config))
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            endpoint = 'http://%s:%s' % server.server_address
+            command = [sys.executable, 'scripts/run_native_peer_offered_http.py', str(path), digest, endpoint]
+            subprocess.run(command + [str(root / 'out')], check=True, capture_output=True, text=True)
+            result = json.loads((root / 'out/result.json').read_text())
+            assert result['offered_count'] == result['successful_count'] == 64
+            assert result['identity_parity_valid'] and result['known_submitted_gets'] == 64
+            assert result['endpoint'] == endpoint and not result['namespace_cold_start_included']
+            (root / 'truth').write_bytes(b'bad')
+            rejected = subprocess.run(command + [str(root / 'invalid-out')], capture_output=True)
+            assert rejected.returncode != 0 and not (root / 'invalid-out').exists()
+        cases.append('peer_CLI_authenticates_inputs_and_exercises_socket_reducer')
 
         rows, result = run([1, 2, 3, 4], timeout=.03)
         assert result['outcomes'] == dict(success=1, rejected_503=1, invalid_response=1, timeout=1), result['outcomes']

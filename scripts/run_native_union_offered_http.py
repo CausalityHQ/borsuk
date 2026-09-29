@@ -17,7 +17,10 @@ from scripts.run_native_union_http import connection, post, quantile
 
 
 def measure(requests, references, truth, authority, *, k, offered_qps,
-            workers=8, timeout_seconds=5):
+            workers=8, timeout_seconds=5, connection_factory=None):
+    connect = connection if connection_factory is None else connection_factory
+    if not callable(connect):
+        raise ValueError("callable HTTP connection factory required")
     count = len(requests)
     if k not in (10, 100) or not 1 <= count <= 10000:
         raise ValueError('k10/k100 and bounded nonempty panel required')
@@ -50,7 +53,7 @@ def measure(requests, references, truth, authority, *, k, offered_qps,
                    integrity_error=None, physical_counters_complete=False)
         client = None
         try:
-            client = connection()
+            client = connect()
             client.timeout = timeout_seconds
             status, raw = post(client, bodies[q])
             row.update(status=status, response_bytes=len(raw), outcome='http_error')
