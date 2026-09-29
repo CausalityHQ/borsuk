@@ -1,0 +1,13 @@
+{
+  "dimensions": 768,
+  "elapsed_ms": 3244.931436,
+  "generation": 1,
+  "hydration": {
+    "object_gets": 0,
+    "response_bytes": 0
+  },
+  "mode": "diagnostic-stress",
+  "queries": 1000,
+  "root_sha256": "56de9f4768271611683193f4fa5d36795cb5926adabb89efb7bd4c851b1e340b",
+  "rows": 100000
+}

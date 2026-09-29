@@ -18,21 +18,24 @@
       "sha256": "23b7e1feccb59275c62a4ff5cf31fe99978302d6b331d6647c05c3d9044c5e58",
       "dataset": "CoHere",
       "code_inventory_observation": "Uses excluded train rows104000\u2013104999; not an unused panel.",
-      "closed_execution_authenticated_here": false
+      "closed_execution_authenticated_here": true,
+      "closed_identity_proof": "fresh-cohere-prior-identity/v277-verification.json"
     },
     {
       "path": "scripts/v194_fresh_1m_optional_source.py",
       "sha256": "1f51d8457a14c9cb20e5518d55f91cdf692fe7fe157f8ed2478f692bbf432c9c",
       "dataset": "ReLAION",
       "code_inventory_observation": "Pseudoquery hash ranks2945\u20133456 from registered1M source; authenticate terminal and feature-ID mappings.",
-      "closed_execution_authenticated_here": false
+      "closed_execution_authenticated_here": true,
+      "closed_identity_proof": "fresh-relaion-prior-identities/verification.json"
     },
     {
       "path": "scripts/v197_fresh_resident_fp16_source.py",
       "sha256": "2f76d58fd503058dc30a8f5ea781655df7ccfbbd762d1f1a5227e31172f791c9",
       "dataset": "ReLAION",
       "code_inventory_observation": "Pseudoquery hash ranks3457\u20133968; authenticate terminal and feature-ID mappings.",
-      "closed_execution_authenticated_here": false
+      "closed_execution_authenticated_here": true,
+      "closed_identity_proof": "fresh-relaion-prior-identities/verification.json"
     },
     {
       "path": "scripts/v198_real_query_resident_fp16.py",
