@@ -1,0 +1,121 @@
+{
+  "schema": "borsuk-native-peer-1m-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "setting_order": [
+    10,
+    100,
+    100,
+    10
+  ],
+  "count": 64,
+  "offered_qps": 8,
+  "workers": 8,
+  "binary": {
+    "key": "research/native-union/20260928/four-slot-1m-offered-http-a0001/artifacts/binaries/two_bit_http",
+    "bytes": 12546280,
+    "sha256": "fe7084ce75e56788f156639f534d41fe9fb576ce771bc6f9f5094a1f20264f82"
+  },
+  "items": [
+    {
+      "dataset": "ReLAION",
+      "rows": 1000000,
+      "dimensions": 768,
+      "query_split": "fresh rank16 development0-63",
+      "authority": {
+        "root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+        "generation": 1,
+        "control_epoch": 1
+      },
+      "indexes": {
+        "10": "research/native-union/20260928/fresh-rank16-dev64-a0002/indexes/relaion/k10",
+        "100": "research/native-union/20260928/fresh-rank16-dev64-a0002/indexes/relaion/k100"
+      },
+      "inputs": {
+        "requests": {
+          "bytes": 940145,
+          "sha256": "56fc916227c821270499e08fc026bd615bea53781d9c5d01b2c3d11431e9f02b",
+          "key": "research/native-union/20260928/fresh-rank16-dev64-a0002/artifacts/screen/requests64.jsonl"
+        },
+        "reference-k10": {
+          "bytes": 59352,
+          "sha256": "066605eea6253ff8976dd7e0df0d68cfebb9bd3273f7e83983b2fbdfc0c96832",
+          "key": "research/native-union/20260928/fresh-rank16-dev64-a0002/artifacts/screen/reference-k10.jsonl"
+        },
+        "reference-k100": {
+          "bytes": 99054,
+          "sha256": "d73bbe25a1e2eea78d3e405e7d1376308eaceecc0b26aec72f4cfaafbe4c3c58",
+          "key": "research/native-union/20260928/fresh-rank16-dev64-a0002/artifacts/screen/reference-k100.jsonl"
+        },
+        "truth": {
+          "bytes": 400000,
+          "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/truth.u32",
+          "sha256": "49eeef8097ec28471cc0cbf9156ccf52204d8694dcd966940d06e195ae1a9444",
+          "range_start": 0,
+          "range_bytes": 25600,
+          "range_sha256": "90b97011cea9fcb9579f6fb2e16f7e33373d1ab05759387b75ced34e8e47a9f4"
+        }
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-rank16-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "56e2421ce84f9ca3cf045a77f440aaaf02f766c06412631fbb200666c1bbbc3d"
+    },
+    {
+      "dataset": "CoHere",
+      "rows": 1000000,
+      "dimensions": 768,
+      "query_split": "fresh CoHere development0-63",
+      "authority": {
+        "root_sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e",
+        "generation": 1,
+        "control_epoch": 1
+      },
+      "indexes": {
+        "10": "research/native-union/20260929/fresh-cohere-dev64-a0002/indexes/cohere/k10",
+        "100": "research/native-union/20260929/fresh-cohere-dev64-a0002/indexes/cohere/k100"
+      },
+      "inputs": {
+        "requests": {
+          "bytes": 983472,
+          "sha256": "304e135fcd03b4f89f0cee3d26262653704d6318a34e0677dd6b3f135b00644d",
+          "key": "research/native-union/20260929/fresh-cohere-dev64-a0002/artifacts/screen/requests64.jsonl"
+        },
+        "reference-k10": {
+          "bytes": 61785,
+          "sha256": "5fd216328164eaecea19d06577100db9021a92445536a8b0f601cd1ae047bba6",
+          "key": "research/native-union/20260929/fresh-cohere-dev64-a0002/artifacts/screen/reference-k10.jsonl"
+        },
+        "reference-k100": {
+          "bytes": 101452,
+          "sha256": "3c8317816b437df7efff26c87cad31d2b43a6b8c240deb9471076e4676077b05",
+          "key": "research/native-union/20260929/fresh-cohere-dev64-a0002/artifacts/screen/reference-k100.jsonl"
+        },
+        "truth": {
+          "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/truth.u32",
+          "bytes": 400000,
+          "sha256": "b9dd2d8d6b12560108b55a70f339f2a097ee550df4b6e562aa91b76cbd9e4f41",
+          "range_start": 0,
+          "range_bytes": 25600,
+          "range_sha256": "918928f4c491ebcc0b8b697bf21533897108b3c51510b2fbe6d71095968e937f"
+        }
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-cohere-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "fb2cf8d616618f0fb33a42340358c2704ed30751557fbb16c23fda0964dd7912"
+    }
+  ],
+  "code_sha256": {
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd"
+  },
+  "gates": {
+    "mean_offered_recall_at_10_minimum": 0.95,
+    "incoming_http_p90_ms_exclusive_maximum": 444,
+    "successful_qps_minimum": 8,
+    "all_offered_success": true
+  },
+  "metadata_resident": true,
+  "application_sq8_cache": false,
+  "namespace_cold_start_included": false,
+  "worker_sha256": "9f16e8ce1094805774e81396ab487a5f348ac466956d50827358354a663e18b8"
+}

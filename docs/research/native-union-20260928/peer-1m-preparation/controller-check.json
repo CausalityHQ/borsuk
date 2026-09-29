@@ -1,0 +1,19 @@
+{
+  "synthetic_only": true,
+  "aws_calls": 0,
+  "paid_jobs": 0,
+  "checks": [
+    "source-bound preflight",
+    "server/client startup bash syntax and role limits",
+    "actual main second-launch failure cleans first acknowledged instance"
+  ],
+  "passed": true,
+  "source_sha256": {
+    "scripts/launch_native_peer_1m_spot.py": "d1cab299880b52e816e8973050ff4438b226dfa08369ac028a721ee68275286b",
+    "scripts/check_native_peer_1m_controller.py": "a311365263090417ce94f22e49220613360810994e64c6e55d476fe47fc0ab44",
+    "scripts/run_native_peer_1m_worker.py": "9f16e8ce1094805774e81396ab487a5f348ac466956d50827358354a663e18b8",
+    "scripts/verify_native_peer_1m.py": "bd9e442708fb08b80c71f538fb6fc0e3835ef2c40453d1c38bcf4bb4213a2dec",
+    "docs/research/native-union-20260928/peer-1m-config.json": "1df077cf5bca02a7b4560440da0aa1814f2ac35b0b85a9cf7ec07d0f22e16ff8"
+  },
+  "socket_note": "Shared VPS cgroup statistics are cumulative; not peer-client RSS or swap measurements."
+}
