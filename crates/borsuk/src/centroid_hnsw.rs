@@ -1034,6 +1034,44 @@ impl CentroidHnsw {
         found.into_iter().map(|candidate| candidate.node).collect()
     }
 
+    /// Source-only adjacency-local chain: O(edges * dimensions + nodes),
+    /// with O(nodes) output/seen storage; no global quadratic centroid chain.
+    pub(crate) fn layer0_nearest_order(&self) -> Vec<u32> {
+        let n = self.vectors.len();
+        let mut order = Vec::with_capacity(n);
+        let mut seen = vec![false; n];
+        let mut current = self.entry;
+        let mut fallback = 0;
+        for _ in 0..n {
+            order.push(current);
+            seen[current as usize] = true;
+            if order.len() == n {
+                break;
+            }
+            current = Self::layer_neighbours(&self.neighbours, current, 0)
+                .iter()
+                .filter(|&&node| !seen[node as usize])
+                .map(|&node| Candidate {
+                    distance: squared_distance(
+                        &self.vectors[current as usize],
+                        &self.vectors[node as usize],
+                    ),
+                    node,
+                })
+                .min()
+                .map_or_else(
+                    || {
+                        while seen[fallback] {
+                            fallback += 1;
+                        }
+                        fallback as u32
+                    },
+                    |candidate| candidate.node,
+                );
+        }
+        order
+    }
+
     /// Order nodes by a BFS over the layer-0 graph from the entry point. Chunking
     /// this order into fragments co-locates each node with its graph neighbours
     /// (the DiskANN "sector" layout), so a beam walk touches contiguous fragments.
@@ -1385,6 +1423,53 @@ impl CentroidHnsw {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_cell_order_follows_nearest_unvisited_edges() {
+        let graph = CentroidHnsw {
+            vectors: vec![
+                vec![0., 0.],
+                vec![100., 0.],
+                vec![1., 0.],
+                vec![2., 0.],
+                vec![200., 0.],
+            ],
+            neighbours: vec![
+                vec![vec![1, 2, 3]],
+                vec![vec![3]],
+                vec![vec![3, 1]],
+                vec![vec![]],
+                vec![vec![]],
+            ],
+            entry: 0,
+            ef_search: 64,
+        };
+        let order = graph.layer0_nearest_order();
+        assert_eq!(
+            order,
+            vec![0, 2, 3, 1, 4],
+            "source cells still use numeric order"
+        );
+        assert_eq!(order, graph.layer0_nearest_order());
+        let mut ids = order;
+        ids.sort_unstable();
+        assert_eq!(ids, vec![0, 1, 2, 3, 4]);
+        let mut disconnected_entry = graph.clone();
+        disconnected_entry.entry = 4;
+        assert_eq!(
+            disconnected_entry.layer0_nearest_order(),
+            vec![4, 0, 2, 3, 1]
+        );
+
+        // Equal distances choose the lower cell ID, regardless of edge order.
+        let tied = CentroidHnsw {
+            vectors: vec![vec![0., 0.], vec![-1., 0.], vec![1., 0.]],
+            neighbours: vec![vec![vec![2, 1]], vec![vec![]], vec![vec![]]],
+            entry: 0,
+            ef_search: 64,
+        };
+        assert_eq!(tied.layer0_nearest_order(), vec![0, 1, 2]);
+    }
 
     #[test]
     fn sequential_diverse_builder_is_deterministic_and_degree_bounded() {

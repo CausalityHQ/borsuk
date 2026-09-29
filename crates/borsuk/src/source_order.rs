@@ -172,6 +172,12 @@ pub fn fit_hierarchical_source_layout(
     if cells > 1 && router.is_none() {
         return Err(bad("hierarchical centroid graph"));
     }
+    let mut ranks = vec![0; cells];
+    if let Some(router) = &router {
+        for (rank, cell) in router.layer0_nearest_order().into_iter().enumerate() {
+            ranks[cell as usize] = rank;
+        }
+    }
     input.seek(SeekFrom::Start(0))?;
     let mut digest = Sha256::new();
     let mut ranked = Vec::with_capacity(rows);
@@ -191,7 +197,7 @@ pub fn fit_hierarchical_source_layout(
             return Err(bad("source cell radius"));
         }
         ranked.push(RankedRow {
-            rank: cell,
+            rank: ranks[cell],
             radius,
             ordinal: row as u64,
         });

@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0a15bc6f8a698eabf",
+  "prefix": "research/native-union/20260928/locality-source-check-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "06c40c0959719bd7738430312b770beedee53ab65e2fb1bd713329b922f3caeb",
+  "source_base_commit": "c29ef100da2ff0208b91e0c2f101907fb787cfcb"
+}

@@ -1,0 +1,148 @@
+{
+  "instance_id": "i-0a15bc6f8a698eabf",
+  "state": "terminated",
+  "source_archive_sha256": "06c40c0959719bd7738430312b770beedee53ab65e2fb1bd713329b922f3caeb",
+  "terminal_sha256": "967c922507ec0bc81302ef42712cc7ebb2bebf790d6466fd32ca0c6714037452",
+  "native_files_matched": 393,
+  "source_files_matched": 395,
+  "artifacts_verified": 20,
+  "qualification": false,
+  "no_corpus_query": true,
+  "cargo_executed_targets": 145,
+  "benchmark_smoke_checks": 12,
+  "exact_previous_top_level_roster_plus_one": true,
+  "raw_summary_passes": 2694,
+  "raw_summary_count": 149,
+  "count_note": "Top-level harness totals; nested subprocess stdout summaries can interleave and are not separate Cargo targets",
+  "public_recipe": {
+    "passed": true,
+    "source_sha256": "a49df38f92f2bbcbc2ad88495eb1c2e706c28ae482ea2cfcc75bf3679acf420b",
+    "order_sha256": "f771a5ae126b0850a8cbc893e9fb8207bc5ba31c01f5cbd9fe10f38d1514ece1",
+    "receipt": {
+      "extent_row_cap": 1024,
+      "extents": [
+        [
+          0,
+          256
+        ],
+        [
+          256,
+          512
+        ],
+        [
+          512,
+          768
+        ],
+        [
+          768,
+          1024
+        ],
+        [
+          1024,
+          1280
+        ],
+        [
+          1280,
+          1536
+        ],
+        [
+          1536,
+          1792
+        ],
+        [
+          1792,
+          2048
+        ],
+        [
+          2048,
+          2304
+        ],
+        [
+          2304,
+          2560
+        ],
+        [
+          2560,
+          2816
+        ],
+        [
+          2816,
+          3072
+        ],
+        [
+          3072,
+          3328
+        ],
+        [
+          3328,
+          3584
+        ],
+        [
+          3584,
+          3840
+        ],
+        [
+          3840,
+          4096
+        ]
+      ],
+      "order_sha256": "f771a5ae126b0850a8cbc893e9fb8207bc5ba31c01f5cbd9fe10f38d1514ece1",
+      "query_or_truth_used": false,
+      "recipe": "borsuk-hierarchical-extents-chacha8-v3",
+      "rows": 4096,
+      "samples_per_sampling_cell": 64,
+      "sampling_cell_target_rows": 1024,
+      "source_cell_order": "nearest-unvisited-layer0-entry-ordinal-fallback-v1",
+      "source_cell_target_rows": 256
+    },
+    "corpus_used": false
+  },
+  "valid_check": true,
+  "boundary": {
+    "qualified": false,
+    "original_graph_sha256": "27d65c1e8b9a60dead9eb55f7590c94f98d9bb46d4092e1a9661b8ceb0898ac1",
+    "fixed_graph_sha256": "2b70546426266d189fb440bcd66620bad2575c7fd8c985a16eaa56c11566077a",
+    "original_source_sha256": "b9ae8c8173341fda29820493a9f9984bd2dba0d1f3f0e1ad2690aeec4d5432de",
+    "fixed_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+    "original_example_sha256": "b8f1f23a3e4c623b1d5b7dbbdaab45a1666713000b118b54017393c018357ccd",
+    "fixed_example_sha256": "9f4472407b0111f91bd8042579520984180b432ef6725adfbcf6031e7f90648a",
+    "red_status": 101,
+    "green_passed": true,
+    "binaries": {
+      "build_two_bit_generation": {
+        "bytes": 1267176,
+        "sha256": "67bc20387f3f09b6421329d0f9b0766f3ff6437ea089b627cf22cf2ad84fbb7a"
+      },
+      "two_bit_plan_demo": {
+        "bytes": 11618544,
+        "sha256": "5b7811480937e7a5f74c289e4e0323f7f7df5fecea621c24b522bda13dd25375"
+      },
+      "two_bit_http": {
+        "bytes": 12515576,
+        "sha256": "c9abf4650f7a7e2a5ae32ba073bdcd776dc0c1a8ae00e2c30a746b2dd1f70ec0"
+      },
+      "build_sq8_source": {
+        "bytes": 1266704,
+        "sha256": "be0a1ae28817b99ae925e9f7db2f5b68c5741a5a58b518d7cf5f5f9bc8963abe"
+      }
+    },
+    "full_workspace_repeated": true,
+    "no_corpus_query": true
+  },
+  "cgroup": {
+    "memory.peak": "10737418240\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 20863\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 7223079488\nuser_usec 6927771721\nsystem_usec 295307767\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  },
+  "full_assurance": {
+    "passed": 2689,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 144
+  },
+  "compiled_graph_sha256": "2b70546426266d189fb440bcd66620bad2575c7fd8c985a16eaa56c11566077a",
+  "compiled_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+  "compiled_example_sha256": "9f4472407b0111f91bd8042579520984180b432ef6725adfbcf6031e7f90648a",
+  "declared_source_transformation": true
+}
