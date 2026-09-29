@@ -13,6 +13,7 @@ import time
 
 import boto3
 
+sys.path.insert(0, str(Path.cwd()))
 from scripts import launch_v174_relaid_bind_compile_spot as runner
 from scripts.launch_v157_primary_feasibility_spot import (
     BUCKET, PROFILE_ARN, REGION, SECURITY_GROUP, missing, put_if_absent,
