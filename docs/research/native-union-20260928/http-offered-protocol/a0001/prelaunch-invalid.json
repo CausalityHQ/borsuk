@@ -1,0 +1,10 @@
+{
+  "valid_check": false,
+  "stage": "prelaunch",
+  "original_session_id": 18049,
+  "exit_code": 1,
+  "instance_launched": false,
+  "reservation_created": false,
+  "reason": "Copied controller boundary authority path accidentally renamed by broad campaign-token substitution; fixed exact path to existing http-topk-authority/a0002/verification.json.",
+  "next_attempt": "a0002"
+}

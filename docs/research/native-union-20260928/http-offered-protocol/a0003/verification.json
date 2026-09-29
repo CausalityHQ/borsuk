@@ -1,0 +1,20 @@
+{
+  "valid_check": true,
+  "state": "terminated",
+  "instance_id": "i-0717ba456e4770d63",
+  "source_archive_sha256": "b060b0c919a620a43cea3dab08aaac28a1e0c7b843f95f1d93e72c83a7309bde",
+  "terminal_sha256": "d17b23371cd0d909055c7fa4b5369e32a9c7198c14a6a08a6de5a306c2166080",
+  "native_files_unchanged": 395,
+  "protocol_source_files_verified": 4,
+  "artifacts_verified": 4,
+  "checks_passed": 5,
+  "unchanged_library_assurance_reused": 2696,
+  "ann_queries": 0,
+  "dataset_quality_measured": false,
+  "cgroup": {
+    "memory.peak": "15663104\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 96851\nuser_usec 75328\nsystem_usec 21522\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  }
+}

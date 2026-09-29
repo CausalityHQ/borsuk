@@ -1,0 +1,10 @@
+{
+  "valid_check": false,
+  "original_session_id": 6982,
+  "exit_code": 1,
+  "state": "terminated",
+  "instance_id": "i-089520c46b3c2e5e4",
+  "reason": "Python3.9 socket.timeout is not builtin TimeoutError; driver incorrectly labeled as transport_error. Fixed shared classifier to explicitly include socket.timeout; same focused protocol gate under a0003, no native/corpus retry.",
+  "failed_check": "rejection_bad_head_timeout_all_offers_retained_no_false_counter_completeness",
+  "next_attempt": "a0003"
+}
