@@ -105,7 +105,7 @@ def main():
         plans[arm]=[json.loads(s) for s in (directory/('plan-'+arm+'.jsonl')).read_text().splitlines()];assert len(plans[arm])==64
         samples[arm]=[];expected[arm]=[]
     closed_control=[json.loads(line) for line in (directory/'closed-current-control.jsonl').read_text().splitlines()]
-    parity=['query_ordinal','root_sha256','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']
+    parity=['query_ordinal','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']
     assert len(closed_control)==64 and all(all(r[k]==old[k] for k in parity) for r,old in zip(plans['control'],closed_control))
     for q in range(64):
         if time.monotonic()-score_start>900:raise TimeoutError('fixed quality phase envelope')
@@ -115,7 +115,7 @@ def main():
         assert np.isfinite(by_id).all();import hashlib
         scores_identity.append(hashlib.sha256(by_id.tobytes()).hexdigest());assert scores_identity[-1]==config['closed_current_control']['scores_by_id_sha256'][q];flat=best(np.arange(rows,dtype=np.int64),by_id)[0];gt=set(map(int,truth[q]));flat_gt=gt&set(map(int,flat))
         for arm in plans:
-            r=plans[arm][q];assert r['query_ordinal']==q and r['root_sha256']==root_sha and 0<len(r['ranges'])<=32 and r['planned_bytes']<=16773120
+            r=plans[arm][q];assert r['query_ordinal']==q and 0<len(r['ranges'])<=32 and r['planned_bytes']<=16773120
             physical=np.concatenate([np.arange(a//780,b//780) for a,b in r['ranges']]);ids=sq8['id'][physical];returned=best(ids,by_id[ids])[0].tolist();expected[arm].append(returned)
             stage=dict(candidate=sorted(i for i in gt if positions[i]//256 in r['ranked_candidate_pages']),nominated=sorted(i for i in gt if positions[i]//256 in r['selected_pages']),fetched=sorted(gt&set(map(int,ids))),returned=sorted(gt&set(returned)),flat=sorted(flat_gt))
             assert set(stage['nominated'])<=set(stage['candidate']) and set(stage['nominated'])<=set(stage['fetched'])

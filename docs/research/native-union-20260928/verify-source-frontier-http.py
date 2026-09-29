@@ -56,7 +56,8 @@ for item in config['items'][:len(decision['results'])]:
     assert all(all(r[k]==old[k] for k in ['query_ordinal','root_sha256','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']) for r,old in zip(actual,current))
     core=[json.loads(line) for line in get(base+'core-plan.jsonl').splitlines()];assert len(core)==64
     actual_candidate=[next(row for row in records[q*2:q*2+2] if row['arm']=='candidate') for q in range(64)]
-    assert all(all(r[k]==new[k] for k in ['query_ordinal','root_sha256','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']) for r,new in zip(core,actual_candidate))
+    assert all(all(r[k]==new[k] for k in ['query_ordinal','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']) for r,new in zip(core,actual_candidate))
+    assert binding['candidate_root_sha256'] in get(base+'core-plan.time').decode() and all(r['root_sha256']==binding['candidate_root_sha256'] for r in actual_candidate)
     assert binding['control_root_sha256']==binding['candidate_root_sha256']==item['control_root_sha256']
 
     ident=item['artifacts']['truth'];truth=s3.get_object(Bucket=config['bucket'],Key=ident['key'])['Body'].read();assert len(truth)==ident['bytes'] and hashlib.sha256(truth).hexdigest()==ident['sha256'];gt=struct.unpack('<100000I',truth)
@@ -65,7 +66,7 @@ for item in config['items'][:len(decision['results'])]:
     encoded_order=get(base+'order.u64');assert hashlib.sha256(encoded_order).hexdigest()==binding['source_order_sha256'];new_ids=struct.unpack('<100000Q',encoded_order)
     assert set(old_ids)==set(new_ids)==set(range(100000)) and len(set(old_ids))==len(set(new_ids))==100000
     orders={'control':old_ids,'candidate':new_ids};positions={arm:{i:pos for pos,i in enumerate(ids)} for arm,ids in orders.items()}
-    discovery_work={arm:[] for arm in orders};discovery_loss={arm:dict(gt_walk_pool=0,gt_centroid_roster=0,flat_gt_walk_pool=0,flat_gt_centroid_roster=0,seed_evaluated_gt=0) for arm in orders}
+    discovery_work={arm:[] for arm in orders};discovery_loss={arm:dict(gt_walk_pool=0,gt_source_roster=0,flat_gt_walk_pool=0,flat_gt_source_roster=0,seed_evaluated_gt=0) for arm in orders}
 
     for q in range(64):
         for r in records[q*2:q*2+2]:
@@ -80,7 +81,7 @@ for item in config['items'][:len(decision['results'])]:
             seed_pages={unit//8 for discovery in r['discoveries'] for unit in discovery['seed_evaluated_units']}
             walk_gt={i for i in query_gt if positions[a][i]//256 in walk_pages};seed_gt={i for i in query_gt if positions[a][i]//256 in seed_pages};flat_gt=stages['flat']
             assert stages['candidate']<=walk_gt
-            for key,value in [('gt_walk_pool',len(query_gt-walk_gt)),('gt_centroid_roster',len(walk_gt-stages['candidate'])),('flat_gt_walk_pool',len(flat_gt-walk_gt)),('flat_gt_centroid_roster',len((flat_gt&walk_gt)-stages['candidate'])),('seed_evaluated_gt',len(seed_gt))]:discovery_loss[a][key]+=value
+            for key,value in [('gt_walk_pool',len(query_gt-walk_gt)),('gt_source_roster',len(walk_gt-stages['candidate'])),('flat_gt_walk_pool',len(flat_gt-walk_gt)),('flat_gt_source_roster',len((flat_gt&walk_gt)-stages['candidate'])),('seed_evaluated_gt',len(seed_gt))]:discovery_loss[a][key]+=value
             for discovery in r['discoveries']:
                 evaluated=discovery['walk_evaluated_units'];assert 0<len(evaluated)==len(set(evaluated))<=1272 and all(0<=unit<3125 for unit in evaluated)
                 assert not discovery['walk_work_exhausted'] or len(evaluated)==1272

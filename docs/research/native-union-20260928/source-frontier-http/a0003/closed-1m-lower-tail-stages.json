@@ -1,0 +1,74 @@
+[
+  {
+    "query_ordinal": 8,
+    "current_stage_hits": {
+      "candidate": 92,
+      "fetched": 92,
+      "flat": 99,
+      "nominated": 92,
+      "returned": 92
+    },
+    "old_whole_page_stage_hits": {
+      "candidate": 92,
+      "fetched": 92,
+      "flat": 99,
+      "nominated": 92,
+      "returned": 92
+    },
+    "current_flat_present_fetched_scoring_loss": 0
+  },
+  {
+    "query_ordinal": 15,
+    "current_stage_hits": {
+      "candidate": 91,
+      "fetched": 89,
+      "flat": 100,
+      "nominated": 89,
+      "returned": 89
+    },
+    "old_whole_page_stage_hits": {
+      "candidate": 88,
+      "fetched": 89,
+      "flat": 100,
+      "nominated": 88,
+      "returned": 89
+    },
+    "current_flat_present_fetched_scoring_loss": 0
+  },
+  {
+    "query_ordinal": 26,
+    "current_stage_hits": {
+      "candidate": 97,
+      "fetched": 92,
+      "flat": 99,
+      "nominated": 92,
+      "returned": 92
+    },
+    "old_whole_page_stage_hits": {
+      "candidate": 94,
+      "fetched": 94,
+      "flat": 99,
+      "nominated": 94,
+      "returned": 94
+    },
+    "current_flat_present_fetched_scoring_loss": 0
+  },
+  {
+    "query_ordinal": 28,
+    "current_stage_hits": {
+      "candidate": 91,
+      "fetched": 81,
+      "flat": 100,
+      "nominated": 80,
+      "returned": 81
+    },
+    "old_whole_page_stage_hits": {
+      "candidate": 82,
+      "fetched": 85,
+      "flat": 100,
+      "nominated": 82,
+      "returned": 85
+    },
+    "current_flat_present_fetched_scoring_loss": 0
+  }
+]

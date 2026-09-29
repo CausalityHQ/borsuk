@@ -55,18 +55,19 @@ order_bytes=get(base+'order.u64');assert len(order_bytes)==8000000 and hashlib.s
 positions={i:p for p,i in enumerate(order)};truth_bytes=get(base+'truth.u32');assert len(truth_bytes)==25600;truth=struct.unpack('<6400I',truth_bytes);oracle=obj(base+'oracle.json');assert oracle['truth_sha256']==hashlib.sha256(truth_bytes).hexdigest() and oracle['dtype']=='float64' and oracle['queries']==64 and oracle['rows']==1000000 and oracle['exact_block_sort_merge']
 assert result['rows']==1000000 and result['split']=='consumed external development0-63' and not result['fresh_cohort_used'] and not result['qualification'] and len(result['scores_by_id_sha256'])==64
 plans={a:[json.loads(s) for s in get(base+'plan-'+a+'.jsonl').splitlines()] for a in ['control','candidate']};decomposition={}
+assert all(root_sha in get(base+'plan-'+arm+'.time').decode() for arm in plans)
 assert result['scores_by_id_sha256']==config['closed_current_control']['scores_by_id_sha256'] and oracle['truth_sha256']==config['closed_current_control']['truth_sha256']
 closed_root=root/'walk-source-1m/a0003';closed_launch=json.loads((closed_root/'aws-launch.json').read_text());closed_proof=json.loads((closed_root/'verification.json').read_text())
 assert closed_proof['valid_measurement'] and closed_proof['terminal_sha256']==reservation['closed_current_control_terminal_sha256']==config['closed_current_control']['terminal_sha256']==hashlib.sha256((closed_root/'aws-terminal.json').read_bytes()).hexdigest()
 assert hashlib.sha256(Path('scripts/run_native_source_frontier_1m.py').read_bytes()).hexdigest()==config['controller_sha256']==reservation['controller_sha256']
 ident=config['artifacts']['closed-current-control.jsonl'];body=s3.get_object(Bucket=config['bucket'],Key=ident['key'])['Body'].read();assert len(body)==ident['bytes'] and hashlib.sha256(body).hexdigest()==ident['sha256'];closed=[json.loads(line) for line in body.splitlines()];assert len(closed)==64
-assert all(all(r[k]==old[k] for k in ['query_ordinal','root_sha256','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']) for r,old in zip(plans['control'],closed))
+assert all(all(r[k]==old[k] for k in ['query_ordinal','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']) for r,old in zip(plans['control'],closed))
 assert result['returned_hits']['control']==config['closed_current_control']['hits']==6288 and result['p05']['control']==config['closed_current_control']['p05']==92 and result['flat_hits']==config['closed_current_control']['flat_hits']==6363 and result['plans_sha256']['control']==config['closed_current_control']['plans_sha256']
 
 for arm,records in plans.items():
     assert len(records)==64 and len(result['samples'][arm])==64 and len(result['expected_ids'][arm])==64;loss={k:0 for k in ['gt_walk_pool','gt_roster','gt_nomination','gt_physical','gt_ranking','flat_discovery','flat_nomination','flat_physical','flat_ranking']};gets=bytes_=calls=0
     for q,r in enumerate(records):
-        assert r['query_ordinal']==q and r['root_sha256']==root_sha;gt=set(truth[q*100:(q+1)*100]);assert len(gt)==100 and all(i<1000000 for i in gt)
+        assert r['query_ordinal']==q;gt=set(truth[q*100:(q+1)*100]);assert len(gt)==100 and all(i<1000000 for i in gt)
         ranges=r['ranges'];assert 0<len(ranges)<=32 and all(0<=a<b<=780000000 and a%780==b%780==0 for a,b in ranges) and all(x[1]<y[0] for x,y in zip(ranges,ranges[1:])) and sum(b-a for a,b in ranges)==r['planned_bytes']<=16773120
         assert len(r['discoveries'])==2;units=set()
         for discovery in r['discoveries']:

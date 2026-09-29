@@ -1,0 +1,11 @@
+{
+  "dataset": "relaion1m",
+  "split": "consumed development0-63",
+  "derived_closed_metadata_only": true,
+  "source_cap_rows": 81408,
+  "full_walk_page_source_min": 78592,
+  "full_walk_page_source_max": 165632,
+  "full_walk_page_source_cap_fail_queries": 63,
+  "complete_roster_source_max": 87584,
+  "complete_roster_source_cap_fail_queries": 2
+}

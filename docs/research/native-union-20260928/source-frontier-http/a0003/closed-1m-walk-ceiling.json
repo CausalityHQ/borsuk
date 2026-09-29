@@ -1,0 +1,21 @@
+{
+  "scope": "CLOSED current integrated-core1M metadata; no new source-priority1M measurement or numerical scorer",
+  "terminal_sha256": "b90b737a11563582a867cfe09e31ae90cea328128e47ee255b1a03eb58fd6c49",
+  "sum_walk_gt_hits": 6354,
+  "minimum": 94,
+  "p05": 97,
+  "queries_below95": [
+    {
+      "query_ordinal": 8,
+      "gt_walk_page_coverage_hits": 94
+    },
+    {
+      "query_ordinal": 15,
+      "gt_walk_page_coverage_hits": 94
+    }
+  ],
+  "worst_returned_query28": {
+    "query_ordinal": 28,
+    "gt_walk_page_coverage_hits": 96
+  }
+}
