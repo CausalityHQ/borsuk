@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-const QUERY_SLOTS: usize = 2;
+const QUERY_SLOTS: usize = 4;
 
 #[derive(Clone, Serialize)]
 struct Authority {
@@ -264,21 +264,22 @@ mod tests {
             validate(&request, &authority, 768),
             Err(StatusCode::BAD_REQUEST)
         );
-        assert_eq!(QUERY_SLOTS, 2);
+        assert_eq!(QUERY_SLOTS, 4);
         let permits = Arc::new(Semaphore::new(QUERY_SLOTS));
-        let permit = admit(&permits).unwrap();
-        let second = admit(&permits).unwrap();
+        let mut held = (0..QUERY_SLOTS)
+            .map(|_| admit(&permits).unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(
             admit(&permits).unwrap_err(),
             StatusCode::SERVICE_UNAVAILABLE
         );
-        drop(permit);
+        drop(held.pop());
         let replacement = admit(&permits).unwrap();
         assert_eq!(
             admit(&permits).unwrap_err(),
             StatusCode::SERVICE_UNAVAILABLE
         );
-        drop(second);
+        drop(held);
         drop(replacement);
         assert_eq!(permits.available_permits(), QUERY_SLOTS);
         assert!(
