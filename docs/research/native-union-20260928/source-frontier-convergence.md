@@ -48,10 +48,15 @@ A preregistered ID-only selector chose 1,000 provisional IDs, and an independent
 pass confirmed zero selected IDs in the original bank and every candidate row
 locator. Further original source/archive and runtime-input audits support a
 [scoped selected-ID GO](fresh-rank16-identity-decision.md) for sealed vector and
-exact-GT construction. **Complete all-history query-artifact closure remains
-false.** The panel has no ANN quality or cold HTTP result; reject all 1,000 IDs
-if later authenticated input proves reuse of any selected ID. No query vectors,
-GT, old rejected seal bodies or quality results were opened by this audit.
+exact-GT construction. That [one Spot construction cell](fresh-rank16-seal-decision.md)
+has now sealed all1,000 query vectors and exhaustive f64 GT100, verified16
+candidate shards, exact original1M raw-source parity, three immutable S3
+artifact SHA256s and actual instance termination. Cgroup peak5.865GB;
+compute$0.0264 **estimated** excluding EBS/S3. **Complete all-history
+query-artifact closure remains false.** No fresh ANN recall or cold HTTP result
+exists; reject all1,000 IDs if later authenticated input proves reuse. Next
+run the frozen fresh development0–63 native quality and offered8QPS gate;
+prospective64–999 stay sealed.
 
 Recent code/measurement evidence: [four-slot decision](four-slot-1m-offered-http-decision.md),
 [frozen strict1M decision](source-completion-1m-decision.md),

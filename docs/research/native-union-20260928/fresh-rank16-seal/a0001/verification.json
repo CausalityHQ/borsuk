@@ -1,0 +1,37 @@
+{
+  "valid_construction": true,
+  "qualification": false,
+  "ann_quality_measured": false,
+  "attempt": "a0001",
+  "instance_id": "i-0b38b829e7709b803",
+  "state": "terminated",
+  "terminal_sha256": "c22cea7e147632511873a0cbc0350d39d691f181ad3281bd9042ff21c0e81e88",
+  "reservation_sha256": "5231ce71c4fb2decd585f4bb74a8be5896fea9086664d7c0a8e21f2c357d9f9c",
+  "source_archive_sha256": "2500a6c97a219c4e91576f32f77079268184946eb901ef38f8da2b81a5cb5afc",
+  "config_sha256": "7885240547ca7791c2c7aca4d6905cafd8af8e651ee3c1c5925290c4bbb0ff16",
+  "panel_sha256": "a8bd97d6e6468e715c4b26d9df8c400f649e5428b2a85f151307f20cb030230c",
+  "authenticated_query_shards": 16,
+  "sealed_artifacts": {
+    "queries.raw": {
+      "bytes": 3072000,
+      "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/queries.raw",
+      "sha256": "a1a2d8d0f37bafbb26e2f918a03c94330819be0ab41ec6cafc1c8b6e898a1758"
+    },
+    "requests.jsonl": {
+      "bytes": 14672490,
+      "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/requests.jsonl",
+      "sha256": "ffe679cc969543b301f5a8350985ad8e234d1194d352b3bd1ef1f2fb44f6ef80"
+    },
+    "truth.u32": {
+      "bytes": 400000,
+      "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/truth.u32",
+      "sha256": "49eeef8097ec28471cc0cbf9156ccf52204d8694dcd966940d06e195ae1a9444"
+    }
+  },
+  "memory_peak_bytes": 5865422848,
+  "swap_peak_bytes": 0,
+  "oracle_wall_seconds": 249.030294041,
+  "instance_elapsed_seconds": 333,
+  "compute_cost_estimate_usd": 0.0264,
+  "cost_scope": "estimate only; excludes EBS/S3 and is not an invoice"
+}

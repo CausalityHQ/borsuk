@@ -55,9 +55,9 @@
   ],
   "existing_authenticated_population_authority": "fresh-identity-authorities/verification.json",
   "next_actions": [
-    "Seal selected query vectors and f64 exact GT10/GT100 on one bounded AWS Spot cell, authenticating all source hashes and selected row locators before decoding; no ANN quality peek.",
-    "Independently verify sealed vector/GT bytes, source/scorer parity, terminal status and actual instance termination; reject entire panel on any mismatch or later authenticated selected-ID reuse.",
-    "Then run one frozen ReLAION-first 1M development quality and cold incoming HTTP gate at offered 8 QPS; require mean recall@10 >=95%, report recall@100 separately, p90 and resources/cost against disclosed published context."
+    "Run one frozen ReLAION FIRST1M rank16 development0-63 native candidate with exact sealed requests/GT, current root/SQ8/scorer/binary and immutable source-parity authority; native mean recall@10 >=95% is the first product gate, report recall@100 separately.",
+    "Only if native quality passes, run fresh incoming HTTP at offered8 successful QPS and disclose hydration, physical GET/bytes, p90/p95/p99, RSS, failures, cost and published-context differences. Terminate original Spot worker at terminal.",
+    "Keep prospective ordinals64-999 sealed until development protocol and architecture are frozen; reject whole panel on later authenticated selected-ID reuse. Then CoHere and 10M/100M scale, lifecycle, mutations/pins/GC and matched both-vendor comparison."
   ],
   "paid_launch_hold": "Lifted by FINAL RELOAD RELEASED immediate-1790693371082917915-2014084; SAME native goal ACTIVE, no further reload needed.",
   "additional_closed_history_inventory": "All341research prefixes scanned:279versioned/490terminals +62nonversioned/207terminals;697 metadata records/125 named query locators. Complete query-source closure remains false.",
@@ -74,5 +74,6 @@
   "cohort_accepted": false,
   "provisional_panel": "fresh-rank16-provisional-ids.json SHAa8bd97d6e6468e715c4b26d9df8c400f649e5428b2a85f151307f20cb030230c: 1000 quality-blind rank16-31 IDs; zero selected IDs in original16 independently confirmed. Selected-ID source lineage supports sealed vector/GT construction only; full global query-artifact closure false; no ANN quality or cold HTTP yet.",
   "selected_id_construction_go": true,
-  "selected_id_construction_authority": "fresh-rank16-identity-decision.md: 35 original and 33 nonversioned SHA-authenticated source archives, 149 exact Git source trees, 701 closed terminal direct-reference checks, 50 native-union terminal/reservation input checks, independent zero-overlap ID check. Scoped inference; not full query-artifact closure or ANN quality."
+  "selected_id_construction_authority": "fresh-rank16-identity-decision.md: 35 original and 33 nonversioned SHA-authenticated source archives, 149 exact Git source trees, 701 closed terminal direct-reference checks, 50 native-union terminal/reservation input checks, independent zero-overlap ID check. Scoped inference; not full query-artifact closure or ANN quality.",
+  "sealed_rank16_construction": "fresh-rank16-seal/a0001/verification.json: original Spot terminal complete, c7g.4xlarge terminated; 1000 quality-blind query vectors and exact f64 GT100 sealed under SHA-authenticated S3 keys, indexed raw source parity exact, 16 selected source shards authenticated; no ANN quality or HTTP measured."
 }

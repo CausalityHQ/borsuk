@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-v36-rank16-fresh-1m-seal-spot-v1",
+  "attempt": "a0001",
+  "source_base_commit": "165aa6d0d795d77bc5363e1752ed538390ba094a",
+  "source_archive_sha256": "2500a6c97a219c4e91576f32f77079268184946eb901ef38f8da2b81a5cb5afc",
+  "config_sha256": "7885240547ca7791c2c7aca4d6905cafd8af8e651ee3c1c5925290c4bbb0ff16",
+  "panel_sha256": "a8bd97d6e6468e715c4b26d9df8c400f649e5428b2a85f151307f20cb030230c",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "availability_zone": "eu-central-1c",
+  "instance_type": "c7g.4xlarge",
+  "spot_price_observed_usd_per_hour": "0.285300",
+  "spot_quote_timestamp": "2026-09-29T17:00:00+00:00",
+  "spot_max_usd_per_hour": "0.60",
+  "wall_seconds": 3600,
+  "compute_cost_cap_usd": 0.6,
+  "ebs_s3_transfer_allowance_usd": 0.5,
+  "measurement_memory_max_bytes": 25769803776,
+  "swap_max_bytes": 0,
+  "interruption_policy": "Discard incomplete cell; no automatic retry",
+  "scope": "Rank16 frozen ReLAION1M external queries plus exhaustive f64 GT100; no ANN quality"
+}
