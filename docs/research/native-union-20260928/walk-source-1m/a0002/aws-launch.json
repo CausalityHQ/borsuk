@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-0df5a746cc02e4451",
+  "prefix": "research/native-union/20260928/walk-source-1m-a0002",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "91ef85db170dcb7a6966435f3ae60233b5a9ff09117c1c31c0ffaa2159d73c4f",
+  "source_base_commit": "eb6fe27556b46436d972e75236debd002896ea5e"
+}

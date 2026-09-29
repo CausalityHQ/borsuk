@@ -1,0 +1,43 @@
+{
+  "valid_native_construction_metadata": true,
+  "scientific_measurement_valid": false,
+  "index_rows": 1000000,
+  "query_split": "none during construction; quality/oracle not reached",
+  "dataset": "ReLAION first1M D768",
+  "root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+  "source_order_sha256": "1df0b8b13d1a11b524d6da7573a0a3e105aa39ad5d4449700856644ee5219d7d",
+  "terminal_sha256": "ce455c3c717d223118462a78010d9296aac7152a51ea4e3e2a36854bde8bb1de",
+  "compiled_native_files_verified": 394,
+  "closed_artifacts_verified": 30,
+  "phases": {
+    "normalize": {
+      "wall_s": 33.5,
+      "user_cpu_s": 20.07,
+      "max_rss_kib": 2576,
+      "exit_code": 0
+    },
+    "hier-fit": {
+      "wall_s": 168.6,
+      "user_cpu_s": 169.54,
+      "max_rss_kib": 406332,
+      "exit_code": 0
+    },
+    "sq8": {
+      "wall_s": 25.78,
+      "user_cpu_s": 16.35,
+      "max_rss_kib": 10236,
+      "exit_code": 0
+    },
+    "build": {
+      "wall_s": 133.11,
+      "user_cpu_s": 123.25,
+      "max_rss_kib": 248684,
+      "exit_code": 0
+    }
+  },
+  "exact_components_bound": true,
+  "full_order_permutation_verified": true,
+  "instance_terminated": true,
+  "failure": "Controller mmap3GB oracle cannot fit fixed4GiB address space; native/source build succeeds; no quality/HTTP",
+  "qualification": false
+}
