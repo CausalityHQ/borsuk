@@ -1,0 +1,98 @@
+{
+  "schema": "borsuk-native-http-dev64-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "arm_order": [
+    "control",
+    "candidate",
+    "candidate",
+    "control"
+  ],
+  "source_scorer": "unchanged current flat-layout native v4 union and nearest authority; no exhaustive SQ8 kernel",
+  "items": [
+    {
+      "name": "relaion",
+      "root_sha256": {
+        "control": "f9087264ac6e84ea214a70969cc3e8c1f6d81b3d41245ce69292fb5a9d2e4e89",
+        "candidate": "75debd103ff5de9a706fdb84ecf52bfd068af920db4a9f475ca17b92ff55f6d3"
+      },
+      "index_prefix": {
+        "control": "research/native-union/20260928/cold-a0001/runs/relaion/0-control",
+        "candidate": "research/native-union/20260928/cold-a0001/runs/relaion/1-candidate"
+      },
+      "artifacts": {
+        "requests": {
+          "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+          "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+          "bytes": 17714558
+        },
+        "truth": {
+          "key": "research/validation-loss-diagnostic/20260928/a0001/artifacts/diagnostic/truth.u32",
+          "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e",
+          "bytes": 400000
+        },
+        "reference-control": {
+          "bytes": 82685,
+          "sha256": "e0c18600ea1d1c271c8b7a6afd14d8aa76ea2bf7a11e8476e3c891145b31a498",
+          "key": "research/native-union/20260928/cold-a0001/artifacts/screen/relaion/run0-control/live.jsonl"
+        },
+        "reference-candidate": {
+          "bytes": 83659,
+          "sha256": "74c680dadd76b52d164e7655b8a07f629f13cff97ebb2927bb5f94e29cebcefd",
+          "key": "research/native-union/20260928/cold-a0001/artifacts/screen/relaion/run1-candidate/live.jsonl"
+        }
+      },
+      "returned_hits": {
+        "control": 6346,
+        "candidate": 6363
+      },
+      "flat_hits": 6369,
+      "p05": {
+        "control": 97,
+        "candidate": 99
+      }
+    },
+    {
+      "name": "cohere",
+      "root_sha256": {
+        "control": "d5ec9e3a0f2f1550f3fb1c2625b44843e3308d9143fa65d1a4e9e7c1c8c7b0a0",
+        "candidate": "bf9d8777e51f4bf2150a014af9584513f64b27822fea4711b011271c37474a99"
+      },
+      "index_prefix": {
+        "control": "research/native-union/20260928/cold-a0001/runs/cohere/0-control",
+        "candidate": "research/native-union/20260928/cold-a0001/runs/cohere/1-candidate"
+      },
+      "artifacts": {
+        "requests": {
+          "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+          "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+          "bytes": 15369495
+        },
+        "truth": {
+          "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/truth.u32",
+          "sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8",
+          "bytes": 400000
+        },
+        "reference-control": {
+          "bytes": 88690,
+          "sha256": "1f04563f3fcb7b8614ef311c161bd554e9587305c8f356f87b2c59b86f335be0",
+          "key": "research/native-union/20260928/cold-a0001/artifacts/screen/cohere/run0-control/live.jsonl"
+        },
+        "reference-candidate": {
+          "bytes": 88944,
+          "sha256": "89a15c05fcf63fc65bda6e0df736192114841014c703547f3465592835ae5a77",
+          "key": "research/native-union/20260928/cold-a0001/artifacts/screen/cohere/run1-candidate/live.jsonl"
+        }
+      },
+      "returned_hits": {
+        "control": 6342,
+        "candidate": 6347
+      },
+      "flat_hits": 6351,
+      "p05": {
+        "control": 98,
+        "candidate": 98
+      }
+    }
+  ]
+}
