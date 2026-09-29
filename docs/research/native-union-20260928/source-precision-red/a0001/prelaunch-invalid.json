@@ -1,0 +1,6 @@
+{
+  "valid": false,
+  "instance_launched": false,
+  "reservation_written": false,
+  "reason": "Prefix assertion treated separator newline as a production change; fixed comparison only strips trailing newlines before added test. Original session29850 exited1 before reservation/RunInstances."
+}

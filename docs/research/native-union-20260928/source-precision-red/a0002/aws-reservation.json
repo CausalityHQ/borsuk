@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-native-source-precision-red-v1",
+  "source_base_commit": "1cb200314172e93ecf40419c59017c2948874ca8",
+  "source_archive_sha256": "dc3ee3a7c9f53e5b929d02d7426bbeec8bd66582f390466f6eee021ec3bca400",
+  "source_dirty": true,
+  "attempt": "a0002",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "wall_seconds": 1500,
+  "test_timeout_seconds": 1200,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.204800",
+  "spot_quote_timestamp": "2026-09-29T04:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.125,
+  "cost_allowance_ebs_s3_usd": 0.1,
+  "scope": "expected three-bit record geometry assertion RED against unchanged two-bit production codec; no full assurance, release or corpus queries",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "existing_native_files_verified_except_declared_change": 394,
+  "changed_native_files": [
+    "crates/borsuk/src/rotated_two_bit.rs"
+  ],
+  "reused_previous_assurance_terminal_sha256": "3b91dadde8185af5a0a85a80eafe0930ddf6bf7459513ed83a29d949b97c4ec1",
+  "measurement_memory_max_bytes": 10737418240,
+  "swap_max_bytes": 0,
+  "cpu_affinity": "0-3",
+  "threads": 4,
+  "s3_versioning_observed": "Disabled"
+}

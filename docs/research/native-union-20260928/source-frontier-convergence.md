@@ -29,3 +29,29 @@ Ordered gates: sourceproxyprecision3bit affected nativeauthority; fixed pairedBO
 qualityGO actual1Mnative/HTTP thenCoHere1M; fresh identity qualification and scales/
 maintenance/BOTHvendor matched lifecycle dollars. ScientificKILL ends exactarm.
 No new reviewer/architecture cycle, extra workbudget or operator decision.
+
+## Active precision checkpoint
+
+Source-priority arm ended in the verified ReLAION100k KILL above. Its compute is
+terminated. Current candidate is a single source-code precision change (2→3bit)
+with centroid discovery and partial-source nomination unchanged.
+
+|Dataset / split|Matched current baseline|Three-bit candidate|Actual quality delta|Tail/QPS/lifecycle cost|Remaining BOTHvendor gap|Next decisive test|
+|---|---|---|---|---|---|---|
+|ReLAION first100k / consumed external dev0–63|6366/6400=99.468750%; exhaustive6369=99.515625% (verified closed)|Unmeasured|Unmeasured|Unmeasured for this candidate|No matched vendor or lifecycle evidence|Verified native authority then bounded quality; KILL stops arm|
+|CoHere first100k / consumed external dev0–63|6349/6400=99.203125%; exhaustive6351=99.234375% (verified closed)|Unmeasured|Unmeasured|Unmeasured for this candidate|No matched vendor or lifecycle evidence|Only after ReLAION GO; BOTH GO before HTTP|
+|ReLAION first1M / consumed external dev0–63|6288/6400=98.25%,p05=92%; exhaustive6363=99.421875% (verified closed KILL)|Unmeasured|Unmeasured|No1MHTTP/QPS/cost measured|Quality gap75hits/1.171875pp plus unqualified serving/scale/vendors|Only after BOTH100k GO; fixed quality before HTTP|
+
+Prerequisite exact assertion RED independently passed: source-precision-red/a0003,
+all394 prior native identities, unchanged production body, seven artifacts,
+actual terminated i-0fb259f2bd0bda7ad. No corpus or full gate in that check.
+Three-bit engineering authority source-precision-integration/a0003 is verified:
+2694passes/0fail/26existing ignores/146Cargo targets and release binaries; actual
+compute terminated. Scientific development is still unmeasured.
+Production geometry/admission/format fixtures changed in nine native files;
+old artifacts remain immutable, new plane/root format rejects old indexes.
+
+100M source metadata49.1125GB decimal /45.74GiB and two generations98.225GB /
+91.48GiB are projections before unqualified allocator/runtime overhead, not
+measured RSS/admission or gains. Fixed48GiBsteady/96GiBpin targets remain.
+No operator decision needed for the current authorized bounded query work.

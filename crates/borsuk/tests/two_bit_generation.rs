@@ -97,7 +97,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v4",
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v5",
         "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
@@ -204,12 +204,15 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         );
     }
 
-    // Exactly admits this D2 codec (one packed byte), leaving no trace budget.
+    // Admit the trace, but leave one byte less than the D2 codec peak.
     let tight = TwoBitGeneration::open(
         root,
         &hash(&manifest),
         TwoBitGenerationLimits {
-            max_query_scratch_bytes: (256 + 2) * std::mem::size_of::<f64>(),
+            max_query_scratch_bytes: borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(
+                512,
+            ) + (64 + 2) * std::mem::size_of::<f64>()
+                - 1,
             ..limits
         },
     )

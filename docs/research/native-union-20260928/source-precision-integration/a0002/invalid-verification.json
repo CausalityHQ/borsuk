@@ -1,0 +1,21 @@
+{
+  "instance_id": "i-029da82e709909e3b",
+  "state": "terminated",
+  "source_archive_sha256": "8c1b3599983609e50acf91cf45ec9debcc664e697f7666134e0de4276842dafe",
+  "terminal_sha256": "bdf0a8955a33b4b624f24983ad435ade078d49546433d84609031de85a9bc14e",
+  "native_files_matched": 394,
+  "artifacts_verified": 6,
+  "qualification": false,
+  "no_corpus_query": true,
+  "valid_check": false,
+  "missing_artifacts": [
+    "boundary-check.json",
+    "full.log",
+    "release.log",
+    "binaries/two_bit_plan_demo",
+    "binaries/two_bit_http",
+    "binaries/build_two_bit_generation"
+  ],
+  "phase": "boundary-check",
+  "exit_code": 1
+}

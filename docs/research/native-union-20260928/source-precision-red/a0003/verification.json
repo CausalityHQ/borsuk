@@ -1,0 +1,41 @@
+{
+  "valid_check": true,
+  "instance_id": "i-0fb259f2bd0bda7ad",
+  "state": "terminated",
+  "source_archive_sha256": "b36adbddc4af1c24de72af8aa0b64f46bc849c2860893a895f175932d1246c2e",
+  "terminal_sha256": "851c7e49740a2a6603ac6cdcef752e549d460d7dd3154f96af66d9d55110bfbd",
+  "native_files_matched": 394,
+  "artifacts_verified": 7,
+  "qualification": false,
+  "no_corpus_query": true,
+  "production_body_unchanged": true,
+  "boundary": {
+    "qualified": false,
+    "no_corpus_query": true,
+    "full_workspace_repeated": false,
+    "original_source_sha256": "f937866bee090fee46bb3a99277e59bedad34fb4df62a7a06399209a1829fac8",
+    "red_status": 101,
+    "red_verified": true,
+    "command": [
+      "/mnt/union-nomination-red/.cargo/bin/cargo",
+      "test",
+      "--locked",
+      "--manifest-path",
+      "/mnt/union-nomination-red/repo/Cargo.toml",
+      "--target-dir",
+      "/mnt/union-nomination-red/target",
+      "-p",
+      "borsuk",
+      "--jobs",
+      "4",
+      "--lib",
+      "rotated_two_bit::precision_tests::three_bit_records_match_scalar_cosine_and_admit_exact_lookup_scratch"
+    ]
+  },
+  "cgroup": {
+    "memory.peak": "6606938112\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 326566216\nuser_usec 297573615\nsystem_usec 28992600\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  }
+}

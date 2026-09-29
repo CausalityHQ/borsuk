@@ -1,0 +1,7 @@
+{
+  "valid": false,
+  "reason": "RunInstances InsufficientInstanceCapacity eu-central-1a Spot; no replacement compute or scientific data",
+  "instance_launched": false,
+  "active_instances_verified": 0,
+  "original_session": 67023
+}
