@@ -1,0 +1,26 @@
+{
+  "valid_check": false,
+  "engineering_invalid": true,
+  "state": "terminated",
+  "instance_id": "i-0b6d11e0e22f66843",
+  "source_archive_sha256": "e28b438626b77f5abaaea10b48ef86a85ae1f06e9982314d22fab2c5e8a11742",
+  "terminal_sha256": "ae108df55093349a57cf2a5a7ea06166835b153b8fee4a316de558902623d898",
+  "native_files_matched": 395,
+  "unchanged_native_files": 394,
+  "artifacts_verified": 7,
+  "focused_native_tests_passed": 3,
+  "release_build_completed": true,
+  "compiled_source_sha256": "ce9502a86c503bf085942fb4294731fac8432ddcb5f1e52cdf21c68397fd5f02",
+  "binary_retained": false,
+  "cli_preopen_rejection_checks_completed": false,
+  "unchanged_library_assurance_reused": 2696,
+  "no_corpus_query": true,
+  "full_workspace_repeated": false,
+  "reason": "Checker expected2 tests, but included native_development_memory module adds third passing test; assertion after release build prevented binary retention and CLI checks. Fixed checker count3/test assertion placement; no paid rerun before final reload resume.",
+  "cgroup": {
+    "memory.peak": "5894967296\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 1836071303\nuser_usec 1785670838\nsystem_usec 50400464\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  }
+}

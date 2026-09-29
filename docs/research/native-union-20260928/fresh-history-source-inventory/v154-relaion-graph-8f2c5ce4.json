@@ -1,0 +1,378 @@
+{
+  "terminal_key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/runs/v154-20260924T143744Z/a0002/terminal.json",
+  "terminal_sha256": "09301ea5dfbb75aef49e7f34869903c15def2dfcd0eb787214f924fb191c5068",
+  "terminal_status": "complete",
+  "archive_key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/source/5fe7bfcd84cc5fa6a3ecf66c45a6f265a6c0d12e9e04fcd2d92a5679c5e5badc/source.tar.gz",
+  "archive_sha256": "5fe7bfcd84cc5fa6a3ecf66c45a6f265a6c0d12e9e04fcd2d92a5679c5e5badc",
+  "source_code": {
+    "scripts/launch_v154_relaion_graph_spot.py": {
+      "sha256": "b1612b6d610df5d073d7b2b6f06605c70ba913fdff0a8aae6e55e0c03e1dce6a",
+      "lines": [
+        {
+          "line": 45,
+          "text": "    source_commit: str"
+        },
+        {
+          "line": 68,
+          "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+        },
+        {
+          "line": 70,
+          "text": "            raise ValueError(\"source identity differs\")"
+        },
+        {
+          "line": 76,
+          "text": "        or plan.source_commit not in archive_key"
+        },
+        {
+          "line": 79,
+          "text": "            f\"research/v154-relaion-graph/{plan.source_commit}/runs/\""
+        },
+        {
+          "line": 93,
+          "text": "            f\"export V154_SOURCE_COMMIT={plan.source_commit}\","
+        },
+        {
+          "line": 116,
+          "text": "  \"source_commit\":os.environ[\"V154_SOURCE_COMMIT\"],"
+        },
+        {
+          "line": 117,
+          "text": "  \"source_archive_sha256\":os.environ[\"V154_ARCHIVE_SHA256\"],"
+        },
+        {
+          "line": 127,
+          "text": "aws s3 cp {shlex.quote(plan.archive_uri)} source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 128,
+          "text": "[ \"$(stat -c%s source.tar.gz)\" = \"{plan.archive_bytes}\" ]"
+        },
+        {
+          "line": 129,
+          "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+        },
+        {
+          "line": 130,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 164,
+          "text": "            \"ResourceType\": \"instance\","
+        },
+        {
+          "line": 183,
+          "text": "def check_source_and_inputs(s3: object, plan: Plan) -> None:"
+        },
+        {
+          "line": 184,
+          "text": "    subprocess.run([\"git\", \"merge-base\", \"--is-ancestor\", plan.source_commit,"
+        },
+        {
+          "line": 196,
+          "text": "        raise ValueError(\"source archive differs\")"
+        },
+        {
+          "line": 198,
+          "text": "        [\"git\", \"archive\", \"--format=tar\", plan.source_commit],"
+        },
+        {
+          "line": 202,
+          "text": "        raise ValueError(\"source archive is not the named Git commit\")"
+        },
+        {
+          "line": 204,
+          "text": "    with tarfile.open(fileobj=archive, mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 205,
+          "text": "        if (RUNNER not in source.getnames()"
+        },
+        {
+          "line": 206,
+          "text": "                or \"crates/borsuk/src/bin/v154_relaion_page_graph.rs\" not in source.getnames()"
+        },
+        {
+          "line": 207,
+          "text": "                or \"crates/borsuk/src/budgeted_page_rank.rs\" not in source.getnames()"
+        },
+        {
+          "line": 208,
+          "text": "                or \"crates/borsuk/src/centroid_hnsw.rs\" not in source.getnames()"
+        },
+        {
+          "line": 209,
+          "text": "                or \"crates/borsuk/src/unit_centroid_pages.rs\" not in source.getnames()"
+        },
+        {
+          "line": 210,
+          "text": "                or \"crates/borsuk/src/unit_centroid_graph.rs\" not in source.getnames()"
+        },
+        {
+          "line": 211,
+          "text": "                or \"crates/borsuk/src/lib.rs\" not in source.getnames()"
+        },
+        {
+          "line": 212,
+          "text": "                or \"crates/borsuk/Cargo.toml\" not in source.getnames()"
+        },
+        {
+          "line": 213,
+          "text": "                or \"Cargo.lock\" not in source.getnames()"
+        },
+        {
+          "line": 214,
+          "text": "                or \"scripts/v154_prepare_relaion_graph.py\" not in source.getnames()"
+        },
+        {
+          "line": 215,
+          "text": "                or \"scripts/v154_independent_recount.py\" not in source.getnames()"
+        },
+        {
+          "line": 216,
+          "text": "                or \"docs/research/v154-relaion-1m-graph-prereg.md\" not in source.getnames()"
+        },
+        {
+          "line": 217,
+          "text": "                or \"docs/research/inputs/v139-relaion-primary.jsonl\" not in source.getnames()):"
+        },
+        {
+          "line": 218,
+          "text": "            raise ValueError(\"source archive lacks V154 runner or evaluator\")"
+        },
+        {
+          "line": 227,
+          "text": "        \"source_commit\": plan.source_commit,"
+        },
+        {
+          "line": 228,
+          "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+        },
+        {
+          "line": 266,
+          "text": "    check_source_and_inputs(s3, plan)"
+        },
+        {
+          "line": 278,
+          "text": "                        or terminal.get(\"source_commit\") != plan.source_commit"
+        },
+        {
+          "line": 279,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+        },
+        {
+          "line": 296,
+          "text": "                required = {\"install.log\", \"core-check-resources.txt\","
+        },
+        {
+          "line": 297,
+          "text": "                            \"core-test-resources.txt\", \"core-test.log\","
+        },
+        {
+          "line": 298,
+          "text": "                            \"gate-build-resources.txt\", \"download.log\","
+        },
+        {
+          "line": 299,
+          "text": "                            \"prepare-resources.txt\", \"fresh/queries.jsonl\","
+        },
+        {
+          "line": 300,
+          "text": "                            \"fresh/routing.jsonl\", \"fresh/manifest.json\","
+        },
+        {
+          "line": 301,
+          "text": "                            \"science-resources.txt\", \"science.jsonl\","
+        },
+        {
+          "line": 355,
+          "text": "    parser.add_argument(\"--source-commit\", required=True)"
+        },
+        {
+          "line": 362,
+          "text": "        source_commit=args.source_commit,"
+        }
+      ]
+    },
+    "scripts/v154_independent_recount.py": {
+      "sha256": "446842da0de0d921e8f1731f4edf6fd1a77023f57fea0c287d45b95e65d559f2",
+      "lines": [
+        {
+          "line": 17,
+          "text": "QUERY_SHA = \"4ef4734ff40aeda8b8e99ec01ca993be46e8ad9c337b5410259eeb171f57acfd\""
+        },
+        {
+          "line": 89,
+          "text": "    seal = json.loads(authenticated[\"fresh/manifest.json\"])"
+        },
+        {
+          "line": 93,
+          "text": "            or seal[\"query_count\"] != 1000"
+        },
+        {
+          "line": 94,
+          "text": "            or seal[\"queries_sha256\"] != QUERY_SHA"
+        },
+        {
+          "line": 96,
+          "text": "            or digest(authenticated[\"fresh/queries.jsonl\"]) != QUERY_SHA"
+        },
+        {
+          "line": 97,
+          "text": "            or digest(authenticated[\"fresh/routing.jsonl\"]) != ROUTING_SHA):"
+        },
+        {
+          "line": 99,
+          "text": "    queries = records(authenticated[\"fresh/queries.jsonl\"])"
+        },
+        {
+          "line": 100,
+          "text": "    routing = records(authenticated[\"fresh/routing.jsonl\"])"
+        },
+        {
+          "line": 106,
+          "text": "            or summary[\"queries\"] != 1000 or graph[:8] != b\"BORSUKG1\""
+        },
+        {
+          "line": 128,
+          "text": "    flat_target_shortfall_queries = 0"
+        },
+        {
+          "line": 130,
+          "text": "    flat_primary_shortfall_queries = 0"
+        },
+        {
+          "line": 132,
+          "text": "    for ordinal, (query, route, record) in enumerate(zip(queries, routing, science)):"
+        },
+        {
+          "line": 133,
+          "text": "        if any(row[\"query_ordinal\"] != ordinal or row[\"source_query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 134,
+          "text": "               for row in (query, route, record)):"
+        },
+        {
+          "line": 135,
+          "text": "            raise ValueError(\"V154 query identity differs\")"
+        },
+        {
+          "line": 191,
+          "text": "        flat_target_shortfall_queries += plans[\"flat\"][\"target_shortfall\"] > 0"
+        },
+        {
+          "line": 213,
+          "text": "        flat_primary_shortfall_queries += len(flat_retained) < p"
+        },
+        {
+          "line": 234,
+          "text": "                       \"flat_target_shortfall_queries\": flat_target_shortfall_queries,"
+        },
+        {
+          "line": 253,
+          "text": "                       \"flat_primary_shortfall_queries\": flat_primary_shortfall_queries,"
+        },
+        {
+          "line": 262,
+          "text": "        expected_fields[f\"{arm}_target_shortfall_queries\"] = sum("
+        }
+      ]
+    },
+    "scripts/v154_prepare_relaion_graph.py": {
+      "sha256": "fedb6880deb8cdc44146f7bc6f27f1994c3284055e7af57014649071d90ed9cb",
+      "lines": [
+        {
+          "line": 15,
+          "text": "QUERIES = 1000"
+        },
+        {
+          "line": 21,
+          "text": "    with path.open(\"rb\") as source:"
+        },
+        {
+          "line": 22,
+          "text": "        for block in iter(lambda: source.read(4 * 1024 * 1024), b\"\"):"
+        },
+        {
+          "line": 30,
+          "text": "    with path.open() as source:"
+        },
+        {
+          "line": 31,
+          "text": "        values = [json.loads(line) for line in source]"
+        },
+        {
+          "line": 32,
+          "text": "    if len(values) != QUERIES:"
+        },
+        {
+          "line": 33,
+          "text": "        raise ValueError(\"query count differs\")"
+        },
+        {
+          "line": 41,
+          "text": "    parser.add_argument(\"--queries-out\", type=Path, required=True)"
+        },
+        {
+          "line": 47,
+          "text": "    with args.queries_out.open(\"x\") as query_out, args.routing_out.open(\"x\") as route_out:"
+        },
+        {
+          "line": 49,
+          "text": "            if request[\"query_ordinal\"] != ordinal or route[\"query_ordinal\"] != ordinal:"
+        },
+        {
+          "line": 50,
+          "text": "                raise ValueError(\"query identity differs\")"
+        },
+        {
+          "line": 51,
+          "text": "            query = request[\"query\"]"
+        },
+        {
+          "line": 55,
+          "text": "                len(query) != DIMS"
+        },
+        {
+          "line": 56,
+          "text": "                or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in query)"
+        },
+        {
+          "line": 64,
+          "text": "                raise ValueError(f\"query or routing geometry differs: {ordinal}\")"
+        },
+        {
+          "line": 65,
+          "text": "            query_out.write(json.dumps({\"query_ordinal\": ordinal,"
+        },
+        {
+          "line": 66,
+          "text": "                                        \"source_query_ordinal\": ordinal,"
+        },
+        {
+          "line": 67,
+          "text": "                                        \"query\": query}, separators=(\",\", \":\")) + \"\\n\")"
+        },
+        {
+          "line": 68,
+          "text": "            route_out.write(json.dumps({\"query_ordinal\": ordinal,"
+        },
+        {
+          "line": 69,
+          "text": "                                        \"source_query_ordinal\": ordinal,"
+        },
+        {
+          "line": 75,
+          "text": "                \"queries_sha256\": sha256(args.queries_out),"
+        },
+        {
+          "line": 77,
+          "text": "                \"query_count\": QUERIES}"
+        }
+      ]
+    }
+  },
+  "complete_prior_query_audit": false,
+  "query_gt_or_sealed_bodies_opened": false
+}

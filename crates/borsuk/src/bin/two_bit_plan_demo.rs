@@ -11,26 +11,32 @@ use sha2::{Digest, Sha256};
 use std::{error::Error, fs, io::Write, path::Path, time::Instant};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args = std::env::args().collect::<Vec<_>>();
+    let mut args = std::env::args().collect::<Vec<_>>();
+    let panel = panel_options(&mut args)?;
+    let top_k = panel.map_or(100, |(_, k)| k);
     let paired = args.len() == 12 && args[8] == "--trace" && args[9] == "--paired";
     let live = args.len() == 12 && args[8] == "--live-s3";
     let trace = (args.len() == 9 && args[8] == "--trace") || paired;
     if args.len() != 6 && args.len() != 8 && !trace && !live {
         return Err(
-            "usage: two_bit_plan_demo ROOT ROOT_SHA REQUESTS REQUESTS_SHA OUTPUT [FIRST COUNT [--trace [--paired ROOT ROOT_SHA] | --live-s3 BUCKET REGION PREFIX]]"
+            "usage: two_bit_plan_demo ROOT ROOT_SHA REQUESTS REQUESTS_SHA OUTPUT [FIRST COUNT [--trace [--paired ROOT ROOT_SHA] | --live-s3 BUCKET REGION PREFIX]] [--panel-count COUNT --top-k 10|100]"
                 .into(),
         );
     }
     let (first, count) = if args.len() >= 8 {
         let split = (args[6].parse::<usize>()?, args[7].parse::<usize>()?);
-        if !matches!(split, (0, 64) | (256, 64) | (256, 744)) {
+        if panel.is_none() && !matches!(split, (0, 64) | (256, 64) | (256, 744)) {
             return Err("unsupported frozen split".into());
         }
         split
     } else {
         (0, 64)
     };
-    if live {
+    if let Some((declared_count, _)) = panel {
+        if !live || first != 0 || count != declared_count {
+            return Err("declared panel requires live S3 and exact first0/count".into());
+        }
+    } else if live {
         live_split(first, count)?;
     }
     let limits = TwoBitGenerationLimits {
@@ -79,7 +85,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err("request identity".into());
     }
     let lines = std::str::from_utf8(&requests)?.lines().collect::<Vec<_>>();
-    if lines.len() > 1000 || first + count > lines.len() {
+    if lines.len() > 1000
+        || first + count > lines.len()
+        || panel.is_some_and(|(declared_count, _)| lines.len() != declared_count)
+    {
         return Err("request roster size".into());
     }
     for (ordinal, line) in lines.iter().enumerate() {
@@ -145,6 +154,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "{}",
             serde_json::json!({"phase":"startup","root_sha256":head.root_sha256(),
             "control_epoch":head.control_epoch(),"generation":head.generation(),"publish_wall_ns":publish_wall_ns,
+            "top_k":top_k,"declared_panel_count":panel.map(|(n,_)|n),
             "head_read_wall_ns":head_read_wall_ns,"remote_open_wall_ns":wall.elapsed().as_nanos()})
         )?;
         output.sync_all()?;
@@ -164,7 +174,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if let Some(reader) = reader.as_ref() {
             let wall = Instant::now();
             let cpu = cpu_ns()?;
-            let result = match generation.search(reader, &query, 100).await {
+            let result = match generation.search(reader, &query, top_k).await {
                 Ok(result) => result,
                 Err(error) => {
                     let stats = match &error {
@@ -245,11 +255,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         writeln!(
             output,
             "{}",
-            serde_json::json!({"phase":"summary","count":count,"measurement_wall_ns":measurement.elapsed().as_nanos()})
+            serde_json::json!({"phase":"summary","count":count,"top_k":top_k,"measurement_wall_ns":measurement.elapsed().as_nanos()})
         )?;
     }
     output.sync_all()?;
     Ok(())
+}
+
+fn panel_options(args: &mut Vec<String>) -> Result<Option<(usize, usize)>, Box<dyn Error>> {
+    let n = args.len();
+    if !args.iter().any(|a| a == "--panel-count" || a == "--top-k") {
+        return Ok(None);
+    }
+    if n < 5 || args[n - 4] != "--panel-count" || args[n - 2] != "--top-k" {
+        return Err("panel options must be final --panel-count COUNT --top-k 10|100".into());
+    }
+    let count = args[n - 3].parse::<usize>()?;
+    let top_k = args[n - 1].parse::<usize>()?;
+    if !(1..=1000).contains(&count) || !matches!(top_k, 10 | 100) {
+        return Err("declared panel count1..1000 and k10/k100 required".into());
+    }
+    args.truncate(n - 4);
+    Ok(Some((count, top_k)))
 }
 
 fn cpu_ns() -> Result<u64, Box<dyn Error>> {
@@ -269,6 +296,42 @@ fn live_split(first: usize, count: usize) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn declared_panel_options_are_bounded_and_explicit() {
+        for count in [1, 64, 1000] {
+            for k in [10, 100] {
+                let mut args = vec![
+                    "demo".into(),
+                    "--panel-count".into(),
+                    count.to_string(),
+                    "--top-k".into(),
+                    k.to_string(),
+                ];
+                assert_eq!(panel_options(&mut args).unwrap(), Some((count, k)));
+                assert_eq!(args, ["demo"]);
+            }
+        }
+        for (count, k) in [(0, 10), (1001, 10), (64, 0), (64, 9), (64, 11), (64, 101)] {
+            let mut args = vec![
+                "demo".into(),
+                "--panel-count".into(),
+                count.to_string(),
+                "--top-k".into(),
+                k.to_string(),
+            ];
+            assert!(panel_options(&mut args).is_err());
+        }
+        let mut legacy = vec!["demo".into(), "root".into()];
+        assert_eq!(panel_options(&mut legacy).unwrap(), None);
+        assert_eq!(legacy, ["demo", "root"]);
+        for values in [
+            vec!["demo", "--top-k", "10"],
+            vec!["demo", "--top-k", "10", "--panel-count", "64"],
+        ] {
+            let mut args = values.into_iter().map(String::from).collect();
+            assert!(panel_options(&mut args).is_err());
+        }
+    }
     #[test]
     fn live_scope_is_development_only() {
         assert!(live_split(0, 64).is_ok(), "live split not implemented");

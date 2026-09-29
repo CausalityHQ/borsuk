@@ -1,0 +1,1 @@
+{"dataset": "CoHere-large-10M train first1m D768 cosine", "k": 100, "query_sha256": "6e3505fdfc9d6a6c101cba2b7d4c16d5c07eee6ec704fa836385a810e8ca17d4", "split": "excluded train rows1001000-1001999", "truth_sha256": "7e24e5a8263b9461eb402f0dabdaef7eb4724c623b5632cdc9f7a7d1c7c65e2d"}

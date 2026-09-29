@@ -1,0 +1,217 @@
+{
+  "terminal_key": "research/v279-relaion-transfer-1m/8206cbc9a7d0949146b2a8739f4964725871a913/runs/a0001/terminal.json",
+  "terminal_sha256": "b7c14d3917a596d7d5451a15cd48196332651af7a89a3aa3228d9b9f323c74e7",
+  "terminal_status": "complete",
+  "archive_key": "research/v279-relaion-transfer-1m/8206cbc9a7d0949146b2a8739f4964725871a913/sources/c38a301c5c51ccdc823fc90518160a7a73a0b296ab22a277817f3273b6bc7c9a.tar.gz",
+  "archive_sha256": "c38a301c5c51ccdc823fc90518160a7a73a0b296ab22a277817f3273b6bc7c9a",
+  "source_code": {
+    "scripts/launch_v279_relaion_transfer_1m_spot.py": {
+      "sha256": "679ec02c3fdffc93791e646b453a2e80d3a3888366f27f6482d0d842b85596c0",
+      "lines": [
+        {
+          "line": 14,
+          "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+        },
+        {
+          "line": 26,
+          "text": "SOURCE_KEY = (\"research/v36-prefix-screen/runs/\""
+        },
+        {
+          "line": 27,
+          "text": "              \"v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet\")"
+        },
+        {
+          "line": 38,
+          "text": "export BORSUK_V279_SOURCE_COMMIT='{commit}'"
+        },
+        {
+          "line": 40,
+          "text": "export BORSUK_V279_SOURCE_KEY='{SOURCE_KEY}'"
+        },
+        {
+          "line": 51,
+          "text": "  'source_commit':os.environ['BORSUK_V279_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 52,
+          "text": "  'source_archive_sha256':os.environ['BORSUK_V279_ARCHIVE_SHA'],"
+        },
+        {
+          "line": 65,
+          "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 66,
+          "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+        },
+        {
+          "line": 67,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 84,
+          "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+        },
+        {
+          "line": 94,
+          "text": "            or s3.head_object(Bucket=BUCKET, Key=SOURCE_KEY)[\"ContentLength\"] != 1_458_450_077"
+        },
+        {
+          "line": 96,
+          "text": "        raise ValueError(\"transfer source or qualifying receipt differs\")"
+        },
+        {
+          "line": 103,
+          "text": "    archive = archive_source(commit)"
+        },
+        {
+          "line": 104,
+          "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 108,
+          "text": "        if not required.issubset(source.getnames()):"
+        },
+        {
+          "line": 111,
+          "text": "    archive_key = f\"research/v279-relaion-transfer-1m/{commit}/sources/{archive_sha}.tar.gz\""
+        },
+        {
+          "line": 123,
+          "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+        },
+        {
+          "line": 124,
+          "text": "        \"source_archive_sha256\": archive_sha,"
+        },
+        {
+          "line": 126,
+          "text": "        \"source_key\": SOURCE_KEY, \"requests_key\": REQUESTS_KEY,"
+        },
+        {
+          "line": 127,
+          "text": "        \"source_sha256\": \"2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86\","
+        },
+        {
+          "line": 130,
+          "text": "        \"split\": \"validation ordinals0-999 historically used\", \"queries\": 1000, \"k\": 100,"
+        },
+        {
+          "line": 132,
+          "text": "        \"candidate\": \"M32 M0=64 efConstruction128 plus bounded extra reverse-edge append cap16 per source\","
+        },
+        {
+          "line": 133,
+          "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+        },
+        {
+          "line": 149,
+          "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+        },
+        {
+          "line": 158,
+          "text": "                or terminal.get(\"source_commit\") != commit"
+        },
+        {
+          "line": 159,
+          "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+        },
+        {
+          "line": 175,
+          "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+        },
+        {
+          "line": 176,
+          "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+        }
+      ]
+    },
+    "scripts/v279_relaion_transfer_1m.py": {
+      "sha256": "190d1285e2a1a89ea4eb914d4bd12497f7a653be214102872349d753bb4938f7",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"Fixed ReLAION-1M source, cosine truth and paired graph transfer decision.\"\"\""
+        },
+        {
+          "line": 10,
+          "text": "from scripts.v164_smooth_layout_1m import source_arrays"
+        },
+        {
+          "line": 11,
+          "text": "from scripts.v271_fresh_frontier import add_rows, digest, unit"
+        },
+        {
+          "line": 14,
+          "text": "SOURCE_SHA = \"2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86\""
+        },
+        {
+          "line": 19,
+          "text": "def prepare(source, requests, vectors, queries, truth):"
+        },
+        {
+          "line": 22,
+          "text": "    if digest(source) != SOURCE_SHA or digest(requests) != REQUESTS_SHA:"
+        },
+        {
+          "line": 23,
+          "text": "        raise ValueError(\"ReLAION source or validation requests differ\")"
+        },
+        {
+          "line": 24,
+          "text": "    source_ids, data, _ = source_arrays(source)"
+        },
+        {
+          "line": 26,
+          "text": "            or len(source_ids) != ROWS or not np.isfinite(data).all()"
+        },
+        {
+          "line": 28,
+          "text": "        raise ValueError(\"ReLAION source geometry differs\")"
+        },
+        {
+          "line": 30,
+          "text": "    del source_ids, data"
+        },
+        {
+          "line": 35,
+          "text": "            values = np.asarray(row[\"query\"], dtype=np.float32)"
+        },
+        {
+          "line": 36,
+          "text": "            if (ordinal >= 1000 or row[\"query_ordinal\"] != ordinal"
+        },
+        {
+          "line": 45,
+          "text": "    panel.tofile(queries)"
+        },
+        {
+          "line": 56,
+          "text": "                      \"source_raw_sha256\": digest(vectors),"
+        },
+        {
+          "line": 57,
+          "text": "                      \"query_sha256\": digest(queries),"
+        },
+        {
+          "line": 78,
+          "text": "            and structure[\"bounded_source_additions\"]"
+        },
+        {
+          "line": 93,
+          "text": "              \"split\": \"used validation ordinals0-999\", \"k\": 100, \"queries\": 1000,"
+        },
+        {
+          "line": 113,
+          "text": "    for name in (\"source\", \"requests\", \"vectors\", \"queries\", \"truth\"):"
+        },
+        {
+          "line": 126,
+          "text": "        prepare(args.source, args.requests, args.vectors, args.queries, args.truth)"
+        }
+      ]
+    }
+  },
+  "complete_prior_query_audit": false,
+  "query_gt_or_sealed_bodies_opened": false
+}

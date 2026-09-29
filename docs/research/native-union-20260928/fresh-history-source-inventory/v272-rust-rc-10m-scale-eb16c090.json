@@ -1,0 +1,305 @@
+{
+  "terminal_key": "research/v272-rust-rc-10m-scale/eb16c09004a4d06852600b5f151e44b105ed22b6/runs/a0001/terminal.json",
+  "terminal_sha256": "e75a7b399920b277683406ee370a67204f3e9f01fd215e809c0f606356958352",
+  "terminal_status": "complete",
+  "archive_key": "research/v272-rust-rc-10m-scale/eb16c09004a4d06852600b5f151e44b105ed22b6/sources/e0e61810247bb6a653f62ecc4b73c0650104c244bbaad0cb73b341b46e23455c.tar.gz",
+  "archive_sha256": "e0e61810247bb6a653f62ecc4b73c0650104c244bbaad0cb73b341b46e23455c",
+  "source_code": {
+    "scripts/launch_v272_rust_rc_10m_spot.py": {
+      "sha256": "4429ae5148382019200e29b8f3e0b7bc8fb78eb00d65da7edb13d4b96769c8be",
+      "lines": [
+        {
+          "line": 16,
+          "text": "    archive_source,"
+        },
+        {
+          "line": 31,
+          "text": "    \"research/v271-rust-rc-fresh-frontier/\""
+        },
+        {
+          "line": 35,
+          "text": "SOURCE_PREFIX = \"publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001\""
+        },
+        {
+          "line": 45,
+          "text": "export BORSUK_V272_SOURCE_COMMIT='{commit}'"
+        },
+        {
+          "line": 47,
+          "text": "export BORSUK_V272_SOURCE_PREFIX='{SOURCE_PREFIX}'"
+        },
+        {
+          "line": 57,
+          "text": "  'source_commit':os.environ['BORSUK_V272_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 58,
+          "text": "  'source_archive_sha256':os.environ['BORSUK_V272_ARCHIVE_SHA'],"
+        },
+        {
+          "line": 71,
+          "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 72,
+          "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+        },
+        {
+          "line": 74,
+          "text": "tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 100,
+          "text": "        raise ValueError(\"source is not pushed on a fast-forward branch\")"
+        },
+        {
+          "line": 115,
+          "text": "    if sha(get(s3, SOURCE_PREFIX + \"/STAGING_COMPLETE.json\")) != RECEIPT_SHA:"
+        },
+        {
+          "line": 116,
+          "text": "        raise ValueError(\"source receipt differs\")"
+        },
+        {
+          "line": 117,
+          "text": "    if sha(get(s3, SOURCE_PREFIX + \"/materialized/test.parquet\")) != TEST_SHA:"
+        },
+        {
+          "line": 130,
+          "text": "    archive = archive_source(commit)"
+        },
+        {
+          "line": 131,
+          "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 138,
+          "text": "        if not required.issubset(source.getnames()):"
+        },
+        {
+          "line": 142,
+          "text": "        f\"research/v272-rust-rc-10m-scale/{commit}/sources/{archive_sha}.tar.gz\""
+        },
+        {
+          "line": 161,
+          "text": "                \"source_commit\": commit,"
+        },
+        {
+          "line": 163,
+          "text": "                \"source_archive_sha256\": archive_sha,"
+        },
+        {
+          "line": 166,
+          "text": "                \"split\": \"first1000 canonical test queries, prior-used; dev0-255/validation256-999\","
+        },
+        {
+          "line": 168,
+          "text": "                \"search\": \"Rust public API, one worker, 1000 sequential loaded queries after warmup\","
+        },
+        {
+          "line": 170,
+          "text": "                \"resource_gate\": \"search RSS<=32GiB; 2500*rows authenticated resident cap\","
+        },
+        {
+          "line": 197,
+          "text": "                    \"source_commit\": commit,"
+        },
+        {
+          "line": 198,
+          "text": "                    \"source_archive_sha256\": archive_sha,"
+        },
+        {
+          "line": 219,
+          "text": "            or terminal.get(\"source_commit\") != commit"
+        },
+        {
+          "line": 220,
+          "text": "            or terminal.get(\"source_archive_sha256\") != archive_sha"
+        },
+        {
+          "line": 251,
+          "text": "            \"source_commit\": commit,"
+        },
+        {
+          "line": 253,
+          "text": "            \"source_archive_sha256\": archive_sha,"
+        }
+      ]
+    },
+    "scripts/v272_10m_scale.py": {
+      "sha256": "1b34c106855f58a3857f07c1ad1b4ea359896020145fe0245b6c8c353b9cb336",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"Authenticated CoHere 10M source, exact truth, and one frozen Rust API score.\"\"\""
+        },
+        {
+          "line": 14,
+          "text": "from scripts.v271_fresh_frontier import D, digest, percentile, unit"
+        },
+        {
+          "line": 20,
+          "text": "QUERIES = 1000"
+        },
+        {
+          "line": 23,
+          "text": "def source_roster(receipt):"
+        },
+        {
+          "line": 30,
+          "text": "        raise ValueError(\"source authority differs\")"
+        },
+        {
+          "line": 32,
+          "text": "        (row for row in receipt[\"objects\"] if row[\"role\"] == \"train\"),"
+        },
+        {
+          "line": 36,
+          "text": "        raise ValueError(\"canonical train roster differs\")"
+        },
+        {
+          "line": 43,
+          "text": "    import pyarrow.parquet as pq"
+        },
+        {
+          "line": 46,
+          "text": "        raise ValueError(\"source receipt or test object differs\")"
+        },
+        {
+          "line": 47,
+          "text": "    shards = source_roster(json.loads(args.receipt.read_text()))"
+        },
+        {
+          "line": 51,
+          "text": "        table.num_rows != QUERIES"
+        },
+        {
+          "line": 60,
+          "text": "    unit(np.asarray(values, dtype=\"<f4\").reshape(QUERIES, D)).tofile(args.queries)"
+        },
+        {
+          "line": 64,
+          "text": "    source_bytes = 0"
+        },
+        {
+          "line": 65,
+          "text": "    with args.source.open(\"xb\") as output:"
+        },
+        {
+          "line": 70,
+          "text": "            temporary = args.source.with_suffix(\".parquet.part\")"
+        },
+        {
+          "line": 80,
+          "text": "                raise ValueError(f\"train shard {ordinal} differs\")"
+        },
+        {
+          "line": 81,
+          "text": "            source_bytes += identity[\"bytes\"]"
+        },
+        {
+          "line": 92,
+          "text": "                raise ValueError(f\"train shard {ordinal} geometry differs\")"
+        },
+        {
+          "line": 96,
+          "text": "                raise ValueError(f\"train shard {ordinal} values differ\")"
+        },
+        {
+          "line": 103,
+          "text": "    if rows != ROWS or args.source.stat().st_size != ROWS * D * 4:"
+        },
+        {
+          "line": 108,
+          "text": "                \"schema\": \"borsuk-v272-10m-source-v1\","
+        },
+        {
+          "line": 114,
+          "text": "                \"queries_sha256\": digest(args.queries),"
+        },
+        {
+          "line": 115,
+          "text": "                \"source_gets\": len(shards),"
+        },
+        {
+          "line": 116,
+          "text": "                \"source_response_bytes\": source_bytes,"
+        },
+        {
+          "line": 129,
+          "text": "        prepared[\"schema\"] != \"borsuk-v272-10m-source-v1\""
+        },
+        {
+          "line": 130,
+          "text": "        or args.source.stat().st_size != ROWS * D * 4"
+        },
+        {
+          "line": 131,
+          "text": "        or digest(args.source) != prepared[\"raw_sha256\"]"
+        },
+        {
+          "line": 132,
+          "text": "        or digest(args.queries) != prepared[\"queries_sha256\"]"
+        },
+        {
+          "line": 134,
+          "text": "        raise ValueError(\"prepared source differs\")"
+        },
+        {
+          "line": 135,
+          "text": "    data = np.memmap(args.source, dtype=\"<f4\", mode=\"r\", shape=(ROWS, D))"
+        },
+        {
+          "line": 136,
+          "text": "    queries = np.fromfile(args.queries, dtype=\"<f4\").reshape(QUERIES, D)"
+        },
+        {
+          "line": 141,
+          "text": "    _, ids = index.search(queries, 100)"
+        },
+        {
+          "line": 142,
+          "text": "    if ids.shape != (QUERIES, 100) or (ids < 0).any():"
+        },
+        {
+          "line": 150,
+          "text": "                \"queries\": QUERIES,"
+        },
+        {
+          "line": 162,
+          "text": "    truth = np.fromfile(args.truth, dtype=\"<u4\").reshape(QUERIES, 100)"
+        },
+        {
+          "line": 165,
+          "text": "    raw = args.raw.read_text().splitlines()"
+        },
+        {
+          "line": 166,
+          "text": "    if len(raw) != QUERIES:"
+        },
+        {
+          "line": 167,
+          "text": "        raise ValueError(\"query count differs\")"
+        },
+        {
+          "line": 179,
+          "text": "            raise ValueError(\"query identity or IDs differ\")"
+        },
+        {
+          "line": 200,
+          "text": "        \"raw_sha256\": digest(args.raw),"
+        },
+        {
+          "line": 210,
+          "text": "        \"prepare\": (\"receipt\", \"test\", \"source\", \"queries\", \"output\"),"
+        },
+        {
+          "line": 211,
+          "text": "        \"truth\": (\"prepared\", \"source\", \"queries\", \"truth\", \"output\"),"
+        }
+      ]
+    }
+  },
+  "complete_prior_query_audit": false,
+  "query_gt_or_sealed_bodies_opened": false
+}

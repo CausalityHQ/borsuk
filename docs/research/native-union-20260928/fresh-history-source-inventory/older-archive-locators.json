@@ -1,0 +1,57 @@
+[
+  {
+    "terminal_key": "research/v151-page-seeded-graph/84bfeefc73f4ccca8d785e2c63fb4f642df82ddd/runs/v151-20260924T130137Z/a0001/terminal.json",
+    "terminal_sha256": "741b7507b7c9e2653127435fe6aa2db86e01dc677ba776c8c1cb3b29ab533d72",
+    "candidate_metadata_locators": [
+      {
+        "key": "research/v151-page-seeded-graph/84bfeefc73f4ccca8d785e2c63fb4f642df82ddd/source/9089fda4eecfc371e3f1c5c0593c4eff9bea70a57d96738e840591054d77eca4/source.tar.gz",
+        "bytes": 14046542
+      }
+    ],
+    "archive_authenticated": false
+  },
+  {
+    "terminal_key": "research/v152-cached-page-graph/0cf15985a352d5143d4c9dfb56ff5652a202c4e0/runs/v153-planner-once-20260924T135920Z/a0001/terminal.json",
+    "terminal_sha256": "16e74eed8353b586977883730eb4811fc91bdb2f2a29fd7b04bec5b1823c414e",
+    "candidate_metadata_locators": [
+      {
+        "key": "research/v152-cached-page-graph/0cf15985a352d5143d4c9dfb56ff5652a202c4e0/source/9e8fc956619a63b6cf67d837b8b98110378210d2ede9d7e8a9c054149a3a195e/source.tar.gz",
+        "bytes": 13982479
+      }
+    ],
+    "archive_authenticated": false
+  },
+  {
+    "terminal_key": "research/v152-cached-page-graph/1cd267782e52fb3cca2c9ce176b2e48970f85c7a/runs/v152-20260924T134009Z/a0001/terminal.json",
+    "terminal_sha256": "e40cd496a573533ba962c3173918b6e146a52b6c1f3df59326478e470d22ad08",
+    "candidate_metadata_locators": [
+      {
+        "key": "research/v152-cached-page-graph/1cd267782e52fb3cca2c9ce176b2e48970f85c7a/source/c58ec56108c9e295eb09f00bff00ddfece743ffe4ebcf284898e8e9cb39d8e6b/source.tar.gz",
+        "bytes": 14064521
+      }
+    ],
+    "archive_authenticated": false
+  },
+  {
+    "terminal_key": "research/v154-relaion-graph/6513bc4c18dbadd1f570c01083086e71066fa290/runs/v154-20260924T142813Z/a0001/terminal.json",
+    "terminal_sha256": "d631429c5cd0085d18376b5c91b190a40c46359359beaf0854995f68f998bd19",
+    "candidate_metadata_locators": [
+      {
+        "key": "research/v154-relaion-graph/6513bc4c18dbadd1f570c01083086e71066fa290/source/11cf3183069547d66945356f6a27a10172dd93f47106c1fbaf25d67e29b86aa9/source.tar.gz",
+        "bytes": 13991127
+      }
+    ],
+    "archive_authenticated": false
+  },
+  {
+    "terminal_key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/runs/v154-20260924T143744Z/a0002/terminal.json",
+    "terminal_sha256": "09301ea5dfbb75aef49e7f34869903c15def2dfcd0eb787214f924fb191c5068",
+    "candidate_metadata_locators": [
+      {
+        "key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/source/5fe7bfcd84cc5fa6a3ecf66c45a6f265a6c0d12e9e04fcd2d92a5679c5e5badc/source.tar.gz",
+        "bytes": 13993053
+      }
+    ],
+    "archive_authenticated": false
+  }
+]

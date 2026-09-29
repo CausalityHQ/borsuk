@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-native-reference-panel-v1",
+  "source_base_commit": "1fb7d7e30c66fea2398daf327cc7cc112e6ebd61",
+  "source_archive_sha256": "e28b438626b77f5abaaea10b48ef86a85ae1f06e9982314d22fab2c5e8a11742",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 2100,
+  "test_timeout_seconds": 1800,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.179200",
+  "spot_quote_timestamp": "2026-09-29T07:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.175,
+  "cost_allowance_ebs_s3_usd": 0.1,
+  "scope": "Affected native reference bin panel-count/k10/k100 CLI tests and release build only; no corpus/full gate; unchanged2696 library and HTTP authority",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "existing_native_files_verified_except_declared_change": 395,
+  "changed_native_files": [
+    "crates/borsuk/src/bin/two_bit_plan_demo.rs"
+  ],
+  "reused_library_terminal_sha256": "d9a7f53bf0f2f1bbf60a3e295e7ed145916afb8cae411ca4ce05fa689456d80b",
+  "reused_http_boundary_terminal_sha256": "3767c83a8552e08db72bcd575c45a79cecac60f6b74eea866fe078fb5d536644",
+  "measurement_memory_max_bytes": 10737418240,
+  "swap_max_bytes": 0,
+  "cpu_affinity": "0-3",
+  "threads": 4,
+  "s3_versioning_observed": "Disabled"
+}

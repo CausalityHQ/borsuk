@@ -1,0 +1,197 @@
+{
+  "terminal_key": "research/v281-extra-reverse-10m/9789438c356bd582126b2c984ae67ef2e5c11779/runs/a0002/terminal.json",
+  "terminal_sha256": "c3dc0e2538816a681a7be3e4be3e12bdd74d7e975a1e43d7b7dab4374b81c55a",
+  "terminal_status": "failed",
+  "archive_key": "research/v281-extra-reverse-10m/9789438c356bd582126b2c984ae67ef2e5c11779/sources/89ad1826bab19b043579e7b03c63184bf7387fe5ead0b9488854dd35647f2ea7.tar.gz",
+  "archive_sha256": "89ad1826bab19b043579e7b03c63184bf7387fe5ead0b9488854dd35647f2ea7",
+  "source_code": {
+    "scripts/launch_v281_extra_reverse_10m_spot.py": {
+      "sha256": "008f286d43e8ec164039e04019d9e501ca6a29d850f0d437e59179226d814d9b",
+      "lines": [
+        {
+          "line": 14,
+          "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+        },
+        {
+          "line": 24,
+          "text": "SOURCE_PREFIX = \"publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001\""
+        },
+        {
+          "line": 41,
+          "text": "export BORSUK_V281_SOURCE_COMMIT='{commit}'"
+        },
+        {
+          "line": 43,
+          "text": "export BORSUK_V281_SOURCE_PREFIX='{SOURCE_PREFIX}'"
+        },
+        {
+          "line": 54,
+          "text": "  'source_commit':os.environ['BORSUK_V281_SOURCE_COMMIT'],"
+        },
+        {
+          "line": 55,
+          "text": "  'source_archive_sha256':os.environ['BORSUK_V281_ARCHIVE_SHA'],"
+        },
+        {
+          "line": 68,
+          "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 69,
+          "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+        },
+        {
+          "line": 70,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 89,
+          "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+        },
+        {
+          "line": 97,
+          "text": "            or sha(get(s3, SOURCE_PREFIX + \"/STAGING_COMPLETE.json\"))"
+        },
+        {
+          "line": 99,
+          "text": "            or sha(get(s3, SOURCE_PREFIX + \"/materialized/test.parquet\"))"
+        },
+        {
+          "line": 101,
+          "text": "        raise ValueError(\"V272/V278 or source identity differs\")"
+        },
+        {
+          "line": 113,
+          "text": "    archive = archive_source(commit)"
+        },
+        {
+          "line": 114,
+          "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+        },
+        {
+          "line": 118,
+          "text": "        if not required.issubset(source.getnames()):"
+        },
+        {
+          "line": 119,
+          "text": "            raise ValueError(\"V281 source archive incomplete\")"
+        },
+        {
+          "line": 121,
+          "text": "    archive_key = f\"research/v281-extra-reverse-10m/{commit}/sources/{archive_sha}.tar.gz\""
+        },
+        {
+          "line": 150,
+          "text": "        print(json.dumps({\"source_commit\": commit, \"archive_sha256\": archive_sha,"
+        },
+        {
+          "line": 160,
+          "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+        },
+        {
+          "line": 161,
+          "text": "        \"source_archive_sha256\": archive_sha, \"v272_terminal_sha256\": V272_TERMINAL_SHA,"
+        },
+        {
+          "line": 184,
+          "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+        },
+        {
+          "line": 193,
+          "text": "                or terminal.get(\"source_commit\") != commit"
+        },
+        {
+          "line": 194,
+          "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+        },
+        {
+          "line": 221,
+          "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+        },
+        {
+          "line": 222,
+          "text": "                  \"source_archive_sha256\": archive_sha, \"v272_terminal_sha256\": V272_TERMINAL_SHA,"
+        }
+      ]
+    },
+    "scripts/v281_10m.py": {
+      "sha256": "0ddd46d7bc15056113106748f7e050220ba69ad9a1de6211393bdc5dedf62bdc",
+      "lines": [
+        {
+          "line": 17,
+          "text": "    with path.open(\"rb\") as source:"
+        },
+        {
+          "line": 18,
+          "text": "        for block in iter(lambda: source.read(1024 * 1024), b\"\"):"
+        },
+        {
+          "line": 23,
+          "text": "def decide(baseline, candidate, old_root, new_root, resources):"
+        },
+        {
+          "line": 24,
+          "text": "    if resources[\"baseline_parity\"] != 1000 or baseline[\"combined\"][\"hits\"] != 99_299:"
+        },
+        {
+          "line": 32,
+          "text": "           (\"source_sha256\", \"rows\", \"dimensions\", \"plane\", \"map\", \"books\", \"codes\")):"
+        },
+        {
+          "line": 42,
+          "text": "    resources_ok = ("
+        },
+        {
+          "line": 45,
+          "text": "        and resources[\"search_rss_bytes\"] <= 32 * 1024**3"
+        },
+        {
+          "line": 46,
+          "text": "        and resources[\"build_rss_bytes\"] <= 8_000 * ROWS"
+        },
+        {
+          "line": 47,
+          "text": "        and resources[\"build_seconds\"] <= 1.5 * 24_796"
+        },
+        {
+          "line": 49,
+          "text": "        and resources[\"hydration_gets\"] == 5"
+        },
+        {
+          "line": 50,
+          "text": "        and resources[\"query_gets\"] == 0"
+        },
+        {
+          "line": 52,
+          "text": "    return \"go_http_10m\" if quality and resources_ok else \"no_go_10m\""
+        },
+        {
+          "line": 63,
+          "text": "        raise ValueError(\"baseline query count differs\")"
+        },
+        {
+          "line": 64,
+          "text": "    resources = json.loads(args.resources.read_text())"
+        },
+        {
+          "line": 65,
+          "text": "    resources[\"baseline_parity\"] = sum(a == b for a, b in zip(old, current, strict=True))"
+        },
+        {
+          "line": 70,
+          "text": "    result = {\"decision\": decide(baseline, candidate, old_root, new_root, resources),"
+        },
+        {
+          "line": 71,
+          "text": "              \"baseline\": baseline, \"candidate\": candidate, \"resources\": resources,"
+        },
+        {
+          "line": 81,
+          "text": "                 \"candidate-quality\", \"candidate-root\", \"resources\", \"truth\", \"output\"):"
+        }
+      ]
+    }
+  },
+  "complete_prior_query_audit": false,
+  "query_gt_or_sealed_bodies_opened": false
+}

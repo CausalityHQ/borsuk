@@ -1,0 +1,21 @@
+{
+  "dataset": "CoHere",
+  "prior_query_source_rows": [
+    1001000,
+    1001999
+  ],
+  "query_count": 1000,
+  "closed_execution_authenticated": true,
+  "terminal_key": "research/v278-extra-reverse-1m/42c48d5e8e6696d9c991faec0d9b43f00dc1b61e/runs/a0001/terminal.json",
+  "terminal_sha256": "cd5ddfdbc321478361e428ef702e573a14532e7c58cbe265649a8d38de76008e",
+  "archive_sha256": "7ae069010410dc466d2c45738ef066da063a587a474ed9550453c521ac2b1600",
+  "prepare_key": "research/v278-extra-reverse-1m/42c48d5e8e6696d9c991faec0d9b43f00dc1b61e/runs/a0001/artifacts/prepare.json",
+  "prepare_identity": {
+    "bytes": 283,
+    "sha256": "952d365015ab37cd285a89132fa187fb74b1d6faacd9054e7bd4278055b6df2a"
+  },
+  "query_sha256": "6e3505fdfc9d6a6c101cba2b7d4c16d5c07eee6ec704fa836385a810e8ca17d4",
+  "query_or_gt_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "action": "Exclude whole V278 panel in addition to V2711000000-1000999; no novel cohort selected"
+}

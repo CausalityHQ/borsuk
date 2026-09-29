@@ -1,0 +1,47 @@
+[
+  {
+    "campaign": "v151-page-seeded-graph",
+    "source_files": 5,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v151-page-seeded-graph-84bfeefc.json"
+  },
+  {
+    "campaign": "v152-cached-page-graph",
+    "source_files": 5,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v152-cached-page-graph-0cf15985.json"
+  },
+  {
+    "campaign": "v152-cached-page-graph",
+    "source_files": 5,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v152-cached-page-graph-1cd26778.json"
+  },
+  {
+    "campaign": "v154-relaion-graph",
+    "source_files": 3,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v154-relaion-graph-6513bc4c.json"
+  },
+  {
+    "campaign": "v154-relaion-graph",
+    "source_files": 3,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v154-relaion-graph-8f2c5ce4.json"
+  },
+  {
+    "campaign": "v272-rust-rc-10m-scale",
+    "already_authenticated": true,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v272-rust-rc-10m-scale-eb16c090.json"
+  },
+  {
+    "campaign": "v278-extra-reverse-1m",
+    "already_authenticated": true,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v278-extra-reverse-1m-42c48d5e.json"
+  },
+  {
+    "campaign": "v279-relaion-transfer-1m",
+    "already_authenticated": true,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v279-relaion-transfer-1m-8206cbc9.json"
+  },
+  {
+    "campaign": "v281-extra-reverse-10m",
+    "already_authenticated": true,
+    "proof": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/native-union-20260928/fresh-history-source-inventory/v281-extra-reverse-10m-9789438c.json"
+  }
+]
