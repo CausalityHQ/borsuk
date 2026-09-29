@@ -55,8 +55,8 @@
   ],
   "complete_attempt_key": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/ATTEMPT_COMPLETE.json",
   "other_attempts_without_terminal_outputs": 21,
-  "decision": "Exclude the complete 16-object original physical source bank for future ReLAION queries; repeated format/selection downstream does not make identities fresh.",
-  "source_id_universe_collected": false,
+  "decision": "The rank16-31 bank is not wholly independent: 5,724 feature IDs also occur in the original rank0-15 bank. Exclude those IDs before any frozen query selection; historical query lineage remains open. No panel selected.",
+  "source_id_universe_collected": true,
   "new_cohort_selected": false,
   "qualification": false,
   "ranked_registry_original_first16_exact_match": true,
@@ -160,7 +160,15 @@
       "uri": "https://huggingface.co/datasets/andropar/relaion2b-natural-embeddings/resolve/bfc7465dcf1245bd605d35dcaf5d2177bbc2025a/data/relaion2b_features_02009.parquet"
     }
   ],
-  "candidate_source_id_universe_collected": false,
-  "candidate_vs_original_physical_id_disjointness_verified": false,
-  "candidate_vs_prior_query_identity_verified": false
+  "candidate_source_id_universe_collected": true,
+  "candidate_vs_original_physical_id_disjointness_verified": true,
+  "candidate_vs_prior_query_identity_verified": false,
+  "candidate_vs_original_physical_id_disjoint": false,
+  "original_physical_rows": 3583054,
+  "original_unique_physical_ids": 3579759,
+  "candidate_physical_rows": 3581781,
+  "candidate_unique_physical_ids": 3578530,
+  "shared_physical_ids": 5724,
+  "candidate_ids_after_original_exclusion": 3572806,
+  "physical_id_report_sha256": "888748ef1125416bfa47c6dc791280e8be1885eb7ea68f3145872985fe5801c6"
 }

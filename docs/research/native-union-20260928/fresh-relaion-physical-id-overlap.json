@@ -1,0 +1,270 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "new_cohort_selected": false,
+  "source_registry_sha256": "b9a19e2f142fd54983ed1db9f09862f2c5623b6b2105d66e538664f8adda9180",
+  "population_authority_sha256": "be6abb86e2930b38da572cb7daec3fc0e1a7adb93a53ce974ab038f1efa42fbe",
+  "original_unique_physical_ids": 3579759,
+  "candidate_unique_physical_ids": 3578530,
+  "shared_physical_ids": 5724,
+  "objects": [
+    {
+      "rank": 0,
+      "path": "data/relaion2b_features_00125.parquet",
+      "source_sha256": "134ae60a1f6419bb6a48b247d316db3624e14abf29fdd66cec2aeb2fccce7eb7",
+      "physical_rows": 224216,
+      "valid_unique_ids_in_object": 224201,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 1,
+      "path": "data/relaion2b_features_01806.parquet",
+      "source_sha256": "62ef455ffe4c101c383f1ec92bce2cb201e9d6926b1fc825cda18df35cd943ba",
+      "physical_rows": 223994,
+      "valid_unique_ids_in_object": 223971,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 2,
+      "path": "data/relaion2b_features_00161.parquet",
+      "source_sha256": "f94b6d237b24df3416090252eea9c5214da0eb930dd2e6bee85088f37346ff10",
+      "physical_rows": 224142,
+      "valid_unique_ids_in_object": 224120,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 3,
+      "path": "data/relaion2b_features_00778.parquet",
+      "source_sha256": "a61e5cc5cc55fd7d6e09eaf761ab670bd1d6bcedb285ce39a80beca1c49487e0",
+      "physical_rows": 223753,
+      "valid_unique_ids_in_object": 223738,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 4,
+      "path": "data/relaion2b_features_01859.parquet",
+      "source_sha256": "af7ba606e425f117fd0d1463c61ef094f953688a63b352408dd91221985e72ae",
+      "physical_rows": 223972,
+      "valid_unique_ids_in_object": 223959,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 5,
+      "path": "data/relaion2b_features_00065.parquet",
+      "source_sha256": "fea56081eed6e8de7986ac2763641cd13cf33d8f1ad8dee52204cdf490f49a6a",
+      "physical_rows": 224067,
+      "valid_unique_ids_in_object": 224052,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 6,
+      "path": "data/relaion2b_features_00658.parquet",
+      "source_sha256": "1db21397833e2ab93f99a085cb2abb66506a7586d3a7fa18b7db0bc7f22149e7",
+      "physical_rows": 223464,
+      "valid_unique_ids_in_object": 223443,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 7,
+      "path": "data/relaion2b_features_00926.parquet",
+      "source_sha256": "f2e2ede7fc7e0ca9b8c6a0fb0874f72643bf498f757089a8912e8f148fee066f",
+      "physical_rows": 223991,
+      "valid_unique_ids_in_object": 223973,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 8,
+      "path": "data/relaion2b_features_01858.parquet",
+      "source_sha256": "3d87d27175c17829799c97ac02e95b6a05af3abeb27f881fe61ab2714764a7d4",
+      "physical_rows": 224389,
+      "valid_unique_ids_in_object": 224372,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 9,
+      "path": "data/relaion2b_features_00647.parquet",
+      "source_sha256": "70728e5306229d76dd232a7f62945521f9ad76d80751c1d40def92c0fb054033",
+      "physical_rows": 224019,
+      "valid_unique_ids_in_object": 224009,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 10,
+      "path": "data/relaion2b_features_01289.parquet",
+      "source_sha256": "79167a9b910d78811c39782bc6f5fe830e972eda26a2abfdb5b469f0458bbde7",
+      "physical_rows": 223592,
+      "valid_unique_ids_in_object": 223575,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 11,
+      "path": "data/relaion2b_features_00978.parquet",
+      "source_sha256": "3706a10940961b8beff33017d98e66919f3c901a59464018e785656915d400a6",
+      "physical_rows": 223714,
+      "valid_unique_ids_in_object": 223699,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 12,
+      "path": "data/relaion2b_features_00827.parquet",
+      "source_sha256": "6825cd8e3d59c8a50180319a45497e4fdb203854fc66f55161df601656ae61f9",
+      "physical_rows": 224537,
+      "valid_unique_ids_in_object": 224530,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 13,
+      "path": "data/relaion2b_features_00849.parquet",
+      "source_sha256": "999851d4055c9c96e94a33695fd09c5c2a6ca7e347b8c5e1184ef260f0095a8a",
+      "physical_rows": 223768,
+      "valid_unique_ids_in_object": 223757,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 14,
+      "path": "data/relaion2b_features_00543.parquet",
+      "source_sha256": "70b55533df1b9b7ea3418971c0a6bf304d2de290db66d253bf8309c3a78e62d6",
+      "physical_rows": 223951,
+      "valid_unique_ids_in_object": 223936,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 15,
+      "path": "data/relaion2b_features_00967.parquet",
+      "source_sha256": "fa9c8096c8cf5145c6069c0ac6e66483ac44bf18a24a04649baf7568b29b259e",
+      "physical_rows": 223485,
+      "valid_unique_ids_in_object": 223473,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 16,
+      "path": "data/relaion2b_features_00175.parquet",
+      "source_sha256": "ab8077d4a994f801c6e2b8244c20a49077a2438a9bbccc5c53ca250692a2794f",
+      "physical_rows": 223478,
+      "valid_unique_ids_in_object": 223463,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 17,
+      "path": "data/relaion2b_features_00784.parquet",
+      "source_sha256": "6258e74b4e1b25f12f24225f80ef92c08b058a030153d2a12d32cc7ebc781ec9",
+      "physical_rows": 225004,
+      "valid_unique_ids_in_object": 224984,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 18,
+      "path": "data/relaion2b_features_01939.parquet",
+      "source_sha256": "a372b29f7ef8afbabbd46dc37ac2ec816de16e6dbe7fdefe463f6dd1e9675293",
+      "physical_rows": 223624,
+      "valid_unique_ids_in_object": 223614,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 19,
+      "path": "data/relaion2b_features_01654.parquet",
+      "source_sha256": "566029bef5a2490b85a5d1c3c13aa91f44bce7456b823be28f410d47daf5c659",
+      "physical_rows": 224719,
+      "valid_unique_ids_in_object": 224708,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 20,
+      "path": "data/relaion2b_features_00608.parquet",
+      "source_sha256": "16b6e50fb9b3b16b530a03ee7d73f632a4a6c239b92fcbf2adb41a4e45021ec1",
+      "physical_rows": 223902,
+      "valid_unique_ids_in_object": 223892,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 21,
+      "path": "data/relaion2b_features_01115.parquet",
+      "source_sha256": "7fbb51551de36dbcce9d53ab2c03778617f177fe932fcb69ace4bcab4527336a",
+      "physical_rows": 224391,
+      "valid_unique_ids_in_object": 224376,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 22,
+      "path": "data/relaion2b_features_01793.parquet",
+      "source_sha256": "2f1035c88672a4674e96e7da47aa5fdfb732724778ace11aee08bf11dc9ca774",
+      "physical_rows": 223128,
+      "valid_unique_ids_in_object": 223116,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 23,
+      "path": "data/relaion2b_features_00886.parquet",
+      "source_sha256": "498ace0af62a617ff8a144e98def5e122b757c66fea2ec30a4a04603de41b976",
+      "physical_rows": 224192,
+      "valid_unique_ids_in_object": 224176,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 24,
+      "path": "data/relaion2b_features_00328.parquet",
+      "source_sha256": "8e13dd01c38da87247625a9dbc05c5c1e95d53b89eb8aab19b26aabeb0d7347f",
+      "physical_rows": 223633,
+      "valid_unique_ids_in_object": 223626,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 25,
+      "path": "data/relaion2b_features_01524.parquet",
+      "source_sha256": "e9b2a1995384a3b5d3a1fb99f422b13f61d00842b106229a1892accdae3ba10a",
+      "physical_rows": 223125,
+      "valid_unique_ids_in_object": 223110,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 26,
+      "path": "data/relaion2b_features_01477.parquet",
+      "source_sha256": "9ad6706eb855f73b06f4f8dc6648eab45ccd73d8278dac2fe143cf3e2c3bf81c",
+      "physical_rows": 224249,
+      "valid_unique_ids_in_object": 224237,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 27,
+      "path": "data/relaion2b_features_01950.parquet",
+      "source_sha256": "ea0072e4d6e7785420196e077ca34ea437525f976c21d6195924dde9f62be3d7",
+      "physical_rows": 223675,
+      "valid_unique_ids_in_object": 223663,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 28,
+      "path": "data/relaion2b_features_00407.parquet",
+      "source_sha256": "399b610c28bf6922b3649b3ac301cfa5ce3ee0330f4582b533d5247c28183968",
+      "physical_rows": 224132,
+      "valid_unique_ids_in_object": 224116,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 29,
+      "path": "data/relaion2b_features_00311.parquet",
+      "source_sha256": "f95a8b7684c95a7bb4a5d84e6934c7cfb83525c8eeb062dd03421cb5f317ae89",
+      "physical_rows": 223523,
+      "valid_unique_ids_in_object": 223508,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 30,
+      "path": "data/relaion2b_features_00769.parquet",
+      "source_sha256": "e1bcff7d519f41f7531a1aefe722f6f368be92ae06191c984c3a13dfbc2edd80",
+      "physical_rows": 223196,
+      "valid_unique_ids_in_object": 223186,
+      "invalid_id_rows": 0
+    },
+    {
+      "rank": 31,
+      "path": "data/relaion2b_features_02009.parquet",
+      "source_sha256": "10df3dab656716d4fe8bc0e0be09de34984fd025f0eec64ad1d4122062fd7299",
+      "physical_rows": 223810,
+      "valid_unique_ids_in_object": 223797,
+      "invalid_id_rows": 0
+    }
+  ],
+  "qualification": false
+}

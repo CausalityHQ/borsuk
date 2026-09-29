@@ -76,6 +76,10 @@ Further source proof, 2026-09-29:
 - `../fresh-relaion-physical-bank-envelope.json` verifies all16 original V36
   ranked source objects against the authenticated population authority and
   records ranked source objects16–31 as a *candidate physical bank only*.
-  The 5,483,342,562 encoded bytes have not been read here. Feature-ID
-  disjointness and historical query identity remain unverified; no cohort was
-  selected or quality measured.
+  The ID-only follow-up `../fresh-relaion-physical-id-overlap.json` then
+  full-SHA-verified all32 pinned objects and decoded only `feature_row_id`.
+  Original rank0–15 has3,583,054 physical rows/3,579,759 unique IDs; candidate
+  rank16–31 has3,581,781 physical rows/3,578,530 unique IDs. **5,724 IDs
+  overlap**. The whole candidate bank is therefore ineligible as a fresh
+  panel. Exclude shared IDs before any frozen query selection; historical
+  query lineage still needs closure. No cohort was selected or quality measured.

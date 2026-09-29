@@ -35,6 +35,17 @@ excluded range is100000–104999. Other known CoHere train ranges1000000–10009
 All697 inventoried terminal bodies were reauthenticated:371 contain a direct
 archive SHA,28 contain nested archive identities,298 lack an archive SHA in the
 terminal. Original V114–V116 reservations bind five older archives separately.
+Exact Git archive reconstruction closes149 source pairs/158 terminal references;
+28 selected V130–V155 original archives were separately verified by terminal SHA.
+The V85 archived converter/input checks bind V114's older formatted queries to
+the original V36 development bank.
+
+An ID-only scan full-SHA-verified the original16 frozen V36 source objects and
+the next16 rank-selected candidate objects. Their3,579,759 and3,578,530 unique
+physical feature IDs overlap by5,724. The candidate bank cannot be used whole
+as a fresh panel; 3,572,806 IDs remain after excluding the original-bank IDs,
+subject to the remaining history audit. No embeddings were decoded or queries
+selected by this check.
 **Complete prior query-source closure remains false.** No new panel was selected;
 no query vectors, GT, old rejected seal bodies or quality results were opened by
 this audit. Next close remaining producer banks/source-ID mappings, or prove a
