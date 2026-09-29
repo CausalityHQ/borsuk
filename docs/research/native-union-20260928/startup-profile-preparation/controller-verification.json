@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "aws_calls": 0,
+  "paid_jobs": 0,
+  "child_commit": "3e3e00f491e51d51544b8d0be26f5f0408085da0",
+  "integrated_commit": "f16a0318",
+  "checks": [
+    "original-ID transient polling and cleanup",
+    "ACK persistence/upload failure cleanup",
+    "interruption/deadline",
+    "focused build identity mock",
+    "metadata/unaffected/code preflight rejection",
+    "real frozen source/config preflight",
+    "full qualified startup shell syntax"
+  ],
+  "startup_body_bytes": 9771,
+  "source_sha256": {
+    "scripts/launch_native_startup_profile_spot.py": "ea8f55d3af70810be3a6d09104cc3a8d32b2fe4b3079279ad5bb22087f256d9e",
+    "scripts/check_native_startup_build.py": "0a045164e74d0099f394d0ce1bc5e3bbeb248c70311ac3617f9861c94c2e3af8",
+    "scripts/verify_native_startup_profile.py": "bfe351bd45c0bd6a197cfa9e68e677c7a211b2547c0e124a03616b6d1ce01946"
+  },
+  "closed_profile_verification_pending": true
+}
