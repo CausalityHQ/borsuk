@@ -1,0 +1,48 @@
+{
+  "decision": "KILL ReLAION prospective cohort novelty; construction/GT seal remains valid",
+  "dataset": "ReLAION",
+  "index_rows": 100000,
+  "prospective_source_first": 100000,
+  "prospective_queries": 1000,
+  "minimum_prior_query_overlap": 1,
+  "witnesses": [
+    {
+      "prior_ordinal": 2578,
+      "source_id": 83606072,
+      "source_row": 100903,
+      "prospective_ordinal": 903
+    }
+  ],
+  "prior_dataset_rows": 1000000,
+  "prior_split": "V189 consumed source pseudoquery holdout ranks2561-2688",
+  "prior_terminal_key": "research/v189-predicted-interval-source/ae0b160e0b48c419a6bac1b6d9e5964f7fd4b63b/runs/a0002/terminal.json",
+  "prior_terminal_sha256": "ec2a845a4471afacf48ec8e78cb16fdafff75bb0852a7323e67d9ea9db2f8605",
+  "prior_features": {
+    "bytes": 15327489,
+    "sha256": "7eb4833c76675534cde41330c5939599ab70d7871ac27cb365d62cdb840c3fbe"
+  },
+  "prior_source_archive_key": "research/v189-predicted-interval-source/ae0b160e0b48c419a6bac1b6d9e5964f7fd4b63b/sources/0e34f57af127f078bf32c76fb818e18421f8e37b650b238a2c03cb24823e834a.tar.gz",
+  "prior_source_archive_sha256": "0e34f57af127f078bf32c76fb818e18421f8e37b650b238a2c03cb24823e834a",
+  "source_parquet_identity": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+    "bytes": 1458450077,
+    "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86",
+    "rows": 1000000,
+    "row_start": 0,
+    "format": "parquet",
+    "role": "train"
+  },
+  "prior_source_code_sha256": {
+    "scripts/launch_v189_predicted_interval_source_spot.py": "27fd54aef2033c909873c79cf0ed215cd6a7c35758c6f6cbe21da5bdbca53714",
+    "scripts/v189_predicted_interval_source.py": "afad92a6c2fa71b1c4689f8c07d997f68a454c6a566d7f43a8ce95c0f843fbb9",
+    "scripts/v177_source_candidate_ceiling.py": "e5c0aa566d79d12da236aaef414c5fc1424b63891e9f1c17309b8b2f914f389c",
+    "scripts/v164_smooth_layout_1m.py": "c011b3dbf1ddafc98749d94f0c5f947844c7ba867423302aab5aaf1eb52fc9eb",
+    "scripts/native_geometric_layout_screen.py": "f12c50c2cb492c003f78dc208cdb3e39d5e73af9cd253db46ce2cc6872400bf6"
+  },
+  "source_mapping_preserves_parquet_row_order": true,
+  "new_sealed_data_opened": false,
+  "ann_quality_measured": false,
+  "complete_prior_query_audit": false,
+  "qualification": false,
+  "action": "Do not use this ReLAION panel as unused qualification evidence; do not remove the witness and silently relabel remaining999. Preserve seal. A replacement cohort must be entirely preregistered and audited before quality access. CoHere novelty remains uncertified."
+}

@@ -1,5 +1,7 @@
 # Source parity and sealed prospective cohort: construction PASS only
 
+**Newer identity gate:** [novelty-decision.md](novelty-decision.md) proves prospective ReLAION ordinal903 was previously queried. This seal is valid construction evidence, but the ReLAION panel must not be used as unused qualification evidence. No sealed data/ANN quality was opened.
+
 Both current frozen first100k raw-source hashes were reproduced before any GT
 publication.1000 query vectors per corpus from fixed source rows100000–100999,
 outside the indexed first100k, and exhaustive f64 cosine GT100 are sealed in S3.
