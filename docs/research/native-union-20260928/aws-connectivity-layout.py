@@ -125,8 +125,10 @@ except Exception:
     reservation['s3_versioning_observed']='Unknown; no physical-space claim'
 (OUT/'aws-user-data.sh').write_text(body)
 (OUT/'aws-reservation.json').write_text(json.dumps(reservation,indent=2)+'\n')
+client_token='connectivity-layout-'+ATTEMPT+'-'+sha[:35]
+assert len(client_token)<=64
 put_if_absent(prefix+'/reservation.json',json.dumps(reservation,sort_keys=True).encode())
-receipt=ec2.run_instances(ClientToken='layout-connectivity-layout-'+ATTEMPT+'-'+sha[:35], ImageId=reservation['image'],
+receipt=ec2.run_instances(ClientToken=client_token, ImageId=reservation['image'],
     InstanceType=reservation['instance_type'],MinCount=1,MaxCount=1,
     IamInstanceProfile={'Arn':PROFILE_ARN},
     NetworkInterfaces=[{'AssociatePublicIpAddress':True,'DeviceIndex':0,'Groups':[SECURITY_GROUP],'SubnetId':SUBNET}],

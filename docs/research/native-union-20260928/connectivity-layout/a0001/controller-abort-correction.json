@@ -1,0 +1,8 @@
+{
+  "field": "reason",
+  "original_record_length": 67,
+  "actual_client_token_length": 68,
+  "limit": 64,
+  "instance_created": false,
+  "reason": "Correct the metadata typo only; same AWS pre-instance rejection, no scientific result"
+}

@@ -1,0 +1,13 @@
+{
+  "valid_measurement": false,
+  "instance_created": false,
+  "instances": [],
+  "native_session": 20643,
+  "exit_code": 1,
+  "error_code": "InvalidParameterValue",
+  "reason": "RunInstances idempotency client token length67 exceeds64",
+  "source_archive_sha256": "3e2454fbb796642e3234da164c000ead5ebd6a75c04b0ed567cbc904366c00f2",
+  "reservation_preserved": true,
+  "no_corpus_query": true,
+  "scientific_decision": null
+}
