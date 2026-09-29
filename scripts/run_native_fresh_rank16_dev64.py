@@ -14,14 +14,14 @@ import numpy as np
 from scripts.run_native_current_1m_offered_http import native, run, sha, write
 
 
-def prefix_object(bucket, ident, path, length):
+def range_object(bucket, ident, path, start, length):
     args = ["aws", "s3api"]
     head = json.loads(subprocess.check_output(args + ["head-object", "--bucket", bucket,
                                                 "--key", ident["key"]]))
     if head["ContentLength"] != ident["bytes"] or head["Metadata"]["sha256"] != ident["sha256"]:
         raise ValueError("sealed whole-object identity differs")
     subprocess.run(args + ["get-object", "--bucket", bucket, "--key", ident["key"],
-                           "--range", f"bytes=0-{length-1}", "--if-match", head["ETag"],
+                           "--range", f"bytes={start}-{start+length-1}", "--if-match", head["ETag"],
                            str(path)], check=True, stdout=subprocess.DEVNULL)
     if path.stat().st_size != length:
         raise ValueError("sealed development byte range differs")
@@ -34,15 +34,17 @@ def main():
     if sha(config_path) != expected_sha:
         raise ValueError("frozen fresh development config differs")
     config = json.loads(Path(config_path).read_text())
-    if (config["schema"] != "borsuk-fresh-rank16-1m-dev64-v1"
-            or (config["rows"], config["dimensions"], config["count"], config["offered_qps"])
-            != (1_000_000, 768, 64, 8)
+    first, count = config.get("first", 0), config["count"]
+    if ((config["schema"], config["rows"], config["dimensions"], first, count,
+         config["offered_qps"]) not in (
+             ("borsuk-fresh-rank16-1m-dev64-v1", 1_000_000, 768, 0, 64, 8),
+             ("borsuk-fresh-rank16-1m-confirm936-v1", 1_000_000, 768, 64, 936, 8))
             or config["setting_order"] != [10, 100, 100, 10]
             or config["gates"] != {"native_mean_recall_at_10_minimum": .95,
                                    "incoming_http_p90_ms_exclusive_maximum": 444,
                                    "successful_qps_minimum": 8,
                                    "all_offered_success": True}
-            or config["prospective_ordinals_sealed"] != [64, 999]
+            or config["prospective_ordinals_sealed"] != ([64, 999] if first == 0 else [])
             or config["fresh_cohort_used"] is not True
             or np.__version__ != "2.3.3"
             or os.environ["BORSUK_NATIVE_MEMORY_BYTES"] != "1073741824"):
@@ -80,28 +82,41 @@ def main():
     if sha(generation / "manifest.json") != config["root_sha256"]:
         raise ValueError("current root manifest differs")
     sealed = config["sealed"]
-    raw_path = out / "queries64.raw"
-    raw_sha = prefix_object(config["bucket"], sealed["queries.raw"], raw_path, 64 * 768 * 4)
-    queries = np.frombuffer(raw_path.read_bytes(), dtype="<f4").reshape(64, 768)
+    raw_path = out / f"queries{count}.raw"
+    raw_sha = range_object(config["bucket"], sealed["queries.raw"], raw_path,
+                           first * 768 * 4, count * 768 * 4)
+    queries = np.frombuffer(raw_path.read_bytes(), dtype="<f4").reshape(count, 768)
     if not np.isfinite(queries).all() or not (queries != 0).any(axis=1).all():
         raise ValueError("fresh development query geometry differs")
-    requests_path = out / "requests64.jsonl"
+    requests_path = out / f"requests{count}.jsonl"
+    original = bytearray()
     with requests_path.open("x") as stream:
         for ordinal, vector in enumerate(queries):
-            stream.write(json.dumps({"query_ordinal": ordinal, "query": vector.tolist()},
-                                    separators=(",", ":"), allow_nan=False) + "\n")
-    request_sha = prefix_object(config["bucket"], sealed["requests.jsonl"],
-                                out / "sealed-requests64.jsonl", requests_path.stat().st_size)
-    if requests_path.read_bytes() != (out / "sealed-requests64.jsonl").read_bytes():
+            original.extend((json.dumps({"query_ordinal": first + ordinal,
+                                        "query": vector.tolist()}, separators=(",", ":"),
+                                        allow_nan=False) + "\n").encode())
+            request = {"query_ordinal": ordinal, "query": vector.tolist()}
+            if first:
+                request["source_query_ordinal"] = first + ordinal
+            stream.write(json.dumps(request, separators=(",", ":"), allow_nan=False) + "\n")
+    if first and config["requests_byte_start"] + len(original) != sealed["requests.jsonl"]["bytes"]:
+        raise ValueError("prospective request suffix does not reach sealed end")
+    request_sha = range_object(config["bucket"], sealed["requests.jsonl"],
+                               out / f"sealed-requests{count}.jsonl",
+                               config.get("requests_byte_start", 0), len(original))
+    if original != (out / f"sealed-requests{count}.jsonl").read_bytes():
         raise ValueError("development requests differ from sealed original")
-    truth_path = out / "truth64.u32"
-    truth_sha = prefix_object(config["bucket"], sealed["truth.u32"], truth_path, 64 * 100 * 4)
+    truth_path = out / f"truth{count}.u32"
+    truth_sha = range_object(config["bucket"], sealed["truth.u32"], truth_path,
+                             first * 100 * 4, count * 100 * 4)
     truth_body = truth_path.read_bytes()
-    truth = [struct.unpack_from("<100I", truth_body, q * 400) for q in range(64)]
+    truth = [struct.unpack_from("<100I", truth_body, q * 400) for q in range(count)]
     if any(len(set(row)) != 100 or max(row) >= 1_000_000 for row in truth):
         raise ValueError("fresh exact truth geometry differs")
     requests = [json.loads(row) for row in requests_path.read_text().splitlines()]
-    assert [r["query_ordinal"] for r in requests] == list(range(64))
+    assert [r["query_ordinal"] for r in requests] == list(range(count))
+    if first:
+        assert [r["source_query_ordinal"] for r in requests] == list(range(first, first + count))
     refs = {}
     native_quality = {}
     for k in (10, 100):
@@ -109,12 +124,13 @@ def main():
         index = prefix + f"/indexes/relaion/k{k}"
         native(out, f"reference-k{k}", [binaries / "two_bit_plan_demo", generation,
               config["root_sha256"], requests_path, sha(requests_path), reference,
-              0, 64, "--live-s3", config["bucket"], config["region"], index,
-              "--panel-count", 64, "--top-k", k])
+              0, count, "--live-s3", config["bucket"], config["region"], index,
+              "--panel-count", count, "--top-k", k],
+              cap=config.get("native_reference_timeout_seconds", 360))
         records = [json.loads(line) for line in reference.read_text().splitlines()]
-        if (len(records) != 66 or records[0]["root_sha256"] != config["root_sha256"]
-                or records[0]["top_k"] != k or records[0]["declared_panel_count"] != 64
-                or records[-1]["count"] != 64):
+        if (len(records) != count + 2 or records[0]["root_sha256"] != config["root_sha256"]
+                or records[0]["top_k"] != k or records[0]["declared_panel_count"] != count
+                or records[-1]["count"] != count):
             raise ValueError("fresh native reference roster differs")
         refs[k] = records[1:-1]
         hits = 0
@@ -125,16 +141,17 @@ def main():
                     or row["verified_bytes"] > 16_773_120 or row["failed_gets"]):
                 raise ValueError("fresh native ID or physical bounds differ")
             hits += len(set(row["ids"]) & set(truth[q][:k]))
-        native_quality[str(k)] = {"hits": hits, "denominator": 64 * k,
-                                  "recall": hits / (64 * k)}
-    quality = {"dataset": "ReLAION FIRST1M D768 cosine", "split": "fresh rank16 development0-63",
+        native_quality[str(k)] = {"hits": hits, "denominator": count * k,
+                                  "recall": hits / (count * k)}
+    quality = {"dataset": "ReLAION FIRST1M D768 cosine", "split": config["query_split"],
                "root_sha256": config["root_sha256"], "query_prefix_sha256": raw_sha,
                "requests_prefix_sha256": request_sha, "truth_prefix_sha256": truth_sha,
-               "only_dev64_ranges_read": True, "native_quality": native_quality,
+               "opened_original_ordinals": [first, first + count - 1],
+               "only_dev64_ranges_read": first == 0, "native_quality": native_quality,
                "qualification": False}
     write(out / "native-quality.json", quality)
     if native_quality["10"]["recall"] < .95:
-        write(out / "decision.json", {"decision": "FAIL fresh ReLAION1M native R@10 development",
+        write(out / "decision.json", {"decision": "FAIL fresh ReLAION1M native R@10 " + config["query_split"],
                                       "native_quality": native_quality, "fresh_cohort_used": True,
                                       "http_measured": False, "qualification": False})
         return
@@ -147,8 +164,8 @@ def main():
             break
     k10 = [r for r in runs if r["k"] == 10]
     passed = len(k10) == 2 and all(r["development_gate_passed"] for r in k10)
-    write(out / "decision.json", {"decision": "GO fresh ReLAION1M development only" if passed
-                                  else "FAIL fresh ReLAION1M offered HTTP development",
+    write(out / "decision.json", {"decision": ("GO fresh ReLAION1M " if passed else
+                                  "FAIL fresh ReLAION1M offered HTTP ") + config["query_split"],
                                   "native_quality": native_quality, "runs": runs,
                                   "fresh_cohort_used": True, "http_measured": True,
                                   "qualification": False, "matched_control_http_measured": False,

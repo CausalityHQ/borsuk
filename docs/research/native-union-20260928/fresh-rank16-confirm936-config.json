@@ -1,0 +1,130 @@
+{
+  "schema": "borsuk-fresh-rank16-1m-confirm936-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "rows": 1000000,
+  "dimensions": 768,
+  "count": 936,
+  "offered_qps": 8,
+  "setting_order": [
+    10,
+    100,
+    100,
+    10
+  ],
+  "query_split": "fresh rank16 prospective64-999",
+  "fresh_cohort_used": true,
+  "root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+  "root_manifest": {
+    "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/manifest.json",
+    "bytes": 33910,
+    "sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce"
+  },
+  "source_raw_sha256": "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33",
+  "sealed": {
+    "queries.raw": {
+      "bytes": 3072000,
+      "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/queries.raw",
+      "sha256": "a1a2d8d0f37bafbb26e2f918a03c94330819be0ab41ec6cafc1c8b6e898a1758"
+    },
+    "requests.jsonl": {
+      "bytes": 14672490,
+      "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/requests.jsonl",
+      "sha256": "ffe679cc969543b301f5a8350985ad8e234d1194d352b3bd1ef1f2fb44f6ef80"
+    },
+    "truth.u32": {
+      "bytes": 400000,
+      "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/truth.u32",
+      "sha256": "49eeef8097ec28471cc0cbf9156ccf52204d8694dcd966940d06e195ae1a9444"
+    }
+  },
+  "sealed_construction_verification_sha256": "c9616d1829956d80a73f066254368181b79bbc9ef010cb71d14f2d46cbab55e1",
+  "binaries": {
+    "two_bit_plan_demo": {
+      "key": "research/native-union/20260928/native-reference-panel-a0002/artifacts/binaries/two_bit_plan_demo",
+      "bytes": 11460464,
+      "sha256": "a2a9ca63d3bb2f6df8ce80d72020361bbba210d593d5c8db7f2401394340c04c"
+    },
+    "two_bit_http": {
+      "key": "research/native-union/20260928/four-slot-1m-offered-http-a0001/artifacts/binaries/two_bit_http",
+      "bytes": 12546280,
+      "sha256": "fe7084ce75e56788f156639f534d41fe9fb576ce771bc6f9f5094a1f20264f82"
+    }
+  },
+  "qualified_reference_verification_sha256": "a6e80b23262c6367c09bbc4dfbf1641fa8e24d576f694946c23b875591a269bc",
+  "qualified_http_verification_sha256": "ed8bedf535c61902e6b247a3f15f46daef8da772a52d8d58a899cabb55565a94",
+  "code_sha256": {
+    "scripts/run_native_fresh_rank16_dev64.py": "aa6a307db5d8e6b21ea76b4646baef60d8ded03ae83b861f5026d399c763ed6c",
+    "scripts/run_native_current_1m_offered_http.py": "dabfadaec3e29a82f68a57e00398b90c1999524f56c0fcd0c9d018cc4a2b50de",
+    "scripts/run_native_union_offered_http.py": "2e62577aec250d038f12598bdf5a733abdaa9819ab0cb43929177a5d49b4c5e0",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd"
+  },
+  "gates": {
+    "native_mean_recall_at_10_minimum": 0.95,
+    "incoming_http_p90_ms_exclusive_maximum": 444,
+    "successful_qps_minimum": 8,
+    "all_offered_success": true
+  },
+  "prospective_ordinals_sealed": [],
+  "matched_control_http_measured": false,
+  "matched_vendor_measured": false,
+  "generation_artifacts": {
+    "generation/canonical.bin": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/canonical.bin",
+      "bytes": 3080000000,
+      "sha256": "321aca56616bfc66104660e25a1674e74cf87cdd71dec5f9563de5ada69177ab"
+    },
+    "generation/centroids.bin": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/centroids.bin",
+      "bytes": 48000032,
+      "sha256": "ab8964974527547f67d138383ab6e77076c897dccf5078f5211e6f2e13a4d4e3"
+    },
+    "generation/diverse_graph.bin": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/diverse_graph.bin",
+      "bytes": 4265768,
+      "sha256": "b9c9b23d28df4fd8fd40cc7213cece023a5c6b60584d78104899bc583e094e4a"
+    },
+    "generation/graph.bin": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/graph.bin",
+      "bytes": 4265768,
+      "sha256": "d7c4cb36ed1ca041755cbbf817f061cf03470d7bb3b07002474bf91aefcbe616"
+    },
+    "generation/manifest.json": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/manifest.json",
+      "bytes": 33910,
+      "sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce"
+    },
+    "generation/page_digests.bin": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/page_digests.bin",
+      "bytes": 125024,
+      "sha256": "4a67b1287d4bb39110f07242212b32b060fea6ded1246f0a66c4b055792fe1ee"
+    },
+    "generation/page_manifest.json": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/page_manifest.json",
+      "bytes": 280,
+      "sha256": "dcd1331821591603e200a472be45bbe9b437aa8e7ca669bc7314f7d83103e660"
+    },
+    "generation/plane/manifest.json": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/plane/manifest.json",
+      "bytes": 549,
+      "sha256": "b4d684edb968826d4c836b738636499212e5a290ec6d6c51935ac765476cb1a6"
+    },
+    "generation/plane/mean.bin": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/plane/mean.bin",
+      "bytes": 3072,
+      "sha256": "f89b58ff4bc60fae32a0ba86878f25dff926cf8e063f5328b4467c40e654788f"
+    },
+    "generation/plane/records.bin": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/plane/records.bin",
+      "bytes": 200000000,
+      "sha256": "b0f993af75f8ce22ab393f98dc5778f629141099a8ad60035481b56a1a466944"
+    }
+  },
+  "first": 64,
+  "requests_byte_start": 940145,
+  "native_reference_timeout_seconds": 600,
+  "original_query_ordinal_map": "local0-935 => frozen64-999",
+  "closed_dev64_terminal_sha256": "22dfcbe6947e3e1952c49884139bbe34870da101b632990ba2187e5cf22b1a47",
+  "closed_dev64_verification_sha256": "56e2421ce84f9ca3cf045a77f440aaaf02f766c06412631fbb200666c1bbbc3d"
+}

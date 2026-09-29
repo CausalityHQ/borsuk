@@ -1,4 +1,4 @@
-"""One original frozen fresh ReLAION dev64 native/HTTP Spot worker."""
+"""One frozen fresh ReLAION development or prospective native/HTTP worker."""
 
 import fcntl
 import gzip
@@ -21,9 +21,6 @@ from scripts.launch_v157_primary_feasibility_spot import (
 
 
 ROOT = Path("docs/research/native-union-20260928")
-CONFIG = ROOT / "fresh-rank16-dev64-config.json"
-SCHEMA = "borsuk-fresh-rank16-1m-dev64-spot-v1"
-TAG = "borsuk-fresh-rank16-dev64"
 SUBNETS = {"subnet-034528fbd6977848f", "subnet-0a12dbed0ca6fac25",
            "subnet-00243d923761c047c"}
 
@@ -32,7 +29,16 @@ def sha(body):
     return hashlib.sha256(body).hexdigest()
 
 
-def main(attempt, subnet):
+def main(attempt, subnet, mode="dev64"):
+    if mode not in ("dev64", "confirm936"):
+        raise ValueError("unknown fresh panel mode")
+    confirm = mode == "confirm936"
+    campaign = "fresh-rank16-confirm936" if confirm else "fresh-rank16-dev64"
+    config_path = ROOT / (campaign + "-config.json")
+    schema = "borsuk-fresh-rank16-1m-" + mode + "-spot-v1"
+    tag = "borsuk-" + campaign
+    wall = 3600 if confirm else 1800
+    process = 3000 if confirm else 1500
     if len(attempt) != 5 or not attempt.startswith("a") or not attempt[1:].isdigit():
         raise ValueError("attempt must be aNNNN")
     if subnet not in SUBNETS:
@@ -42,8 +48,8 @@ def main(attempt, subnet):
     subprocess.run(["git", "fetch", "origin", "main"], check=True)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], check=True)
-    config = json.loads(CONFIG.read_text())
-    if config["schema"] != "borsuk-fresh-rank16-1m-dev64-v1":
+    config = json.loads(config_path.read_text())
+    if config["schema"] != "borsuk-fresh-rank16-1m-" + mode + "-v1":
         raise ValueError("fresh protocol config differs")
     for name, expected in config["code_sha256"].items():
         if sha(Path(name).read_bytes()) != expected:
@@ -74,6 +80,15 @@ def main(attempt, subnet):
     if (config["generation_artifacts"] != expected_generation
             or config["root_manifest"] != expected_generation["generation/manifest.json"]):
         raise ValueError("closed generation artifact roster differs")
+    if confirm:
+        prior = ROOT / "fresh-rank16-dev64/a0002"
+        proof = json.loads((prior / "verification.json").read_text())
+        terminal = json.loads((prior / "aws-terminal.json").read_text())
+        if (not proof["valid_measurement"] or proof["state"] != "terminated"
+                or sha((prior / "verification.json").read_bytes()) != config["closed_dev64_verification_sha256"]
+                or sha((prior / "aws-terminal.json").read_bytes()) != config["closed_dev64_terminal_sha256"]
+                or config["requests_byte_start"] != terminal["artifacts"]["screen/requests64.jsonl"]["bytes"]):
+            raise ValueError("frozen prospective suffix boundary differs")
     archive = io.BytesIO()
     raw = subprocess.run(["git", "archive", "--format=tar", "HEAD"],
                          capture_output=True, check=True).stdout
@@ -81,13 +96,13 @@ def main(attempt, subnet):
         zipped.write(raw)
     source = archive.getvalue()
     with tarfile.open(fileobj=io.BytesIO(source), mode="r:gz") as tar:
-        if not {str(CONFIG), str(ROOT / "fresh-rank16-dev64-preregister.md"),
+        if not {str(config_path), str(ROOT / (campaign + "-preregister.md")),
                 "scripts/run_native_fresh_rank16_dev64.py"}.issubset(tar.getnames()):
             raise ValueError("frozen development archive differs")
     archive_sha = sha(source)
     archive_key = f"research/native-library-check/sources/{archive_sha}.tar.gz"
-    prefix = f"research/native-union/20260928/fresh-rank16-dev64-{attempt}"
-    out = ROOT / "fresh-rank16-dev64" / attempt
+    prefix = f"research/native-union/20260928/{campaign}-{attempt}"
+    out = ROOT / campaign / attempt
     out.mkdir(parents=True, exist_ok=True)
     session = boto3.Session(profile_name="causality", region_name=REGION)
     ec2, s3 = session.client("ec2"), session.client("s3")
@@ -100,7 +115,7 @@ def main(attempt, subnet):
     if any(r["Instances"] for r in active["Reservations"]):
         raise ValueError("BORSUK worker already active")
     stopped = ec2.describe_instances(Filters=[
-        {"Name": "tag:Name", "Values": [TAG]},
+        {"Name": "tag:Name", "Values": [tag]},
         {"Name": "instance-state-name", "Values": ["stopped"]},
     ])
     if any(r["Instances"] for r in stopped["Reservations"]):
@@ -115,10 +130,10 @@ def main(attempt, subnet):
         put_if_absent(archive_key, source)
     elif sha(s3.get_object(Bucket=BUCKET, Key=archive_key)["Body"].read()) != archive_sha:
         raise ValueError("existing source archive differs")
-    runner.WALL_SECONDS = 1800
-    runner.SCHEMA = SCHEMA
+    runner.WALL_SECONDS = wall
+    runner.SCHEMA = schema
     artifacts = ["cpu.txt", "environment.txt", "screen/decision.json", "screen/cgroup.json",
-                 "screen/native-quality.json", "screen/requests64.jsonl",
+                 "screen/native-quality.json", f"screen/requests{config['count']}.jsonl",
                  "screen/reference-k10.jsonl", "screen/reference-k100.jsonl",
                  "screen/reference-k10.log", "screen/reference-k10.time",
                  "screen/reference-k100.log", "screen/reference-k100.time"]
@@ -128,10 +143,10 @@ def main(attempt, subnet):
                           "server-closeout.json"))
     runner.ARTIFACTS += tuple(artifacts)
     body = runner.user_data(commit, archive_sha, archive_key, prefix)
-    body = body.replace("v174-relaid-bind-compile", "fresh-rank16-dev64")
+    body = body.replace("v174-relaid-bind-compile", campaign)
     body = body.replace("'source_commit':", "'source_base_commit':")
     start, stop = body.index("phase=install"), body.index("phase=complete", body.index("phase=install"))
-    config_sha = sha(CONFIG.read_bytes())
+    config_sha = sha(config_path.read_bytes())
     check = f'''phase=install
 dnf install -y -q python3.12 python3.12-pip util-linux time
 python3.12 -m venv .venv
@@ -147,10 +162,10 @@ echo '{ident["sha256"]}  binaries/{name}' | sha256sum -c -
 chmod 755 binaries/{name}
 '''
     check += f'''phase=measure
-systemd-run --unit=fresh-rank16-dev64 --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec=1530 -p WorkingDirectory="$root/repo" \\
+systemd-run --unit={campaign} --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec={process+30} -p WorkingDirectory="$root/repo" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=OPENBLAS_NUM_THREADS=4 --setenv=OMP_NUM_THREADS=4 --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=1073741824 \\
- /usr/bin/time -v -o "$root/test-resources.txt" timeout --signal=TERM --kill-after=30 1500 \\
- bash -c 'set -e; ulimit -v 4194304; exec taskset -c 0-3 "$1" "$2/repo/scripts/run_native_fresh_rank16_dev64.py" "$2/repo/docs/research/native-union-20260928/fresh-rank16-dev64-config.json" "$3" "$2/screen" "$2/binaries" "$4"' _ \\
+ /usr/bin/time -v -o "$root/test-resources.txt" timeout --signal=TERM --kill-after=30 {process} \\
+ bash -c 'set -e; ulimit -v 4194304; exec taskset -c 0-3 "$1" "$2/repo/scripts/run_native_fresh_rank16_dev64.py" "$2/repo/{config_path}" "$3" "$2/screen" "$2/binaries" "$4"' _ \\
  "$root/.venv/bin/python" "$root" '{config_sha}' '{prefix}' >test.log 2>&1
 test -s "$root/screen/decision.json"
 test -s "$root/screen/native-quality.json"
@@ -160,22 +175,23 @@ test -s "$root/screen/cgroup.json"
     subprocess.run(["bash", "-n"], input=body, text=True, check=True)
     if len(body.encode()) > 16384:
         raise ValueError("EC2 user data limit")
-    reservation = {"schema": SCHEMA, "attempt": attempt, "source_base_commit": commit,
+    reservation = {"schema": schema, "attempt": attempt, "source_base_commit": commit,
                    "source_archive_sha256": archive_sha, "config_sha256": config_sha,
                    "sealed_construction_terminal_sha256": sealed_proof["terminal_sha256"],
                    "profile": "causality", "region": REGION, "availability_zone": az,
                    "instance_type": "c7g.2xlarge", "spot_price_observed_usd_per_hour": quote["SpotPrice"],
                    "spot_quote_timestamp": quote["Timestamp"].isoformat(),
-                   "spot_max_usd_per_hour": "0.30", "compute_cost_cap_usd": .15,
-                   "ebs_s3_allowance_usd": .15, "wall_seconds": 1800,
+                   "spot_max_usd_per_hour": "0.30", "compute_cost_cap_usd": wall / 3600 * .30,
+                   "ebs_s3_allowance_usd": .30 if confirm else .15, "wall_seconds": wall,
                    "measurement_memory_max_bytes": 8 * 1024**3, "swap_max_bytes": 0,
                    "interruption_policy": "Discard interrupted cell; no automatic retry",
-                   "scope": "Frozen rank16 fresh dev64 native R10/R100 then conditional four-slot HTTP; prospective untouched"}
+                   "scope": ("Frozen rank16 prospective64-999 native R10/R100 then conditional four-slot HTTP; no tuning" if confirm else
+                             "Frozen rank16 fresh dev64 native R10/R100 then conditional four-slot HTTP; prospective untouched")}
     (out / "aws-user-data.sh").write_text(body)
     (out / "aws-reservation.json").write_text(json.dumps(reservation, indent=2) + "\n")
     put_if_absent(prefix + "/reservation.json", json.dumps(reservation, sort_keys=True).encode())
     receipt = ec2.run_instances(
-        ClientToken="fresh-rank16-dev64-" + attempt + "-" + archive_sha[:28],
+        ClientToken=campaign + "-" + attempt + "-" + archive_sha[:28],
         ImageId="ami-03748c04dc81412c6", InstanceType="c7g.2xlarge",
         MinCount=1, MaxCount=1, IamInstanceProfile={"Arn": PROFILE_ARN},
         NetworkInterfaces=[{"AssociatePublicIpAddress": True, "DeviceIndex": 0,
@@ -187,7 +203,7 @@ test -s "$root/screen/cgroup.json"
             "DeleteOnTermination": True, "Encrypted": True, "VolumeSize": 80,
             "VolumeType": "gp3"}}],
         TagSpecifications=[{"ResourceType": "instance", "Tags": [
-            {"Key": "Name", "Value": TAG}, {"Key": "BorsukAttempt", "Value": attempt}]}],
+            {"Key": "Name", "Value": tag}, {"Key": "BorsukAttempt", "Value": attempt}]}],
         UserData=body)
     instance = receipt["Instances"][0]["InstanceId"]
     launch = {"instance_id": instance, "prefix": prefix, "source_archive_sha256": archive_sha,
@@ -197,11 +213,11 @@ test -s "$root/screen/cgroup.json"
     started = time.monotonic()
     terminal = None
     try:
-        while time.monotonic() - started < 2100:
+        while time.monotonic() - started < wall + 300:
             if not missing(s3, prefix + "/terminal.json"):
                 raw = s3.get_object(Bucket=BUCKET, Key=prefix + "/terminal.json")["Body"].read()
                 terminal = json.loads(raw)
-                for key, expected in (("schema", SCHEMA), ("instance_id", instance),
+                for key, expected in (("schema", schema), ("instance_id", instance),
                                       ("source_archive_sha256", archive_sha),
                                       ("source_base_commit", commit)):
                     if terminal.get(key) != expected:
@@ -243,8 +259,10 @@ test -s "$root/screen/cgroup.json"
 
 
 if __name__ == "__main__":
-    attempt = sys.argv[1] if len(sys.argv) > 1 else "a0001"
-    subnet = sys.argv[2] if len(sys.argv) > 2 else "subnet-0a12dbed0ca6fac25"
-    with open("/tmp/borsuk-fresh-rank16-dev64.lock", "a+") as lock:
+    mode = "confirm936" if len(sys.argv) > 1 and sys.argv[1] == "confirm936" else "dev64"
+    offset = 2 if mode == "confirm936" else 1
+    attempt = sys.argv[offset] if len(sys.argv) > offset else "a0001"
+    subnet = sys.argv[offset + 1] if len(sys.argv) > offset + 1 else "subnet-0a12dbed0ca6fac25"
+    with open("/tmp/borsuk-fresh-rank16-worker.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        main(attempt, subnet)
+        main(attempt, subnet, mode)

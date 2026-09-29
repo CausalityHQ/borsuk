@@ -16,9 +16,9 @@ def plan_sha(records):
     return hashlib.sha256(''.join(json.dumps({k:r[k] for k in ['query_ordinal','ranges','planned_bytes']},sort_keys=True,separators=(',',':'))+'\n' for r in records).encode()).hexdigest()
 
 
-def native(out,phase,args):
+def native(out,phase,args,cap=360):
     with (out/(phase+'.log')).open('x') as log:
-        subprocess.run(['/usr/bin/time','-v','-o',str(out/(phase+'.time')),'timeout','--signal=TERM','--kill-after=10','360',*map(str,args)],check=True,stdout=log,stderr=subprocess.STDOUT)
+        subprocess.run(['/usr/bin/time','-v','-o',str(out/(phase+'.time')),'timeout','--signal=TERM','--kill-after=10',str(cap),*map(str,args)],check=True,stdout=log,stderr=subprocess.STDOUT)
 
 
 def run(out,rep,k,config,binary,index,requests,reference,truth):
@@ -49,7 +49,7 @@ def run(out,rep,k,config,binary,index,requests,reference,truth):
                 for row in samples:stream.write(json.dumps(row,sort_keys=True,allow_nan=False)+'\n')
             result.update(rep=rep,dataset='ReLAION',rows=1000000,dimensions=768,split=config.get('query_split','consumed external development0-63'),authority=authority,namespace_ready_ms=namespace_ready_ms,metadata_resident=True,application_sq8_cache=False,fresh_cohort_used=config.get('fresh_cohort_used',False),matched_control_http_measured=False)
             if not result['identity_parity_valid']:raise ValueError('HTTP source/scorer/native reference integrity')
-            result['development_gate_passed']=(result['successful_count']==64 and result['mean_offered_recall']>=.95 and result['successful_incoming_http_ms']['p90']<444 and result['achieved_successful_qps']>=8)
+            result['development_gate_passed']=(result['successful_count']==len(requests) and result['mean_offered_recall']>=.95 and result['successful_incoming_http_ms']['p90']<444 and result['achieved_successful_qps']>=8)
             write(directory/'result.json',result)
         finally:
             intentional_stop=server.poll() is None
