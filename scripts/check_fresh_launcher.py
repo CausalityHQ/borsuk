@@ -57,6 +57,17 @@ def check():
         raise AssertionError('preflight did not terminate')
 
     assert accepted('rank16') and accepted('cohere')
+    if (ROOT / 'fresh-cohere-dev64-config.json').exists():
+        with patch.object(launcher.subprocess, 'check_output', side_effect=['', 'f' * 40]), \
+             patch.object(launcher.subprocess, 'run'), \
+             patch.object(launcher.io, 'BytesIO', side_effect=Accepted), \
+             patch.object(launcher.boto3, 'Session', side_effect=AssertionError('AWS execution')):
+            try:
+                launcher.main('a0001', 'subnet-0a12dbed0ca6fac25', family='cohere')
+            except Accepted:
+                pass
+            else:
+                raise AssertionError('actual CoHere authority did not terminate at archive boundary')
     for changed in [('valid_source_construction', False), ('state', 'running'),
                     ('remote_bodies_independently_hashed', False), ('query_or_truth_used', True),
                     ('quality_measured', True), ('root_sha256', '0' * 64),

@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-fresh-cohere-vector-identity-v1",
+  "decision": "GO scoped fixed-panel construction",
+  "candidate_rows": [
+    1005000,
+    1005999
+  ],
+  "query_raw_sha256": "28af674aaa41964d065c0cab8390488961aa4fa7b3d07bef4e95bb2bad7d769c",
+  "query_count": 1000,
+  "duplicate_counts": {
+    "within_panel_raw": 0,
+    "within_panel_unit": 0,
+    "indexed_raw": 0,
+    "indexed_unit": 0,
+    "known_prior_query_raw": 0,
+    "known_prior_query_units": 0
+  },
+  "prior_unit_query_identities": {
+    "1000000": "24ff130daf48ef8cd644c9994cd92fd7ad8305d3a5a38127e9ff239fa8a41a22",
+    "1001000": "6e3505fdfc9d6a6c101cba2b7d4c16d5c07eee6ec704fa836385a810e8ca17d4"
+  },
+  "source_candidate_sha256": "d8d633b217ecc1f64bd531ef3b514fccc414f0afaf4b6b8233280ff7e5e43631",
+  "source_build_terminal_sha256": "905ed20152c29ded8f339fd030f9c02a0cabd67c7d54b143b9832ed56a643d92",
+  "complete_prior_query_audit": false,
+  "gt_or_ann_quality_opened": false,
+  "scope": "Exact raw/unit duplicate exclusion against indexed first1M (including consumed train100000-104999), authenticated V271/V278 and registered test; existing source-selector metadata proof retained."
+}

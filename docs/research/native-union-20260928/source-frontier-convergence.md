@@ -85,3 +85,14 @@ no EC2 was launched and no query/GT/quality body was opened. Its resource
 numbers are construction measurements, not query performance. The
 [preregistered transfer gate](fresh-cohere-1m-preregister.md) retains the current
 mechanism and all existing valid ReLAION evidence.
+
+### CoHere fixed-panel seal, 2026-09-29
+
+Fixed source rows1,005,000–1,005,999 passed scoped raw/unit duplicate checks
+against indexed first1M and authenticated prior query sets; complete historical
+freshness remains unproven. Construction job closed0:370.99s wall,763,916KiB
+process peak RSS; exact f64 GT100 took170.55s. Terminal`ee86ab74…`, all five
+closed remote bodies independently rehashed; one development GT row recomputed
+over first1M. ANN recall, query tails/QPS and total cost remain **unmeasured**.
+Next decisive test: frozen dev64 native R@10>=95%, followed conditionally by
+four offered HTTP cells at8QPS and k10 p90<444ms. No matched vendor delta.

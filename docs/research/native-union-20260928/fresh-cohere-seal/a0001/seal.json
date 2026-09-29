@@ -1,0 +1,48 @@
+{
+  "schema": "borsuk-fresh-cohere-1m-seal-v1",
+  "status": "complete",
+  "exit_code": 0,
+  "root_sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e",
+  "source_raw_sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005",
+  "query_rows": [
+    1005000,
+    1005999
+  ],
+  "development_ordinals": [
+    0,
+    63
+  ],
+  "prospective_ordinals": [
+    64,
+    999
+  ],
+  "artifacts": {
+    "queries.raw": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/queries.raw",
+      "bytes": 3072000,
+      "sha256": "28af674aaa41964d065c0cab8390488961aa4fa7b3d07bef4e95bb2bad7d769c"
+    },
+    "requests.jsonl": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/requests.jsonl",
+      "bytes": 15369586,
+      "sha256": "0a273ae5bfb8b258242b2a7063f27e2f2b158ed91e5d1019e403593b91420464"
+    },
+    "truth.u32": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/truth.u32",
+      "bytes": 400000,
+      "sha256": "b9dd2d8d6b12560108b55a70f339f2a097ee550df4b6e562aa91b76cbd9e4f41"
+    },
+    "identity.json": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/identity.json",
+      "bytes": 1157,
+      "sha256": "5fa4d5df83c24f87863d8115671d42b215c7961caf4822d6b93856da46e4dd20"
+    }
+  },
+  "oracle": "exhaustive f64 cosine block-sort merge; signed source ordinal ties",
+  "oracle_source_sha256": "fe91b3afbd95648fa2d6de371ae4fa3b31d549df873496010a643f365bff450d",
+  "oracle_wall_seconds": 170.5473289060028,
+  "controller_sha256": "17d08701529b612f04807b80357c3bfce790d6c8add8d57233affcde96310606",
+  "preregister_sha256": "b2f45f65b57e457aa46e88d7a47f6955cfc54a906e6183310c57a611d1148d52",
+  "complete_prior_query_audit": false,
+  "ann_quality_measured": false
+}

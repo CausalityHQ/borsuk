@@ -26,10 +26,13 @@ def percentile(values, p):
     return values[low] + (values[high] - values[low]) * (x - low)
 
 
-def main(attempt):
-    directory = ROOT / "fresh-rank16-dev64" / attempt
+def main(attempt, family="rank16"):
+    if family not in ("rank16", "cohere"):
+        raise ValueError("unknown fresh dataset family")
+    campaign = "fresh-" + family + "-dev64"
+    directory = ROOT / campaign / attempt
     launch = json.loads((directory / "aws-launch.json").read_text())
-    config = json.loads((ROOT / "fresh-rank16-dev64-config.json").read_text())
+    config = json.loads((ROOT / (campaign + "-config.json")).read_text())
     session = boto3.Session(profile_name="causality", region_name="eu-central-1")
     s3, ec2 = session.client("s3"), session.client("ec2")
     prefix = launch["prefix"]
@@ -43,7 +46,7 @@ def main(attempt):
     assert terminal["instance_id"] == launch["instance_id"]
     assert terminal["source_base_commit"] == reservation["source_base_commit"] == launch["source_base_commit"]
     assert terminal["source_archive_sha256"] == reservation["source_archive_sha256"] == launch["source_archive_sha256"]
-    assert reservation["config_sha256"] == sha((ROOT / "fresh-rank16-dev64-config.json").read_bytes())
+    assert reservation["config_sha256"] == sha((ROOT / (campaign + "-config.json")).read_bytes())
     archive = s3.get_object(Bucket=BUCKET, Key="research/native-library-check/sources/"
                             + launch["source_archive_sha256"] + ".tar.gz")["Body"].read()
     assert sha(archive) == launch["source_archive_sha256"]
@@ -56,10 +59,10 @@ def main(attempt):
     quality = json.loads(artifact("native-quality.json"))
     decision = json.loads(artifact("decision.json"))
     cgroup = json.loads(artifact("cgroup.json"))["cgroup"]
-    assert quality["split"] == "fresh rank16 development0-63"
+    assert quality["split"] == config["query_split"]
     assert quality["root_sha256"] == config["root_sha256"]
     assert quality["only_dev64_ranges_read"] and not quality["qualification"]
-    assert decision["decision"] == "GO fresh ReLAION1M development only"
+    assert decision["decision"] == ("GO fresh CoHere1M " + config["query_split"] if family == "cohere" else "GO fresh ReLAION1M development only")
     assert decision["fresh_cohort_used"] and decision["http_measured"]
     assert not decision["qualification"] and not decision["matched_control_http_measured"] and not decision["matched_vendor_measured"]
 
@@ -104,7 +107,7 @@ def main(attempt):
     for rep, k in enumerate(config["setting_order"]):
         result = json.loads(artifact(f"run{rep}-k{k}/result.json"))
         assert result == decision["runs"][rep] and result["rep"] == rep and result["k"] == k
-        assert result["split"] == "fresh rank16 development0-63" and result["fresh_cohort_used"]
+        assert result["split"] == config["query_split"] and result["fresh_cohort_used"]
         assert result["successful_count"] == 64 and result["outcomes"] == {"success": 64}
         assert result["identity_parity_valid"] and result["physical_counters_complete"]
         assert result["namespace_ready_ms"] > 0 and result["development_gate_passed"]
@@ -167,4 +170,6 @@ def main(attempt):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "a0002")
+    family = "cohere" if len(sys.argv) > 1 and sys.argv[1] == "cohere" else "rank16"
+    offset = 2 if family == "cohere" else 1
+    main(sys.argv[offset] if len(sys.argv) > offset else ("a0001" if family == "cohere" else "a0002"), family)
