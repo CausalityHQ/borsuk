@@ -33,7 +33,7 @@ control=root/'walk-source-integration/a0001';cp=json.loads((control/'verificatio
 assert cp['valid_check'] and cp['full_assurance']==dict(passed=2693,failed=0,ignored=26,targets=145) and cp['state']=='terminated'
 assert hashlib.sha256((control/'aws-terminal.json').read_bytes()).hexdigest()==cp['terminal_sha256']==reservation['control_authority_terminal_sha256']
 assert reservation['new_native_files_matched']==394
-previous=json.loads((root/'source-frontier-http/a0001/verification.json').read_text());assert previous['valid_measurement'] and previous['terminal_sha256']==reservation['predecessor_http_terminal_sha256']
+previous=json.loads((root/'source-frontier-http/a0003/verification.json').read_text());assert previous['valid_measurement'] and previous['terminal_sha256']==reservation['predecessor_http_terminal_sha256']
 report=dict(instance_id=launch['instance_id'],state='terminated',source_archive_sha256=launch['source_archive_sha256'],terminal_sha256=hashlib.sha256(raw).hexdigest(),native_files_matched=native,source_files_matched=matched,artifacts_verified=len(terminal['artifacts']),qualification=False,fresh_cohort_used=False)
 if terminal['status']!='complete' or terminal['exit_code']!=0 or 'screen/decision.json' not in terminal['artifacts']:
     report.update(valid_measurement=False,reason='Incomplete/failed terminal',phase=terminal['phase'],exit_code=terminal['exit_code']);(out/'invalid-verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report));sys.exit(0)

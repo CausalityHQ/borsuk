@@ -74,9 +74,9 @@
           "sha256": "e72f61f9fbf79326335f7f2150b6ce8140eb617a248457b5e2ccd157793c6311"
         },
         "control/page_digests.bin": {
-          "key": "research/native-union/20260928/cold-a0001/runs/relaion/1-candidate/generations/75debd103ff5de9a706fdb84ecf52bfd068af920db4a9f475ca17b92ff55f6d3/page_digests.bin",
+          "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/page_digests.bin",
           "bytes": 12512,
-          "sha256": "da21e09d75986e977265122c3535aa7bd90d4868e2bbfe235d607fb4a9b8b584"
+          "sha256": "2195b3fac01c8ea529604934c5fe5fb761d16d21221fb84ce97524caf912dbeb"
         },
         "control/centroids.bin": {
           "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/centroids.bin",
@@ -201,9 +201,9 @@
           "sha256": "9f6442a34dc6ba965f93c1e8875452f67eb2bbe8dde9513abe924d078d8192e0"
         },
         "control/page_digests.bin": {
-          "key": "research/native-union/20260928/cold-a0001/runs/cohere/1-candidate/generations/bf9d8777e51f4bf2150a014af9584513f64b27822fea4711b011271c37474a99/page_digests.bin",
+          "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/page_digests.bin",
           "bytes": 12512,
-          "sha256": "9f5666a312208112694ff81fa826608e2f14387acd3296ed9231419447c2c77e"
+          "sha256": "5bf185ca763e49d5c2c4bc811d10074ee84715b7c6520eb2720ab6499c686416"
         },
         "control/centroids.bin": {
           "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/centroids.bin",

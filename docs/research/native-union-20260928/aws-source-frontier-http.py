@@ -55,6 +55,21 @@ config_sha=hashlib.sha256(config_path.read_bytes()).hexdigest()
 config=json.loads(config_path.read_text())
 for name,digest in (config['scorer_hashes']|config['controller_dependencies']).items():
     if hashlib.sha256(Path(name).read_bytes()).hexdigest()!=digest:raise RuntimeError('Frozen scorer changed')
+# All nine v4 metadata components must belong to the same authenticated root.
+for item in config['items']:
+    artifacts=item['artifacts']
+    def metadata(name):
+        ident=artifacts['control/'+name]
+        data=s3.get_object(Bucket=BUCKET,Key=ident['key'])['Body'].read()
+        assert len(data)==ident['bytes'] and hashlib.sha256(data).hexdigest()==ident['sha256']
+        return json.loads(data)
+    root=metadata('manifest.json');plane=metadata('plane/manifest.json');page=metadata('page_manifest.json')
+    expected={'manifest.json':item['control_root_sha256'],'plane/manifest.json':root['plane_manifest_sha256'],'plane/mean.bin':plane['mean_sha256'],'plane/records.bin':plane['records_sha256'],'page_manifest.json':root['page_manifest_sha256'],'page_digests.bin':page['page_digest_sha256'],'centroids.bin':root['centroids_sha256'],'graph.bin':root['graph_sha256'],'diverse_graph.bin':root['diverse_graph_sha256']}
+    assert {name.removeprefix('control/') for name in artifacts if name.startswith('control/') and name!='control/canonical.bin'}==set(expected)
+    for name,digest in expected.items():assert artifacts['control/'+name]['sha256']==digest,name
+    assert artifacts['sq8.bin']['sha256']==root['sq8_object_sha256']==page['object_sha256']==plane['sq8_sha256']
+    assert artifacts['order.u64']['sha256']==plane['source_order_sha256']
+    assert artifacts['control/canonical.bin']['sha256']==root['canonical']['sha256'] and artifacts['control/canonical.bin']['bytes']==root['canonical']['bytes']
 previous=ROOT_OUT/'locality-source-check/a0001'
 old_launch=json.loads((previous/'aws-launch.json').read_text());old_terminal=json.loads((previous/'aws-terminal.json').read_text());proof=json.loads((previous/'verification.json').read_text())
 assert proof['valid_check'] and proof['state']=='terminated' and proof['full_assurance']==dict(passed=2689,failed=0,ignored=26,targets=144)

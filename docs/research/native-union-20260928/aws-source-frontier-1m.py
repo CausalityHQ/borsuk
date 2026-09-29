@@ -88,13 +88,16 @@ assert new_matched==394
 assert hashlib.sha256(Path('scripts/run_native_source_frontier_1m.py').read_bytes()).hexdigest()==config['controller_sha256']
 reservation.update(config_sha256=config_sha,reused_native_source_archive_sha256=old_launch['source_archive_sha256'],reused_terminal_sha256=proof['terminal_sha256'],measurement_memory_max_bytes=8589934592,process_address_space_bytes=4294967296,swap_max_bytes=0,cpu_affinity='0-3',threads=4,controller_sha256=config['controller_sha256'],new_native_files_matched=new_matched,new_native_source_archive_sha256=narrow_launch['source_archive_sha256'],candidate_authority_terminal_sha256=narrow_proof['terminal_sha256'],control_authority_terminal_sha256=control_proof['terminal_sha256'],candidate_compiled_generation_sha256=narrow_proof['compiled_generation_sha256'],candidate_compiled_graph_sha256=narrow_proof['compiled_graph_sha256'])
 runner.WALL_SECONDS=2700;runner.SCHEMA=SCHEMA
-prior_http=json.loads((ROOT_OUT/'source-frontier-http/a0001/verification.json').read_text())
+prior_http=json.loads((ROOT_OUT/'source-frontier-http/a0003/verification.json').read_text())
 assert prior_http['valid_measurement'] and len(prior_http['rows'])==2 and all(r['decision'].startswith('GO') for r in prior_http['rows'])
 assert ec2.describe_instances(InstanceIds=[prior_http['instance_id']])['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
 reservation['predecessor_http_terminal_sha256']=prior_http['terminal_sha256']
 prior_build=json.loads((ROOT_OUT/'walk-source-1m/a0002/construction-verification.json').read_text());assert prior_build['valid_native_construction_metadata'] and prior_build['instance_terminated']
 assert prior_build['terminal_sha256']==config['closed_construction_terminal_sha256']==hashlib.sha256((ROOT_OUT/'walk-source-1m/a0002/aws-terminal.json').read_bytes()).hexdigest()
-assert ec2.describe_instances(InstanceIds=[json.loads((ROOT_OUT/'walk-source-1m/a0002/aws-launch.json').read_text())['instance_id']])['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
+construction=ROOT_OUT/'walk-source-1m/a0002';construction_launch=json.loads((construction/'aws-launch.json').read_text());construction_close=json.loads((construction/'aws-closeout.json').read_text())
+assert construction_close['instance_id']==construction_launch['instance_id'] and construction_close['state']=='terminated'
+found=[i for r in ec2.describe_instances(InstanceIds=[construction_launch['instance_id']])['Reservations'] for i in r['Instances']]
+assert not found or len(found)==1 and found[0]['State']['Name']=='terminated'
 reservation['closed_construction_terminal_sha256']=prior_build['terminal_sha256']
 closed_science=json.loads((ROOT_OUT/'walk-source-1m/a0003/verification.json').read_text());assert closed_science['valid_measurement'] and closed_science['state']=='terminated' and closed_science['terminal_sha256']==config['closed_current_control']['terminal_sha256']
 reservation['closed_current_control_terminal_sha256']=closed_science['terminal_sha256']

@@ -1,0 +1,10 @@
+{
+  "valid_measurement": false,
+  "discard_entire_cell": true,
+  "partial_measurement_or_logs_opened": false,
+  "native_session": 63811,
+  "instance_id": "i-09f8f7edf0dc73f07",
+  "reason": "Static metadata inspection found current root/page manifest paired with old layout page_digests.bin; fails authenticated open; cancel known doomed cell and replace only after actual termination",
+  "correction": "Register current source-v3 page digests; verify all9 components against root/plane/page manifests before launch",
+  "science_result_used": false
+}
