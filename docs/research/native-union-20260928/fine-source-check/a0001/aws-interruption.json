@@ -1,0 +1,15 @@
+{
+  "instance_id": "i-087810940276362cf",
+  "state": "terminated",
+  "state_reason": {
+    "Code": "Server.SpotInstanceTermination",
+    "Message": "Server.SpotInstanceTermination: Spot instance termination"
+  },
+  "state_transition_reason": "Service initiated (2026-09-29 03:39:42 GMT)",
+  "spot_request_id": "sir-s7xznjeg",
+  "spot_status": {
+    "Code": "instance-terminated-no-capacity",
+    "Message": "Your Spot instance was terminated because there is no Spot capacity available that matches your request.",
+    "UpdateTime": "2026-09-29 03:37:39+00:00"
+  }
+}

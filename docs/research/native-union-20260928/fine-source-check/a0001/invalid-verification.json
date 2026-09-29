@@ -1,0 +1,27 @@
+{
+  "instance_id": "i-087810940276362cf",
+  "state": "terminated",
+  "source_archive_sha256": "76f6f031f3caa934cc38f257e3ec763072f6dcf7743cb50fe1a0911b8de744c9",
+  "terminal_sha256": "7e224a33b22a01bcc2609902eee4f028f04061820d952cbbdbe2546123080c16",
+  "native_files_matched": 393,
+  "source_files_matched": 395,
+  "artifacts_verified": 9,
+  "qualification": false,
+  "no_corpus_query": true,
+  "valid_check": false,
+  "reason": "Incomplete required check artifacts; reported terminal success is not assurance",
+  "missing_artifacts": [
+    "boundary-check.json",
+    "boundary-cgroup.json",
+    "release.log",
+    "recipe-check.json",
+    "recipe.log",
+    "fixture-order.u64",
+    "binaries/build_two_bit_generation",
+    "binaries/two_bit_plan_demo",
+    "binaries/two_bit_http",
+    "binaries/build_sq8_source"
+  ],
+  "reported_status": "complete",
+  "reported_exit_code": 0
+}
