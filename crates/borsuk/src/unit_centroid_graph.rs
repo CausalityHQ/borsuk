@@ -206,8 +206,22 @@ impl UnitCentroidGraph {
         } else {
             build_hnsw_adjacency
         };
-        let adjacency = build(&centers, M, M0, EF_CONSTRUCTION, 64)
+        let mut adjacency = build(&centers, M, M0, EF_CONSTRUCTION, 64)
             .ok_or(UnitCentroidGraphError::InvalidGeometry)?;
+        // A directed base-layer cycle prevents pruning from isolating a seeded
+        // walk. Keep the existing degree and evaluation bounds; higher layers
+        // remain untouched. Construction quality needs separate qualification.
+        let nodes = adjacency.neighbours.len();
+        for (node, tower) in adjacency.neighbours.iter_mut().enumerate() {
+            let next = ((node + 1) % nodes) as u32;
+            let base = tower.last_mut().expect("base layer");
+            if !base.contains(&next) {
+                if base.len() == M0 {
+                    base.pop();
+                }
+                base.push(next);
+            }
+        }
         let centroid_sha256 = Sha256::digest(centroid_blob).into();
         Ok(Self {
             rows: scorer.rows(),
@@ -940,6 +954,82 @@ mod tests {
                 .search_pages_seeded(&scorer, &[2.1], &[0], 1, 1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn duplicate_centroids_keep_seeded_discovery_reachable_and_bounded() {
+        // 200 physical pages, eight identical units per page. HNSW tie pruning
+        // must not strand a bounded walk in a small directed component.
+        let rows = 200 * 256;
+        let mut sq8 = vec![0u8; rows * 13];
+        for record in sq8.chunks_exact_mut(13) {
+            record[12] = 1;
+        }
+        let blob = UnitCentroidPages::build_from_sq8_reader(
+            &mut Cursor::new(sq8),
+            rows,
+            1,
+            32,
+            256,
+            &[0.0],
+            &[1.0],
+        )
+        .unwrap();
+        let scorer = UnitCentroidPages::decode(&blob).unwrap();
+        for graph in [
+            UnitCentroidGraph::build(&scorer, &blob).unwrap(),
+            UnitCentroidGraph::build_diverse(&scorer, &blob).unwrap(),
+        ] {
+            let loaded =
+                UnitCentroidGraph::decode(&graph.encode().unwrap(), &blob, &scorer).unwrap();
+            assert!(
+                loaded
+                    .neighbours
+                    .iter()
+                    .all(|tower| tower.last().unwrap().len() <= M0)
+            );
+            for seed in [0, 100, 199] {
+                let found = loaded
+                    .search_pages_seeded(&scorer, &[1.0], &[seed], 158, 1272)
+                    .unwrap();
+                assert_eq!(
+                    found.unit_evaluations, 1272,
+                    "frontier ended before work cap"
+                );
+                assert_eq!(
+                    found.pages.len(),
+                    158,
+                    "discovery lost required page coverage"
+                );
+                assert!(found.pages.iter().all(|&(page, _)| page != seed));
+            }
+            // Reachability in both directions establishes strong connectivity,
+            // including units that the fixed-budget query intentionally omits.
+            let mut reverse = vec![Vec::new(); loaded.node_count()];
+            for (node, tower) in loaded.neighbours.iter().enumerate() {
+                for &neighbor in tower.last().unwrap() {
+                    reverse[neighbor as usize].push(node as u32);
+                }
+            }
+            for reversed in [false, true] {
+                let mut seen = HashSet::new();
+                let mut frontier = vec![0u32];
+                while let Some(node) = frontier.pop() {
+                    if seen.insert(node) {
+                        frontier.extend(if reversed {
+                            &reverse[node as usize]
+                        } else {
+                            loaded.layer_neighbours(node, 0)
+                        });
+                    }
+                }
+                assert_eq!(
+                    seen.len(),
+                    loaded.node_count(),
+                    "directed graph disconnected"
+                );
+            }
+        }
     }
 
     #[test]

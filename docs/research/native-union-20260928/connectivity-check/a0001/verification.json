@@ -1,0 +1,59 @@
+{
+  "instance_id": "i-0d4561bf68ee3f05d",
+  "state": "terminated",
+  "source_archive_sha256": "3081e7b6761a81331f0b593f962bc98a408378e68d3f69762ba67d11a40cdeb0",
+  "terminal_sha256": "a29d0b4e923ebb4e539732b33d32c24c383b8562cd32df3f274311a29d1259c6",
+  "native_files_matched": 393,
+  "source_files_matched": 395,
+  "artifacts_verified": 16,
+  "qualification": false,
+  "no_corpus_query": true,
+  "cargo_executed_targets": 145,
+  "benchmark_smoke_checks": 12,
+  "exact_previous_top_level_roster_plus_one": true,
+  "raw_summary_passes": 2690,
+  "raw_summary_count": 147,
+  "count_note": "Top-level harness totals; nested subprocess stdout summaries can interleave and are not separate Cargo targets",
+  "valid_check": true,
+  "boundary": {
+    "qualified": false,
+    "original_graph_sha256": "dbcb477c79105ea1f72de3bf74f699df7258a23efb428c397690f0a197a6ab2c",
+    "fixed_graph_sha256": "9370e93ba5b46de488110d361cbfea111f8fb9250de36f10995be3f6863640fe",
+    "red_status": 101,
+    "green_passed": true,
+    "binaries": {
+      "build_two_bit_generation": {
+        "bytes": 1267440,
+        "sha256": "2ad8edffd4b5f0f1dbbbc2420a27c1ca46ff99c3d37b67de5e851ecab92133e1"
+      },
+      "two_bit_plan_demo": {
+        "bytes": 11685096,
+        "sha256": "441d98540074641788a811c779474dc3b401e427e08c290bd9a05dd8dd36b0c3"
+      },
+      "two_bit_http": {
+        "bytes": 12517000,
+        "sha256": "076e4e15e9ee9db59b4e91ddaa8d4f13ba655897eff9f332dc738d91b811709d"
+      },
+      "build_sq8_source": {
+        "bytes": 1268624,
+        "sha256": "7d666c5049d2c37532fdc16aef9c5d946d65895448c859a677ee5c3d75198497"
+      }
+    },
+    "full_workspace_repeated": true,
+    "no_corpus_query": true
+  },
+  "cgroup": {
+    "memory.peak": "10737418240\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 21959\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 7528107004\nuser_usec 7193326691\nsystem_usec 334780312\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  },
+  "full_assurance": {
+    "passed": 2687,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 144
+  },
+  "compiled_graph_sha256": "9370e93ba5b46de488110d361cbfea111f8fb9250de36f10995be3f6863640fe",
+  "declared_source_transformation": true
+}
