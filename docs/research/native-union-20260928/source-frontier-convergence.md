@@ -105,3 +105,14 @@ four offered HTTP cells at8QPS and k10 p90<444ms. No matched vendor delta.
 
 [Closed development decision](fresh-cohere-dev64-decision.md); original startup
 a0001 remains an immutable infrastructure failure, not a quality KILL.
+
+### CoHere prospective convergence,2026-09-29
+
+| Baseline/context | Candidate/split | Actual quality delta | Measured tails/QPS/cost | Remaining gap to BOTH vendors | Next decisive test |
+|---|---|---|---|---|---|
+| Practical95% R@10; TP1M D768 cold p90=444ms published context | Frozen a4eb4851, CoHere FIRST1M D768 cosine prospective64–999 | VerifiedR10=96.6667%,R100=94.1015%; matched delta unmeasured | Verifiedk10 p90=112.913/112.931ms,p95=113.949/114.109ms,8QPS/cell,3744/3744success; compute$0.0480 estimated excludesEBS/S3 | Peer cold/namespace initialization(~4.5s remoteopen), matched comparisons, saturation/totalcost,10M/100M/lifecycle | Bound two-host peer measurement and explicit namespace-startup accounting |
+
+[Closed prospective confirmation](fresh-cohere-confirm936-decision.md) preserves
+this candidate and the separate verified ReLAION prospective GO. Namespace
+startup is not part of the reported incoming query tails. CoHere train query
+rows1,005,000–1,005,999 cannot be reused as a disjoint full10M scale split.
