@@ -1,0 +1,59 @@
+{
+  "metadata_only": true,
+  "query_embedding_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "cohort_selected": false,
+  "qualification": false,
+  "source_code_leads": [
+    {
+      "path": "scripts/v271_fresh_frontier.py",
+      "sha256": "3e0cc374e8888729ec9dc6bf3e0b74fee114c9c04c01f1aa74369716364588ac",
+      "dataset": "CoHere",
+      "code_inventory_observation": "Prepares source rows1000000\u20131000999; outside1M alone cannot establish novelty.",
+      "closed_execution_authenticated_here": false
+    },
+    {
+      "path": "scripts/v277_extra_reverse_fresh.py",
+      "sha256": "23b7e1feccb59275c62a4ff5cf31fe99978302d6b331d6647c05c3d9044c5e58",
+      "dataset": "CoHere",
+      "code_inventory_observation": "Uses excluded train rows104000\u2013104999; not an unused panel.",
+      "closed_execution_authenticated_here": false
+    },
+    {
+      "path": "scripts/v194_fresh_1m_optional_source.py",
+      "sha256": "1f51d8457a14c9cb20e5518d55f91cdf692fe7fe157f8ed2478f692bbf432c9c",
+      "dataset": "ReLAION",
+      "code_inventory_observation": "Pseudoquery hash ranks2945\u20133456 from registered1M source; authenticate terminal and feature-ID mappings.",
+      "closed_execution_authenticated_here": false
+    },
+    {
+      "path": "scripts/v197_fresh_resident_fp16_source.py",
+      "sha256": "2f76d58fd503058dc30a8f5ea781655df7ccfbbd762d1f1a5227e31172f791c9",
+      "dataset": "ReLAION",
+      "code_inventory_observation": "Pseudoquery hash ranks3457\u20133968; authenticate terminal and feature-ID mappings.",
+      "closed_execution_authenticated_here": false
+    },
+    {
+      "path": "scripts/v198_real_query_resident_fp16.py",
+      "sha256": "1942fd9abed0e9054429c3280e018528b86fbd475df714fda1e30197f7274c73",
+      "dataset": "ReLAION",
+      "code_inventory_observation": "External-query derivative; inspect archived source and CLOSED query authority.",
+      "closed_execution_authenticated_here": false
+    },
+    {
+      "path": "scripts/audit_native_union_fresh_novelty.py",
+      "sha256": "6bddf143ab4e16391f80eaed746a691dc42472eafd142c130292815e0d515dc4",
+      "dataset": "ReLAION",
+      "code_inventory_observation": "Verified V189 overlap witness invalidates entire former panel; reuse metadata-only audit pattern.",
+      "closed_execution_authenticated_here": false
+    }
+  ],
+  "existing_authenticated_population_authority": "fresh-identity-authorities/verification.json",
+  "next_actions": [
+    "Authenticate CLOSED terminal/source archive for relevant query producers; inventory derivative reuse and query identities, not just current source code.",
+    "Collect identity columns and archive-bound source mapping for historical external/pseudoquery sets; do not inspect quality or sealed bodies.",
+    "Preregister entirely separate representative source/query panel outside indexed1M and all prior-query identities; identity rejection ends whole panel, no per-query salvage.",
+    "After identity PASS, seal f64 exactGT10/100 and immutable source/scorer/currentcandidate roots; measure R@10/R@100 separately and actual incomingHTTP at declaredcoldprotocol,8QPS then saturation/costcurve."
+  ],
+  "paid_launch_hold": "Operator reload checkpoint: no new paid jobs until reload instruction resolves."
+}
