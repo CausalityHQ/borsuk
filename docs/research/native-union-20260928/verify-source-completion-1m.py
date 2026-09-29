@@ -76,6 +76,7 @@ assert closed_proof['valid_measurement'] and closed_proof['terminal_sha256']==re
 assert hashlib.sha256(Path('scripts/run_native_source_completion_1m.py').read_bytes()).hexdigest()==config['controller_sha256']==reservation['controller_sha256']
 ident=config['artifacts']['closed-current-control.jsonl'];body=s3.get_object(Bucket=config['bucket'],Key=ident['key'])['Body'].read();assert len(body)==ident['bytes'] and hashlib.sha256(body).hexdigest()==ident['sha256'];closed=[json.loads(line) for line in body.splitlines()];assert len(closed)==64
 assert all(all(r[k]==old[k] for k in ['query_ordinal','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']) for r,old in zip(plans['control'],closed))
+assert all(old['discoveries']==new['discoveries'] for old,new in zip(plans['control'],plans['candidate']))
 assert result['returned_hits']['control']==config['closed_current_control']['hits']==6288 and result['p05']['control']==config['closed_current_control']['p05']==92 and result['flat_hits']==config['closed_current_control']['flat_hits']==6363 and result['plans_sha256']['control']==config['closed_current_control']['plans_sha256']
 
 for arm,records in plans.items():

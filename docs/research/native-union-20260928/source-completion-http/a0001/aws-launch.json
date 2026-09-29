@@ -1,0 +1,7 @@
+{
+  "instance_id": "i-026727531d5b42289",
+  "prefix": "research/native-union/20260928/source-completion-http-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "source_archive_sha256": "6fdf1e8a3ce4d4878300b1eff354f9b7283a26b6d155123ba6473ea44769b2cb",
+  "source_base_commit": "7049691ae90b4ab84398d57e3746f944dc181ded"
+}

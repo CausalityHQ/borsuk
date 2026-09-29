@@ -124,6 +124,7 @@ def main():
     closed_control=[json.loads(line) for line in (directory/'closed-current-control.jsonl').read_text().splitlines()]
     parity=['query_ordinal','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']
     assert len(closed_control)==64 and all(all(r[k]==old[k] for k in parity) for r,old in zip(plans['control'],closed_control))
+    assert all(old['discoveries']==new['discoveries'] for old,new in zip(plans['control'],plans['candidate']))
     for q in range(64):
         if time.monotonic()-score_start>900:raise TimeoutError('fixed quality phase envelope')
         query=normalize(requests[q]['query']);assert query.shape==(768,)

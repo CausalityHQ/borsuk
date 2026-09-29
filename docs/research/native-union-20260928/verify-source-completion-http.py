@@ -57,6 +57,7 @@ for item in config['items'][:len(decision['results'])]:
     assert all(all(r[k]==old[k] for k in ['query_ordinal','root_sha256','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page']) for r,old in zip(actual,current))
     core=[json.loads(line) for line in get(base+'core-plan.jsonl').splitlines()];assert len(core)==64
     actual_candidate=[next(row for row in records[q*2:q*2+2] if row['arm']=='candidate') for q in range(64)]
+    assert all(old['discoveries']==new['discoveries'] for old,new in zip(actual,actual_candidate))
     assert all(all(r[k]==new[k] for k in ['query_ordinal','ranges','planned_bytes','discoveries','ranked_candidate_pages','selected_pages','primary_page','nomination_evaluated_units']) for r,new in zip(core,actual_candidate))
     assert binding['candidate_root_sha256'] in get(base+'core-plan.time').decode() and all(r['root_sha256']==binding['candidate_root_sha256'] for r in actual_candidate)
     assert binding['control_root_sha256']==item['control_root_sha256'] and binding['candidate_root_sha256']==item['control_root_sha256']
@@ -156,8 +157,8 @@ for item in config['items'][:len(decision['results'])]:
             d,n,f,t,z=(set(sample['stages'][key]) for key in ['candidate','nominated','fetched','returned','flat'])
             losses['gt_physical']+=len(n-f);losses['gt_physical_spill']+=len(f-n)
             for key,value in [('flat_gt_discovery',len(z-d)),('flat_gt_nomination',len((z&d)-n)),('flat_gt_physical',len((z&n)-f)),('flat_gt_ranking',len((z&f)-t)),('returned_outside_flat',len(t-z))]:losses[key]+=value
-        source_work=sum(32*len(set(record['nomination_evaluated_units']) if arm=='candidate' else set().union(*(set(d['walk_evaluated_units']) for d in record['discoveries']))) for record in records if record['arm']==arm)
+        source_work=sum(32*len(set(record['nomination_evaluated_units']) if arm=='candidate' else set().union(*(set(d['walk_evaluated_units']) for d in record['discoveries']))) for record in (actual_candidate if arm=='candidate' else actual))
         decomposition[arm]=dict(nomination_source_row_evaluations=source_work,counts=counts,losses=losses,discovery_loss=discovery_loss[arm],graph_walks_verified=len(discovery_work[arm]),work_evaluations_cap=1272,work_evaluations_min=min(discovery_work[arm]),work_evaluations_max=max(discovery_work[arm]),naturally_ended_walks=sum(n<1272 for n in discovery_work[arm]))
-    rows.append(dict(dataset=item['name'],returned_hits=result['returned_hits'],p05=result['p05'],decision=result['decision'],physical_cold_measured=result['physical_cold_measured'],decomposition=decomposition,arm_median_incoming_http_ms=result.get('arm_median_incoming_http_ms'),arm_median_serial_qps=result.get('arm_median_serial_qps'),runs=result.get('runs')))
+    rows.append(dict(dataset=item['name'],exact_discovery_trace_parity=True,returned_hits=result['returned_hits'],p05=result['p05'],decision=result['decision'],physical_cold_measured=result['physical_cold_measured'],decomposition=decomposition,arm_median_incoming_http_ms=result.get('arm_median_incoming_http_ms'),arm_median_serial_qps=result.get('arm_median_serial_qps'),runs=result.get('runs')))
 cgroup=obj('screen/cgroup.json');assert int(cgroup['memory.max'])==8589934592 and int(cgroup['memory.swap.max'])==int(cgroup['memory.swap.peak'])==0 and all(int(s.split()[1])==0 for s in cgroup['memory.events'].splitlines() if s.split()[0] in ['oom','oom_kill']);report.update(valid_measurement=True,rows=rows,cgroup=cgroup,helper=helper,decision=decision['decision'],fresh_cohort_used=False)
 (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))

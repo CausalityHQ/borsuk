@@ -1,0 +1,10 @@
+{
+  "authenticated_before_local_removal": true,
+  "immutable_terminal_descriptors": "aws-terminal.json",
+  "artifacts": [
+    "screen/cohere/candidate/canonical.bin",
+    "screen/cohere/candidate/plane/records.bin",
+    "screen/relaion/candidate/canonical.bin",
+    "screen/relaion/candidate/plane/records.bin"
+  ]
+}

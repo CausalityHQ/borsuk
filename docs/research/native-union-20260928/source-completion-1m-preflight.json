@@ -1,12 +1,15 @@
 {
   "metadata_only": true,
   "no_numerical_execution": true,
-  "config_sha256": "d0056860ca1166be126825c71e51f18a1bb91b5bd81f2dfa6ae42017a16ff8ef",
+  "config_sha256": "164e8e64dfc6058698bee8b6e0d511eb89c8afa6b748040734e4f1fd7ef7a8f2",
   "root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
   "components": 9,
   "canonical_bytes_expected_from_authenticated_root": 3080000000,
   "canonical_body_verified": false,
   "oracle_selfcheck_and_topk_ast_unchanged": true,
   "control_hits": 6288,
-  "flat_hits": 6363
+  "flat_hits": 6363,
+  "controller_sha256": "2a302bd89d61254b3c52c3162e0577ce6686ee8e885ec60618a26f46353db566",
+  "exact_discovery_parity_gate": true,
+  "predecessor_verified_terminal_sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd"
 }

@@ -70,3 +70,13 @@ Candidate walkpool/roster/nomination/physical/final losses46/18/26/0/22;
 flat-present finalrank0. Endprecisionarm; bounded source-only discovery/selection
 must change next. Wholewalk/completeroster/sourcepriority failures remain closed.
 No scale/fresh/vendor launch onthisarm; originalgoalACTIVE unchanged.
+
+## Latest bounded completion: VERIFIED BOTH100k GO
+
+See [paired decision](source-completion-http-decision.md) for current exact controls,
+quality deltas and actual HTTP. R6366→6369 (+.046875pp), C6349→6351 (+.031250pp),
+matching flat SQ8 totals; candidate p90/p95 R117.485/125.202ms,C109.296/110.768ms;
+serial QPS8.81918/9.24361, slower than matched controls. Lifecycle$ unmeasured.
+Same source/root/scorer/discovery; fixed work caps. Next decisive test fixedR1M
+>=6331hits,p05>=95 then actual nativeHTTP; kill exact arm on scientific failure.
+Both vendor gap, fresh identity/scale/maintenance/pins/recovery remain unresolved.

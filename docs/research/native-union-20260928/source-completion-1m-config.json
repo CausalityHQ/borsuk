@@ -233,7 +233,7 @@
     "truth_sha256": "b2234a3c3391f4fe2a529f69dcffb62836d76e27acf14ef836f9704c28fff902",
     "terminal_sha256": "b90b737a11563582a867cfe09e31ae90cea328128e47ee255b1a03eb58fd6c49"
   },
-  "controller_sha256": "881a3acc17c24006a06cae53dc5795ca2a8c2fd2c353fd0d2008204a3c55870c",
+  "controller_sha256": "2a302bd89d61254b3c52c3162e0577ce6686ee8e885ec60618a26f46353db566",
   "source_precision_bits": {
     "control": 2,
     "candidate": 2
