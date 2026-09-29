@@ -39,3 +39,29 @@ targets with disclosed differences until matched vendor measurements exist.
 Current BORSUK100k evidence is k100, consumeddev0–63, loopback serial HTTP/resident
 router/no client SQ8 cache; not a representative fresh k10 or matched8QPS test.
 No current1M HTTP,10M,100M or total lifecycle dollar evidence has been accepted.
+
+## Exact next serving prerequisites (static source inspection)
+
+Current `crates/borsuk/examples/two_bit_http.rs` validation accepts onlyk100,
+admission semaphore has one permit, and search forwards request.k to the library.
+`scripts/run_native_union_http.py` fixes64 serialk100requests/native references.
+These are concrete limitations of the existing development harness, not measured
+product failures. Current receipts cannot establish freshk10 or8QPS attainment.
+
+After reload hold resolves: preserve historical controllers/source archives;
+qualify HTTP boundary acceptingk10 andk100 with existing identity/finite/body/
+admission/cancellation checks, then produce actualk10 native reference IDs and
+separate exactGT10/100 from the new identity-qualified panel. Do not infer recall@10
+from recall@100 aggregate totals. Verify the existing library search behavior at
+bothk values; affected boundary tests/source-bound serving binary required.
+
+Driver must use declared complete panel counts and an actual offered8QPS schedule,
+record scheduled start/admission/completion, errors/503s, client queue delay and
+achieved successful QPS; publish p50/p90/p95/p99 and physical GET/bytes/RSS.
+Do not call serial closed-loop9QPS a reproduced8QPS cold workload. Initial one-slot
+admission may saturate; measure that curve before changing bounded concurrency,
+and qualify per-slot memory accounting before any such change. Server startup/
+resident-router/SQ8 cache state, keepalive, S3 cache uncertainty and repeated-query
+policy must be declared separately from vendor protocol unknowns. No latency/QPS
+projection or warm/cold conversion. This is engineering preparation, not a launch
+preregistration or assurance result; no paid job has started under reload hold.
