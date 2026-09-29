@@ -172,6 +172,23 @@ pub(crate) fn metadata_location(prefix: &ObjectPath, name: &str) -> ObjectPath {
 
 /// Stream a fixed metadata set to owned scratch; authenticate the root first.
 /// Child identities and decoded memory are checked by the generation opener.
+/// Bounded per-object accounting for authenticated remote metadata staging.
+#[derive(Debug, serde::Serialize)]
+pub struct MetadataReadStats {
+    /// Fixed metadata filename under the generation prefix.
+    pub name: String,
+    /// Bytes streamed to the scratch file.
+    pub bytes: u64,
+    /// Number of transport chunks received.
+    pub chunks: u64,
+    /// GET response-header wait, in nanoseconds.
+    pub get_wall_ns: u128,
+    /// Stream consumption and file output, including flush, in nanoseconds.
+    pub stream_wall_ns: u128,
+    /// Awaited file writes and flush; included in stream_wall_ns.
+    pub write_wall_ns: u128,
+}
+
 pub(crate) async fn stage_generation_metadata(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
@@ -179,7 +196,7 @@ pub(crate) async fn stage_generation_metadata(
     max_bytes: u64,
     names: &[&str],
     scratch_parent: &Path,
-) -> Result<tempfile::TempDir, ObjectNativeOpenError> {
+) -> Result<(tempfile::TempDir, Vec<MetadataReadStats>), ObjectNativeOpenError> {
     if !is_hash(trusted_sha256) || max_bytes == 0 {
         return Err(ObjectNativeOpenError::Invalid(
             "trusted digest or memory cap",
@@ -187,11 +204,14 @@ pub(crate) async fn stage_generation_metadata(
     }
     let scratch = tempfile::tempdir_in(scratch_parent).map_err(ObjectNativeOpenError::Io)?;
     let mut total = 0_u64;
+    let mut stats = Vec::with_capacity(names.len());
     for &name in names {
+        let get_started = std::time::Instant::now();
         let fetched = store
             .get(&metadata_location(prefix, name))
             .await
             .map_err(ObjectNativeOpenError::Store)?;
+        let get_wall_ns = get_started.elapsed().as_nanos();
         let limit = max_bytes
             .saturating_sub(total)
             .min(if name.ends_with(".json") {
@@ -215,6 +235,9 @@ pub(crate) async fn stage_generation_metadata(
         let mut digest = Sha256::new();
         let expected = fetched.meta.size;
         let mut stream = fetched.into_stream();
+        let stream_started = std::time::Instant::now();
+        let mut chunks = 0_u64;
+        let mut write_wall_ns = 0_u128;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(ObjectNativeOpenError::Store)?;
             count = count
@@ -226,15 +249,28 @@ pub(crate) async fn stage_generation_metadata(
             if name == "manifest.json" {
                 digest.update(&chunk);
             }
+            chunks += 1;
+            let write_started = std::time::Instant::now();
             output
                 .write_all(&chunk)
                 .await
                 .map_err(ObjectNativeOpenError::Io)?;
+            write_wall_ns += write_started.elapsed().as_nanos();
         }
         if count != expected {
             return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
         }
+        let flush_started = std::time::Instant::now();
         output.flush().await.map_err(ObjectNativeOpenError::Io)?;
+        write_wall_ns += flush_started.elapsed().as_nanos();
+        stats.push(MetadataReadStats {
+            name: name.to_owned(),
+            bytes: count,
+            chunks,
+            get_wall_ns,
+            stream_wall_ns: stream_started.elapsed().as_nanos(),
+            write_wall_ns,
+        });
         drop(output);
         if name == "manifest.json" && format!("{:x}", digest.finalize()) != trusted_sha256 {
             return Err(ObjectNativeOpenError::HashMismatch("generation manifest"));
@@ -243,7 +279,7 @@ pub(crate) async fn stage_generation_metadata(
             .checked_add(count)
             .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
     }
-    Ok(scratch)
+    Ok((scratch, stats))
 }
 
 impl ObjectNativeGeneration {
@@ -257,7 +293,7 @@ impl ObjectNativeGeneration {
         limits: ObjectNativeLimits,
         scratch_parent: &Path,
     ) -> Result<Self, ObjectNativeOpenError> {
-        let scratch = stage_generation_metadata(
+        let (scratch, _) = stage_generation_metadata(
             store,
             prefix,
             trusted_sha256,
@@ -858,5 +894,46 @@ mod tests {
                 | Err(ObjectNativeOpenError::Page(PageError::InvalidSidecar))
         ));
         fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn metadata_staging_reports_exact_bounded_transfer_geometry() {
+        let store = InMemory::new();
+        let prefix = ObjectPath::from("profile/metadata");
+        let manifest = b"{}";
+        let payload = vec![7_u8; 32768];
+        for (name, body) in [
+            ("manifest.json", manifest.as_slice()),
+            ("payload.bin", payload.as_slice()),
+        ] {
+            store
+                .put(
+                    &metadata_location(&prefix, name),
+                    PutPayload::from(body.to_vec()),
+                )
+                .await
+                .unwrap();
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let (scratch, stats) = stage_generation_metadata(
+            &store,
+            &prefix,
+            &sha256(manifest),
+            32770,
+            &["manifest.json", "payload.bin"],
+            parent.path(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].name, "manifest.json");
+        assert_eq!(stats[0].bytes, 2);
+        assert_eq!(stats[1].bytes, 32768);
+        assert!(stats.iter().all(|entry| entry.chunks > 0));
+        assert_eq!(
+            fs::read(scratch.path().join("payload.bin")).unwrap(),
+            payload
+        );
+        drop(scratch);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 }

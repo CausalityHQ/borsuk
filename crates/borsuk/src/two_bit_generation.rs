@@ -3,7 +3,8 @@ use crate::{
     budgeted_page_rank::{BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse},
     canonical_source::CanonicalSource,
     object_native_generation::{
-        ObjectNativeOpenError, ObjectNativeSearchResult, stage_generation_metadata,
+        MetadataReadStats, ObjectNativeOpenError, ObjectNativeSearchResult,
+        stage_generation_metadata,
     },
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{OneAttemptS3, RankedSq8Failure, Sq8ReadStats},
@@ -98,6 +99,17 @@ pub(crate) const METADATA_FILES: [&str; 9] = [
     "plane/mean.bin",
     "plane/records.bin",
 ];
+/// Remote namespace startup accounting; query measurements remain separate.
+#[derive(Debug, serde::Serialize)]
+pub struct RemoteOpenStats {
+    /// Fixed, bounded roster of metadata-object transfers.
+    pub metadata: Vec<MetadataReadStats>,
+    /// All metadata staging, including scratch creation and transfers.
+    pub staging_wall_ns: u128,
+    /// Authenticated local decoding and admission after staging.
+    pub decode_wall_ns: u128,
+}
+
 /// Immutable metadata; SQ8 rows are fetched conditionally and never cached here.
 pub struct TwoBitGeneration {
     root_sha256: String,
@@ -109,6 +121,7 @@ pub struct TwoBitGeneration {
     manifest: Manifest,
     limits: TwoBitGenerationLimits,
     slots: Semaphore,
+    remote_open_stats: Option<RemoteOpenStats>,
 }
 
 /// One generation-pinned base fetch merged with a bounded immutable delta.
@@ -309,7 +322,8 @@ impl TwoBitGeneration {
         limits: TwoBitGenerationLimits,
         scratch_parent: &Path,
     ) -> Result<Self> {
-        let scratch = stage_generation_metadata(
+        let staging_started = std::time::Instant::now();
+        let (scratch, metadata) = stage_generation_metadata(
             store,
             prefix,
             trusted_sha256,
@@ -321,7 +335,20 @@ impl TwoBitGeneration {
         )
         .await
         .map_err(TwoBitGenerationError::Stage)?;
-        Self::open(scratch.path(), trusted_sha256, limits)
+        let staging_wall_ns = staging_started.elapsed().as_nanos();
+        let decode_started = std::time::Instant::now();
+        let mut generation = Self::open(scratch.path(), trusted_sha256, limits)?;
+        generation.remote_open_stats = Some(RemoteOpenStats {
+            metadata,
+            staging_wall_ns,
+            decode_wall_ns: decode_started.elapsed().as_nanos(),
+        });
+        Ok(generation)
+    }
+
+    /// Startup counters for a remote open; absent for local metadata opens.
+    pub fn remote_open_stats(&self) -> Option<&RemoteOpenStats> {
+        self.remote_open_stats.as_ref()
     }
 
     /// Open local metadata under a trusted root SHA. No PQ or SQ8 payload load.
@@ -548,6 +575,7 @@ impl TwoBitGeneration {
             manifest,
             limits,
             slots: Semaphore::new(limits.max_active_queries),
+            remote_open_stats: None,
         })
     }
     fn plan_inner<'a>(

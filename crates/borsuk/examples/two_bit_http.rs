@@ -208,7 +208,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "{}",
         json!({"phase":"ready","listen":listener.local_addr()?,
         "authority":state.authority,"head_read_wall_ns":head_read_wall_ns,
-        "remote_open_wall_ns":remote_open_wall_ns})
+        "remote_open_wall_ns":remote_open_wall_ns,
+        "remote_open_stats":state.generation.remote_open_stats()})
     );
     axum::serve(listener, router).await?;
     Ok(())

@@ -180,6 +180,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     }
     fs::write(root.join("manifest.json"), &manifest).unwrap();
     let generation = TwoBitGeneration::open(root, &hash(&manifest), limits).unwrap();
+    assert!(generation.remote_open_stats().is_none());
     let first = generation.plan(&[0.5, 0.25]).await.unwrap();
     let (diagnostic, trace) = generation.diagnostic_plan(&[0.5, 0.25]).await.unwrap();
     assert_eq!(diagnostic, first);
@@ -628,6 +629,24 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         TwoBitGeneration::open_remote(&store, &prefix, &hash(&manifest), limits, scratch.path())
             .await
             .unwrap();
+    let stats = remote.remote_open_stats().unwrap();
+    assert_eq!(stats.metadata.len(), 9);
+    for object in &stats.metadata {
+        assert_eq!(
+            object.bytes,
+            fs::metadata(root.join(&object.name)).unwrap().len()
+        );
+        assert!(object.chunks > 0);
+        assert!(object.write_wall_ns <= object.stream_wall_ns);
+    }
+    assert!(
+        stats
+            .metadata
+            .iter()
+            .map(|entry| entry.get_wall_ns + entry.stream_wall_ns)
+            .sum::<u128>()
+            <= stats.staging_wall_ns
+    );
     assert_eq!(
         first.ranges,
         remote.plan(&[0.5, 0.25]).await.unwrap().ranges

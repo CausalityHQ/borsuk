@@ -1,0 +1,71 @@
+{
+  "schema": "borsuk-native-startup-profile-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "dataset_order": [
+    "ReLAION",
+    "CoHere",
+    "ReLAION",
+    "CoHere",
+    "ReLAION",
+    "CoHere"
+  ],
+  "items": [
+    {
+      "dataset": "ReLAION",
+      "authority": {
+        "root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+        "generation": 1,
+        "control_epoch": 1
+      },
+      "index": "research/native-union/20260928/fresh-rank16-dev64-a0002/indexes/relaion/k10",
+      "metadata_files": {
+        "manifest.json": 33910,
+        "page_manifest.json": 280,
+        "page_digests.bin": 125024,
+        "centroids.bin": 48000032,
+        "graph.bin": 4265768,
+        "diverse_graph.bin": 4265768,
+        "plane/manifest.json": 549,
+        "plane/mean.bin": 3072,
+        "plane/records.bin": 200000000
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-rank16-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "56e2421ce84f9ca3cf045a77f440aaaf02f766c06412631fbb200666c1bbbc3d"
+    },
+    {
+      "dataset": "CoHere",
+      "authority": {
+        "root_sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e",
+        "generation": 1,
+        "control_epoch": 1
+      },
+      "index": "research/native-union/20260929/fresh-cohere-dev64-a0002/indexes/cohere/k10",
+      "metadata_files": {
+        "manifest.json": 33963,
+        "page_manifest.json": 280,
+        "page_digests.bin": 125024,
+        "centroids.bin": 48000032,
+        "graph.bin": 4265768,
+        "diverse_graph.bin": 4265768,
+        "plane/manifest.json": 549,
+        "plane/mean.bin": 3072,
+        "plane/records.bin": 200000000
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-cohere-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "fb2cf8d616618f0fb33a42340358c2704ed30751557fbb16c23fda0964dd7912"
+    }
+  ],
+  "code_sha256": {
+    "scripts/run_native_startup_profile.py": "4fbfdf65558abe92a918bd854b25283e628c7270e2405b7067f0b199bccfd14e",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd"
+  },
+  "ann_queries": 0,
+  "first_query_measured": false,
+  "matched_vendor_measured": false
+}
