@@ -63,5 +63,8 @@
   "paid_launch_hold": "Lifted by FINAL RELOAD RELEASED immediate-1790693371082917915-2014084; SAME native goal ACTIVE, no further reload needed.",
   "additional_closed_history_inventory": "All341research prefixes scanned:279versioned/490terminals +62nonversioned/207terminals;697 metadata records/125 named query locators. Complete query-source closure remains false.",
   "additional_authenticated_exclusion": "fresh-history-source-inventory/v278-exclusion-proof.json:CoHere train1001000-1001999 already consumed; exclude whole panel.",
-  "additional_authenticated_query_family": "fresh-cohere-request-family.json:20CLOSED terminal manifests share one registered1000CoHere-test-query SHA; originalV248 source archive authenticated."
+  "additional_authenticated_query_family": "fresh-cohere-request-family.json:20CLOSED terminal manifests share one registered1000CoHere-test-query SHA; originalV248 source archive authenticated.",
+  "additional_authenticated_relaion_query_family": "fresh-relaion-validation-family.json: original V36 validation1000 -> CLOSED V116 request bank -> V154/V198/V279 derivatives; exclude whole bank, not just encoded-file SHAs.",
+  "additional_authenticated_cohere_stress_exclusions": "fresh-cohere-stress-query-families.json: V273-276 canonical CoHere raw rows100000-103999, four1000-query banks; V274-276 add previously omitted rows101000-103999. With CLOSED V277 exclude100000-104999 inclusive.",
+  "additional_terminal_archive_bindings": "fresh-history-source-bindings.json: all697 inventoried terminal bodies reauthenticated;371 terminal SHA-only,28 nested archive identities,298 without archive SHA in terminal. Original same-attempt V114-116 reservations separately bind five archives; never describe those hashes as present in terminals."
 }

@@ -1,0 +1,134 @@
+[
+  {
+    "terminal_key": "research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/terminal.json",
+    "terminal_sha256": "4da6827429b2b4bf56234c64adf99ff719a6adbed23eb06c23862317d56d22c1",
+    "source_commit": "87881c71e048d557c5c1285ffa0ac1d8c381f764",
+    "objects": [
+      {
+        "key": "research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/artifacts/mirror/source.json",
+        "bytes": 296,
+        "sha256": "e5a09b6350f7683fc7eebd3d654b0db869cad6c505396c9d041f3818acc58860",
+        "metadata": {
+          "manifest_sha256": "48e01d4488d0c84b991baef521a02bca75ce096c0f9a1154f779c046732707f8",
+          "schema": "borsuk-v114-existing-sq8-mirror-v1",
+          "source_sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86",
+          "sq8_sha256": "2284f24745f964ff2b125eedb883d5cd8ff6afab0738f49f9e16e593167a318b"
+        }
+      },
+      {
+        "key": "research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/runs/v114-1m-dev-20260923T222600Z/a0001/reservation.json",
+        "bytes": 198,
+        "sha256": "27772d94de98c237473a1872adbaddb9bd0e2c66a84ab89186ea19a43be7928d",
+        "metadata": {
+          "archive_sha256": "dc4b98b92f935a5a65c529c26ea42d2c08606c465a4c52fc5da658be46d8ba05",
+          "attempt": 1,
+          "schema": "borsuk-v114-1m-paired-spot-v1",
+          "source_commit": "87881c71e048d557c5c1285ffa0ac1d8c381f764"
+        }
+      },
+      {
+        "key": "research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/source/source.tar.gz",
+        "bytes": 11504263
+      }
+    ]
+  },
+  {
+    "terminal_key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/terminal.json",
+    "terminal_sha256": "b0123edaf3895bc893c952cc01bb6ccde120533be9f7e53a1ea1800aebc1054c",
+    "source_commit": "3443d7674432e281e6709bbb5ecee30f96b54a1e",
+    "objects": [
+      {
+        "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/mirror/source.json",
+        "bytes": 300,
+        "sha256": "919994c356d3ecf1ed87b82d7da486d941e56c8a9a8eec0de6d9348ebcaebd9f",
+        "metadata": {
+          "artifact_seal_sha256": "803b00d9366bc8feb0e58e4900e27b1973c5d9578c33a0d6007fe4c28722c7b2",
+          "manifest_sha256": "14a12fa3f7a571a99bf4e4411fea0a9f4a2180579decc3e539db558accda5be5",
+          "schema": "borsuk-v114-source-mirror-v1",
+          "source_sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+        }
+      },
+      {
+        "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/reservation.json",
+        "bytes": 205,
+        "sha256": "65bbf0dbbd983a9723cb95dc13d4f2dcb24625da317380db0cc4e44694bdba44",
+        "metadata": {
+          "archive_sha256": "e3acaee12267d25fb40ae6d43df57f0fb0e7e4269a3690468fb185e0aad1e1d2",
+          "attempt": 1,
+          "schema": "borsuk-v114-exact-local-100k-spot-v1",
+          "source_commit": "3443d7674432e281e6709bbb5ecee30f96b54a1e"
+        }
+      },
+      {
+        "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/source/source.tar.gz",
+        "bytes": 11485691
+      }
+    ]
+  },
+  {
+    "terminal_key": "research/v114-exact-local/584f456ecd17c05afd6d086e16df8f0a02d64767/runs/v114-100k-20260923T215026Z/a0001/terminal.json",
+    "terminal_sha256": "89371cf0926afb4b5c249edd00bce0b45fd4def7e54aa9bc9a95b4379ca36b56",
+    "source_commit": "584f456ecd17c05afd6d086e16df8f0a02d64767",
+    "objects": [
+      {
+        "key": "research/v114-exact-local/584f456ecd17c05afd6d086e16df8f0a02d64767/runs/v114-100k-20260923T215026Z/a0001/reservation.json",
+        "bytes": 205,
+        "sha256": "341cb5a0e78234655b882e65d96f0ae8b66868be5c3e48aadfcdfb1297555d86",
+        "metadata": {
+          "archive_sha256": "4c72bc13cfeeb87a996b54ad40741ed193dde652be9d1d38fdcc14a632e15e10",
+          "attempt": 1,
+          "schema": "borsuk-v114-exact-local-100k-spot-v1",
+          "source_commit": "584f456ecd17c05afd6d086e16df8f0a02d64767"
+        }
+      },
+      {
+        "key": "research/v114-exact-local/584f456ecd17c05afd6d086e16df8f0a02d64767/source/source.tar.gz",
+        "bytes": 11486179
+      }
+    ]
+  },
+  {
+    "terminal_key": "research/v115-returned-replay/40c1b150448913466f67832a5ff8c2eaeda915a1/runs/v115-replay-20260923T234055Z/a0001/terminal.json",
+    "terminal_sha256": "802848650773663536bbcd3c96dbeb0cac01f3e6f6b08ad64662b346afdd1c27",
+    "source_commit": "40c1b150448913466f67832a5ff8c2eaeda915a1",
+    "objects": [
+      {
+        "key": "research/v115-returned-replay/40c1b150448913466f67832a5ff8c2eaeda915a1/runs/v115-replay-20260923T234055Z/a0001/reservation.json",
+        "bytes": 204,
+        "sha256": "c83b0f21132e14bca089d68964f0bd9f61abab5cabfa35977269d58ec441b7ce",
+        "metadata": {
+          "archive_sha256": "8e33e9949c0692126ddaaa4b129a5998c6e2bdd9e7144671022ad0d658648ec1",
+          "attempt": 1,
+          "schema": "borsuk-v115-returned-replay-spot-v1",
+          "source_commit": "40c1b150448913466f67832a5ff8c2eaeda915a1"
+        }
+      },
+      {
+        "key": "research/v115-returned-replay/40c1b150448913466f67832a5ff8c2eaeda915a1/source/source.tar.gz",
+        "bytes": 11538506
+      }
+    ]
+  },
+  {
+    "terminal_key": "research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/terminal.json",
+    "terminal_sha256": "932ca2d0ed378acdbbbe4cd741c3dd451f848184dd19d190c0ee60b10db4655d",
+    "source_commit": "5e9b35ad40ea023eab4407aa611d759e1893bb34",
+    "objects": [
+      {
+        "key": "research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/reservation.json",
+        "bytes": 206,
+        "sha256": "80f23dff629b87627ed1515dec98f960771c3c13d5ceccf37a82d5ecc5fe016f",
+        "metadata": {
+          "archive_sha256": "a56f17b40b4c747c6361393ca3d03d727dfa5b9de45d4b18599fbe4efec54f30",
+          "attempt": 1,
+          "schema": "borsuk-v116-validation-paired-spot-v1",
+          "source_commit": "5e9b35ad40ea023eab4407aa611d759e1893bb34"
+        }
+      },
+      {
+        "key": "research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/source/source.tar.gz",
+        "bytes": 11541885
+      }
+    ]
+  }
+]

@@ -1,0 +1,580 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "producer_proofs": [
+    {
+      "terminal_key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/runs/v154-20260924T143744Z/a0002/terminal.json",
+      "terminal_sha256": "09301ea5dfbb75aef49e7f34869903c15def2dfcd0eb787214f924fb191c5068",
+      "archive_key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/source/5fe7bfcd84cc5fa6a3ecf66c45a6f265a6c0d12e9e04fcd2d92a5679c5e5badc/source.tar.gz",
+      "archive_sha256": "5fe7bfcd84cc5fa6a3ecf66c45a6f265a6c0d12e9e04fcd2d92a5679c5e5badc",
+      "source_code": {
+        "scripts/launch_v154_relaion_graph_spot.py": {
+          "sha256": "b1612b6d610df5d073d7b2b6f06605c70ba913fdff0a8aae6e55e0c03e1dce6a",
+          "lines": [
+            {
+              "line": 36,
+              "text": "    (\"research/v116-validation-paired/\""
+            },
+            {
+              "line": 38,
+              "text": "     \"runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl\","
+            },
+            {
+              "line": 47,
+              "text": "    archive_sha256: str"
+            },
+            {
+              "line": 68,
+              "text": "    for value, size in ((plan.source_commit, 40), (plan.archive_sha256, 64)):"
+            },
+            {
+              "line": 77,
+              "text": "        or plan.archive_sha256 not in archive_key"
+            },
+            {
+              "line": 94,
+              "text": "            f\"export V154_ARCHIVE_SHA256={plan.archive_sha256}\","
+            },
+            {
+              "line": 117,
+              "text": "  \"source_archive_sha256\":os.environ[\"V154_ARCHIVE_SHA256\"],"
+            },
+            {
+              "line": 129,
+              "text": "printf '%s  source.tar.gz\\\\n' {plan.archive_sha256} | sha256sum -c -"
+            },
+            {
+              "line": 136,
+              "text": "    token = \"v154-\" + hashlib.sha256(plan.output_prefix.encode()).hexdigest()[:48]"
+            },
+            {
+              "line": 188,
+              "text": "    sha = hashlib.sha256()"
+            },
+            {
+              "line": 195,
+              "text": "    if count != plan.archive_bytes or sha.hexdigest() != plan.archive_sha256:"
+            },
+            {
+              "line": 214,
+              "text": "                or \"scripts/v154_prepare_relaion_graph.py\" not in source.getnames()"
+            },
+            {
+              "line": 228,
+              "text": "        \"source_archive_sha256\": plan.archive_sha256,"
+            },
+            {
+              "line": 279,
+              "text": "                        or terminal.get(\"source_archive_sha256\") != plan.archive_sha256"
+            },
+            {
+              "line": 286,
+              "text": "                terminal[\"terminal_sha256\"] = hashlib.sha256(raw).hexdigest()"
+            },
+            {
+              "line": 299,
+              "text": "                            \"prepare-resources.txt\", \"fresh/queries.jsonl\","
+            },
+            {
+              "line": 322,
+              "text": "                    digest = hashlib.sha256()"
+            },
+            {
+              "line": 329,
+              "text": "                    if length != metadata[\"bytes\"] or digest.hexdigest() != metadata[\"sha256\"]:"
+            },
+            {
+              "line": 357,
+              "text": "    parser.add_argument(\"--archive-sha256\", required=True)"
+            },
+            {
+              "line": 364,
+              "text": "        archive_sha256=args.archive_sha256,"
+            }
+          ]
+        },
+        "scripts/v154_prepare_relaion_graph.py": {
+          "sha256": "fedb6880deb8cdc44146f7bc6f27f1994c3284055e7af57014649071d90ed9cb",
+          "lines": [
+            {
+              "line": 2,
+              "text": "\"\"\"Seal the used ReLAION validation requests for the paired Rust scale gate.\"\"\""
+            },
+            {
+              "line": 12,
+              "text": "REQUEST_SHA = \"c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9\""
+            },
+            {
+              "line": 19,
+              "text": "def sha256(path: Path) -> str:"
+            },
+            {
+              "line": 20,
+              "text": "    digest = hashlib.sha256()"
+            },
+            {
+              "line": 28,
+              "text": "    if sha256(path) != digest:"
+            },
+            {
+              "line": 33,
+              "text": "        raise ValueError(\"query count differs\")"
+            },
+            {
+              "line": 39,
+              "text": "    parser.add_argument(\"--requests\", type=Path, required=True)"
+            },
+            {
+              "line": 45,
+              "text": "    requests = records(args.requests, REQUEST_SHA)"
+            },
+            {
+              "line": 47,
+              "text": "    with args.queries_out.open(\"x\") as query_out, args.routing_out.open(\"x\") as route_out:"
+            },
+            {
+              "line": 48,
+              "text": "        for ordinal, (request, route) in enumerate(zip(requests, primary)):"
+            },
+            {
+              "line": 49,
+              "text": "            if request[\"query_ordinal\"] != ordinal or route[\"query_ordinal\"] != ordinal:"
+            },
+            {
+              "line": 50,
+              "text": "                raise ValueError(\"query identity differs\")"
+            },
+            {
+              "line": 51,
+              "text": "            query = request[\"query\"]"
+            },
+            {
+              "line": 53,
+              "text": "            nominees = request[\"nominees\"]"
+            },
+            {
+              "line": 55,
+              "text": "                len(query) != DIMS"
+            },
+            {
+              "line": 56,
+              "text": "                or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in query)"
+            },
+            {
+              "line": 61,
+              "text": "                or request[\"primary_count\"] != 100"
+            },
+            {
+              "line": 64,
+              "text": "                raise ValueError(f\"query or routing geometry differs: {ordinal}\")"
+            },
+            {
+              "line": 65,
+              "text": "            query_out.write(json.dumps({\"query_ordinal\": ordinal,"
+            },
+            {
+              "line": 66,
+              "text": "                                        \"source_query_ordinal\": ordinal,"
+            },
+            {
+              "line": 67,
+              "text": "                                        \"query\": query}, separators=(\",\", \":\")) + \"\\n\")"
+            },
+            {
+              "line": 68,
+              "text": "            route_out.write(json.dumps({\"query_ordinal\": ordinal,"
+            },
+            {
+              "line": 69,
+              "text": "                                        \"source_query_ordinal\": ordinal,"
+            },
+            {
+              "line": 74,
+              "text": "                \"requests_sha256\": REQUEST_SHA, \"primary_sha256\": PRIMARY_SHA,"
+            },
+            {
+              "line": 75,
+              "text": "                \"queries_sha256\": sha256(args.queries_out),"
+            },
+            {
+              "line": 76,
+              "text": "                \"routing_sha256\": sha256(args.routing_out),"
+            },
+            {
+              "line": 77,
+              "text": "                \"query_count\": QUERIES}"
+            }
+          ]
+        },
+        "scripts/run_v154_relaion_graph_remote.sh": {
+          "sha256": "07bc969c803f5f7897636feba322cb944a74eb50d3769482751f752bc9db7b86",
+          "lines": [
+            {
+              "line": 37,
+              "text": "      prepare.log prepare-resources.txt fresh/queries.jsonl \\"
+            },
+            {
+              "line": 60,
+              "text": "       'prepare.log','prepare-resources.txt','fresh/queries.jsonl',"
+            },
+            {
+              "line": 72,
+              "text": "        digest=hashlib.sha256()"
+            },
+            {
+              "line": 76,
+              "text": "        artifacts[name]={'bytes':path.stat().st_size,'sha256':digest.hexdigest()}"
+            },
+            {
+              "line": 80,
+              "text": "  'source_archive_sha256':os.environ['V154_ARCHIVE_SHA256'],"
+            },
+            {
+              "line": 128,
+              "text": "  printf '%s  %s\\n' \"$sha\" \"$name\" | sha256sum -c - >>download.log"
+            },
+            {
+              "line": 152,
+              "text": "v116=research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/artifacts"
+            },
+            {
+              "line": 153,
+              "text": "download_checked relaion/requests.jsonl \"$v116/requests.jsonl\" 18726909 c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9"
+            },
+            {
+              "line": 159,
+              "text": "    or v146['artifacts']['relaion.centroids.bin']['sha256']!='07ad4736d8eb6867d46523de71ed61d82220dabc923f3c88ead1cd13eb776651'):"
+            },
+            {
+              "line": 163,
+              "text": "phase=prepare"
+            },
+            {
+              "line": 165,
+              "text": "run_science prepare python3 repo/scripts/v154_prepare_relaion_graph.py \\"
+            },
+            {
+              "line": 166,
+              "text": "  --requests relaion/requests.jsonl \\"
+            },
+            {
+              "line": 173,
+              "text": "if (seal['queries_sha256']!='4ef4734ff40aeda8b8e99ec01ca993be46e8ad9c337b5410259eeb171f57acfd'"
+            },
+            {
+              "line": 174,
+              "text": "    or seal['routing_sha256']!='2545c5762d04d28c91941607ae1801a8aa7d5a927f4a02aa92b28d43b1cdf1cf'):"
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "fresh/manifest.json": {
+          "identity": {
+            "bytes": 474,
+            "sha256": "0194f4b3d93093bd80b96ee3fd6e5630bf621fdc7e27957d374b5019554a433d"
+          },
+          "value": {
+            "dataset": "ReLAION-1M",
+            "primary_sha256": "71bfdf71f293ca1d23f58694866b3ba52ee8ee95ed9b02e676a2a8bf031f3162",
+            "queries_sha256": "4ef4734ff40aeda8b8e99ec01ca993be46e8ad9c337b5410259eeb171f57acfd",
+            "query_count": 1000,
+            "requests_sha256": "c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9",
+            "routing_sha256": "2545c5762d04d28c91941607ae1801a8aa7d5a927f4a02aa92b28d43b1cdf1cf",
+            "schema": "borsuk-v154-relaion-seal-v1",
+            "split": "validation-1000-already-used"
+          }
+        }
+      },
+      "query_artifact_identity": {
+        "bytes": 14698673,
+        "sha256": "4ef4734ff40aeda8b8e99ec01ca993be46e8ad9c337b5410259eeb171f57acfd"
+      }
+    },
+    {
+      "terminal_key": "research/v279-relaion-transfer-1m/8206cbc9a7d0949146b2a8739f4964725871a913/runs/a0001/terminal.json",
+      "terminal_sha256": "b7c14d3917a596d7d5451a15cd48196332651af7a89a3aa3228d9b9f323c74e7",
+      "archive_key": "research/v279-relaion-transfer-1m/8206cbc9a7d0949146b2a8739f4964725871a913/sources/c38a301c5c51ccdc823fc90518160a7a73a0b296ab22a277817f3273b6bc7c9a.tar.gz",
+      "archive_sha256": "c38a301c5c51ccdc823fc90518160a7a73a0b296ab22a277817f3273b6bc7c9a",
+      "source_code": {
+        "scripts/launch_v279_relaion_transfer_1m_spot.py": {
+          "sha256": "679ec02c3fdffc93791e646b453a2e80d3a3888366f27f6482d0d842b85596c0",
+          "lines": [
+            {
+              "line": 17,
+              "text": "    read_marker, spot_request, terminate_confirmed,"
+            },
+            {
+              "line": 28,
+              "text": "REQUESTS_KEY = (\"research/v116-validation-paired/\""
+            },
+            {
+              "line": 30,
+              "text": "                \"runs/v116-validation-20260923T235426Z/a0001/artifacts/requests.jsonl\")"
+            },
+            {
+              "line": 41,
+              "text": "export BORSUK_V279_REQUESTS_KEY='{REQUESTS_KEY}'"
+            },
+            {
+              "line": 52,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V279_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 66,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 92,
+              "text": "            or sha(prior_decision) != prior[\"artifacts\"][\"decision.json\"][\"sha256\"]"
+            },
+            {
+              "line": 95,
+              "text": "            or s3.head_object(Bucket=BUCKET, Key=REQUESTS_KEY)[\"ContentLength\"] != 18_726_909):"
+            },
+            {
+              "line": 124,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 125,
+              "text": "        \"v278_terminal_sha256\": V278_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"source_key\": SOURCE_KEY, \"requests_key\": REQUESTS_KEY,"
+            },
+            {
+              "line": 127,
+              "text": "        \"source_sha256\": \"2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86\","
+            },
+            {
+              "line": 128,
+              "text": "        \"requests_sha256\": \"c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9\","
+            },
+            {
+              "line": 133,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 141,
+              "text": "        request = spot_request(\"server\", prefix, bootstrap(commit, archive_sha, archive_key, prefix))"
+            },
+            {
+              "line": 142,
+              "text": "        request[\"BlockDeviceMappings\"][0][\"Ebs\"][\"VolumeSize\"] = 80"
+            },
+            {
+              "line": 143,
+              "text": "        request[\"TagSpecifications\"][0][\"Tags\"][0][\"Value\"] = \"borsuk-v279-relaion-transfer-1m\""
+            },
+            {
+              "line": 144,
+              "text": "        launched = ec2.run_instances(**request)[\"Instances\"][0]"
+            },
+            {
+              "line": 149,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 153,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 159,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 170,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 176,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 177,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 186,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/v279_relaion_transfer_1m.py": {
+          "sha256": "190d1285e2a1a89ea4eb914d4bd12497f7a653be214102872349d753bb4938f7",
+          "lines": [
+            {
+              "line": 15,
+              "text": "REQUESTS_SHA = \"c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9\""
+            },
+            {
+              "line": 19,
+              "text": "def prepare(source, requests, vectors, queries, truth):"
+            },
+            {
+              "line": 22,
+              "text": "    if digest(source) != SOURCE_SHA or digest(requests) != REQUESTS_SHA:"
+            },
+            {
+              "line": 23,
+              "text": "        raise ValueError(\"ReLAION source or validation requests differ\")"
+            },
+            {
+              "line": 32,
+              "text": "    with requests.open() as stream:"
+            },
+            {
+              "line": 35,
+              "text": "            values = np.asarray(row[\"query\"], dtype=np.float32)"
+            },
+            {
+              "line": 36,
+              "text": "            if (ordinal >= 1000 or row[\"query_ordinal\"] != ordinal"
+            },
+            {
+              "line": 40,
+              "text": "                raise ValueError(\"validation request geometry differs\")"
+            },
+            {
+              "line": 43,
+              "text": "        raise ValueError(\"validation request count differs\")"
+            },
+            {
+              "line": 56,
+              "text": "                      \"source_raw_sha256\": digest(vectors),"
+            },
+            {
+              "line": 57,
+              "text": "                      \"query_sha256\": digest(queries),"
+            },
+            {
+              "line": 58,
+              "text": "                      \"truth_sha256\": digest(truth)}, sort_keys=True))"
+            },
+            {
+              "line": 112,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 113,
+              "text": "    for name in (\"source\", \"requests\", \"vectors\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 125,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 126,
+              "text": "        prepare(args.source, args.requests, args.vectors, args.queries, args.truth)"
+            }
+          ]
+        },
+        "scripts/run_v279_relaion_transfer_1m.sh": {
+          "sha256": "a0bafe20ab9b537df9afdff161ccfc70378e615f153c9de6e0ada56ea8d18b24",
+          "lines": [
+            {
+              "line": 13,
+              "text": "  files=(install.log compile.time prepare.time prepare.json vectors.raw.sha256"
+            },
+            {
+              "line": 14,
+              "text": "    source.parquet.sha256 requests.jsonl.sha256 queries.f32 truth.u32"
+            },
+            {
+              "line": 39,
+              "text": "    h=hashlib.sha256()"
+            },
+            {
+              "line": 43,
+              "text": "    artifacts[name]={'bytes':path.stat().st_size,'sha256':h.hexdigest()}"
+            },
+            {
+              "line": 47,
+              "text": "    'source_archive_sha256':os.environ['BORSUK_V279_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 69,
+              "text": "printf '%s  source.parquet\\n' '2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86' | sha256sum -c - >source.parquet.sha256"
+            },
+            {
+              "line": 70,
+              "text": "aws s3 cp \"s3://$BORSUK_V279_BUCKET/$BORSUK_V279_REQUESTS_KEY\" requests.jsonl --only-show-errors"
+            },
+            {
+              "line": 71,
+              "text": "printf '%s  requests.jsonl\\n' 'c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9' | sha256sum -c - >requests.jsonl.sha256"
+            },
+            {
+              "line": 78,
+              "text": "/usr/bin/time -v -o prepare.time .venv/bin/python -m scripts.v279_relaion_transfer_1m prepare \\"
+            },
+            {
+              "line": 79,
+              "text": "  source.parquet requests.jsonl vectors.raw queries.f32 truth.u32 >prepare.json"
+            },
+            {
+              "line": 82,
+              "text": "base_sha=$(.venv/bin/python -c 'import json;print(json.load(open(\"baseline.build.json\"))[\"root_sha256\"])')"
+            },
+            {
+              "line": 88,
+              "text": "sha=$(.venv/bin/python -c 'import json;print(json.load(open(\"candidate.build.json\"))[\"root_sha256\"])')"
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "prepare.json": {
+          "identity": {
+            "bytes": 347,
+            "sha256": "477d973a809ae7d1a6e2f19b9ec1bba5d13778a3c9a4c1900a712d456d432787"
+          },
+          "value": {
+            "dataset": "ReLAION-1M D768 cosine",
+            "k": 100,
+            "query_sha256": "82fe696c1d765d27b9f8f6c5277a998a4ebbf2bd6d6f89533ad3a5445105525a",
+            "source_raw_sha256": "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33",
+            "split": "used validation ordinals0-999",
+            "truth_sha256": "23180f9b7e7727f478672d919e08e7bc17bdb75a76c9308d69dbc44c41bc1db7"
+          }
+        }
+      },
+      "query_artifact_identity": {
+        "bytes": 3072000,
+        "sha256": "82fe696c1d765d27b9f8f6c5277a998a4ebbf2bd6d6f89533ad3a5445105525a"
+      }
+    }
+  ],
+  "family": "ReLAION V36 validation1000 and query-preserving derivatives",
+  "family_upstream_authenticated": true,
+  "source_query_count": 1000,
+  "source_query_ordinals": [
+    0,
+    999
+  ],
+  "upstream_query_object": {
+    "encoded_bytes": 1558594,
+    "role": "validation-query",
+    "sha256": "869e225181f7d01a972d8faa144eaff4838c7c1f8f7c0c55091487e234f0bd5e",
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/validation-query.parquet"
+  },
+  "upstream_complete_receipt_sha256": "e08ac93eecd9dda22aa4611884bf3f072fcee7ea5918966607d271630bc0f385",
+  "upstream_producer_proof": {
+    "path": "fresh-history-source-inventory/v114-v116-query-producers.json",
+    "terminal_key": "research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/runs/v116-validation-20260923T235426Z/a0001/terminal.json",
+    "terminal_sha256": "932ca2d0ed378acdbbbe4cd741c3dd451f848184dd19d190c0ee60b10db4655d",
+    "reservation_sha256": "80f23dff629b87627ed1515dec98f960771c3c13d5ceccf37a82d5ecc5fe016f",
+    "archive_sha256": "a56f17b40b4c747c6361393ca3d03d727dfa5b9de45d4b18599fbe4efec54f30",
+    "archive_binding": "Original same-attempt reservation, matched terminal schema/source commit; terminal does not itself contain archive SHA."
+  },
+  "upstream_request_identity": {
+    "bytes": 18726909,
+    "sha256": "c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9"
+  },
+  "additional_existing_derivative_proof": "fresh-relaion-prior-identities/v198-verification.json",
+  "decision": "Exclude entire original validation bank and all listed derivatives; different vector encodings do not make new query identities.",
+  "qualification": false
+}

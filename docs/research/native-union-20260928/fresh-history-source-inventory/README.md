@@ -29,3 +29,29 @@ identities and all earlier source dependencies before selecting a fresh panel.
 collection commands. Source selection is fixed to nine archived experiments;
 no new experiment/query selection or product quality claim. Full prior-query
 audit remains FALSE, novel cohort not selected, old rejected seal stays closed.
+
+Further CLOSED lineage, 2026-09-29:
+
+- `v114-v116-query-producers.json` authenticates five original source archives
+  using same-attempt reservations plus matching terminal schema/source commit.
+  Those old terminals do not contain the archive SHA themselves. Includes failed
+  attempts conservatively. Query bodies and quality outputs were not read.
+- `../fresh-relaion-validation-family.json` binds the original V36 validation1000
+  through V116 requests to V154/V198/V279. Different encoded query hashes belong
+  to the same prior query identities; exclude the entire bank.
+- `../fresh-cohere-stress-query-families.json` authenticates V273–V276 byte ranges,
+  archived mandatory input SHA checks, CLOSED `fresh_queries.raw: OK` receipts
+  and preparation metadata. V274–V276 add previously omitted train-order raw rows
+  101000–103999. With V273/V277 exclude100000–104999 inclusive. The22-byte check
+  receipt's own SHA is not the vector SHA. Preparation metadata contains only
+  truth/version fields; expected vector SHA comes from the archived check.
+- `../fresh-history-source-bindings.json` reauthenticates all697 inventoried
+  terminal bodies and preserves nested archive/input identities missed by the
+  first collector:371 direct SHA,28 nested identity,298 without terminal archive
+  SHA. This metadata normalization does not authenticate each archive or prove
+  complete query-bank closure.
+
+Remaining gate: authenticate remaining producer banks/source-ID mappings, or
+prove a conservative new source bank excludes every historical query bank.
+No fresh cohort selected, no query/GT/sealed bodies opened, no ANN/numerical
+work, native build/test, paid job or full assurance rerun occurred in this slice.

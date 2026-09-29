@@ -1,0 +1,2797 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "dataset": "CoHere D768",
+  "source_terminal_key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/terminal.json",
+  "source_terminal_sha256": "00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82",
+  "source_raw_identity": {
+    "bytes": 3072000000,
+    "sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005"
+  },
+  "excluded_raw_source_rows_inclusive": [
+    100000,
+    103999
+  ],
+  "additional_rows_beyond_previously_named_v273": 3000,
+  "producer_proofs": [
+    {
+      "terminal_key": "research/v273-construction-quality/7c11454043c45c38fb2285c3ec1dbd90f86d954a/runs/a0001/terminal.json",
+      "terminal_sha256": "20460f51c120bb22e8a72af17734e9d55539fe408b0729bdd1f91a7a702693b0",
+      "terminal_status": "failed",
+      "archive_key": "research/v273-construction-quality/7c11454043c45c38fb2285c3ec1dbd90f86d954a/sources/ad23cdda78e138fd110a4857ca8e01f34dc884337346d9b6775651d2fe71b9de.tar.gz",
+      "archive_sha256": "ad23cdda78e138fd110a4857ca8e01f34dc884337346d9b6775651d2fe71b9de",
+      "query_source_byte_range": [
+        307200000,
+        310271999
+      ],
+      "query_source_rows_inclusive": [
+        100000,
+        100999
+      ],
+      "query_count": 1000,
+      "query_sha256": "10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0",
+      "preparation_metadata": null,
+      "preparation_identity": null,
+      "query_input_check": null,
+      "source_code": {
+        "scripts/launch_v273_construction_quality_spot.py": {
+          "sha256": "ecf53e809cae817f598b967ac729062a5dee8aac5696a645de7e9370ad5dd779",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V273_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V273_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V273_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V273_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v273-construction-quality/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows100000-100999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 130,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 146,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 150,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 155,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 167,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 172,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 173,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 183,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/run_v273_construction_quality.sh": {
+          "sha256": "d3639d8d7d3dbe1131d6aa81fe44a67231e242ff42a59a767fd50cb5d2641140",
+          "lines": [
+            {
+              "line": 13,
+              "text": "  files=(install.log compile.time prepare.time prepare.json vectors.raw.sha256"
+            },
+            {
+              "line": 14,
+              "text": "    fresh_queries.raw.sha256 baseline-terminal.json truth.u32 baseline.search.time"
+            },
+            {
+              "line": 33,
+              "text": "    h=hashlib.sha256()"
+            },
+            {
+              "line": 34,
+              "text": "    with path.open('rb') as source:"
+            },
+            {
+              "line": 35,
+              "text": "        for block in iter(lambda:source.read(1024*1024),b''):"
+            },
+            {
+              "line": 37,
+              "text": "    artifacts[name]={'bytes':path.stat().st_size,'sha256':h.hexdigest()}"
+            },
+            {
+              "line": 40,
+              "text": "    'source_commit':os.environ['BORSUK_V273_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 41,
+              "text": "    'source_archive_sha256':os.environ['BORSUK_V273_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 62,
+              "text": "source_key=\"$BORSUK_V273_V261_PREFIX/artifacts/vectors.raw\""
+            },
+            {
+              "line": 63,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V273_BUCKET\" --key \"$source_key\" --range bytes=0-307199999 vectors.raw >/dev/null"
+            },
+            {
+              "line": 64,
+              "text": "printf '%s  vectors.raw\\n' 'd638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753' | sha256sum -c - >vectors.raw.sha256"
+            },
+            {
+              "line": 65,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V273_BUCKET\" --key \"$source_key\" --range bytes=307200000-310271999 fresh_queries.raw >/dev/null"
+            },
+            {
+              "line": 66,
+              "text": "printf '%s  fresh_queries.raw\\n' '10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0' | sha256sum -c - >fresh_queries.raw.sha256"
+            },
+            {
+              "line": 68,
+              "text": "printf '%s  baseline-terminal.json\\n' '13775dc6c5176c636fc8442b4bd2bddd2ee375818a98d1328d2c0352423bc80b' | sha256sum -c -"
+            },
+            {
+              "line": 72,
+              "text": "  expected=$(python3 -c 'import json,sys; print(json.load(open(\"baseline-terminal.json\"))[\"artifacts\"][\"new100/\"+sys.argv[1]][\"sha256\"])' \"$name\")"
+            },
+            {
+              "line": 73,
+              "text": "  printf '%s  %s\\n' \"$expected\" \"baseline/$name\" | sha256sum -c -"
+            },
+            {
+              "line": 81,
+              "text": "/usr/bin/time -v -o prepare.time .venv/bin/python -m scripts.v273_construction_quality prepare vectors.raw fresh_queries.raw truth.u32 >prepare.json"
+            },
+            {
+              "line": 85,
+              "text": "  fresh_queries.raw 1000 baseline.raw.jsonl >baseline.search.json"
+            },
+            {
+              "line": 88,
+              "text": "sha=$(.venv/bin/python -c 'import json;print(json.load(open(\"candidate.build.json\"))[\"root_sha256\"])')"
+            },
+            {
+              "line": 90,
+              "text": "  fresh_queries.raw 1000 candidate.raw.jsonl >candidate.search.json"
+            }
+          ]
+        },
+        "scripts/v273_construction_quality.py": {
+          "sha256": "e00024e675a3d8541369eea926dbd84a3d62ebff087d4954371a4549b0397827",
+          "lines": [
+            {
+              "line": 2,
+              "text": "\"\"\"Fixed 100k fresh-query truth and paired graph-quality decision.\"\"\""
+            },
+            {
+              "line": 14,
+              "text": "SOURCE_SHA = \"d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753\""
+            },
+            {
+              "line": 15,
+              "text": "QUERY_SHA = \"10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0\""
+            },
+            {
+              "line": 19,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 20,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 21,
+              "text": "        for block in iter(lambda: source.read(1024 * 1024), b\"\"):"
+            },
+            {
+              "line": 35,
+              "text": "def prepare(source, queries, truth):"
+            },
+            {
+              "line": 38,
+              "text": "    if digest(source) != SOURCE_SHA or digest(queries) != QUERY_SHA:"
+            },
+            {
+              "line": 39,
+              "text": "        raise ValueError(\"source or fresh query SHA differs\")"
+            },
+            {
+              "line": 40,
+              "text": "    rows = np.memmap(source, dtype=\"<f4\", mode=\"r\", shape=(100_000, DIMS))"
+            },
+            {
+              "line": 41,
+              "text": "    panel = np.memmap(queries, dtype=\"<f4\", mode=\"r\", shape=(1_000, DIMS))"
+            },
+            {
+              "line": 44,
+              "text": "    for start in range(0, 100_000, 25_000):"
+            },
+            {
+              "line": 50,
+              "text": "    print(json.dumps({\"truth_sha256\": digest(truth), \"faiss_version\":"
+            },
+            {
+              "line": 61,
+              "text": "    with Path(raw).open() as source:"
+            },
+            {
+              "line": 62,
+              "text": "        for ordinal, line in enumerate(source):"
+            },
+            {
+              "line": 68,
+              "text": "                raise ValueError(\"query row identity or values differ\")"
+            },
+            {
+              "line": 73,
+              "text": "        raise ValueError(\"query count differs\")"
+            },
+            {
+              "line": 78,
+              "text": "            \"raw_sha256\": digest(raw), \"truth_sha256\": digest(truth)}"
+            },
+            {
+              "line": 93,
+              "text": "              \"dataset\": \"CoHere-large-10M train first100k D768 cosine\","
+            },
+            {
+              "line": 94,
+              "text": "              \"split\": \"excluded train rows100000-100999\", \"k\": 100,"
+            },
+            {
+              "line": 95,
+              "text": "              \"queries\": 1_000, \"mode\": \"diagnostic-stress\","
+            },
+            {
+              "line": 96,
+              "text": "              \"query_sha256\": QUERY_SHA, \"source_sha256\": SOURCE_SHA}"
+            },
+            {
+              "line": 104,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 105,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 111,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 112,
+              "text": "        prepare(args.source, args.queries, args.truth)"
+            }
+          ]
+        }
+      },
+      "executed_preparation_authenticated": false,
+      "exclusion": "Conservatively exclude whole producer range, including failed attempts."
+    },
+    {
+      "terminal_key": "research/v273-construction-quality/f5cc5a01a7184112adb609c3fff4e59508da5ecb/runs/a0002/terminal.json",
+      "terminal_sha256": "dfac21e16f24f4b0fddb6c2520736cd77758461465c576b68618a9619d3c4885",
+      "terminal_status": "complete",
+      "archive_key": "research/v273-construction-quality/f5cc5a01a7184112adb609c3fff4e59508da5ecb/sources/3ac17e6e22c206dec3fe7b93326e19aaeb0641909f8ac143868a4583edf2d7a2.tar.gz",
+      "archive_sha256": "3ac17e6e22c206dec3fe7b93326e19aaeb0641909f8ac143868a4583edf2d7a2",
+      "query_source_byte_range": [
+        307200000,
+        310271999
+      ],
+      "query_source_rows_inclusive": [
+        100000,
+        100999
+      ],
+      "query_count": 1000,
+      "query_sha256": "10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0",
+      "preparation_metadata": {
+        "faiss_version": "1.15.1",
+        "truth_sha256": "317a7ee040d56be88120c3fdf0af551a95e1ec4763e9f8f5d53cf028257537ec"
+      },
+      "preparation_identity": {
+        "bytes": 112,
+        "sha256": "0542011e1f66024364d1de520331ab557d71b715e151250b1dc44f68e4c5169a"
+      },
+      "query_input_check": {
+        "identity": {
+          "bytes": 22,
+          "sha256": "781d3f4dcf09555043b7f6d8a0262945d92b817bf4b1133cb33106bab872ae89"
+        },
+        "text": "fresh_queries.raw: OK\n",
+        "expected_query_sha256": "10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0"
+      },
+      "source_code": {
+        "scripts/launch_v273_construction_quality_spot.py": {
+          "sha256": "ecf53e809cae817f598b967ac729062a5dee8aac5696a645de7e9370ad5dd779",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V273_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V273_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V273_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V273_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v273-construction-quality/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows100000-100999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 130,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 146,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 150,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 155,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 167,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 172,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 173,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 183,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/run_v273_construction_quality.sh": {
+          "sha256": "91bf756a0e61fdcfd74d3f13148589e9f488a6dc646690c1fd95c5811fa03875",
+          "lines": [
+            {
+              "line": 13,
+              "text": "  files=(install.log compile.time prepare.time prepare.json vectors.raw.sha256"
+            },
+            {
+              "line": 14,
+              "text": "    fresh_queries.raw.sha256 baseline-terminal.json truth.u32 baseline.search.time"
+            },
+            {
+              "line": 33,
+              "text": "    h=hashlib.sha256()"
+            },
+            {
+              "line": 34,
+              "text": "    with path.open('rb') as source:"
+            },
+            {
+              "line": 35,
+              "text": "        for block in iter(lambda:source.read(1024*1024),b''):"
+            },
+            {
+              "line": 37,
+              "text": "    artifacts[name]={'bytes':path.stat().st_size,'sha256':h.hexdigest()}"
+            },
+            {
+              "line": 40,
+              "text": "    'source_commit':os.environ['BORSUK_V273_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 41,
+              "text": "    'source_archive_sha256':os.environ['BORSUK_V273_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 62,
+              "text": "source_key=\"$BORSUK_V273_V261_PREFIX/artifacts/vectors.raw\""
+            },
+            {
+              "line": 63,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V273_BUCKET\" --key \"$source_key\" --range bytes=0-307199999 vectors.raw >/dev/null"
+            },
+            {
+              "line": 64,
+              "text": "printf '%s  vectors.raw\\n' '0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e' | sha256sum -c - >vectors.raw.sha256"
+            },
+            {
+              "line": 65,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V273_BUCKET\" --key \"$source_key\" --range bytes=307200000-310271999 fresh_queries.raw >/dev/null"
+            },
+            {
+              "line": 66,
+              "text": "printf '%s  fresh_queries.raw\\n' '10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0' | sha256sum -c - >fresh_queries.raw.sha256"
+            },
+            {
+              "line": 68,
+              "text": "printf '%s  baseline-terminal.json\\n' '13775dc6c5176c636fc8442b4bd2bddd2ee375818a98d1328d2c0352423bc80b' | sha256sum -c -"
+            },
+            {
+              "line": 72,
+              "text": "  expected=$(python3 -c 'import json,sys; print(json.load(open(\"baseline-terminal.json\"))[\"artifacts\"][\"new100/\"+sys.argv[1]][\"sha256\"])' \"$name\")"
+            },
+            {
+              "line": 73,
+              "text": "  printf '%s  %s\\n' \"$expected\" \"baseline/$name\" | sha256sum -c -"
+            },
+            {
+              "line": 81,
+              "text": "/usr/bin/time -v -o prepare.time .venv/bin/python -m scripts.v273_construction_quality prepare vectors.raw fresh_queries.raw truth.u32 >prepare.json"
+            },
+            {
+              "line": 85,
+              "text": "  fresh_queries.raw 1000 baseline.raw.jsonl >baseline.search.json"
+            },
+            {
+              "line": 88,
+              "text": "sha=$(.venv/bin/python -c 'import json;print(json.load(open(\"candidate.build.json\"))[\"root_sha256\"])')"
+            },
+            {
+              "line": 90,
+              "text": "  fresh_queries.raw 1000 candidate.raw.jsonl >candidate.search.json"
+            }
+          ]
+        },
+        "scripts/v273_construction_quality.py": {
+          "sha256": "27dd3e449130c50702196f654e87c6f65286f28ac236c7d4ecacf00177da1e9d",
+          "lines": [
+            {
+              "line": 2,
+              "text": "\"\"\"Fixed 100k fresh-query truth and paired graph-quality decision.\"\"\""
+            },
+            {
+              "line": 14,
+              "text": "SOURCE_RAW_SHA = \"0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e\""
+            },
+            {
+              "line": 15,
+              "text": "SOURCE_IDENTITY_SHA = \"d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753\""
+            },
+            {
+              "line": 16,
+              "text": "QUERY_SHA = \"10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0\""
+            },
+            {
+              "line": 20,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 21,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 22,
+              "text": "        for block in iter(lambda: source.read(1024 * 1024), b\"\"):"
+            },
+            {
+              "line": 27,
+              "text": "def source_identity(path):"
+            },
+            {
+              "line": 28,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 29,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 30,
+              "text": "        for row_id in range(100_000):"
+            },
+            {
+              "line": 31,
+              "text": "            vector = source.read(DIMS * 4)"
+            },
+            {
+              "line": 33,
+              "text": "                raise ValueError(\"source truncated\")"
+            },
+            {
+              "line": 36,
+              "text": "        if source.read(1):"
+            },
+            {
+              "line": 37,
+              "text": "            raise ValueError(\"source has trailing bytes\")"
+            },
+            {
+              "line": 50,
+              "text": "def prepare(source, queries, truth):"
+            },
+            {
+              "line": 53,
+              "text": "    if (digest(source) != SOURCE_RAW_SHA"
+            },
+            {
+              "line": 54,
+              "text": "            or source_identity(source) != SOURCE_IDENTITY_SHA"
+            },
+            {
+              "line": 55,
+              "text": "            or digest(queries) != QUERY_SHA):"
+            },
+            {
+              "line": 56,
+              "text": "        raise ValueError(\"source or fresh query SHA differs\")"
+            },
+            {
+              "line": 57,
+              "text": "    rows = np.memmap(source, dtype=\"<f4\", mode=\"r\", shape=(100_000, DIMS))"
+            },
+            {
+              "line": 58,
+              "text": "    panel = np.memmap(queries, dtype=\"<f4\", mode=\"r\", shape=(1_000, DIMS))"
+            },
+            {
+              "line": 61,
+              "text": "    for start in range(0, 100_000, 25_000):"
+            },
+            {
+              "line": 67,
+              "text": "    print(json.dumps({\"truth_sha256\": digest(truth), \"faiss_version\":"
+            },
+            {
+              "line": 78,
+              "text": "    with Path(raw).open() as source:"
+            },
+            {
+              "line": 79,
+              "text": "        for ordinal, line in enumerate(source):"
+            },
+            {
+              "line": 85,
+              "text": "                raise ValueError(\"query row identity or values differ\")"
+            },
+            {
+              "line": 90,
+              "text": "        raise ValueError(\"query count differs\")"
+            },
+            {
+              "line": 95,
+              "text": "            \"raw_sha256\": digest(raw), \"truth_sha256\": digest(truth)}"
+            },
+            {
+              "line": 110,
+              "text": "              \"dataset\": \"CoHere-large-10M train first100k D768 cosine\","
+            },
+            {
+              "line": 111,
+              "text": "              \"split\": \"excluded train rows100000-100999\", \"k\": 100,"
+            },
+            {
+              "line": 112,
+              "text": "              \"queries\": 1_000, \"mode\": \"diagnostic-stress\","
+            },
+            {
+              "line": 113,
+              "text": "              \"query_sha256\": QUERY_SHA, \"source_raw_sha256\": SOURCE_RAW_SHA,"
+            },
+            {
+              "line": 114,
+              "text": "              \"source_identity_sha256\": SOURCE_IDENTITY_SHA}"
+            },
+            {
+              "line": 122,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 123,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 129,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 130,
+              "text": "        prepare(args.source, args.queries, args.truth)"
+            }
+          ]
+        }
+      },
+      "executed_preparation_authenticated": true,
+      "exclusion": "Conservatively exclude whole producer range, including failed attempts."
+    },
+    {
+      "terminal_key": "research/v274-neighbour-expand/2cfbb7108eeda0895ae5dc17e072fc75d18725d5/runs/a0001/terminal.json",
+      "terminal_sha256": "d0e7487eb5637d60655ce542ad8bde44abf4fffe97100b57ce0cf71a78ce9c40",
+      "terminal_status": "complete",
+      "archive_key": "research/v274-neighbour-expand/2cfbb7108eeda0895ae5dc17e072fc75d18725d5/sources/55a11fe973597b158806503dfa0cf6ccf1b898c7a52e81d68bea7ae0c38a698a.tar.gz",
+      "archive_sha256": "55a11fe973597b158806503dfa0cf6ccf1b898c7a52e81d68bea7ae0c38a698a",
+      "query_source_byte_range": [
+        310272000,
+        313343999
+      ],
+      "query_source_rows_inclusive": [
+        101000,
+        101999
+      ],
+      "query_count": 1000,
+      "query_sha256": "ba64f7134f252314e12cac2b1fe8911a87f6d7112e7a472bff81d33ac86ee822",
+      "preparation_metadata": {
+        "faiss_version": "1.15.1",
+        "truth_sha256": "47dd01e210e6f555c683823b098647aade016dcc69d54fdc4f77e6bd05a6a5a8"
+      },
+      "preparation_identity": {
+        "bytes": 112,
+        "sha256": "44a4c0908083faba3de2f55f673f064227b710a7669e766cea710c545928663a"
+      },
+      "query_input_check": {
+        "identity": {
+          "bytes": 22,
+          "sha256": "781d3f4dcf09555043b7f6d8a0262945d92b817bf4b1133cb33106bab872ae89"
+        },
+        "text": "fresh_queries.raw: OK\n",
+        "expected_query_sha256": "ba64f7134f252314e12cac2b1fe8911a87f6d7112e7a472bff81d33ac86ee822"
+      },
+      "source_code": {
+        "scripts/launch_v273_construction_quality_spot.py": {
+          "sha256": "ecf53e809cae817f598b967ac729062a5dee8aac5696a645de7e9370ad5dd779",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V273_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V273_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V273_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V273_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v273-construction-quality/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows100000-100999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 130,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 146,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 150,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 155,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 167,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 172,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 173,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 183,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/launch_v274_neighbour_expand_spot.py": {
+          "sha256": "e6704253aac7ef7b379269d0f39f9e72c0ad5f69b36766b3ebf935db261d7048",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V274_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V274_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V274_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V274_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v274-neighbour-expand/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows101000-101999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"query_sha256\": \"ba64f7134f252314e12cac2b1fe8911a87f6d7112e7a472bff81d33ac86ee822\","
+            },
+            {
+              "line": 128,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 131,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 147,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 151,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 157,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 168,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 173,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 175,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 184,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/run_v274_neighbour_expand.sh": {
+          "sha256": "0e61ef7a753140f4602c84d663540d1434214b9a7e2b37924a6f022bc4ec8e2b",
+          "lines": [
+            {
+              "line": 13,
+              "text": "  files=(install.log compile.time prepare.time prepare.json vectors.raw.sha256"
+            },
+            {
+              "line": 14,
+              "text": "    fresh_queries.raw.sha256 baseline-terminal.json truth.u32 baseline.search.time"
+            },
+            {
+              "line": 30,
+              "text": "    h=hashlib.sha256()"
+            },
+            {
+              "line": 31,
+              "text": "    with path.open('rb') as source:"
+            },
+            {
+              "line": 32,
+              "text": "        for block in iter(lambda:source.read(1024*1024),b''):"
+            },
+            {
+              "line": 34,
+              "text": "    artifacts[name]={'bytes':path.stat().st_size,'sha256':h.hexdigest()}"
+            },
+            {
+              "line": 37,
+              "text": "    'source_commit':os.environ['BORSUK_V274_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 38,
+              "text": "    'source_archive_sha256':os.environ['BORSUK_V274_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 59,
+              "text": "source_key=\"$BORSUK_V274_V261_PREFIX/artifacts/vectors.raw\""
+            },
+            {
+              "line": 60,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V274_BUCKET\" --key \"$source_key\" --range bytes=0-307199999 vectors.raw >/dev/null"
+            },
+            {
+              "line": 61,
+              "text": "printf '%s  vectors.raw\\n' '0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e' | sha256sum -c - >vectors.raw.sha256"
+            },
+            {
+              "line": 62,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V274_BUCKET\" --key \"$source_key\" --range bytes=310272000-313343999 fresh_queries.raw >/dev/null"
+            },
+            {
+              "line": 63,
+              "text": "printf '%s  fresh_queries.raw\\n' 'ba64f7134f252314e12cac2b1fe8911a87f6d7112e7a472bff81d33ac86ee822' | sha256sum -c - >fresh_queries.raw.sha256"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  baseline-terminal.json\\n' '13775dc6c5176c636fc8442b4bd2bddd2ee375818a98d1328d2c0352423bc80b' | sha256sum -c -"
+            },
+            {
+              "line": 69,
+              "text": "  expected=$(python3 -c 'import json,sys; print(json.load(open(\"baseline-terminal.json\"))[\"artifacts\"][\"new100/\"+sys.argv[1]][\"sha256\"])' \"$name\")"
+            },
+            {
+              "line": 70,
+              "text": "  printf '%s  %s\\n' \"$expected\" \"baseline/$name\" | sha256sum -c -"
+            },
+            {
+              "line": 78,
+              "text": "/usr/bin/time -v -o prepare.time .venv/bin/python -m scripts.v274_neighbour_expand prepare vectors.raw fresh_queries.raw truth.u32 >prepare.json"
+            },
+            {
+              "line": 82,
+              "text": "  fresh_queries.raw 1000 baseline.raw.jsonl >baseline.search.json"
+            },
+            {
+              "line": 86,
+              "text": "  fresh_queries.raw 1000 candidate.raw.jsonl >candidate.search.json"
+            }
+          ]
+        },
+        "scripts/v273_construction_quality.py": {
+          "sha256": "524e8a5e129ad9468dde011b77d56437ef947abcf6df16d33cc7fa1d010be0d4",
+          "lines": [
+            {
+              "line": 2,
+              "text": "\"\"\"Fixed 100k fresh-query truth and paired graph-quality decision.\"\"\""
+            },
+            {
+              "line": 14,
+              "text": "SOURCE_RAW_SHA = \"0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e\""
+            },
+            {
+              "line": 15,
+              "text": "SOURCE_IDENTITY_SHA = \"d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753\""
+            },
+            {
+              "line": 16,
+              "text": "QUERY_SHA = \"10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0\""
+            },
+            {
+              "line": 20,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 21,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 22,
+              "text": "        for block in iter(lambda: source.read(1024 * 1024), b\"\"):"
+            },
+            {
+              "line": 27,
+              "text": "def source_identity(path):"
+            },
+            {
+              "line": 28,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 29,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 30,
+              "text": "        for row_id in range(100_000):"
+            },
+            {
+              "line": 31,
+              "text": "            vector = source.read(DIMS * 4)"
+            },
+            {
+              "line": 33,
+              "text": "                raise ValueError(\"source truncated\")"
+            },
+            {
+              "line": 36,
+              "text": "        if source.read(1):"
+            },
+            {
+              "line": 37,
+              "text": "            raise ValueError(\"source has trailing bytes\")"
+            },
+            {
+              "line": 50,
+              "text": "def prepare(source, queries, truth, query_sha):"
+            },
+            {
+              "line": 53,
+              "text": "    if (digest(source) != SOURCE_RAW_SHA"
+            },
+            {
+              "line": 54,
+              "text": "            or source_identity(source) != SOURCE_IDENTITY_SHA"
+            },
+            {
+              "line": 55,
+              "text": "            or digest(queries) != query_sha):"
+            },
+            {
+              "line": 56,
+              "text": "        raise ValueError(\"source or fresh query SHA differs\")"
+            },
+            {
+              "line": 57,
+              "text": "    rows = np.memmap(source, dtype=\"<f4\", mode=\"r\", shape=(100_000, DIMS))"
+            },
+            {
+              "line": 58,
+              "text": "    panel = np.memmap(queries, dtype=\"<f4\", mode=\"r\", shape=(1_000, DIMS))"
+            },
+            {
+              "line": 61,
+              "text": "    for start in range(0, 100_000, 25_000):"
+            },
+            {
+              "line": 67,
+              "text": "    print(json.dumps({\"truth_sha256\": digest(truth), \"faiss_version\":"
+            },
+            {
+              "line": 78,
+              "text": "    with Path(raw).open() as source:"
+            },
+            {
+              "line": 79,
+              "text": "        for ordinal, line in enumerate(source):"
+            },
+            {
+              "line": 85,
+              "text": "                raise ValueError(\"query row identity or values differ\")"
+            },
+            {
+              "line": 90,
+              "text": "        raise ValueError(\"query count differs\")"
+            },
+            {
+              "line": 95,
+              "text": "            \"raw_sha256\": digest(raw), \"truth_sha256\": digest(truth)}"
+            },
+            {
+              "line": 98,
+              "text": "def compare(baseline, candidate, truth, output, query_sha):"
+            },
+            {
+              "line": 110,
+              "text": "              \"dataset\": \"CoHere-large-10M train first100k D768 cosine\","
+            },
+            {
+              "line": 111,
+              "text": "              \"split\": \"excluded train rows100000-100999\", \"k\": 100,"
+            },
+            {
+              "line": 112,
+              "text": "              \"queries\": 1_000, \"mode\": \"diagnostic-stress\","
+            },
+            {
+              "line": 113,
+              "text": "              \"query_sha256\": query_sha, \"source_raw_sha256\": SOURCE_RAW_SHA,"
+            },
+            {
+              "line": 114,
+              "text": "              \"source_identity_sha256\": SOURCE_IDENTITY_SHA}"
+            },
+            {
+              "line": 122,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 123,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 125,
+              "text": "    prep.add_argument(\"--query-sha\", default=QUERY_SHA)"
+            },
+            {
+              "line": 129,
+              "text": "    paired.add_argument(\"--query-sha\", default=QUERY_SHA)"
+            },
+            {
+              "line": 131,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 132,
+              "text": "        prepare(args.source, args.queries, args.truth, args.query_sha)"
+            },
+            {
+              "line": 134,
+              "text": "        compare(args.baseline, args.candidate, args.truth, args.output, args.query_sha)"
+            }
+          ]
+        },
+        "scripts/v274_neighbour_expand.py": {
+          "sha256": "98a4dd758b3b0ecfc9ae90e01d4996dbfc684676e89a3dfb9029f47f95a76f7a",
+          "lines": [
+            {
+              "line": 8,
+              "text": "from scripts.v273_construction_quality import prepare, score"
+            },
+            {
+              "line": 10,
+              "text": "QUERY_SHA = \"ba64f7134f252314e12cac2b1fe8911a87f6d7112e7a472bff81d33ac86ee822\""
+            },
+            {
+              "line": 16,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 17,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 25,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 26,
+              "text": "        prepare(args.source, args.queries, args.truth, QUERY_SHA)"
+            },
+            {
+              "line": 42,
+              "text": "              \"dataset\": \"CoHere-large-10M train first100k D768 cosine\","
+            },
+            {
+              "line": 43,
+              "text": "              \"split\": \"excluded train rows101000-101999\", \"queries\": 1000,"
+            },
+            {
+              "line": 44,
+              "text": "              \"k\": 100, \"query_sha256\": QUERY_SHA,"
+            },
+            {
+              "line": 45,
+              "text": "              \"baseline_root_sha256\": \"440beefd321dfeeae25ba6277a2e2f1f938c389a0c4a9007177f4bacc4b1d6e3\"}"
+            }
+          ]
+        }
+      },
+      "executed_preparation_authenticated": true,
+      "exclusion": "Conservatively exclude whole producer range, including failed attempts."
+    },
+    {
+      "terminal_key": "research/v275-reverse-incoming/50170297e61b3b923f83cae91668a1f7db7e72d0/runs/a0001/terminal.json",
+      "terminal_sha256": "7f986fd18117e0cd8d42f55e431bef555e3b512eefcbaa1ec34e4678b696eb19",
+      "terminal_status": "complete",
+      "archive_key": "research/v275-reverse-incoming/50170297e61b3b923f83cae91668a1f7db7e72d0/sources/5f2ba9ec61a3a44cad6483155d50facf8270319babfd67eea7f9361ceb2c1b73.tar.gz",
+      "archive_sha256": "5f2ba9ec61a3a44cad6483155d50facf8270319babfd67eea7f9361ceb2c1b73",
+      "query_source_byte_range": [
+        313344000,
+        316415999
+      ],
+      "query_source_rows_inclusive": [
+        102000,
+        102999
+      ],
+      "query_count": 1000,
+      "query_sha256": "51cbd05d06c84f75c7f3394e42366a1e963447c0ebc90233351409cfda6a44c3",
+      "preparation_metadata": {
+        "faiss_version": "1.15.1",
+        "truth_sha256": "192229de9b21302386840b51f6c18eb1a832e82195d960f8beefedf09559b72f"
+      },
+      "preparation_identity": {
+        "bytes": 112,
+        "sha256": "cfddbf3dc12edcfaf53f51b80a2554b2839c399eecf2fe51fb744bbc7e0034a6"
+      },
+      "query_input_check": {
+        "identity": {
+          "bytes": 22,
+          "sha256": "781d3f4dcf09555043b7f6d8a0262945d92b817bf4b1133cb33106bab872ae89"
+        },
+        "text": "fresh_queries.raw: OK\n",
+        "expected_query_sha256": "51cbd05d06c84f75c7f3394e42366a1e963447c0ebc90233351409cfda6a44c3"
+      },
+      "source_code": {
+        "scripts/launch_v273_construction_quality_spot.py": {
+          "sha256": "ecf53e809cae817f598b967ac729062a5dee8aac5696a645de7e9370ad5dd779",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V273_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V273_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V273_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V273_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v273-construction-quality/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows100000-100999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 130,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 146,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 150,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 155,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 167,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 172,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 173,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 183,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/launch_v275_reverse_incoming_spot.py": {
+          "sha256": "96167657f13b558388a8f6c69c4ef90d319903dc7a34d1679f2ce5c16bbabc6d",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V275_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V275_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V275_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V275_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v275-reverse-incoming/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows102000-102999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 129,
+              "text": "        \"query_sha256\": \"51cbd05d06c84f75c7f3394e42366a1e963447c0ebc90233351409cfda6a44c3\","
+            },
+            {
+              "line": 131,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 147,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 151,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 157,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 168,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 173,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 175,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 184,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/run_v275_reverse_incoming.sh": {
+          "sha256": "4439ccf8d3675ff62573286b851cf320ae50022383b91ab8c6d108e1b7f6af3c",
+          "lines": [
+            {
+              "line": 13,
+              "text": "  files=(install.log compile.time prepare.time prepare.json vectors.raw.sha256"
+            },
+            {
+              "line": 14,
+              "text": "    fresh_queries.raw.sha256 baseline-terminal.json truth.u32 baseline.search.time"
+            },
+            {
+              "line": 36,
+              "text": "    h=hashlib.sha256()"
+            },
+            {
+              "line": 37,
+              "text": "    with path.open('rb') as source:"
+            },
+            {
+              "line": 38,
+              "text": "        for block in iter(lambda:source.read(1024*1024),b''):"
+            },
+            {
+              "line": 40,
+              "text": "    artifacts[name]={'bytes':path.stat().st_size,'sha256':h.hexdigest()}"
+            },
+            {
+              "line": 43,
+              "text": "    'source_commit':os.environ['BORSUK_V275_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 44,
+              "text": "    'source_archive_sha256':os.environ['BORSUK_V275_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 65,
+              "text": "source_key=\"$BORSUK_V275_V261_PREFIX/artifacts/vectors.raw\""
+            },
+            {
+              "line": 66,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V275_BUCKET\" --key \"$source_key\" --range bytes=0-307199999 vectors.raw >/dev/null"
+            },
+            {
+              "line": 67,
+              "text": "printf '%s  vectors.raw\\n' '0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e' | sha256sum -c - >vectors.raw.sha256"
+            },
+            {
+              "line": 68,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V275_BUCKET\" --key \"$source_key\" --range bytes=313344000-316415999 fresh_queries.raw >/dev/null"
+            },
+            {
+              "line": 69,
+              "text": "printf '%s  fresh_queries.raw\\n' '51cbd05d06c84f75c7f3394e42366a1e963447c0ebc90233351409cfda6a44c3' | sha256sum -c - >fresh_queries.raw.sha256"
+            },
+            {
+              "line": 71,
+              "text": "printf '%s  baseline-terminal.json\\n' '13775dc6c5176c636fc8442b4bd2bddd2ee375818a98d1328d2c0352423bc80b' | sha256sum -c -"
+            },
+            {
+              "line": 75,
+              "text": "  expected=$(python3 -c 'import json,sys; print(json.load(open(\"baseline-terminal.json\"))[\"artifacts\"][\"new100/\"+sys.argv[1]][\"sha256\"])' \"$name\")"
+            },
+            {
+              "line": 76,
+              "text": "  printf '%s  %s\\n' \"$expected\" \"baseline/$name\" | sha256sum -c -"
+            },
+            {
+              "line": 84,
+              "text": "/usr/bin/time -v -o prepare.time .venv/bin/python -m scripts.v275_reverse_incoming prepare vectors.raw fresh_queries.raw truth.u32 >prepare.json"
+            },
+            {
+              "line": 88,
+              "text": "  fresh_queries.raw 1000 baseline.raw.jsonl >baseline.search.json"
+            },
+            {
+              "line": 91,
+              "text": "sha=$(.venv/bin/python -c 'import json;print(json.load(open(\"candidate.build.json\"))[\"root_sha256\"])')"
+            },
+            {
+              "line": 93,
+              "text": "  fresh_queries.raw 1000 candidate.raw.jsonl >candidate.search.json"
+            },
+            {
+              "line": 97,
+              "text": "  fresh_queries.raw 1000 baseline.default.raw.jsonl >baseline.default.json"
+            },
+            {
+              "line": 99,
+              "text": "  fresh_queries.raw 1000 candidate.default.raw.jsonl >candidate.default.json"
+            }
+          ]
+        },
+        "scripts/v273_construction_quality.py": {
+          "sha256": "524e8a5e129ad9468dde011b77d56437ef947abcf6df16d33cc7fa1d010be0d4",
+          "lines": [
+            {
+              "line": 2,
+              "text": "\"\"\"Fixed 100k fresh-query truth and paired graph-quality decision.\"\"\""
+            },
+            {
+              "line": 14,
+              "text": "SOURCE_RAW_SHA = \"0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e\""
+            },
+            {
+              "line": 15,
+              "text": "SOURCE_IDENTITY_SHA = \"d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753\""
+            },
+            {
+              "line": 16,
+              "text": "QUERY_SHA = \"10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0\""
+            },
+            {
+              "line": 20,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 21,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 22,
+              "text": "        for block in iter(lambda: source.read(1024 * 1024), b\"\"):"
+            },
+            {
+              "line": 27,
+              "text": "def source_identity(path):"
+            },
+            {
+              "line": 28,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 29,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 30,
+              "text": "        for row_id in range(100_000):"
+            },
+            {
+              "line": 31,
+              "text": "            vector = source.read(DIMS * 4)"
+            },
+            {
+              "line": 33,
+              "text": "                raise ValueError(\"source truncated\")"
+            },
+            {
+              "line": 36,
+              "text": "        if source.read(1):"
+            },
+            {
+              "line": 37,
+              "text": "            raise ValueError(\"source has trailing bytes\")"
+            },
+            {
+              "line": 50,
+              "text": "def prepare(source, queries, truth, query_sha):"
+            },
+            {
+              "line": 53,
+              "text": "    if (digest(source) != SOURCE_RAW_SHA"
+            },
+            {
+              "line": 54,
+              "text": "            or source_identity(source) != SOURCE_IDENTITY_SHA"
+            },
+            {
+              "line": 55,
+              "text": "            or digest(queries) != query_sha):"
+            },
+            {
+              "line": 56,
+              "text": "        raise ValueError(\"source or fresh query SHA differs\")"
+            },
+            {
+              "line": 57,
+              "text": "    rows = np.memmap(source, dtype=\"<f4\", mode=\"r\", shape=(100_000, DIMS))"
+            },
+            {
+              "line": 58,
+              "text": "    panel = np.memmap(queries, dtype=\"<f4\", mode=\"r\", shape=(1_000, DIMS))"
+            },
+            {
+              "line": 61,
+              "text": "    for start in range(0, 100_000, 25_000):"
+            },
+            {
+              "line": 67,
+              "text": "    print(json.dumps({\"truth_sha256\": digest(truth), \"faiss_version\":"
+            },
+            {
+              "line": 78,
+              "text": "    with Path(raw).open() as source:"
+            },
+            {
+              "line": 79,
+              "text": "        for ordinal, line in enumerate(source):"
+            },
+            {
+              "line": 85,
+              "text": "                raise ValueError(\"query row identity or values differ\")"
+            },
+            {
+              "line": 90,
+              "text": "        raise ValueError(\"query count differs\")"
+            },
+            {
+              "line": 95,
+              "text": "            \"raw_sha256\": digest(raw), \"truth_sha256\": digest(truth)}"
+            },
+            {
+              "line": 98,
+              "text": "def compare(baseline, candidate, truth, output, query_sha):"
+            },
+            {
+              "line": 110,
+              "text": "              \"dataset\": \"CoHere-large-10M train first100k D768 cosine\","
+            },
+            {
+              "line": 111,
+              "text": "              \"split\": \"excluded train rows100000-100999\", \"k\": 100,"
+            },
+            {
+              "line": 112,
+              "text": "              \"queries\": 1_000, \"mode\": \"diagnostic-stress\","
+            },
+            {
+              "line": 113,
+              "text": "              \"query_sha256\": query_sha, \"source_raw_sha256\": SOURCE_RAW_SHA,"
+            },
+            {
+              "line": 114,
+              "text": "              \"source_identity_sha256\": SOURCE_IDENTITY_SHA}"
+            },
+            {
+              "line": 122,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 123,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 125,
+              "text": "    prep.add_argument(\"--query-sha\", default=QUERY_SHA)"
+            },
+            {
+              "line": 129,
+              "text": "    paired.add_argument(\"--query-sha\", default=QUERY_SHA)"
+            },
+            {
+              "line": 131,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 132,
+              "text": "        prepare(args.source, args.queries, args.truth, args.query_sha)"
+            },
+            {
+              "line": 134,
+              "text": "        compare(args.baseline, args.candidate, args.truth, args.output, args.query_sha)"
+            }
+          ]
+        },
+        "scripts/v275_reverse_incoming.py": {
+          "sha256": "e00a2efb6601b1bf101772b1008681a9e4772aa61e27f1d2d32560ba2328fd4c",
+          "lines": [
+            {
+              "line": 12,
+              "text": "from scripts.v273_construction_quality import prepare, score"
+            },
+            {
+              "line": 14,
+              "text": "QUERY_SHA = \"51cbd05d06c84f75c7f3394e42366a1e963447c0ebc90233351409cfda6a44c3\""
+            },
+            {
+              "line": 26,
+              "text": "    for row in range(rows):"
+            },
+            {
+              "line": 31,
+              "text": "        for layer in range(layers):"
+            },
+            {
+              "line": 65,
+              "text": "    with raw.open() as source:"
+            },
+            {
+              "line": 66,
+              "text": "        for ordinal, line in enumerate(source):"
+            },
+            {
+              "line": 69,
+              "text": "                raise ValueError(\"raw query ordinal\")"
+            },
+            {
+              "line": 75,
+              "text": "        raise ValueError(\"query count\")"
+            },
+            {
+              "line": 103,
+              "text": "              \"split\": \"excluded train rows102000-102999\", \"k\": 100,"
+            },
+            {
+              "line": 104,
+              "text": "              \"queries\": 1000, \"query_sha256\": QUERY_SHA,"
+            },
+            {
+              "line": 105,
+              "text": "              \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 128,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 129,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 139,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 140,
+              "text": "        prepare(args.source, args.queries, args.truth, QUERY_SHA)"
+            }
+          ]
+        }
+      },
+      "executed_preparation_authenticated": true,
+      "exclusion": "Conservatively exclude whole producer range, including failed attempts."
+    },
+    {
+      "terminal_key": "research/v276-extra-reverse/65684cc922a9a81e654ffb58722691c0f7b2a11b/runs/a0001/terminal.json",
+      "terminal_sha256": "6f83e1877ed0e5eaf44ba5514c7588df6b924476f035cea5a77feffc0d8148a1",
+      "terminal_status": "complete",
+      "archive_key": "research/v276-extra-reverse/65684cc922a9a81e654ffb58722691c0f7b2a11b/sources/3a5d6f3638f1fa744a89a76575651f644a7c70c95512a4d90faad24153da3bb9.tar.gz",
+      "archive_sha256": "3a5d6f3638f1fa744a89a76575651f644a7c70c95512a4d90faad24153da3bb9",
+      "query_source_byte_range": [
+        316416000,
+        319487999
+      ],
+      "query_source_rows_inclusive": [
+        103000,
+        103999
+      ],
+      "query_count": 1000,
+      "query_sha256": "81d455e2b251f6244e5e6092b0880fc7014e5cb88c93c29d8f57685f2d51056b",
+      "preparation_metadata": {
+        "faiss_version": "1.15.1",
+        "truth_sha256": "f97e2e861641ff7dd55bd9ccd8ec6220d4b585937accdeaaf53c1ff7174f493e"
+      },
+      "preparation_identity": {
+        "bytes": 112,
+        "sha256": "e562424f8b06c57aae3089b4ed4ba0547556b1a1884c0bef18d3a97ee9aca37a"
+      },
+      "query_input_check": {
+        "identity": {
+          "bytes": 22,
+          "sha256": "781d3f4dcf09555043b7f6d8a0262945d92b817bf4b1133cb33106bab872ae89"
+        },
+        "text": "fresh_queries.raw: OK\n",
+        "expected_query_sha256": "81d455e2b251f6244e5e6092b0880fc7014e5cb88c93c29d8f57685f2d51056b"
+      },
+      "source_code": {
+        "scripts/launch_v273_construction_quality_spot.py": {
+          "sha256": "ecf53e809cae817f598b967ac729062a5dee8aac5696a645de7e9370ad5dd779",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V273_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V273_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V273_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V273_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v273-construction-quality/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows100000-100999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 130,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 146,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 150,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 155,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 167,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 172,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 173,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 183,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/launch_v276_extra_reverse_spot.py": {
+          "sha256": "849b48af9eab761b197efbca0693df643ff22dbb8a61d39f43170c88e98d0c09",
+          "lines": [
+            {
+              "line": 14,
+              "text": "    BUCKET, REGION, archive_source, missing, put_if_absent,"
+            },
+            {
+              "line": 23,
+              "text": "V261_PREFIX = (\"research/v261-cohere-dual-graph-1m/\""
+            },
+            {
+              "line": 25,
+              "text": "V261_TERMINAL_SHA = \"00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82\""
+            },
+            {
+              "line": 37,
+              "text": "export BORSUK_V276_SOURCE_COMMIT='{commit}'"
+            },
+            {
+              "line": 39,
+              "text": "export BORSUK_V276_V261_PREFIX='{V261_PREFIX}'"
+            },
+            {
+              "line": 50,
+              "text": "  'source_commit':os.environ['BORSUK_V276_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 51,
+              "text": "  'source_archive_sha256':os.environ['BORSUK_V276_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 64,
+              "text": "aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors"
+            },
+            {
+              "line": 65,
+              "text": "printf '%s  source.tar.gz\\\\n' '{archive_sha}' | sha256sum -c -"
+            },
+            {
+              "line": 66,
+              "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+            },
+            {
+              "line": 83,
+              "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+            },
+            {
+              "line": 86,
+              "text": "    v261 = get(s3, V261_PREFIX + \"/terminal.json\")"
+            },
+            {
+              "line": 89,
+              "text": "    if (sha(v261) != V261_TERMINAL_SHA or sha(v271) != V271_TERMINAL_SHA"
+            },
+            {
+              "line": 90,
+              "text": "            or json.loads(v261)[\"artifacts\"][\"vectors.raw\"][\"sha256\"]"
+            },
+            {
+              "line": 93,
+              "text": "            or old[\"artifacts\"][\"new100/root.json\"][\"sha256\"] != ROOT_SHA):"
+            },
+            {
+              "line": 94,
+              "text": "        raise ValueError(\"historical source or baseline receipt differs\")"
+            },
+            {
+              "line": 101,
+              "text": "    archive = archive_source(commit)"
+            },
+            {
+              "line": 102,
+              "text": "    with tarfile.open(fileobj=io.BytesIO(archive), mode=\"r:gz\") as source:"
+            },
+            {
+              "line": 106,
+              "text": "        if not required.issubset(source.getnames()):"
+            },
+            {
+              "line": 109,
+              "text": "    archive_key = f\"research/v276-extra-reverse/{commit}/sources/{archive_sha}.tar.gz\""
+            },
+            {
+              "line": 121,
+              "text": "        \"schema\": SCHEMA + \"-reservation\", \"source_commit\": commit,"
+            },
+            {
+              "line": 122,
+              "text": "        \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 123,
+              "text": "        \"v261_terminal_sha256\": V261_TERMINAL_SHA,"
+            },
+            {
+              "line": 124,
+              "text": "        \"v271_terminal_sha256\": V271_TERMINAL_SHA,"
+            },
+            {
+              "line": 126,
+              "text": "        \"split\": \"excluded train rows103000-103999\", \"queries\": 1000, \"k\": 100,"
+            },
+            {
+              "line": 127,
+              "text": "        \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 129,
+              "text": "        \"query_sha256\": \"81d455e2b251f6244e5e6092b0880fc7014e5cb88c93c29d8f57685f2d51056b\","
+            },
+            {
+              "line": 130,
+              "text": "        \"candidate\": \"M32 M0=64 efConstruction128 plus bounded extra reverse-edge append cap16 per source\","
+            },
+            {
+              "line": 131,
+              "text": "        \"cache\": \"authenticated local resident, no query-time GETs\","
+            },
+            {
+              "line": 147,
+              "text": "            \"source_commit\": commit, \"source_archive_sha256\": archive_sha,"
+            },
+            {
+              "line": 151,
+              "text": "                          \"archive_sha256\": archive_sha}), flush=True)"
+            },
+            {
+              "line": 156,
+              "text": "                or terminal.get(\"source_commit\") != commit"
+            },
+            {
+              "line": 157,
+              "text": "                or terminal.get(\"source_archive_sha256\") != archive_sha"
+            },
+            {
+              "line": 168,
+              "text": "            if len(body) != identity[\"bytes\"] or sha(body) != identity[\"sha256\"]:"
+            },
+            {
+              "line": 173,
+              "text": "        result = {\"schema\": SCHEMA + \"-closeout\", \"source_commit\": commit,"
+            },
+            {
+              "line": 174,
+              "text": "                  \"source_archive_sha256\": archive_sha, \"instance_id\": instance_id,"
+            },
+            {
+              "line": 175,
+              "text": "                  \"terminal_sha256\": sha(raw), \"terminal_status\": terminal[\"status\"],"
+            },
+            {
+              "line": 184,
+              "text": "        print(json.dumps({\"closeout_sha256\": sha(body), **result}, sort_keys=True), flush=True)"
+            }
+          ]
+        },
+        "scripts/run_v276_extra_reverse.sh": {
+          "sha256": "c58c0bc8f4aba6343f66277e147783ed4373cc416c7827019839a363cf441738",
+          "lines": [
+            {
+              "line": 13,
+              "text": "  files=(install.log compile.time prepare.time prepare.json vectors.raw.sha256"
+            },
+            {
+              "line": 14,
+              "text": "    fresh_queries.raw.sha256 baseline-terminal.json truth.u32 baseline.search.time"
+            },
+            {
+              "line": 36,
+              "text": "    h=hashlib.sha256()"
+            },
+            {
+              "line": 37,
+              "text": "    with path.open('rb') as source:"
+            },
+            {
+              "line": 38,
+              "text": "        for block in iter(lambda:source.read(1024*1024),b''):"
+            },
+            {
+              "line": 40,
+              "text": "    artifacts[name]={'bytes':path.stat().st_size,'sha256':h.hexdigest()}"
+            },
+            {
+              "line": 43,
+              "text": "    'source_commit':os.environ['BORSUK_V276_SOURCE_COMMIT'],"
+            },
+            {
+              "line": 44,
+              "text": "    'source_archive_sha256':os.environ['BORSUK_V276_ARCHIVE_SHA'],"
+            },
+            {
+              "line": 65,
+              "text": "source_key=\"$BORSUK_V276_V261_PREFIX/artifacts/vectors.raw\""
+            },
+            {
+              "line": 66,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V276_BUCKET\" --key \"$source_key\" --range bytes=0-307199999 vectors.raw >/dev/null"
+            },
+            {
+              "line": 67,
+              "text": "printf '%s  vectors.raw\\n' '0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e' | sha256sum -c - >vectors.raw.sha256"
+            },
+            {
+              "line": 68,
+              "text": "aws s3api get-object --bucket \"$BORSUK_V276_BUCKET\" --key \"$source_key\" --range bytes=316416000-319487999 fresh_queries.raw >/dev/null"
+            },
+            {
+              "line": 69,
+              "text": "printf '%s  fresh_queries.raw\\n' '81d455e2b251f6244e5e6092b0880fc7014e5cb88c93c29d8f57685f2d51056b' | sha256sum -c - >fresh_queries.raw.sha256"
+            },
+            {
+              "line": 71,
+              "text": "printf '%s  baseline-terminal.json\\n' '13775dc6c5176c636fc8442b4bd2bddd2ee375818a98d1328d2c0352423bc80b' | sha256sum -c -"
+            },
+            {
+              "line": 75,
+              "text": "  expected=$(python3 -c 'import json,sys; print(json.load(open(\"baseline-terminal.json\"))[\"artifacts\"][\"new100/\"+sys.argv[1]][\"sha256\"])' \"$name\")"
+            },
+            {
+              "line": 76,
+              "text": "  printf '%s  %s\\n' \"$expected\" \"baseline/$name\" | sha256sum -c -"
+            },
+            {
+              "line": 84,
+              "text": "/usr/bin/time -v -o prepare.time .venv/bin/python -m scripts.v276_extra_reverse prepare vectors.raw fresh_queries.raw truth.u32 >prepare.json"
+            },
+            {
+              "line": 88,
+              "text": "  fresh_queries.raw 1000 baseline.raw.jsonl >baseline.search.json"
+            },
+            {
+              "line": 91,
+              "text": "sha=$(.venv/bin/python -c 'import json;print(json.load(open(\"candidate.build.json\"))[\"root_sha256\"])')"
+            },
+            {
+              "line": 93,
+              "text": "  fresh_queries.raw 1000 candidate.raw.jsonl >candidate.search.json"
+            },
+            {
+              "line": 97,
+              "text": "  fresh_queries.raw 1000 baseline.default.raw.jsonl >baseline.default.json"
+            },
+            {
+              "line": 99,
+              "text": "  fresh_queries.raw 1000 candidate.default.raw.jsonl >candidate.default.json"
+            }
+          ]
+        },
+        "scripts/v273_construction_quality.py": {
+          "sha256": "524e8a5e129ad9468dde011b77d56437ef947abcf6df16d33cc7fa1d010be0d4",
+          "lines": [
+            {
+              "line": 2,
+              "text": "\"\"\"Fixed 100k fresh-query truth and paired graph-quality decision.\"\"\""
+            },
+            {
+              "line": 14,
+              "text": "SOURCE_RAW_SHA = \"0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e\""
+            },
+            {
+              "line": 15,
+              "text": "SOURCE_IDENTITY_SHA = \"d638878523cfdd349cb28e214d59010709d6451f3eeca2a70da88c0c9d9ea753\""
+            },
+            {
+              "line": 16,
+              "text": "QUERY_SHA = \"10322f59ee236849e60137c081432c3a8ef55d6c09dc1585356e984b2bfc30c0\""
+            },
+            {
+              "line": 20,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 21,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 22,
+              "text": "        for block in iter(lambda: source.read(1024 * 1024), b\"\"):"
+            },
+            {
+              "line": 27,
+              "text": "def source_identity(path):"
+            },
+            {
+              "line": 28,
+              "text": "    value = hashlib.sha256()"
+            },
+            {
+              "line": 29,
+              "text": "    with Path(path).open(\"rb\") as source:"
+            },
+            {
+              "line": 30,
+              "text": "        for row_id in range(100_000):"
+            },
+            {
+              "line": 31,
+              "text": "            vector = source.read(DIMS * 4)"
+            },
+            {
+              "line": 33,
+              "text": "                raise ValueError(\"source truncated\")"
+            },
+            {
+              "line": 36,
+              "text": "        if source.read(1):"
+            },
+            {
+              "line": 37,
+              "text": "            raise ValueError(\"source has trailing bytes\")"
+            },
+            {
+              "line": 50,
+              "text": "def prepare(source, queries, truth, query_sha):"
+            },
+            {
+              "line": 53,
+              "text": "    if (digest(source) != SOURCE_RAW_SHA"
+            },
+            {
+              "line": 54,
+              "text": "            or source_identity(source) != SOURCE_IDENTITY_SHA"
+            },
+            {
+              "line": 55,
+              "text": "            or digest(queries) != query_sha):"
+            },
+            {
+              "line": 56,
+              "text": "        raise ValueError(\"source or fresh query SHA differs\")"
+            },
+            {
+              "line": 57,
+              "text": "    rows = np.memmap(source, dtype=\"<f4\", mode=\"r\", shape=(100_000, DIMS))"
+            },
+            {
+              "line": 58,
+              "text": "    panel = np.memmap(queries, dtype=\"<f4\", mode=\"r\", shape=(1_000, DIMS))"
+            },
+            {
+              "line": 61,
+              "text": "    for start in range(0, 100_000, 25_000):"
+            },
+            {
+              "line": 67,
+              "text": "    print(json.dumps({\"truth_sha256\": digest(truth), \"faiss_version\":"
+            },
+            {
+              "line": 78,
+              "text": "    with Path(raw).open() as source:"
+            },
+            {
+              "line": 79,
+              "text": "        for ordinal, line in enumerate(source):"
+            },
+            {
+              "line": 85,
+              "text": "                raise ValueError(\"query row identity or values differ\")"
+            },
+            {
+              "line": 90,
+              "text": "        raise ValueError(\"query count differs\")"
+            },
+            {
+              "line": 95,
+              "text": "            \"raw_sha256\": digest(raw), \"truth_sha256\": digest(truth)}"
+            },
+            {
+              "line": 98,
+              "text": "def compare(baseline, candidate, truth, output, query_sha):"
+            },
+            {
+              "line": 110,
+              "text": "              \"dataset\": \"CoHere-large-10M train first100k D768 cosine\","
+            },
+            {
+              "line": 111,
+              "text": "              \"split\": \"excluded train rows100000-100999\", \"k\": 100,"
+            },
+            {
+              "line": 112,
+              "text": "              \"queries\": 1_000, \"mode\": \"diagnostic-stress\","
+            },
+            {
+              "line": 113,
+              "text": "              \"query_sha256\": query_sha, \"source_raw_sha256\": SOURCE_RAW_SHA,"
+            },
+            {
+              "line": 114,
+              "text": "              \"source_identity_sha256\": SOURCE_IDENTITY_SHA}"
+            },
+            {
+              "line": 122,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 123,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 125,
+              "text": "    prep.add_argument(\"--query-sha\", default=QUERY_SHA)"
+            },
+            {
+              "line": 129,
+              "text": "    paired.add_argument(\"--query-sha\", default=QUERY_SHA)"
+            },
+            {
+              "line": 131,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 132,
+              "text": "        prepare(args.source, args.queries, args.truth, args.query_sha)"
+            },
+            {
+              "line": 134,
+              "text": "        compare(args.baseline, args.candidate, args.truth, args.output, args.query_sha)"
+            }
+          ]
+        },
+        "scripts/v276_extra_reverse.py": {
+          "sha256": "118f85af3d5cd2e8e678c569a4f90aaa39182490f85206d25e84883a22f89dec",
+          "lines": [
+            {
+              "line": 12,
+              "text": "from scripts.v273_construction_quality import prepare, score"
+            },
+            {
+              "line": 14,
+              "text": "QUERY_SHA = \"81d455e2b251f6244e5e6092b0880fc7014e5cb88c93c29d8f57685f2d51056b\""
+            },
+            {
+              "line": 26,
+              "text": "    for row in range(rows):"
+            },
+            {
+              "line": 31,
+              "text": "        for layer in range(layers):"
+            },
+            {
+              "line": 65,
+              "text": "    with raw.open() as source:"
+            },
+            {
+              "line": 66,
+              "text": "        for ordinal, line in enumerate(source):"
+            },
+            {
+              "line": 69,
+              "text": "                raise ValueError(\"raw query ordinal\")"
+            },
+            {
+              "line": 75,
+              "text": "        raise ValueError(\"query count\")"
+            },
+            {
+              "line": 114,
+              "text": "              \"split\": \"excluded train rows103000-103999\", \"k\": 100,"
+            },
+            {
+              "line": 115,
+              "text": "              \"queries\": 1000, \"query_sha256\": QUERY_SHA,"
+            },
+            {
+              "line": 116,
+              "text": "              \"baseline_root_sha256\": ROOT_SHA,"
+            },
+            {
+              "line": 142,
+              "text": "    prep = sub.add_parser(\"prepare\")"
+            },
+            {
+              "line": 143,
+              "text": "    for name in (\"source\", \"queries\", \"truth\"):"
+            },
+            {
+              "line": 153,
+              "text": "    if args.command == \"prepare\":"
+            },
+            {
+              "line": 154,
+              "text": "        prepare(args.source, args.queries, args.truth, QUERY_SHA)"
+            }
+          ]
+        }
+      },
+      "executed_preparation_authenticated": true,
+      "exclusion": "Conservatively exclude whole producer range, including failed attempts."
+    }
+  ],
+  "qualification": false
+}
