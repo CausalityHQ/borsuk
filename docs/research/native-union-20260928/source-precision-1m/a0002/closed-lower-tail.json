@@ -1,0 +1,54 @@
+{
+  "authority_terminal_sha256": "adfa18d717c607e723a54bc3882bfe6ea962a3f001e4cd3303f5017b8ab13a60",
+  "derivation": "CLOSED integer/GT sets only; no scoring or query tuning",
+  "rows": [
+    {
+      "query": 8,
+      "control": 92,
+      "candidate": 92,
+      "candidate_stages": {
+        "candidate": 92,
+        "fetched": 92,
+        "flat": 99,
+        "nominated": 92,
+        "returned": 92
+      }
+    },
+    {
+      "query": 15,
+      "control": 89,
+      "candidate": 89,
+      "candidate_stages": {
+        "candidate": 91,
+        "fetched": 89,
+        "flat": 100,
+        "nominated": 89,
+        "returned": 89
+      }
+    },
+    {
+      "query": 26,
+      "control": 92,
+      "candidate": 93,
+      "candidate_stages": {
+        "candidate": 97,
+        "fetched": 93,
+        "flat": 99,
+        "nominated": 93,
+        "returned": 93
+      }
+    },
+    {
+      "query": 28,
+      "control": 81,
+      "candidate": 82,
+      "candidate_stages": {
+        "candidate": 89,
+        "fetched": 82,
+        "flat": 100,
+        "nominated": 82,
+        "returned": 82
+      }
+    }
+  ]
+}

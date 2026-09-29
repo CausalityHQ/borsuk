@@ -59,3 +59,14 @@ No candidate1M quality/tail/QPS result. Independent memory authority395native/
 2694-pass library assurance reused. Sciencea0002 candidate1.25GiB admission vs
 retainedcontrol1GiB, both same4GiBAS/8GiBcgroup; no work/quality/cache weakening.
 Next decisive test remains >=6331hits/p05>=95 then actual1MHTTP, else endarm.
+
+## Latest decisive ReLAION1M result: VERIFIED scientific KILL
+
+Matched currentcontrol6288/6400=98.25%,p0592 ->3bit6288=98.25%,p0593;
+actualdelta0hits/0pp, flat6363=99.421875%, deficit75hits/1.171875pp.
+No1MHTTP/tails/QPS/serverRSS/lifecycle$ measured.395native/403source/38artifacts
+independentlyverified, actualtermination546s, compute$.0272ESTIMATEDexcl.
+Candidate walkpool/roster/nomination/physical/final losses46/18/26/0/22;
+flat-present finalrank0. Endprecisionarm; bounded source-only discovery/selection
+must change next. Wholewalk/completeroster/sourcepriority failures remain closed.
+No scale/fresh/vendor launch onthisarm; originalgoalACTIVE unchanged.
