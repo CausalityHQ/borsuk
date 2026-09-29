@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-native-native-memory-authority-v1",
+  "source_base_commit": "8e7e9130f570f0f4afde3e80dea7da870db65ca3",
+  "source_archive_sha256": "eacca7fe01e846b28d3f72ab9119278788651b17aa4dfb13de83502817bc482d",
+  "source_dirty": true,
+  "attempt": "a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "wall_seconds": 2100,
+  "test_timeout_seconds": 1800,
+  "cargo_jobs": 4,
+  "spot_price_observed_usd_per_hour": "0.179200",
+  "spot_quote_timestamp": "2026-09-29T07:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "cost_cap_compute_usd": 0.175,
+  "cost_allowance_ebs_s3_usd": 0.1,
+  "scope": "development-runner caller memory admission only; unchanged library full authority reused, release-mode expected legacy-default RED and focused parser GREEN, planner/HTTP rebuild only, no corpus/full gate",
+  "interruption_policy": "Discard incomplete check; no automatic replacement",
+  "image": "ami-03748c04dc81412c6",
+  "existing_native_files_verified_except_declared_change": 394,
+  "changed_native_files": [
+    "crates/borsuk/examples/two_bit_http.rs",
+    "crates/borsuk/src/bin/two_bit_plan_demo.rs"
+  ],
+  "reused_previous_assurance_terminal_sha256": "31bca4ce97aff9ad2f24945c321337e8f88dfc986952b8b8e14f087187fcd4bb",
+  "measurement_memory_max_bytes": 10737418240,
+  "swap_max_bytes": 0,
+  "cpu_affinity": "0-3",
+  "threads": 4,
+  "s3_versioning_observed": "Disabled"
+}

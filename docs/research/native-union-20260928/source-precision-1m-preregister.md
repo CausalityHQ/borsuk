@@ -56,3 +56,13 @@ CLOSED evidence collection streams SHA256/size for artifacts>64MiB in4MiB
 chunks, retains those immutable S3 bodies, and compresses small metadata/logs
 locally. Independent verifier streams every large body again; it does not hydrate
 3GiB canonical data in the devbox collector. Scientific method/caps unchanged.
+
+Explicit correction a0002: a0001 INVALID before quality because candidate caller
+hardcoded1GiB admission; immutable failed cell preserved/terminated. Native memory
+authority a0001 must verify focused release RED/GREEN and binaries before launch.
+Candidate runner admission1.25GiB (1342177280B), old retained control1GiB
+(1073741824B); disclose asymmetric admission, not measured RSS. Same4GiB process/
+8GiBcgroup, caches/concurrency/source/scorer/query/work/quality gates unchanged.
+Library admission accounting untouched. Reuse unchanged2694 full library proof
+and unchanged constructor; only focused qualified planner/HTTP runner binaries
+replace prior binaries. All395 current native identities match runner authority.

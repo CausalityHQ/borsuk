@@ -1,0 +1,15 @@
+{
+  "instance_id": "i-097547ed496fcbdb3",
+  "state": "terminated",
+  "source_archive_sha256": "f89e949b29e807231c480858921262f1b9d6650fcc991473f0c56c591ddae6ca",
+  "terminal_sha256": "a54d27503fd359561930b7b8b210cc1970efef5a1309911e2fb305e82580dde1",
+  "native_files_matched": 394,
+  "source_files_matched": 402,
+  "artifacts_verified": 34,
+  "qualification": false,
+  "fresh_cohort_used": false,
+  "valid_measurement": false,
+  "reason": "Incomplete/failed terminal",
+  "phase": "layout",
+  "exit_code": 1
+}

@@ -70,14 +70,20 @@ assert narrow_proof['valid_check'] and narrow_proof['state']=='terminated' and n
 assert hashlib.sha256(narrow_raw).hexdigest()==narrow_proof['terminal_sha256']
 assert hashlib.sha256(Path('crates/borsuk/src/two_bit_generation.rs').read_bytes()).hexdigest()==narrow_proof['compiled_generation_sha256']
 assert hashlib.sha256(Path('crates/borsuk/src/unit_centroid_graph.rs').read_bytes()).hexdigest()==narrow_proof['compiled_native_sha256']['crates/borsuk/src/unit_centroid_graph.rs']
-for receipt,directory in [(old_launch,previous),(control_launch,control),(narrow_launch,narrow)]:
+memory=ROOT_OUT/'native-memory-authority/a0001'
+memory_launch=json.loads((memory/'aws-launch.json').read_text());memory_raw=(memory/'aws-terminal.json').read_bytes();memory_terminal=json.loads(memory_raw);memory_proof=json.loads((memory/'verification.json').read_text())
+assert memory_proof['valid_check'] and memory_proof['state']=='terminated' and memory_proof['focused_native_tests_passed']==2 and not memory_proof['full_workspace_repeated']
+assert hashlib.sha256(memory_raw).hexdigest()==memory_proof['terminal_sha256']
+assert memory_proof['library_full_assurance_terminal_sha256']==narrow_proof['terminal_sha256']
+assert config['runner_admission_bytes']==dict(control=1073741824,candidate=1342177280)
+for receipt,directory in [(old_launch,previous),(control_launch,control),(narrow_launch,narrow),(memory_launch,memory)]:
     close=json.loads((directory/'aws-closeout.json').read_text())
     assert close['instance_id']==receipt['instance_id'] and close['state']=='terminated'
     found=[instance for reservation in ec2.describe_instances(InstanceIds=[receipt['instance_id']])['Reservations'] for instance in reservation['Instances']]
     assert not found or len(found)==1 and found[0]['InstanceId']==receipt['instance_id'] and found[0]['State']['Name']=='terminated'
 
-new_archive=s3.get_object(Bucket=BUCKET,Key='research/native-library-check/sources/'+narrow_launch['source_archive_sha256']+'.tar.gz')['Body'].read()
-assert hashlib.sha256(new_archive).hexdigest()==narrow_launch['source_archive_sha256']
+new_archive=s3.get_object(Bucket=BUCKET,Key='research/native-library-check/sources/'+memory_launch['source_archive_sha256']+'.tar.gz')['Body'].read()
+assert hashlib.sha256(new_archive).hexdigest()==memory_launch['source_archive_sha256']
 new_matched=0
 with tarfile.open(fileobj=io.BytesIO(new_archive),mode='r:gz') as tar:
     for member in tar.getmembers():
@@ -85,9 +91,9 @@ with tarfile.open(fileobj=io.BytesIO(new_archive),mode='r:gz') as tar:
         if path.suffix=='.rs' or path.name in ['Cargo.toml','Cargo.lock']:
             assert path.read_bytes()==tar.extractfile(member).read(),member.name
             new_matched+=1
-assert new_matched==394
+assert new_matched==395
 assert hashlib.sha256(Path('scripts/run_native_source_precision_1m.py').read_bytes()).hexdigest()==config['controller_sha256']
-reservation.update(config_sha256=config_sha,reused_native_source_archive_sha256=old_launch['source_archive_sha256'],reused_terminal_sha256=proof['terminal_sha256'],measurement_memory_max_bytes=8589934592,process_address_space_bytes=4294967296,swap_max_bytes=0,cpu_affinity='0-3',threads=4,controller_sha256=config['controller_sha256'],new_native_files_matched=new_matched,new_native_source_archive_sha256=narrow_launch['source_archive_sha256'],candidate_authority_terminal_sha256=narrow_proof['terminal_sha256'],control_authority_terminal_sha256=control_proof['terminal_sha256'],candidate_compiled_generation_sha256=narrow_proof['compiled_generation_sha256'],candidate_compiled_graph_sha256=narrow_proof['compiled_native_sha256']['crates/borsuk/src/unit_centroid_graph.rs'])
+reservation.update(config_sha256=config_sha,reused_native_source_archive_sha256=old_launch['source_archive_sha256'],reused_terminal_sha256=proof['terminal_sha256'],measurement_memory_max_bytes=8589934592,process_address_space_bytes=4294967296,swap_max_bytes=0,cpu_affinity='0-3',threads=4,controller_sha256=config['controller_sha256'],new_native_files_matched=new_matched,new_native_source_archive_sha256=memory_launch['source_archive_sha256'],candidate_authority_terminal_sha256=narrow_proof['terminal_sha256'],runner_authority_terminal_sha256=memory_proof['terminal_sha256'],runner_admission_bytes=config['runner_admission_bytes'],control_authority_terminal_sha256=control_proof['terminal_sha256'],candidate_compiled_generation_sha256=narrow_proof['compiled_generation_sha256'],candidate_compiled_graph_sha256=narrow_proof['compiled_native_sha256']['crates/borsuk/src/unit_centroid_graph.rs'])
 runner.WALL_SECONDS=2700;runner.SCHEMA=SCHEMA
 prior_http=json.loads((ROOT_OUT/'source-precision-http/a0002/verification.json').read_text())
 assert prior_http['valid_measurement'] and len(prior_http['rows'])==2 and all(r['decision'].startswith('GO') for r in prior_http['rows'])
@@ -123,7 +129,8 @@ mkdir binaries
 for receipt,t,names in [
     (old_launch,old_terminal,[('build_sq8_source','build_sq8_source')]),
     (control_launch,control_terminal,[('two_bit_plan_demo','old_two_bit_plan_demo'),('two_bit_http','old_two_bit_http')]),
-    (narrow_launch,narrow_terminal,[('build_two_bit_generation','build_two_bit_generation'),('two_bit_plan_demo','two_bit_plan_demo'),('two_bit_http','two_bit_http')]),
+    (narrow_launch,narrow_terminal,[('build_two_bit_generation','build_two_bit_generation')]),
+    (memory_launch,memory_terminal,[('two_bit_plan_demo','two_bit_plan_demo'),('two_bit_http','two_bit_http')]),
 ]:
     for name,output in names:
         identity=t['artifacts']['binaries/'+name]
@@ -142,7 +149,7 @@ PYHELPER
 check+=f"""echo '{{"native_files_matched":393,"source_archive_sha256":"{old_launch['source_archive_sha256']}","terminal_sha256":"{proof['terminal_sha256']}","native_serving_binary_and_full_assurance_reused":true}}' >reuse.json
 phase=layout
 systemd-run --unit=native-union-layout --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec=2430 \\
- --setenv=PYTHONPATH=\"$root/repo\" --setenv=MALLOC_ARENA_MAX=2 --setenv=OPENBLAS_NUM_THREADS=4 --setenv=OMP_NUM_THREADS=4 --setenv=MKL_NUM_THREADS=4 --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 \\
+ --setenv=PYTHONPATH=\"$root/repo\" --setenv=MALLOC_ARENA_MAX=2 --setenv=OPENBLAS_NUM_THREADS=4 --setenv=OMP_NUM_THREADS=4 --setenv=MKL_NUM_THREADS=4 --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=1342177280 \\
  /usr/bin/time -v -o \"$root/test-resources.txt\" timeout --signal=TERM --kill-after=30 2400 \\
  bash -c 'set -e; ulimit -v 4194304; exec taskset -c 0-3 \"$1\" \"$2/repo/scripts/run_native_source_precision_1m.py\" \"$2/repo/docs/research/native-union-20260928/source-precision-1m-config.json\" \"$3\" \"$2/repo\" \"$2/screen\" \"$2/binaries\" \"$4\"' _ \\
  \"$root/.venv/bin/python\" \"$root\" '{config_sha}' '{prefix}' >test.log 2>&1

@@ -23,17 +23,22 @@ with tarfile.open(fileobj=io.BytesIO(archive),mode='r:gz') as tar:
     for member in tar.getmembers():
         path=Path(member.name);is_native=path.suffix=='.rs' or path.name in ['Cargo.toml','Cargo.lock']
         if is_native or member.name in names:assert path.read_bytes()==tar.extractfile(member).read(),member.name;native+=is_native;matched+=1
-assert native==394 and reservation['new_native_files_matched']==394
+assert native==395 and reservation['new_native_files_matched']==395
 authority=root/'source-precision-integration/a0003';proof=json.loads((authority/'verification.json').read_text());authority_raw=(authority/'aws-terminal.json').read_bytes()
 assert proof['valid_check'] and proof['full_assurance']==dict(passed=2694,failed=0,ignored=26,targets=145) and proof['cargo_executed_targets']==146
 assert hashlib.sha256(authority_raw).hexdigest()==proof['terminal_sha256']==reservation['candidate_authority_terminal_sha256']
-for name,digest in proof['compiled_native_sha256'].items():assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==digest,name
+memory=root/'native-memory-authority/a0001';mp=json.loads((memory/'verification.json').read_text())
+assert mp['valid_check'] and mp['state']=='terminated' and mp['focused_native_tests_passed']==2 and not mp['full_workspace_repeated']
+assert hashlib.sha256((memory/'aws-terminal.json').read_bytes()).hexdigest()==mp['terminal_sha256']==reservation['runner_authority_terminal_sha256']
+assert mp['library_full_assurance_terminal_sha256']==proof['terminal_sha256']
+for name,digest in mp['compiled_native_sha256'].items():assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==digest,name
+assert config['runner_admission_bytes']==reservation['runner_admission_bytes']==dict(control=1073741824,candidate=1342177280)
 assert proof['compiled_generation_sha256']==reservation['candidate_compiled_generation_sha256']
 assert proof['compiled_native_sha256']['crates/borsuk/src/unit_centroid_graph.rs']==reservation['candidate_compiled_graph_sha256']
 control=root/'walk-source-integration/a0001';cp=json.loads((control/'verification.json').read_text())
 assert cp['valid_check'] and cp['full_assurance']==dict(passed=2693,failed=0,ignored=26,targets=145) and cp['state']=='terminated'
 assert hashlib.sha256((control/'aws-terminal.json').read_bytes()).hexdigest()==cp['terminal_sha256']==reservation['control_authority_terminal_sha256']
-assert reservation['new_native_files_matched']==394
+assert reservation['new_native_files_matched']==395
 previous=json.loads((root/'source-precision-http/a0002/verification.json').read_text());assert previous['valid_measurement'] and previous['terminal_sha256']==reservation['predecessor_http_terminal_sha256']
 report=dict(instance_id=launch['instance_id'],state='terminated',source_archive_sha256=launch['source_archive_sha256'],terminal_sha256=hashlib.sha256(raw).hexdigest(),native_files_matched=native,source_files_matched=matched,artifacts_verified=len(terminal['artifacts']),qualification=False,fresh_cohort_used=False)
 if terminal['status']!='complete' or terminal['exit_code']!=0 or 'screen/decision.json' not in terminal['artifacts']:

@@ -59,6 +59,7 @@ def main():
     assert sha(config_path)==digest and config['schema']=='borsuk-native-source-precision-1m-dev-v1' and config['source_precision_bits']==dict(control=2,candidate=3)
     assert (config['rows'],config['dimensions'],config['k'],config['first'],config['count'])==(1000000,768,100,0,64)
     assert config['arm_order']==['control','candidate','candidate','control'] and config['fresh_cohort_used'] is False
+    assert config['runner_admission_bytes']==dict(control=1073741824,candidate=1342177280) and os.environ['BORSUK_NATIVE_MEMORY_BYTES']=='1342177280'
     assert np.__version__=='2.3.3' and pa.__version__=='24.0.0' and sorted(os.sched_getaffinity(0))==[0,1,2,3]
     for name,digest in config['dependencies'].items():assert sha(repo/name)==digest
     out.mkdir();self_check();write(out/'self-check.json',dict(passed=True,top100_merge_signed_id_ties=True,actual_streaming_oracle_fixture=True,scalar_matrix_f64_parity=True))

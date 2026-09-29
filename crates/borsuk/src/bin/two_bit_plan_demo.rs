@@ -1,4 +1,6 @@
 //! Frozen plan replay and development-only native S3 serving integration.
+#[path = "../native_development_memory.rs"]
+mod native_development_memory;
 use borsuk::two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace};
 use borsuk::{
     sq8_s3_range::OneAttemptS3,
@@ -32,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         live_split(first, count)?;
     }
     let limits = TwoBitGenerationLimits {
-        max_memory_bytes: 1_073_741_824,
+        max_memory_bytes: native_development_memory::memory_limit()?,
         max_active_queries: 1,
         max_query_bytes: 84 * 256 * 780,
         max_query_gets: 32,
@@ -54,9 +56,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Path::new(&args[10]),
             &args[11],
             TwoBitGenerationLimits {
-                // Conservatively charge the control's entire1GiB allowance.
-                max_memory_bytes: 2_147_483_648,
-                already_pinned_bytes: 1_073_741_824,
+                // Conservatively charge the control's entire admitted allowance.
+                max_memory_bytes: limits
+                    .max_memory_bytes
+                    .checked_mul(2)
+                    .ok_or("paired memory overflow")?,
+                already_pinned_bytes: limits.max_memory_bytes,
                 ..limits
             },
         )?)

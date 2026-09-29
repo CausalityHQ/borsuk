@@ -1,5 +1,7 @@
 //! Development HTTP boundary for an authenticated, immutable native S3 generation.
 
+#[path = "../src/native_development_memory.rs"]
+mod native_development_memory;
 use std::{error::Error, net::SocketAddr, sync::Arc, time::Instant};
 
 use axum::{
@@ -156,7 +158,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let head_read_wall_ns = started.elapsed().as_nanos();
     let scratch = tempfile::tempdir()?;
     let limits = TwoBitGenerationLimits {
-        max_memory_bytes: 1_073_741_824,
+        max_memory_bytes: native_development_memory::memory_limit()?,
         max_active_queries: 1,
         max_query_bytes: 16_773_120,
         max_query_gets: 32,

@@ -50,3 +50,12 @@ reused. No new nativefull/reviewer/architecture needed for next controller-only 
 100M49.1125GB and two generations98.225GB metadata are PROJECTIONS before runtime/
 allocator;48GiBsteady/96GiBpin targets unchanged/unqualified. All freshness/scale/
 maintenance/pins/recovery/BOTHvendor lifecycle gates remain.
+
+## 1M engineering correction
+
+Firstprecision1M/a0001 INVALID before quality: caller1GiB memory admission.
+No candidate1M quality/tail/QPS result. Independent memory authority395native/
+11artifacts/expectedRED+twoGREEN verified; actual Spot termination. Unchanged
+2694-pass library assurance reused. Sciencea0002 candidate1.25GiB admission vs
+retainedcontrol1GiB, both same4GiBAS/8GiBcgroup; no work/quality/cache weakening.
+Next decisive test remains >=6331hits/p05>=95 then actual1MHTTP, else endarm.
