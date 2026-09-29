@@ -68,7 +68,8 @@ for arm,records in plans.items():
     normal=''.join(json.dumps({k:r[k] for k in ['query_ordinal','ranges','planned_bytes']},sort_keys=True,separators=(',',':'))+'\n' for r in records)
     assert hashlib.sha256(normal.encode()).hexdigest()==result['plans_sha256'][arm]
     assert result['returned_hits'][arm]==sum(s['returned_hits'] for s in result['samples'][arm]) and result['p05'][arm]==sorted(s['returned_hits'] for s in result['samples'][arm])[3]
-    decomposition[arm]=dict(losses=loss,planned_gets=gets,planned_bytes=bytes_,source_row_evaluations=calls)
+    loss.update(gt_physical_spill=sum(len(set(s['stages']['fetched'])-set(s['stages']['nominated'])) for s in result['samples'][arm]),returned_outside_flat=sum(len(set(s['stages']['returned'])-set(s['stages']['flat'])) for s in result['samples'][arm]),flat_physical_spill_rescued=sum(len((set(s['stages']['flat'])&set(s['stages']['fetched']))-set(s['stages']['nominated'])) for s in result['samples'][arm]))
+    decomposition[arm]=dict(counts={stage:sum(len(s['stages'][stage]) for s in result['samples'][arm]) for stage in ['candidate','nominated','fetched','returned','flat']},losses=loss,planned_gets=gets,planned_bytes=bytes_,walk_exposed_source_rows=calls,nomination_source_row_evaluations=calls if arm=='candidate' else sum(min(256,1000000-page*256) for r in records for page in r['ranked_candidate_pages']))
 assert all(a['stages']['flat']==b['stages']['flat'] for a,b in zip(result['samples']['control'],result['samples']['candidate']))
 assert result['flat_hits']==sum(len(s['stages']['flat']) for s in result['samples']['control'])==sum(len(s['stages']['flat']) for s in result['samples']['candidate'])
 passed=result['returned_hits']['candidate']/64>=98 and result['p05']['candidate']>=95 and result['flat_hits']-result['returned_hits']['candidate']<=32 and result['returned_hits']['candidate']>=result['returned_hits']['control']
@@ -94,5 +95,5 @@ if result['physical_cold_measured']:
         near(result['arm_median_serial_qps'][arm],quantile([r['serial_observed_qps'] for r in result['runs'] if r['arm']==arm],.5))
     tails=result['arm_median_incoming_http_ms']['candidate'];assert result['decision']==('GO 1M consumed development HTTP envelope only' if tails['p90']<=250 and tails['p95']<=400 else 'KILL 1M consumed development HTTP envelope')
 cgroup=obj('screen/cgroup.json');assert int(cgroup['memory.max'])==8589934592 and int(cgroup['memory.swap.max'])==int(cgroup['memory.swap.peak'])==0 and all(int(s.split()[1])==0 for s in cgroup['memory.events'].splitlines() if s.split()[0] in ['oom','oom_kill'])
-report.update(valid_measurement=True,result=result,decomposition=decomposition,cgroup=cgroup)
+report.update(valid_measurement=True,result={k:v for k,v in result.items() if k not in ['samples','expected_ids']},decomposition=decomposition,cgroup=cgroup)
 (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps({k:v for k,v in report.items() if k!='result'}))
