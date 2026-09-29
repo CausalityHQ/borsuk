@@ -1,0 +1,71 @@
+{
+  "metadata_verified": true,
+  "query_or_gt_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "query_pool": "CoHere registered test.parquet rows0-999 D768; source-code checked fixed1000 query geometry",
+  "test_sha256": "5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e",
+  "descendant_terminal_proofs": [
+    {
+      "terminal_key": "research/v272-rust-rc-10m-scale/eb16c09004a4d06852600b5f151e44b105ed22b6/runs/a0001/terminal.json",
+      "terminal_sha256": "e75a7b399920b277683406ee370a67204f3e9f01fd215e809c0f606356958352",
+      "terminal_status": "complete",
+      "archive_key": "research/v272-rust-rc-10m-scale/eb16c09004a4d06852600b5f151e44b105ed22b6/sources/e0e61810247bb6a653f62ecc4b73c0650104c244bbaad0cb73b341b46e23455c.tar.gz",
+      "archive_sha256": "e0e61810247bb6a653f62ecc4b73c0650104c244bbaad0cb73b341b46e23455c",
+      "source_metadata_key": "research/v272-rust-rc-10m-scale/eb16c09004a4d06852600b5f151e44b105ed22b6/runs/a0001/artifacts/source.json",
+      "source_metadata_identity": {
+        "bytes": 472,
+        "sha256": "483e81cf7b33eacc9317967b6288543ec0b0340d6bee5898e21082505f18ae26"
+      },
+      "source_metadata": {
+        "dimensions": 768,
+        "queries_sha256": "4394cb0f28238fe713182094dbb90e2dbc52db634f48c1419997e86ad085ddd4",
+        "raw_sha256": "2e33abfc666e652455a815b90d88a13b617f6dbb431538d6324ad06eccf06f1f",
+        "receipt_sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87",
+        "rows": 10000000,
+        "schema": "borsuk-v272-10m-source-v1",
+        "source_gets": 458,
+        "source_response_bytes": 30726503063,
+        "test_sha256": "5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e"
+      },
+      "query_artifact_identity": {
+        "bytes": 3072000,
+        "sha256": "4394cb0f28238fe713182094dbb90e2dbc52db634f48c1419997e86ad085ddd4"
+      },
+      "archived_source_proof": "docs/research/native-union-20260928/fresh-history-source-inventory/v272-rust-rc-10m-scale-eb16c090.json",
+      "archived_source_proof_sha256": "89dd1f7ea3341e88424a0b3a7a0a458900a4a2d88f9edb442c3d4876c9543785"
+    },
+    {
+      "terminal_key": "research/v281-extra-reverse-10m/9789438c356bd582126b2c984ae67ef2e5c11779/runs/a0002/terminal.json",
+      "terminal_sha256": "c3dc0e2538816a681a7be3e4be3e12bdd74d7e975a1e43d7b7dab4374b81c55a",
+      "terminal_status": "failed",
+      "archive_key": "research/v281-extra-reverse-10m/9789438c356bd582126b2c984ae67ef2e5c11779/sources/89ad1826bab19b043579e7b03c63184bf7387fe5ead0b9488854dd35647f2ea7.tar.gz",
+      "archive_sha256": "89ad1826bab19b043579e7b03c63184bf7387fe5ead0b9488854dd35647f2ea7",
+      "source_metadata_key": "research/v281-extra-reverse-10m/9789438c356bd582126b2c984ae67ef2e5c11779/runs/a0002/artifacts/source.json",
+      "source_metadata_identity": {
+        "bytes": 472,
+        "sha256": "483e81cf7b33eacc9317967b6288543ec0b0340d6bee5898e21082505f18ae26"
+      },
+      "source_metadata": {
+        "dimensions": 768,
+        "queries_sha256": "4394cb0f28238fe713182094dbb90e2dbc52db634f48c1419997e86ad085ddd4",
+        "raw_sha256": "2e33abfc666e652455a815b90d88a13b617f6dbb431538d6324ad06eccf06f1f",
+        "receipt_sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87",
+        "rows": 10000000,
+        "schema": "borsuk-v272-10m-source-v1",
+        "source_gets": 458,
+        "source_response_bytes": 30726503063,
+        "test_sha256": "5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e"
+      },
+      "query_artifact_identity": {
+        "bytes": 3072000,
+        "sha256": "4394cb0f28238fe713182094dbb90e2dbc52db634f48c1419997e86ad085ddd4"
+      },
+      "archived_source_proof": "docs/research/native-union-20260928/fresh-history-source-inventory/v281-extra-reverse-10m-9789438c.json",
+      "archived_source_proof_sha256": "b5e76501b9450ba4632cfc23fa2e3ff5a2d43696b500812a8da9a898d3f1cde3"
+    }
+  ],
+  "producer_full_code_verified_against_archived_hash": true,
+  "producer": "scripts/v272_10m_scale.py",
+  "producer_sha256": "1b34c106855f58a3857f07c1ad1b4ea359896020145fe0245b6c8c353b9cb336",
+  "query_count": 1000
+}

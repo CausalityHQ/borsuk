@@ -1,0 +1,91 @@
+{
+  "schema": "borsuk-two-slot-1m-offered-http-dev-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "rows": 1000000,
+  "dimensions": 768,
+  "first": 0,
+  "count": 64,
+  "offered_qps": 8,
+  "setting_order": [
+    10,
+    100,
+    100,
+    10
+  ],
+  "fresh_cohort_used": false,
+  "root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+  "artifacts": {
+    "original-requests": {
+      "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+      "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+      "bytes": 17714558
+    },
+    "generation/manifest.json": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/generation/manifest.json",
+      "bytes": 33910,
+      "sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce"
+    },
+    "truth.u32": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/truth.u32",
+      "bytes": 25600,
+      "sha256": "b2234a3c3391f4fe2a529f69dcffb62836d76e27acf14ef836f9704c28fff902"
+    },
+    "closed-quality.json": {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/artifacts/screen/relaion/quality.json",
+      "bytes": 1512361,
+      "sha256": "f889e789903a08486ea19f6a19bf604c0d1dc7ff9478100ec77e1ec63b6b7e93"
+    },
+    "reference-k10.jsonl": {
+      "key": "research/native-union/20260928/current-1m-offered-http-a0001/artifacts/screen/reference-k10.jsonl",
+      "bytes": 60002,
+      "sha256": "e26ea372b22980932b14d5824c67ff98d603450a0ba0d3861334c39465e4f0e2"
+    },
+    "reference-k100.jsonl": {
+      "key": "research/native-union/20260928/current-1m-offered-http-a0001/artifacts/screen/reference-k100.jsonl",
+      "bytes": 99679,
+      "sha256": "4cbd29e7dae6966ac2802b17d79647369bd8d891efb0a1af2118f982af2e8357"
+    },
+    "native-quality.json": {
+      "key": "research/native-union/20260928/current-1m-offered-http-a0001/artifacts/screen/native-quality.json",
+      "bytes": 719,
+      "sha256": "6187a702afe31240b5d28b2ca946add03d2ed39bd6a04834337f7b1b8cdab21c"
+    }
+  },
+  "binaries": {},
+  "authorities": {
+    "source-completion-integration/a0002": {
+      "verification.json": "5322570dd1d26a8c1f3cb43cafa74bc965e11cc163260105a694426b26584f6f",
+      "aws-terminal.json": "d9a7f53bf0f2f1bbf60a3e295e7ed145916afb8cae411ca4ce05fa689456d80b"
+    },
+    "native-reference-panel/a0002": {
+      "verification.json": "a6e80b23262c6367c09bbc4dfbf1641fa8e24d576f694946c23b875591a269bc",
+      "aws-terminal.json": "daec7b4fec08bfd178d45655520de42ae41306ed8bef9e346a77945f7f348263"
+    },
+    "http-topk-authority/a0002": {
+      "verification.json": "2dd5a5c408fef5ec83093c4196fdbdd2262c58a91b3ab20257bda7b84cd5c3db",
+      "aws-terminal.json": "3767c83a8552e08db72bcd575c45a79cecac60f6b74eea866fe078fb5d536644"
+    },
+    "http-offered-protocol/a0003": {
+      "verification.json": "c88377716a5cf3bb4bcf90e02ea16e8223bcd440babc15dd39be87bbb21a860e",
+      "aws-terminal.json": "d17b23371cd0d909055c7fa4b5369e32a9c7198c14a6a08a6de5a306c2166080"
+    },
+    "source-completion-1m/a0001": {
+      "verification.json": "aefcc55b9ad0e90a1812879c43b57ef00fb3a6eeaacbbeb1a24507a0c31cc13f",
+      "aws-terminal.json": "2e3306d61c5ecc83a7bd95578e9a9f0dd1c163b500b76761796febb1b3e3e365"
+    },
+    "current-1m-offered-http/a0001": {
+      "verification.json": "ae5d4fbb18bf24ef4d09b8264b880a3ee993ef95fd88fd129232b5a8ba1f420f",
+      "aws-terminal.json": "40bea9a0de1ece2a5e5cf46920b22ada614165af8df2d431abbfee98e107b856"
+    }
+  },
+  "dependencies": {
+    "scripts/run_native_current_1m_offered_http.py": "90c1133121675e8f7dab0dfac2b21ec6ada9dd21757d34410e1d57e021391c10",
+    "scripts/run_native_union_offered_http.py": "2e62577aec250d038f12598bdf5a733abdaa9819ab0cb43929177a5d49b4c5e0",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_two_slot_1m_offered_http.py": "d72450c3a68e470586526a8e52f962d5dd6629a62c46f219fec8f1f60c6cf5b0"
+  },
+  "query_slots": 2,
+  "closed_index_prefix": "research/native-union/20260928/current-1m-offered-http-a0001/indexes/relaion"
+}

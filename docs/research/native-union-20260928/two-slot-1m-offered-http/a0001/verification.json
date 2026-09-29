@@ -1,0 +1,100 @@
+{
+  "instance_id": "i-0f5f21680f642c94d",
+  "state": "terminated",
+  "source_archive_sha256": "747f60f859c6a1551312c28d3a96dce8bd83698756bb57ccc5b8195a33cd76ce",
+  "terminal_sha256": "0867f694fd6ab2de59d8967062f1c0932697cee710ca8fa23092b5f8c7284762",
+  "native_files_matched": 395,
+  "artifacts_verified": 24,
+  "full_library_assurance_reused": 2696,
+  "offered_protocol_checks_reused": 5,
+  "qualification": false,
+  "fresh_cohort_used": false,
+  "matched_control_http_measured": false,
+  "matched_vendor_measured": false,
+  "compute_cost_estimate_usd": 0.0208,
+  "compute_cost_status": "estimate from observed Spot quote and elapsed wall; excludes EBS/S3, not invoice",
+  "valid_measurement": true,
+  "engineering_invalid": false,
+  "decision": "FAIL current1M consumed development offered8QPS",
+  "native_quality": {
+    "100": {
+      "hits": 6318,
+      "denominator": 6400,
+      "recall": 0.9871875,
+      "actual_native_serving": true,
+      "offline_ordered_id_plan_parity": true
+    },
+    "10": {
+      "hits": 635,
+      "denominator": 640,
+      "recall": 0.9921875,
+      "actual_native_serving": true,
+      "offline_ordered_id_plan_parity": true
+    }
+  },
+  "runs": [
+    {
+      "rep": 0,
+      "k": 10,
+      "successful_count": 58,
+      "outcomes": {
+        "success": 58,
+        "rejected_503": 6
+      },
+      "mean_offered_recall": 0.9015625,
+      "mean_successful_recall": 0.9948275862068966,
+      "incoming_http_ms": {
+        "p50": 111.351855,
+        "p90": 245.0018272000002,
+        "p95": 345.11769254999996,
+        "p99": 433.8390055
+      },
+      "all_offered_terminal_ms": {
+        "p50": 111.3171705,
+        "p90": 229.4701611,
+        "p95": 331.24713244999975,
+        "p99": 430.3313587999998
+      },
+      "successful_qps": 7.25,
+      "process_max_rss_kib": 362192,
+      "known_gets": 1754,
+      "known_verified_bytes": 972840960,
+      "physical_counters_complete": true,
+      "development_gate_passed": false
+    }
+  ],
+  "original_strict_diagnostic_preserved": "KILL 1M consumed development quality",
+  "cgroup": {
+    "cgroup": {
+      "memory.max": "8589934592\n",
+      "memory.peak": "679182336\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+      "cpu.stat": "usage_usec 14040970\nuser_usec 11957005\nsystem_usec 2083964\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+    },
+    "address_space_limit": [
+      4294967296,
+      4294967296
+    ],
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "matched_offline_recall100_control": 0.9825,
+  "matched_offline_flat_sq8_recall100": 0.99421875,
+  "compiled_http_sha256": "0bc3e5fea7988ff972a82571d7452f8a657fa5ca017fad6fa8cd059e173c65a2",
+  "binary_sha256": "3c3ce7d3077504827574ba5d18da2b3c99b250485742473fd2de746d102ec202",
+  "focused_native_tests_passed": 2,
+  "query_slots": 2,
+  "actual_native_references_reused": true,
+  "compiler_cgroup": {
+    "memory.peak": "5627432960\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 1021235007\nuser_usec 987942692\nsystem_usec 33292315\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  }
+}

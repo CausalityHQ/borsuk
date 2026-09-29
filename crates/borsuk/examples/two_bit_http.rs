@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+const QUERY_SLOTS: usize = 2;
+
 #[derive(Clone, Serialize)]
 struct Authority {
     root_sha256: String,
@@ -159,7 +161,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let scratch = tempfile::tempdir()?;
     let limits = TwoBitGenerationLimits {
         max_memory_bytes: native_development_memory::memory_limit()?,
-        max_active_queries: 1,
+        max_active_queries: QUERY_SLOTS,
         max_query_bytes: 16_773_120,
         max_query_gets: 32,
         max_parallel_gets: 32,
@@ -182,7 +184,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .map_err(|error| format!("reader: {error:?}"))?,
         authority,
         dimensions: head.dimensions(),
-        permits: Arc::new(Semaphore::new(1)),
+        permits: Arc::new(Semaphore::new(QUERY_SLOTS)),
     });
     let router = Router::new()
         .route(
@@ -262,14 +264,23 @@ mod tests {
             validate(&request, &authority, 768),
             Err(StatusCode::BAD_REQUEST)
         );
-        let permits = Arc::new(Semaphore::new(1));
+        assert_eq!(QUERY_SLOTS, 2);
+        let permits = Arc::new(Semaphore::new(QUERY_SLOTS));
         let permit = admit(&permits).unwrap();
+        let second = admit(&permits).unwrap();
         assert_eq!(
             admit(&permits).unwrap_err(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         drop(permit);
-        assert!(admit(&permits).is_ok());
+        let replacement = admit(&permits).unwrap();
+        assert_eq!(
+            admit(&permits).unwrap_err(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        drop(second);
+        drop(replacement);
+        assert_eq!(permits.available_permits(), QUERY_SLOTS);
         assert!(
             serde_json::from_value::<SearchRequest>(serde_json::json!({
                 "query":[1.0],"k":100,"root_sha256":authority.root_sha256,
