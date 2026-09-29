@@ -26,6 +26,20 @@ def sha(body):
     return hashlib.sha256(body).hexdigest()
 
 
+def qualified_binary(config):
+    identity = config.get('http_build_verification')
+    if not identity:
+        raise ValueError('private-listener build qualification required; historical binary is loopback only')
+    body = Path(identity['path']).read_bytes()
+    assert sha(body) == identity['sha256']
+    proof = json.loads(body)
+    assert proof['valid_check'] and proof['state'] == 'terminated' and proof['no_corpus_query']
+    assert proof['qualification'] == 'private-listener HTTP example only'
+    assert proof['library_assurance_reused'] == 2696
+    assert proof['compiled_http_sha256'] == sha(Path('crates/borsuk/examples/two_bit_http.rs').read_bytes())
+    return proof['binary']
+
+
 def preflight(config):
     assert config['schema'] == 'borsuk-native-peer-1m-v1'
     assert config['count'] == 64 and config['offered_qps'] == config['workers'] == 8
@@ -66,7 +80,7 @@ def preflight(config):
         quality = json.loads(quality_body)
         assert item['inputs']['truth'] == dict(original['sealed']['truth.u32'], range_start=0,
             range_bytes=64 * 100 * 4, range_sha256=quality['truth_prefix_sha256'])
-    binary = json.loads((ROOT / 'fresh-cohere-dev64-config.json').read_text())['binaries']['two_bit_http']
+    binary = qualified_binary(config)
     assert config['binary'] == binary
 
 

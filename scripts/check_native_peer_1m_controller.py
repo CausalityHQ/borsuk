@@ -10,7 +10,36 @@ from scripts import launch_native_peer_1m_spot as controller
 
 def main():
     config = json.loads(controller.CONFIG.read_text())
-    controller.preflight(config)
+    with tempfile.TemporaryDirectory() as directory:
+        proof_path = Path(directory) / 'verification.json'
+        binary = dict(config['binary'])
+        proof = dict(valid_check=True, state='terminated', no_corpus_query=True,
+            qualification='private-listener HTTP example only', library_assurance_reused=2696,
+            compiled_http_sha256=controller.sha(Path('crates/borsuk/examples/two_bit_http.rs').read_bytes()),
+            binary=binary)
+        proof_path.write_text(json.dumps(proof))
+        qualified = copy.deepcopy(config)
+        qualified['http_build_verification'] = dict(path=str(proof_path), sha256=controller.sha(proof_path.read_bytes()))
+        assert controller.qualified_binary(qualified) == binary
+        proof['state'] = 'running'
+        proof_path.write_text(json.dumps(proof))
+        qualified['http_build_verification']['sha256'] = controller.sha(proof_path.read_bytes())
+        try:
+            controller.qualified_binary(qualified)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('live build accepted')
+    historical = copy.deepcopy(config)
+    historical.pop('http_build_verification', None)
+    try:
+        controller.qualified_binary(historical)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('historical loopback binary accepted')
+    with patch.object(controller, 'qualified_binary', return_value=config['binary']):
+        controller.preflight(config)
     for field in ('authority', 'inputs', 'indexes'):
         bad = copy.deepcopy(config)
         if field == 'authority':
