@@ -1,0 +1,45 @@
+{
+  "instance_id": "i-000e60ee254d3d17b",
+  "state": "terminated",
+  "source_archive_sha256": "f281b31e11e7ec4e7f7102bf690d06773097a63b1ad663026fa33b4d16b48156",
+  "terminal_sha256": "38a246558f3a7a743efc0c7fa273f8503bf252bdd54518e46e74c40ebf9ce2b7",
+  "native_files_matched": 394,
+  "artifacts_verified": 11,
+  "qualification": false,
+  "no_corpus_query": true,
+  "reused_unchanged_shared_native_files": 393,
+  "reused_full_assurance": {
+    "passed": 2689,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 144
+  },
+  "valid_check": true,
+  "boundary": {
+    "qualified": false,
+    "no_corpus_query": true,
+    "full_workspace_repeated": false,
+    "original_source_sha256": "2e170bd22108326f540de26062b2f2e5e5a4a727f0331873ad587382400e8d98",
+    "fixed_source_sha256": "002111a40e053c6167d2f74fb465bbb2ea8d24ace1e2edf1e4d34810917a2fcc",
+    "red_status": 101,
+    "green_passed": true,
+    "binaries": {
+      "two_bit_walk_nomination": {
+        "bytes": 1295040,
+        "sha256": "84b85f54f66fbdbaaa3d06b92733d0ccb44e068abb3de04153b13203b42fb4c4"
+      }
+    }
+  },
+  "cgroup": {
+    "memory.peak": "6651834368\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 1256725967\nuser_usec 1199496273\nsystem_usec 57229694\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  },
+  "narrow_tests": {
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0
+  },
+  "compiled_source_sha256": "002111a40e053c6167d2f74fb465bbb2ea8d24ace1e2edf1e4d34810917a2fcc"
+}
