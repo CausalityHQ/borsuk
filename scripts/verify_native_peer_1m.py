@@ -75,7 +75,9 @@ def main(attempt):
         assert summary['cpu_affinity'] == ([0, 1, 2, 3] if role == 'server' else [0, 1])
         instance = ec2.describe_instances(InstanceIds=[launch[role]['instance_id']])['Reservations'][0]['Instances'][0]
         assert instance['State']['Name'] == 'terminated' and instance['InstanceLifecycle'] == 'spot'
-        assert instance['PrivateIpAddress'] == launch[role]['private_ip']
+        if 'PrivateIpAddress' in instance:
+            assert instance['PrivateIpAddress'] == launch[role]['private_ip']
+        # Terminated EC2 responses can omit IPs; authenticated IMDS role receipts above retain them.
         assert instance['Placement']['AvailabilityZone'] == reservation['availability_zone']
     assert summaries['server']['decisions'] == summaries['client']['decisions']
     decisions = summaries['client']['decisions']
@@ -93,6 +95,13 @@ def main(attempt):
         assert ready['authority'] == item['authority'] and ready['cell'] == cell and ready['k'] == k
         assert ready['dataset'] == item['dataset'] and ready['instance_id'] == launch['server']['instance_id']
         assert ready['endpoint'] == 'http://' + launch['server']['private_ip'] + ':8080' and ready['namespace_ready_ms'] > 0
+        headers = [json.loads(line) for line in artifacts['server'][f'screen/cell{cell}-server.log'].splitlines()
+                   if line.startswith(b'{')]
+        assert len(headers) == 1 and headers[0]['phase'] == 'ready'
+        header = headers[0]
+        assert header['authority'] == item['authority']
+        assert header['listen'] == launch['server']['private_ip'] + ':8080'
+        assert header['head_read_wall_ns'] > 0 and header['remote_open_wall_ns'] > 0
         done = artifact('client', f'done{cell}.json')
         assert done == json.loads(remote(prefix + f'/done/{cell}.json'))
         closed = artifact('server', f'closed{cell}.json')
@@ -155,14 +164,20 @@ def main(attempt):
         passed = k != 10 or (len(times) == 64 and hits / (64 * k) >= .95 and result['successful_incoming_http_ms']['p90'] < 444 and result['achieved_successful_qps'] >= 8)
         assert done['gate_passed'] == decision['gate_passed'] == passed
         runs.append(dict(cell=cell, dataset=item['dataset'], k=k, hits=hits, denominator=64*k,
-            incoming_http_ms=result['successful_incoming_http_ms'], successful_qps=result['achieved_successful_qps'],
-            namespace_ready_ms=ready['namespace_ready_ms'], data_gets=gets, verified_data_bytes=count_bytes))
+            successful_count=len(times), incoming_http_ms=result['successful_incoming_http_ms'], successful_qps=result['achieved_successful_qps'],
+            namespace_ready_ms=ready['namespace_ready_ms'], head_read_ms=header['head_read_wall_ns']/1e6,
+            remote_open_ms=header['remote_open_wall_ns']/1e6, data_gets=gets, verified_data_bytes=count_bytes))
     passed = len(decisions) == 8 and all(row['gate_passed'] for row in decisions)
     assert summaries['client']['all_cells_completed'] == summaries['server']['all_cells_completed'] == (len(decisions) == 8)
     assert passed or decisions[-1]['gate_passed'] is False
     report = dict(valid_measurement=True, decision='GO' if passed else 'FAIL', runs=runs,
         state='terminated', matched_vendor_measured=False, namespace_cold_start_included=False,
         config_sha256=sha(config_body), source_archive_sha256=launch['source_archive_sha256'],
+        all_offered_requests=64*len(runs), all_successful_requests=sum(run['successful_count'] for run in runs),
+        physical_data_gets=sum(run['data_gets'] for run in runs), verified_data_bytes=sum(run['verified_data_bytes'] for run in runs),
+        role_resources={role: dict(cgroup_peak_bytes=int(summary['cgroup']['memory.peak']), swap_peak_bytes=0,
+            address_space_limit=summary['address_space_limit'], cpu_affinity=summary['cpu_affinity'])
+            for role, summary in summaries.items()},
         compute_cost_estimate_usd=close['compute_cost_estimate_usd'], cost_scope=close['cost_scope'])
     (directory / 'verification.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))

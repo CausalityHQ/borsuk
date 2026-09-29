@@ -1,0 +1,15 @@
+{
+  "server": {
+    "instance_id": "i-0f272c689ed0b2f6f",
+    "private_ip": "172.31.10.130"
+  },
+  "client": {
+    "instance_id": "i-01178d7ad6c290114",
+    "private_ip": "172.31.9.43"
+  },
+  "prefix": "research/native-union/20260929/peer-1m-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "config_sha256": "cd32e35343deff1b5006b83aa1be558a1821873c095856cce85fcde221d691aa",
+  "source_commit": "1e735a0e9e2fa5b58b3949a830b0b102984a21f4",
+  "source_archive_sha256": "59f503f648be4bd3bd3c4bb13c570927fc764f465bb29e62125dbfd3ba8eb025"
+}

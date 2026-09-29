@@ -1,0 +1,205 @@
+{
+  "valid_measurement": true,
+  "decision": "GO",
+  "runs": [
+    {
+      "cell": 0,
+      "dataset": "ReLAION",
+      "k": 10,
+      "hits": 636,
+      "denominator": 640,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 112.59273400000001,
+        "p90": 141.12355100000002,
+        "p95": 195.68210594999988,
+        "p99": 258.82953360999994
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4918.733472,
+      "head_read_ms": 102.28567,
+      "remote_open_ms": 4773.709001,
+      "data_gets": 1927,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "cell": 1,
+      "dataset": "ReLAION",
+      "k": 100,
+      "hits": 6299,
+      "denominator": 6400,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 112.142585,
+        "p90": 117.2043701,
+        "p95": 119.57764479999999,
+        "p99": 133.50792448999994
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 5016.004086,
+      "head_read_ms": 89.00863,
+      "remote_open_ms": 4864.560267,
+      "data_gets": 1927,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "cell": 2,
+      "dataset": "ReLAION",
+      "k": 100,
+      "hits": 6299,
+      "denominator": 6400,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 112.8555345,
+        "p90": 117.79001520000001,
+        "p95": 118.5166515,
+        "p99": 128.75307643999994
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4716.019378,
+      "head_read_ms": 89.772535,
+      "remote_open_ms": 4534.993569,
+      "data_gets": 1927,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "cell": 3,
+      "dataset": "ReLAION",
+      "k": 10,
+      "hits": 636,
+      "denominator": 640,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 113.23848100000001,
+        "p90": 118.2494215,
+        "p95": 119.22407325,
+        "p99": 127.00146305999995
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4814.965243,
+      "head_read_ms": 110.607498,
+      "remote_open_ms": 4584.201254,
+      "data_gets": 1927,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "cell": 4,
+      "dataset": "CoHere",
+      "k": 10,
+      "hits": 620,
+      "denominator": 640,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 113.5571735,
+        "p90": 118.3884053,
+        "p95": 119.83735734999999,
+        "p99": 127.39119840999997
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4915.917774,
+      "head_read_ms": 89.563956,
+      "remote_open_ms": 4780.322469,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "cell": 5,
+      "dataset": "CoHere",
+      "k": 100,
+      "hits": 6047,
+      "denominator": 6400,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 112.5643225,
+        "p90": 118.0472994,
+        "p95": 119.55086424999999,
+        "p99": 125.97788278999997
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4915.612947,
+      "head_read_ms": 131.874042,
+      "remote_open_ms": 4735.040914,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "cell": 6,
+      "dataset": "CoHere",
+      "k": 100,
+      "hits": 6047,
+      "denominator": 6400,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 111.9924015,
+        "p90": 116.1291925,
+        "p95": 117.06348044999999,
+        "p99": 125.67424635999994
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4714.726247,
+      "head_read_ms": 133.581705,
+      "remote_open_ms": 4513.984531,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    },
+    {
+      "cell": 7,
+      "dataset": "CoHere",
+      "k": 10,
+      "hits": 620,
+      "denominator": 640,
+      "successful_count": 64,
+      "incoming_http_ms": {
+        "p50": 112.721986,
+        "p90": 116.9580448,
+        "p95": 118.39806055000001,
+        "p99": 128.94358015999995
+      },
+      "successful_qps": 8.0,
+      "namespace_ready_ms": 4715.071769,
+      "head_read_ms": 92.271339,
+      "remote_open_ms": 4585.970123,
+      "data_gets": 2035,
+      "verified_data_bytes": 1073479680
+    }
+  ],
+  "state": "terminated",
+  "matched_vendor_measured": false,
+  "namespace_cold_start_included": false,
+  "config_sha256": "cd32e35343deff1b5006b83aa1be558a1821873c095856cce85fcde221d691aa",
+  "source_archive_sha256": "59f503f648be4bd3bd3c4bb13c570927fc764f465bb29e62125dbfd3ba8eb025",
+  "all_offered_requests": 512,
+  "all_successful_requests": 512,
+  "physical_data_gets": 15848,
+  "verified_data_bytes": 8587837440,
+  "role_resources": {
+    "server": {
+      "cgroup_peak_bytes": 641310720,
+      "swap_peak_bytes": 0,
+      "address_space_limit": [
+        4294967296,
+        4294967296
+      ],
+      "cpu_affinity": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "client": {
+      "cgroup_peak_bytes": 83116032,
+      "swap_peak_bytes": 0,
+      "address_space_limit": [
+        1073741824,
+        1073741824
+      ],
+      "cpu_affinity": [
+        0,
+        1
+      ]
+    }
+  },
+  "compute_cost_estimate_usd": 0.0241,
+  "cost_scope": "estimate only, conservatively same duration for both roles; excludes EBS/S3, not invoice"
+}

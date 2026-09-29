@@ -1,0 +1,10 @@
+{
+  "server": {
+    "instance_id": "i-0f272c689ed0b2f6f",
+    "private_ip": "172.31.10.130"
+  },
+  "client": {
+    "instance_id": "i-01178d7ad6c290114",
+    "private_ip": "172.31.9.43"
+  }
+}

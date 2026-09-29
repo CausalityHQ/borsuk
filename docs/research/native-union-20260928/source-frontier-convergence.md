@@ -116,3 +116,6 @@ a0001 remains an immutable infrastructure failure, not a quality KILL.
 this candidate and the separate verified ReLAION prospective GO. Namespace
 startup is not part of the reported incoming query tails. CoHere train query
 rows1,005,000–1,005,999 cannot be reused as a disjoint full10M scale split.
+
+## Verified peer transport checkpoint 2026-09-29
+Baseline: exact frozen native references on FIRST1M D768 cosine development0–63. Candidate: private peer HTTP, metadata resident/no application SQ8 cache. ReLAIONR10=99.375%,R100=98.421875%; CoHereR10=96.875%,R100=94.484375%, qualitydelta0pp verified orderedIDs. k10p90ReLAION141.123551/118.2494215ms,CoHere118.3884053/116.9580448ms;512/512success8QPS/cell; compute$.0241ESTexEBS/S3. Serverpeak641310720B/client83116032B, zeroSwap/OOM, bothSpotterminated. RemaininggaptoBOTHvendors: no matched vendor measurement, namespaceopen4.514–4.865s, total$/saturation/10M/100M/lifecycleopen. Nextdecisivetest: metadata startup decomposition and one causal change, then truecold first-query gate. Fullreceipt/decision peer-1m/a0001/verification.json and peer-1m-decision.md.

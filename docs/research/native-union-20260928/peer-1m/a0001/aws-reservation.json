@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-native-peer-1m-spot-v1",
+  "source_commit": "1e735a0e9e2fa5b58b3949a830b0b102984a21f4",
+  "source_archive_sha256": "59f503f648be4bd3bd3c4bb13c570927fc764f465bb29e62125dbfd3ba8eb025",
+  "config_sha256": "cd32e35343deff1b5006b83aa1be558a1821873c095856cce85fcde221d691aa",
+  "attempt": "a0001",
+  "roles": [
+    "server",
+    "client"
+  ],
+  "spot_price_observed_usd_per_hour": "0.178400",
+  "spot_quote_timestamp": "2026-09-29T21:00:00+00:00",
+  "availability_zone": "eu-central-1c",
+  "instance_type": "c7g.2xlarge",
+  "wall_seconds": 1800,
+  "compute_cost_cap_usd": 0.3,
+  "ebs_s3_allowance_usd": 0.3,
+  "interruption_policy": "Discard interrupted cell; no automatic replacement"
+}
